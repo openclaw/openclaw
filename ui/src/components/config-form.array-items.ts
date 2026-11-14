@@ -21,7 +21,7 @@ export function collectAllOfSchemas(schema: JsonSchema): JsonSchema[] {
   return result;
 }
 
-export function combinedSchema(candidates: JsonSchema[]): JsonSchema | undefined {
+function combinedSchema(candidates: JsonSchema[]): JsonSchema | undefined {
   const base = candidates.find((candidate) => schemaType(candidate) !== undefined) ?? candidates[0];
   return !base || candidates.length === 1
     ? base
@@ -29,6 +29,55 @@ export function combinedSchema(candidates: JsonSchema[]): JsonSchema | undefined
         ...base,
         allOf: [...(base.allOf ?? []), ...candidates.filter((candidate) => candidate !== base)],
       };
+}
+
+export function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
+  const properties = schema.properties;
+  return properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
+}
+
+export function requiredPropertyKeys(schema: JsonSchema): Set<string> {
+  return new Set(collectAllOfSchemas(schema).flatMap((entry) => entry.required ?? []));
+}
+
+export function objectPropertyKeys(schema: JsonSchema): string[] {
+  const schemas = collectAllOfSchemas(schema);
+  const keys = new Set(schemas.flatMap((entry) => Object.keys(entry.properties ?? {})));
+  return [...keys].filter((key) =>
+    schemas.every(
+      (entry) =>
+        ownPropertySchema(entry, key) !== undefined || entry.additionalProperties !== false,
+    ),
+  );
+}
+
+export function objectAdditionalPropertiesSchema(
+  schema: JsonSchema,
+): JsonSchema | false | undefined {
+  const policies = collectAllOfSchemas(schema)
+    .map((entry) => entry.additionalProperties)
+    .filter((policy) => policy !== undefined);
+  if (policies.some((policy) => policy === false)) {
+    return false;
+  }
+  const schemas = policies.filter(
+    (policy): policy is JsonSchema => Boolean(policy) && typeof policy === "object",
+  );
+  if (schemas.length > 0) {
+    return combinedSchema(schemas);
+  }
+  return policies.some((policy) => policy === true) ? {} : undefined;
+}
+
+export function objectPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
+  if (!objectPropertyKeys(schema).includes(key)) {
+    return undefined;
+  }
+  return combinedSchema(
+    collectAllOfSchemas(schema)
+      .map((entry) => ownPropertySchema(entry, key))
+      .filter((property): property is JsonSchema => property !== undefined),
+  );
 }
 
 export function arrayItemSchema(schema: JsonSchema, index: number): JsonSchema | undefined {

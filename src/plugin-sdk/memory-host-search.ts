@@ -1,8 +1,8 @@
+import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 /**
  * Lazy private-local facade for active memory search manager lifecycle operations.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 
 type ActiveMemorySearchPurpose = "default" | "status";
 

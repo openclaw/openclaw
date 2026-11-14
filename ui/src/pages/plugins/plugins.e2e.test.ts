@@ -119,7 +119,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await gateway.resolveDeferred("plugins.catalog.browse", { items: [matrixDiscoveryPlugin] });
     const cards = catalog.locator(".plugin-catalog-grid--results .plugin-catalog-card");
     // The older category response must not replace loading for the newer search intent.
-    const loading = role(catalog, "status", "Loading ClawHub plugins…");
+    const loading = role(catalog, "status", "Loading plugins…");
     await loading.waitFor();
     expect(await cards.count()).toBe(0);
     expect(await gateway.getRequests("plugins.catalog.browse", { query: "matrix" })).toEqual([]);
@@ -628,10 +628,18 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
   it("explains a successful empty ClawHub response", async () => {
     const { page } = await setup({ "plugins.catalog.browse": { items: [] } });
+    await page.emulateMedia({ colorScheme: "light" });
     await page.goto(`${server.baseUrl}plugins`);
-    await text(page, "No plugins found").waitFor();
+    await text(page, "No plugins match your search.").waitFor();
     await text(page, "Try a different search or choose another filter.").waitFor();
     expect(await page.locator(".plugin-catalog-card").count()).toBe(0);
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const proof = createControlUiE2eArtifactDir("plugin-empty-search");
+      await page.getByRole("region", { name: "Explore plugins" }).screenshot({
+        animations: "disabled",
+        path: path.join(proof, "empty-search.png"),
+      });
+    }
   });
 
   it("reloads ClawHub discovery after the Gateway reconnects", async () => {

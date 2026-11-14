@@ -72,7 +72,7 @@ suite.define(() => {
             await source.dispatchEvent("pointerup", { button: 0, pointerType: "mouse" });
             await page
               .getByRole("toolbar", { name: "Selection actions" })
-              .getByRole("button", { name: "Add to chat", exact: true })
+              .getByRole("button", { name: "Add to message", exact: true })
               .click();
             if (editorKind === "reopened") {
               await textbox.fill("Saved Alpha comment.");

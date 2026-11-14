@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { create as createArchive } from "tar";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { root } from "../infra/fs-safe.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { safePluginInstallFileName } from "../plugins/install-paths.js";
@@ -131,11 +132,18 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
     }
     const controlUi = loaded.manifest.controlUi;
     if (controlUi) {
-      const { directory, assets } = await readPluginControlUiAssets(rootDir, controlUi);
+      const { directory, assets, panelIcon } = await readPluginControlUiAssets(rootDir, controlUi);
       for (const [name, asset] of assets) {
         const relativePath = path.posix.join(directory, name);
         await destination.mkdir(path.posix.dirname(relativePath));
         await destination.create(relativePath, asset.body);
+      }
+      if (panelIcon) {
+        const iconDirectory = path.posix.dirname(panelIcon.path);
+        if (iconDirectory !== ".") {
+          await destination.mkdir(iconDirectory);
+        }
+        await destination.create(panelIcon.path, panelIcon.body);
       }
     }
     const archive = path.join(staging, "plugin.tgz");
@@ -169,6 +177,6 @@ export async function runPluginsPackCommand(opts: PluginsPackOptions): Promise<v
     return;
   }
   defaultRuntime.log(
-    `Packed ${receipt.pluginId}: ${receipt.path}\nSHA256: ${receipt.sha256}\nUse plugin_activate_artifact with this path and digest to request activation approval.`,
+    terminalText`Packed ${receipt.pluginId}: ${receipt.path}\nSHA256: ${receipt.sha256}\nUse plugin_activate_artifact with this path and digest to request activation approval.`,
   );
 }

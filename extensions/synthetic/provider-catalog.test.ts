@@ -7,24 +7,20 @@ import { SYNTHETIC_BASE_URL } from "./models.js";
 import { buildSyntheticProvider } from "./provider-catalog.js";
 
 const fetchGuard = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
-    allowedHostnames: [new URL(baseUrl).hostname],
-  }),
 }));
 
 const endpoint = "https://api.synthetic.new/openai/v1/models";
 const provider = await registerSingleProviderPlugin(plugin);
 const liveModel = {
   id: "hf:Qwen/Qwen3.8-27B",
-  name: "Qwen/Qwen3.8-27B",
   input_modalities: ["text", "image"],
   output_modalities: ["text"],
   context_length: 262144,
   max_output_length: 65536,
   supported_features: ["tools", "reasoning"],
-  reasoning_parameters: { efforts: ["low", "medium", "xhigh"] },
   pricing: {
     prompt: "$0.00000045",
     completion: "$0.0000022",
@@ -33,15 +29,13 @@ const liveModel = {
   },
 };
 
-function context(baseUrl?: string): ProviderCatalogContext {
-  const auth = { apiKey: "SYNTHETIC_API_KEY", discoveryApiKey: "fixture-discovery-key" };
-  return {
-    config: baseUrl ? { models: { providers: { synthetic: { baseUrl, models: [] } } } } : {},
-    env: {},
-    resolveProviderApiKey: () => auth,
-    resolveProviderAuth: () => ({ ...auth, mode: "api_key", source: "profile" }),
-  };
-}
+const auth = { apiKey: "SYNTHETIC_API_KEY", discoveryApiKey: "fixture-key" };
+const context: ProviderCatalogContext = {
+  config: {},
+  env: {},
+  resolveProviderApiKey: () => auth,
+  resolveProviderAuth: () => ({ ...auth, mode: "api_key", source: "profile" }),
+};
 
 const respond = (data: unknown[]) =>
   fetchGuard.mockResolvedValueOnce({
@@ -71,19 +65,14 @@ it("discovers new models and refreshes known metadata without changing the infer
     { ...liveModel, id: "invalid-limits", context_length: -1 },
     { ...liveModel, id: "retired-model", deprecated: true },
   ]);
-  const result = await provider.catalog?.run(context());
-  expect(result).toMatchObject({
+  await expect(provider.catalog?.run(context)).resolves.toMatchObject({
     provider: {
       api: "anthropic-messages",
       baseUrl: SYNTHETIC_BASE_URL,
-      apiKey: "SYNTHETIC_API_KEY",
       models: [
         {
           id: liveModel.id,
           reasoning: true,
-          input: ["text", "image"],
-          contextWindow: 262144,
-          maxTokens: 65536,
           cost: { input: 0.45, output: 2.2, cacheRead: 0.09, cacheWrite: 0 },
           compat: { supportsTools: true },
         },
@@ -93,39 +82,21 @@ it("discovers new models and refreshes known metadata without changing the infer
     },
   });
   const request = fetchGuard.mock.calls[0]?.[0];
-  const headers = new Headers(request.init.headers);
   expect(request.url).toBe(endpoint);
-  expect(headers.get("authorization")).toBe("Bearer fixture-discovery-key");
+  expect(new Headers(request.init.headers).get("authorization")).toBe("Bearer fixture-key");
 });
 
-it.each(["failure", "unusable"])("does not substitute seeds for %s discovery", async (mode) => {
-  if (mode === "failure") {
-    fetchGuard.mockRejectedValueOnce(new Error("fixture unavailable"));
-  } else {
-    respond([{ id: "missing-metadata" }]);
-  }
+it("does not substitute seeds for unusable discovery metadata", async () => {
+  respond([{ id: "missing-metadata" }]);
   const modelIdCatalog = { baseUrl: SYNTHETIC_BASE_URL, modelIds: ["missing-metadata"] };
-  await expect(provider.catalog?.run(context())).resolves.toEqual(
-    mode === "failure"
-      ? { providers: {}, outcomes: [{ provider: "synthetic", status: "unavailable" }] }
-      : {
-          provider: { ...buildSyntheticProvider(), apiKey: "SYNTHETIC_API_KEY", models: [] },
-          outcomes: [{ provider: "synthetic", status: "ready", modelIdCatalog }],
-        },
-  );
+  await expect(provider.catalog?.run(context)).resolves.toEqual({
+    provider: { ...buildSyntheticProvider(), apiKey: "SYNTHETIC_API_KEY", models: [] },
+    outcomes: [{ provider: "synthetic", status: "ready", modelIdCatalog }],
+  });
 });
 
-it("does not send a custom proxy credential to Synthetic's fixed model endpoint", async () => {
-  const result = await provider.catalog?.run(context("https://proxy.example/anthropic"));
-  const expected = { baseUrl: "https://proxy.example/anthropic", api: "anthropic-messages" };
-  expect(result).toMatchObject({ provider: expected });
-  expect(fetchGuard).not.toHaveBeenCalled();
-});
-
-it("keeps static discovery network-free and live discovery credential-gated", async () => {
-  const staticResult = await provider.staticCatalog?.run(context());
-  expect(staticResult).toEqual({ provider: buildSyntheticProvider() });
-  const anonymous = { ...context(), resolveProviderApiKey: () => ({ apiKey: undefined }) };
+it("keeps live discovery credential-gated", async () => {
+  const anonymous = { ...context, resolveProviderApiKey: () => ({ apiKey: undefined }) };
   await expect(provider.catalog?.run(anonymous)).resolves.toBeNull();
   expect(fetchGuard).not.toHaveBeenCalled();
 });

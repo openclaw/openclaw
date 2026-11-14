@@ -168,7 +168,6 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
     resumed: new Set([getSubagentRunRuntimeKey(entry)]),
     retryTimers: new Set(),
     completeSubagentRun: failed,
-    scheduleSweep: vi.fn(),
     resumeRun: resume,
   });
   await recovery.completeSubagentRunWithRecovery(

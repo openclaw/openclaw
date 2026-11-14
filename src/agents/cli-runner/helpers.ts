@@ -87,6 +87,7 @@ export function buildCliAgentSystemPrompt(params: {
   preparedModelRuntime?: Parameters<
     typeof buildConfiguredAgentSystemPrompt
   >[0]["preparedModelRuntime"];
+  preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string;
   preparedSessionEntry?: Parameters<typeof buildSystemPromptParams>[0]["preparedSessionEntry"];
   extraSystemPrompt?: string;
@@ -122,6 +123,7 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
+    preparedRepoRoot: params.preparedRepoRoot,
     preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
     preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,
@@ -139,6 +141,7 @@ export function buildCliAgentSystemPrompt(params: {
       chatType: params.runtimeChatType,
       capabilities: params.runtimeCapabilities,
       customInlineButtonHint: params.customInlineButtonHint,
+      blind: params.preparedSessionEntry?.blindPrompt,
     },
   });
   return buildConfiguredAgentSystemPrompt({

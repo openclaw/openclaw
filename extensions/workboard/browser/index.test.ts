@@ -37,46 +37,81 @@ function dispose() {
 }
 async function activate() {
   stopPlugin = (await workboardPlugin.activate(fixture.host)) ?? undefined;
-}
-const tick = () => vi.advanceTimersByTimeAsync(0);
-async function change(payload: unknown = {}) {
-  fixture.emit("plugin.workboard.changed", payload);
   await tick();
 }
-const clickDialog = (confirm: boolean) =>
+const tick = () => vi.advanceTimersByTimeAsync(0);
+const query = (selector: string) =>
+  expectDefined(document.querySelector<HTMLElement>(selector), selector);
+const navigation = (id: string) =>
+  fixture.registrations.get(`navigation/board-${id}`) as ControlUiNavigationItem;
+const deleteAction = () =>
+  expectDefined(
+    navigation("ops").actions?.find(({ id }) => id === "delete"),
+    "delete action",
+  );
+const registeredKeys = (prefix: string) =>
+  [...fixture.registrations.keys()].filter((key) => key.startsWith(prefix));
+const deleteCalls = () =>
+  request.mock.calls.filter(([method]) => method === "workboard.boards.delete");
+const dialogButton = (confirm: boolean) =>
   expectDefined(
     document.querySelector<HTMLButtonElement>(
       `[data-test-dialog] ${confirm ? ".danger" : "button:not(.danger)"}`,
     ),
     "dialog button",
-  ).click();
+  );
+const clickDialog = (confirm: boolean) => dialogButton(confirm).click();
+const expectError = (message: string) =>
+  expect(query("[role=alert]").textContent).toContain(message);
+async function change(payload: unknown = {}) {
+  fixture.emit("plugin.workboard.changed", payload);
+  await tick();
+}
 async function mountPage(props: Record<string, string>) {
-  const { host, registrations } = fixture;
-  const container = document.createElement("div");
-  document.body.append(container);
-  const page = registrations.get("page/workboard") as ControlUiPage;
-  const mounted = page.mount(container, createViewContext(host, props));
+  const container = document.body.appendChild(document.createElement("div"));
+  const page = fixture.registrations.get("page/workboard") as ControlUiPage;
+  const mounted = page.mount(container, createViewContext(fixture.host, props));
   stopView = () => mounted?.dispose?.();
   const update = (next: Record<string, string>, presented = true) =>
-    mounted?.update?.(createViewContext(host, next, presented));
+    mounted?.update?.(createViewContext(fixture.host, next, presented));
   await vi.dynamicImportSettled();
   update(props);
   await tick();
   return { container, update };
 }
 function mountAccessory(session: ReturnType<typeof createGatewaySession>) {
-  const { host, registrations } = fixture;
   const container = document.createElement("div");
-  const accessory = registrations.get("accessory/linked-card") as ControlUiAccessory;
+  const accessory = fixture.registrations.get("accessory/linked-card") as ControlUiAccessory;
   const mounted = accessory.mount(
     container,
-    createViewContext(host, { sessionKey: session.key, session }),
+    createViewContext(fixture.host, { sessionKey: session.key, session }),
   );
   stopView = () => mounted?.dispose?.();
   return container;
 }
 
 const makeBoard = (id: string, extra: Partial<WorkboardBoardSummary> = {}) => ({ id, ...extra });
+
+it("refreshes catalog labels when a deferred locale loads and when the locale changes", async () => {
+  Object.assign(fixture.host, { locale: "sv" });
+  request.mockResolvedValue({ boards: [makeBoard("default")] });
+  await activate();
+  await vi.dynamicImportSettled();
+  await tick();
+  expect(navigation("default").label).toBe("Standardtavla");
+
+  Object.assign(fixture.host, { locale: "en" });
+  fixture.notify();
+  await tick();
+  expect(navigation("default").label).toBe("Default board");
+  expect(request).toHaveBeenCalledTimes(1);
+
+  Object.assign(fixture.host, { locale: "sv" });
+  fixture.notify();
+  dispose();
+  await tick();
+  expect(fixture.registrations.has("navigation/board-default")).toBe(false);
+});
 function navigationItem(id: string, label: string, icon?: string) {
   return {
     id: `board-${id}`,
@@ -93,70 +128,6 @@ const columns: NonNullable<WorkboardBoardSummary["sessions"]>["columns"] = [
 ];
 const sessionsBoard = (name: string) =>
   makeBoard("sessions", { name, kind: "sessions", sessions: { columns } });
-
-it("keeps reassigned session cards current through events without polling", async () => {
-  const { host, registrations } = fixture;
-  const session = createGatewaySession({ key: "agent:writer:dashboard:captured" });
-  const expectedCalls = [
-    ["workboard.boards.list", {}],
-    ["workboard.cards.list", { sessionKey: session.key }],
-  ];
-  const card = createWorkboardCard({
-    title: "Previously captured conversation",
-    sessionKey: session.key,
-    agentId: "main",
-    metadata: { automation: { boardId: "ops" } },
-  });
-  Object.assign(host.sessions, { rows: [session], selectedKey: session.key });
-  Object.assign(host.agents, {
-    rows: [{ id: "main" }, { id: "writer" }],
-    selectedId: "writer",
-    scopeId: "writer",
-  });
-  const boards = [makeBoard("ops", { total: 1, active: 1, byStatus: { todo: 1 } })];
-  const historical = createWorkboardCard({ id: "history", notes: "history".repeat(10_000) });
-  let currentCard = card;
-  let responseBytes = 0;
-  request.mockImplementation(async (method: string, params: unknown) => {
-    if (method === "workboard.cards.list") {
-      const result = {
-        cards:
-          params && typeof params === "object" && "sessionKey" in params
-            ? [currentCard]
-            : [currentCard, historical],
-        boards,
-      };
-      responseBytes += JSON.stringify(result).length;
-      return result;
-    }
-    if (method === "workboard.boards.list") {
-      return { boards };
-    }
-    return { tasks: [] };
-  });
-  await activate();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(registrations.has("navigation/board-ops")).toBe(true);
-  expect([...registrations.keys()].filter((key) => key.startsWith("action/"))).toEqual([]);
-  const container = mountAccessory(session);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(container.textContent).toContain(card.title);
-  await vi.advanceTimersByTimeAsync(15 * 60_000);
-  expect(request.mock.calls).toEqual(expectedCalls);
-  expect(responseBytes).toBeLessThan(2048);
-
-  currentCard = {
-    ...card,
-    title: "Current captured conversation",
-    updatedAt: card.updatedAt + 1,
-  };
-  request.mockClear();
-  await change({ epoch: "catalog-epoch", revision: 1 });
-  expect(container.textContent).toContain(currentCard.title);
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls).toEqual(expect.arrayContaining(expectedCalls));
-  expect(responseBytes).toBeLessThan(2048);
-});
 
 it("keeps catalog navigation ordered and disambiguates names only while boards share them", async () => {
   const { host, connection, registrations } = fixture;
@@ -176,7 +147,6 @@ it("keeps catalog navigation ordered and disambiguates names only while boards s
     await change();
     expect(boardNavigation().map(({ label }) => label)).toEqual(labels);
   }
-  await vi.advanceTimersByTimeAsync(0);
   expect(boardNavigation()).toMatchObject([
     navigationItem("ops", "Zebra", "rocket"),
     navigationItem("sessions", "Alpha"),
@@ -203,23 +173,19 @@ it("keeps catalog navigation ordered and disambiguates names only while boards s
   await change();
   expect(register).not.toHaveBeenCalled();
 
-  const ambiguous = ["Alpha (sessions)", "Alpha (cards)"];
   await showBoards(
     [sessions, { ...operations, name: "Alpha", icon: "kanban", color: "green" }],
-    ambiguous,
+    ["Alpha (sessions)", "Alpha (cards)"],
   );
   expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions", "board-ops"]);
-  expect(registrations.get("navigation/board-ops")).toMatchObject({
-    icon: "kanban",
-  });
+  expect(navigation("ops").icon).toBe("kanban");
 
   await showBoards([sessions, { ...operations, name: "Operations" }], ["Alpha", "Operations"]);
-  await showBoards([sessions, { ...operations, name: "Alpha" }], ambiguous);
   await showBoards([sessions], ["Alpha"]);
   expect(boardNavigation().map(({ id }) => id)).toEqual(["board-sessions"]);
   expect(host.ui.pinNavigation).not.toHaveBeenCalled();
   dispose();
-  expect([...registrations.keys()].filter((key) => key.startsWith("navigation/"))).toEqual([]);
+  expect(registeredKeys("navigation/")).toEqual([]);
 });
 
 it.each(["open", "another board", "hidden"] as const)(
@@ -242,21 +208,15 @@ it.each(["open", "another board", "hidden"] as const)(
       return { cards: [], boards };
     });
     await activate();
-    await vi.advanceTimersByTimeAsync(0);
     const { update } = await mountPage({ boardId: "ops" });
     const previousBoards = boards;
     if (presentation === "open") {
       pendingCatalog = stale.promise;
       await change();
     }
-    const item = registrations.get("navigation/board-ops") as ControlUiNavigationItem;
-    const pending = item.actions?.find(({ id }) => id === "delete")?.run();
-    const dialog = expectDefined(
-      document.querySelector<HTMLElement>("[data-test-dialog]"),
-      "dialog",
-    );
-    expect(dialog.getAttribute("aria-label")).toBe("Delete “Operations”?");
-    expect(request.mock.calls.some(([method]) => method === "workboard.boards.delete")).toBe(false);
+    const pending = deleteAction().run();
+    expect(query("[data-test-dialog]").getAttribute("aria-label")).toBe("Delete “Operations”?");
+    expect(deleteCalls()).toHaveLength(0);
     clickDialog(true);
     expect(request).toHaveBeenCalledWith("workboard.boards.delete", { id: "ops" });
     expect(host.ui.unpinNavigation).not.toHaveBeenCalled();
@@ -296,12 +256,7 @@ it("keeps a board and its pin when deletion is canceled, refused, or fails", asy
     return { cards: [], boards: [operations] };
   });
   await activate();
-  await vi.advanceTimersByTimeAsync(0);
-  const item = registrations.get("navigation/board-ops") as ControlUiNavigationItem;
-  const action = expectDefined(
-    item.actions?.find(({ id }) => id === "delete"),
-    "delete action",
-  );
+  const action = deleteAction();
   const cancel = action.run();
   clickDialog(false);
   await cancel;
@@ -309,38 +264,29 @@ it("keeps a board and its pin when deletion is canceled, refused, or fails", asy
   connection.canWrite = false;
   clickDialog(true);
   await vi.advanceTimersByTimeAsync(0);
-  expect(document.querySelector("[role=alert]")?.textContent).toContain(
-    "Connect with write access",
-  );
-  expect(request.mock.calls.some(([method]) => method === "workboard.boards.delete")).toBe(false);
+  expectError("Connect with write access");
+  expect(deleteCalls()).toHaveLength(0);
   connection.canWrite = true;
   clickDialog(true);
   await vi.advanceTimersByTimeAsync(0);
-  expect(document.querySelector("[role=alert]")?.textContent).toContain("board still has cards");
-  const confirm = expectDefined(
-    document.querySelector<HTMLButtonElement>("[data-test-dialog] .danger"),
-    "delete confirmation",
-  );
+  expectError("board still has cards");
+  const confirm = dialogButton(true);
   const retry = createDeferred<unknown>();
   request.mockImplementationOnce(() => retry.promise);
   confirm.click();
   confirm.click();
   await vi.advanceTimersByTimeAsync(0);
-  expect(
-    request.mock.calls.filter(([method]) => method === "workboard.boards.delete"),
-  ).toHaveLength(2);
+  expect(deleteCalls()).toHaveLength(2);
   expect(document.querySelector("[role=alert]")).toBeNull();
   expect(confirm.disabled).toBe(true);
-  expect(
-    document.querySelector<HTMLButtonElement>("[data-test-dialog] button:not(.danger)")?.disabled,
-  ).toBe(true);
+  expect(dialogButton(false).disabled).toBe(true);
   const cancelEvent = new Event("cancel", { cancelable: true });
-  document.querySelector("[data-test-dialog]")?.dispatchEvent(cancelEvent);
+  query("[data-test-dialog]").dispatchEvent(cancelEvent);
   expect(cancelEvent.defaultPrevented).toBe(true);
   retry.reject(new Error("Retry deletion failed"));
   await vi.advanceTimersByTimeAsync(0);
-  expect(document.querySelector("[role=alert]")?.textContent).toContain("Retry deletion failed");
-  expect(document.querySelector("[data-test-dialog] .danger")).toBe(confirm);
+  expectError("Retry deletion failed");
+  expect(dialogButton(true)).toBe(confirm);
   expect(confirm.disabled).toBe(false);
   expect(registrations.has("navigation/board-ops")).toBe(true);
   expect(host.ui.unpinNavigation).not.toHaveBeenCalled();
@@ -387,11 +333,11 @@ it("disambiguates a created board and its sibling before pinning through a stale
   fixture.emit("plugin.workboard.changed", {});
   const form = expectDefined(
     container.querySelector<HTMLFormElement>(".workboard-board-draft"),
-    "board draft form",
+    "draft form",
   );
   const name = expectDefined(
     form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
-    "board name input",
+    "draft name",
   );
   name.value = board.name;
   name.dispatchEvent(new Event("input", { bubbles: true }));
@@ -404,10 +350,7 @@ it("disambiguates a created board and its sibling before pinning through a stale
   stale.resolve({ cards: [], boards: [existing] });
   await vi.advanceTimersByTimeAsync(0);
   expect(registrations.get("navigation/board-created")).toBe(pinnedNavigation);
-  refreshed.resolve({
-    cards: [],
-    boards: [existing, board],
-  });
+  refreshed.resolve({ cards: [], boards: [existing, board] });
   await vi.advanceTimersByTimeAsync(0);
   register.mockClear();
   await change();
@@ -415,9 +358,9 @@ it("disambiguates a created board and its sibling before pinning through a stale
   expect(host.ui.pinNavigation).toHaveBeenCalledOnce();
 });
 
-it("recovers accessory reads independently from the catalog and retires pending reads", async () => {
+it("avoids accessory polling, recovers failed reads, and retires pending reads", async () => {
   const hostListeners = fixture.listeners.size;
-  const { host, registrations } = fixture;
+  const { host } = fixture;
   const session = createGatewaySession();
   const card = createWorkboardCard({ title: "Linked card", sessionKey: session.key });
   const boards = [makeBoard("default")];
@@ -430,10 +373,16 @@ it("recovers accessory reads independently from the catalog and retires pending 
   const container = mountAccessory(session);
   await vi.advanceTimersByTimeAsync(0);
   expect(container.textContent).toContain(card.title);
-  expect([...registrations.keys()].filter((key) => key.startsWith("action/"))).toEqual([]);
+  expect(registeredKeys("action/")).toEqual([]);
+  const expectedCalls = [
+    ["workboard.boards.list", {}],
+    ["workboard.cards.list", { sessionKey: session.key }],
+  ];
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  expect(request.mock.calls).toEqual(expectedCalls);
 
   read.mockRejectedValueOnce(new Error("Temporary read failure"));
-  await change();
+  await change({ epoch: "catalog-epoch", revision: 1 });
   expect(request.mock.settledResults.some((result) => result.type === "rejected")).toBe(true);
   expect(container.textContent).toContain(card.title);
 

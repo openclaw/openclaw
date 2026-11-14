@@ -1,6 +1,8 @@
 // Register shared mocks before importing the production CLI graph.
 import "./update-repair.test-support.js";
 import os from "node:os";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import * as nativeProcess from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -30,6 +32,10 @@ vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveUpdateInstallKind: async () => "package",
 }));
+vi.mock("@openclaw/proc-safe/identity", async (original) => ({
+  ...(await original<typeof import("@openclaw/proc-safe/identity")>()),
+}));
+
 let state: OpenClawTestState;
 let fixture: ReturnType<typeof createManagedHandoffRecoveryFixture>;
 
@@ -211,6 +217,14 @@ it.each(preservedOwnerCases)(
           throw Object.assign(new Error("permission denied"), { code: "EPERM" });
         }
         return kill(pid, signal);
+      });
+      // Both Windows probes must observe the synthetic owner's denied permissions.
+      const readIdentity = nativeProcess.readProcessIdentity;
+      vi.spyOn(nativeProcess, "readProcessIdentity").mockImplementation((pid) => {
+        if (pid === fixture.helper.pid) {
+          throw new ProcSafeError("access-denied", "permission denied");
+        }
+        return readIdentity(pid);
       });
     }
     const retained = fixture.store.read(key);

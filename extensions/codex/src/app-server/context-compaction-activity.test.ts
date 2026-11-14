@@ -91,15 +91,13 @@ describe("persistCodexContextCompactionActivity", () => {
       expect(appendMessage.mock.calls[0]?.[0].message).toMatchObject({
         provider: "openai",
         model: "gpt-5.6-luna",
-        usage: {
-          contextUsage:
-            tokensAfter === undefined
-              ? { state: "unavailable" }
-              : { state: "available", promptTokens: tokensAfter, totalTokens: tokensAfter },
-        },
       });
-      expect(appendMessage.mock.calls[0]?.[0].message.usage).not.toHaveProperty("input");
-      expect(appendMessage.mock.calls[0]?.[0].message.usage).not.toHaveProperty("usageReport");
+      expect(appendMessage.mock.calls[0]?.[0].message.usage).toEqual({
+        contextUsage:
+          tokensAfter === undefined
+            ? { state: "unavailable" }
+            : { state: "available", promptTokens: tokensAfter, totalTokens: tokensAfter },
+      });
     },
   );
 });

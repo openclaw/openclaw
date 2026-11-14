@@ -1,0 +1,3 @@
+# Mounted catalog regression: native terminal exit rechecks provider eligibility
+# while preserving retained history and respecting provider denial.
+102

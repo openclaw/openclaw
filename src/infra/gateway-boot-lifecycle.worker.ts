@@ -3,7 +3,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
-import type { GatewayBootLifecycleCompletion } from "./gateway-boot-lifecycle.js";
+import type {
+  GatewayBootLifecycleCompletion,
+  GatewayRestartResumeWindow,
+} from "./gateway-boot-lifecycle.js";
 import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
@@ -40,8 +43,42 @@ export const gatewayBootOperations = {
         : undefined;
     const id = randomUUID();
     try {
-      runOpenClawStateWriteTransaction(({ db }) => {
+      const restartResumeWindow = runOpenClawStateWriteTransaction(({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
+        const boots = kysely
+          .selectFrom("gateway_boot_lifecycle")
+          .select(["pid", "started_at_ms", "outcome", "startup_reason"]);
+        const predecessor = executeSqliteQueryTakeFirstSync(
+          db,
+          boots.orderBy("started_at_ms", "desc").limit(1),
+        );
+        let window: GatewayRestartResumeWindow | undefined;
+        // Forced exit can interrupt marker persistence just like a process crash.
+        if (
+          predecessor &&
+          (predecessor.outcome === null || predecessor.outcome === "forced_stop")
+        ) {
+          let previous: NonNullable<typeof predecessor> = predecessor;
+          // A safe-mode recovery splits one incarnation; a real restart can reuse its PID.
+          while (previous.startup_reason === GATEWAY_CRASH_LOOP_RECOVERED_REASON) {
+            const parent = executeSqliteQueryTakeFirstSync(
+              db,
+              boots
+                .where("pid", "=", previous.pid)
+                .where("outcome", "=", "safe_mode_stable")
+                .where("completed_at_ms", "=", previous.started_at_ms)
+                .where("started_at_ms", "<", previous.started_at_ms)
+                .orderBy("started_at_ms", "desc")
+                .limit(1),
+            );
+            if (!parent) {
+              break;
+            }
+            previous = parent;
+          }
+          window = { startedAt: previous.started_at_ms, endedAt: nowMs };
+        }
+        // Read the predecessor before pruning: a long-running boot can exceed retention.
         executeSqliteQuerySync(
           db,
           kysely
@@ -60,8 +97,9 @@ export const gatewayBootOperations = {
             reason: null,
           }),
         );
+        return window;
       }, context.stateOptions());
-      return { decision, id };
+      return { decision, id, ...(restartResumeWindow ? { restartResumeWindow } : {}) };
     } catch (err) {
       // A failed history append must not discard an already-tripped breaker decision.
       gatewayLifecycleLog.warn(`failed to persist gateway boot start; fail-open: ${String(err)}`);

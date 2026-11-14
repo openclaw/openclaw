@@ -1,10 +1,8 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
-import * as cliGrant from "../agents/cli-runner/mcp-grant-context.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import * as gatewayRequests from "../agents/tools/in-process-gateway.js";
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
-import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import * as grants from "./mcp-grant-store.js";
@@ -27,7 +25,7 @@ vi.mock("../agents/node-exec-availability.js", () => ({
 const runtime = mcp.useLoopbackServerForTest();
 
 it.each([false, true])(
-  "carries personal Workshop and live session-tool authority outside cloned grant context (assignment only: %s)",
+  "carries personal library and live session-tool authority outside cloned grant context (assignment only: %s)",
   async (assignmentOnly) => {
     const alice = { profileId: "alice", senderId: "alice", name: "Alice" };
     const session = {
@@ -57,34 +55,21 @@ it.each([false, true])(
         invoke,
       };
       const config = { session: { mainKey: "main" } };
-      const context = cliGrant.buildCliMcpGrantContext({
-        run: {
-          ...session,
-          sessionFile: "/tmp/library-session",
-          workspaceDir: "/tmp/library-workspace",
-          provider: "test-cli",
-          prompt: "List my skills",
-          timeoutMs: 1_000,
-          skillLibraryAuthoring,
-        },
-        config,
-        requireExplicitMessageTarget: false,
-        agentId: "main",
-        modelProvider: "openai",
-        modelId: "gpt-5.6-luna",
-      });
-      const preparedGrant = expectDefined(
-        cliGrant.finalizeCliMcpGrant(context, undefined, false, { config }),
-        "Expected prepared CLI grant",
-      );
       const grant = grants.mintMcpLoopbackClientGrant({
-        ...preparedGrant,
+        context: {
+          ...session,
+          workspaceDir: "/tmp/library-workspace",
+          agentId: "main",
+          senderIsOwner: false,
+          nodeExecAllowed: true,
+        },
+        toolPolicyConfig: config,
         runtimeOwnerToken: runtime().ownerToken,
         admittedRunContext: turn.admittedRunContext,
         personalToolParticipants: turn.operation.personalToolParticipants,
         skillLibraryAuthoring,
       });
-      expect(grant.context).not.toHaveProperty("skillWorkshop.libraryAuthoring");
+      expect(grant.context).not.toHaveProperty("skillLibraryAuthoring");
       expect(grant.context).not.toHaveProperty("personalToolParticipants");
       const callGateway = vi
         .spyOn(gatewayRequests, "callAgentToolGatewayRequest")
@@ -95,11 +80,11 @@ it.each([false, true])(
         })
         .mockClear();
       resolveTools.mockImplementation(async (input) => {
-        const capability = input.skillWorkshop?.libraryAuthoring;
+        const capability = input.skillLibraryAuthoring;
         return mcp.scopedToolFixture(
           capability
             ? [
-                createLibrarySkillWorkshopTool(capability),
+                createSkillLibraryTool(capability),
                 createSessionsTool({
                   senderIsOwner: assignmentOnly ? false : undefined,
                   agentSessionKey: session.sessionKey,
@@ -121,9 +106,9 @@ it.each([false, true])(
         });
       const call = async (name: string, args: Record<string, unknown>) =>
         mcp.readOkMcpPayload(await request(name, args));
-      const workshop = await call("skill_workshop", { action: "list" });
-      expect(workshop.result?.isError).toBe(false);
-      expect(JSON.parse(String(workshop.result?.content?.[0]?.text))).toMatchObject({
+      const library = await call("skill_library", { action: "list" });
+      expect(library.result?.isError).toBe(false);
+      expect(JSON.parse(String(library.result?.content?.[0]?.text))).toMatchObject({
         entries: [],
         omitted: 0,
       });

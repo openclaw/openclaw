@@ -30,8 +30,8 @@ suite.define(() => {
       },
       async ({ page }) => {
         const commands = [
-          command("autoreview", "Auto Review"),
-          command("technical_documentation", "Technical Documentation"),
+          command("autoreview", "Mu\u0308nchen"),
+          command("technical_documentation", "Home Caf\u00e9"),
           command("status_report", "Status Report"),
           command("status"),
         ];
@@ -49,7 +49,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const draft = (value: string) => expect.poll(() => composer.inputValue()).toBe(value);
         const screenshot = async (name: string, target: Locator) => {
@@ -60,18 +60,18 @@ suite.define(() => {
             );
           }
         };
-        await composer.fill("Review this with $auto");
+        await composer.fill("Review this with $m\u00fcnchen");
 
         const picker = page.getByRole("listbox", { name: "Skill references" });
         await picker.waitFor({ state: "visible" });
         await expect
           .poll(() => picker.getByRole("option").allTextContents())
-          .toEqual([expect.stringContaining("Auto Review")]);
+          .toEqual([expect.stringContaining("Mu\u0308nchen")]);
         await screenshot("skill-reference-picker.png", picker);
         await composer.press("Enter");
         await draft("Review this with $autoreview ");
 
-        await composer.fill(`${await composer.inputValue()}and $technical`);
+        await composer.fill(`${await composer.inputValue()}and $cafe\u0301`);
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await composer.press("Tab");
         await draft("Review this with $autoreview and $technical_documentation ");

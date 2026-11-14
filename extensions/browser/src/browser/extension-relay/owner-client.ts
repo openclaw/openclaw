@@ -43,14 +43,12 @@ export class RelayOwnerClient {
   private profileAdmission: () => void = () => {};
   private sequence = 0;
   private closed = false;
-  private retirementAcknowledged = false;
   private closing: Promise<void> | undefined;
 
   private constructor(private readonly ws: WebSocket) {
     ws.on("message", (raw) => {
       const parsed = parseStrictJsonObject(rawDataToString(raw));
       if (relayOwnerRetired.safeParse(parsed).success) {
-        this.retirementAcknowledged = true;
         this.invalidate("Relay owner retired");
         return;
       }
@@ -284,7 +282,8 @@ export class RelayOwnerClient {
   }
 
   close(): Promise<void> {
-    if (this.retirementAcknowledged) {
+    // The daemon owns cleanup after socket loss; this dead lease cannot acknowledge it.
+    if (this.closed || this.ws.readyState !== 1) {
       return Promise.resolve();
     }
     return (this.closing ??= this.request("close").then(() => {

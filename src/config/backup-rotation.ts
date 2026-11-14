@@ -1,4 +1,5 @@
 // Config publication stages candidates before consuming recovery history.
+import { randomUUID } from "node:crypto";
 import type fs from "node:fs";
 import path from "node:path";
 import { tempFile } from "@openclaw/fs-safe/advanced";
@@ -15,18 +16,32 @@ export async function prepareConfigFileWrite(
     configPath: string;
     content: string;
     previousRaw: string | null;
+    warn?: (message: string) => void;
     fsModule: typeof fs;
     assertCurrent?: () => void;
     destinationHardlinks?: "reject";
     durable?: boolean;
-    dirMode?: number;
-  } & Pick<ReplaceFileAtomicSyncOptions, "assertBeforeMutation" | "onDestinationState">,
+  } & Pick<ReplaceFileAtomicSyncOptions, "assertBeforeMutation" | "onDestinationState" | "dirMode">,
 ) {
   const { configPath, fsModule } = params;
   const assertCurrent = createConfigWriteAuthorityGuard(params.assertCurrent);
   const assertBeforeMutation = createConfigWriteAuthorityGuard(
     params.assertBeforeMutation ?? assertCurrent,
   );
+  let backupRotationWarningIssued = false;
+  const warnBackupRotationFailure = () => {
+    if (backupRotationWarningIssued) {
+      return;
+    }
+    backupRotationWarningIssued = true;
+    try {
+      params.warn?.(
+        "Config backup rotation failed; the config write is continuing without a guaranteed current backup. Before making further config changes, create and verify a backup with `openclaw backup create --verify`.",
+      );
+    } catch {
+      // Logging must not turn best-effort backup maintenance into a failed config write.
+    }
+  };
   assertCurrent?.();
   let backup: Awaited<ReturnType<typeof tempFile>> | undefined;
   try {
@@ -59,6 +74,7 @@ export async function prepareConfigFileWrite(
     backup = undefined;
     // Backup creation remains best effort; failed preparation never consumes history.
     assertCurrent?.();
+    warnBackupRotationFailure();
   }
   return {
     publish() {
@@ -131,10 +147,14 @@ export async function prepareConfigFileWrite(
             try {
               using destination = to ? openBackupArtifact(to) : undefined;
               if (destination && !destination.ok && !isRootFileMissingFailure(destination)) {
+                warnBackupRotationFailure();
                 return;
               }
               using source = openBackupArtifact(from);
               if (!source.ok) {
+                if (!isRootFileMissingFailure(source)) {
+                  warnBackupRotationFailure();
+                }
                 return;
               }
               const assertSource = captureBackupIdentity(source.path, source.fd, "source");
@@ -163,6 +183,7 @@ export async function prepareConfigFileWrite(
               if (error instanceof ConfigMutationConflictError) {
                 throw error;
               }
+              warnBackupRotationFailure();
             }
           };
           const base = `${configPath}.bak`;
@@ -185,8 +206,10 @@ interface PreUpdateSnapshotFs {
   writeFile: (
     path: string,
     content: string,
-    options: { encoding: "utf-8"; mode: number; flag: "w" },
+    options: { encoding: "utf-8"; mode: number; flag: "wx" },
   ) => Promise<void>;
+  rename: (from: string, to: string) => Promise<void>;
+  rm: (path: string) => Promise<void>;
   readFile: (path: string, encoding: "utf-8") => Promise<string>;
   existsSync: (path: string) => boolean;
 }
@@ -198,6 +221,8 @@ const preUpdateConfigSnapshotsWritten = new Set<string>();
  *
  * The snapshot is outside the rotating `.bak` ring so repeated writes during
  * one process keep an operator-visible rollback point for the original file.
+ * It publishes through a same-directory rename so a crash mid-write cannot
+ * truncate the previous rollback point.
  */
 export async function createPreUpdateConfigSnapshot(params: {
   configPath: string;
@@ -213,15 +238,22 @@ export async function createPreUpdateConfigSnapshot(params: {
   // Mark before I/O so concurrent callers coalesce onto the in-flight snapshot attempt.
   preUpdateConfigSnapshotsWritten.add(snapshotKey);
   const snapshotPath = `${params.configPath}.pre-update`;
+  const tempPath = `${snapshotPath}.${randomUUID()}.tmp`;
   try {
     const content = await params.fs.readFile(params.configPath, "utf-8");
-    await params.fs.writeFile(snapshotPath, content, {
+    await params.fs.writeFile(tempPath, content, {
       encoding: "utf-8",
       mode: 0o600,
-      flag: "w",
+      flag: "wx",
     });
+    await params.fs.rename(tempPath, snapshotPath);
   } catch {
     // Best-effort: let the update continue, but allow its later snapshot pass to retry.
+    try {
+      await params.fs.rm(tempPath);
+    } catch {
+      // The temp file may not exist yet; the marker reset below still allows a retry.
+    }
     preUpdateConfigSnapshotsWritten.delete(snapshotKey);
   }
 }

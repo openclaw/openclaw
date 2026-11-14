@@ -73,7 +73,11 @@ if (process.argv.includes("auth")) {
   send({ loggedIn: nativeLogin });
   process.exit(0);
 }
+appendFileSync(join(nativeRoot, "execution-launches.log"), "launch\n");
 const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
+let credential = nativeLogin
+  ? JSON.parse(readFileSync(join(nativeRoot, ".credentials.json"), "utf8")).claudeAiOauth?.accessToken
+  : undefined;
 let reply = "No managed credential supplied.";
 if (nativeLogin) {
   reply = "Native account reply.";
@@ -81,6 +85,7 @@ if (nativeLogin) {
 if (descriptor !== undefined) {
   assert.equal(descriptor, "3");
   const token = readFileSync(3, "utf8");
+  credential = token;
   assert.ok(["synthetic-pasted-anthropic-token", "synthetic-replacement-anthropic-token"].includes(token));
   reply = token === "synthetic-replacement-anthropic-token"
     ? "Replacement account reply." : "Saved account reply.";
@@ -89,13 +94,21 @@ for (const name of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE
   assert.equal(process.env[name], undefined);
 }
 let currentHistory;
-createInterface({ input: process.stdin }).on("line", (line) => {
+createInterface({ input: process.stdin }).on("line", async (line) => {
   const message = JSON.parse(line);
   if (message.type === "control_request" && message.request.subtype === "initialize") {
     send({ type: "control_response", response: {
       subtype: "success", request_id: message.request_id, response: { commands: [], models: [] },
     } });
   } else if (message.type === "user") {
+    const providerFile = join(nativeRoot, "provider-url.txt");
+    if (existsSync(providerFile)) {
+      const response = await fetch(readFileSync(providerFile, "utf8"), {
+        method: "POST", headers: { authorization: "Bearer " + credential }, body: "fixture inference",
+      });
+      assert.equal(response.status, 200);
+      await response.text();
+    }
     assert.equal(realpathSync.native(process.cwd()).normalize("NFC"), ${JSON.stringify(workspaceDir)});
     const resumeIndex = process.argv.indexOf("--resume");
     const sessionId = process.argv[(resumeIndex >= 0 ? resumeIndex : process.argv.indexOf("--session-id")) + 1];

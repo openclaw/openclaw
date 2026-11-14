@@ -175,8 +175,15 @@ describe("Doctor maintenance with shared-state workers", () => {
               if (databaseGenerations) {
                 vi.spyOn(
                   api.updateState,
-                  "readUpdateDatabaseGenerationsIsolated",
-                ).mockImplementation(async (paths) => api.generations(paths));
+                  "readUpdateDatabaseGenerationPairIsolated",
+                ).mockImplementation(async (paths) => {
+                  const generations = await api.generations(paths);
+                  return {
+                    committed: generations,
+                    physical: generations,
+                    emptyReaderAlternates: {},
+                  };
+                });
               }
               const admittedGenerations = databaseGenerations
                 ? await api.generations([databasePath])

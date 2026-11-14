@@ -19,7 +19,6 @@ import {
   resolveRequesterPrincipalKey,
   type RequesterOrigin,
 } from "../../agents/requester-origin.js";
-import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -33,21 +32,16 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
-import {
-  getUserTurnTranscriptAdmissionOwner,
-  readUserTurnRequesterOrigin,
-} from "../../sessions/user-turn-transcript-admission.js";
+import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import {
   buildRunUserTurnIdempotencyKey,
-  buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
-import type { registerChatAbortController } from "../chat-abort.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   persistInboundImagesForTranscript,
@@ -62,10 +56,7 @@ import { resolveGatewayInputParticipant } from "../session-input-participant.js"
 import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  shouldSuppressAgentPromptPersistence,
-  type RestoredCronContinuation,
-} from "./agent-handler-helpers.js";
+import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
@@ -238,7 +229,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
 
     let message = params.message;
-    let runtimeContextFragments = params.client?.internal?.runtimeContextFragments;
+    const runtimeContextFragments = params.client?.internal?.runtimeContextFragments;
     let effectiveTranscriptInputText = params.effectiveTranscriptInputText;
     let execApprovalContinuationPromptRange: ExecApprovalContinuationPromptRange | undefined;
     if (execApprovalFollowupRuntimeHandoff?.resultText !== undefined) {
@@ -279,12 +270,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
     const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
     const suppressPromptPersistence =
-      !params.privateCompletion &&
-      (params.requestedPromptPersistenceSuppression ||
-        shouldSuppressAgentPromptPersistence({
-          inputProvenance: params.inputProvenance,
-          internalEvents: params.request.internalEvents,
-        }));
+      !params.privateCompletion && params.requestedPromptPersistenceSuppression;
     if (
       params.resolvedSessionKey &&
       !params.suppressVisibleSessionEffects &&
@@ -392,28 +378,8 @@ export async function prepareAgentRunUserTurn(params: {
         sessionId: params.admittedSessionId,
         agentId: params.activeSessionAgentId,
       });
-      let peerMessage = peerDelivery?.acceptedMessage;
-      if (peerDelivery && !peerMessage) {
-        const { captureQueuedOperatorRecoverySource } =
-          await import("../operator-run-recovery-source.js");
-        params.assertCurrent();
-        const operatorSource =
-          captureQueuedOperatorRecoverySource(operatorAuthority) ??
-          (requesterOrigin?.operatorProfileId ? { kind: "unavailable" as const } : null);
-        const original = buildPersistedUserTurnMessage(input);
-        peerMessage = {
-          ...original,
-          __openclaw: {
-            ...original["__openclaw"],
-            // The exact unconsumed pending input owns this source; a retained
-            // transcript copy cannot authorize replay.
-            sessionSendDelivery: { ...peerDelivery.delivery, operatorSource },
-          },
-        };
-      }
       recorder = createUserTurnTranscriptRecorder({
         trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
-        ...(peerMessage ? { message: peerMessage } : {}),
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: params.privateCompletion
@@ -437,6 +403,8 @@ export async function prepareAgentRunUserTurn(params: {
       if (
         !(await recorder.stageApproved!({
           runId: params.runId,
+          // This live, freshly authorized completion can retry; stored Stop/completed receipts win.
+          retryCancelled: trackRequesterCompletion,
           storageTarget: params.freshChildStorePath
             ? {
                 agentId: params.activeSessionAgentId,
@@ -460,13 +428,6 @@ export async function prepareAgentRunUserTurn(params: {
       // that exact provenance into execution, not only its transcript receipt.
       if (settleWakeReplay) {
         inputProvenance = normalizeInputProvenance(recorder.getPendingInputMessage?.()?.provenance);
-        if (getUserTurnTranscriptAdmissionOwner(recorder)?.pendingInput()?.interruptedByRestart) {
-          // A turn-local carrier survives replay of an already frozen model prompt.
-          runtimeContextFragments = [
-            ...(runtimeContextFragments ?? []),
-            { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
-          ];
-        }
       }
       requesterOrigin = readUserTurnRequesterOrigin(recorder) ?? requesterOrigin;
     }
@@ -550,16 +511,11 @@ export async function prepareAgentRunUserTurn(params: {
       // Retained input must keep its media even if later preparation or cleanup fails.
       params.onUserTurnMediaPersisted();
     }
-    const stopReason = params.getAbortStopReason?.() ?? "rpc";
-    const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
-    // Pending input must settle before admission can publish an abort. Timeouts
-    // retain retry custody; an explicit stop cancels it even before execution.
+    // Failed preparation settles as an ordinary failed send. The pending-input
+    // owner independently preserves queued inputs selected for graceful restart.
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
       { recorder, claimedExecApprovalFollowupHandoffId, execApprovalFollowupHandoffClaimId },
       error,
-      params.abortSignal?.aborted && stopReason !== "restart" && outcome.reason === "cancelled"
-        ? "cancelled"
-        : "interrupted",
     );
     if (!mediaRetained) {
       await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
@@ -603,19 +559,6 @@ export function finalizePreparedAgentRunUserTurn(prepared: PreparedAgentRunUserT
   }
 }
 
-export async function releaseStoppedAgentRunUserTurn(
-  prepared: PreparedAgentRunUserTurn,
-  abort: Pick<ReturnType<typeof registerChatAbortController>, "controller" | "entry">,
-): Promise<void> {
-  const stopReason = abort.entry?.adapter.abortStopReason;
-  const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
-  const cancelled =
-    abort.controller.signal.aborted &&
-    stopReason !== "restart" &&
-    (!prepared.privateCompletion || outcome.reason === "cancelled");
-  await releasePreparedAgentRunUserTurn(prepared, cancelled ? "cancelled" : "interrupted");
-}
-
 export async function releasePreparedAgentRunUserTurn(
   prepared: Pick<
     PreparedAgentRunUserTurn,
@@ -624,7 +567,7 @@ export async function releasePreparedAgentRunUserTurn(
     | "claimedExecApprovalFollowupHandoffId"
     | "execApprovalFollowupHandoffClaimId"
   >,
-  disposition: "cancelled" | "interrupted" = "interrupted",
+  disposition: "cancelled" | "interrupted" = "cancelled",
 ): Promise<void> {
   try {
     prepared.releaseProcessingAbortObserver?.();

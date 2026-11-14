@@ -283,9 +283,18 @@ function readWaitState(
     inputIndex: number;
   }> = [];
   const pending: string[] = [];
+  const announcing: string[] = [];
   for (const [inputIndex, runId] of ids.entries()) {
     const entry = entries.get(runId);
     if (!entry?.collect) {
+      // Session-mode children may deliver to a bound thread instead of the requester.
+      if (
+        entry?.expectsCompletionMessage &&
+        entry.spawnMode !== "session" &&
+        owner.currentSessionKeys.has(entry.requesterSessionKey)
+      ) {
+        announcing.push(runId);
+      }
       errors.push({ runId, error: "not_found" });
       continue;
     }
@@ -305,6 +314,12 @@ function readWaitState(
     } else {
       pending.push(runId);
     }
+  }
+  if (announcing.length === ids.length) {
+    // Mixed batches keep per-ID results; an announcing-only wait gets delivery guidance instead.
+    throw new ToolInputError(
+      `agents_wait only collects runs started with collect=true. ${announcing.join(", ")} will report back to this session as a completion message; continue other work or end the turn instead of waiting.`,
+    );
   }
   completed.sort(
     (left, right) => left.completedAt - right.completedAt || left.inputIndex - right.inputIndex,

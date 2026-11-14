@@ -3,7 +3,10 @@ import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
-import { captureOpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-cache.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  openClawStateDatabaseCache,
+} from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   captureOpenClawStateReadContextWithAdmission,
@@ -23,6 +26,7 @@ export function captureOpenClawStateReadContext(
   return captureOpenClawStateReadContextWithAdmission(
     pathname,
     captureOpenClawStateDatabaseReadAdmission,
+    openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
   );
 }
 
@@ -33,6 +37,7 @@ export function captureOpenClawStateReadWorkerContext(
   return captureOpenClawStateReadWorkerContextWithAdmission(
     options,
     captureOpenClawStateDatabaseReadAdmission,
+    openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
   );
 }
 
@@ -57,7 +62,8 @@ export function prepareOpenClawStateReadSource(input: { path: string; env?: Node
       next.admission.identity.key !== source.key ||
       next.admission.identity.birthtime !== source.birthtime ||
       next.maintenanceScope !== original.maintenanceScope ||
-      next.existingSchemaPath !== original.existingSchemaPath
+      next.existingSchemaPath !== original.existingSchemaPath ||
+      next.gatewayServiceInstallation !== original.gatewayServiceInstallation
     ) {
       throw new Error("Prepared state read source changed before read admission");
     }
@@ -100,5 +106,6 @@ export function captureOpenClawStateWorkerContext(
   return captureOpenClawStateWorkerContextWithAdmission(
     options,
     captureOpenClawStateDatabaseReadAdmission,
+    openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
   );
 }

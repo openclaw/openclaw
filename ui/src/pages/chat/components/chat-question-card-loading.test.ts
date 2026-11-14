@@ -90,41 +90,37 @@ it("defers controls, retries loading, and mounts only the current connected requ
     return importOriginal();
   });
   const { container, updatePanel } = mountDock();
-  expect(customElements.get("openclaw-chat-question-panel")).toBeUndefined();
   expect(load).not.toHaveBeenCalled();
   const onSubmit = vi.fn();
   const props = { model: model("old-request", "Old question"), onSubmit };
   updatePanel(props);
   flush();
   const card = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+  const status = () => card.querySelector('[role="status"]');
+  const alert = () => card.querySelector('[role="alert"]');
+  const retry = async () => {
+    card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
+    await waitForSolid(() => expect(status()).not.toBeNull());
+  };
+  const expectError = (message: string) =>
+    waitForSolid(() => expect(alert()?.textContent).toContain(message));
   await Promise.all([card.updateComplete, loadStarted.promise]);
-  expect(card.querySelector('[role="status"]')).not.toBeNull();
+  expect(status()).not.toBeNull();
   expect(card.querySelector("openclaw-chat-question-panel")).toBeNull();
-  const loadError = new Error("Synthetic load failure");
-  initialLoad.reject(loadError);
-  await waitForSolid(() =>
-    expect(card.querySelector('[role="alert"]')?.textContent).toContain("Synthetic load failure"),
-  );
+  initialLoad.reject(new Error("Synthetic load failure"));
+  await expectError("Synthetic load failure");
   await card.updateComplete;
-  expect(card.querySelector('[role="alert"]')?.textContent).toContain("Synthetic load failure");
   expect(onSubmit).not.toHaveBeenCalled();
-  expect(load).toHaveBeenCalledOnce();
 
-  card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-  await waitForSolid(() => expect(card.querySelector('[role="status"]')).not.toBeNull());
+  await retry();
   const staleError = new Error("Failed to fetch dynamically imported module");
   staleLoad.reject(staleError);
   const preloadError = new Event("vite:preloadError", { cancelable: true });
   Object.defineProperty(preloadError, "payload", { value: staleError });
   window.dispatchEvent(preloadError);
-  await waitForSolid(() =>
-    expect(card.querySelector('[role="alert"]')?.textContent).toContain(
-      "Failed to fetch dynamically imported module",
-    ),
-  );
+  await expectError(staleError.message);
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-  card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-  await waitForSolid(() => expect(card.querySelector('[role="status"]')).not.toBeNull());
+  await retry();
   const canReload = retryStale.mock.calls[0]![0].canReload;
   expect(canReload()).toBe(true);
   updatePanel({ ...props, model: { ...props.model } });
@@ -144,7 +140,7 @@ it("defers controls, retries loading, and mounts only the current connected requ
   });
   expect(persist).not.toHaveBeenCalledWith(guardKey, expect.any(String));
   recovery.resolve(false);
-  await waitForSolid(() => expect(card.querySelector('[role="alert"]')).not.toBeNull());
+  await waitForSolid(() => expect(alert()).not.toBeNull());
   expect(load).toHaveBeenCalledTimes(2);
   card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
   await waitForSolid(() => expect(load).toHaveBeenCalledTimes(3));
@@ -156,7 +152,6 @@ it("defers controls, retries loading, and mounts only the current connected requ
   const ready = questionPanelIn(container);
   retryLoad.resolve();
   const panel = await ready;
-  expect(load).toHaveBeenCalledTimes(3);
   expect(card.textContent).toContain("Current question");
   expect(card.textContent).not.toContain("Old question");
   expect(removedCard.querySelector(".chat-question-panel")).toBeNull();

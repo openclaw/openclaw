@@ -6,6 +6,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import * as pluginResources from "../plugins/doctor-contract-registry.js";
 import { preparePluginDoctorMigrationResources } from "../plugins/doctor-migration-resources.js";
@@ -21,9 +22,13 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
 import * as doctorAdmission from "./doctor-maintenance-admission.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
@@ -35,8 +40,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function withDoctorRehearsalState<T>(run: (state: OpenClawTestState) => Promise<T>): Promise<T> {
+  return withOpenClawTestState({ scenario: "minimal" }, (state) => {
+    const cleanup = state.cleanup;
+    let cleanupPromise: Promise<void> | undefined;
+    // Rehearsal TMPDIR contains the retained broker's socket. Keep it until native custody joins.
+    state.cleanup = () =>
+      (cleanupPromise ??= Promise.resolve().then(async () => {
+        await state.restoreEnv();
+        const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+        expect(await retireIdleOpenClawStateReadWorkers(source)).toBe(true);
+        expect(await source.retireIdleBroker()).toBe(true);
+        await cleanup();
+      }));
+    return run(state);
+  });
+}
+
 it("keeps config and declared plugin resources while excluding disposable core images and aliases", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withDoctorRehearsalState(async (state) => {
     const stateDir = await fs.realpath(state.stateDir);
     await withEnvAsync(
       {
@@ -277,7 +299,7 @@ it("keeps config and declared plugin resources while excluding disposable core i
 });
 
 it("refuses to seal exclusions when the rehearsal environment changes during capture", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withDoctorRehearsalState(async (state) => {
     const stateDir = await fs.realpath(state.stateDir);
     const env: NodeJS.ProcessEnv = {
       ...buildUpdateRehearsalPathEnv(stateDir),

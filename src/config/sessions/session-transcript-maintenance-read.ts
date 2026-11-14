@@ -44,6 +44,7 @@ export function readSessionTranscriptMaintenance(
         );
         return {
           kind: "transcript-maintenance" as const,
+          version: readTranscriptContextVersionInTransaction(database, target.sessionId),
           events: navigation.readCustomBranch(request.leafEntryId, request.customType, (seq) =>
             readTranscriptReportEvent(database, target.sessionId, seq),
           ),

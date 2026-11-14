@@ -1,7 +1,5 @@
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 /** Captured mailbox batch cleanup and summary bookkeeping. */
 import type { FollowupRun } from "../auto-reply/reply/queue/types.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCurrentSessionControllerTurnInput } from "./session-controller.context.js";
 import type {
@@ -10,19 +8,17 @@ import type {
 } from "./session-controller.contracts.js";
 import {
   abortSessionControllerInput,
-  completeSessionControllerSourceLifecycle,
   retireSessionControllerInput,
 } from "./session-controller.mailbox-source.js";
-import { runWithSessionControllerCleanup } from "./session-controller.owner-context.js";
-import { sessionControllers } from "./session-controller.state.js";
-
-let followedRestartDrainSignal: AbortSignal | undefined;
 
 /** Snapshots aggregate summary sources shared by selection and captured cleanup. */
 export function captureSessionControllerMailboxSummarySources(
   mailbox: SessionControllerMailbox,
 ): FollowupRun[] {
-  return [...mailbox.summaryElisions.flatMap((part) => part.sources), ...mailbox.summarySources];
+  return [
+    ...mailbox.summaryElisions.flatMap((part) => part.entries.map(({ source }) => source)),
+    ...mailbox.summaryEntries.map(({ source }) => source),
+  ];
 }
 
 /** Removes only authorized captured sources; reentrant successors keep their summaries. */
@@ -31,18 +27,16 @@ function detachSummarySources(
   selectedSource: (source: FollowupRun) => boolean,
 ): number {
   let removed = 0;
-  for (let index = mailbox.summarySources.length - 1; index >= 0; index--) {
-    if (selectedSource(mailbox.summarySources[index]!)) {
-      mailbox.summarySources.splice(index, 1);
-      mailbox.summaryLines.splice(index, 1);
+  for (let index = mailbox.summaryEntries.length - 1; index >= 0; index--) {
+    if (selectedSource(mailbox.summaryEntries[index]!.source)) {
+      mailbox.summaryEntries.splice(index, 1);
       removed++;
     }
   }
   for (const entry of mailbox.summaryElisions) {
-    for (let index = entry.sources.length - 1; index >= 0; index--) {
-      if (selectedSource(entry.sources[index]!)) {
-        entry.sources.splice(index, 1);
-        entry.summaryLines.splice(index, 1);
+    for (let index = entry.entries.length - 1; index >= 0; index--) {
+      if (selectedSource(entry.entries[index]!.source)) {
+        entry.entries.splice(index, 1);
         removed++;
       }
     }
@@ -51,9 +45,8 @@ function detachSummarySources(
         entry.sourceRefs.delete(original);
       }
     }
-    entry.count = entry.sources.length;
   }
-  mailbox.summaryElisions = mailbox.summaryElisions.filter((entry) => entry.count > 0);
+  mailbox.summaryElisions = mailbox.summaryElisions.filter((entry) => entry.entries.length > 0);
   mailbox.droppedCount = Math.max(0, mailbox.droppedCount - removed);
   return removed;
 }
@@ -130,7 +123,11 @@ export function clearSessionControllerMailbox(
         (source) => source.controllerInput === input,
       );
       for (const [key, record] of mailbox.recentSources) {
-        if (record.input === input && !input.custody.adopted && input.phase !== "consumed") {
+        if (
+          record.inputInstance === input.instance &&
+          !input.custody.adopted &&
+          input.phase !== "consumed"
+        ) {
           mailbox.recentSources.delete(key);
         }
       }
@@ -188,49 +185,4 @@ export function clearSessionControllerMailbox(
     mailbox.wake();
   }
   return cleared;
-}
-
-/** Waiting inputs retire on restart; active producers remain with the shutdown drain owner. */
-export function bindSessionControllerMailboxRestartDrain(): void {
-  const signal = getGatewayRestartDrainSignal();
-  if (followedRestartDrainSignal === signal) {
-    return;
-  }
-  followedRestartDrainSignal = signal;
-  signal.addEventListener(
-    "abort",
-    () => {
-      // Capture owners before cleanup can mutate the registry or publish a successor.
-      const mailboxes = [...sessionControllers.values()].flatMap((owner) =>
-        owner.mailbox ? [owner.mailbox] : [],
-      );
-      // Restart may originate inside a turn; selection must not depend on its context.
-      runWithSessionControllerCleanup(() => {
-        for (const mailbox of mailboxes) {
-          const waiting = mailbox.entries.filter(
-            (input) => (!input.claim || input.claim.released) && input.phase !== "injecting",
-          );
-          clearSessionControllerMailbox(
-            mailbox,
-            completeRestartClearedSource,
-            waiting,
-            undefined,
-            createAgentRunRestartAbortError(),
-          );
-        }
-      });
-    },
-    { once: true },
-  );
-}
-
-// Use the existing source custody without submitting missing followup work.
-function completeRestartClearedSource(source: FollowupRun): void {
-  const input = source.controllerInput;
-  if (input) {
-    completeSessionControllerSourceLifecycle(
-      source,
-      source.controllerClaim?.custody ?? input.custody,
-    );
-  }
 }

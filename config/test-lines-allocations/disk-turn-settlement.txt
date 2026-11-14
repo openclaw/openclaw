@@ -1,0 +1,3 @@
+# Exact pending-disk turn settlement and authorized retained wake before claim.
+# Real repository/native-store fixtures cover both result claim modes and revoked wake custody.
+268

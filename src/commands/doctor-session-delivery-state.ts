@@ -14,7 +14,9 @@ import {
   projectExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -31,7 +33,7 @@ import {
   isOpenClawAgentDatabaseOpen,
 } from "../state/openclaw-agent-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
 import { backupDoctorSqliteDatabases } from "./doctor-migration-backup.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 import {
@@ -39,11 +41,14 @@ import {
   scanDoctorSessionEntryRecords,
 } from "./doctor/shared/session-entry-rewrite.js";
 import {
+  inspectLegacyRestartTombstone,
   migrateLegacySessionEntryState,
   type SessionEntryStateRepair,
 } from "./doctor/shared/session-entry-shape.js";
 
-export type SessionDeliveryStateRepairReport = ReturnType<typeof repairCanonicalSessionEntries>;
+export type SessionDeliveryStateRepairReport = Awaited<
+  ReturnType<typeof repairCanonicalSessionEntries>
+>;
 
 type CanonicalSessionRepairOptions = Omit<
   Parameters<typeof repairCanonicalSessionEntries>[0],
@@ -82,7 +87,7 @@ type PreparedSessionEntryRepairParams =
   | (SessionEntryRepairParams & { source: "canonical" })
   | (Omit<SessionEntryRepairParams, "transform"> & {
       source: "raw";
-      rawNeedsRepair: (entry: Record<string, unknown>) => boolean;
+      rawNeedsRepair: (entry: Record<string, unknown>, sessionKey: string) => boolean;
       rawTransform: (
         entry: Record<string, unknown>,
         sessionKey: string,
@@ -92,7 +97,8 @@ type PreparedSessionEntryRepairParams =
       deferToMediaPreparation?: boolean;
     });
 
-function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
+async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
+  const signal = resolveSqliteInspectionSignal();
   const targets = (
     params.targets ??
     projectExistingAgentDatabaseTargets(
@@ -105,22 +111,30 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
     )
   ).filter((target) => !params.excludedDatabasePaths?.has(target.sqlitePath));
   const inspectedTargets: Array<ExistingAgentDatabaseTarget & { canonicalPath: string }> = [];
-  const pending = targets.flatMap((target) => {
+  const pending: Array<{
+    target: ExistingAgentDatabaseTarget;
+    scope: { agentId: string; env: NodeJS.ProcessEnv; storePath: string };
+    sessionKeys: string[];
+    identity: ReturnType<typeof readDatabasePathIdentitySync>;
+  }> = [];
+  for (const target of targets) {
+    signal?.throwIfAborted();
     const sessionKeys: string[] = [];
     const scope = { agentId: target.agentId, env: params.env, storePath: target.sqlitePath };
-    const scan = () => {
+    const scan = async () => {
       const identity = readDatabasePathIdentitySync(target.sqlitePath);
       if (params.source === "raw") {
-        scanDoctorSessionEntryRecords(
+        await scanDoctorSessionEntryRecords(
           scope,
           ({ entry, sessionKey }) => {
-            if (params.rawNeedsRepair(entry)) {
+            if (params.rawNeedsRepair(entry, sessionKey)) {
               sessionKeys.push(sessionKey);
             }
           },
           identity,
         );
       } else {
+        await prepareArtifactPreservingSqliteRead(target.sqlitePath, signal);
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, recoveredFromProjections, sessionKey }) => {
@@ -139,21 +153,25 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
     try {
       const operation =
         params.source === "raw"
-          ? { ok: true, value: scan() }
-          : runDoctorAgentDatabaseOperation({
+          ? { ok: true, value: await scan() }
+          : await runDoctorAgentDatabaseOperationAsync({
               agentId: target.agentId,
               path: target.sqlitePath,
               run: scan,
             });
+      signal?.throwIfAborted();
       if (!operation.ok) {
-        return [];
+        continue;
       }
       inspectedTargets.push({
         ...target,
         canonicalPath: operation.value.identity.canonicalPath,
       });
-      return sessionKeys.length > 0 ? [operation.value] : [];
+      if (sessionKeys.length > 0) {
+        pending.push(operation.value);
+      }
     } catch (error) {
+      signal?.throwIfAborted();
       if (
         params.source === "raw" &&
         (params.deferToMediaPreparation ||
@@ -169,11 +187,11 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
           `- Session entry inspection awaits ${owner}: ${formatErrorMessage(error)}`,
           "Session SQLite",
         );
-        return [];
+        continue;
       }
       throw error;
     }
-  });
+  }
   return {
     targets,
     inspectedTargets,
@@ -210,10 +228,10 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
   };
 }
 
-export function repairCanonicalSessionEntries(
+export async function repairCanonicalSessionEntries(
   params: SessionEntryRepairParams & { apply: boolean },
 ) {
-  const plan = prepareSessionEntryRepairs({ ...params, source: "canonical" });
+  const plan = await prepareSessionEntryRepairs({ ...params, source: "canonical" });
   return {
     found: plan.found,
     repaired: params.apply ? plan.apply() : 0,
@@ -224,6 +242,7 @@ export function repairCanonicalSessionEntries(
 function needsLegacySessionEntryRepair(entry: Record<string, unknown>): boolean {
   return (
     hasLegacySessionEntryState(entry) ||
+    inspectLegacyRestartTombstone(entry)?.retire ||
     SESSION_ENTRY_NUMERIC_FIELDS.some((field) => typeof entry[field] === "string")
   );
 }
@@ -245,15 +264,40 @@ export async function repairLegacySessionEntryStates(params: {
   ) => void;
 }): Promise<SessionDeliveryStateRepairReport> {
   try {
-    const plan = prepareSessionEntryRepairs({
+    const recoveredTombstones = new Map<string, string>();
+    const retainedWarnings = new Map<string, string>();
+    const reportRetained = () => {
+      for (const [sessionKey, warning] of retainedWarnings) {
+        note(`${sessionKey}: ${warning}`, "Session recovery warning");
+      }
+    };
+    const plan = await prepareSessionEntryRepairs({
       ...params,
       source: "raw",
-      rawNeedsRepair: needsLegacySessionEntryRepair,
+      rawNeedsRepair: (entry, sessionKey) => {
+        const tombstone = inspectLegacyRestartTombstone(entry);
+        if (tombstone && !tombstone.retire) {
+          retainedWarnings.set(sessionKey, tombstone.warning);
+        }
+        return needsLegacySessionEntryRepair(entry);
+      },
       rawTransform: (entry, sessionKey, updatedAt) => {
         if (!needsLegacySessionEntryRepair(entry)) {
           return { entry };
         }
-        const next = migrateLegacySessionEntryState(entry, updatedAt, sessionKey);
+        const next = migrateLegacySessionEntryState(entry, updatedAt);
+        const tombstone = inspectLegacyRestartTombstone(entry);
+        retainedWarnings.delete(sessionKey);
+        if (tombstone?.retire) {
+          recoveredTombstones.set(
+            sessionKey,
+            tombstone.doctorOnly
+              ? `${sessionKey}: ${tombstone.warning}`
+              : `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
+          );
+        } else if (tombstone) {
+          retainedWarnings.set(sessionKey, tombstone.warning);
+        }
         return {
           ...next,
           entry: hasLegacySessionProviderState(entry)
@@ -265,6 +309,7 @@ export async function repairLegacySessionEntryStates(params: {
     });
     const report = { found: plan.found, repaired: 0, scannedStores: plan.scannedStores };
     if (!params.apply || plan.found === 0) {
+      reportRetained();
       params.onInspectedTargets?.(plan.inspectedTargets);
       return report;
     }
@@ -292,6 +337,10 @@ export async function repairLegacySessionEntryStates(params: {
       assertCurrent();
       note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
       report.repaired = plan.apply(assertTargetCurrent);
+      reportRetained();
+      for (const warning of recoveredTombstones.values()) {
+        note(warning, "Session recovery warning");
+      }
       params.onInspectedTargets?.(plan.inspectedTargets);
       note(
         `- Canonicalized entry state for ${report.repaired} durable session row(s).`,

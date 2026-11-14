@@ -8,7 +8,7 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import {
@@ -34,16 +34,10 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
-import type {
-  PrepareGatewaySessionLifecycle,
-  PreparedGatewaySessionLifecycle,
-} from "../session-create-service.types.js";
+import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { commitPreparedSessionWorkspace } from "../session-lifecycle-preparation.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveExplicitSessionName } from "../session-title-state.js";
@@ -98,77 +92,6 @@ export function resolveSessionRepositoryCreation(
     );
   }
   return ok({ url, ...(ref ? { ref } : {}) });
-}
-
-export function prepareSessionRepositoryWorkspace(
-  repository: RepositorySource,
-  options: { runSetupScript: boolean; assertCurrent: () => void },
-): PrepareGatewaySessionLifecycle {
-  const { assertCurrent } = options;
-  return async (target) => {
-    const store = getSessionRepositoryWorkspaceStore();
-    const source = captureOpenClawStateWorkerContext({ path: store.path });
-    const assertSourceCurrent = () => {
-      source.admission.assertCurrent();
-      assertCurrent();
-    };
-    const existing = await store.find({ agentId: target.agentId, sessionKey: target.key });
-    if (
-      target.entry &&
-      (!target.entry.repositoryWorkspaceId ||
-        target.entry.repositoryWorkspaceId !== existing?.workspaceId)
-    ) {
-      return invalidSessionRequest("repository source requires a new repository session");
-    }
-    if (
-      existing &&
-      (existing.url !== repository.url || existing.requestedRef !== (repository.ref ?? null))
-    ) {
-      return invalidSessionRequest("session repository source cannot be changed");
-    }
-    assertSourceCurrent();
-    const workspace = await store.create({
-      agentId: target.agentId,
-      sessionKey: target.key,
-      url: repository.url,
-      requestedRef: repository.ref,
-      runSetupScript: options.runSetupScript,
-      assertCurrent: assertSourceCurrent,
-    });
-    const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>
-      runOpenClawStateWorkerOperation(source, () => run(assertSourceCurrent), {
-        assertCurrent: assertSourceCurrent,
-      });
-    return ok({
-      repositoryWorkspaceId: workspace.workspaceId,
-      withCommit,
-      ...(!existing
-        ? {
-            rollback: async () => {
-              // Creation still holds the session lifecycle lock. Cleanup owns only the
-              // untouched row it allocated, even when the initiating caller has gone away.
-              source.admission.assertCurrent();
-              const prepared = await store.prepare(workspace.workspaceId);
-              await store.delete({
-                workspaceId: workspace.workspaceId,
-                assertCurrent: () => {
-                  source.admission.assertCurrent();
-                  const current = prepared.current();
-                  if (
-                    current &&
-                    (current.agentId !== target.agentId ||
-                      current.sessionKey !== target.key ||
-                      current.revision !== workspace.revision)
-                  ) {
-                    throw new Error("Repository preparation changed before rollback");
-                  }
-                },
-              });
-            },
-          }
-        : {}),
-    });
-  };
 }
 
 export function validateSessionWorktreeSelection(
@@ -559,6 +482,7 @@ export async function prepareSessionWorkspaceForRun(params: {
                 // initialize its prompt in the final execution directory.
                 const bound = await commitPreparedSessionWorkspace({
                   prepared: promptWorkspace,
+                  signal,
                   target,
                   projectId: project?.id,
                   assertCurrent: assertRunOwnership,
@@ -581,6 +505,7 @@ export async function prepareSessionWorkspaceForRun(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared,
+        signal,
         target,
         projectId: project?.id,
         assertCurrent: assertRunOwnership,

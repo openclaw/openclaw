@@ -1,0 +1,2 @@
+# Preserve the released updater's physical SQLite capture before Doctor cohort discovery.
+19

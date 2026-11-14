@@ -8,6 +8,7 @@ import { observeResize } from "../../lib/reactive/observers.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
+import { ErrorDetails } from "../config-error.tsx";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
@@ -21,52 +22,6 @@ import "../../styles/session-panel-rail.css";
 registerEnglishCatalog(registerBrowserEnglish);
 export type BrowserPanelDock = "bottom" | "right";
 type ControllerProps = { controller: BrowserPanel };
-
-function HeaderActions(
-  props: ControllerProps & {
-    dock: BrowserPanelDock;
-    onDockChange: (dock: BrowserPanelDock) => void;
-    onClose: () => void;
-  },
-) {
-  const activeUrl = createMemo(
-    () =>
-      props.controller.native.activeTab?.url ||
-      props.controller.view?.metrics?.url ||
-      props.controller.view?.url ||
-      props.controller.urlDraft,
-  );
-  return (
-    <div class="rail-header__actions bp-actions">
-      <span class="bp-dock-modes" role="group" aria-label={t("browser.title")}>
-        <openclaw-tooltip
-          prop:content={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-        >
-          <PanelIconButton
-            class="rail-header__action bp-icon"
-            label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-            icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
-            onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
-          />
-        </openclaw-tooltip>
-      </span>
-      <PanelIconButton
-        class="rail-header__action bp-icon"
-        label={t("browser.openExternal")}
-        icon={<Icon name="externalLink" />}
-        newTab
-        disabled={!activeUrl()}
-        onClick={() => props.controller.openExternal()}
-      />
-      <PanelIconButton
-        class="rail-header__action bp-icon"
-        label={t("browser.close")}
-        icon={<Icon name="x" />}
-        onClick={() => props.onClose()}
-      />
-    </div>
-  );
-}
 
 function AnnotateBar(props: ControllerProps) {
   return (
@@ -191,7 +146,10 @@ function ViewportContent(
           presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("browser.loadFailed")}
-          description={props.controller.errorText!}
+          description={props.controller.errorText!.split("\n", 1).join("")}
+          details={
+            <ErrorDetails error={props.controller.errorText!.split("\n").slice(1).join("\n")} />
+          }
           action={
             <button
               class="btn"
@@ -394,6 +352,46 @@ export function BrowserPanelChrome(
     !props.controller.native.activeTab &&
     !props.controller.view &&
     Boolean(props.controller.errorText);
+  function HeaderActions() {
+    const activeUrl = createMemo(
+      () =>
+        props.controller.native.activeTab?.url ||
+        props.controller.view?.metrics?.url ||
+        props.controller.view?.url ||
+        props.controller.urlDraft,
+    );
+    return (
+      <div class="rail-header__actions bp-actions">
+        <span class="bp-dock-modes" role="group" aria-label={t("browser.title")}>
+          <openclaw-tooltip
+            prop:content={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
+          >
+            <PanelIconButton
+              class="rail-header__action bp-icon"
+              label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
+              icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
+              onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
+            />
+          </openclaw-tooltip>
+        </span>
+        <PanelIconButton
+          class="rail-header__action bp-icon"
+          label={t("browser.openExternal")}
+          icon={<Icon name="externalLink" />}
+          newTab
+          disabled={!activeUrl()}
+          onClick={() => props.controller.openExternal()}
+        />
+        <PanelIconButton
+          class="rail-header__action bp-icon"
+          label={t("browser.close")}
+          icon={<Icon name="x" />}
+          onClick={() => props.onClose()}
+        />
+      </div>
+    );
+  }
+
   return (
     <section
       class={["bp", `bp--${props.embedded ? "embedded" : props.dock}`]}
@@ -410,14 +408,7 @@ export function BrowserPanelChrome(
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
           <BrowserTabs />
-          {!props.embedded ? (
-            <HeaderActions
-              controller={props.controller}
-              dock={props.dock}
-              onDockChange={props.onDockChange}
-              onClose={props.onClose}
-            />
-          ) : null}
+          {!props.embedded ? <HeaderActions /> : null}
         </header>
       ) : null}
       <BrowserToolbar
@@ -429,7 +420,8 @@ export function BrowserPanelChrome(
       {props.controller.errorText ? (
         emptyError() ? null : (
           <div class="bp-note bp-note--error" role="alert">
-            {props.controller.errorText}
+            <div>{props.controller.errorText.split("\n")[0]}</div>
+            <ErrorDetails error={props.controller.errorText.split("\n").slice(1).join("\n")} />
           </div>
         )
       ) : props.controller.noticeText ? (

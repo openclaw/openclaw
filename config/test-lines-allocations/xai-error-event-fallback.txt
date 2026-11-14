@@ -1,0 +1,2 @@
+# Top-level xAI stream failures and auth priority after visible partial output.
+13

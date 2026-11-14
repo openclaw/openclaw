@@ -4,6 +4,8 @@ import path from "node:path";
 import { parse } from "acorn";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStandaloneArtifactAdapter } from "../../scripts/lib/bun-standalone-artifacts.mjs";
+import { parseStandaloneArguments } from "../../scripts/lib/bun-standalone-contract.mjs";
+import { standaloneEmbeddedPathsExpression } from "../../scripts/lib/bun-standalone-data.mjs";
 import {
   planStandaloneRuntime,
   pruneStandaloneRuntime,
@@ -145,17 +147,27 @@ async function compile(
 
 describe("matched standalone support artifacts", () => {
   it.skipIf(process.platform === "win32")(
-    "retains requested AOT features and entrypoints without applying them to JIT support",
+    "allows disk plugins and retains AOT features without applying them to JIT support",
     async () => {
       const input = fixture();
       const second = path.join(input.compileRoot, "worker.js");
       fs.writeFileSync(second, "console.log('worker');");
+      const parsed = parseStandaloneArguments([
+        "out",
+        "--compile-aot",
+        "--trim-allow=run,jit",
+        "--trim-locales=en",
+        "--aot-disable=flow-results",
+      ]);
+      if (parsed.help) {
+        throw new Error("Expected AOT build options");
+      }
       await compile(input, {
         compiledEntries: [input.mainEntry, second],
         compileEntries: new Set([input.mainEntry, second]),
         external: ["external-package"],
-        compileFlags: ["--aot", "--trim-allow=run,jit", "--trim-locales=en"],
-        aotCompileOptions: { trim: { allow: ["run", "jit"], locales: ["en"] } },
+        compileFlags: parsed.compileFlags,
+        aotCompileOptions: parsed.aotCompileOptions,
       });
       const options = JSON.parse(
         fs.readFileSync(path.join(input.outputRoot, "openclaw.options.json"), "utf8"),
@@ -170,7 +182,9 @@ describe("matched standalone support artifacts", () => {
         compile: {
           outfile: path.join(input.outputRoot, "openclaw"),
           aot: true,
+          allowCodeFromDisk: true,
           trim: { allow: ["run", "jit"], locales: ["en"] },
+          aotDisable: ["flow-results"],
           autoloadPackageJson: true,
           autoloadDotenv: false,
           autoloadBunfig: false,
@@ -180,6 +194,13 @@ describe("matched standalone support artifacts", () => {
         fs.readFileSync(path.join(input.outputRoot, "support-artifact/openclaw"), "utf8"),
       );
       expect(support.aot).toBe(false);
+      const supportOptions = JSON.parse(
+        fs.readFileSync(
+          path.join(input.outputRoot, "support-artifact/openclaw.options.json"),
+          "utf8",
+        ),
+      );
+      expect(supportOptions.compile.allowCodeFromDisk).toBeUndefined();
       expect(fs.existsSync(path.join(input.outputRoot, "compile-standalone.mjs"))).toBe(false);
     },
   );
@@ -291,7 +312,7 @@ describe("matched standalone support artifacts", () => {
     },
   );
 
-  it("keeps bundled plugin fingerprints bound to the executing image's captured identity", () => {
+  it("keeps bundled artifacts in the executing image with the lazy entry lookup", () => {
     const runtimeRoot = tempDirs.make("standalone-fingerprint-");
     const entry = "dist/extensions/demo/state-operation-api.js";
     const entries = { [entry]: "/$bunfs/root/runtime/" + entry };
@@ -309,23 +330,61 @@ describe("matched standalone support artifacts", () => {
         `
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import.meta.require = createRequire(import.meta.url);
 const root = ${JSON.stringify(runtimeRoot)};
-const entries = ${JSON.stringify(entries)};
+const entries = ${standaloneEmbeddedPathsExpression(entries)};
+const required = [];
+globalThis.__openclawStandaloneCreateRequire = () => (target) => {
+  required.push(target);
+  return { selected: target };
+};
 globalThis.__openclawStandaloneBuildInfo = { build: { id: "image-a" } };
 ${adapter.bootstrap}
 globalThis.__openclawStandaloneBuildInfo = { build: { id: "image-b" } };
 const record = ${JSON.stringify(record)};
 const fingerprint = globalThis.__openclawStandaloneFingerprintArtifact;
-console.log(JSON.stringify([fingerprint(record), fingerprint({ ...record, sourcePreferred: true })]));
+const filename = path.join(root, ${JSON.stringify(entry)});
+const fallback = (...args) => ({ fallback: args });
+const capture = globalThis.__openclawStandaloneCaptureOperationArtifact;
+const artifact = capture(fallback, path.join(root, "dist"), [filename]);
+const loaded = globalThis.__openclawStandaloneLoadPluginModule(filename);
+const beforeDispose = [artifact.rootDir, artifact.hasSource(filename), artifact.resolve(filename)];
+artifact.prepareModule(filename);
+artifact.dispose();
+let disposedError;
+try { artifact.resolve(filename); } catch (error) { disposedError = error.message; }
+console.log(JSON.stringify({
+  fingerprints: [fingerprint(record), fingerprint({ ...record, sourcePreferred: true })],
+  loaded,
+  required,
+  beforeDispose,
+  disposed: !artifact.hasSource(filename),
+  disposedError,
+  outside: capture(fallback, "/editable", ["/editable/operation-api.js"]),
+  extraArguments: capture(fallback, path.join(root, "dist"), [filename], "extra"),
+  unselected: globalThis.__openclawStandaloneLoadPluginModule("/editable/index.js"),
+}));
 `,
       ],
       { encoding: "utf8" },
     );
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual([
-      'image-a:["dist/extensions/demo","dist/extensions/demo/state-operation-api.js"]',
-      null,
-    ]);
+    expect(JSON.parse(result.stdout)).toEqual({
+      fingerprints: [
+        'image-a:["dist/extensions/demo","dist/extensions/demo/state-operation-api.js"]',
+        null,
+      ],
+      loaded: { moduleExport: { selected: entries[entry] } },
+      required: [entries[entry]],
+      beforeDispose: [path.join(runtimeRoot, "dist"), true, path.join(runtimeRoot, entry)],
+      disposed: true,
+      disposedError: "Plugin state operation source is no longer available",
+      outside: { fallback: ["/editable", ["/editable/operation-api.js"]] },
+      extraArguments: {
+        fallback: [path.join(runtimeRoot, "dist"), [path.join(runtimeRoot, entry)], "extra"],
+      },
+    });
   });
 
   it.skipIf(process.platform === "win32")(

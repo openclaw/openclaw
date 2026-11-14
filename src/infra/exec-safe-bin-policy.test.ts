@@ -1,4 +1,3 @@
-// Covers safe-bin policy profiles, validation, and generated docs text.
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -91,16 +90,10 @@ describe("exec safe bin policy", () => {
       wc: { allowedBooleanFlags: ["-l"], deniedFlags: ["--files0-from"] },
     } as unknown as SafeBinProfileFixtures;
     const normalized = normalizeSafeBinProfileFixtures(customFixtures);
-    expect(
-      "allowedBooleanFlags" in expectDefined(normalized.wc, "normalized.wc test invariant"),
-    ).toBe(false);
-    const profiles = resolveSafeBinProfiles(normalized);
-    expect(
-      expectDefined(profiles.wc, "profiles.wc test invariant").allowedBooleanFlags?.size ?? 0,
-    ).toBe(0);
-    expect(
-      validateSafeBinArgv(["-l"], expectDefined(profiles.wc, "profiles.wc test invariant")),
-    ).toBe(false);
+    expect("allowedBooleanFlags" in expectDefined(normalized.wc, "normalized wc")).toBe(false);
+    const profile = expectDefined(resolveSafeBinProfiles(normalized).wc, "resolved wc");
+    expect(profile.allowedBooleanFlags?.size ?? 0).toBe(0);
+    expect(validateSafeBinArgv(["-l"], profile)).toBe(false);
   });
 });
 
@@ -113,9 +106,8 @@ describe("exec safe bin policy long-option metadata", () => {
   });
 
   it("preserves behavior when profile metadata is missing and rebuilt at runtime", () => {
-    const sortProfile = SAFE_BIN_PROFILES.sort;
     const withoutMetadata = {
-      ...sortProfile,
+      ...SAFE_BIN_PROFILES.sort,
       knownLongFlags: undefined,
       knownLongFlagsSet: undefined,
       longFlagPrefixMap: undefined,

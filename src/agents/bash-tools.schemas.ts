@@ -52,6 +52,12 @@ export const execSchema = Type.Object({
         "Start an independent service now; survives request Stop. Use yieldMs for ordinary work. timeoutSeconds applies.",
     }),
   ),
+  durable: Type.Optional(
+    Type.Boolean({
+      description:
+        "Survive Gateway restart using Linux systemd user services; requires background or yieldMs. No interactive input or proxy-backed secrets.",
+    }),
+  ),
   timeoutSeconds: Type.Optional(
     Type.Number({
       description: "Process lifetime in seconds; 0 disables.",
@@ -120,7 +126,7 @@ function buildExecSchemas(
       description: `Omit: named node or configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}). auto: configured host.`,
     }),
   });
-  return { standard, completion: Type.Omit(standard, ["yieldMs", "background"]) };
+  return { standard, completion: Type.Omit(standard, ["yieldMs", "background", "durable"]) };
 }
 
 /** Parameters exposed by node-only exec surfaces. */

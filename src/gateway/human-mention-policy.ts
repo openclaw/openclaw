@@ -378,7 +378,10 @@ export function createHumanMentionPolicy(params: {
             ? [
                 {
                   profileId: candidate.profileId,
-                  displayName: humanMentionDisplayLabel(candidate.label, candidate.profileId),
+                  displayName: humanMentionDisplayLabel(
+                    candidate.label ?? logins[0],
+                    candidate.profileId,
+                  ),
                   avatarUrl: candidate.avatarUrl,
                   logins,
                   online: false,

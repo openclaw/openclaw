@@ -15,10 +15,23 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../infra/database-engine/postgres-catalog.js";
+import { DEFERRED_PLUGIN_MIGRATION_RUN_PREFIX } from "../infra/deferred-plugin-migrations.contract.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { quoteSqliteIdentifier as quote } from "../infra/sqlite-schema-sql.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import {
+  assertPluginCohortDatabaseRestoreRecords,
+  assertPluginCohortDatabaseRestoreMigrations,
+  type PluginCohortDatabaseMigrationRow,
+} from "../infra/update-plugin-cohort-records.js";
+import {
+  PLUGIN_COHORT_RECOVERY_KEY_PREFIX,
+  type PluginCohortRecoveryBinding,
+} from "../infra/update-plugin-cohort-schema.js";
+import { UPDATE_RECOVERY_KEY_PREFIX } from "../infra/update-run-recovery-keys.js";
+import { decodePluginCohortRecoveryPairRows } from "../infra/update-run-recovery-store.js";
+import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/plugin-metadata-state.kernel.js";
 import {
   captureDatabaseArtifact,
   exportPostgresBackup,
@@ -133,6 +146,7 @@ export async function preparePostgresRestoreInWorker(params: {
   expectedSource?: { storeId: string; namespace: string };
   pluginOwners?: DatabasePortPluginOwners;
   preserveUpdateHistory?: boolean;
+  pluginCohortRecovery?: PluginCohortRecoveryBinding;
   assertCurrent: () => void;
 }) {
   const manifest = await verifyMatchedPostgresBackup(
@@ -174,13 +188,105 @@ export async function preparePostgresRestoreInWorker(params: {
           catalog.filter((fact) => fact.table === table.name),
           expected,
         );
+        if (params.pluginCohortRecovery) {
+          const machineStateSchema = [descriptor, ...(descriptor.fragments ?? [])].find((schema) =>
+            schema.tables.some((entry) => entry.name === "config_machine_state"),
+          );
+          if (!machineStateSchema) {
+            throw new Error("PostgreSQL rollback cannot preserve plugin cohort recovery storage.");
+          }
+          assertPostgresCatalog(
+            catalog.filter((fact) => fact.table === "config_machine_state"),
+            machineStateSchema.expectedCatalog.filter(
+              (fact) => fact.table === "config_machine_state",
+            ),
+          );
+        }
         const columns = table.columns.map(({ name }) => quote(name)).join(", ");
+        const binding = params.pluginCohortRecovery;
+        const keys = binding
+          ? [
+              UPDATE_RECOVERY_KEY_PREFIX + binding.runId,
+              PLUGIN_COHORT_RECOVERY_KEY_PREFIX + binding.runId,
+            ]
+          : [];
+        params.assertCurrent();
         await client.query("BEGIN; SET LOCAL synchronous_commit = on");
         try {
+          if (binding) {
+            const sourceRows = await client.query<{ state_key: string; value_json: string }>(
+              `SELECT state_key,value_json FROM ${quote(source)}.config_machine_state WHERE state_key = ANY($1::text[]) FOR SHARE`,
+              [keys],
+            );
+            const pair = decodePluginCohortRecoveryPairRows(sourceRows.rows, binding);
+            if (!pair) {
+              throw new Error("PostgreSQL rollback lost its live plugin cohort recovery pair.");
+            }
+            const indexRows = await client.query<{
+              baseline_value: string | null;
+              current_value: string | null;
+            }>(
+              `SELECT (SELECT value_json FROM ${quote(namespace)}.config_machine_state WHERE state_key=$1) AS baseline_value,(SELECT value_json FROM ${quote(source)}.config_machine_state WHERE state_key=$1) AS current_value`,
+              [INSTALLED_PLUGIN_INDEX_STATE_KEY],
+            );
+            const indexRow = indexRows.rows[0];
+            if (!indexRow) {
+              throw new Error("PostgreSQL rollback did not read its canonical plugin records.");
+            }
+            assertPluginCohortDatabaseRestoreRecords(
+              pair.cohort.publications,
+              indexRow.baseline_value ?? undefined,
+              indexRow.current_value ?? undefined,
+            );
+            const migrationRows = async (name: string, present: boolean) =>
+              present
+                ? (
+                    await client.query<PluginCohortDatabaseMigrationRow>(
+                      `SELECT id,started_at::float8 AS started_at,finished_at::float8 AS finished_at,status,report_json FROM ${quote(name)}.migration_runs WHERE id LIKE $1`,
+                      [DEFERRED_PLUGIN_MIGRATION_RUN_PREFIX + "%"],
+                    )
+                  ).rows
+                : [];
+            assertPluginCohortDatabaseRestoreMigrations(
+              pair.cohort.publications,
+              await migrationRows(
+                namespace,
+                Object.hasOwn(manifest.verification.tables, "migration_runs"),
+              ),
+              await migrationRows(
+                source,
+                catalog.some((fact) => fact.table === "migration_runs"),
+              ),
+            );
+          }
+          params.assertCurrent();
           await client.query(`DELETE FROM ${quote(namespace)}.update_runs`);
+          params.assertCurrent();
           await client.query(
             `INSERT INTO ${quote(namespace)}.update_runs (${columns}) SELECT ${columns} FROM ${quote(source)}.update_runs`,
           );
+          if (binding) {
+            params.assertCurrent();
+            await client.query(
+              `DELETE FROM ${quote(namespace)}.config_machine_state WHERE state_key = ANY($1::text[])`,
+              [keys],
+            );
+            params.assertCurrent();
+            await client.query(
+              `INSERT INTO ${quote(namespace)}.config_machine_state (state_key,value_json,updated_at_ms) SELECT state_key,value_json,updated_at_ms FROM ${quote(source)}.config_machine_state WHERE state_key = ANY($1::text[])`,
+              [keys],
+            );
+            const restoredRows = await client.query<{ state_key: string; value_json: string }>(
+              `SELECT state_key,value_json FROM ${quote(namespace)}.config_machine_state WHERE state_key = ANY($1::text[]) FOR SHARE`,
+              [keys],
+            );
+            if (!decodePluginCohortRecoveryPairRows(restoredRows.rows, binding)) {
+              throw new Error(
+                "PostgreSQL rollback did not preserve its plugin cohort recovery pair.",
+              );
+            }
+          }
+          params.assertCurrent();
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK");

@@ -2,6 +2,7 @@ import { onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import type {
   LogbookStatusPayload,
   LogbookTimelinePayload,
@@ -166,14 +167,15 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
     })();
   }
 
-  // PluginPage remounts this model for each connection; polling shares the analysis refresh owner.
+  const poll = useVisiblePoll(POLL_INTERVAL_MS, () => void refreshSilently());
+  // PluginPage remounts this model for each connection; abandoned renders must not poll.
   onSettled(() => {
-    const pollTimer = client
-      ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS)
-      : undefined;
+    if (client) {
+      poll.start();
+    }
     return () => {
       dayLifetime.resolve();
-      clearInterval(pollTimer);
+      poll.stop();
       client = null;
       backgroundRefreshQueued = false;
     };

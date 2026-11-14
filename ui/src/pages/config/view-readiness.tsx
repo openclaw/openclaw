@@ -8,7 +8,7 @@ import type { ConfigProps } from "./view-types.ts";
 export function ConfigReadLoading(props: { message: string }) {
   return (
     <div class="config-loading" aria-busy="true">
-      <div class="config-loading__spinner" />
+      <span class="btn__spinner config-loading__spinner" aria-hidden="true" />
       <span>{props.message}</span>
     </div>
   );

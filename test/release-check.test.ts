@@ -218,23 +218,29 @@ it.skipIf(process.platform === "win32")("flags non-executable skill shell script
 });
 
 describe("collectForbiddenPackPaths", () => {
-  it("blocks root dist chunks that still reference private qa lab sources", () => {
-    const tempRoot = fixture({
-      "dist/entry.js": "//#region extensions/qa-lab/src/runtime-api.ts\n",
-      "CHANGELOG.md": "local QA notes mention extensions/qa-lab/\n",
-    });
+  it.each(["//#region", "//"])(
+    "blocks root dist chunks that still reference private qa lab sources (%s)",
+    (label) => {
+      const tempRoot = fixture({
+        "dist/entry.js": `${label} extensions/qa-lab/src/runtime-api.ts\n`,
+        "CHANGELOG.md": "local QA notes mention extensions/qa-lab/\n",
+      });
 
-    expect(collectForbiddenPackContentPaths(["dist/entry.js", "CHANGELOG.md"], tempRoot)).toEqual([
-      "dist/entry.js",
-    ]);
-  });
+      expect(collectForbiddenPackContentPaths(["dist/entry.js", "CHANGELOG.md"], tempRoot)).toEqual(
+        ["dist/entry.js"],
+      );
+    },
+  );
 
-  it("blocks root plugin SDK declarations that still reference private test helpers", () => {
-    const file = "dist/plugin-sdk/channel-test-helpers.d.ts";
-    const tempRoot = fixture({ [file]: "//#region src/plugin-sdk/test-helpers/session.ts\n" });
+  it.each(["//#region", "//"])(
+    "blocks root plugin SDK declarations that still reference private test helpers (%s)",
+    (label) => {
+      const file = "dist/plugin-sdk/channel-test-helpers.d.ts";
+      const tempRoot = fixture({ [file]: `${label} src/plugin-sdk/test-helpers/session.ts\n` });
 
-    expect(collectForbiddenPackContentPaths([file], tempRoot)).toEqual([file]);
-  });
+      expect(collectForbiddenPackContentPaths([file], tempRoot)).toEqual([file]);
+    },
+  );
 });
 
 it("packs bundled plugin runtime sidecars only for dynamic boundaries", () => {

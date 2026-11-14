@@ -190,7 +190,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       },
       defaultRuntime,
       createDefaultDeps(),
-      {},
     );
     captured?.authority.assertCurrent();
     return result;

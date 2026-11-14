@@ -225,23 +225,20 @@ describe("SQLite-backed plugin model catalogs", () => {
     };
     const removal = { candidates: [candidate], credentials: new Set([removedKey]) };
     const before = readCatalogCacheRow("zai");
-    const worker = vi.spyOn(pluginModelCatalogExecution, "withPluginModelCatalogWorker");
-    try {
-      await removePersistedPluginModelCatalogCredentials(removal);
-      expect(worker.mock.calls.length).toBe(0);
-      expect(readCatalogCacheRow("zai")).toEqual(before);
+    using worker = vi.spyOn(pluginModelCatalogExecution, "withPluginModelCatalogWorker");
 
-      await replacePersistedPluginModelCatalogs({
-        agentDir,
-        pluginCatalogWrites: { [relativePath]: catalogContents("zai", removedKey) },
-      });
-      worker.mockClear();
-      await removePersistedPluginModelCatalogCredentials(removal);
-      expect(worker.mock.calls.length).toBe(1);
-      expectCatalogs({ zai: catalogContents("zai") });
-    } finally {
-      worker.mockRestore();
-    }
+    await removePersistedPluginModelCatalogCredentials(removal);
+    expect(worker.mock.calls.length).toBe(0);
+    expect(readCatalogCacheRow("zai")).toEqual(before);
+
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: { [relativePath]: catalogContents("zai", removedKey) },
+    });
+    worker.mockClear();
+    await removePersistedPluginModelCatalogCredentials(removal);
+    expect(worker.mock.calls.length).toBe(1);
+    expectCatalogs({ zai: catalogContents("zai") });
   });
 
   it("waits for an uncommitted catalog publication before skipping a clean catalog", async () => {

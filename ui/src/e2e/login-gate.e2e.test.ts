@@ -144,7 +144,9 @@ suite.define(() => {
     await gateway.rejectDeferred("connect", mismatch);
     const failure = page.locator('.login-gate__failure[data-kind="protocol-mismatch"]');
     await failure.waitFor();
-    expect((await failure.textContent())?.toLowerCase()).toContain("supported connection protocol");
+    expect((await failure.textContent())?.toLowerCase()).toContain(
+      "this page and the gateway use different versions",
+    );
     const refresh = failure.locator(".login-gate__failure-refresh");
     expect(await refresh.isVisible()).toBe(true);
     await page.clock.runFor(120_000);
@@ -325,7 +327,7 @@ suite.define(() => {
     await failure.waitFor();
     await gateway.waitForRequest("connect", { after: 1 });
     expect(await failure.textContent()).toContain(
-      "Waiting for approval… this page connects on its own once the request is approved.",
+      "Waiting for approval… This page connects automatically once approved.",
     );
     expect(await failure.getByRole("button", { name: "Check now", exact: true }).isEnabled()).toBe(
       true,

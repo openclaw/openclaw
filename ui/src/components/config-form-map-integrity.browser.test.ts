@@ -5,23 +5,19 @@ import {
   updateConfigFormValue,
 } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
+import {
+  expandConfigObjects,
+  expectElement,
+  renderAnalyzedFormFixture,
+} from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
-
 describe("config form map integrity", () => {
   it.each(["agent"])(
     "round-trips the %s model Code Mode field without losing sibling settings",
-    (scope) => {
+    async (scope) => {
       const wrapScope = (value: unknown) =>
         scope === "defaults" ? { defaults: value } : { entries: { ops: value } };
       const modelSettings = (codeMode?: boolean) => ({
@@ -111,11 +107,12 @@ describe("config form map integrity", () => {
         });
       const getSelect = () =>
         expectElement(
-          container.querySelector<HTMLSelectElement>('select[aria-label="Code Mode"]'),
+          container.querySelector<HTMLSelectElement>('select[aria-label="Code mode"]'),
           "model Code Mode selector",
         );
 
       renderValue();
+      await expandConfigObjects(container);
       if (scope === "agent") {
         expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
       }
@@ -248,7 +245,7 @@ describe("config form map integrity", () => {
       );
       expectElement(
         Array.from(container.querySelectorAll("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
+          (button) => button.textContent?.trim() === "Add",
         ),
         "add entry",
       ).click();
@@ -268,7 +265,7 @@ describe("config form map integrity", () => {
       flush();
       expectElement(
         Array.from(draft.querySelectorAll("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
+          (button) => button.textContent?.trim() === "Add entry",
         ),
         "commit entry",
       ).click();
@@ -281,7 +278,7 @@ describe("config form map integrity", () => {
       flush();
       expectElement(
         Array.from(draft.querySelectorAll("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
+          (button) => button.textContent?.trim() === "Add entry",
         ),
         "commit valid entry",
       ).click();

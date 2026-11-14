@@ -45,11 +45,12 @@ vi.mock("../worker-task-pool.js", async (importOriginal) => {
           return new Target(...args);
         }
         return {
-          async run(input: unknown) {
+          async run(input: unknown, options: { signal?: AbortSignal } = {}) {
             if (!backup.handle) {
               throw new Error("Backup worker handler was not registered");
             }
             return backup.handle(structuredClone(input), undefined, {
+              signal: options.signal ?? new AbortController().signal,
               runNativeSection: async (operation) => operation(),
               throwIfCancelled() {},
             });

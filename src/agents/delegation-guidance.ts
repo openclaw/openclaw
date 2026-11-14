@@ -43,16 +43,17 @@ export function buildSubagentPromptGuidance(params: {
   const { availableTools } = params;
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const hasSessionsYield = availableTools.has("sessions_yield");
-  const inTurnCollectionGuidance =
-    isCronSessionKey(params.sessionKey) && !hasSessionsYield
-      ? [
-          "Isolated automation: child completion will not resume this turn.",
-          availableTools.has("agents_wait")
-            ? "If you need child results to finish the job, spawn with `collect=true` and wait with `agents_wait` in this turn before replying."
-            : "If you need child results to finish the job, complete that work directly in this turn; explicit child collection is unavailable.",
-          "Fire-and-forget is valid when child output is the deliverable.",
-        ].join(" ")
-      : undefined;
+  const inTurnCollectionGuidance = isCronSessionKey(params.sessionKey)
+    ? [
+        "Isolated automation: child completion will not resume this turn.",
+        availableTools.has("agents_wait")
+          ? "If you need child results to finish the job, spawn with `collect=true` and wait with `agents_wait` in this turn before replying."
+          : "If you need child results to finish the job, complete that work directly in this turn; explicit child collection is unavailable.",
+        hasSessionsYield
+          ? "Fire-and-forget is valid when child output is the deliverable. `sessions_yield` ends this turn; the scheduler delivers that output."
+          : "Fire-and-forget is valid when child output is the deliverable.",
+      ].join(" ")
+    : undefined;
   return {
     inTurnCollectionGuidance,
     delegationSection: buildDelegationGuidanceSection({

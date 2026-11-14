@@ -71,7 +71,6 @@
 }
 
 .chat-session-versions-mobile__radio {
-  box-sizing: border-box;
   width: 19px;
   height: 19px;
   flex: none;

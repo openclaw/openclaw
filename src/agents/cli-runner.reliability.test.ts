@@ -82,10 +82,9 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-hooks-");
@@ -2003,7 +2002,7 @@ describe("runCliAgent reliability", () => {
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "native-session" });
       expect(context.systemPrompt).toBe("");
       expect(context.contextEngine).toBeUndefined();
-      expect(context.claudeSkillsPluginArgs).toEqual([]);
+      expect(context.claudeSkillsPlugin.args).toEqual([]);
     } finally {
       admission.close();
     }

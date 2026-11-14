@@ -9,12 +9,10 @@ import {
 } from "../../components/panel-refresh-status-state.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import {
   requestSessionUsage,
   type SessionUsageQuery,

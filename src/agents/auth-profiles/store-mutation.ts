@@ -88,18 +88,21 @@ export function prepareAuthProfileStoreMutation(params: {
     (profileId) =>
       Object.hasOwn(existingProfiles, profileId) !== Object.hasOwn(payload.profiles, profileId),
   );
-  const { statePayload, stateChanged, selectionChanged } = prepareAuthProfileStateMutation({
-    existingState,
-    store,
-    selectionProfiles,
-  });
+  const { statePayload, stateChanged, selectionChanged, availabilityOnly } =
+    prepareAuthProfileStateMutation({
+      existingState,
+      store,
+      selectionProfiles,
+    });
+  const credentialsChanged = !isDeepStrictEqual(existingRaw, payload);
   return {
     payload,
     statePayload,
     publication: {
       profileIds: changedProfileIds,
       profileSetChanged,
-      credentialsChanged: !isDeepStrictEqual(existingRaw, payload),
+      credentialsChanged,
+      availabilityOnly: !credentialsChanged && availabilityOnly,
       stateChanged,
       selectionChanged,
     },
@@ -125,5 +128,8 @@ export function prepareAuthProfileStateMutation(params: {
     });
   const selectionChanged =
     stateChanged && !isDeepStrictEqual(metadata(previousState), metadata(statePayload));
-  return { statePayload, stateChanged, selectionChanged };
+  // Rotation bookkeeping shares the availability path; only explicit order changes affect catalog identity.
+  const availabilityOnly =
+    stateChanged && isDeepStrictEqual(previousState?.order, statePayload?.order);
+  return { statePayload, stateChanged, selectionChanged, availabilityOnly };
 }

@@ -1,12 +1,13 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import { createDoctorWriteAuthority } from "../commands/doctor-policy-custody.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import * as doctorMode from "../commands/doctor-repair-mode.js";
 import * as updatePhase from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { withSqliteSnapshotFailureScope } from "../infra/sqlite-error-diagnostics.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
@@ -14,6 +15,7 @@ import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.med
 import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-custody.js";
 import {
   captureUpdateDoctorConfigWrites,
+  getUpdateDoctorConfigCapture,
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -24,7 +26,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { formatUpdateFailureFact } from "../infra/update-failure-facts-format.js";
-import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
+import { createUpdateErrorFact, createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -47,11 +49,12 @@ import { publishDoctorUpdateResult } from "./doctor-health-update-result.js";
 export async function runDoctorHealthFlow(
   runtime?: RuntimeEnv,
   options: DoctorOptions = {},
-  writeAuthority?: UpdateDoctorWriteAuthority,
+  delegatedAuthority?: UpdateDoctorWriteAuthority,
   databasePreflight?: DoctorDatabasePreflight,
 ) {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
   signal?.throwIfAborted();
+  const writeAuthority = delegatedAuthority && createDoctorWriteAuthority(delegatedAuthority);
   using custody = await retainUpdateDoctorProcesses(
     writeAuthority?.assertCurrent,
     writeAuthority?.commandAuthority,
@@ -73,7 +76,7 @@ export async function runDoctorHealthFlow(
         const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
           await import("../commands/doctor-update-schema-guard.js");
         const guarded = await startup.withDoctorProgress(
-          "Update schema admission",
+          formatDoctorProgressPhase("Update schema admission"),
           () =>
             guardUpdateDoctorSchemaUpgrade({
               schemas: preparedPreflight,
@@ -90,7 +93,7 @@ export async function runDoctorHealthFlow(
         if (!preCaptureRehearsalRoot && preparedPreflight?.updateSchemaRehearsal) {
           const rehearsal = preparedPreflight;
           await startup.withDoctorProgress(
-            "Update schema rehearsal",
+            formatDoctorProgressPhase("Update schema rehearsal"),
             () =>
               rehearseDeferredUpdateDoctorSchema(rehearsal, runtime, options.fullIntegrityCheck),
             options.json !== true,
@@ -100,7 +103,7 @@ export async function runDoctorHealthFlow(
       }
       const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
       return withPluginLoadDiagnostics((diagnostics) => {
-        const runDoctor = (capture?: DoctorConfigCapture) =>
+        const runDoctor = (capture = getUpdateDoctorConfigCapture()) =>
           runDoctorHealthFlowWithResult(
             (selectedRuntime, code) => {
               requestedExit = () => startup.exitDoctorHealthFlow(selectedRuntime, code);
@@ -109,7 +112,7 @@ export async function runDoctorHealthFlow(
             options,
             preparedPreflight,
             diagnostics,
-            resultPath && capture ? { resultPath, capture } : undefined,
+            capture ? { resultPath, capture } : undefined,
             writeAuthority,
             resumeCapture,
             preCaptureRehearsalRoot,
@@ -123,7 +126,12 @@ export async function runDoctorHealthFlow(
     await import("../plugins/plugin-generation-source-lookup.js");
   await withPluginGenerationSourceCustody(() =>
     custody ? withCommandProcessScope(run, undefined, custody) : run(),
-  );
+  ).catch(async (error: unknown) => {
+    const { reportDoctorReadOnlyFilesystemError } =
+      await import("../commands/doctor-maintenance-inspection.js");
+    await reportDoctorReadOnlyFilesystemError(error, runtime);
+    throw error;
+  });
   signal?.throwIfAborted();
   requestedExit?.();
 }
@@ -134,18 +142,13 @@ async function runDoctorHealthFlowWithResult(
   options: DoctorOptions,
   databasePreflight: DoctorDatabasePreflight | undefined,
   diagnostics: readonly PluginDiagnostic[],
-  updateResult?: { resultPath: string; capture: DoctorConfigCapture },
+  updateResult?: { resultPath?: string; capture: DoctorConfigCapture },
   writeAuthority?: UpdateDoctorWriteAuthority,
   resumeCapture?: () => void,
   preCaptureRehearsalRoot?: string,
 ) {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
-  const measure = <T>(name: string, run: () => T | Promise<T>) =>
-    startup.withDoctorProgress(
-      name.replace(/^doctor\./, "").replaceAll(/[.-]/g, " "),
-      () => measureGatewayBootstrapStep(name, run),
-      options.json !== true,
-    );
+  const measure = startup.createDoctorProgressMeasure(options);
   const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } = await measure(
     "doctor.startup",
     () => startup.prepareDoctorHealthFlow(runtime, options, startup.showDoctorIntro),
@@ -164,8 +167,8 @@ async function runDoctorHealthFlowWithResult(
     createDoctorHealthFindingBuffer(effectiveRuntime);
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
-  const recordConfigWriteRefusal = (ctx: DoctorHealthFlowContext): boolean => {
-    const refusal = startup.showDoctorConfigWriteRefusal(ctx);
+  const recordRepairRefusal = (ctx: DoctorHealthFlowContext): boolean => {
+    const refusal = startup.showDoctorRepairRefusal(ctx);
     if (!refusal) {
       return false;
     }
@@ -206,7 +209,11 @@ async function runDoctorHealthFlowWithResult(
     const automaticHeartbeatRepair = await prepareAutomaticHeartbeatRepair(options);
     // Published updater markers opt only custody and backup into maintenance.
     const maintenanceOptions = automaticHeartbeatRepair ? { ...options, repair: true } : options;
-    if (options.repair === true || options.yes === true || interactiveRepair) {
+    // Standalone Doctor warms archives before stopping the Gateway; update already owns the stop.
+    if (
+      !repairMode.updateInProgress &&
+      (options.repair === true || options.yes === true || interactiveRepair)
+    ) {
       preparedArchiveDiscovery = await measure("doctor.archive-preparation", () =>
         startup.prepareDoctorMaintenanceArchives(
           databasePreflight,
@@ -226,6 +233,7 @@ async function runDoctorHealthFlowWithResult(
         root,
         runtime: repairRuntime,
         assertCurrent: writeAuthority?.assertCurrent,
+        lendPolicyCustody: writeAuthority?.lendPolicyCustody,
         databaseGenerations: writeAuthority?.databaseGenerations,
         databasePluginOwners: writeAuthority?.databasePluginOwners,
         serviceInspectionDeadlineAtMs: writeAuthority?.serviceInspectionDeadlineAtMs,
@@ -411,6 +419,7 @@ async function runDoctorHealthFlowWithResult(
         runtime: doctorRuntime,
         healthFindings: startupFindings.healthFindings,
         options,
+        retirementOnly: writeAuthority?.retirementOnly === true,
         prompter,
         configResult,
         cfg: configResult.cfg,
@@ -435,7 +444,7 @@ async function runDoctorHealthFlowWithResult(
       healthContext = ctx;
       const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
       await measure("doctor.contributions", () => runDoctorHealthContributions(ctx));
-      if (recordConfigWriteRefusal(ctx)) {
+      if (recordRepairRefusal(ctx)) {
         return undefined;
       }
       if (maintenance) {
@@ -546,7 +555,7 @@ async function runDoctorHealthFlowWithResult(
       showDoctorHealthSummary(healthContext ?? startupFindings);
       return;
     }
-    if (recordConfigWriteRefusal(ctx)) {
+    if (recordRepairRefusal(ctx)) {
       return;
     }
     const pluginWarnings: string[] = [];
@@ -583,7 +592,7 @@ async function runDoctorHealthFlowWithResult(
           }
         : {}),
     };
-    if (updateResult && doctorResult.status === "advisory") {
+    if (updateResult?.resultPath && doctorResult.status === "advisory") {
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
       return;
     }
@@ -604,25 +613,13 @@ async function runDoctorHealthFlowWithResult(
       showDoctorHealthSummary(healthContext ?? startupFindings);
       writeAuthority?.assertCurrent();
       // Admission restored its service before refusing; no migration work has started.
-      const { recordUpdateDoctorRefusal } = await import("../commands/doctor-update-refusal.js");
+      const { recordDeferredUpdateDoctorWarning, recordUpdateDoctorRefusal } =
+        await import("../commands/doctor-update-refusal.js");
       recordUpdateDoctorRefusal(error.message);
       effectiveRuntime.error(error.message);
       doctorResult = { status: "ok", warnings: [error.message], maintenanceRefusal: error.refusal };
-      const runId = process.env.OPENCLAW_UPDATE_RUN_ID?.trim();
-      if (!updateResult && runId) {
-        try {
-          const { recordUpdateRunStep } = await import("../infra/update-run-ledger.js");
-          recordUpdateRunStep(runId, {
-            step: "warning:doctor-maintenance",
-            status: "completed",
-            endedAtMs: Date.now(),
-            detail: error.message,
-          });
-        } catch {
-          effectiveRuntime.error(
-            "Doctor maintenance warning could not be saved to update history.",
-          );
-        }
+      if (!updateResult) {
+        await recordDeferredUpdateDoctorWarning(error.message, effectiveRuntime);
       }
       startup.showDoctorOutro("Doctor maintenance deferred; pending repairs remain unchanged.");
       exitCode = 0;
@@ -672,6 +669,7 @@ async function runDoctorHealthFlowWithResult(
           ? refusalFacts
           : [
               createUpdateFailureFact({
+                leaseLoss: createUpdateErrorFact("doctor", error).leaseLoss,
                 check: unsafeConfigWrite
                   ? "config-write"
                   : schemaRefusal
@@ -694,7 +692,6 @@ async function runDoctorHealthFlowWithResult(
     }
     throw error;
   } finally {
-    const startupWarnings = startupFindings.updateWarnings;
     await measure("doctor.maintenance.release", () => resources.disposeAsync());
     if (updateResult) {
       await publishDoctorUpdateResult({
@@ -702,7 +699,7 @@ async function runDoctorHealthFlowWithResult(
         doctorResult,
         healthContext,
         maintenance,
-        startupWarnings,
+        startupWarnings: startupFindings.updateWarnings,
       });
     }
     // The default runtime exits synchronously; finish native recovery and release

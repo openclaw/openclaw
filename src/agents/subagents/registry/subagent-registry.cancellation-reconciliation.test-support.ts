@@ -51,6 +51,7 @@ export function registerCancellationReconciliationTests({
     | "captureSubagentCompletionReply"
     | "runSubagentAnnounceFlow"
     | "getAgentRunContext"
+    | "hasLiveAgentRunContext"
     | "runSubagentEnded"
     | "onSubagentEnded"
     | "removeInternalSessionEffectsSession"
@@ -279,6 +280,7 @@ export function registerCancellationReconciliationTests({
         mocks.getAgentRunContext.mockImplementation((id: string) =>
           id === newRunId ? ({} as never) : undefined,
         );
+        mocks.hasLiveAgentRunContext.mockImplementation((id) => id === newRunId);
         mockEndedHooks();
       }
       let attachmentsRootDir: string | undefined;

@@ -48,8 +48,28 @@ export function isArchiveAccessDeniedError(err: unknown): boolean {
   );
 }
 
-export function formatMissingOperatorReadScopeMessage(feature: string): string {
-  return `You don't have permission to view ${feature}. Ask the person who manages OpenClaw for access.`;
+const missingScopeAccessLabels = new Map([
+  ["operator.read", "read access"],
+  ["operator.write", "write access"],
+  ["operator.admin", "admin access"],
+]);
+
+export function formatMissingScopeMessage(scope: string, action: string): string {
+  const access = missingScopeAccessLabels.get(scope) ?? "the required access";
+  return `Couldn’t ${action}. Ask an admin to grant ${access}.`;
+}
+
+export async function formatMissingOperatorReadScopeMessage(
+  feature: string,
+  fallback: string,
+): Promise<string> {
+  try {
+    const errors = await import("./permission-error.ts");
+    return errors.formatMissingOperatorReadScopeMessage(feature);
+  } catch {
+    // Keep the Gateway denial visible if the optional error catalog cannot load.
+    return fallback;
+  }
 }
 
 /** Retry only a typed deadline or an explicitly retryable rejection of this read. */

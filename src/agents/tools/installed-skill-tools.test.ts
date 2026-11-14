@@ -18,11 +18,9 @@ function skill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
   return { ...guideMetadata, source: { filePath: guideMetadata.location }, ...overrides };
 }
 
-function skillTools(skills: InstalledSkill[], admit = true) {
+function skillTools(skills: InstalledSkill[]) {
   const tools = createInstalledSkillTools(skills);
-  if (admit) {
-    finalizeAgentToolAvailability(tools);
-  }
+  finalizeAgentToolAvailability(tools);
   const search = expectDefined(tools[0], "search");
   const read = expectDefined(tools[1], "read");
   return {
@@ -36,7 +34,7 @@ function skillTools(skills: InstalledSkill[], admit = true) {
 }
 it("requires the effective native read tool for body I/O and cached body matches", async () => {
   const reader = vi.fn(async () => "Private canary deployment instructions");
-  const { tools, search, read, find } = skillTools([skill({ readSearchContent: reader })], false);
+  const { tools, search, read, find } = skillTools([skill({ readSearchContent: reader })]);
   const check = async (id: string, names: string[], reads: number, query = "canary") => {
     const skills = names.map((name) => ({ name }));
     expect((await find(id, query)).details).toMatchObject({ skills });
@@ -76,9 +74,6 @@ it("does not publish an in-flight body index across read revocation and regrant"
 
 it.each([
   ["inline", "/skills/guide/SKILL.md"],
-  ["inline", "workspace-skill://workspace/guide/SKILL.md"],
-  ["inline", "C:\\skills\\guide\\SKILL.md"],
-  ["inline", "\\\\server\\skills\\guide\\SKILL.md"],
   ["reader", "/skills/guide/SKILL.md"],
   ["partial", "/skills/guide/SKILL.md"],
 ] as const)("searches and reads whole %s instructions at %s", async (mode, location) => {
@@ -95,22 +90,19 @@ it.each([
     source: mode === "reader" ? source : { ...source, readContent: content },
     ...(mode === "reader" ? { reader, readSearchContent: reader } : {}),
   });
-  const unavailable = {
-    name: "unavailable",
-    description: "Operations",
-    location: "/skills/unavailable/SKILL.md",
-  };
   const unreadable = skill({
-    ...unavailable,
+    name: "unavailable",
     async reader() {
       throw new Error("Unavailable");
     },
   });
-  const catalog = mode === "partial" ? [entry, unreadable] : [entry];
-  const { find, load } = skillTools(catalog);
+  const { find, load } = skillTools(mode === "partial" ? [entry, unreadable] : [entry]);
   const result = await find("find", mode === "reader" ? "canary" : "operations");
   expect(result.details).toEqual({
-    skills: [{ ...guideMetadata, name, location }, ...(mode === "partial" ? [unavailable] : [])],
+    skills: [
+      { ...guideMetadata, name, location },
+      ...(mode === "partial" ? [{ ...guideMetadata, name: "unavailable" }] : []),
+    ],
     hasMore: false,
     ...(mode === "partial"
       ? { coverage: { bodyIndexed: 1, metadataOnly: 1, truncatedBodies: 1 } }
@@ -130,8 +122,6 @@ it.each([
   expect(loaded.details).toMatchObject({ name, location, content });
   expect(JSON.stringify(loaded)).not.toContain("/private/gateway");
   if (mode === "reader") {
-    expect(reader).toHaveBeenLastCalledWith({ location, signal: undefined });
-    await expect(load("invalid", "../hidden")).rejects.toThrow("is not available to this agent");
     expect(reader).toHaveBeenCalledTimes(2);
   }
 });

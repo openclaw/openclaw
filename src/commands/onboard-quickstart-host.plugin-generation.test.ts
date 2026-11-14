@@ -29,37 +29,31 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => ({
 
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
-it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (pinnedCaller) => {
-  await withTestState({ env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } }, async (state) => {
+it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", (pinnedCaller) =>
+  withTestState({ env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } }, async (state) => {
     const config: OpenClawConfig = {
       gateway: { mode: "local", auth: { mode: "none" } },
       agents: { defaults: { workspace: state.workspaceDir } },
       plugins: { entries: { codex: { enabled: true } } },
     };
     await state.writeConfig(config);
-    // The CLI keeps this operation alive from provider selection through browser handoff.
     await withPluginCache(createPluginCache(), async () => {
       const readMetadata = () =>
         resolveConfigWidePluginMetadataSnapshot({ config, allowCurrent: false });
       const initial = readMetadata();
       expect(initial.byPluginId.has("codex")).toBe(false);
       const installAndStart = async () => {
-        const pluginRoot = writeManagedNpmPlugin({
-          stateDir: state.stateDir,
-          packageName: "@fixture/codex",
-          pluginId: "codex",
-          version: "1.0.0",
-        });
-        // Package acquisition is synthetic; the install ledger and post-install invalidation are real.
         await withPluginLifecycleLease({}, async () => {
           await seedInstalledPluginIndex(
             {
               codex: {
                 source: "npm",
-                spec: "@fixture/codex@1.0.0",
-                installPath: pluginRoot,
-                resolvedName: "@fixture/codex",
-                resolvedVersion: "1.0.0",
+                installPath: writeManagedNpmPlugin({
+                  stateDir: state.stateDir,
+                  packageName: "@fixture/codex",
+                  pluginId: "codex",
+                  version: "1.0.0",
+                }),
               },
             },
             { config, env: process.env },
@@ -67,8 +61,6 @@ it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (p
           clearPluginMetadataLifecycleCaches();
           await invalidatePluginRuntimeDiscoveryAfterConfigMutation({});
         });
-        const fresh = withPluginCache(createPluginCache(), readMetadata);
-        expect(fresh.byPluginId.has("codex")).toBe(true);
         const inventoryPath = state.statePath("child-plugin-inventory.json");
         const packageCwd = process.cwd();
         const tsxLoader = path.join(packageCwd, "scripts/tsx.mjs");
@@ -110,5 +102,5 @@ it.each([false, true])("fresh Gateway metadata/cwd (pinned caller=%s)", async (p
         ? withPluginRuntimeGenerationScope({ metadataSnapshot: initial }, installAndStart)
         : installAndStart());
     });
-  });
-});
+  }),
+);

@@ -15,13 +15,17 @@ import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 type GoalReturnParams = {
   base: FollowupRun;
   sessionKey: string;
-  continuation: GoalContinuation;
+  storePath: string;
+  expectedSession: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+  initialGoalId?: string;
   operation: ReplyOperation;
   context: (
+    continuation: GoalContinuation,
     entry: SessionEntry | undefined,
     existing?: CurrentInboundPromptContext,
   ) => CurrentInboundPromptContext | undefined;
   resume: (params: {
+    continuation: GoalContinuation;
     base: FollowupRun;
     runId: string;
     result: EmbeddedAgentRunResult;
@@ -30,6 +34,7 @@ type GoalReturnParams = {
 };
 type GoalReturn = {
   params: GoalReturnParams;
+  continuation?: GoalContinuation;
   generation: string;
   signal: AbortSignal;
   sourceRunId?: string;
@@ -80,6 +85,9 @@ export function createGoalContinuationReturnScope(
   const sourceSignal = resolveFollowupAbortSignal(params.base);
   const owner: GoalReturn = {
     params,
+    continuation: params.initialGoalId
+      ? { ...params.expectedSession, goalId: params.initialGoalId }
+      : undefined,
     signal: sourceSignal
       ? AbortSignal.any([params.operation.abortSignal, sourceSignal])
       : params.operation.abortSignal,
@@ -101,6 +109,34 @@ export function bindGoalContinuationExecution(runId: string, sessionKey: string 
   if (owner && !owner.closed && owner.params.sessionKey === sessionKey) {
     owner.sourceRunId = runId;
   }
+}
+
+/** A Goal created by this execution can use its admitted chat return, never another command's. */
+export function bindCreatedGoalContinuation(params: {
+  runId?: string;
+  sessionKey: string;
+  agentId: string;
+  storePath: string;
+  goalId: string;
+}): void {
+  const owner = goalReturns.getStore();
+  if (
+    !owner ||
+    owner.closed ||
+    owner.signal.aborted ||
+    owner.continuation ||
+    owner.params.base.run.scheduledAutomation ||
+    owner.params.operation.result !== null ||
+    owner.generation !== getAgentRunLifecycleGeneration() ||
+    !params.runId ||
+    owner.sourceRunId !== params.runId ||
+    owner.params.sessionKey !== params.sessionKey ||
+    owner.params.base.run.agentId !== params.agentId ||
+    owner.params.storePath !== params.storePath
+  ) {
+    return;
+  }
+  owner.continuation = { ...owner.params.expectedSession, goalId: params.goalId };
 }
 
 /** The committed yield publisher binds the return before the completion wake becomes eligible. */
@@ -126,7 +162,11 @@ export function promoteGoalContinuationYield(params: {
   ) {
     return;
   }
-  const { continuation, sessionKey, base } = owner.params;
+  const continuation = owner.continuation;
+  if (!continuation) {
+    return;
+  }
+  const { sessionKey, base } = owner.params;
   if (
     params.entries.some(
       (entry) =>
@@ -242,7 +282,10 @@ export function readGoalContinuationContext(params: {
   ) {
     return undefined;
   }
-  const context = settlement.owner.params.context(settlement.entry, params.currentInboundContext);
+  const continuation = settlement.owner.continuation;
+  const context =
+    continuation &&
+    settlement.owner.params.context(continuation, settlement.entry, params.currentInboundContext);
   if (!context) {
     return undefined;
   }
@@ -282,8 +325,9 @@ export async function finishGoalContinuationSettlement(
     return;
   }
   try {
-    if (delivered && owner.terminal) {
+    if (delivered && owner.terminal && owner.continuation) {
       await owner.params.resume({
+        continuation: owner.continuation,
         base: owner.params.base,
         ...owner.terminal,
         isCurrent: () => !owner.closed && owner.generation === getAgentRunLifecycleGeneration(),

@@ -1,11 +1,11 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { MemorySearchManager } from "../../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   MemoryCliSearchOutcome,
   MemoryProviderStatus,
-  MemorySearchManager,
   MemorySearchResponse,
 } from "../../memory-host-sdk/host/types.js";
 import {

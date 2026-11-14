@@ -24,56 +24,18 @@ type RpcRequest = {
   id?: number;
   method: string;
   params?: { name?: string; arguments?: Record<string, unknown> };
+  reply: (result: unknown) => void;
+  write: (value: string | Buffer) => void;
+  stream: (chunks: Iterable<Buffer>) => Promise<void>;
 };
 
-type FakeEndpoint = {
-  binaryPath: string;
-  socketPath: string;
-  requests: RpcRequest[];
-  respond: (request: RpcRequest, result: unknown) => void;
-  writeRaw: (request: RpcRequest, value: string | Buffer) => void;
-  writeRawStream: (request: RpcRequest, chunks: Iterable<Buffer>) => Promise<void>;
-  close: () => Promise<void>;
-};
-
-async function createFakeEndpoint(
-  handle: (request: RpcRequest, endpoint: FakeEndpoint) => void,
-): Promise<FakeEndpoint> {
+async function createFakeEndpoint(handle: (request: RpcRequest) => void) {
   // macOS sockaddr_un cannot hold the test runner's nested temporary path.
   const directory = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-cua-mcp-"));
   onTestFinished(async () => await fs.rm(directory, { recursive: true, force: true }));
   const socketPath = path.join(directory, "daemon.sock");
-  const binaryPath = fileURLToPath(new URL("../test/fixtures/mcp-proxy.cjs", import.meta.url));
   const requests: RpcRequest[] = [];
   const connections = new Set<net.Socket>();
-  const writers = new Map<number, net.Socket>();
-  const writeRaw = (request: RpcRequest, value: string | Buffer) => {
-    if (request.id !== undefined) {
-      writers.get(request.id)?.write(value);
-    }
-  };
-  const endpoint: FakeEndpoint = {
-    binaryPath,
-    socketPath,
-    requests,
-    respond: (request, result) => writeRaw(request, frame(request.id, result)),
-    writeRaw,
-    writeRawStream: async (request, chunks) => {
-      const writer = request.id === undefined ? undefined : writers.get(request.id);
-      if (!writer) {
-        throw new Error("fixture request has no connected writer");
-      }
-      await pipeline(Readable.from(chunks), writer, { end: false });
-    },
-    close: async () => {
-      for (const connection of connections) {
-        connection.destroy();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
-  };
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.once("close", () => connections.delete(socket));
@@ -81,22 +43,43 @@ async function createFakeEndpoint(
       if (!line) {
         return;
       }
-      const request = JSON.parse(line) as RpcRequest;
+      const wire = JSON.parse(line) as Pick<RpcRequest, "id" | "method" | "params">;
+      const request: RpcRequest = {
+        ...wire,
+        reply: (result) => {
+          socket.write(frame(wire.id, result));
+        },
+        write: (value) => {
+          socket.write(value);
+        },
+        stream: async (chunks) => {
+          await pipeline(Readable.from(chunks), socket, { end: false });
+        },
+      };
       requests.push(request);
-      if (typeof request.id === "number") {
-        writers.set(request.id, socket);
-      }
-      handle(request, endpoint);
+      handle(request);
     });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, resolve);
   });
-  // Register first so later driver hooks dispose before socket cleanup, even when a test fails.
-  onTestFinished(endpoint.close);
-  return endpoint;
+  // Later driver hooks dispose before socket cleanup, even when a test fails.
+  onTestFinished(async () => {
+    for (const connection of connections) {
+      connection.destroy();
+    }
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+  return {
+    binaryPath: fileURLToPath(new URL("../test/fixtures/mcp-proxy.cjs", import.meta.url)),
+    socketPath,
+    requests,
+  };
 }
+type FakeEndpoint = Awaited<ReturnType<typeof createFakeEndpoint>>;
 
 function toolResult(structuredContent: Record<string, unknown>, image = false) {
   return {
@@ -123,13 +106,18 @@ function createSessionEndpoint(
   handle: Parameters<typeof createFakeEndpoint>[0],
   scope: "window" | "desktop" = "window",
 ) {
-  return createFakeEndpoint((request, fake) => {
+  return createFakeEndpoint((request) => {
     if (request.method === "initialize") {
-      fake.respond(request, { protocolVersion: "2025-06-18" });
+      expect(request.params).toEqual({
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "openclaw-cua-computer", version: "1" },
+      });
+      request.reply({ protocolVersion: "2025-06-18" });
     } else if (request.method === "tools/call" && request.params?.name === "start_session") {
-      fake.respond(request, sessionState(scope));
+      request.reply(sessionState(scope));
     } else {
-      handle(request, fake);
+      handle(request);
     }
   });
 }
@@ -151,10 +139,10 @@ function received(endpoint: FakeEndpoint, method: string) {
 }
 
 function replyWith(results: Record<string, unknown>) {
-  return (request: RpcRequest, fake: FakeEndpoint) => {
+  return (request: RpcRequest) => {
     const name = request.params?.name;
     if (request.method === "tools/call" && name && Object.hasOwn(results, name)) {
-      fake.respond(request, results[name]);
+      request.reply(results[name]);
     }
   };
 }
@@ -246,15 +234,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       await driver.callTool("list_windows", {}),
     ]).toMatchObject([{ isError: false }, { desktopUnlocked: true }, { isError: false }]);
 
-    expect(endpoint.requests[0]).toMatchObject({
-      id: 0,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-06-18",
-        capabilities: {},
-        clientInfo: { name: "openclaw-cua-computer", version: "1" },
-      },
-    });
     const startCalls = toolCalls(endpoint, "start_session");
     expect(startCalls).toHaveLength(1);
     expect(startCalls[0]?.params?.arguments).not.toHaveProperty("capture_scope");
@@ -280,18 +259,17 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("retries a rejected session startup before dispatching tools", async () => {
     let starts = 0;
-    const endpoint = await createFakeEndpoint((request, fake) => {
+    const endpoint = await createFakeEndpoint((request) => {
       if (request.method === "initialize") {
-        fake.respond(request, { protocolVersion: "2025-06-18" });
+        request.reply({ protocolVersion: "2025-06-18" });
       } else if (request.params?.name === "start_session") {
-        fake.respond(
-          request,
+        request.reply(
           starts++ === 0
             ? { isError: true, content: [{ type: "text", text: "fixture startup failed" }] }
             : sessionState("desktop"),
         );
       } else if (request.method === "tools/call") {
-        fake.respond(request, toolResult({ windows: [] }));
+        request.reply(toolResult({ windows: [] }));
       }
     });
     const driver = managedDriver(endpoint);
@@ -301,96 +279,79 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     expect(toolCalls(endpoint, "list_windows")).toHaveLength(1);
   });
 
-  it("preserves UTF-8 and routes multiple out-of-order responses", async () => {
-    const held: RpcRequest[] = [];
-    const endpoint = await createSessionEndpoint((request, fake) => {
-      if (request.method === "tools/call" && request.params?.name === "list_windows") {
-        held.push(request);
-        if (held.length !== 2) {
-          return;
-        }
-        const firstRequest = held.find((call) => call.params?.arguments?.marker === "first");
-        const secondRequest = held.find((call) => call.params?.arguments?.marker === "second");
-        if (!firstRequest || !secondRequest) {
-          throw new Error("fixture did not receive both tagged requests");
-        }
-        const framed = Buffer.from(
-          frame(secondRequest.id, toolResult({ marker: "second", text: "β雪" })) +
-            "\n" +
-            frame(firstRequest.id, toolResult({ marker: "first" })),
-        );
-        const split = framed.indexOf(Buffer.from("雪")) + 1;
-        expect(split).toBeGreaterThan(0);
-        // Receiving both requests owns the response; cold proxy startup is not a polling deadline.
-        fake.writeRaw(secondRequest, framed.subarray(0, split));
-        setImmediate(() => fake.writeRaw(secondRequest, framed.subarray(split)));
-      } else if (request.method === "tools/call" && request.params?.name === "end_session") {
-        fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
-      }
-    });
-    const driver = managedDriver(endpoint);
-    const settlement: string[] = [];
-    const results = await Promise.all(
-      ["first", "second"].map(async (marker) => {
-        const result = await driver.callTool("list_windows", { marker });
-        settlement.push(marker);
-        return projectedToolDetails(result, "list_windows");
-      }),
-    );
-    expect(results).toEqual([{ marker: "first" }, { marker: "second", text: "β雪" }]);
-    expect(settlement).toEqual(["second", "first"]);
-    await driver.dispose();
-  });
-
-  it("retains completed responses before a later fatal frame and ignores unknown numeric IDs", async () => {
-    const held: RpcRequest[] = [];
-    const endpoint = await createSessionEndpoint((request, fake) => {
-      if (request.params?.name === "list_windows") {
-        held.push(request);
-        if (held.length === 2) {
-          const [first, second] = held;
-          if (!first || !second) {
-            throw new Error("expected both requests");
+  it.each(["out-of-order", "fatal-frame"] as const)(
+    "settles multiplexed responses across %s",
+    async (mode) => {
+      const held: RpcRequest[] = [];
+      const endpoint = await createSessionEndpoint((request) => {
+        if (request.params?.name === "end_session" && mode === "out-of-order") {
+          request.reply(toolResult({ active: false }));
+        } else if (request.params?.name === "list_windows") {
+          held.push(request);
+          if (held.length !== 2) {
+            return;
           }
-          fake.writeRaw(
-            first,
-            frame(-5, {}) +
-              "\n" +
-              frame(first.id, toolResult({ marker: "completed" })) +
-              "not-json\n" +
-              frame(second.id, toolResult({ marker: "too-late" })),
-          );
+          const first = held.find((call) => call.params?.arguments?.marker === "first")!;
+          const second = held.find((call) => call.params?.arguments?.marker === "second")!;
+          if (mode === "fatal-frame") {
+            first.write(
+              frame(-5, {}) +
+                "\n" +
+                frame(first.id, toolResult({ marker: "completed" })) +
+                "not-json\n" +
+                frame(second.id, toolResult({ marker: "too-late" })),
+            );
+          } else {
+            const bytes = Buffer.from(
+              frame(second.id, toolResult({ marker: "second", text: "β雪" })) +
+                "\n" +
+                frame(first.id, toolResult({ marker: "first" })),
+            );
+            const split = bytes.indexOf(Buffer.from("雪")) + 1;
+            expect(split).toBeGreaterThan(0);
+            second.write(bytes.subarray(0, split));
+            setImmediate(() => second.write(bytes.subarray(split)));
+          }
+        }
+      });
+      const driver = managedDriver(endpoint);
+      const settlement: string[] = [];
+      const results = await Promise.allSettled(
+        ["first", "second"].map(async (marker) => {
+          const result = await driver.callTool("list_windows", { marker });
+          settlement.push(marker);
+          return projectedToolDetails(result, "list_windows");
+        }),
+      );
+      if (mode === "out-of-order") {
+        expect(results).toEqual([
+          { status: "fulfilled", value: { marker: "first" } },
+          { status: "fulfilled", value: { marker: "second", text: "β雪" } },
+        ]);
+        expect(settlement).toEqual(["second", "first"]);
+      } else {
+        expect(results).toMatchObject([
+          { status: "fulfilled", value: { marker: "completed" } },
+          { status: "rejected", reason: { message: expect.stringContaining("invalid JSON") } },
+        ]);
+        expect(driver.isAvailable()).toBe(false);
+        await driver.dispose();
+        const probe = net.createConnection(endpoint.socketPath);
+        try {
+          await once(probe, "connect");
+        } finally {
+          probe.destroy();
         }
       }
-    });
-    const driver = managedDriver(endpoint);
-    const results = await Promise.allSettled([
-      driver.callTool("list_windows", {}),
-      driver.callTool("list_windows", {}),
-    ]);
-    expect(results).toMatchObject([
-      { status: "fulfilled", value: { structuredContent: { marker: "completed" } } },
-      { status: "rejected", reason: { message: expect.stringContaining("invalid JSON") } },
-    ]);
-    expect(driver.isAvailable()).toBe(false);
-    await driver.dispose();
-    const probe = net.createConnection(endpoint.socketPath);
-    try {
-      await once(probe, "connect");
-    } finally {
-      probe.destroy();
-    }
-  });
+    },
+  );
 
   it("keeps JSON-RPC request errors local and preserves their CUA error text", async () => {
-    const endpoint = await createSessionEndpoint((request, fake) => {
+    const endpoint = await createSessionEndpoint((request) => {
       if (request.params?.arguments?.fail) {
-        fake.writeRaw(
-          request,
-          frame(request.id, { code: -32000, message: "fixture refusal" }, "error"),
-        );
+        request.write(frame(request.id, { code: -32000, message: "fixture refusal" }, "error"));
       } else if (request.method === "tools/call") {
-        fake.respond(request, toolResult({ windows: [] }));
+        request.reply(toolResult({ windows: [] }));
       }
     });
     const driver = managedDriver(endpoint);
@@ -403,11 +364,11 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("accepts a CUA screenshot larger than the default MCP buffer", async () => {
     const image = "A".repeat(11 * 1024 * 1024);
-    const endpoint = await createSessionEndpoint((request, fake) => {
+    const endpoint = await createSessionEndpoint((request) => {
       if (request.params?.name === "get_desktop_state") {
-        fake.respond(request, { content: [{ type: "image", data: image, mimeType: "image/png" }] });
+        request.reply({ content: [{ type: "image", data: image, mimeType: "image/png" }] });
       } else if (request.params?.name === "end_session") {
-        fake.respond(request, toolResult({ active: false }));
+        request.reply(toolResult({ active: false }));
       }
     });
     const driver = managedDriver(endpoint);
@@ -430,9 +391,9 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       yield Buffer.from([0x20]);
     }
     let streaming: Promise<void> | undefined;
-    const endpoint = await createSessionEndpoint((request, fake) => {
+    const endpoint = await createSessionEndpoint((request) => {
       if (request.params?.name === "get_desktop_state") {
-        streaming = fake.writeRawStream(request, overflowChunks());
+        streaming = request.stream(overflowChunks());
         // Observe producer errors until the test checks them after the expected proxy retirement.
         void streaming.catch(() => {});
       }
@@ -480,11 +441,11 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     ["timeout", "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP tools/call timed out after 120000ms"],
   ])("%s rejects pending calls without cancellation", async (trigger, message) => {
     const held: RpcRequest[] = [];
-    const endpoint = await createSessionEndpoint((request, fake) => {
+    const endpoint = await createSessionEndpoint((request) => {
       if (request.params?.arguments?.hold) {
         held.push(request);
       } else if (request.method === "tools/call") {
-        fake.respond(request, toolResult({ windows: [] }));
+        request.reply(toolResult({ windows: [] }));
       }
     });
     const driver = managedDriver(endpoint);
@@ -516,11 +477,11 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("bounds pending calls and tears down the proxy on cancellation", async () => {
     const held: RpcRequest[] = [];
-    const endpoint = await createSessionEndpoint((request, fake) => {
+    const endpoint = await createSessionEndpoint((request) => {
       if (request.method === "tools/call" && request.params?.name === "list_windows") {
         held.push(request);
       } else if (request.method === "tools/call" && request.params?.name === "end_session") {
-        fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
+        request.reply(toolResult({ session: "openclaw-test", active: false }));
       }
     });
     const driver = managedDriver(endpoint);
@@ -532,7 +493,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       session: expect.stringMatching(/^openclaw-/),
     });
     for (const request of held) {
-      endpoint.respond(request, toolResult({ windows: [] }));
+      request.reply(toolResult({ windows: [] }));
     }
     await Promise.all(calls.slice(0, 64));
 

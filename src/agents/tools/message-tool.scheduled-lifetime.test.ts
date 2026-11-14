@@ -22,7 +22,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { createEmbeddedMessageInvocationPolicy } from "../scheduled-message-invocation.js";
 import * as gatewayCallerContext from "./gateway-caller-context.js";
-import { createMessageTool } from "./message-tool-execution.js";
+import { createMessageTool, createMessageToolAsync } from "./message-tool-execution.js";
 import {
   messageGatewayContext,
   resolvedMessageSecrets,
@@ -285,7 +285,7 @@ it.each([
           return resolvedMessageSecrets(resolvedConfig);
         },
       );
-      const tool = createMessageTool({
+      const tool = await createMessageToolAsync({
         config,
         ...identity,
         agentSessionKey: sessionKey,

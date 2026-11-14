@@ -1,8 +1,10 @@
 import { Type } from "typebox";
-import { expect, it, vi } from "vitest";
+import { expect, expectTypeOf, it, vi } from "vitest";
 import {
   createFeatureClient,
   defineFeatureContract,
+  type FeatureClient,
+  type FeatureClientContract,
   type FeatureTransport,
 } from "./feature-contract.js";
 
@@ -15,11 +17,22 @@ const contract = defineFeatureContract({
       input: Type.Object({}),
       output: Type.String(),
     },
+    update: {
+      kind: "action",
+      description: "Update",
+      input: Type.Object({ value: Type.String() }),
+      output: Type.Boolean(),
+    },
   },
   events: { changed: Type.Object({}) },
 });
 
-function watchFixture(sessionKey?: string) {
+const browserContract = {
+  pluginId: "feature-fixture",
+  operations: { inspect: { kind: "query" }, update: { kind: "action" } },
+} satisfies FeatureClientContract<typeof contract>;
+
+function watchFixture(clientContract: FeatureClientContract<typeof contract>, sessionKey?: string) {
   const controller = new AbortController();
   const events = new Map<string, (payload: unknown) => void>();
   const listeners = new Set<() => void>();
@@ -44,9 +57,10 @@ function watchFixture(sessionKey?: string) {
   };
   vi.spyOn(host, "request");
   const callbacks = { onChange: vi.fn(), onError: vi.fn() };
-  const options = { events: ["changed"] as const, ...callbacks, sessionKey };
-  const dispose = createFeatureClient(contract, host).watch("inspect", {}, options);
+  const client = createFeatureClient<typeof contract>(clientContract, host);
+  const dispose = client.watch("inspect", {}, { events: ["changed"], ...callbacks, sessionKey });
   return {
+    client,
     host,
     controller,
     ...callbacks,
@@ -69,42 +83,57 @@ function watchFixture(sessionKey?: string) {
   };
 }
 
-it("refreshes watched queries on events and reconnect while fencing stale results", async () => {
-  const fixture = watchFixture("agent:fixture:task");
-  await Promise.resolve();
-  expect(fixture.host.request).toHaveBeenCalledWith("plugins.sessionAction", {
-    pluginId: contract.pluginId,
-    actionId: "inspect",
-    payload: {},
-    sessionKey: "agent:fixture:task",
-    agentId: undefined,
-  });
-  fixture.changed();
-  await Promise.resolve();
-  await fixture.settle({ ok: true, result: "stale" }, { ok: true, result: "current" });
-  expect(fixture.onChange.mock.calls).toEqual([["current"]]);
+it.each(["dispose", "abort"] as const)(
+  "refreshes queries, fences stale results, and closes via %s",
+  async (close) => {
+    const f = watchFixture(browserContract, "agent:fixture:task");
+    await Promise.resolve();
+    expect(f.host.request).toHaveBeenCalledWith("plugins.sessionAction", {
+      pluginId: contract.pluginId,
+      actionId: "inspect",
+      payload: {},
+      sessionKey: "agent:fixture:task",
+      agentId: undefined,
+    });
+    f.changed();
+    await Promise.resolve();
+    await f.settle({ ok: true, result: "stale" }, { ok: true, result: "current" });
+    expect(f.onChange.mock.calls).toEqual([["current"]]);
+    f.connect(false);
+    f.changed();
+    await Promise.resolve();
+    expect(f.host.request).toHaveBeenCalledTimes(2);
+    f.connect(true);
+    await Promise.resolve();
+    await f.settle({ ok: false, error: "query unavailable" });
+    expect(f.onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "query unavailable" }),
+    );
+    f.onChange.mockClear();
+    f.onError.mockClear();
+    f.changed();
+    await Promise.resolve();
+    if (close === "abort") {
+      f.controller.abort();
+    } else {
+      f.dispose();
+    }
+    await f.settle({ ok: true, result: "late" });
+    expect(f.onChange).not.toHaveBeenCalled();
+    expect(f.onError).not.toHaveBeenCalled();
+    expect(f.subscriptions()).toEqual([0, 0]);
+  },
+);
 
-  fixture.connect(false);
-  fixture.changed();
-  await Promise.resolve();
-  expect(fixture.host.request).toHaveBeenCalledTimes(2);
-  fixture.connect(true);
-  await Promise.resolve();
-  expect(fixture.host.request).toHaveBeenCalledTimes(3);
-  await fixture.settle({ ok: false, error: "query unavailable" });
-  expect(fixture.onError).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "query unavailable" }),
-  );
-  fixture.dispose();
-  expect(fixture.subscriptions()).toEqual([0, 0]);
-});
-
-it("disposes event subscriptions and in-flight deliveries with the browser owner", async () => {
-  const fixture = watchFixture();
-  await Promise.resolve();
-  fixture.controller.abort();
-  await fixture.settle({ ok: true, result: "late" });
-  expect(fixture.onChange).not.toHaveBeenCalled();
-  expect(fixture.onError).not.toHaveBeenCalled();
-  expect(fixture.subscriptions()).toEqual([0, 0]);
+it("preserves canonical client inference and query-only watches without schemas", () => {
+  const { client, host, controller } = watchFixture(browserContract);
+  const inferred = createFeatureClient(contract, host);
+  expectTypeOf(inferred).toEqualTypeOf<FeatureClient<typeof contract>>();
+  expectTypeOf(client).toEqualTypeOf<typeof inferred>();
+  expectTypeOf<Parameters<typeof client.watch>[0]>().toEqualTypeOf<"inspect">();
+  expectTypeOf<ReturnType<typeof client.invoke<"update">>>().toEqualTypeOf<Promise<boolean>>();
+  expect(() =>
+    Reflect.apply(client.watch, undefined, ["update", { value: "changed" }, {}]),
+  ).toThrow("Only feature queries can be watched");
+  controller.abort();
 });

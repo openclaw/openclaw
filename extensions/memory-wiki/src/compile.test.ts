@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
+import { extractWikiLinks } from "./markdown-links.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -75,6 +77,21 @@ describe("compileMemoryWikiVault", () => {
       "<!-- openclaw:wiki:related:start -->",
     );
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(notesLine);
+  });
+
+  it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`"])("native links: %s", async (title) => {
+    const { config, page, read } = await createVault();
+    await page("entities/plan.md", { pageType: "entity", id: "entity.plan", title: "Plan" });
+    await page(
+      "sources/meeting notes.md",
+      { pageType: "source", id: "source.meeting-notes", title },
+      "# Source\n\n[Plan](../entities/plan.md)\n",
+    );
+    await compileMemoryWikiVault(config);
+    const index = await read("index.md");
+    expect(extractWikiLinks(index, "index.md")).toContain("sources/meeting notes.md");
+    expect(JSON.stringify(fromMarkdown(index))).toContain(`"value":${JSON.stringify(title)}`);
+    await expect(read("entities/plan.md")).resolves.toContain("](<../sources/meeting notes.md>)");
   });
 
   it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {

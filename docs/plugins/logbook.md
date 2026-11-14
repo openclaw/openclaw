@@ -28,7 +28,7 @@ You need:
 
 - A connected node that exposes `screen.snapshot` or `logbook.snapshot`. The
   macOS app node needs Screen Recording permission. A headless macOS node host
-  (`openclaw node host run`) gets the plugin-provided `logbook.snapshot`
+  (`openclaw node run`) gets the plugin-provided `logbook.snapshot`
   command backed by the system `screencapture` tool.
 - The bundled Codex plugin enabled and authenticated. Codex provides
   the structured image-extraction contract Logbook requires. Sign in with

@@ -46,6 +46,8 @@ export type WorkerTaskHost = {
   describeTask?(url: URL, input: unknown): string;
   receiveMessage(worker: WorkerLifecycle, message: unknown): boolean;
   observeResourceReply?(this: void): void;
+  /** Capture diagnostics before construction detaches from the task's async context. */
+  captureWorkerStartObserver?(url: URL): (() => void) | undefined;
   workerStarted(worker: WorkerLifecycle, pool: object): void;
   workerRetiring(worker: WorkerLifecycle, reason: WorkerRetirementReason): void;
   /** Best-effort telemetry before native stop; the host bounds waiting, including synchronous service. */

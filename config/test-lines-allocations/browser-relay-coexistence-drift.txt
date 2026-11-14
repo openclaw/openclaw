@@ -1,0 +1,2 @@
+3
+# Prove borrowed/available relay setup and assert drift refusal at the active-use boundary.

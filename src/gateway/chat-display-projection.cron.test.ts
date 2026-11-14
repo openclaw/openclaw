@@ -11,10 +11,8 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sql
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  projectForwardedMessages,
-} from "./chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.cron.js";
+import { projectForwardedMessages } from "./chat-display-projection.history.js";
 import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import {

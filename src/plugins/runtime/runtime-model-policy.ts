@@ -8,7 +8,7 @@ import { compileModelAllowlist, type CompiledModelAllowlist } from "../model-all
 import { normalizePluginPolicyId } from "../plugin-policy-id.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
-import type { LlmCompleteCaller } from "./types-core.js";
+import type { LlmCompleteCaller } from "./runtime-llm.types.js";
 
 export type RuntimeLlmAuthority = {
   caller?: LlmCompleteCaller;

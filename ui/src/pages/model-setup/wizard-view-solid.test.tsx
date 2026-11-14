@@ -52,13 +52,11 @@ it("keeps the wizard draft mounted while typing and presenting a pending save", 
 
   expect(container.querySelector("openclaw-modal-dialog")).toBe(modal);
   expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
-  expect(document.activeElement).toBe(input);
-  expect([input.value, untrack(draft)]).toEqual(["initial typed", "initial typed"]);
 
   setSaving(true);
   flush();
   expect(container.querySelector("#model-setup-wizard-text-input")).toBe(input);
-  expect(input.value).toBe("initial typed");
+  expect([input.value, untrack(draft)]).toEqual(["initial typed", "initial typed"]);
   expect(input.disabled).toBe(true);
   expect(container.querySelector('[role="status"][aria-busy="true"]')?.textContent).toContain(
     "Working",
@@ -67,9 +65,11 @@ it("keeps the wizard draft mounted while typing and presenting a pending save", 
     (button) => button.textContent?.trim() === "Cancel",
   );
   expect(cancel?.disabled).toBe(false);
+  cancel?.focus();
   setSaving(false);
   flush();
   expect(input.disabled).toBe(false);
+  expect(document.activeElement).toBe(input);
 
   input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   expect(answer).toHaveBeenCalledExactlyOnceWith("initial typed");
@@ -234,7 +234,7 @@ it("shows device-code expiry only near the end and retires an expired code", asy
   flush();
   expect(container.querySelector("code")).toBeNull();
   expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-    "This code expired. Nothing was connected.",
+    "This code expired. No account was added.",
   );
   expect(container.querySelector(".wizard-sign-in__ring")).toBeNull();
 });

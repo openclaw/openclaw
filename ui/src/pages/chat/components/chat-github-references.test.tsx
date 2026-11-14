@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 

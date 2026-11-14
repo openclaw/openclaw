@@ -2,22 +2,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { expect, it } from "vitest";
 import { parse } from "yaml";
+import packageJson from "../package.json" with { type: "json" };
 import { mergeOverrides, readNpmLockOverrides } from "../scripts/generate-npm-package-lock.mts";
 import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
-
-type WorkspaceConfig = {
-  allowBuilds?: Record<string, boolean>;
-  blockExoticSubdeps?: boolean;
-  onlyBuiltDependencies?: string[];
-  minimumReleaseAge?: number;
-  minimumReleaseAgeStrict?: boolean;
-  verifyDepsBeforeRun?: boolean;
-};
-
-type RootPackageJson = {
-  dependencies: { tar: string };
-  pnpm?: WorkspaceConfig;
-};
 
 type PnpmEnvironmentLock = {
   importers?: Record<
@@ -29,10 +16,6 @@ type PnpmEnvironmentLock = {
   packages?: Record<string, unknown>;
   snapshots?: Record<string, { optionalDependencies?: Record<string, string> }>;
 };
-
-function readPackageJson(): RootPackageJson {
-  return JSON.parse(fs.readFileSync("package.json", "utf8")) as RootPackageJson;
-}
 
 function readPnpmEnvironmentLock(): PnpmEnvironmentLock {
   const committedLockfile = execFileSync("git", ["show", "HEAD:pnpm-lock.yaml"], {
@@ -58,12 +41,9 @@ it("keeps pnpm 12 environment lock portable across platforms", () => {
   }
 
   expect(packageManagerDependencies).not.toHaveProperty("@pnpm/exe");
-  expect(
-    Object.keys(lockfile.packages ?? {}).filter((key) => key.startsWith("@pnpm/exe@")),
-  ).toEqual([]);
-  expect(
-    Object.keys(lockfile.snapshots ?? {}).filter((key) => key.startsWith("@pnpm/exe@")),
-  ).toEqual([]);
+  for (const entries of [lockfile.packages, lockfile.snapshots]) {
+    expect(Object.keys(entries ?? {}).filter((key) => key.startsWith("@pnpm/exe@"))).toEqual([]);
+  }
 
   const platformExecutables = Object.keys(
     lockfile.snapshots?.[`pnpm@${pnpmVersion}`]?.optionalDependencies ?? {},
@@ -76,10 +56,9 @@ it("keeps pnpm 12 environment lock portable across platforms", () => {
 });
 
 it("keeps optional native Discord opus builds disabled by default", () => {
-  const packageJson = readPackageJson();
-  const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
+  const workspace: unknown = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8"));
 
-  expect(packageJson.pnpm).toBeUndefined();
+  expect(packageJson).not.toHaveProperty("pnpm");
   expect(workspace).toMatchObject({
     allowBuilds: { "@discordjs/opus": false },
     blockExoticSubdeps: true,
@@ -87,11 +66,11 @@ it("keeps optional native Discord opus builds disabled by default", () => {
     minimumReleaseAgeStrict: true,
     verifyDepsBeforeRun: false,
   });
-  expect(workspace.onlyBuiltDependencies).toBeUndefined();
+  expect(workspace).not.toHaveProperty("onlyBuiltDependencies");
 });
 
 it("pins forked transitive dependencies with parent-scoped npm-lock overrides", () => {
-  const tarVersion = readPackageJson().dependencies.tar;
+  const tarVersion = packageJson.dependencies.tar;
   const dependencies = { minipass: "3.3.6", tar: tarVersion };
   const overrides = readNpmLockOverrides({ dependencies }, process.cwd());
 
@@ -101,36 +80,17 @@ it("pins forked transitive dependencies with parent-scoped npm-lock overrides", 
 });
 
 it.each([
-  { first: "package", second: "workspace", childrenFirst: false, rootSpec: "1.2.3" },
-  { first: "package", second: "lock", childrenFirst: true, rootSpec: "npm:@scope/parent@1.2.3" },
-] as const)(
-  "retains child policy and $rootSpec across sources $first/$second (childrenFirst=$childrenFirst)",
-  ({ first, second, childrenFirst, rootSpec }) => {
-    const sources: Record<"package" | "workspace" | "lock", Record<string, unknown>> = {
-      package: {},
-      workspace: {},
-      lock: {},
-    };
-    const children = { parent: { child: "2.0.0" } };
+  ["1.2.3", undefined],
+  ["npm:@scope/parent@1.2.3", undefined],
+  ["npm:@nolyfill/domexception@1.0.28", "1.0.28"],
+] as const)("preserves root %s and child pins in either order", (rootSpec, existingRoot) => {
+  for (const nestedFirst of [false, true]) {
     const self = { parent: rootSpec };
-    sources[first] = childrenFirst ? children : self;
-    sources[second] = childrenFirst ? self : children;
-
-    expect(mergeOverrides(sources.package, sources.workspace, sources.lock)).toEqual({
+    const nested = { parent: { child: "2.0.0", ...(existingRoot ? { ".": existingRoot } : {}) } };
+    expect(mergeOverrides(nestedFirst ? nested : self, nestedFirst ? self : nested, {})).toEqual({
       parent: { ".": rootSpec, child: "2.0.0" },
     });
-  },
-);
-
-it.each([false, true])("preserves npm alias pins (nested first: %s)", (nestedFirst) => {
-  const alias = { "node-domexception": "npm:@nolyfill/domexception@1.0.28" };
-  const nested = { "node-domexception": { ".": "1.0.28", child: "2.0.0" } };
-  expect(mergeOverrides(nestedFirst ? nested : alias, nestedFirst ? alias : nested, {})).toEqual({
-    "node-domexception": {
-      ".": "npm:@nolyfill/domexception@1.0.28",
-      child: "2.0.0",
-    },
-  });
+  }
 });
 
 it.each([

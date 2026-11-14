@@ -9,7 +9,7 @@ import type {
   Mutation,
 } from "./session-actor-worker.test-support.js";
 import { readPendingInput } from "./session-pending-input-operations.kernel.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 
 type Fixture = ReturnType<typeof createSessionActorWorkerFixture>;
@@ -66,7 +66,6 @@ function withReads(f: Fixture, run: (counts: { read: number }) => void) {
 async function accept(
   f: Fixture,
   input: Acceptance,
-  runId: string,
   before = withEngineStoreAdmission(() => f.read()),
 ) {
   const command: Mutation = {
@@ -75,8 +74,8 @@ async function accept(
       target: f.target,
       commandId: "pending" in input ? "stage-input" : "append-input",
       phaseId: "input",
-      expectedState: buildRestartRecoveryExpectedState(before.entry!),
-      lifecycle: { restartRecoveryDeliveryRunId: runId },
+      expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
+      lifecycle: { abortedLastRun: false },
       ...input,
     },
   };
@@ -120,7 +119,7 @@ async function stage(f: Fixture, plan: SessionTurnPlan) {
   if (expected.kind !== "stage") {
     throw new Error("Expected pending input stage");
   }
-  const outcome = await accept(f, { pending: { ...pending, expected } }, "next-run", before);
+  const outcome = await accept(f, { pending: { ...pending, expected } }, before);
   return { outcome, pending };
 }
 
@@ -144,7 +143,7 @@ export function runSessionTurnResidentTests(
       withReads(f, (reads) => {
         expect(f.prepareTurn(plan)).toMatchObject({
           runtimeTarget: { sessionKey: f.scope.sessionKey, selectedSessionId: f.scope.sessionId },
-          expectedSessionState: { restartRecoveryDeliveryRunId: "next-run" },
+          expectedSessionState: { abortedLastRun: false },
           messages: [{ pending: true, existing: undefined }],
           version: { rawSeq: null },
         });
@@ -167,18 +166,18 @@ export function runSessionTurnResidentTests(
       withEngineStoreAdmission(() => {
         const prepared = f.prepareTurn(plan);
         expect(prepared.messages).toEqual([{ pending: false, existing: undefined }]);
-        expect(prepared.expectedSessionState?.restartRecoveryDeliveryRunId).toBeUndefined();
-        expect(f.nativeEntry()?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(prepared.expectedSessionState?.abortedLastRun).toBeUndefined();
+        expect(f.nativeEntry()?.abortedLastRun).toBeUndefined();
       });
     }));
 
   it("sees native in-process entry and transcript writes before the next preparation", () =>
     withResident((f) => {
       f.read();
-      f.writeEntry({ ...f.nativeEntry()!, restartRecoveryDeliveryRunId: "native-run" });
+      f.writeEntry({ ...f.nativeEntry()!, abortedLastRun: true });
       append(f, [message("native write", "next-input", "native")]);
       expect(f.prepareTurn(turn(f))).toMatchObject({
-        expectedSessionState: { restartRecoveryDeliveryRunId: "native-run" },
+        expectedSessionState: { abortedLastRun: true },
         version: { rawSeq: 0 },
         messages: [{ existing: { messageId: "native", message: { content: "native write" } } }],
       });
@@ -195,13 +194,10 @@ export function runSessionTurnResidentTests(
         });
       } else {
         const destination = "agent:main:moved";
-        f.writeEntry(
-          { ...f.nativeEntry()!, restartRecoveryDeliveryRunId: "moved-run" },
-          destination,
-        );
+        f.writeEntry({ ...f.nativeEntry()!, abortedLastRun: true }, destination);
         expect(f.prepareTurn(turn(f))).toMatchObject({
           runtimeTarget: { sessionKey: destination, selectedSessionId: f.scope.sessionId },
-          expectedSessionState: { restartRecoveryDeliveryRunId: "moved-run" },
+          expectedSessionState: { abortedLastRun: true },
         });
       }
     }),
@@ -234,13 +230,11 @@ export function runSessionTurnResidentTests(
 
   it("uses committed identities for fresh inputs and returns stored bytes on retry", () =>
     withActor(async (f) => {
-      expect((await accept(f, { turn: turn(f, "committed-input") }, "append-run")).kind).toBe(
-        "committed",
-      );
+      expect((await accept(f, { turn: turn(f, "committed-input") })).kind).toBe("committed");
       withReads(f, (reads) => {
         expect(f.prepareTurn(turn(f))).toMatchObject({
           version: { rawSeq: 1 },
-          expectedSessionState: { restartRecoveryDeliveryRunId: "append-run" },
+          expectedSessionState: { abortedLastRun: false },
         });
         expect(reads.read).toBe(0);
         const retry = turn(f, "committed-input", "different retry bytes");

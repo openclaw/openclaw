@@ -1,7 +1,10 @@
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
-import { createFreshLlmBoundaryTokenEstimator } from "../context-token-pressure.js";
+import {
+  createFreshLlmBoundaryTokenEstimator,
+  type FixedRequestTokenPressure,
+} from "../context-token-pressure.js";
 
 /** Ephemeral foreground facts; a separately routed summarizer cannot reconstruct these. */
 export type CompactionRequestBudget = Readonly<{
@@ -19,6 +22,8 @@ export type CompactionRequestBudget = Readonly<{
 /** Input preservation exists before the foreground prompt can supply a token budget. */
 export type CompactionRequestConstraints = Readonly<{
   requestBudget?: CompactionRequestBudget;
+  /** Source of the active run, including after its input has been processed. */
+  requestFromEntryId?: string;
   pendingUserEntryId?: string;
 }>;
 
@@ -56,6 +61,7 @@ export function createCompactionRequestBudget(params: {
   reserveTokens: number;
   systemPrompt?: string;
   tools?: readonly { name: string; description: string; parameters: unknown }[];
+  fixedTokenPressure?: FixedRequestTokenPressure;
   pendingPrompt?: string;
   pendingImageCount?: number;
   pendingUserIdempotencyKey?: string;

@@ -1,0 +1,2 @@
+# tools.invoke runs configured MCP tools: prove policy, session MCP overrides, final-I/O authority and discovery cancellation.
+313

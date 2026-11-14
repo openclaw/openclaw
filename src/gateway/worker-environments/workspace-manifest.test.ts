@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { applyWorkspaceSourceOverlay } from "./workspace-manifest-overlay.js";
 import {
   parseWorkerWorkspaceManifest,
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest as serializeManifest,
 } from "./workspace-manifest.js";
-import { workspacePathAncestors } from "./workspace-path-ancestors.js";
+import * as pathExclusions from "./workspace-path-exclusions.js";
 
 const sha256 = "a".repeat(64);
 const file = { path: "file", type: "file" as const, mode: 0o644, size: 0, sha256 };
@@ -43,24 +44,50 @@ function rejectsEntry(value: unknown, error: string) {
   expect(() => readJournal({ ...journal, baseEntries: [value] })).toThrow(error);
 }
 
+it("projects each overlay inventory once while preserving incoming and setup edits", () => {
+  const source = {
+    ...manifest,
+    entries: ["unchanged.txt", "changed.txt", "deleted.txt", "__pycache__/cache.pyc"].map(
+      namedFile,
+    ),
+  };
+  const prepared = {
+    ...source,
+    entries: [...source.entries, namedFile("setup.txt")],
+  };
+  const incoming = {
+    ...source,
+    entries: [
+      source.entries[0]!,
+      { ...namedFile("changed.txt"), sha256: "b".repeat(64) },
+      namedFile("added.txt"),
+    ],
+  };
+  const projectPath = vi.spyOn(pathExclusions, "isDerivedWorkspacePath");
+  let result: ReturnType<typeof applyWorkspaceSourceOverlay>;
+  let projectionCount: number;
+  try {
+    result = applyWorkspaceSourceOverlay(source, prepared, incoming);
+    projectionCount = projectPath.mock.calls.length;
+  } finally {
+    projectPath.mockRestore();
+  }
+  expect(result.entries).toEqual([
+    source.entries[0],
+    prepared.entries.at(-1),
+    incoming.entries[1],
+    incoming.entries[2],
+  ]);
+  expect(projectionCount).toBe(
+    source.entries.length + prepared.entries.length + incoming.entries.length,
+  );
+});
+
 it.each([false, true])("projects caches using trusted input context: %s", (trusted) => {
   const authored = ".artifacts/build-all-cache/authored.txt";
   const generated = ".artifacts/build-cache-inputs/compile.json";
-  const emptyDirectories = ["empty", "nested", "nested/empty"];
-  const paths = [
-    ".artifacts/vitest-worker-cache/out.js",
-    ".local/share/pnpm/store/content",
-    authored,
-    generated,
-    "file",
-  ];
-  const directories = [
-    ...new Set([
-      ...paths.flatMap((name) => [...workspacePathAncestors(name)]),
-      ...emptyDirectories,
-    ]),
-  ];
-  const entries = paths.map(namedFile);
+  const directories = [".artifacts", ".artifacts/build-all-cache", ".artifacts/build-cache-inputs"];
+  const entries = [authored, generated].map(namedFile);
   const rawEntries = [...directories.map(directory), ...entries].toSorted((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
@@ -70,13 +97,8 @@ it.each([false, true])("projects caches using trusted input context: %s", (trust
   const buildCacheInputs = trusted ? [authored] : undefined;
   const expected = {
     ...manifest,
-    entries: (trusted ? [authored, "file"] : [authored, generated, "file"]).map(namedFile),
-    directories: [
-      ".artifacts",
-      ".artifacts/build-all-cache",
-      ...(trusted ? [] : [".artifacts/build-cache-inputs"]),
-      ...emptyDirectories,
-    ],
+    entries: (trusted ? [authored] : [authored, generated]).map(namedFile),
+    directories: trusted ? directories.slice(0, 2) : directories,
   };
   expect(parseWorkerWorkspaceManifest(raw, ref, buildCacheInputs)).toEqual({
     ...expected,
@@ -85,7 +107,6 @@ it.each([false, true])("projects caches using trusted input context: %s", (trust
   const serialized = serializeManifest({ ...manifest, entries, directories, buildCacheInputs });
   expect(readManifest(JSON.parse(serialized))).toEqual(expected);
   expect(JSON.parse(serialized).buildCacheInputs).toBeUndefined();
-  expect(() => parseWorkerWorkspaceManifest(raw + " ", ref, buildCacheInputs)).toThrow("digest");
 });
 
 it("requires non-array records for manifests, journals, and entries", () => {

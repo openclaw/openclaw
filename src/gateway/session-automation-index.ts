@@ -1,6 +1,6 @@
 /** Process-local index of session keys that enabled cron jobs are bound to. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { resolveCronJobSessionBindings } from "../cron/job-session-bindings.js";
 import type { CronJob } from "../cron/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -80,12 +80,11 @@ function buildAutomationKeys(
     if (!job.enabled) {
       continue;
     }
-    for (const key of resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId })) {
-      const agentId = job.owner?.agentId ?? defaultAgentId;
+    for (const [key, agentId] of resolveCronJobSessionBindings(job, { cfg, defaultAgentId })) {
       if (parseAgentSessionKey(key)) {
         keys.add(key);
-      } else if (agentId) {
-        keys.add(`${normalizeAgentId(agentId)}\0${key}`);
+      } else {
+        keys.add(`${agentId}\0${key}`);
       }
     }
   }

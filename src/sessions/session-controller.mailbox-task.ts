@@ -7,6 +7,7 @@ import type {
 } from "./session-controller.contracts.js";
 import { logSessionControllerSourceClaim } from "./session-controller.diagnostics.js";
 import { releaseSessionControllerClaim } from "./session-controller.mailbox-claim.js";
+import { settleSessionControllerSourceInjectionOrder } from "./session-controller.mailbox-source.js";
 
 /** A prepared producer consumes its existing source, never submits another runnable input. */
 export function claimSessionControllerTask(
@@ -49,6 +50,9 @@ export function claimSessionControllerTask(
     }
   };
   input.phase = "waiting";
+  // This source is committed to a separate turn, not an earlier steering opportunity.
+  // Keep its mailbox position while allowing later input to steer the incumbent.
+  settleSessionControllerSourceInjectionOrder(input, false);
   logSessionControllerSourceClaim(input, "waiting");
   input.mailbox.wake();
   return pending.promise;

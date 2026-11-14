@@ -1,9 +1,11 @@
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import { hashCliSessionText } from "../cli-session.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import { resolveToolSearchConfig } from "../tool-search-config.js";
 import type { RunCliAgentParams } from "./types.js";
 
 /**
@@ -220,4 +222,42 @@ export function keptManagedNativeTools(
   params: Pick<RunCliAgentParams, "cliToolAvailability">,
 ): string[] {
   return managedNativeTools.filter((name) => params.cliToolAvailability?.native.includes(name));
+}
+
+/** Discovery sees only the final MCP catalog and does not restore native execution tools. */
+export function withCliToolSearch(
+  params: RunCliAgentParams,
+  nativeToolSearch: string | undefined,
+): RunCliAgentParams {
+  const availability = params.cliToolAvailability;
+  if (
+    !nativeToolSearch ||
+    !availability ||
+    params.disableTools ||
+    availability.openClaw.length === 0 ||
+    !resolveToolSearchConfig(params.config).enabled
+  ) {
+    return params;
+  }
+  return {
+    ...params,
+    cliToolAvailability: { ...availability, discovery: [nativeToolSearch] },
+  };
+}
+
+/** Bind CLI session reuse to its stable native, discovery, and mediated tool catalog. */
+export function resolveCliToolAvailabilityHash(
+  baseHash: string | undefined,
+  availability: RunCliAgentParams["cliToolAvailability"],
+): string | undefined {
+  return availability
+    ? hashCliSessionText(
+        JSON.stringify([
+          baseHash ?? null,
+          availability.native.toSorted(),
+          availability.openClaw.toSorted(),
+          ...(availability.discovery ? [availability.discovery] : []),
+        ]),
+      )
+    : baseHash;
 }

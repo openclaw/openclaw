@@ -662,6 +662,15 @@ describe("native app i18n inventory", () => {
 
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
+    const expectSourceAtSite = (
+      source: string,
+      predicate: (site: NativeI18nEntry["sites"][number]) => boolean,
+    ) => {
+      expect(
+        entries.some((entry) => hasSite(entry, predicate) && entry.source === source),
+        source,
+      ).toBe(true);
+    };
     const surfaces = new Set(entries.map((entry) => entry.surface));
 
     const sources = new Set(entries.map((entry) => entry.source));
@@ -764,15 +773,10 @@ describe("native app i18n inventory", () => {
           ),
         ),
     ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) => site.path === "apps/android/wear/src/main/res/values/strings.xml",
-          ) && entry.source === "Current session",
-      ),
-    ).toBe(true);
+    expectSourceAtSite(
+      "Current session",
+      (site) => site.path === "apps/android/wear/src/main/res/values/strings.xml",
+    );
     // Wear-only entries do not reach phone resources; the phone owner must declare its modes.
     expect(
       entries
@@ -788,24 +792,14 @@ describe("native app i18n inventory", () => {
         )
         .map((entry) => entry.source),
     ).toEqual(expect.arrayContaining(["System", "Dark", "Light"]));
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) =>
-            site.path.endsWith(
-              "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
-            ),
-          ) && entry.source === "Control other apps",
+    expectSourceAtSite("Control other apps", (site) =>
+      site.path.endsWith(
+        "/thirdParty/java/ai/openclaw/app/ui/SensitivePhoneCapabilitiesSettings.kt",
       ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) =>
-            site.path.endsWith("/accessibility/AccessibilityDevActivity.kt"),
-          ) && entry.source === "Accessibility executor",
-      ),
-    ).toBe(true);
+    );
+    expectSourceAtSite("Accessibility executor", (site) =>
+      site.path.endsWith("/accessibility/AccessibilityDevActivity.kt"),
+    );
     expect(
       entries.some((entry) =>
         new Set(["Request ID: \\(value)", "Request ID: %@"]).has(entry.source),
@@ -845,47 +839,18 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some((entry) => entry.surface === "android" && entry.source === "Search OpenClaw"),
     ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
-          entry.source === "Message actions",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
-          entry.source === "Reply",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) => site.path.endsWith("/ChatMessageActions.kt")) &&
-          entry.source === "Share message",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) =>
-              site.path ===
-              "apps/ios/Sources/Settings/DeviceSettings/IOSDeviceSettingsConsent.swift",
-          ) && entry.source === "Share Apple Health summaries with the Gateway?",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) => site.path === "apps/ios/Sources/Settings/DashboardPageScreen.swift",
-          ) && entry.source === "Done",
-      ),
-    ).toBe(true);
+    expectSourceAtSite("Message actions", (site) => site.path.endsWith("/ChatMessageActions.kt"));
+    expectSourceAtSite("Reply", (site) => site.path.endsWith("/ChatMessageActions.kt"));
+    expectSourceAtSite("Share message", (site) => site.path.endsWith("/ChatMessageActions.kt"));
+    expectSourceAtSite(
+      "Share Apple Health summaries with the Gateway?",
+      (site) =>
+        site.path === "apps/ios/Sources/Settings/DeviceSettings/IOSDeviceSettingsConsent.swift",
+    );
+    expectSourceAtSite(
+      "Done",
+      (site) => site.path === "apps/ios/Sources/Settings/DashboardPageScreen.swift",
+    );
     expect
       .soft(
         entries
@@ -907,24 +872,11 @@ describe("native app i18n inventory", () => {
           .map((entry) => entry.surface),
       )
       .toEqual(["apple"]);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(entry, (site) => site.path.endsWith("/ChatSheets.swift")) &&
-          entry.source === "Search threads",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
-          ) &&
-          entry.source ===
-            "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
-      ),
-    ).toBe(true);
+    expectSourceAtSite("Search threads", (site) => site.path.endsWith("/ChatSheets.swift"));
+    expectSourceAtSite(
+      "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
+      (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+    );
     expect(
       entries.some((entry) =>
         [
@@ -935,32 +887,18 @@ describe("native app i18n inventory", () => {
         ].includes(entry.source),
       ),
     ).toBe(false);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) =>
-              site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
-              site.kind === "ui-localized-call-multiline",
-          ) &&
-          entry.source ===
-            "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) =>
-              site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
-              site.kind === "ui-localized-call-multiline",
-          ) &&
-          entry.source ===
-            "Can't reach gateway at %1$@:%2$@. Check the address and your network connection.",
-      ),
-    ).toBe(true);
+    expectSourceAtSite(
+      "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
+      (site) =>
+        site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
+        site.kind === "ui-localized-call-multiline",
+    );
+    expectSourceAtSite(
+      "Can't reach gateway at %1$@:%2$@. Check the address and your network connection.",
+      (site) =>
+        site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
+        site.kind === "ui-localized-call-multiline",
+    );
     expect(entries.some((entry) => entry.source === "Approve this device on the gateway.\n")).toBe(
       false,
     );
@@ -983,30 +921,16 @@ describe("native app i18n inventory", () => {
           entry.surface === "android" && ["off", "talk-orb", "pulse"].includes(entry.source),
       ),
     ).toBe(false);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
-          ) &&
-          entry.source ===
-            "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          hasSite(
-            entry,
-            (site) =>
-              site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
-              site.kind === "ui-localized-call-multiline",
-          ) &&
-          entry.source ===
-            "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
-      ),
-    ).toBe(true);
+    expectSourceAtSite(
+      "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
+      (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
+    );
+    expectSourceAtSite(
+      "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
+      (site) =>
+        site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
+        site.kind === "ui-localized-call-multiline",
+    );
     expect(
       entries.some((entry) => hasSite(entry, (site) => site.path.endsWith("Info.plist"))),
     ).toBe(true);

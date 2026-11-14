@@ -697,8 +697,12 @@ describe("sessions_send dispatch admission", () => {
   });
 
   it.each([
-    { name: "numeric thread", sourceKey: requesterSessionKey, threadId: 42 },
-    { name: "legacy DM", sourceKey: "agent:main:telegram:direct:peer-1", threadId: "42" },
+    { name: "top-level Slack", sourceKey: requesterSessionKey, threadId: undefined },
+    {
+      name: "legacy DM numeric thread",
+      sourceKey: "agent:main:telegram:direct:peer-1",
+      threadId: 42,
+    },
     {
       name: "current source over fallback",
       sourceKey: requesterSessionKey,
@@ -711,9 +715,13 @@ describe("sessions_send dispatch admission", () => {
     const self = "self" in scenario;
     const fallback = "fallback" in scenario;
     const targetKey = self ? sourceKey : targetSessionKey;
+    const slack = scenario.name === "top-level Slack";
     const sourceId = self ? "self-session" : "requester-session";
     const targetId = self ? sourceId : "target-session";
     const originalRoute = { channel: "telegram", accountId: "default", to: "original-recipient" };
+    if (slack) {
+      originalRoute.channel = "slack";
+    }
     const laterRoute = { channel: "telegram", accountId: "other", to: "later-recipient" };
     const entry = { sessionId: sourceId, updatedAt: 1, lifecycleRevision: "original-generation" };
     const settled = await trackActualReplyFlow();
@@ -777,7 +785,9 @@ describe("sessions_send dispatch admission", () => {
         agentThreadId: self ? undefined : fallback ? 99 : scenario.threadId,
         currentMessagingTarget: self || fallback ? originalRoute.to : undefined,
         currentChannelId: fallback ? "native-channel-id" : undefined,
-        currentThreadTs: fallback ? "42" : undefined,
+        currentThreadTs: fallback ? "42" : slack ? "1793210000.000100" : undefined,
+        currentMessageId: slack ? "1793210000.000100" : undefined,
+        replyToMode: slack ? "off" : undefined,
         config,
         disableMessageTool: true,
         disablePluginTools: true,
@@ -795,7 +805,7 @@ describe("sessions_send dispatch admission", () => {
           expectedExistingSessionId: sourceId,
           expectedExistingSessionLifecycleRevision: entry.lifecycleRevision,
           ...originalRoute,
-          threadId: "42",
+          threadId: slack ? undefined : "42",
           deliver: false,
           sourceReplyDeliveryMode: "message_tool_only",
         });

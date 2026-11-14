@@ -163,13 +163,13 @@ describe("coalesceAgentRunFrames", () => {
     expect(history.key).toBe(live.key);
   });
 
-  it("keeps a restart-recovered tool-only run in one stable frame", () => {
+  it("keeps a system-initiated tool-only run in one stable frame", () => {
     const runId = "run-recovered";
     const boundaryId = `send:${runId}`;
     const recoveryNotice = {
       kind: "notice" as const,
-      key: "notice:restart-recovery",
-      text: "Turn interrupted by a gateway restart.",
+      key: "notice:system-event",
+      text: "Check the current workspace state.",
       timestamp: 1,
       startsTurn: true as const,
       boundaryId,

@@ -49,6 +49,8 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
           sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
         };
         const gateway = await installMockGateway(page, {
+          // The offline reload below must return before this test reconnects.
+          awaitInitialRoster: false,
           methodResponses: {
             "sessions.list": createdSessionListResult(sessionKey),
             "chat.history": history,

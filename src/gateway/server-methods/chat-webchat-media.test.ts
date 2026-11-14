@@ -81,7 +81,10 @@ describe("webchat audio blocks through assistant messages", () => {
       const fileUrl = pathToFileURL(audioPath).href.replace(/^file:\/\/\//, `${scheme}/`);
       const blocks = await localAudio(fileUrl, localRoot);
       expect(blocks).toHaveLength(1);
-      expect((blocks[0] as { type?: string }).type).toBe("attachment");
+      expect(blocks[0]).toMatchObject({
+        type: "attachment",
+        attachment: { url: audioPath },
+      });
     },
   );
 

@@ -1,0 +1,2 @@
+# Abort npm prefix preparation before success/profile changes/package mutation when mkdir or npm config fails.
+19

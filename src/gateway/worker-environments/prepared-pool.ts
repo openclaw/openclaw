@@ -6,10 +6,9 @@ import {
   createPreparedPoolPresence,
   matchingPreparedPoolPresenceDemand,
 } from "./prepared-pool-presence.js";
-import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerEnvironmentRecord as Environment } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
-/** Environment rows own inventory; placement activation and explicit builds establish demand. */
+/** Environment rows own inventory; activation, explicit builds, and standing policy establish demand. */
 export function createPreparedWorkerPool(options: pool.PoolOptions) {
   const { store, signal, now } = options;
   let inFlight: Promise<void> | undefined;
@@ -107,7 +106,6 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
     return preparation
       ? store.list().filter((record) => {
           const limits = pool.poolPolicy(options, record.profileId, record.providerId);
-          const presenceDemand = presence.current();
           return (
             limits.target > 0 &&
             limits.maxTotal > 0 &&
@@ -116,11 +114,8 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
             record.preparation !== null &&
             record.preparation.key === preparation.key &&
             record.preparation.consumedAtMs === null &&
-            ((presenceDemand &&
-              presenceDemand.project.key ===
-                readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
-              (presenceDemand.retireAtMs ?? Number.MAX_SAFE_INTEGER) > now()) ||
-              record.preparation.expiresAtMs > now()) &&
+            // Standing demand replenishes capacity; it cannot extend a restored finite deadline.
+            record.preparation.expiresAtMs > now() &&
             record.destroyRequestedAtMs === null &&
             record.sharedHost === false &&
             record.nodeDeviceId !== null &&

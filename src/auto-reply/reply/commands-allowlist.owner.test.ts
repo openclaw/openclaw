@@ -233,20 +233,17 @@ it("settles a committed pairing addition after the original admin is demoted", a
     const admin = fixture.admins[0]!;
     const params = await commandParams(fixture, "/allowlist add dm --store --account team 200");
     const add = pairingStore.addChannelAllowFromStoreEntry;
-    const writer = vi
+    using _ = vi
       .spyOn(pairingStore, "addChannelAllowFromStoreEntry")
       .mockImplementation(async (entry) => {
         const result = await add(entry);
         setUserProfileRole(admin.profile.id, "member");
         return result;
       });
-    try {
-      const result = await handleAllowlistCommand(params, true);
-      expect(result?.reply?.text).toContain("allowlist added");
-      expect(await readStore("team")).toEqual(["200"]);
-      expect(params.command.assertOwnerCurrent).toThrow("authority changed");
-    } finally {
-      writer.mockRestore();
-    }
+
+    const result = await handleAllowlistCommand(params, true);
+    expect(result?.reply?.text).toContain("allowlist added");
+    expect(await readStore("team")).toEqual(["200"]);
+    expect(params.command.assertOwnerCurrent).toThrow("authority changed");
   });
 });

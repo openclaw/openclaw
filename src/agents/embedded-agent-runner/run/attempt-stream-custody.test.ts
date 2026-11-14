@@ -81,6 +81,7 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-l
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import * as streamWrappers from "./stream-wrapper.js";
 import type { EmbeddedAttemptExecutionState } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -121,6 +122,39 @@ function createFixture(
 }
 
 describe("installed replay repair ownership", () => {
+  it("does not join absent replay repairs for streamed deltas", async () => {
+    const originalWrap = streamWrappers.wrapStreamObjectSettlement;
+    const join = vi.fn<() => Promise<unknown>>();
+    using _ = vi
+      .spyOn(streamWrappers, "wrapStreamObjectSettlement")
+      .mockImplementation((stream, settle, beforeEvent, close) => {
+        return originalWrap(stream, join.mockImplementation(settle), beforeEvent, close);
+      });
+    const source = createAssistantMessageEventStream();
+    const final = createAssistant(testModel, [{ type: "text", text: "Synthetic response" }]);
+    const response = await (await createFixture(() => source)).open();
+    const iterator = response[Symbol.asyncIterator]();
+    try {
+      for (let index = 0; index < 16; index++) {
+        const event = { type: "text_delta", contentIndex: 0, delta: "x" } as const;
+        source.push(event);
+        const next = await iterator.next();
+        expect(next.done).toBe(false);
+        expect(next.value).toBe(event);
+      }
+      expect(join).not.toHaveBeenCalled();
+      source.end(final);
+      await response.result();
+      expect(join).toHaveBeenCalledOnce();
+      expect((await iterator.next()).done).toBe(true);
+      expect(join).toHaveBeenCalledTimes(2);
+    } finally {
+      source.end(final);
+      await iterator.return?.();
+      await response.result();
+    }
+  });
+
   it("keeps the newer model request active when an older result finishes late", async () => {
     const firstSource = createAssistantMessageEventStream();
     const secondSource = createAssistantMessageEventStream();

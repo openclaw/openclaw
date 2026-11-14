@@ -21,7 +21,7 @@ import {
 } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import { SettingsEmpty, SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
@@ -51,6 +51,7 @@ export function pluginSettingsNodeOptions(model: PluginSettingsEditorModel) {
     commitOnBlur: true,
     maskSensitive: true,
     rawAvailable: false,
+    secretFields: model.configSecretFields,
     onPatch: model.onConfigPatch,
     onRemove: model.onConfigRemove,
   };
@@ -368,9 +369,9 @@ function PluginSettingsGroups(props: GroupsProps) {
           </EditorSection>
         ) : null}
         {!fields().length && !additional() && !props.permissions ? (
-          <p class="plugin-editor__empty">
-            {t(query() ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}
-          </p>
+          <SettingsEmpty
+            message={t(query() ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}
+          />
         ) : null}
       </div>
     </div>

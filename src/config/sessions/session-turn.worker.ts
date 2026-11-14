@@ -14,7 +14,7 @@ import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-go
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { createCliHistoryOwnerProbe, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { applySessionGoalOperation } from "./goals-operation-policy.js";
-import { readSessionGoalOperationReceipt } from "./goals-operations.js";
+import { readSessionGoalOperationReceipt } from "./goals-operation-receipts.js";
 import {
   readQualifiedSessionEntryRow,
   readSessionKeyBySessionIdInDatabase,
@@ -37,7 +37,7 @@ import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worke
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -267,7 +267,7 @@ export function prepareSessionTurn(
       version: transcriptState?.version,
       expectedSessionState:
         expectedEntry &&
-        buildRestartRecoveryExpectedState(
+        buildSessionTranscriptTurnExpectedState(
           selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
         ),
       goalId:

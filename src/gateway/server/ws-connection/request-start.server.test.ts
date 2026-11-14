@@ -11,6 +11,7 @@ import {
   WebSocketServer,
 } from "../../../../packages/gateway-client/src/websocket.test-support.js";
 import { writeConfigFile } from "../../../config/config.js";
+import { listSystemPresence } from "../../../infra/system-presence.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
@@ -405,6 +406,8 @@ describe("authenticated operator request starts", () => {
   it("keeps local frames raw and compresses remote frames both ways without stalling", async () => {
     await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
     const registry = createEmptyPluginRegistry();
+    let responseStream: IncomingMessage["socket"] | undefined;
+    const responseBytes = new Map<string, number>();
     const sharedMessages = [
       { text: 'Escaped "segment" 漢字🦞\n'.repeat(4096) },
       { text: randomBytes(1536).toString("base64").repeat(16) },
@@ -414,11 +417,28 @@ describe("authenticated operator request starts", () => {
       sharedBytes,
       deflateRawSync(sharedBytes, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
     );
-    registry.gatewayHandlers["test.echo"] = async ({ req, respond, acceptsDeflatedSegments }) => {
+    registry.gatewayHandlers["test.echo"] = async ({
+      req,
+      respond,
+      acceptsDeflatedSegments,
+      context,
+    }) => {
+      // Presence can publish before the client receives this response.
+      using writes = responseStream ? vi.spyOn(responseStream, "write") : undefined;
       respond(true, {
         echoed: (req.params as { text: string }).text,
         acceptsDeflatedSegments: acceptsDeflatedSegments === true,
       });
+      if (writes) {
+        expect(writes).toHaveBeenCalled();
+        responseBytes.set(
+          req.id,
+          writes.mock.calls.reduce((total, [chunk]) => total + Buffer.byteLength(chunk), 0),
+        );
+      }
+      if (req.id === "medium") {
+        context.broadcast("presence", { presence: listSystemPresence() });
+      }
     };
     registry.gatewayHandlers["test.segments"] = async ({ respond }) => {
       respond(true, { messages: new SerializedJsonArray(sharedBytes) });
@@ -473,6 +493,7 @@ describe("authenticated operator request starts", () => {
       expect(upgrade.headers["sec-websocket-extensions"]).toContain("server_max_window_bits=10");
       const { stream } = capture.get();
       // Device tokens ride in hello; secrets never share a compressed frame.
+      responseStream = stream;
       const beforeHello = stream.bytesWritten;
       const hello = JSON.stringify(await connectOk(socket, { token, prePairDevice: true }));
       expect(hello.length).toBeGreaterThan(16 * 1024);
@@ -483,13 +504,14 @@ describe("authenticated operator request starts", () => {
         send = () => socket.send(rpc(id, "test.echo", { text })),
       ) => {
         const response = onceMessage(socket, (value) => value.type === "res" && value.id === id);
-        const before = stream.bytesWritten;
         send();
         await expect(response).resolves.toMatchObject({
           ok: true,
           payload: { echoed: text, acceptsDeflatedSegments: false },
         });
-        return stream.bytesWritten - before;
+        const bytes = responseBytes.get(id);
+        expect(bytes).toBeGreaterThan(0);
+        return bytes;
       };
       const request = (id: string, text: string) => rpc(id, "test.echo", { text });
       // A worker's window-15 cache must not bypass this peer's window-10 limit.

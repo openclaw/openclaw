@@ -49,6 +49,27 @@ function blockedTransport() {
 describe("ClickClack native agent progress", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("uses the formatter's prepared text without trimming it again", async () => {
+    const { publisher, frames } = createPublisher();
+    const renderedText = "Read: prepared-progress-sentinel";
+    let renderedTrims = 0;
+    const spy = vi.spyOn(String.prototype, "trim");
+    try {
+      publisher.onItemEvent({
+        itemId: "tool_1",
+        kind: "tool",
+        name: "read",
+        progressText: "  prepared-progress-sentinel  ",
+      });
+      renderedTrims = spy.mock.contexts.filter((value) => value === renderedText).length;
+    } finally {
+      spy.mockRestore();
+      await publisher.finalize();
+    }
+    expect(frames()[1]).toMatchObject({ line: { text: renderedText } });
+    expect(renderedTrims).toBe(0);
+  });
+
   it("serializes turn, private-command completion, and clear frames", async () => {
     const { publisher, publishEphemeral, frames } = createPublisher({ agentLabel: "Blackbird" });
     const tool = {

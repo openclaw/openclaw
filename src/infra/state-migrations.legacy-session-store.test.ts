@@ -106,19 +106,15 @@ it("imports provider-only fields still preserved by the July Doctor writer", asy
 });
 
 it("refuses a malformed UTF-8 legacy index without changing its bytes", async () => {
-  const raw = Buffer.concat([
-    Buffer.from('{"agent:main:main":{"sessionId":"session-'),
-    Buffer.from([0xff]),
-    Buffer.from('","updatedAt":1}}'),
-  ]);
+  const raw = Buffer.from(
+    '{"agent:main:main":{"sessionId":"session-\xff","updatedAt":1}}',
+    "latin1",
+  );
   await fs.writeFile(storePath, raw);
   const issues: Parameters<typeof readLegacySessionStoreEntries>[1] = [];
   expect(readLegacySessionStoreEntries({ storePath }, issues)).toEqual({ entries: [] });
-  expect(issues).toEqual([
-    expect.objectContaining({
-      code: "store_unreadable",
-      message: expect.stringContaining("UTF-8"),
-    }),
+  expect(issues).toMatchObject([
+    { code: "store_unreadable", message: expect.stringContaining("UTF-8") },
   ]);
   expect(await fs.readFile(storePath)).toEqual(raw);
 });

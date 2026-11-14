@@ -62,7 +62,7 @@ function holdState(role: GatewayLockRole, update: boolean, pid = process.ppid) {
 }
 
 /** `startMs` is how long this Doctor process ran before entering maintenance. */
-function startDoctor(startMs = 0, waitForMaintenance = false) {
+function startDoctor(startMs = 0, waitForMaintenance = false, serviceInspectionTimeoutMs?: number) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   const clock = { ms: startMs };
   vi.spyOn(performance, "now").mockImplementation(() => clock.ms);
@@ -72,6 +72,10 @@ function startDoctor(startMs = 0, waitForMaintenance = false) {
   // Published drivers can run the activation Doctor without an update authority callback.
   const result = beginDoctorMaintenance({
     waitForMaintenance,
+    serviceInspectionDeadlineAtMs:
+      serviceInspectionTimeoutMs === undefined
+        ? undefined
+        : Date.now() + serviceInspectionTimeoutMs,
     options: { repair: true, nonInteractive: true },
     root: null,
     runtime: { log, error: vi.fn(), exit: vi.fn() },
@@ -188,14 +192,26 @@ it("preserves accepted shutdown after cancelling a startup maintenance wait", as
 it.each([
   ["manual doctor --fix with a transient holder", "agent-embedded", false, process.ppid],
   ["update Doctor with a Gateway holder", "gateway", true, process.ppid],
+  ["bounded update Doctor with a Gateway holder", "gateway", true, process.ppid, 60_000],
   // This process's own owner cannot release while Doctor waits on it.
   ["update Doctor with its own process's owner", "sqlite-maintenance", true, process.pid],
-] as const)("keeps immediate contention failure for %s", async (_name, role, update, pid) => {
-  using state = holdState(role, update, pid);
-  const doctor = state.startDoctor();
-  const completed = await doctor.result;
-  expect(completed).toMatchObject({
-    error: { message: expect.stringContaining("OpenClaw state database is busy at") },
-  });
-  expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
-});
+] as const)(
+  "keeps immediate contention failure for %s",
+  async (_name, role, update, pid, timeoutMs?: number) => {
+    using state = holdState(role, update, pid);
+    const doctor = state.startDoctor(0, false, timeoutMs);
+    try {
+      await doctor.firstWait;
+      expect(doctor.isSettled()).toBe(true);
+    } finally {
+      if (!doctor.isSettled()) {
+        await doctor.advanceTo(timeoutMs ?? FALLBACK_DEADLINE_MS);
+      }
+    }
+    const completed = await doctor.result;
+    expect(completed).toMatchObject({
+      error: { message: expect.stringContaining("OpenClaw state database is busy at") },
+    });
+    expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
+  },
+);

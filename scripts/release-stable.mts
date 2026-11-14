@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { watchPublication } from "./lib/release-publication-watch.mts";
 import { closeout, flipGithub, macos, syncBeta } from "./lib/release-stable-phases-post.mts";
 import { cut, publish, validate } from "./lib/release-stable-phases.mts";
 import {
@@ -31,6 +32,11 @@ export function parseReleaseStableArgs(argv: string[]): ReleaseOptions | undefin
       from: { type: "string" },
       "dry-run": { type: "boolean" },
       status: { type: "boolean" },
+      watch: { type: "boolean" },
+      once: { type: "boolean" },
+      json: { type: "boolean" },
+      "poll-seconds": { type: "string" },
+      "timeout-seconds": { type: "string" },
       help: { type: "boolean" },
       repo: { type: "string" },
       "releases-repo": { type: "string" },
@@ -50,6 +56,11 @@ export function parseReleaseStableArgs(argv: string[]): ReleaseOptions | undefin
   --from <${RELEASE_PHASES.join("|")}>  Resume from this phase
   --dry-run                          Print commands without executing or saving state
   --status                           Print retained phase state
+  --watch                            Watch the retained publication (read-only)
+  --once                             With --watch, observe once and return
+  --json                             With --watch, print the final JSON snapshot
+  --poll-seconds <seconds>           Watch interval (default: 60)
+  --timeout-seconds <seconds>        Watch deadline (default: 43200)
   --repo <owner/repo>                 Default: openclaw/openclaw
   --releases-repo <owner/repo>         Default: openclaw/releases
   --state-dir <directory>             Default: .artifacts/release-<version>
@@ -92,6 +103,47 @@ export function parseReleaseStableArgs(argv: string[]): ReleaseOptions | undefin
       ]);
     }
   }
+  const watchOnlyFlags =
+    values.once ||
+    values.json ||
+    values["poll-seconds"] !== undefined ||
+    values["timeout-seconds"] !== undefined;
+  if (watchOnlyFlags && !values.watch) {
+    throw new ReleaseRefusal(
+      "--once, --json, --poll-seconds, and --timeout-seconds require --watch",
+      [`pnpm release:stable ${release} --watch`],
+    );
+  }
+  if (
+    values.watch &&
+    (values.status ||
+      values["dry-run"] ||
+      values.from !== undefined ||
+      values["approve-publication"] ||
+      values["confirm-cut-sha"] !== undefined ||
+      values["cut-sha"] !== undefined ||
+      values["tooling-sha"] !== undefined ||
+      values["plugin-sdk-api-acknowledgement"] !== undefined ||
+      values["macos-preflight-run-id"] !== undefined ||
+      values["macos-validate-run-id"] !== undefined)
+  ) {
+    throw new ReleaseRefusal(
+      "--watch is observation-only and cannot be combined with release mutations or --status",
+      [`pnpm release:stable ${release} --watch`],
+    );
+  }
+  const parseWatchSeconds = (name: "poll-seconds" | "timeout-seconds", fallback: number) => {
+    const value = values[name];
+    if (value === undefined) {
+      return fallback;
+    }
+    if (!/^[1-9][0-9]*$/u.test(value) || Number(value) > 86_400) {
+      throw new ReleaseRefusal(`--${name} must be an integer from 1 through 86400`, [
+        `pnpm release:stable ${release} --watch`,
+      ]);
+    }
+    return Number(value);
+  };
   const acknowledgement = values["plugin-sdk-api-acknowledgement"];
   if (acknowledgement !== undefined && !/^[a-f0-9]{8}$/u.test(acknowledgement)) {
     throw new ReleaseRefusal("Plugin SDK API acknowledgement must be 8 lowercase hex digits", [
@@ -103,6 +155,11 @@ export function parseReleaseStableArgs(argv: string[]): ReleaseOptions | undefin
     from,
     dryRun: values["dry-run"] ?? false,
     status: values.status ?? false,
+    watch: values.watch ?? false,
+    watchOnce: values.once ?? false,
+    watchJson: values.json ?? false,
+    watchPollSeconds: parseWatchSeconds("poll-seconds", 60),
+    watchTimeoutSeconds: parseWatchSeconds("timeout-seconds", 43_200),
     approvePublication: values["approve-publication"] ?? false,
     repo: values.repo ?? "openclaw/openclaw",
     releasesRepo: values["releases-repo"] ?? "openclaw/releases",
@@ -135,7 +192,7 @@ export async function runReleaseStable(
   runner?: ReleaseRunner,
 ): Promise<void> {
   let releaseLock: (() => void) | undefined;
-  if (!options.status && !options.dryRun) {
+  if (!options.status && !options.dryRun && !options.watch) {
     try {
       releaseLock = acquireReleaseLock(options.stateDir);
     } catch (error) {
@@ -149,6 +206,26 @@ export async function runReleaseStable(
     const state = loadReleaseState(options);
     if (options.status) {
       printReleaseStatus(state);
+      return;
+    }
+    if (options.watch) {
+      const ctx: ReleaseContext = {
+        options,
+        state,
+        run: createReleaseRunner(false, runner),
+        save: () => undefined,
+        log: (phase, message) => console.log(`[release-stable] ${phase}: ${message}`),
+        resume: (phase, extra) => resumeCommand(options, phase, extra),
+      };
+      const snapshot = await watchPublication(ctx, {
+        once: options.watchOnce,
+        json: options.watchJson,
+        pollSeconds: options.watchPollSeconds,
+        timeoutSeconds: options.watchTimeoutSeconds,
+      });
+      if (snapshot.state === "attention") {
+        process.exitCode = 1;
+      }
       return;
     }
     if (options.cutSha && state.cut.cutSha && options.cutSha !== state.cut.cutSha) {

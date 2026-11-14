@@ -1,12 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import {
-  buildSystemAgentSessionInvalidatedErrorDetails,
-  type SystemAgentChatResult,
-  type SystemChangesListResult,
-} from "@openclaw/gateway-protocol";
+import type { SystemAgentChatResult, SystemChangesListResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSystemAgentSessionInvalidatedErrorDetails } from "../../../../packages/gateway-protocol/src/system-agent-error-details.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
@@ -556,7 +553,7 @@ describe("custodian page", () => {
     setChannelsSnapshot(null);
     setChannelsConnected(false);
     setChannelsConnected(true);
-    expect(context.channels.refresh).not.toHaveBeenCalled();
+    expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
     expect(context.replace).toHaveBeenCalledWith("custodian");
     expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
   });
@@ -595,7 +592,7 @@ describe("custodian page", () => {
     });
     const { context, setGatewaySnapshot } = createContext(request);
     const channels = createChannelCapability(context.gateway);
-    Object.assign(context, { channels });
+    Object.assign(context, { acquireChannels: () => channels });
     await channels.refresh();
     await channels.refresh();
     const previousSnapshot = channels.state.channelsSnapshot;
@@ -637,7 +634,7 @@ describe("custodian page", () => {
     );
     const { context } = createContext(request);
     const channels = createChannelCapability(context.gateway);
-    Object.assign(context, { channels });
+    Object.assign(context, { acquireChannels: () => channels });
     void channels.refresh();
     const { page } = await mountPage(context, { onboarding: true });
     expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();

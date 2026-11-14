@@ -46,20 +46,17 @@ it("checks bootstrap history without decoding canonical message payloads", async
     ]);
     const parse = JSON.parse;
     let parsedPayloadBytes = 0;
-    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+    using _ = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
       if (text.length >= payload.length) {
         parsedPayloadBytes += text.length;
       }
       return parse(text, reviver);
     });
-    try {
-      // The history worker uses this query; caller-only spies cannot observe its decoding.
-      expect(hasSessionTranscriptMessageInDatabase(database, sessionTarget.sessionId)).toBe(true);
-      await expectPresence(true);
-      expect(parsedPayloadBytes).toBe(0);
-    } finally {
-      spy.mockRestore();
-    }
+
+    // The history worker uses this query; caller-only spies cannot observe its decoding.
+    expect(hasSessionTranscriptMessageInDatabase(database, sessionTarget.sessionId)).toBe(true);
+    await expectPresence(true);
+    expect(parsedPayloadBytes).toBe(0);
   });
 });
 

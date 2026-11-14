@@ -4,6 +4,7 @@ import { createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { SkillsState } from "../../lib/skills/index.ts";
@@ -45,12 +46,10 @@ export function mountSkills(
       sessionKey: "main",
     }),
   );
-  const agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "global" as const,
+  const agentsList = makeBootRoster({
+    scope: "global",
     agents: [{ id: "main" }, { id: "research" }],
-  };
+  });
   const agents = {
     state: { agentsList, agentsLoading: false, agentsError: null },
     ensureList: vi.fn(async () => agentsList),

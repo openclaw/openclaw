@@ -171,6 +171,7 @@ describe("GitHub detail selected read identity", () => {
     const payload = kind === "commit" ? commit({}, 1) : fullPull();
     const { selected, fetchMock, read } = fixture(kind, payload);
     const first = await read();
+    expect(selected.revalidate).toHaveBeenCalledTimes(fetchMock.mock.calls.length + 1);
     expect(first.partial).toBe(false);
     expect(first.body).toBe(kind === "pull" ? item().body : commit().commit.message);
     expect(first.comments).toHaveLength(kind === "pull" ? 2 : 1);
@@ -184,7 +185,9 @@ describe("GitHub detail selected read identity", () => {
       );
     }
     expect(await read()).toBe(first);
+    expect(selected.revalidate).toHaveBeenCalledTimes(fetchMock.mock.calls.length + 2);
     await read(undefined, true);
+    expect(selected.revalidate).toHaveBeenCalledTimes(fetchMock.mock.calls.length + 3);
     for (const [, options] of fetchMock.mock.calls) {
       expect(options?.headers).toHaveProperty("Authorization", "Bearer " + selected.token);
     }
@@ -228,6 +231,20 @@ describe("GitHub detail selected read identity", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toHaveProperty("Authorization");
   });
+
+  it.each([false, true])(
+    "rejects changed credentials before dispatch (cached: %s)",
+    async (cached) => {
+      const { selected, fetchMock, read } = fixture();
+      if (cached) {
+        await read();
+      }
+      fetchMock.mockClear();
+      vi.mocked(selected.revalidate).mockRejectedValue(new Error("credential changed"));
+      await expect(read()).rejects.toThrow("credential changed");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { name: "private", repository: { id: 123, private: true, visibility: "private" } },

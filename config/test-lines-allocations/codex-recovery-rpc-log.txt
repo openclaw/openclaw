@@ -1,0 +1,2 @@
+# Observe the missing-thread recovery warning after production log normalization.
+20

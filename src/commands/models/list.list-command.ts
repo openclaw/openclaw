@@ -4,7 +4,7 @@ import type { ModelsListParams } from "../../../packages/gateway-protocol/src/sc
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import { ExpectedCliError } from "../../cli/failure-output.js";
+import { ExpectedCliError } from "../../cli/expected-cli-error.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";

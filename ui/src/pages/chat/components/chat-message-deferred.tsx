@@ -1,5 +1,7 @@
 import { lazy, Show } from "solid-js";
+import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { widgetPreviewHeight } from "./widget-preview-layout.ts";
 
 const Images = lazy(() => import("./chat-message-images-solid.tsx"), {
   export: "MessageImages",
@@ -15,8 +17,8 @@ const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
   export: "ChatClawHubCard",
 });
 
-// Chat and pending New Session messages share these boundaries. Empty media
-// collections must not load the renderers or the players they register.
+// Pending New Session images use this adapter; transcript images render with the row.
+// Empty collections keep deferred renderers and their players asleep.
 export function MessageImages(
   props: Parameters<typeof import("./chat-message-images-solid.tsx").MessageImages>[0],
 ) {
@@ -55,7 +57,31 @@ export function ToolPreview(
   props: Parameters<typeof import("./widget-card-view.tsx").ToolPreview>[0],
 ) {
   return (
-    <ChatLazyBoundary>
+    <ChatLazyBoundary
+      fallback={
+        <Show
+          when={
+            props.preview?.kind === "canvas" &&
+            props.preview.surface === "assistant_message" &&
+            (props.options?.mediaReadAllowed === false ||
+              props.preview.mcpApp ||
+              !parseYouTubeVideoUrl(props.preview.url))
+              ? props.preview
+              : undefined
+          }
+        >
+          {(preview) => (
+            <div
+              class="chat-tool-card__preview"
+              aria-hidden="true"
+              style={{
+                "min-height": `${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px`,
+              }}
+            />
+          )}
+        </Show>
+      }
+    >
       <Preview {...props} />
     </ChatLazyBoundary>
   );

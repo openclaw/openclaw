@@ -25,12 +25,7 @@ async function withRealtimeProvider(
   assert(address && typeof address !== "string", "expected a local realtime WebSocket address");
   const received: Buffer[] = [];
   const acknowledgement =
-    kind === "native"
-      ? { type: "session.updated" }
-      : {
-          type: "session.started",
-          session: { id: "fixture-live", expires_at: Math.floor(Date.now() / 1000) + 60 },
-        };
+    kind === "native" ? { type: "session.updated" } : { type: "session.started", session: {} };
   server.once("connection", (socket) => {
     socket.on("message", (payload) => {
       const event = JSON.parse(rawDataToString(payload)) as Record<string, unknown>;
@@ -43,7 +38,6 @@ async function withRealtimeProvider(
     });
   });
 
-  const endpoint = `http://127.0.0.1:${address.port}`;
   const socketUrl = `ws://127.0.0.1:${address.port}`;
   const audioCallbacks = { onAudio: vi.fn(), onClearAudio: vi.fn() };
   const bridge =
@@ -51,7 +45,7 @@ async function withRealtimeProvider(
       ? buildOpenAIRealtimeVoiceProvider().createBridge({
           providerConfig: {
             apiKey: "fixture-local", // pragma: allowlist secret
-            azureEndpoint: endpoint,
+            azureEndpoint: `http://127.0.0.1:${address.port}`,
             azureDeployment: "fixture-realtime",
           },
           ...audioCallbacks,

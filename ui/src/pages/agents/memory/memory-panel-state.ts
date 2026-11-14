@@ -193,7 +193,7 @@ export function createAgentMemory(
     } catch (error) {
       // Expected failures already use the runtime owner's toast contract.
       if (isTaskScopeCurrent(scope)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   });

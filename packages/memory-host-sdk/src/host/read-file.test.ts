@@ -200,52 +200,59 @@ it("returns not found for absent extra paths and rejects non-directory parents",
   );
 });
 
-it.each(["EACCES", "EIO"])("scopes extra-path %s errors to the requested file", async (code) => {
-  const { directory, workspaceDir, extraDir } = await fixture({
-    "extra/note.md": "secret",
-    "healthy/note.md": "healthy",
-    "healthy/blocked.md": "blocked",
-  });
-  const target = path.join(extraDir, "note.md");
-  const healthyDir = path.join(directory, "healthy");
-  const blockedTarget = path.join(healthyDir, "blocked.md");
-  const scanError = Object.assign(new Error(`${code}: extra path unreadable`), { code });
-  const lstat = fs.lstat;
-  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-    if ([extraDir, blockedTarget].includes(path.resolve(String(args[0])))) {
-      throw scanError;
-    }
-    return await lstat(...args);
-  });
-  // fs-safe checks children synchronously; configured-root admission remains async.
-  const lstatSync = fsSync.lstatSync;
-  vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-    if (path.resolve(String(args[0])) === blockedTarget) {
-      throw scanError;
-    }
-    return lstatSync(...args);
-  });
-  const read = (
-    relPath: string,
-    extraPaths: Parameters<typeof readMemoryFile>[0]["extraPaths"] = [extraDir, healthyDir],
-  ) => readMemoryFile({ workspaceDir, extraPaths, relPath });
-  for (const relPath of [target, blockedTarget]) {
-    await expect(read(relPath)).rejects.toMatchObject({
-      code,
-      message: `${code}: extra path unreadable`,
+it.each(["EACCES", "EPERM", "EIO"])(
+  "scopes extra-path %s errors to the requested file",
+  async (code) => {
+    const { directory, workspaceDir, extraDir } = await fixture({
+      "extra/note.md": "secret",
+      "healthy/note.md": "healthy",
+      "healthy/blocked.md": "blocked",
     });
-  }
-  await expect(read(path.join(healthyDir, "note.md"))).resolves.toMatchObject({ text: "healthy" });
-  await expect(read(target, [extraDir, target])).resolves.toMatchObject({ text: "secret" });
-  for (const relPath of [path.join(directory, "outside.md"), path.join(extraDir, "note.txt")]) {
-    await expect(read(relPath, [extraDir])).rejects.toThrow(
+    const target = path.join(extraDir, "note.md");
+    const healthyDir = path.join(directory, "healthy");
+    const blockedTarget = path.join(healthyDir, "blocked.md");
+    const scanError = Object.assign(new Error(`${code}: extra path unreadable`), { code });
+    const lstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if ([extraDir, blockedTarget].includes(path.resolve(String(args[0])))) {
+        throw scanError;
+      }
+      return await lstat(...args);
+    });
+    // fs-safe checks children synchronously; configured-root admission remains async.
+    const lstatSync = fsSync.lstatSync;
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      if (path.resolve(String(args[0])) === blockedTarget) {
+        throw scanError;
+      }
+      return lstatSync(...args);
+    });
+    const read = (
+      relPath: string,
+      extraPaths: Parameters<typeof readMemoryFile>[0]["extraPaths"] = [extraDir, healthyDir],
+    ) => readMemoryFile({ workspaceDir, extraPaths, relPath });
+    for (const relPath of [target, blockedTarget]) {
+      const result = read(relPath);
+      await expect(result).rejects.toMatchObject({
+        code,
+        message: `${code}: extra path unreadable`,
+      });
+      await expect(result).rejects.toBe(scanError);
+    }
+    await expect(read(path.join(healthyDir, "note.md"))).resolves.toMatchObject({
+      text: "healthy",
+    });
+    await expect(read(target, [extraDir, target])).resolves.toMatchObject({ text: "secret" });
+    for (const relPath of [path.join(directory, "outside.md"), path.join(extraDir, "note.txt")]) {
+      await expect(read(relPath, [extraDir])).rejects.toThrow(
+        "path is not an allowed Markdown memory file",
+      );
+    }
+    await expect(read(target, [{ path: extraDir, pattern: "runbooks/**/*.md" }])).rejects.toThrow(
       "path is not an allowed Markdown memory file",
     );
-  }
-  await expect(read(target, [{ path: extraDir, pattern: "runbooks/**/*.md" }])).rejects.toThrow(
-    "path is not an allowed Markdown memory file",
-  );
-});
+  },
+);
 
 it("rejects extra path reads through symlinked directory components", async () => {
   const { directory, workspaceDir, extraDir } = await fixture({

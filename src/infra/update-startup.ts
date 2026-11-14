@@ -28,6 +28,7 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import {
@@ -42,11 +43,7 @@ import {
   currentUpdateCheckLifecycle,
   type UpdateCheckLifecycle,
 } from "./update-check-lifecycle.js";
-import {
-  compareSemverStrings,
-  resolveNpmChannelTag,
-  type UpdateCheckResult,
-} from "./update-check.js";
+import { resolveNpmChannelTag, type UpdateCheckResult } from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import {
   prepareStartupUpdateInstall,
@@ -105,8 +102,11 @@ function resolveCheckIntervalMs(
   installKind?: UpdateCheckResult["installKind"],
 ): number {
   const channel = normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
-  return cfg.update?.auto?.enabled &&
-    (channel === "stable" || channel === "beta" || (channel === "dev" && installKind === "git"))
+  // Stable package discovery re-reads the telemetry cache that Gateway maintenance
+  // refreshes on its own daily deadline, so a release does not wait a second day.
+  return (channel === "stable" && installKind === "package") ||
+    (cfg.update?.auto?.enabled &&
+      (channel === "stable" || channel === "beta" || (channel === "dev" && installKind === "git")))
     ? ONE_HOUR_MS
     : UPDATE_CHECK_INTERVAL_MS;
 }
@@ -481,7 +481,16 @@ async function runGatewayUpdateCheckOwned(
     ? null
     : resolvePersistedUpdateAvailable(state, configuredChannel);
   const cacheMatchesChannel = state.lastCheckedChannel === configuredChannel;
-  const shouldBypassSharedThrottle = isDevGit || !cacheMatchesChannel;
+  // Stable discovery without auto-update reads the shared telemetry cache; a release
+  // newer than the one already published must not wait out the daily throttle.
+  const hasNewTelemetryRelease =
+    !shouldRunAutoUpdate &&
+    configuredChannel === "stable" &&
+    (compareSemverStrings(
+      persistedAvailable?.latestVersion ?? VERSION,
+      telemetryUpdate?.version ?? null,
+    ) ?? 0) < 0;
+  const shouldBypassSharedThrottle = isDevGit || !cacheMatchesChannel || hasNewTelemetryRelease;
   setAvailable(persistedAvailable);
   if (persistedAvailable) {
     setSchedule({
@@ -563,7 +572,7 @@ async function runGatewayUpdateCheckOwned(
   }
 
   const channel = configuredChannel;
-  const resolved =
+  const resolved: Awaited<ReturnType<typeof resolveNpmChannelTag>> =
     shouldRunAutoUpdate || channel !== "stable"
       ? await resolveNpmChannelTag({ channel, signal: params.signal })
       : {
@@ -573,6 +582,13 @@ async function runGatewayUpdateCheckOwned(
   params.signal?.throwIfAborted();
   if (!isCurrent()) {
     return;
+  }
+  // A failed registry observation cannot advance the successful-check throttle
+  // or erase a previously observed update. Missing selectors remain valid absence.
+  const registryFailure =
+    resolved.error ?? (resolved.reason === "selector_missing" ? undefined : resolved.reason);
+  if (registryFailure) {
+    throw new Error(`npm ${resolved.tag} update check failed: ${registryFailure}`);
   }
   const tag = resolved.tag;
   if (!resolved.version) {

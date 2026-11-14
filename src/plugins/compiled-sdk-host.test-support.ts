@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRuntimeProcessDistRoot } from "../../runtime-process-bootstrap.generated.mjs";
 import { collectPackageDistImports } from "../../scripts/lib/package-dist-imports.mjs";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 
@@ -21,8 +22,8 @@ export function createCompiledSdkHost(
   if (artifacts.some((file) => path.extname(file) !== ".js")) {
     return undefined;
   }
-  const sourceDist = path.dirname(path.dirname(artifact));
-  if (artifacts.some((file) => path.dirname(path.dirname(file)) !== sourceDist)) {
+  const sourceDist = resolveRuntimeProcessDistRoot(artifact);
+  if (!sourceDist || artifacts.some((file) => resolveRuntimeProcessDistRoot(file) !== sourceDist)) {
     throw new Error("Compiled SDK entrypoints must share one invocation's dist directory");
   }
   const sourceRoot = path.dirname(sourceDist);

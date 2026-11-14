@@ -196,19 +196,30 @@ describe("selected transcript turn cold restoration", () => {
     "keeps the archive cold when the captured revision changes %s",
     async (timing) => {
       const fixture = await createFixture();
+      const navigationRows = () =>
+        fixture
+          .database()
+          .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
+          .all(historicalId);
+      const before = navigationRows();
+      expect(before).not.toHaveLength(0);
       let admitted = false;
       let commitRequested = false;
       if (timing === "at worker admission") {
         interceptRestoration((params) => ({
           ...params,
-          withWriteAdmission: (run, diagnostics) =>
-            params.withWriteAdmission((refusal) => {
-              if (!refusal) {
-                admitted = true;
-                fixture.replaceRevision();
-              }
-              return run(refusal);
-            }, diagnostics),
+          withWriteAdmission: (run, diagnostics, operation) =>
+            params.withWriteAdmission(
+              (refusal) => {
+                if (!refusal) {
+                  admitted = true;
+                  fixture.replaceRevision();
+                }
+                return run(refusal);
+              },
+              diagnostics,
+              operation,
+            ),
           onCommitRequest: () => {
             commitRequested = true;
             params.onCommitRequest();
@@ -227,12 +238,7 @@ describe("selected transcript turn cold restoration", () => {
       expect(commitRequested).toBe(false);
       expect(fixture.prepareMessage).not.toHaveBeenCalled();
       expect(fixture.cold()).toEqual(fixture.descriptor);
-      expect(
-        fixture
-          .database()
-          .prepare("SELECT seq FROM transcript_events WHERE session_id = ?")
-          .all(historicalId),
-      ).toEqual([]);
+      expect(navigationRows()).toEqual(before);
     },
   );
 
@@ -295,10 +301,10 @@ describe("selected transcript turn cold restoration", () => {
       const resume = createDeferred();
       interceptRestoration((params) => ({
         ...params,
-        withWriteAdmission: async (run, diagnostics) => {
+        withWriteAdmission: async (run, diagnostics, operation) => {
           requested.resolve();
           await resume.promise;
-          return params.withWriteAdmission(run, diagnostics);
+          return params.withWriteAdmission(run, diagnostics, operation);
         },
       }));
       const callback = vi.fn(async (locked: { readEvents: () => Promise<unknown[]> }) =>

@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { Errors } from "typebox/schema";
 import type { SourceInfo } from "../../../sessions/source-info.js";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.js";
+import { loadTuiRuntime } from "../tui-runtime.js";
 import { ThemeJsonSchema, type ColorValue, type ThemeJson } from "./theme-schema.js";
 import { isThemeJson } from "./theme-validator.generated.js";
 
@@ -300,7 +300,8 @@ function parseThemeJsonContent(label: string, content: string): ThemeJson {
 }
 
 function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string): Theme {
-  const colorMode = mode ?? (getCapabilities().trueColor ? "truecolor" : "256color");
+  const colorMode =
+    mode ?? (loadTuiRuntime().getCapabilities().trueColor ? "truecolor" : "256color");
   const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
   const fgColors: Record<ThemeColor, string | number> = {} as Record<ThemeColor, string | number>;
   const bgColors: Record<ThemeBg, string | number> = {} as Record<ThemeBg, string | number>;

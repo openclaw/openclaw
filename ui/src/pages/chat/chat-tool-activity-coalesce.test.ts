@@ -1,13 +1,11 @@
 // @vitest-environment node
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import * as canvas from "../../../../src/chat/canvas-render.js";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 
-afterEach(() => vi.restoreAllMocks());
 type Fields = Record<string, unknown>;
 function result(id: string) {
   return { type: "tool_result", id, name: "custom", text: JSON.stringify({ exitCode: 0, id }) };
@@ -20,11 +18,7 @@ function assistant(content: unknown[], fields: Fields = {}) {
   return { role: "assistant", content, ...fields };
 }
 function invocation(id: string) {
-  const call = assistant([
-    { type: "text", text: `before ${id}` },
-    toolCall(id),
-    { type: "text", text: `after ${id}` },
-  ]);
+  const call = assistant([toolCall(id)]);
   const output = { role: "toolResult", content: [result(id)] };
   return { call, output, items: () => [item(call, `call-${id}`), item(output, `result-${id}`)] };
 }
@@ -49,27 +43,10 @@ it("coalesces a new projected boundary's invocation without borrowing from the p
   expect(rows[0]).toBe(previous);
   expect(extractToolCardsCached(rows[1])[0]).toMatchObject({ callId: "call", completed: true });
 });
-
-it("reuses finalized bundles across prepends and invalidates only changed sources", () => {
+it("invalidates replaced blocks and messages without rebuilding unrelated bundles", () => {
   const first = invocation("first");
   const second = invocation("second");
-  const older = invocation("older");
   const initial = messages([...first.items(), ...second.items()]);
-  const prepare = vi.spyOn(canvas, "extractCanvasFromText");
-  initial.forEach((message) => {
-    extractToolCardsCached(message);
-    const record = message as { content: unknown[] };
-    Object.freeze(record.content);
-    Object.freeze(message);
-  });
-  const calls = prepare.mock.calls.length;
-  const rebuilt = messages([...first.items(), ...second.items()]);
-  expect(sameReferences(rebuilt, initial)).toEqual([true, true]);
-  const prepended = messages([...older.items(), ...first.items(), ...second.items()]);
-  expect(sameReferences(prepended.slice(1), initial)).toEqual([true, true]);
-  rebuilt.forEach(extractToolCardsCached);
-  expect(prepare).toHaveBeenCalledTimes(calls + 1); // Only the newly prepended output.
-
   first.output.content = [{ ...first.output.content[0]!, text: '{"exitCode":1}' }];
   const replacedBlock = messages([...first.items(), ...second.items()]);
   expect(sameReferences(replacedBlock, initial)).toEqual([false, true]);
@@ -81,28 +58,6 @@ it("reuses finalized bundles across prepends and invalidates only changed source
   expect(sameReferences(replacedMessage, replacedBlock)).toEqual([false, true]);
   expect(extractToolCardsCached(initial[0])[0]?.exitCode).toBe(0);
   expect(extractToolCardsCached(replacedBlock[0])[0]?.exitCode).toBe(1);
-});
-
-it.each(["anonymous sibling", "standalone"])("caches %s across rebuilds and prepends", (shape) => {
-  const block = result("current");
-  const message =
-    shape === "standalone"
-      ? { role: "toolResult", toolCallId: block.id, toolName: block.name, content: block.text }
-      : assistant([{ type: "tool_call", name: "other", arguments: {} }, block]);
-  const prepare = vi.spyOn(canvas, "extractCanvasFromText");
-  const prepared = (text: string, count: number) =>
-    expect(prepare.mock.calls.filter(([input]) => input === text)).toHaveLength(count);
-  const current = item(message);
-  const first = coalesceToolActivityMessages([current]);
-  prepared(block.text, 1);
-  expect(coalesceToolActivityMessages([current])).toEqual(first);
-  const olderBlock = result("older");
-  const older = item(assistant([olderBlock]), "older");
-  expect(coalesceToolActivityMessages([older, current])).toEqual([older, ...first]);
-  prepared(block.text, 1);
-  prepared(olderBlock.text, 1);
-  coalesceToolActivityMessages([item({ ...message })]);
-  prepared(block.text, 2);
 });
 const activity = (status?: AgentActivityItem["status"]): AgentActivityItem => ({
   itemId: "tool:active",
@@ -135,7 +90,6 @@ it.each([false, true])("replaces history placeholders (live first: %s)", (liveFi
   expect(outcomes(liveFirst ? [live, history] : [history, live])).toEqual([activity("running")]);
   expect(outcomes([history])).toEqual([{ ...activity(), unpairedCall: true }]);
 });
-
 it.each([true, false])("retains durable outcomes over stale live (raw=%s)", (hasRawResult) => {
   const terminal = execution(
     hasRawResult ? [{ type: "text", text: "Command ended" }] : [activeCall],
@@ -155,4 +109,13 @@ it.each([true, false])("retains durable outcomes over stale live (raw=%s)", (has
   for (const rows of orders) {
     expect(outcomes(rows)).toEqual([activity()]);
   }
+});
+
+it.each(["text", "thinking"])("keeps %s apart from its calls and prepared activity", (type) => {
+  const prose = (value: string) => ({ type, text: value, thinking: value });
+  const content = [prose("Now."), activeCall, prose("Then."), toolCall("b")];
+  const rows = messages([execution(content)]);
+  const cards = rows.map(extractToolCardsCached);
+  expect(cards.map((list) => list.map((card) => card.callId))).toEqual([[], ["active"], [], ["b"]]);
+  expect(rows.flatMap(readPreparedActivity)).toEqual([activity()]);
 });

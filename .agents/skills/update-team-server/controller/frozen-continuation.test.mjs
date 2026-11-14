@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -228,6 +228,10 @@ for (const [sourceState, targetState, sourceAgent, targetAgent, offlineDoctor = 
 ]) test(`continues the sealed cut through native update (${sourceState}/${sourceAgent} → ${targetState}/${targetAgent}${offlineDoctor ? "; offline Doctor repair" : ""})`, t => {
   const f = fixture(t, "", sourceState, targetState, sourceAgent, targetAgent, offlineDoctor);
   if (offlineDoctor) f.args.push("--offline-doctor-repair", "--interrupt-after-drain");
+  // An earlier rolled-back transaction is settled; this deployment keeps only its own root.
+  const earlier = join(f.runtime, ".openclaw-update", `update-${f.sha}-${randomUUID()}`);
+  mkdirSync(join(earlier, "native.databases"), { recursive: true });
+  writeFileSync(join(earlier, "native.receipt.json"), JSON.stringify({ schemaVersion: 1, status: "restored" }));
   const result = runOwner(f, f.args);
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);

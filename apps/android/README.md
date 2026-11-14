@@ -21,6 +21,14 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Manage installed skills and Gateway-verified ClawHub releases, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
+## Certificate-pinned Gateways
+
+Use the app's native screens when a Gateway connection uses a stored TLS
+certificate fingerprint. Embedded Control UI pages, including terminal, desktop,
+dashboard, and browser previews, are unavailable on that connection because
+Android WebView cannot enforce the same pin for every page and WebSocket
+connection. The native Gateway connection and native chat retain their pin.
+
 ## Open in Android Studio
 
 - Open the folder `apps/android`.
@@ -126,7 +134,11 @@ truncated patches, stopped workspaces, and unavailable repositories are identifi
 in the viewer. Switching conversation or Gateway closes the review; safe fold
 layout changes preserve the opening.
 
-## Foldable layout
+## Large-screen and foldable layout
+
+Without an intersecting separator, tablet and desktop windows at least 840 dp
+wide and 320 dp tall keep a 360 dp sidebar beside the active page. The sidebar
+follows the reading direction. Narrower or shorter windows use the modal sidebar.
 
 With a full-height vertical separator reported by AndroidX WindowManager, the
 main app places its sidebar on the reading-direction start plane and the active
@@ -134,12 +146,13 @@ page on the other plane. Both use the reported bounds, including off-center
 hinges. The sidebar remains visible after selecting a page or session.
 
 Book panes require at least 280 dp for the sidebar, 320 dp for the active page,
-and 320 dp of height. Onboarding and layouts without a supported split use the
+and 320 dp of height, even when the window is narrower than 840 dp.
+Onboarding and layouts without a supported split use the
 largest rectangular region clear of separating folds and fully occluding hinges.
 Equal regions prefer the top, then the reading-direction start side. Opening
 the keyboard does not select a different fallback region for this outer host.
-Without an intersecting separator, the app keeps its full-window layout and
-modal sidebar.
+Width-based sidebars require the entire host to be clear of separating folds
+and fully occluding hinges; they never subdivide a reduced fallback region.
 
 In Chat, a full-width horizontal separator can place the conversation header,
 transcript, and status above the hinge and the same composer below it. Each
@@ -333,6 +346,26 @@ animations, captures the screenshots, then shuts down the emulator it started.
 Install the API 36 Google APIs and API 34 Wear OS system images in the local
 Android SDK. Use `--form-factor phone|wear` with `--avd` or `--device` to
 explicitly capture one form factor from another emulator.
+
+Each form factor's debug APK is built before starting its screenshot emulator,
+so compilation does not compete with emulator boot or rendering.
+
+**Android Store Release** enables bounded screenshot diagnostics. If capture
+fails, the existing emulator diagnostic artifact retains phase timings, host
+resource samples, image identity, and system/ANR evidence for 30 days. App debug
+logs and signing files are excluded. Local Linux runs can opt in with
+`ANDROID_SCREENSHOT_DIAGNOSTICS=1`.
+
+For a nonpublishing hosted replay, select `screenshots` in **Android Emulator
+Diagnostic**, choose the candidate branch in **Use workflow from**, and supply
+that branch's exact commit SHA. Screenshot execution is pinned to the selected
+workflow revision; a different target SHA fails before candidate code runs.
+It runs the same phone
+and Wear capture script with `ANDROID_SCREENSHOT_DIAGNOSTICS=1`, recording phase
+timings, host resource samples, emulator/image identity, and bounded system/ANR
+diagnostics on failure before emulator cleanup. Diagnostic artifacts expire after
+seven days. This operation uses debug apps and does not access signing or store
+credentials.
 
 For local branch-switching proof, launch a debug build with the intent extras
 `openclaw.screenshotMode=true` and `openclaw.screenshotScene=branches`. This Chat

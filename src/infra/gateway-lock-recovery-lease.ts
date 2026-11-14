@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   readOpenClawStateLease,
@@ -18,9 +17,6 @@ export type RecoveryLease = NonNullable<ReturnType<typeof readOpenClawStateLease
 export async function inspectGatewayRecoveryLease(
   databasePath: string,
 ): Promise<RecoveryLease | null> {
-  if (isStatePostgres()) {
-    throw new Error("Gateway lock recovery requires a local SQLite state database.");
-  }
   if (!fs.existsSync(databasePath)) {
     return null;
   }

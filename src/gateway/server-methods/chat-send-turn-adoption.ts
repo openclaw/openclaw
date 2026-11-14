@@ -47,6 +47,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   retainWorkAdmission: () => () => void;
   armOperatorRunCancellation?: () => void;
   retireOperatorRunCancellation?: () => void;
+  recordUnstartedFailure?: (failure: { error: string; notice?: string }) => Promise<void>;
 }): {
   lifecycle: TurnAdoptionLifecycle;
   isEnqueued: () => boolean;
@@ -167,6 +168,14 @@ export function createChatSendTurnAdoptionLifecycle(params: {
             })
           : { kind: "dropped" as const, reason: "no-visible-content" as const };
         if (batch.clientRunId === params.runId && batch.completion.kind !== "progress") {
+          if (batch.completion.kind === "failed" && batch.completion.notice) {
+            // A rejected preparation (memory flush, preflight compaction, sandbox
+            // setup) ends before any runtime lifecycle can record the run.
+            await params.recordUnstartedFailure?.({
+              error: batch.completion.error,
+              notice: batch.completion.notice,
+            });
+          }
           recordQueuedTerminal(batch.completion);
         }
         return result;

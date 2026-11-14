@@ -38,18 +38,33 @@ export type AgentDatabaseCloseSelection = {
   agentId?: string;
 };
 
-const resources = resolveGlobalSingleton(
-  Symbol.for("openclaw.agentDatabaseAsyncResources"),
-  () => ({
-    active: new Set<AgentDatabaseResource>(),
-    closing: new Map<AgentDatabaseResource, Promise<void> | undefined>(),
-    selections: new Map<AgentDatabaseCloseSelection, Promise<unknown> | undefined>(),
-  }),
-);
+const resources = resolveGlobalSingleton<{
+  active: Set<AgentDatabaseResource>;
+  closing: Map<AgentDatabaseResource, Promise<void> | undefined>;
+  selections: Map<AgentDatabaseCloseSelection, Promise<unknown> | undefined>;
+  onRelease?: (resource: AgentDatabaseResource) => void;
+}>(Symbol.for("openclaw.agentDatabaseAsyncResources"), () => ({
+  active: new Set<AgentDatabaseResource>(),
+  closing: new Map<AgentDatabaseResource, Promise<void> | undefined>(),
+  selections: new Map<AgentDatabaseCloseSelection, Promise<unknown> | undefined>(),
+}));
 
-/** CLI cleanup can skip loading native database owners when no Worker was admitted. */
-export function hasOpenClawAgentDatabaseAsyncResources(): boolean {
-  return resources.active.size > 0 || resources.closing.size > 0;
+/** Query existing close custody without admitting or revoking another resource. */
+export function hasOpenClawAgentDatabaseAsyncResources(
+  selection?: AgentDatabaseCloseSelection,
+): boolean {
+  return selection
+    ? [...resources.active, ...resources.closing.keys()].some((resource) =>
+        matchesAgentDatabaseClose(selection, resource),
+      )
+    : resources.active.size > 0 || resources.closing.size > 0;
+}
+
+/** The writable lifecycle owns idle handles; retirement only notifies that owner. */
+export function registerAgentDatabaseResourceReleaseHandler(
+  onRelease: (resource: AgentDatabaseResource) => void,
+): void {
+  resources.onRelease = onRelease;
 }
 
 /** Observe a full close without admitting a reader into its retiring lifetime. */
@@ -158,6 +173,7 @@ function registerAgentDatabaseResource(
   const unregister = () => {
     resources.active.delete(owned);
     releaseCreation?.();
+    resources.onRelease?.(owned);
   };
   getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", () =>
     closeAgentDatabaseResource(owned),
@@ -203,6 +219,7 @@ function closeAgentDatabaseResource(
       resource.closeSync();
       resources.active.delete(resource);
       resources.closing.delete(resource);
+      resources.onRelease?.(resource);
       return Promise.resolve();
     } catch (error) {
       if (onCloseError) {
@@ -222,6 +239,7 @@ function closeAgentDatabaseResource(
         () => {
           resources.active.delete(resource);
           resources.closing.delete(resource);
+          resources.onRelease?.(resource);
         },
         () => {
           // Keep exact custody even if the actor unregisters while its close fails.

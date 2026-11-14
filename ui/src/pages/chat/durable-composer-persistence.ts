@@ -108,6 +108,7 @@ export async function writeDurableComposerSnapshot(snapshot: DurableChatComposer
       ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
       ...(snapshot.replyTarget ? { replyTarget: snapshot.replyTarget } : {}),
       ...(snapshot.modelSelection ? { modelSelection: snapshot.modelSelection } : {}),
+      ...(snapshot.permissionMode ? { permissionMode: snapshot.permissionMode } : {}),
       attachments: snapshot.storedAttachments ?? [],
     },
     {

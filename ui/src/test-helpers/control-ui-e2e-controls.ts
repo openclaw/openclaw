@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import type {
   ControlUiMockGateway,
+  ControlUiMockGatewayInstallOptions,
   MockGatewayControls,
   MockGatewayWindow,
 } from "./control-ui-e2e-contract.ts";
@@ -23,9 +24,10 @@ type GatewayMutation = {
 export async function installMockGatewayScript(
   page: Page,
   script: string,
-  handlers?: Record<string, (params: unknown) => unknown>,
+  options: ControlUiMockGatewayInstallOptions = {},
 ): Promise<void> {
-  let content = script;
+  const handlers = options.requestHandlers;
+  let content = script + (options.afterInitScript ?? "");
   if (handlers) {
     const binding = `__openclawMockRequest${++mockRequestBindingSequence}`;
     await page.exposeBinding(binding, (_source, method: string, params: unknown) =>

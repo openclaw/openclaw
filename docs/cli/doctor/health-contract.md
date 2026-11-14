@@ -51,3 +51,13 @@ A finding includes:
 Core doctor checks that declare structured health checks stay attached to the ordered doctor contribution that owns their human `doctor` / `doctor --fix` behavior. The shared structured health registry is the extension point: bundled and plugin-backed checks run after core doctor checks once their owning package registers them in the active command path. `openclaw/plugin-sdk/health` exposes the same contract for plugin authors.
 
 Set `category` at the producing check. Do not classify free-form message text. Absent a category, warning/error findings require attention and info findings are recommendations. Historical findings describe retained evidence, not current readiness. Doctor summarizes remaining findings after repair verification.
+
+### Model-reference retirement inventory
+
+The internal `openclaw/plugin-sdk/doctor-repair-runtime` surface exports
+`inspectDoctorModelReferences({ cfg, env, matches })`
+for provider retirement checks. It resolves configured model aliases and reads
+saved session selectors and the selected cron partition without editing state
+or loading transcripts. The result contains `references` (path, canonical model
+reference, optional agent ID) and `warnings` for incomplete scans. Report those
+warnings as findings; an unreadable store is not evidence of a clean migration.

@@ -37,7 +37,10 @@ import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js"
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
 import { admitScheduledOccurrence } from "../execution-context-admission.js";
-import { readScheduledMemoryParent } from "../execution-context-registry.js";
+import {
+  readScheduledMemoryParent,
+  readScheduledToolTargets,
+} from "../execution-context-registry.js";
 import type { CronEvent } from "../service.js";
 import { onTimer } from "../service/timer.test-support.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
@@ -240,9 +243,12 @@ it.each([
   let entered = 0;
   let operatorAdmitted = false;
   let revokedDuringRun: boolean | undefined;
+  let ownerGuarded = false;
+  let runSenderIsOwner: boolean | undefined;
   let memoryParent: ReturnType<typeof readScheduledMemoryParent>;
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
     entered++;
+    runSenderIsOwner = params.senderIsOwner;
     const admitted = await expectDefined(params.preparedRunAdmission, "scheduled admission").admit(
       "gateway",
       params.runId,
@@ -252,9 +258,12 @@ it.each([
     if (scenario === "device revoked during the run") {
       // The Gateway's device-token revocation owner fences every capture of that device.
       invalidateGatewayDeviceRevocation(context, DEVICE.deviceId, "operator");
+      // The run's owner-only tools recheck the same operator source before each call.
+      const targets = readScheduledToolTargets(admitted);
+      ownerGuarded = typeof targets?.assertOwnerCurrent === "function";
       revokedDuringRun = (() => {
         try {
-          operator?.assertCurrent();
+          targets?.assertOwnerCurrent?.();
           return false;
         } catch {
           return true;
@@ -291,6 +300,7 @@ it.each([
     if (scenario === "device revoked during the run") {
       expect(entered).toBe(1);
       expect(operatorAdmitted).toBe(true);
+      expect(ownerGuarded).toBe(true);
       expect(revokedDuringRun).toBe(true);
       return;
     }
@@ -304,11 +314,14 @@ it.each([
         expect(memoryParent).toBeUndefined();
       } else if (scenario === "valid") {
         expect(memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: true });
+        // An owner run is an internal turn: it carries no sender bit.
+        expect(runSenderIsOwner).toBeUndefined();
       } else {
         // Without a snapshot the existing profile check decides owner status; the
         // fixture's attributed profile is not resident, so it is not the owner.
         expect(job.createdActor).toMatchObject({ source: "profile", id: "fixture-operator" });
         expect(memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: false });
+        expect(runSenderIsOwner).toBe(false);
       }
       return;
     }

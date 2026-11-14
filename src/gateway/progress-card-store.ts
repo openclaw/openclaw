@@ -1,7 +1,5 @@
-import {
-  getSessionActorStorageBinding,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";

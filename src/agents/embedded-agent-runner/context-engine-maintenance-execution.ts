@@ -5,6 +5,7 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
   ContextEngine,
@@ -71,11 +72,9 @@ function buildContextEngineMaintenanceRuntimeContext(
             undefined,
             abortSignal,
           );
-          sessionManager = await SessionManager.openAsync(
-            runtimeTarget,
-            undefined,
-            undefined,
-            abortSignal,
+          const target = runtimeTarget;
+          sessionManager = await withSessionTranscriptHydrationCaller("maintenance", () =>
+            SessionManager.openAsync(target, undefined, undefined, abortSignal),
           );
         }
         const manager = sessionManager;

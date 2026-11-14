@@ -45,6 +45,52 @@ it("loads another bounded page on demand and refreshes the held window", async (
   expect(state.nextCursor).toBeNull();
 });
 
+it("shares dependency lookup work without mixing interleaved card arrays", () => {
+  const reads = { first: 0, second: 0 };
+  const children = ["first-child", "second-child"].map((id) =>
+    createWorkboardCard({
+      id,
+      metadata: {
+        links: [{ id: `${id}-parent`, type: "parent", targetCardId: "parent", createdAt: 1 }],
+      },
+    }),
+  );
+  const source = (side: "first" | "second", title: string, status: "todo" | "done") =>
+    Object.freeze(
+      [createWorkboardCard({ id: "parent", title, status }), ...children].map((card) =>
+        Object.defineProperty(Object.assign({}, card), "id", {
+          get() {
+            reads[side]++;
+            return card.id;
+          },
+        }),
+      ),
+    );
+  const first = source("first", "First parent", "todo");
+  const second = source("second", "Second parent", "done");
+  expect(getWorkboardDependencyState(first[0]!, first).parents).toEqual([]);
+  expect(reads).toEqual({ first: 0, second: 0 });
+  const results = [
+    getWorkboardDependencyState(first[1]!, first),
+    getWorkboardDependencyState(second[1]!, second),
+    getWorkboardDependencyState(first[2]!, first),
+    getWorkboardDependencyState(second[2]!, second),
+  ];
+  expect(
+    results.map(({ parents, blockedParents }) => [
+      parents[0]?.title,
+      parents[0]?.status,
+      blockedParents.length,
+    ]),
+  ).toEqual([
+    ["First parent", "todo", 1],
+    ["Second parent", "done", 0],
+    ["First parent", "todo", 1],
+    ["Second parent", "done", 0],
+  ]);
+  expect(reads).toEqual({ first: 3, second: 3 });
+});
+
 it("does not mark a dependency outside the loaded page missing or block its card", () => {
   const card = createWorkboardCard({
     metadata: {

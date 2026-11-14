@@ -23,7 +23,7 @@
 }
 
 .dashboards-loading__control {
-  height: 40px;
+  height: var(--settings-control-height);
 }
 
 .dashboards-loading__select {
@@ -73,35 +73,15 @@
   height: 17px;
 }
 
-.dashboards-search input,
-.dashboards-select select {
-  min-height: 40px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text);
-  background: var(--card);
-  font: inherit;
-  outline: none;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
 .dashboards-search input {
   width: 100%;
+  min-height: var(--settings-control-height);
   padding: 0 var(--space-3) 0 40px;
-}
-
-.dashboards-search input::placeholder {
-  color: var(--muted);
-}
-
-.dashboards-search input:focus,
-.dashboards-select select:focus {
-  border-color: color-mix(in srgb, var(--accent) 66%, var(--border-strong));
-  background: var(--bg-elevated);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
+  font-size: var(--field-font-size);
+  outline: none;
 }
 
 .dashboards-select {
@@ -121,17 +101,56 @@
 
 .dashboards-select select {
   min-width: 156px;
-  padding: 0 34px 0 var(--space-3);
 }
 
 .dashboards-results {
   margin-bottom: var(--space-3);
 }
 
+/* Phone widths only; wider layouts keep the labeled selects. */
+.dashboards-filter {
+  display: none;
+}
+
+.dashboards-filter__popover {
+  --oc-popover-padding: var(--menu-padding);
+
+  min-width: min(224px, calc(100dvw - 16px));
+  font-size: calc(13px * var(--control-ui-text-scale));
+  user-select: none;
+}
+
+.dashboards-filter__heading {
+  flex: none;
+  margin: 0.25em 0;
+  padding: 0.25em 0.75em;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: round(calc(1em / 1.125), 1px);
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.dashboards-filter__authors + .dashboards-filter__heading {
+  margin-top: var(--space-2);
+}
+
+.dashboards-filter__authors {
+  max-height: calc(var(--menu-item-height) * 5.85);
+  overflow-y: auto;
+}
+
 .dashboards-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-4);
+}
+
+.dashboards-grid__item {
+  min-width: 0;
+}
+
+.dashboards-grid__item > .dashboard-card {
+  height: 100%;
 }
 
 .dashboard-card {
@@ -239,7 +258,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-base);
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: -0.02em;
   line-height: 1.3;
@@ -247,22 +266,8 @@
   white-space: nowrap;
 }
 
-.dashboard-card__live {
-  display: inline-flex;
+.dashboard-card__heading .settings-status {
   flex: none;
-  align-items: center;
-  gap: 5px;
-  color: var(--ok);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-}
-
-.dashboard-card__live i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 0 3px var(--ok-subtle);
 }
 
 .dashboard-card__author {
@@ -351,11 +356,108 @@
   .dashboards-header__count {
     display: none;
   }
-  .dashboards-grid,
-  .dashboards-toolbar {
+  .dashboards-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .dashboards-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2);
   }
   .dashboards-search {
     grid-column: auto;
+  }
+  .dashboards-select,
+  .dashboards-results {
+    display: none;
+  }
+  .dashboards-filter {
+    display: block;
+  }
+  .dashboards-filter__trigger,
+  .dashboards-loading__filter {
+    width: var(--settings-control-height);
+    min-width: 0;
+    height: var(--settings-control-height);
+    padding: 0;
+    border-radius: var(--field-radius);
+  }
+  .dashboards-filter__trigger {
+    justify-content: center;
+  }
+  .dashboards-filter__trigger svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* One meta row: author from the body, then the footer's update time and open arrow. */
+  .dashboard-card__main,
+  .dashboards-loading .dashboard-card {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(max-content, 1fr);
+    gap: var(--space-2);
+    align-items: center;
+    padding-bottom: var(--space-3);
+  }
+  .dashboard-preview {
+    grid-column: 1 / -1;
+    height: 176px;
+    aspect-ratio: auto;
+    contain: inline-size;
+  }
+  /* The preview is inert and the card already names it, so its widgets drop the title bar. */
+  .dashboard-preview .board-widget {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .dashboard-preview .board-widget__chrome,
+  .dashboard-preview .board-widget__grant-dot {
+    display: none;
+  }
+  .dashboard-card__body {
+    display: contents;
+  }
+  /* Full-width rows must not size the meta row's columns. */
+  .dashboard-card__heading,
+  .dashboards-loading__title {
+    grid-column: 1 / -1;
+    margin: var(--space-1) var(--space-3) 0;
+    contain: inline-size;
+  }
+  .dashboard-card__author {
+    min-width: 0;
+    margin: 0;
+    padding-inline-start: var(--space-3);
+    line-height: 22px;
+  }
+  .dashboard-card__author > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dashboard-card__footer {
+    min-height: 0;
+    padding: 0 var(--space-3) 0 0;
+    border-top: 0;
+    line-height: 22px;
+    white-space: nowrap;
+  }
+  .dashboard-card__footer > span:first-child {
+    margin-inline-end: auto;
+  }
+  .dashboard-card__footer > span:first-child::before {
+    margin-inline-end: var(--space-2);
+    content: "\00b7";
+  }
+  .dashboard-card__open,
+  .dashboard-card__open svg {
+    flex: none;
+    width: 14px;
+    height: 14px;
+  }
+  .dashboards-loading .dashboard-card__author .skeleton-line {
+    width: 64px;
+  }
+  .dashboards-loading .dashboard-card__footer .skeleton-line {
+    width: 112px;
   }
 }

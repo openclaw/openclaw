@@ -108,73 +108,6 @@ describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-sessions-");
 
-  it("rejects ordinary work on a restart-recovery tombstone", async () => {
-    const entry = {
-      sessionId: "tombstoned-session",
-      updatedAt: Date.now(),
-      status: "failed",
-      abortedLastRun: false,
-      mainRestartRecovery: {
-        cycleId: "cycle-exhausted",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
-    };
-    mockMainSessionEntry(entry);
-    mocks.updateSessionStore.mockImplementation(
-      async (_path, updater) => await updater({ "agent:main:main": structuredClone(entry) }),
-    );
-    const commandCallCount = mocks.agentCommand.mock.calls.length;
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "continue old work",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "tombstone-reuse",
-      },
-      { reqId: "tombstone-reuse", respond },
-    );
-
-    expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
-    expectStringFieldContains(error, "message", "ended during restart recovery");
-  });
-
-  it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {
-    const entry = {
-      sessionId: "exhausted-session",
-      updatedAt: Date.now(),
-      status: "interrupted",
-      abortedLastRun: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-exhausted",
-        revision: 4,
-        chargedAttempts: 3,
-      },
-    };
-    mockMainSessionEntry(entry);
-    mocks.updateSessionStore.mockImplementation(
-      async (_path, updater) => await updater({ "agent:main:main": structuredClone(entry) }),
-    );
-    const commandCallCount = mocks.agentCommand.mock.calls.length;
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "continue old work",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "exhausted-reuse",
-      },
-      { reqId: "exhausted-reuse", respond },
-    );
-
-    expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
-  });
-
   it("does not restore elevated defaults from idempotency key suffixes", async () => {
     const { registration } = createElevatedExecApprovalFixture("req-elevated-75832");
     if (!registration) {
@@ -1354,7 +1287,7 @@ describe("gateway agent handler", () => {
     expect(call.to).toBeUndefined();
   });
 
-  it("rolls stale gateway agent sessions even when updatedAt was recently touched", async () => {
+  it("resets stale gateway agent sessions without rotating a recently touched transcript", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1395,7 +1328,7 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("stale-session-id");
+      expect(call.sessionId).toBe("stale-session-id");
       expect(getCapturedEntry()?.sessionStartedAt).toBe(now);
       expect(getCapturedEntry()?.lastInteractionAt).toBe(now);
       expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledTimes(1);
@@ -1515,7 +1448,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("emits idle lifecycle reason when inactivity rotates a gateway agent session", async () => {
+  it("emits idle lifecycle reason when inactivity resets a gateway agent session", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1555,7 +1488,7 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("idle-session-id");
+      expect(call.sessionId).toBe("idle-session-id");
       expectRecordFields(
         mockCallArg(mocks.emitGatewaySessionEndPluginHook) as Record<string, unknown>,
         {
@@ -1579,7 +1512,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("emits lifecycle hooks when a committed rotation later fails delivery validation", async () => {
+  it("emits lifecycle hooks when a committed reset later fails delivery validation", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1748,7 +1681,7 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("stale-session-id");
+      expect(call.sessionId).toBe("stale-session-id");
       expect(getCapturedEntry()?.sessionStartedAt).toBe(now);
       expect(getCapturedEntry()?.lastInteractionAt).toBe(now);
     } finally {

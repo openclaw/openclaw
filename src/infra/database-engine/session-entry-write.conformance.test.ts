@@ -16,7 +16,7 @@ import {
 } from "../../config/sessions/session-actor-worker.test-support.js";
 import type { SessionEntryWritePostimages } from "../../config/sessions/session-entry-write-postimage.js";
 import { readTranscriptContextVersionsInTransaction } from "../../config/sessions/session-transcript-context-versions.js";
-import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { promptReport } from "../../config/sessions/system-prompt-report.test-support.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -47,6 +47,10 @@ function persisted(db: EngineConnection, sessionKey: string, sessionId: string) 
 
 function tripRecorder(db: EngineConnection) {
   const queries: Record<string, string[]> = {};
+  const isEntryWrite = (sql: string) =>
+    /\binsert into\s+"?(?:session_nodes|session_windows|session_entry_snapshots)"?|\bdelete from\s+"?session_entry_snapshots"?/iu.test(
+      sql,
+    );
   return {
     queries,
     expectQueries(name: string, pattern: RegExp, count: number) {
@@ -63,28 +67,17 @@ function tripRecorder(db: EngineConnection) {
       }
       const statements: string[] = [];
       const query = db.query.bind(db);
-      const spy = vi.spyOn(db, "query").mockImplementation(
-        new Proxy(query, {
-          apply(target, receiver, args) {
-            statements.push(args[0]);
-            return Reflect.apply(target, receiver, args);
-          },
-        }),
-      );
+      const spy = vi.spyOn(db, "query").mockImplementation((sql, parameters) => {
+        statements.push(sql);
+        return query(sql, parameters);
+      });
       try {
         return run();
       } finally {
         spy.mockRestore();
         queries[name] = statements;
         if (writes != null) {
-          expect(
-            statements.filter((sql) =>
-              /\binsert into\s+"?(?:session_nodes|session_windows|session_entry_snapshots)"?|\bdelete from\s+"?session_entry_snapshots"?/iu.test(
-                sql,
-              ),
-            ),
-            name,
-          ).toHaveLength(writes);
+          expect(statements.filter(isEntryWrite), name).toHaveLength(writes);
         }
       }
     },
@@ -210,20 +203,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           );
         });
         const initial = current();
-        let sequential: ReturnType<typeof current> | undefined;
         const rollback = new Error("archive equivalence rollback");
-        expect(() =>
-          transaction((owner) => {
-            rawUnselectedWrite();
-            for (const input of inputs()) {
-              writeSessionEntry(owner, input.sessionKey, input.entry);
-            }
-            sequential = current();
-            throw rollback;
-          }),
-        ).toThrow(rollback);
-        expect(current()).toEqual(initial);
-
         readSessionEntryCache(database, { cache: true, projection: "list" });
         expect(() =>
           transaction((owner) => {
@@ -248,7 +228,6 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             }),
           3,
         );
-        expect(current()).toEqual(sequential);
         expect(written.map((entry) => entry.archivedAt)).toEqual(
           Array.from({ length: 66 }, () => 30),
         );
@@ -259,9 +238,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           window: { session_key: keys.at(-1), hook_external_content_source: "gmail" },
         });
         for (const key of keys) {
-          const state = persisted(database.db, key, read(key).entry.sessionId);
+          const entry = read(key).entry;
+          const state = persisted(database.db, key, entry.sessionId);
           const postimage = postimages.get(key);
+          expect(entry).toMatchObject({ archivedAt: 30, archiveReason: "age-retention" });
           expect(postimage).toBeDefined();
+          expect(state.node).toMatchObject({ archived_at: 30, snapshot_revision: 1 });
+          expect(state.snapshots).toEqual(snapshotRows(skills));
           expect(state.window).toMatchObject(postimage!.window);
           expect(postimage?.entry.skillsSnapshot).toEqual(skills);
         }
@@ -272,7 +255,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         ).toBe("untracked update before archive");
       }, true));
 
-    it("keeps batched empty, hot, cold, and changed transcript versions equivalent", () =>
+    it("reads batched empty, hot, and cold transcript versions and rolls back changes", () =>
       withEntryDatabase(({ database, transaction }) => {
         const ids = [
           "version-absent",
@@ -286,13 +269,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           sessionKey: `agent:main:${sessionId}`,
           sessionId,
         });
-        const read = () => {
-          const batch = readTranscriptContextVersionsInTransaction(database, ids);
-          expect(batch).toEqual(
-            ids.map((id) => readTranscriptContextVersionInTransaction(database, id)),
-          );
-          return batch;
-        };
+        const read = () => readTranscriptContextVersionsInTransaction(database, ids);
         transaction((owner) => {
           for (const id of ids.slice(1, 4)) {
             writeSessionEntry(owner, scope(id).sessionKey, { sessionId: id, updatedAt: 10 });
@@ -437,7 +414,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               sessionId: f.scope.sessionId,
               lifecycleRevision: before.entry!.lifecycleRevision ?? null,
               writerRunId: before.entry!.activeWriterRunId,
-              expectedState: buildRestartRecoveryExpectedState(before.entry!),
+              expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
             },
             reducers: [
               {
@@ -497,7 +474,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             target: f.target,
             commandId: "input",
             phaseId: "turn",
-            expectedState: buildRestartRecoveryExpectedState(before.entry!),
+            expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
             lifecycle: { updatedAt: 20, startedAt: 20 },
             turn: {
               agentId: "main",

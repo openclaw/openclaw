@@ -9,6 +9,41 @@ function emitGatewayEvent(state: ChatPageHost, event: "session.message", payload
 
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["current-run", "other-run"])(
+  "retires only the matching CLI reply when persistence precedes completion (key=%s)",
+  (persistedRunId) => {
+    const { state } = createSessionEventState({
+      chatRunId: "current-run",
+      chatStream: "CLI answer",
+      chatStreamStartedAt: 100,
+    });
+    const message = {
+      role: "assistant",
+      api: "cli",
+      content: [{ type: "text", text: "CLI answer" }],
+      __openclaw: {
+        id: "saved-cli-reply",
+        seq: 2,
+        runId: "current-run",
+        idempotencyKey: `cli-assistant:${persistedRunId}`,
+      },
+    };
+
+    emitGatewayEvent(state, "session.message", {
+      sessionKey: state.sessionKey,
+      hasActiveRun: true,
+      messageId: "saved-cli-reply",
+      messageSeq: 2,
+      message,
+    });
+
+    expect(state.chatMessages).toEqual([message]);
+    expect(state.chatStream).toBe(persistedRunId === "current-run" ? null : "CLI answer");
+    expect(state.chatStreamStartedAt).toBe(persistedRunId === "current-run" ? null : 100);
+    expect(state.chatRunId).toBe("current-run");
+  },
+);
+
 it("leaves the active run assistant message on the terminal stream path", () => {
   const currentUser = {
     role: "user",

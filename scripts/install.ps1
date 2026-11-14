@@ -293,10 +293,10 @@ function Test-NodeVersionSupported {
         return $false
     }
     if ($major -eq 24) {
-        return ($minor -gt 22 -or ($minor -eq 22 -and $patch -ge 1))
+        return ($minor -ge 16)
     }
     if ($major -eq 26) {
-        return ($minor -gt 12 -or ($minor -eq 12 -and $patch -ge 1))
+        return ($minor -ge 1)
     }
     return ($major -gt 26)
 }
@@ -326,6 +326,71 @@ function Test-NodeSqliteSupported {
             )
         )
     )
+}
+
+function Test-NodePackageEngine {
+    param([string]$Version, [string]$Engine = $script:NodePackageEngine)
+
+    # Fallback covers latest and extended-stable until both publish relaxed engines.
+    if ([string]::IsNullOrWhiteSpace($Engine)) { $Engine = ">=24.22.1 <25 || >=26.12.1" }
+    $versionMatch = [regex]::Match($Version, '^v?(\d+\.\d+\.\d+)')
+    if (-not $versionMatch.Success) { return $false }
+    $current = [version]$versionMatch.Groups[1].Value
+    $satisfied = $false
+    foreach ($clause in ($Engine -split '\|\|')) {
+        # Same >=floor [<ceiling] subset as the package preinstall guard.
+        $match = [regex]::Match($clause, '^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$')
+        if (-not $match.Success) { return $null }
+        $lower = [version]$match.Groups[1].Value
+        $upper = $match.Groups[2].Value
+        if ($upper -and -not $upper.Contains('.')) { $upper += '.0.0' }
+        if ($current -ge $lower -and (-not $upper -or $current -lt [version]$upper)) { $satisfied = $true }
+    }
+    return $satisfied
+}
+
+function Resolve-NodePackageEngine {
+    param([string]$RepoDir)
+    $script:NodePackageEngine = ">=24.22.1 <25 || >=26.12.1"
+    try {
+        if ($InstallMethod -eq 'git') {
+            $package = Get-Content -LiteralPath (Join-Path $RepoDir 'package.json') -Raw | ConvertFrom-Json
+            $output = @($package.engines.node)
+            $global:LASTEXITCODE = 0
+        } else {
+            $target = Resolve-NpmOpenClawInstallSpec -PackageName 'openclaw' -RequestedTag $Tag
+            $output = @(Invoke-NpmCommand -Arguments @('view', $target, 'engines.node', '--fetch-timeout=5000', '--fetch-retries=0') 2>$null)
+        }
+        if ($LASTEXITCODE -eq 0 -and $output.Count -eq 1) {
+            $engine = $output[0].ToString().Trim()
+            $verdict = Test-NodePackageEngine -Version '0.0.0' -Engine $engine
+            if ($engine -and $null -ne $verdict) {
+                $script:NodePackageEngine = $engine
+                return
+            }
+        }
+    } catch { }
+    Write-Host "[!] Could not resolve target Node requirement; using $script:NodePackageEngine" -ForegroundColor Yellow
+}
+
+function Ensure-Node {
+    if (-not (Check-Node)) {
+        if (-not (Install-Node)) {
+            return $false
+        }
+
+        # npm may only become available during provisioning; admit the actual target.
+        if ($InstallMethod -eq 'npm') { Resolve-NodePackageEngine }
+
+        # Verify installation
+        if (-not (Check-Node)) {
+            Write-Host ""
+            Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
+            Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
+            return $false
+        }
+    }
+    return $true
 }
 
 function Check-Node {
@@ -373,11 +438,15 @@ process.stdout.write(JSON.stringify(result));
         if ($nodeVersion) {
             if (
                 (Test-NodeVersionSupported -Version $nodeVersion) -and
+                (Test-NodePackageEngine -Version $nodeVersion) -and
                 (Test-NodeSqliteSupported -Version $sqliteVersion) -and
                 $sqlite.text -and $sqlite.blob -and $sqlite.json -and -not $sqlite.error
             ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
+            } elseif (-not (Test-NodePackageEngine -Version $nodeVersion)) {
+                Write-Host "[!] Node.js $nodeVersion does not satisfy the target package; upgrading Node.js" -ForegroundColor Yellow
+                return $false
             } elseif ($sqlite.available -and -not $sqlite.text -and -not $sqlite.error) {
                 Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix" -ForegroundColor Yellow
                 return $false
@@ -393,7 +462,7 @@ process.stdout.write(JSON.stringify(result));
                 Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required" -ForegroundColor Yellow
                 return $false
             } else {
-                Write-Host "[!] Node.js $nodeVersion found, but Node 24.22.1+ or Node 26.12.1+ is required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion found, but Node 24.16.0+ or Node 26.1.0+ is required" -ForegroundColor Yellow
                 return $false
             }
         }
@@ -1118,6 +1187,32 @@ function Invoke-OpenClawCommand {
     }
 }
 
+function Get-TrustedWindowsCmdExe {
+    if ([string]::IsNullOrWhiteSpace($env:SystemRoot)) {
+        return $null
+    }
+
+    $candidate = Join-Path (Join-Path $env:SystemRoot "System32") "cmd.exe"
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return $candidate
+    }
+    return $null
+}
+
+function Write-OpenClawSetupRecovery {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandPath,
+        [string[]]$Arguments
+    )
+
+    $shownArgs = (@($Arguments) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join " "
+    $quotedPath = "'" + ($CommandPath.Replace("'", "''")) + "'"
+    $shown = if ([string]::IsNullOrWhiteSpace($shownArgs)) { "& $quotedPath" } else { "& $quotedPath $shownArgs" }
+    Write-Host "Setup did not start. Run:" -ForegroundColor Yellow
+    Write-Host "  $shown" -ForegroundColor Cyan
+}
+
 function Invoke-InteractiveOpenClawCommand {
     param(
         [Parameter(ValueFromRemainingArguments = $true)]
@@ -1129,7 +1224,30 @@ function Invoke-InteractiveOpenClawCommand {
         throw "openclaw command not found on PATH."
     }
 
-    $process = Start-Process -FilePath $commandPath -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+    $isBatch = [System.IO.Path]::GetExtension($commandPath) -match '^\.(cmd|bat)$'
+    $previousShimPath = $env:OPENCLAW_INSTALLER_SETUP_SHIM
+    try {
+        $launchPath = $commandPath
+        $launchArguments = $Arguments
+        if ($isBatch) {
+            $launchPath = Get-TrustedWindowsCmdExe
+            if (-not $launchPath) {
+                throw "openclaw $($Arguments -join ' ') could not start because cmd.exe was not found."
+            }
+            # Expand the path once inside quotes, preserving literal %, &, and !.
+            # The only caller supplies the fixed onboard command.
+            $env:OPENCLAW_INSTALLER_SETUP_SHIM = $commandPath
+            $launchArguments = '/d /v:off /s /c ""%OPENCLAW_INSTALLER_SETUP_SHIM%" ' + ($Arguments -join ' ') + '"'
+        }
+        $process = Start-Process -FilePath $launchPath -ArgumentList $launchArguments -NoNewWindow -Wait -PassThru
+    } catch {
+        Write-OpenClawSetupRecovery -CommandPath $commandPath -Arguments $Arguments
+        throw
+    } finally {
+        if ($isBatch) {
+            $env:OPENCLAW_INSTALLER_SETUP_SHIM = $previousShimPath
+        }
+    }
     if ($process.ExitCode -ne 0) {
         throw "openclaw $($Arguments -join ' ') failed with exit code $($process.ExitCode)."
     }
@@ -1949,6 +2067,55 @@ function New-TransactionalGitCheckout {
     }
 }
 
+function Get-GitCheckoutState {
+    param([string]$RepoDir)
+
+    $state = $null
+    try {
+        $gitDir = git -C $RepoDir rev-parse --absolute-git-dir 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $head = git -C $RepoDir rev-parse --verify HEAD 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $porcelain = (git -C $RepoDir status --porcelain=v1 --untracked-files=all 2>$null | Out-String)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $state = [PSCustomObject]@{
+            Head = [string]$head
+            Status = $porcelain
+            Rebasing = (Test-Path -LiteralPath (Join-Path $gitDir "rebase-merge")) -or (Test-Path -LiteralPath (Join-Path $gitDir "rebase-apply"))
+        }
+    } catch {}
+    return $state
+}
+
+# A failed pull --rebase can stop mid-rebase with HEAD, index, or files changed.
+# Continue on the current revision only after proving the checkout is unchanged.
+function Update-GitCheckoutBestEffort {
+    param([string]$RepoDir)
+
+    # Windows PowerShell 5.1 and PowerShell 7.0/7.1 turn Git's stderr progress into
+    # terminating errors under Stop; judge Git only by its exit code.
+    $ErrorActionPreference = "Continue"
+    $before = Get-GitCheckoutState -RepoDir $RepoDir
+    if (-not $before -or $before.Rebasing) {
+        throw "Could not record the Git checkout state before updating: $RepoDir. Inspect the checkout (git status), then retry."
+    }
+    git -C $RepoDir pull --rebase 2>$null | Out-Host
+    if ($LASTEXITCODE -eq 0) {
+        return
+    }
+
+    $after = Get-GitCheckoutState -RepoDir $RepoDir
+    if ($after -and $after.Rebasing) {
+        git -C $RepoDir rebase --abort 2>$null | Out-Null
+        $after = Get-GitCheckoutState -RepoDir $RepoDir
+    }
+    if ($after -and -not $after.Rebasing -and $after.Head -eq $before.Head -and $after.Status -eq $before.Status) {
+        Write-Host "[!] git pull --rebase failed; the checkout is unchanged, continuing with the current revision" -ForegroundColor Yellow
+        return
+    }
+    throw "git pull --rebase failed and the checkout could not be restored: $RepoDir. Run git -C `"$RepoDir`" rebase --abort, inspect git status, then retry."
+}
+
 function Install-OpenClawFromGit {
     param(
         [string]$RepoDir,
@@ -1973,17 +2140,20 @@ function Install-OpenClawFromGit {
     if (-not $SkipUpdate) {
         # PowerShell 7+ surfaces native-command stderr as terminating errors when
         # $ErrorActionPreference=Stop, so git's normal "From <url>" progress line
-        # would abort the script. Swallow failures here — pull is best-effort.
+        # would abort the script. Pull stays best-effort, but only from a verified checkout.
         $dirty = $null
         try { $dirty = git -C $RepoDir status --porcelain 2>$null } catch {}
         if (-not $dirty) {
-            try { git -C $RepoDir pull --rebase 2>$null } catch {}
+            Update-GitCheckoutBestEffort -RepoDir $RepoDir
         } else {
             Write-Host "[!] Repo is dirty; skipping git pull" -ForegroundColor Yellow
         }
     } else {
         Write-Host "[!] Git update disabled; skipping git pull" -ForegroundColor Yellow
     }
+
+    Resolve-NodePackageEngine -RepoDir $RepoDir
+    if (-not (Ensure-Node)) { return $false }
 
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
     $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY
@@ -2290,27 +2460,21 @@ function Main {
     # Check for existing installation
     $isUpgrade = Check-ExistingOpenClaw
 
-    # Step 1: Node.js
-    if (-not (Check-Node)) {
-        if (-not (Install-Node)) {
-            Fail-Install
-            return
-        }
-
-        # Verify installation
-        if (-not (Check-Node)) {
-            Write-Host ""
-            Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
-            Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
-            Fail-Install
-            return
-        }
+    if ($InstallMethod -eq 'npm') {
+        Resolve-NodePackageEngine
+        if (-not (Ensure-Node)) { Fail-Install; return }
     }
 
     $finalGitDir = $null
 
     # Step 2: OpenClaw
     if ($InstallMethod -eq "git") {
+        $finalGitDir = $GitDir
+        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
+        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
+            Fail-Install
+            return
+        }
         $hadNpmOwner = $false
         try {
             $npmCommand = Get-NpmCommandPath
@@ -2319,12 +2483,6 @@ function Main {
                 $hadNpmOwner = ($LASTEXITCODE -eq 0)
             }
         } catch { }
-        $finalGitDir = $GitDir
-        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
-        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
-            Fail-Install
-            return
-        }
         if ($hadNpmOwner) {
             Remove-PreviousNpmOwner -GitWrapper (Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd")
         }

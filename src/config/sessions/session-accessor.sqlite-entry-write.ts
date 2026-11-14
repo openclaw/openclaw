@@ -92,6 +92,8 @@ type SessionEntryWriteOptions = {
   canonicalPreviousSideTables?: SessionEntryWritePostimage["sideTables"];
   postimages?: SessionEntryWritePostimages;
   consumePendingReset?: boolean;
+  /** Initial child fork keeps this logical node's current audience across transcript installation. */
+  preserveVisibility?: boolean;
   /** A rehome can bind historical windows to an otherwise unchanged target. */
   publishConversationBinding?: boolean;
   preserveNodeSuggestions?: boolean;

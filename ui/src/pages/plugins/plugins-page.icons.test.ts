@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createComponent, createSignal } from "solid-js";
+import { createComponent, createEffect, createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
@@ -82,6 +82,61 @@ afterEach(() => {
 
 beforeEach(async () => {
   await i18n.setLocale("en");
+});
+
+it("does not republish the page when an iconless tile joins the rendered inventory", async () => {
+  const { gateway } = iconGateway();
+  const routeData = createPluginsRouteData(
+    gateway,
+    createResult([createPlugin({ id: "first" }), createPlugin({ id: "second" })]),
+    createPluginsRouteLocation("/settings/plugins"),
+  );
+  const published = vi.fn();
+  let showSecond!: (visible: boolean) => void;
+  const host = document.createElement("div");
+  const mounted = mountSolid(
+    () => {
+      const [second, setSecond] = createSignal(false);
+      showSecond = setSecond;
+      const page = createPluginsPage({
+        context: createContext(gateway),
+        element: () => host,
+        routeData: () => routeData,
+        surface: () => "settings",
+      });
+      createEffect(() => page.read(), published);
+      return [
+        createComponent(PluginArtTile, {
+          slug: "first",
+          name: "First",
+          registerIcon: page.icons.register,
+        }),
+        createComponent(Show, {
+          get when() {
+            return second();
+          },
+          children: (_visible) => {
+            return createComponent(PluginArtTile, {
+              slug: "second",
+              name: "Second",
+              registerIcon: page.icons.register,
+            });
+          },
+        }),
+      ];
+    },
+    { container: host },
+  );
+  try {
+    await settlePlugins();
+    published.mockClear();
+    showSecond(true);
+    await settlePlugins();
+    expect(host.querySelectorAll(".plugins-tile")).toHaveLength(2);
+    expect(published).not.toHaveBeenCalled();
+  } finally {
+    mounted.unmount();
+  }
 });
 
 it("loads artwork when a retained tile changes identity without a page refresh", async () => {

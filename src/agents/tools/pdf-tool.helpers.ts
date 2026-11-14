@@ -13,7 +13,6 @@ import type { Context } from "../../llm/types.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import type { PdfExtractedContent } from "../../media/pdf-extract.js";
 import { wrapExternalContent } from "../../security/external-content.js";
-import { createMediaAssistantTextCoercer } from "./media-tool-text.js";
 
 type PdfModelConfig = Exclude<AgentModelConfig, string>;
 
@@ -79,8 +78,6 @@ export function parsePageRange(
   return { pages, truncated: false };
 }
 
-export const coercePdfAssistantText = createMediaAssistantTextCoercer("PDF");
-
 export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
   const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
@@ -106,13 +103,17 @@ export function buildPdfExtractionContext(
   extractions: PdfExtractedContent[],
   explicitSelectionLimit?: number,
   model?: { api?: string },
-): Context {
+): { context: Context; truncationNotices: string[] } {
   const content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
+  const truncationNotices: string[] = [];
 
   for (const [i, extraction] of extractions.entries()) {
     const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
+    if (notice) {
+      truncationNotices.push(extractions.length > 1 ? `PDF ${i + 1}: ${notice}` : notice);
+    }
     if (extraction.text.trim() || notice) {
       const label = extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
       const text = extraction.text.trim()
@@ -134,7 +135,10 @@ export function buildPdfExtractionContext(
     model?.api === "openai-chatgpt-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
 
   return {
-    ...(systemPrompt ? { systemPrompt } : {}),
-    messages: [{ role: "user", content, timestamp: Date.now() }],
+    context: {
+      ...(systemPrompt ? { systemPrompt } : {}),
+      messages: [{ role: "user", content, timestamp: Date.now() }],
+    },
+    truncationNotices,
   };
 }

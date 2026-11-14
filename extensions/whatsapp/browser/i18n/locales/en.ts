@@ -4,6 +4,7 @@ export default {
     linked: "Linked",
     running: "Running",
     connected: "Connected",
+    details: "Details",
     lastConnect: "Last connect",
     lastMessage: "Last message",
     authAge: "Auth age",

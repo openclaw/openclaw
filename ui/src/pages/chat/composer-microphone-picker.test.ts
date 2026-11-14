@@ -1,4 +1,4 @@
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
@@ -179,16 +179,11 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
       picker.handleOpen();
     }
     initial.resolve([]);
-    async function waitDiscovery(index: number) {
-      const result = discovery.mock.results[index];
-      assert.isDefined(result);
-      await result.value;
-    }
-    await waitDiscovery(0);
+    await discovery.mock.results[0]!.value;
     const staleProbes = getUserMedia.mock.calls.length;
     if (transition === "replace") {
       replacement.resolve([]);
-      await waitDiscovery(1);
+      await discovery.mock.results[1]!.value;
     }
     expect(staleProbes).toBe(transition === "remain open" ? 1 : 0);
     const permits = transition === "remain open" || transition === "replace";

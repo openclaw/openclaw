@@ -92,16 +92,25 @@ export function createAgentConfigActions(params: {
           if (!skillName.trim()) {
             return;
           }
-          stage(
-            config,
-            [...target.path, "skills"],
-            nextAgentSkillAllowlist({
-              configured: resolveAgentSkillsFilter(currentConfigObject(config.state), agentId),
-              report: params.getReport(),
-              skillName: skillName.trim(),
-              enabled,
-            }),
+          const path = [...target.path, "skills"];
+          const configured = resolveAgentSkillsFilter(currentConfigObject(config.state), agentId);
+          const report = params.getReport();
+          const selectedSkillName = skillName.trim();
+          // The first toggle snapshots reported skills; learned Workshop skills bypass allowlists.
+          const next = new Set(
+            configured ??
+              report?.agentSkillFilter ??
+              report?.skills
+                .filter((skill) => skill.name && !isWorkshopSkill(skill))
+                .map((skill) => skill.name) ??
+              [],
           );
+          if (enabled) {
+            next.add(selectedSkillName);
+          } else {
+            next.delete(selectedSkillName);
+          }
+          stage(config, path, [...next]);
         }),
       onDisableAll: (agentId: string) =>
         edit(agentId, true, (config, target) => stage(config, [...target.path, "skills"], [])),
@@ -138,27 +147,4 @@ function existingModelParts(existing: unknown): {
     primary: typeof record?.primary === "string" ? record.primary.trim() || null : null,
     fallbacks: Array.isArray(record?.fallbacks) ? record.fallbacks : null,
   };
-}
-
-// The first toggle snapshots reported skills; learned Workshop skills bypass allowlists.
-function nextAgentSkillAllowlist(params: {
-  configured: string[] | undefined;
-  report: SkillStatusReport | null;
-  skillName: string;
-  enabled: boolean;
-}): string[] {
-  const next = new Set(
-    params.configured ??
-      params.report?.agentSkillFilter ??
-      params.report?.skills
-        .filter((skill) => skill.name && !isWorkshopSkill(skill))
-        .map((skill) => skill.name) ??
-      [],
-  );
-  if (params.enabled) {
-    next.add(params.skillName);
-  } else {
-    next.delete(params.skillName);
-  }
-  return [...next];
 }

@@ -103,7 +103,7 @@ describe("publication policy inherited by a managed child", () => {
     const childPublishers = child.filter((tool) => tool.name === "github_publish");
     expect(childPublishers).toHaveLength(1);
     expect(childPublishers[0]?.parameters).toMatchObject({
-      properties: { action: { enum: ["publish"] } },
+      properties: { action: { enum: ["publish", "inspect"] } },
     });
   });
 
@@ -179,8 +179,15 @@ describe("publication policy inherited by a managed child", () => {
             }
           : {},
       );
-      expect(parent.some((tool) => tool.name === "github_publish")).toBe(false);
-      expect(inheritedToolAllowlistRef.includes("github_publish")).toBe(expected);
+      expect(
+        parent.some(
+          (tool) =>
+            tool.name === "github_publish" && Value.Check(tool.parameters, { action: "publish" }),
+        ),
+      ).toBe(false);
+      expect(inheritedToolAllowlistRef.includes("github_publish")).toBe(
+        expected || tools.gatewayPolicy?.actions?.github_publish?.includes("inspect") === true,
+      );
 
       // Child construction has its own valid publication fact. The captured parent
       // ceiling remains authoritative even when the child's local policy permits it.
@@ -214,7 +221,17 @@ describe("publication policy inherited by a managed child", () => {
         },
         { [childKey]: inheritedEntry(inheritedToolAllowlistRef, tools.deny ?? []) },
       );
-      expect(child.some((tool) => tool.name === "github_publish")).toBe(expected);
+      expect(
+        child.some(
+          (tool) =>
+            tool.name === "github_publish" &&
+            (Value.Check(tool.parameters, { action: "publish" }) ||
+              Value.Check(tool.parameters, {
+                action: "prepare_pr",
+                pullRequestUrl: "https://github.com/example/repository/pull/1",
+              })),
+        ),
+      ).toBe(expected);
       if (tools.gatewayPolicy?.actions?.github_publish?.includes("prepare_pr")) {
         const publisher = expectDefined(
           child.find((tool) => tool.name === "github_publish"),

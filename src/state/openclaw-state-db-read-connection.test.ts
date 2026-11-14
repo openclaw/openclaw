@@ -55,6 +55,7 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
   openClawStateDatabaseCache: { closeOpenClawStateDatabaseHandle: mocks.closeHandle },
 }));
 
+import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import {
   openOpenClawStateReadConnection as openConnection,
   readOpenClawStateReadOnlyLocation as readLocation,
@@ -70,12 +71,7 @@ const failWith = (error: Error) => () => {
 };
 
 function caught(run: () => unknown) {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected an exception");
+  return captureThrown(run, "Expected an exception");
 }
 
 function expectAggregate(error: unknown, primary: Error, cleanup: unknown) {

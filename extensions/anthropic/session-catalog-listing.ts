@@ -69,12 +69,13 @@ export async function listLocalClaudeSessionPage(
     search && !scan.records.some((record) => record.threadId.toLocaleLowerCase() === search)
       ? await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, sessionId: search })
       : undefined;
+  const needle = search?.normalize("NFC");
   const records = [...(exact?.records ?? []), ...scan.records].filter((record) => {
-    if (!search) {
+    if (!needle) {
       return true;
     }
     return [record.name, record.cwd, record.gitBranch, record.threadId].some((candidate) =>
-      candidate?.toLocaleLowerCase().includes(search),
+      candidate?.toLocaleLowerCase().normalize("NFC").includes(needle),
     );
   });
   const page = records

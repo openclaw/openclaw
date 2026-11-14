@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, it, expect } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   appendTranscriptMessageSync,
@@ -47,14 +48,7 @@ it.each(["", "Partial reply"])(
         })),
       }),
     );
-    append("done-result", {
-      role: "toolResult",
-      toolCallId: "done",
-      toolName: "exec",
-      content: [{ type: "text", text: "Completed" }],
-      isError: false,
-      timestamp: 1,
-    });
+    append("done-result", makeTextToolResult("done", "exec", "Completed", false, 1));
     const snapshot = captureAbortedPartial({
       session: {
         ok: true,

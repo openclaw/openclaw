@@ -35,12 +35,10 @@ function expectModelPlan(
     modelApplied: true,
     initialSessionPatch: { modelProvider: provider, model, modelOverrideSource: source },
   });
-  expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(
-    hasOrigin ? provider : undefined,
-  );
-  expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(
-    hasOrigin ? model : undefined,
-  );
+  expect([
+    plan.initialSessionPatch.modelOverrideFallbackOriginProvider,
+    plan.initialSessionPatch.modelOverrideFallbackOriginModel,
+  ]).toEqual(hasOrigin ? [provider, model] : [undefined, undefined]);
 }
 
 it("threads explicit fast mode into the initial child session patch", async () => {
@@ -62,6 +60,17 @@ it("rejects invalid thinking before preparing a model", async () => {
     error: expect.stringMatching(/Invalid thinking level/i),
   });
   expect(modelChoice).not.toHaveBeenCalled();
+});
+
+it("names the selected model's row levels for invalid thinking", async () => {
+  const plan = await planFor({
+    cfg: configFor({ subagents: { model: "moonshot/kimi-k3" } }),
+    thinkingOverrideRaw: "banana",
+  });
+  expect(plan).toMatchObject({
+    status: "error",
+    error: expect.stringMatching(/Use one of: max\b/),
+  });
 });
 
 it("uses the target default provider for a bare configured subagent model", async () => {

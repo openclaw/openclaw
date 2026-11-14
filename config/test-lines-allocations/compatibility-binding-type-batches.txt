@@ -1,0 +1,2 @@
+# Real-compiler distinct-pattern batch count and preserved typed receiver/parameter escapes.
+34

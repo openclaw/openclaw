@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { expectFamilyEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as restartHealthProbe from "../cli/daemon-cli/restart-health-probe.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
@@ -16,6 +17,10 @@ import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
+import {
+  acquireGatewayStateOwnerFile,
+  StateDatabaseAdmissionPendingError,
+} from "../infra/gateway-state-owner-record.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as packageJson from "../infra/package-json.js";
@@ -147,6 +152,7 @@ type StoppedUnitState =
   | "runtime-timeout-changed-command"
   | "runtime-timeout-changed-manager"
   | "inspection-competing"
+  | "restoration-maintenance"
   | "lifecycle-contended"
   | "gateway-lifecycle-contended"
   | "legacy-gateway-lifecycle-contended";
@@ -230,46 +236,37 @@ async function runDoctorFinishForStoppedUnit(
         const pathname = openOpenClawStateDatabase().path;
         closeOpenClawStateDatabaseForTest();
         if (scenario === "gateway-lifecycle-contended") {
-          const db = new DatabaseSync(pathname);
-          try {
-            const startedAt = getFileLockProcessStartTime(process.pid);
-            if (startedAt === null) {
-              throw new Error("Current process start identity is unavailable");
-            }
-            const now = Date.now();
-            db.prepare(
-              `INSERT INTO state_leases
+          using db = new DatabaseSync(pathname);
+          const startedAt = getFileLockProcessStartTime(process.pid);
+          if (startedAt === null) {
+            throw new Error("Current process start identity is unavailable");
+          }
+          const now = Date.now();
+          db.prepare(
+            `INSERT INTO state_leases
                  (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
                VALUES ('gateway-owner', 'global', 'test-gateway', ?, ?, ?, ?, ?)`,
-            ).run(
-              now + 60_000,
-              now,
-              JSON.stringify({
-                owner: {
-                  pid: process.pid,
-                  host: hostname(),
-                  startedAt,
-                  processNamespace: readGatewayLockProcessNamespace(),
-                },
-                port: gatewayPort.port,
-                mode: "supervised",
-                supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
-              }),
-              now,
-              now,
-            );
-          } finally {
-            db.close();
-          }
+          ).run(
+            now + 60_000,
+            now,
+            JSON.stringify({
+              owner: {
+                pid: process.pid,
+                host: hostname(),
+                startedAt,
+                processNamespace: readGatewayLockProcessNamespace(),
+              },
+              port: gatewayPort.port,
+              mode: "supervised",
+              supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
+            }),
+            now,
+            now,
+          );
         }
         // Publish damaged bytes only after seeding the serving lease in the valid catalog.
         createDanglingSkillWorkshopReviewIndex(pathname);
-        const readArtifacts = () =>
-          snapshotSourceFamily(pathname).files.map(({ pathname: file, bytes, mtimeNs }) => ({
-            file,
-            bytes,
-            mtimeNs,
-          }));
+        const readArtifacts = () => snapshotSourceFamily(pathname).files;
         const beforeArtifacts = readArtifacts();
         let beforeCatalog = fs.readFileSync(pathname);
         if (scenario === "gateway-lifecycle-contended") {
@@ -289,7 +286,7 @@ async function runDoctorFinishForStoppedUnit(
         }
         assertCatalogUnchanged = () =>
           expect(fs.readFileSync(pathname).equals(beforeCatalog)).toBe(true);
-        assertPreStopArtifactsUnchanged = () => expect(readArtifacts()).toEqual(beforeArtifacts);
+        assertPreStopArtifactsUnchanged = () => expectFilesEqual(readArtifacts(), beforeArtifacts);
         expect(() => listUpdateRuns()).toThrow(/legacy-workshop-review-index.*doctor --fix/);
         assertPreStopArtifactsUnchanged();
         if (lateRun) {
@@ -459,6 +456,38 @@ async function runDoctorFinishForStoppedUnit(
       }
       const { runtime, logs } = createCapturingTestRuntime();
       const databasePath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+      let competingMaintenance: ReturnType<typeof acquireGatewayStateOwnerFile> | undefined;
+      let refusedMaintenance = false;
+      if (scenario === "restoration-maintenance") {
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) => {
+          const owner = await acquire(options);
+          if (!owner) {
+            return owner;
+          }
+          return {
+            ...owner,
+            async release() {
+              await owner.release();
+              // A queued CLI gets its first chance as soon as Doctor drops the root.
+              try {
+                competingMaintenance = acquireGatewayStateOwnerFile(databasePath, owner.lockPath, {
+                  pid: process.ppid,
+                  createdAt: new Date().toISOString(),
+                  configPath: path.join(home, ".openclaw", "openclaw.json"),
+                  processNamespace: readGatewayLockProcessNamespace(),
+                  role: "sqlite-maintenance",
+                });
+              } catch (error) {
+                if (!(error instanceof StateDatabaseAdmissionPendingError)) {
+                  throw error;
+                }
+                refusedMaintenance = true;
+              }
+            },
+          };
+        });
+      }
       otherOwner =
         scenario === "lifecycle-contended" || gatewayContended
           ? acquireGatewayStateOwner({
@@ -554,6 +583,8 @@ async function runDoctorFinishForStoppedUnit(
         }
       } catch (error) {
         finishError = error;
+      } finally {
+        competingMaintenance?.release();
       }
       const unauthorizedRestarts = restart.mock.calls.length - restartsBefore;
       if (custody.startsWith("copied")) {
@@ -570,10 +601,20 @@ async function runDoctorFinishForStoppedUnit(
           savedRun?.steps.filter((step) => step.step === "finalize:repair-takeover").length ?? 0,
         runStatus: savedRun?.status,
         unauthorizedRestarts,
+        refusedMaintenance,
       };
     },
   );
 }
+
+it("restores its stopped Gateway before queued CLI maintenance can acquire ownership", async () => {
+  expect(await runDoctorFinishForStoppedUnit("restoration-maintenance")).toMatchObject({
+    finishError: undefined,
+    restartCalls: 1,
+    refusedMaintenance: true,
+    logs: expect.arrayContaining(["Gateway restarted and verified after Doctor repair."]),
+  });
+});
 
 it.each(["copied", "copied-release", "consumed", "released-during-inspection"] as const)(
   "refuses %s maintenance custody without another service mutation",
@@ -622,7 +663,7 @@ it.each(process.platform === "win32" ? ["0600"] : ["0600", "0444"])(
     await expect(admission).rejects.toThrow("newer schema version");
     await expect(admission).rejects.toThrow(/restore.*backup/);
     await expect(admission).rejects.not.toThrow(/doctor --fix/);
-    expect(snapshotSourceFamily(databasePath)).toEqual(before);
+    expectFamilyEqual(snapshotSourceFamily(databasePath), before);
     expect(fs.statSync(databasePath).mode).toBe(beforeMode);
     expect(mocks.stops).toBe(0);
   },

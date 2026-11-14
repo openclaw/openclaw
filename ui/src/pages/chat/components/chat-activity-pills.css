@@ -33,12 +33,10 @@
   width: max-content;
   min-width: 100%;
   padding: 4px 2px;
-  box-sizing: border-box;
 }
 .chat-activity-pills .activity-pill {
   position: relative;
   isolation: isolate;
-  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -154,22 +152,20 @@
   color: var(--danger);
 }
 .chat-activity-pills .activity-pill__spinner {
-  box-sizing: border-box;
   display: inline-block;
   width: 14px;
   height: 14px;
   flex: none;
   color: var(--accent);
-  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-top-color: currentColor;
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: 999px;
   animation: btn-spinner-spin 1.6s linear infinite;
 }
 .chat-activity-pills .activity-pill__badge .activity-pill__spinner {
   width: 9px;
   height: 9px;
-  border-color: color-mix(in srgb, currentColor 45%, transparent);
-  border-top-color: currentColor;
+  mask: var(--spinner-mask-small);
   animation-duration: 1.5s;
 }
 .chat-activity-pills [data-family="progress"] {
@@ -221,13 +217,12 @@
 }
 .chat-activity-pills .activity-pill__avatar {
   position: relative;
-  box-sizing: border-box;
   display: grid;
   place-items: center;
   width: 23px;
   height: 23px;
   border: 2px solid var(--activity-surface);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--avatar-bg);
   color: var(--avatar-ink);
   animation: activity-pill-wave 10.6s cubic-bezier(0.77, 0, 0.175, 1) infinite;
@@ -247,24 +242,6 @@
 }
 .chat-activity-pills .activity-pill__avatar > svg {
   stroke-width: 1.55;
-}
-.chat-activity-pills .activity-pill__label--shine {
-  -webkit-text-fill-color: color-mix(in srgb, currentColor 65%, transparent);
-}
-.chat-activity-pills .activity-pill__shimmer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: linear-gradient(90deg, transparent 0%, currentColor 50%, transparent 100%);
-  background-size: 200% 100%;
-  background-repeat: no-repeat;
-  background-position: 200% center;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: activity-pill-shimmer 2s linear infinite;
-}
-.chat-activity-pills .activity-pill--flow .activity-pill__label--shine {
-  -webkit-text-fill-color: color-mix(in srgb, currentColor 80%, transparent);
 }
 .chat-activity-pills .activity-pill--flow .activity-pill__avatar {
   border-color: var(--avatar-bg);
@@ -322,30 +299,12 @@
   pointer-events: none;
 }
 .chat-activity-pills:is([data-document-hidden], [data-presented="false"])
-  :is(
-    .activity-pill__shimmer,
-    .activity-pill__avatar,
-    .activity-pill__spinner,
-    .activity-pill__atlas
-  ),
+  :is(.text-shimmer, .activity-pill__avatar, .activity-pill__spinner, .activity-pill__atlas),
 .chat-activity-pills
   [data-out-of-view]
-  :is(
-    .activity-pill__shimmer,
-    .activity-pill__avatar,
-    .activity-pill__spinner,
-    .activity-pill__atlas
-  ) {
+  :is(.text-shimmer, .activity-pill__avatar, .activity-pill__spinner, .activity-pill__atlas) {
   animation-play-state: paused;
   will-change: auto;
-}
-@keyframes activity-pill-shimmer {
-  from {
-    background-position: 200% center;
-  }
-  to {
-    background-position: -200% center;
-  }
 }
 @keyframes activity-pill-wave {
   0% {
@@ -369,18 +328,12 @@
     animation: none;
     transform: none;
   }
-  .chat-activity-pills .activity-pill__label--shine,
-  .chat-activity-pills .activity-pill--flow .activity-pill__label--shine {
-    -webkit-text-fill-color: currentColor;
-  }
-  .chat-activity-pills .activity-pill__shimmer,
   .chat-activity-pills .activity-pill__flow {
     display: none;
     animation: none;
   }
   .chat-activity-pills .activity-pill__spinner {
     animation: none;
-    border-color: currentColor;
   }
 }
 :root[data-theme-mode="light"] .chat-activity-pills .activity-pill {

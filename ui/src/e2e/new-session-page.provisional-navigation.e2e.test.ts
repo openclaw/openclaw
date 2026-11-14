@@ -69,6 +69,7 @@ suite.define(() => {
       expect(observed.text).not.toContain("private pending draft");
       await display.evaluate((value) => value.stop());
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
       const settings = await page.evaluate(() =>
         Object.keys(localStorage)
           .filter((key) => key.startsWith("openclaw.control.settings.v1"))
@@ -85,6 +86,7 @@ suite.define(() => {
       });
       expect(page.url()).toBe(targetUrl);
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
     } finally {
       releaseRoute();
       await browser.close();

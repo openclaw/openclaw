@@ -16,6 +16,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,
@@ -27,7 +28,6 @@ import type { WebChannelStatus } from "./auto-reply/types.js";
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
-import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
 import { resolveWhatsAppGroupSessionKey } from "./group-session-key.js";
 import {
   isWhatsAppGroupJid,
@@ -102,7 +102,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         resolveGroupPolicy: (account) => account.groupPolicy,
       }),
       mentions: {
-        stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
+        stripRegexes: ({ ctx }) => {
+          const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/i, "");
+          if (!selfE164) {
+            return [];
+          }
+          const escaped = escapeRegExp(selfE164);
+          return [new RegExp(escaped, "g"), new RegExp(`@${escaped}`, "g")];
+        },
       },
       commands: whatsappCommandPolicy,
       bindings: {

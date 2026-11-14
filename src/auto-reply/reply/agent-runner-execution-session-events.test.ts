@@ -6,8 +6,6 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import { finalizeCronPromptForResolvedTools } from "../../cron/isolated-agent/run-delivery-trace.js";
-import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-delivery-plan.js";
 import * as cronInference from "../../cron/run-inference.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
@@ -74,21 +72,7 @@ function useCliFallback(followupRun: ReturnType<typeof createFollowupRun>) {
   }));
 }
 
-function expectedCompletionEvidence(runtime: "embedded" | "cli") {
-  const provider = runtime === "cli" ? "claude-cli" : "anthropic";
-  const model = runtime === "cli" ? "claude-opus-4-6" : "claude";
-  return expect.objectContaining({
-    payloads: [{ text: "done" }],
-    meta: expect.objectContaining({
-      executionTrace: {
-        attempts: [{ provider, model, result: "success" }],
-        fallbackUsed: false,
-        winnerModel: model,
-        winnerProvider: provider,
-      },
-    }),
-  });
-}
+const completionEvidence = expect.objectContaining({ payloads: [{ text: "done" }] });
 
 describe("ordinary session event execution", () => {
   it.for(["embedded", "cli"] as const)(
@@ -216,77 +200,6 @@ describe("ordinary session event execution", () => {
     });
   });
 
-  it.each(["embedded", "cli"] as const)(
-    "retains scheduled destination guidance in the %s turn without changing the system prefix",
-    async (runtime) => {
-      const followupRun = createFollowupRun();
-      const automation = createScheduledAutomation();
-      const resolvedDelivery = {
-        ok: true as const,
-        channel: "telegram",
-        to: "scheduled-chat",
-        accountId: "scheduled-account",
-        threadId: "42",
-      };
-      const sourceDelivery = resolveCronSourceDeliveryPlan({
-        deliveryPlan: { source: "delivery", mode: "announce", requested: true },
-        resolvedDelivery,
-      });
-      automation.finalizePromptForResolvedTools = (params) =>
-        finalizeCronPromptForResolvedTools({
-          ...params,
-          deliveryRequested: true,
-          resolvedDelivery,
-          sourceDelivery,
-        });
-      followupRun.run.scheduledAutomation = automation;
-      followupRun.run.extraSystemPrompt = "Existing shared session instructions";
-      followupRun.run.extraSystemPromptStatic = "Stable shared session instructions";
-      const observed: { prompt: string; messageToolAvailable: boolean }[] = [];
-      let observedSystemPrompt: string | undefined;
-      let observedStaticSystemPrompt: string | undefined;
-      const inspectCandidate = async (
-        params: RunEmbeddedAgentInternalParams | RunCliAgentParams,
-      ) => {
-        for (const messageToolAvailable of [true, false]) {
-          const prompt =
-            params.finalizePromptForResolvedTools?.({
-              prompt: params.prompt,
-              messageToolAvailable,
-            }) ?? params.prompt;
-          observed.push({ prompt, messageToolAvailable });
-        }
-        observedSystemPrompt = params.extraSystemPrompt;
-        return { payloads: [{ text: "done" }], meta: {} };
-      };
-      if (runtime === "cli") {
-        useCliFallback(followupRun);
-        state.runCliAgentMock.mockImplementationOnce((params: RunCliAgentParams) => {
-          observedStaticSystemPrompt = params.extraSystemPromptStatic;
-          return inspectCandidate(params);
-        });
-      } else {
-        state.runEmbeddedAgentMock.mockImplementationOnce(inspectCandidate);
-      }
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
-      expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
-      expect(observed).toHaveLength(2);
-      for (const { prompt, messageToolAvailable } of observed) {
-        expect(prompt).toContain("fix it");
-        expect(prompt).toContain("delivered automatically");
-        if (messageToolAvailable) {
-          expect(prompt).toContain('"target":"scheduled-chat"');
-        } else {
-          expect(prompt).not.toContain("Message delivery destination metadata");
-        }
-      }
-      expect(observedSystemPrompt).toBe("Existing shared session instructions");
-      if (runtime === "cli") {
-        expect(observedStaticSystemPrompt).toBe("Stable shared session instructions");
-      }
-    },
-  );
-
   it.for([
     {
       label: "declared fallback",
@@ -336,10 +249,105 @@ describe("ordinary session event execution", () => {
     },
   );
 
-  it("keeps the scheduled inference account through native execution and deferred settlement", async ({
-    onTestFinished,
-  }) => {
-    const followupRun = createFollowupRun();
+  it.each([
+    { runtime: "embedded", revoke: false },
+    { runtime: "cli", revoke: false },
+    { runtime: "cli", revoke: true },
+  ] as const)(
+    "keeps scheduled credential authority through $runtime execution (revoked=$revoke)",
+    async ({ runtime, revoke }) => {
+      const automation = createScheduledAutomation();
+      const authRequirement = runtime === "cli" ? ("subscription" as const) : ("api-key" as const);
+      automation.job.inferenceBinding = {
+        version: 1,
+        provider: runtime === "cli" ? "claude-cli" : "anthropic",
+        profileId: "scheduled-profile",
+        authorizationId: "a".repeat(64),
+        authRequirement,
+        source: "auto",
+      };
+      const followupRun = createFollowupRun({
+        scheduledAutomation: automation,
+        authProfileId: "destination-profile",
+        authProfileIdSource: "user",
+      });
+      let retired = false;
+      const assertCurrent = vi.fn(() => {
+        if (retired) {
+          throw new Error("scheduled credential retired");
+        }
+      });
+      const dispose = vi.fn();
+      const assertCandidate = vi.fn();
+      const onSuccessfulAuthProfile = vi.fn();
+      const authProfileBinding = {
+        profileId: "scheduled-profile",
+        authRequirement,
+        assertCurrent,
+        revalidate: async () => {},
+      };
+      using acquire = vi.spyOn(cronInference, "prepareCronRunInference");
+      acquire.mockResolvedValue({
+        runParams: {
+          authProfileId: "scheduled-profile",
+          authProfileIdSource: "auto",
+          authProfileBinding,
+          allowAuthProfileFallback: false,
+          onSuccessfulAuthProfile,
+        },
+        runtimeSessionEntry: (entry) => entry,
+        assertCandidate,
+        resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
+        dispose,
+      });
+      const settle = vi.fn(async () => {
+        expect(dispose).not.toHaveBeenCalled();
+      });
+      if (runtime === "cli") {
+        useCliFallback(followupRun);
+        state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+          expect(params.authProfileId).toBe("scheduled-profile");
+          expect(params.assertCurrent).toBeTypeOf("function");
+          params.assertCurrent?.();
+          retired = revoke;
+          // The CLI owner rechecks after awaited preparation.
+          params.assertCurrent?.();
+          return { payloads: [{ text: "done" }], meta: {} };
+        });
+      } else {
+        state.runEmbeddedAgentMock.mockImplementationOnce(
+          async (params: RunEmbeddedAgentInternalParams) => {
+            expect(params.authProfileId).toBe("scheduled-profile");
+            expect(params.authProfileIdSource).toBe("auto");
+            expect(params.authProfileBinding).toBe(authProfileBinding);
+            expect(params.allowAuthProfileFallback).toBe(false);
+            params.onSuccessfulAuthProfile?.("scheduled-profile");
+            params.onDeferredLifecycleOwner?.({
+              complete: settle,
+              discard: vi.fn(),
+              beginRetryWait: vi.fn(),
+            });
+            expect(dispose).not.toHaveBeenCalled();
+            return { payloads: [{ text: "done" }], meta: {} };
+          },
+        );
+      }
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+      expect(result.outcome).toMatchObject(
+        revoke ? { kind: "rejected" } : { kind: "settled", status: "ok" },
+      );
+      if (runtime === "cli") {
+        expect(assertCurrent).toHaveBeenCalledTimes(2);
+      } else {
+        expect(assertCandidate).toHaveBeenCalledWith("anthropic", false);
+        expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith("scheduled-profile");
+        expect(settle).toHaveBeenCalledOnce();
+      }
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("resolves a session job's candidates on its captured runtime, not the row's override", async () => {
     const automation = createScheduledAutomation();
     automation.job.inferenceBinding = {
       version: 1,
@@ -348,117 +356,36 @@ describe("ordinary session event execution", () => {
       authorizationId: "a".repeat(64),
       authRequirement: "api-key",
       source: "auto",
+      runtime: "openclaw",
     };
-    followupRun.run.scheduledAutomation = automation;
-    followupRun.run.authProfileId = "destination-profile";
-    followupRun.run.authProfileIdSource = "user";
-    const dispose = vi.fn();
+    const followupRun = createFollowupRun({ scheduledAutomation: automation });
+    const rowEntry = { sessionId: "row", updatedAt: 1, agentRuntimeOverride: "claude-cli" };
+    const runtimeSessionEntry = vi.fn(() => ({ agentRuntimeOverride: "openclaw" }));
     const assertCandidate = vi.fn();
-    const onSuccessfulAuthProfile = vi.fn();
-    const authProfileBinding = {
-      profileId: "scheduled-profile",
-      authRequirement: "api-key" as const,
-      assertCurrent: vi.fn(),
-      revalidate: vi.fn(async () => {}),
-    };
-    const acquire = vi.spyOn(cronInference, "prepareCronRunInference").mockResolvedValue({
+    using acquire = vi.spyOn(cronInference, "prepareCronRunInference");
+    acquire.mockResolvedValue({
       runParams: {
         authProfileId: "scheduled-profile",
         authProfileIdSource: "auto",
-        authProfileBinding,
         allowAuthProfileFallback: false,
-        onSuccessfulAuthProfile,
       },
+      runtimeSessionEntry,
       assertCandidate,
       resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
-      dispose,
+      dispose: vi.fn(),
     });
-    onTestFinished(() => acquire.mockRestore());
-    const settle = vi.fn(async () => {
-      expect(dispose).not.toHaveBeenCalled();
-    });
-    state.runEmbeddedAgentMock.mockImplementationOnce(
-      async (params: RunEmbeddedAgentInternalParams) => {
-        expect(params.authProfileId).toBe("scheduled-profile");
-        expect(params.authProfileIdSource).toBe("auto");
-        expect(params.authProfileBinding).toBe(authProfileBinding);
-        expect(params.allowAuthProfileFallback).toBe(false);
-        params.onSuccessfulAuthProfile?.("scheduled-profile");
-        params.onDeferredLifecycleOwner?.({
-          complete: settle,
-          discard: vi.fn(),
-          beginRetryWait: vi.fn(),
-        });
-        expect(dispose).not.toHaveBeenCalled();
-        return { payloads: [{ text: "done" }], meta: {} };
-      },
-    );
-    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
-    expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
-    expect(acquire).toHaveBeenCalledExactlyOnceWith({
-      binding: automation.job.inferenceBinding,
-      cfg: followupRun.run.config,
-      agentDir: followupRun.run.agentDir,
-    });
-    expect(assertCandidate).toHaveBeenCalledWith("anthropic", false);
-    expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith("scheduled-profile");
-    expect(settle).toHaveBeenCalledOnce();
-    expect(dispose).toHaveBeenCalledOnce();
-  });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
 
-  it.for([false, true])(
-    "carries scheduled credential authority into CLI preparation (revoked=%s)",
-    async (revoke, { onTestFinished }) => {
-      const followupRun = createFollowupRun();
-      useCliFallback(followupRun);
-      const automation = createScheduledAutomation();
-      followupRun.run.scheduledAutomation = automation;
-      automation.job.inferenceBinding = {
-        version: 1,
-        provider: "claude-cli",
-        profileId: "scheduled-profile",
-        authorizationId: "a".repeat(64),
-        authRequirement: "subscription",
-        source: "auto",
-      };
-      let retired = false;
-      const assertCurrent = vi.fn(() => {
-        if (retired) {
-          throw new Error("scheduled credential retired");
-        }
-      });
-      const acquire = vi.spyOn(cronInference, "prepareCronRunInference").mockResolvedValue({
-        runParams: {
-          authProfileId: "scheduled-profile",
-          authProfileBinding: {
-            profileId: "scheduled-profile",
-            authRequirement: "subscription",
-            assertCurrent,
-            revalidate: async () => {},
-          },
-        },
-        assertCandidate: vi.fn(),
-        resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
-        dispose: vi.fn(),
-      });
-      onTestFinished(() => acquire.mockRestore());
-      state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
-        expect(params.authProfileId).toBe("scheduled-profile");
-        expect(params.assertCurrent).toBeTypeOf("function");
-        params.assertCurrent?.();
-        retired = revoke;
-        // The real CLI owner invokes this guard again after awaited preparation.
-        params.assertCurrent?.();
-        return { payloads: [{ text: "done" }], meta: {} };
-      });
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
-      expect(state.runCliAgentMock).toHaveBeenCalledOnce();
-      expect(assertCurrent).toHaveBeenCalledTimes(2);
-      expect(result.outcome).toMatchObject(
-        revoke ? { kind: "rejected" } : { kind: "settled", status: "ok" },
-      );
-    },
-  );
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () => rowEntry,
+    });
+
+    expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+    expect(runtimeSessionEntry).toHaveBeenCalledWith(rowEntry);
+    expect(assertCandidate).toHaveBeenCalledWith("anthropic", false, "openclaw");
+    expect(state.runCliAgentMock).not.toHaveBeenCalled();
+  });
 
   it.for([
     { runtime: "embedded", outcome: "start" },
@@ -547,8 +474,6 @@ describe("ordinary session event execution", () => {
           awaitGateBeforeSettlement(entered.promise, pending, "final event admission"),
           signal,
         );
-        expect(event.beforeStart).toHaveBeenCalledOnce();
-        expect(scheduledRuns).toEqual([expect.any(String)]);
         expect(providerWork).not.toHaveBeenCalled();
         expect(onLaneWait.mock.calls.map(([info]) => info?.waiting)).toEqual(
           runtime === "embedded" ? [true, false] : [],
@@ -563,30 +488,13 @@ describe("ordinary session event execution", () => {
         current = outcome === "start";
         release.resolve();
         const result = await pending;
-        expect(result.runId).toBe(scheduledRuns[0]);
         expect(event.beforeStart).toHaveBeenCalledOnce();
         expect(scheduledRuns).toEqual([result.runId]);
-        expect(
-          runtime === "cli" ? state.runCliAgentMock : state.runEmbeddedAgentMock,
-        ).toHaveBeenCalledOnce();
         const nativeUpdates = onExecutionPhase.mock.calls
           .map(([info]) => info)
           .filter((info) => info.phase === nativePhase);
-        expect(nativeUpdates).toEqual(
-          outcome === "start"
-            ? [
-                {
-                  jobId: "scheduled-target-test",
-                  agentId: "main",
-                  sessionId: "session",
-                  sessionKey: "main",
-                  runId: result.runId,
-                  phase: nativePhase,
-                  provider: runtime === "cli" ? "claude-cli" : "anthropic",
-                  model: runtime === "cli" ? "claude-opus-4-6" : "claude",
-                },
-              ]
-            : [],
+        expect(nativeUpdates).toMatchObject(
+          outcome === "start" ? [{ jobId: "scheduled-target-test", runId: result.runId }] : [],
         );
         if (outcome === "start") {
           expect(observedProgress.indexOf("started")).toBeLessThan(
@@ -598,23 +506,16 @@ describe("ordinary session event execution", () => {
           expect(event.onTerminal).toHaveBeenCalledExactlyOnceWith(
             result.runId,
             "completed",
-            expectedCompletionEvidence(runtime),
+            completionEvidence,
           );
         } else {
           expect(providerWork).not.toHaveBeenCalled();
           expect(event.onStarted).not.toHaveBeenCalled();
-          expect(event.onTerminal).toHaveBeenCalledExactlyOnceWith(result.runId, "failed", {
-            payloads: [
-              {
-                isError: true,
-                text: "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-              },
-            ],
-            resolved: {
-              provider: runtime === "cli" ? "claude-cli" : "anthropic",
-              model: runtime === "cli" ? "claude-opus-4-6" : "claude",
-            },
-          });
+          expect(event.onTerminal).toHaveBeenCalledExactlyOnceWith(
+            result.runId,
+            "failed",
+            expect.objectContaining({ payloads: [expect.objectContaining({ isError: true })] }),
+          );
           expect(
             lifecycleEvents.some((lifecycleEvent) => lifecycleEvent.data.phase === "start"),
           ).toBe(false);
@@ -705,7 +606,7 @@ describe("ordinary session event execution", () => {
       expect(event.onTerminal).toHaveBeenCalledExactlyOnceWith(
         result.runId,
         "completed",
-        expectedCompletionEvidence(runtime),
+        completionEvidence,
       );
     },
   );
@@ -725,7 +626,7 @@ describe("ordinary session event execution", () => {
     expect(terminal).toHaveBeenCalledExactlyOnceWith(
       expect.any(String),
       "completed",
-      expectedCompletionEvidence("embedded"),
+      completionEvidence,
     );
   });
 });

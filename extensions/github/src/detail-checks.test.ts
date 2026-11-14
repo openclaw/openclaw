@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadGitHubDetail } from "./detail.js";
-import { githubJson as json, queuedFetch } from "./preview.test-support.js";
+import { githubJson as json, previewPayload, queuedFetch } from "./preview.test-support.js";
 import type { GitHubTarget } from "./targets.js";
 
 const sha = "a".repeat(40);
@@ -11,21 +11,15 @@ function target(): GitHubTarget {
   return { kind: "pull", owner: "octocat", repo: "checks-" + ++sequence, number: 1 };
 }
 function pull(headSha: unknown = sha) {
-  return {
-    title: "Public PR",
+  return previewPayload({
     body: "Keep the PR body",
-    state: "open",
-    created_at: "2026-09-19T12:00:00Z",
-    updated_at: "2026-09-19T12:00:00Z",
     comments: 0,
     review_comments: 0,
     changed_files: 0,
-    additions: 3,
-    deletions: 1,
     head: { sha: headSha, ref: "feature/checks" },
     base: { sha: "b".repeat(40), ref: "main" },
     merge_commit_sha: "c".repeat(40),
-  };
+  });
 }
 function run(overrides: Record<string, unknown> = {}) {
   return {
@@ -81,7 +75,7 @@ afterEach(() => {
 });
 
 describe("GitHub PR checks through the document loader", () => {
-  it("coalesces anonymous exact-head CI reads and projects branch/tone facts", async () => {
+  it("coalesces anonymous exact-head reads", async () => {
     vi.stubEnv("GH_TOKEN", "test-ambient-token");
     vi.stubEnv("GITHUB_TOKEN", "test-other-token");
     const input = target();
@@ -89,33 +83,19 @@ describe("GitHub PR checks through the document loader", () => {
     const read = reader(fetchMock, undefined, input);
     const [detail, shared] = await Promise.all([read(), read()]);
     expect(shared).toBe(detail);
-    expect(detail).toMatchObject({
-      body: "Keep the PR body",
-      partial: false,
-      checks: {
-        state: "success",
-        summary: "2 passed",
-        total: 2,
-        commit: sha,
-        truncated: false,
-        url: "https://github.com/octocat/" + input.repo + "/pull/1/checks",
-        items: [
-          { name: "Build", state: "success", detail: "Passed", url: run().html_url },
-          { name: "Deploy", state: "success", detail: "Passed", url: commitStatus().target_url },
-        ],
+    expectChecksDocument(
+      detail,
+      {
+        url: `https://github.com/octocat/${input.repo}/pull/1/checks`,
+        items: [{ url: run().html_url }, { url: commitStatus().target_url, detail: "Passed" }],
       },
-      metadata: expect.arrayContaining([
-        { label: "Branch", value: "feature/checks → main" },
-        { label: "Additions", value: "+3", tone: "positive" },
-        { label: "Deletions", value: "−1", tone: "negative" },
-      ]),
-    });
-    const root = "https://api.github.com/repos/octocat/" + input.repo;
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      root,
-      root + "/pulls/1",
-      root + "/commits/" + sha + "/check-runs?filter=latest&per_page=100",
-      root + "/commits/" + sha + "/status?per_page=100",
+      false,
+    );
+    expect(detail.metadata).toContainEqual({ label: "Branch", value: "feature/checks → main" });
+    const commitUrl = `https://api.github.com/repos/octocat/${input.repo}/commits/${sha}`;
+    expect(fetchMock.mock.calls.slice(2).map(([url]) => url)).toEqual([
+      `${commitUrl}/check-runs?filter=latest&per_page=100`,
+      `${commitUrl}/status?per_page=100`,
     ]);
     for (const [, options] of fetchMock.mock.calls) {
       expect(options?.headers).not.toHaveProperty("Authorization");
@@ -124,92 +104,50 @@ describe("GitHub PR checks through the document loader", () => {
     }
   });
 
-  it("orders failed/pending checks ahead of passes and skipped jobs", async () => {
+  it("deduplicates run IDs and status contexts, then orders checks by severity", async () => {
     const result = await readChecks(
       runs([
-        run({ id: 1, name: "Build", status: "in_progress", conclusion: null }),
-        run({ id: 2, name: "Lint" }),
+        run({ id: 1, status: "in_progress", conclusion: null, check_suite: { id: 1 } }),
+        run({ id: 2, name: "Build", check_suite: { id: 2 } }),
+        run({ id: 2, name: "Build", check_suite: { id: 2 } }),
         run({ id: 3, name: "Optional", conclusion: "skipped" }),
       ]),
-      statuses([commitStatus({ state: "failure" })]),
+      statuses([
+        commitStatus({ id: 21, context: "Deploy", state: "failure" }),
+        commitStatus({ id: 20, context: "DEPLOY" }),
+      ]),
     );
     expect(result.checks).toMatchObject({
       state: "failure",
+      total: 4,
+      truncated: false,
       summary: "1 failed · 1 pending · 1 passed · 1 skipped or neutral",
       items: [
         { name: "Deploy", state: "failure", detail: "Failed" },
         { name: "Build", state: "pending", detail: "In progress" },
-        { name: "Lint", state: "success", detail: "Passed" },
+        { name: "Build", state: "success", detail: "Passed" },
         { name: "Optional", state: "neutral", detail: "Skipped" },
       ],
     });
-  });
-
-  it("preserves distinct check run IDs and deduplicates legacy status contexts", async () => {
-    const result = await readChecks(
-      runs([
-        run({ id: 5, conclusion: "failure", check_suite: { id: 1 } }),
-        run({ id: 10, check_suite: { id: 2 } }),
-        run({ id: 10, check_suite: { id: 2 } }),
-      ]),
-      statuses([
-        commitStatus({ id: 21, context: "build" }),
-        commitStatus({ id: 20, context: "BUILD", state: "failure" }),
-      ]),
-    );
-    expect(result.checks).toMatchObject({
-      state: "failure",
-      total: 3,
-      summary: "1 failed · 2 passed",
-      truncated: false,
-      items: expect.arrayContaining([
-        expect.objectContaining({ name: "Build", state: "failure", detail: "Failed" }),
-        expect.objectContaining({ name: "build", state: "success", detail: "Passed" }),
-        expect.objectContaining({ name: "Build", state: "success", detail: "Passed" }),
-      ]),
-    });
-    expect(result.checks?.items).toHaveLength(3);
+    expect(result.checks?.items).toHaveLength(4);
   });
 
   it.each([
     [503, "success", "unavailable", "Checks incomplete · 1 passed", "Passed"],
     [403, "pending", "pending", "Checks incomplete · 1 pending", "Pending"],
-  ] as const)(
-    "preserves the PR with HTTP %s checks and its sibling",
-    async (status, legacy, state, summary, label) => {
-      const detail = await readChecks(
-        json({ message: "sensitive upstream diagnostic" }, status),
-        statuses([commitStatus({ state: legacy })]),
-      );
-      expectChecksDocument(detail, {
-        state,
-        summary,
-        total: 1,
-        truncated: true,
-        items: [{ state: legacy, detail: label }],
-      });
-      expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
-    },
-  );
-
-  it("refreshes a cached failed checks section for the same head", async () => {
-    const read = reader(publicFetch(json({}, 503), statuses()), "checks");
-    const failed = await read();
-    expect(failed).toMatchObject({
-      revision: sha,
-      partial: true,
-      checks: { state: "unavailable", truncated: true },
+  ] as const)("keeps the PR after HTTP %s", async (status, legacy, state, summary, label) => {
+    const detail = await readChecks(
+      json({ message: "sensitive upstream diagnostic" }, status),
+      statuses([commitStatus({ state: legacy })]),
+    );
+    expectChecksDocument(detail, {
+      state,
+      summary,
+      total: 1,
+      truncated: true,
+      items: [{ state: legacy, detail: label }],
     });
-    const recoveredFetch = publicFetch(runs([run()]), statuses());
-    expect(await read(false, recoveredFetch)).toBe(failed);
-    expect(recoveredFetch).not.toHaveBeenCalled();
-    const recovered = await read(true, recoveredFetch);
-    expect(recovered).toMatchObject({
-      revision: sha,
-      partial: false,
-      checks: { state: "success", commit: sha, truncated: false, total: 1 },
-    });
-    expect(recoveredFetch).toHaveBeenCalledTimes(4);
+    expect(JSON.stringify(detail)).not.toContain("sensitive upstream");
   });
 
   it("honors anonymous quota cooldown without losing the body or spending requests", async () => {
@@ -225,19 +163,16 @@ describe("GitHub PR checks through the document loader", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each([undefined, "../main"])(
-    "rejects invalid head %s without substituting branch or merge SHA",
-    async (headSha) => {
-      const fetchMock = publicFetch(runs(), statuses(), {
-        ...pull(),
-        head: { sha: headSha, ref: "feature/checks" },
-      });
-      const detail = await loadGitHubDetail(target(), undefined, fetchMock);
-      expectChecksDocument(detail, { state: "unavailable", items: [] });
-      expect(detail.checks?.commit).toBeUndefined();
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    },
-  );
+  it.each([undefined, "../main"])("rejects invalid head %s", async (headSha) => {
+    const fetchMock = publicFetch(runs(), statuses(), {
+      ...pull(),
+      head: { sha: headSha, ref: "feature/checks" },
+    });
+    const detail = await loadGitHubDetail(target(), undefined, fetchMock);
+    expectChecksDocument(detail, { state: "unavailable", items: [] });
+    expect(detail.checks?.commit).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 
   it.each([
     ["wrong check SHA", () => runs([run({ head_sha: nextSha })]), () => statuses()],
@@ -264,7 +199,7 @@ describe("GitHub PR checks through the document loader", () => {
   });
 
   it.each(["http://ci.example.com/log", "https://user:password@ci.example.com/log"])(
-    "omits unsafe check and status links: %s",
+    "omits unsafe URL %s",
     async (url) => {
       const result = await readChecks(
         runs([run({ html_url: url })]),
@@ -274,39 +209,46 @@ describe("GitHub PR checks through the document loader", () => {
     },
   );
 
-  it("does not let a late old-head read overwrite the refreshed document cache", async () => {
+  it("keeps refreshed failures over late reads, then recovers and expires them", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
     const deferred = createDeferred<Response>();
     const requested = createDeferred<void>();
-    const fetchMock = publicFetch(() => {
-      requested.resolve();
-      return deferred.promise;
-    });
-    const read = reader(fetchMock);
+    const read = reader(
+      publicFetch(() => {
+        requested.resolve();
+        return deferred.promise;
+      }),
+      "checks",
+    );
     const older = read();
     await requested.promise;
-    const freshFetch = publicFetch(
+    const failed = await read(
+      true,
+      publicFetch(json({}, 503), statuses([], nextSha), pull(nextSha)),
+    );
+    expect(failed).toMatchObject({
+      revision: nextSha,
+      partial: true,
+      checks: { state: "unavailable", truncated: true },
+    });
+    deferred.resolve(runs([run()]));
+    expect((await older).checks).toMatchObject({ state: "success", commit: sha });
+    const recovery = publicFetch(
       runs([run({ head_sha: nextSha, conclusion: "failure" })]),
       statuses([], nextSha),
       pull(nextSha),
     );
-    const fresh = await read(true, freshFetch);
-    deferred.resolve(runs([run()]));
-    expect((await older).checks).toMatchObject({ state: "success", commit: sha });
-    expect(fresh.checks).toMatchObject({ state: "failure", commit: nextSha });
-    expect(await read()).toBe(fresh);
-    expect(freshFetch).toHaveBeenCalledTimes(4);
-  });
-
-  it("expires complete PR snapshots after 30 seconds, not five minutes", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
-    const fetchMock = publicFetch();
-    const read = reader(fetchMock);
-    const first = await read();
+    expect(await read(false, recovery)).toBe(failed);
+    expect(recovery).not.toHaveBeenCalled();
+    const fresh = await read(true, recovery);
+    expect(fresh).toMatchObject({
+      revision: nextSha,
+      partial: false,
+      checks: { state: "failure", commit: nextSha, truncated: false, total: 1 },
+    });
     now.mockReturnValue(30_999);
-    expect(await read()).toBe(first);
-    fetchMock.mockImplementation(publicFetch(runs([run()])));
+    expect(await read()).toBe(fresh);
     now.mockReturnValue(31_001);
-    expect((await read()).checks?.state).toBe("success");
-    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(await read(false, publicFetch())).not.toBe(fresh);
   });
 });

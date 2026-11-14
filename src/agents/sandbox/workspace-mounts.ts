@@ -102,11 +102,12 @@ function resolveReadOnlyWorkspaceSkillMountCandidates(params: WorkspaceSkillMoun
   return mounts;
 }
 
-/** Materialize protected sources before selecting the first sandbox's mounts. */
+/** Materialize protected sources and report whether preparation created a directory. */
 export async function ensureReadOnlyWorkspaceSkillMountSources(
   params: WorkspaceSkillMountParams,
   assertCurrent?: () => void,
-): Promise<void> {
+): Promise<boolean> {
+  let created = false;
   for (const mount of resolveReadOnlyWorkspaceSkillMountCandidates(params)) {
     const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir));
     const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.hostPath));
@@ -148,7 +149,9 @@ export async function ensureReadOnlyWorkspaceSkillMountSources(
     });
     await directory.mkdir(path.relative(ancestor, canonicalSource));
     assertCurrent?.();
+    created = true;
   }
+  return created;
 }
 
 export function resolveReadOnlyWorkspaceSkillMounts(
@@ -278,6 +281,72 @@ export function resolveSandboxMountSelection(
     skippedBinds: (params.binds ?? []).filter((bind) => !allowed.includes(bind)),
     readOnlyWorkspaceSkillMounts,
   };
+}
+
+/** Writable self-bind keeping one directory between a managed root and a protected mount in place. */
+export type ProtectedMountAncestor = SandboxSelectedMount & {
+  /** Local root of the managed mount that owns this directory. */
+  ownerHostPath: string;
+  /** Path of the directory relative to ownerHostPath. */
+  relativePath: string;
+};
+
+/**
+ * Linux refuses to rename a mountpoint but not one of its ancestors. Binding each
+ * writable directory between a managed root and a nested protected mount onto
+ * itself makes those ancestors mountpoints too, so a sandboxed process cannot
+ * move the protected mount aside and recreate its pathname as ordinary files.
+ */
+export function resolveProtectedMountAncestors(
+  mounts: readonly SandboxSelectedMount[],
+): ProtectedMountAncestor[] {
+  const byTarget = new Map(
+    mounts.map((mount) => [normalizeMountContainerPath(mount.containerPath), mount] as const),
+  );
+  const ancestors = new Map<string, ProtectedMountAncestor>();
+  for (const mount of mounts) {
+    if (mount.source !== "protectedSkill") {
+      continue;
+    }
+    const chain: string[] = [];
+    let owner: SandboxSelectedMount | undefined;
+    let ownerTarget = "/";
+    for (
+      let current = path.posix.dirname(normalizeMountContainerPath(mount.containerPath));
+      ;
+      current = path.posix.dirname(current)
+    ) {
+      owner = byTarget.get(current);
+      if (owner || current === "/") {
+        ownerTarget = current;
+        break;
+      }
+      chain.push(current);
+    }
+    // Only managed writable roots have Gateway-local sources we can pin; read-only
+    // roots already refuse the rename and custom binds keep their daemon contract.
+    if (!owner || owner.readOnly || (owner.source !== "workspace" && owner.source !== "agent")) {
+      continue;
+    }
+    for (const ancestor of chain) {
+      if (ancestors.has(ancestor)) {
+        continue;
+      }
+      const relativePath = path.posix.relative(ownerTarget, ancestor);
+      ancestors.set(ancestor, {
+        hostPath: path.join(owner.hostPath, ...relativePath.split("/")),
+        containerPath: ancestor,
+        readOnly: false,
+        source: owner.source,
+        ownerHostPath: owner.hostPath,
+        relativePath,
+      });
+    }
+  }
+  // Parents first so engine creation order matches the directory hierarchy.
+  return [...ancestors.values()].toSorted(
+    (a, b) => a.containerPath.length - b.containerPath.length,
+  );
 }
 
 /** Docker keeps the final ro/rw flag; Podman rejects conflicting flags before creation. */

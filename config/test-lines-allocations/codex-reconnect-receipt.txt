@@ -1,0 +1,2 @@
+# Preserve the real reconnect receipt for an assertion outside the handler catch.
+5

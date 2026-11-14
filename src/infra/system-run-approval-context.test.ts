@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
-  parsePreparedSystemRunPayload,
-  resolveSystemRunApprovalRequestContext,
-  resolveSystemRunApprovalRuntimeContext,
+  parsePreparedSystemRunPayload as parsePayload,
+  resolveSystemRunApprovalRequestContext as requestContext,
+  resolveSystemRunApprovalRuntimeContext as runtimeContext,
 } from "./system-run-approval-context.js";
 
 const identity = { cwd: "/tmp", agentId: "main", sessionKey: "agent:main:main" };
@@ -19,7 +19,7 @@ describe("resolveSystemRunApprovalRequestContext", () => {
     const argv = Object.freeze(["./env", "sh", "-c", "jq --version"]);
     const commandText = './env sh -c "jq --version"';
     expect(
-      resolveSystemRunApprovalRequestContext({
+      requestContext({
         host: "node",
         command: "jq --version",
         cwd: "/fallback",
@@ -37,28 +37,25 @@ describe("resolveSystemRunApprovalRequestContext", () => {
   });
 
   test("falls back to explicit request params for non-node hosts", () => {
-    const context = resolveSystemRunApprovalRequestContext({
+    const context = requestContext({
       host: "gateway",
-      command: "jq --version",
-      commandArgv: ["jq", "--version"],
+      command: preparedPlan.commandText,
+      commandArgv: preparedPlan.argv,
       ...identity,
-      systemRunPlan: {
-        argv: ["ignored"],
-        commandText: "ignored",
-      },
+      systemRunPlan: { argv: ["ignored"], commandText: "ignored" },
     });
 
     expect(context).toEqual({
       plan: null,
-      commandArgv: ["jq", "--version"],
-      commandText: "jq --version",
+      commandArgv: preparedPlan.argv,
+      commandText: preparedPlan.commandText,
       commandPreview: null,
       ...identity,
     });
   });
 
   test("preserves whitespace in cwd from a node plan", () => {
-    const context = resolveSystemRunApprovalRequestContext({
+    const context = requestContext({
       host: "node",
       command: "echo hi",
       cwd: "/fallback",
@@ -68,8 +65,7 @@ describe("resolveSystemRunApprovalRequestContext", () => {
         commandText: "echo hi",
       },
     });
-    expect(context.cwd).toBe("/srv/data ");
-    expect(context.plan?.cwd).toBe("/srv/data ");
+    expect(context).toMatchObject({ cwd: "/srv/data ", plan: { cwd: "/srv/data " } });
   });
 });
 
@@ -78,8 +74,8 @@ describe("parsePreparedSystemRunPayload", () => {
     "does not reconstruct plans rejected for invalid %s",
     (field) => {
       expect(
-        parsePreparedSystemRunPayload({
-          plan: { argv: ["jq", "--version"], commandText: "jq --version", [field]: null },
+        parsePayload({
+          plan: { ...preparedPlan, [field]: null },
           commandText: "jq --version",
         }),
       ).toBeNull();
@@ -87,14 +83,10 @@ describe("parsePreparedSystemRunPayload", () => {
   );
 
   test("parses prepared exec policy metadata", () => {
-    expect(
-      parsePreparedSystemRunPayload({
-        plan: preparedPlan,
-        execPolicy: { security: "allowlist", ask: "always" },
-      }),
-    ).toEqual({
+    const execPolicy = { security: "allowlist", ask: "always" };
+    expect(parsePayload({ plan: preparedPlan, execPolicy })).toEqual({
       plan: { ...preparedPlan, commandPreview: null, agentId: null, sessionKey: null },
-      execPolicy: { security: "allowlist", ask: "always" },
+      execPolicy,
     });
   });
 
@@ -102,14 +94,14 @@ describe("parsePreparedSystemRunPayload", () => {
     { plan: { argv: [] }, commandText: "jq --version" },
     { plan: { argv: ["jq", "--version"] } },
   ])("rejects incomplete legacy payload %j", (payload) => {
-    expect(parsePreparedSystemRunPayload(payload)).toBeNull();
+    expect(parsePayload(payload)).toBeNull();
   });
 });
 
 describe("resolveSystemRunApprovalRuntimeContext", () => {
   test("uses normalized plan runtime metadata when available", () => {
     const plan = Object.freeze({ ...jqPlan, commandPreview: "jq --version" });
-    expect(resolveSystemRunApprovalRuntimeContext({ plan })).toEqual({ ok: true, plan, ...jqPlan });
+    expect(runtimeContext({ plan })).toEqual({ ok: true, plan, ...jqPlan });
   });
 
   test.each([
@@ -118,7 +110,7 @@ describe("resolveSystemRunApprovalRuntimeContext", () => {
   ] as const)("validates fallback %j (%j) and preserves cwd %j", (args, commandText, cwd) => {
     const argv = Object.freeze([...args]);
     expect(
-      resolveSystemRunApprovalRuntimeContext({
+      runtimeContext({
         command: argv,
         rawCommand: commandText,
         ...identity,
@@ -128,11 +120,7 @@ describe("resolveSystemRunApprovalRuntimeContext", () => {
   });
 
   test("returns request validation errors from command fallback", () => {
-    expect(
-      resolveSystemRunApprovalRuntimeContext({
-        rawCommand: "jq --version",
-      }),
-    ).toEqual({
+    expect(runtimeContext({ rawCommand: "jq --version" })).toEqual({
       ok: false,
       message: "rawCommand requires params.command",
       details: { code: "MISSING_COMMAND" },

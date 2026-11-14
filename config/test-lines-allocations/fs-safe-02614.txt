@@ -1,0 +1,2 @@
+# Real denied-traversal regression for fs-safe 0.26.14 cleanup errno handling.
+24

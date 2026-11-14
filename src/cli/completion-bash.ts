@@ -60,7 +60,7 @@ _${rootCmd}_completion() {
     local cur opts command_path candidate_path value_options word flag i j cword remaining_line word_prefix
     local character next_character quote
     local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
-    local required_value_options options_ended=0 literal_opts=""
+    local required_value_options options_ended=0 operand_flag="" literal_opts=""
     local -a words=()
     # Before Bash 4.3, COMP_POINT is a byte offset; string spans must use the same units.
     if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3))); then
@@ -140,6 +140,7 @@ _${rootCmd}_completion() {
             if [[ \${word} != *=* && -n \${flag} && " \${value_options} " == *" \${flag} "* &&
                 ( \${words[i+1]} != -?* || " \${required_value_options} " == *" \${flag} "* ) ]]; then
                 i=$((i + 1))
+                ((i == cword)) && operand_flag="\${flag}"
             fi
             continue
         fi
@@ -155,16 +156,16 @@ ${commandPathUpdate}
         opts="\${literal_opts}"
     else
 
-        choice_flag="\${words[cword-1]}"
+        choice_flag="\${operand_flag:-\${words[cword-1]}}"
         choice_prefix="\${cur}"
         choice_completion_prefix=""
-        if [[ "\${cur}" == --*=* ]]; then
+        if [[ -z "\${operand_flag}" && "\${cur}" == --*=* ]]; then
             choice_flag="\${cur%%=*}"
             choice_prefix="\${cur#*=}"
             choice_completion_prefix="\${choice_flag}="
         fi
         for short_group in "\${choice_flag}" "\${cur}"; do
-            [[ "\${short_group}" == -??* && "\${short_group}" != --* ]] || continue
+            [[ -z "\${operand_flag}" && "\${short_group}" == -??* && "\${short_group}" != --* ]] || continue
             short_group="\${short_group#-}"
             for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
                 short_flag="-\${short_group:short_index:1}"
@@ -182,6 +183,9 @@ ${commandPathUpdate}
         done
 
 ${choiceCompletion}
+        if [[ -n "\${operand_flag}" ]]; then
+            return
+        fi
     fi
     COMPREPLY=( $(compgen -W "\${opts}" -- "\${cur}") )
     COMPREPLY=("\${COMPREPLY[@]#"\${word_prefix}"}")

@@ -1,6 +1,6 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import { claimCard, summaryLink } from "./claim-view.js";
-import { contract } from "./contract.js";
+import type { contract } from "./contract.js";
 import { assertionOrigin as origin, confidenceView } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import type { Page } from "./page-context.js";
@@ -145,7 +145,7 @@ export function renderBrowse(
   );
   if (s.kind === "page" && s.vocabulary) {
     let group = "";
-    for (const def of [...s.vocabulary.definitions]
+    for (const def of s.vocabulary.definitions
       .filter((d) => d.recordCount > 0)
       .toSorted(
         (a, b) =>

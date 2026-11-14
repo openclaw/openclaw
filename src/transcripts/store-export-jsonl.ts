@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { writeTranscriptArtifactFile } from "./store-artifacts.js";
+import {
+  writeTranscriptArtifactFile,
+  type TranscriptArtifactAuthority,
+} from "./store-artifacts.js";
 import type { TranscriptStoreOperation } from "./store-worker-client.js";
 
 export async function writeTranscriptJsonlArtifact(params: {
   sessionDir: string;
   session: TranscriptSessionDescriptor;
   operation: TranscriptStoreOperation;
-  assertOwner: () => void;
+  authority: TranscriptArtifactAuthority;
   signal: AbortSignal;
 }): Promise<string> {
   const digest = createHash("sha256");
@@ -16,7 +19,7 @@ export async function writeTranscriptJsonlArtifact(params: {
   await writeTranscriptArtifactFile({
     rootDir: params.sessionDir,
     fileName: "transcript.jsonl",
-    assertBeforeMutation: params.assertOwner,
+    authority: params.authority,
     signal: params.signal,
     write: async (filePath) => {
       const handle = await fs.open(filePath, "wx", 0o600);

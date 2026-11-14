@@ -44,15 +44,6 @@ function createResponse(h: Harness, fields: Partial<ClickClackChannel>) {
   );
 }
 
-function replacementAccount(baseUrl: string) {
-  return {
-    enabled: true,
-    baseUrl,
-    token: "test-token-placeholder",
-    workspace: "team",
-    discussions: { enabled: true },
-  };
-}
 function expectAttachmentWarning(h: Harness, sessionKey: string) {
   const warnings = vi
     .mocked(h.runtime.logging.getChildLogger)
@@ -75,31 +66,6 @@ function messagePage(...messages: ReturnType<typeof createInboundMessage>[]) {
   return { messages, oldest_seq: 0, has_older: false };
 }
 describe("ClickClack discussion binding retention", () => {
-  it.each(["info", "open"] as const)(
-    "keeps a deleted session's room visible through %s",
-    async (method) => {
-      const h = createHarness({ label: "Deleted" });
-      const key = "agent:main:deleted";
-      await h.service.open(key);
-      h.setSessionEntry(undefined);
-      expect(await h.service[method](key)).toMatchObject({ state: "open" });
-      expect(h.store.lookup(key)).toMatchObject({
-        channelId: "chn_discussion",
-        detachedAt: expect.any(Number),
-      });
-      h.setSessionEntry({ sessionId: "recreated", label: "Deleted" });
-      expect(await h.service[method](key)).toMatchObject({ state: "open" });
-      expect(h.store.lookup(key)).not.toHaveProperty("detachedAt");
-      expect(h.createChannel).toHaveBeenCalledOnce();
-      const other = createHarness({ label: "Independent" });
-      await other.service.open(key);
-      h.setSessionEntry({ sessionId: "recreated", label: "Renamed" });
-      await h.service.reconcile(key);
-      expectLastPatch(h, { display_title: "Renamed", name: "renamed" });
-      expect(other.updateChannel).not.toHaveBeenCalled();
-    },
-  );
-
   it("retains only the newest 1,000 deleted-session bindings", async () => {
     const harness = createHarness(undefined);
     const seededKeys = Array.from({ length: 999 }, (_, i) => `agent:main:retained-detached-${i}`);
@@ -118,17 +84,16 @@ describe("ClickClack discussion binding retention", () => {
     entries.set(firstKey, { sessionId: "session-a", label: "Detached A", updatedAt: 1 });
     await harness.service.open(firstKey);
     entries.delete(firstKey);
-    await harness.service.reconcile(firstKey);
+    expect(await harness.service.info(firstKey)).toMatchObject({ state: "open" });
+    expect(harness.store.lookup(firstKey)).toHaveProperty("detachedAt");
     expect(harness.store.entries()).toHaveLength(1_000);
     expect(harness.revokedStore.entries()).toHaveLength(0);
 
-    harness.createChannel.mockImplementationOnce(async (_workspaceId, input) =>
-      discussionChannel({ id: "chn_discussion_b", route_id: "discussion-route-b", ...input }),
-    );
+    createResponse(harness, { id: "chn_discussion_b", route_id: "discussion-route-b" });
     entries.set(secondKey, { sessionId: "session-b", label: "Detached B", updatedAt: 2 });
     await harness.service.open(secondKey);
     entries.delete(secondKey);
-    await harness.service.reconcile(secondKey);
+    expect(await harness.service.open(secondKey)).toMatchObject({ state: "open" });
 
     expect(harness.store.lookup(seededKeys[0]!)).toBeUndefined();
     expect(harness.store.entries()).toHaveLength(1_000);
@@ -139,6 +104,12 @@ describe("ClickClack discussion binding retention", () => {
     expect(harness.revokedStore.entries()).toEqual([
       expect.objectContaining({ value: expect.objectContaining({ channelId: "chn_retained_0" }) }),
     ]);
+    entries.set(firstKey, { sessionId: "recreated", label: "Detached A", updatedAt: 3 });
+    expect(await harness.service.info(firstKey)).toMatchObject({ state: "open" });
+    expect(harness.store.lookup(firstKey)).not.toHaveProperty("detachedAt");
+    entries.set(secondKey, { sessionId: "recreated-b", label: "Detached B", updatedAt: 4 });
+    expect(await harness.service.open(secondKey)).toMatchObject({ state: "open" });
+    expect(harness.store.lookup(secondKey)).not.toHaveProperty("detachedAt");
     expect(harness.createChannel).toHaveBeenCalledTimes(2);
   });
 });
@@ -161,6 +132,23 @@ describe("ClickClack discussion service contracts", () => {
     expect(h.revokedStore.entries()).toHaveLength(1);
     expect(h.generationStore.lookup(sessionKey)).toMatchObject({ generation: expect.any(String) });
     expect(h.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
+  }
+  function replaceAccounts(...baseUrls: string[]) {
+    h.config.channels!.clickclack = {
+      accounts: Object.fromEntries(
+        baseUrls.map((baseUrl, index) => [
+          index ? "second" : "replacement",
+          {
+            enabled: true,
+            baseUrl,
+            apiBaseUrl: h.transportBaseUrl,
+            token: "test-token-placeholder",
+            workspace: "team",
+            discussions: { enabled: true },
+          },
+        ]),
+      ),
+    };
   }
   it.each(["capability", "listing"])(
     "rejects failed %s preflight before reserving",
@@ -196,73 +184,59 @@ describe("ClickClack discussion service contracts", () => {
     h.channels.mockResolvedValue([
       discussionChannel({ id: "chn_general", external_managed: false }),
     ]);
-    createResponse(h, {
-      external_url: undefined,
-    });
+    createResponse(h, { external_url: undefined });
     await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
     expect(h.revokedStore.entries()).toHaveLength(0);
     expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
   });
 
-  it("stops honoring an existing binding when a second discussion account is enabled", async () => {
-    await h.service.open(sessionKey);
-    h.config.channels!.clickclack = {
-      accounts: {
-        first: replacementAccount("https://clickclack-one.example"),
-        second: replacementAccount("https://clickclack-two.example"),
-      },
-    };
-    expect(await h.service.info(sessionKey)).toEqual({ state: "none" });
-    await expect(h.service.open(sessionKey)).rejects.toThrow(
-      "ClickClack discussions require exactly one enabled discussion account",
-    );
-    expect(await h.service.readLatestMessages(sessionKey, 30)).toEqual(noDiscussion);
-    expect(h.createChannel).toHaveBeenCalledTimes(1);
-  });
+  it.each(["discussions", "account", "ambiguous"] as const)(
+    "stops activity for %s accounts",
+    async (scope) => {
+      await h.service.open(sessionKey);
+      const configured = h.config.channels!.clickclack!;
+      if (scope === "ambiguous") {
+        replaceAccounts("https://clickclack-one.example", "https://clickclack-two.example");
+        await expect(h.service.open(sessionKey)).rejects.toThrow(
+          "ClickClack discussions require exactly one enabled discussion account",
+        );
+      } else if (scope === "account") {
+        configured.enabled = false;
+      } else {
+        configured.discussions!.enabled = false;
+      }
+      h.setSessionEntry({ label: "Should Not Rename", archivedAt: 123 });
+      await h.service.reconcile(sessionKey);
+      expect(await h.service.info(sessionKey)).toEqual({ state: "none" });
+      expect(await h.service.readLatestMessages(sessionKey, 30)).toEqual(noDiscussion);
+      expect(h.updateChannel).not.toHaveBeenCalled();
+      expect(h.createChannel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("invalidates an old account before opening its replacement", async () => {
     await h.service.open(sessionKey);
-    h.config.channels!.clickclack = {
-      accounts: {
-        replacement: {
-          ...replacementAccount("https://replacement.example"),
-          apiBaseUrl: h.transportBaseUrl,
-        },
-      },
-    };
+    replaceAccounts("https://replacement.example");
     expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
     expect(h.updateChannel).not.toHaveBeenCalled();
     expect(await h.service.open(sessionKey)).toMatchObject({ state: "open" });
     expect(h.createChannel).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["id", "selector"])(
-    "releases a changed workspace %s without remote writes",
-    async (field) => {
-      await h.service.open(sessionKey);
-      if (field === "id") {
-        h.workspaces.mockResolvedValue([
-          { ...(await h.workspaces())[0]!, id: "wsp_new", route_id: "new" },
-        ]);
-      } else {
-        h.config.channels!.clickclack!.token = "test-token-placeholder";
-        h.config.channels!.clickclack!.workspace = "other-team";
-        h.config.channels!.clickclack!.discussions!.workspace = "other-team";
-      }
-      expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
-      expect(h.updateChannel).not.toHaveBeenCalled();
-      expect(h.store.lookup(sessionKey)).toBeUndefined();
-      expect(h.revokedStore.entries()).toHaveLength(1);
-    },
-  );
+  it("releases a replaced workspace without remote writes", async () => {
+    await h.service.open(sessionKey);
+    h.workspaces.mockResolvedValue([
+      { ...(await h.workspaces())[0]!, id: "wsp_new", route_id: "new" },
+    ]);
+    expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
+    expect(h.updateChannel).not.toHaveBeenCalled();
+    expect(h.store.lookup(sessionKey)).toBeUndefined();
+    expect(h.revokedStore.entries()).toHaveLength(1);
+  });
 
   it("rotates the external ref after a destination round trip without an intermediate open", async () => {
     await h.service.open(sessionKey);
-    h.config.channels!.clickclack = {
-      accounts: {
-        replacement: replacementAccount("https://clickclack.example"),
-      },
-    };
+    replaceAccounts("https://clickclack.example");
     await h.service.info(sessionKey);
     h.config.channels!.clickclack = {
       ...discussionConfig().channels!.clickclack,
@@ -273,24 +247,6 @@ describe("ClickClack discussion service contracts", () => {
     expect(externalRefs).toHaveLength(2);
     expect(new Set(externalRefs).size).toBe(2);
   });
-
-  it.each(["discussions", "account"] as const)(
-    "stops activity when %s is disabled",
-    async (scope) => {
-      await h.service.open(sessionKey);
-      const configured = h.config.channels!.clickclack!;
-      if (scope === "account") {
-        configured.enabled = false;
-      } else {
-        configured.discussions!.enabled = false;
-      }
-      h.setSessionEntry({ label: "Should Not Rename", archivedAt: 123 });
-      await h.service.reconcile(sessionKey);
-      expect(await h.service.info(sessionKey)).toEqual({ state: "none" });
-      expect(await h.service.readLatestMessages(sessionKey, 30)).toEqual(noDiscussion);
-      expect(h.updateChannel).not.toHaveBeenCalled();
-    },
-  );
 
   it.each(["server", "workspace", "open"] as const)(
     "keeps reads observational but releases stale ownership during %s reconciliation",
@@ -381,13 +337,7 @@ describe("ClickClack discussion service contracts", () => {
     if (!current.credentialFingerprint) {
       throw new Error("Expected persisted credentials");
     }
-    const generation = await reserveDiscussionBindingGeneration({
-      runtime: h.runtime,
-      sessionKey,
-      accountId: current.accountId,
-      credentialFingerprint: current.credentialFingerprint,
-      destinationIdentity: TEST_DESTINATION_IDENTITY,
-    });
+    const generation = await reserveGeneration(current.accountId, current.credentialFingerprint);
     await recordPendingDiscussionOpen({
       runtime: h.runtime,
       sessionKey,
@@ -410,13 +360,7 @@ describe("ClickClack discussion service contracts", () => {
 
   it("rejects a pending open when ownership changes after reservation", async () => {
     const credentialFingerprint = discussionCredentialFingerprint("original-token");
-    const generation = await reserveDiscussionBindingGeneration({
-      runtime: h.runtime,
-      sessionKey,
-      accountId: "original",
-      credentialFingerprint,
-      destinationIdentity: TEST_DESTINATION_IDENTITY,
-    });
+    const generation = await reserveGeneration("original", credentialFingerprint);
     await expect(
       recordPendingDiscussionOpen({
         runtime: h.runtime,
@@ -503,7 +447,7 @@ describe("ClickClack discussion service contracts", () => {
   });
 
   it.each(
-    (["readLatestMessages", "info", "open", "reconcile"] as const).flatMap((method) =>
+    (["readLatestMessages", "info"] as const).flatMap((method) =>
       [true, false].map((failed) => ({ method, failed })),
     ),
   )("refreshes attachments through $method (write failure=$failed)", async ({ method, failed }) => {
@@ -524,8 +468,6 @@ describe("ClickClack discussion service contracts", () => {
     } else if (method === "readLatestMessages") {
       expect(result).toMatchObject({ text: "The bound discussion has no messages yet." });
       expect(await h.service.open(sessionKey)).toMatchObject({ state: "open" });
-    } else if (method === "reconcile") {
-      expect(result).toBeUndefined();
     } else {
       expect(result).toMatchObject({ state: "open" });
     }
@@ -556,6 +498,15 @@ describe("ClickClack discussion service contracts", () => {
     },
   );
 
+  function reserveGeneration(accountId: string, credentialFingerprint: string) {
+    return reserveDiscussionBindingGeneration({
+      runtime: h.runtime,
+      sessionKey,
+      accountId,
+      credentialFingerprint,
+      destinationIdentity: TEST_DESTINATION_IDENTITY,
+    });
+  }
   const mainSessionKey = sessionKey;
   async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
     const { runtime, store } = h;

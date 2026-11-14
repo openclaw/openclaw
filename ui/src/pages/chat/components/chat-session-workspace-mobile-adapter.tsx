@@ -8,13 +8,14 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { fileKindForPath } from "../../../components/file-kind.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { formatByteSize } from "../../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -27,7 +28,7 @@ import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
 import "./chat-session-workspace-mobile.css";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 type File = SessionWorkspaceListResult["files"][number];
 
@@ -214,6 +215,7 @@ function MobileGroupRows(props: {
   folder: boolean;
   search: string;
   onBrowsePath: SessionWorkspaceProps["onBrowsePath"];
+  onBrowseFiles: () => void;
   onOpenFileInsideFiles: SessionWorkspaceProps["onOpenFile"];
   onOpenArtifactInsideFiles: SessionWorkspaceProps["onOpenArtifact"];
 }) {
@@ -273,9 +275,20 @@ function MobileGroupRows(props: {
         </For>
       </ul>
       <Show when={workspace()?.truncated}>
-        <p class="chat-workspace-mobile__notice" role="status">
-          {t("chat.workspaceFiles.truncated")}
-        </p>
+        <div class="chat-workspace-mobile__notice">
+          <div role="status">
+            {t(
+              props.search.trim()
+                ? "chat.workspaceFiles.searchIncomplete"
+                : "chat.workspaceFiles.truncated",
+            )}
+          </div>
+          <Show when={props.search.trim()}>
+            <button type="button" class="btn" onClick={() => props.onBrowseFiles()}>
+              {t("chat.workspaceFiles.browseFiles")}
+            </button>
+          </Show>
+        </div>
       </Show>
     </>
   );
@@ -327,18 +340,24 @@ export function MobileWorkspaceContents(props: {
       },
     };
     const workspaceList = workspace.list;
-    const searchQuery = workspace.browserSearch.trim().toLowerCase();
+    const searchQuery = workspace.browserSearch.trim();
+    // The server echo check below stays byte-exact; local candidate matching compares NFC.
+    const matchQuery = foldSearchCase(searchQuery).normalize("NFC");
     const browserPath = workspace.browserPath;
     const listed = workspaceList?.browser;
     const browser = searchQuery
-      ? listed?.search?.trim().toLowerCase() === searchQuery
+      ? listed?.search?.trim().toLowerCase() === searchQuery.toLowerCase()
         ? listed
         : undefined
       : listed && !listed.search && listed.path === browserPath
         ? listed
         : workspace.cachedBrowser;
     const matches = (...values: (string | undefined)[]) =>
-      !searchQuery || values.some((value) => value?.toLowerCase().includes(searchQuery));
+      !searchQuery ||
+      values.some(
+        (value) =>
+          value !== undefined && foldSearchCase(value).normalize("NFC").includes(matchQuery),
+      );
     const groups: SessionWorkspaceMobileGroup[] = [];
     const expandedGroups = workspace.mobileNavigation?.expandedGroups;
     if (!browserPath) {
@@ -480,6 +499,7 @@ export function MobileWorkspaceContents(props: {
   function View(view: { status: SessionWorkspaceMobileStatus }) {
     let scroll!: HTMLDivElement;
     let content!: HTMLDivElement;
+    let searchField: HTMLInputElement | undefined;
     const folderLocation = () => {
       const current = location();
       return current.kind === "folder" ? current : undefined;
@@ -522,7 +542,12 @@ export function MobileWorkspaceContents(props: {
               type="search"
               placeholder={searchLabel()}
               aria-label={searchLabel()}
-              ref={liveValue(() => query())}
+              ref={[
+                liveValue(() => query()),
+                (element) => {
+                  searchField = element;
+                },
+              ]}
               onInput={(event) => props.workspace.onSearch(event.currentTarget.value)}
             />
           </label>
@@ -627,6 +652,10 @@ export function MobileWorkspaceContents(props: {
                         folder={folder()}
                         search={query()}
                         onBrowsePath={onBrowsePath}
+                        onBrowseFiles={() => {
+                          props.workspace.onSearchOpenChange?.(false);
+                          searchField?.focus({ preventScroll: true });
+                        }}
                         onOpenFileInsideFiles={(file, origin) =>
                           props.workspace.onOpenFile(file, origin)
                         }

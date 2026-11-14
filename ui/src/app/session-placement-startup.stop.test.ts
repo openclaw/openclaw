@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { requestCloudWorkerStop } from "../components/cloud-worker-stop.runtime.ts";
 import {
   pauseSessionPlacementRecovery,
@@ -412,7 +412,7 @@ describe("placement startup Retry", () => {
         phase: "failed",
         action: "retry",
         error:
-          "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
+          "Device setup is still in progress. Retry to check the existing device. Your message hasn’t been sent.",
         initialTurn: { text: input.recovery.message, sendRunId: messageId },
       });
       expect(readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey)).toMatchObject({

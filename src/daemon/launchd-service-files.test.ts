@@ -2,13 +2,16 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { installLaunchAgent, stageLaunchAgent } from "./launchd-install.js";
 import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile as readCommand,
+  resolveLaunchAgentProgramArguments,
 } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { readLaunchAgentProgramArguments } from "./launchd-runtime.js";
@@ -94,6 +97,53 @@ function mockPlutil() {
 
 describe("LaunchAgent plist", () => {
   beforeEach(mockPlutil);
+  it.each([undefined, "/runtime/bun", "/runtime/node", null])(
+    "observes Program=%s without rewriting saved argv",
+    async (Program) => {
+      const onEffectiveExecutable = vi.fn();
+      const command = await resolveLaunchAgentProgramArguments(
+        { Program, ProgramArguments: programArguments },
+        "/synthetic/gateway.plist",
+        { requireEffective: true, onEffectiveExecutable },
+      );
+      expect(command).toEqual({ programArguments, sourcePath: "/synthetic/gateway.plist" });
+      if (Program === null) {
+        expect(onEffectiveExecutable).not.toHaveBeenCalled();
+      } else {
+        expect(onEffectiveExecutable).toHaveBeenCalledExactlyOnceWith(
+          Program ?? programArguments[0],
+        );
+      }
+    },
+  );
+  it("resolves service paths without loading the XML policy editor", async () => {
+    const result = await runNodeScript(
+      [
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "--eval",
+        `import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier === "linkedom") throw new Error("Service path lookup loaded the XML policy editor");
+  return nextResolve(specifier, context);
+} });
+const { resolveLaunchAgentPlistPathForLabel } = await import(${JSON.stringify(new URL("./launchd-service-files.ts", import.meta.url).href)});
+assert.equal(resolveLaunchAgentPlistPathForLabel({ HOME: "/synthetic" }, "test.service"), "/synthetic/Library/LaunchAgents/test.service.plist");
+console.log("service-path-import-ok");`,
+      ],
+      {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        HOME: dirs.make("launchd-import-"),
+      },
+      30_000,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("service-path-import-ok");
+  });
+
   it("gives the installed Gateway 330 seconds to drain and exit", () => {
     expect(buildPlist()).toMatch(/<key>ExitTimeOut<\/key>\s*<integer>330<\/integer>/u);
   });
@@ -110,6 +160,7 @@ describe("LaunchAgent plist", () => {
       programArguments: ["/bin/sh", wrapper, envFile, ...programArguments],
       environment: strict ? { INLINE: "inline", SHARED: "original" } : undefined,
     });
+    const onEffectiveExecutable = vi.fn();
     const command = await readCommand(
       plistPath,
       strict
@@ -117,6 +168,7 @@ describe("LaunchAgent plist", () => {
             requireEffective: true,
             expectedEnvironmentWrapperPath: wrapper,
             expectedEnvironmentFilePath: envFile,
+            onEffectiveExecutable,
           }
         : undefined,
     );
@@ -126,11 +178,31 @@ describe("LaunchAgent plist", () => {
         : { EDITED: "$(id)", NEXT: "retained" },
     );
     if (strict) {
+      expect(onEffectiveExecutable).toHaveBeenCalledExactlyOnceWith(programArguments[0]);
       expect(command).toMatchObject({
         programArguments,
         environmentValueSources: { INLINE: "inline", SHARED: "inline-and-file", FILE: "file" },
       });
     }
+  });
+  it("observes Program instead of a generated-looking argv executable", async () => {
+    const { plistPath, wrapper, envFile } = fixture("program-wrapper", {});
+    await writeFile(envFile, "export FIXTURE='value'\n", 0o600);
+    const onEffectiveExecutable = vi.fn();
+    await resolveLaunchAgentProgramArguments(
+      {
+        Program: "/runtime/bun",
+        ProgramArguments: ["/bin/sh", wrapper, envFile, ...programArguments],
+      },
+      plistPath,
+      {
+        requireEffective: true,
+        expectedEnvironmentWrapperPath: wrapper,
+        expectedEnvironmentFilePath: envFile,
+        onEffectiveExecutable,
+      },
+    );
+    expect(onEffectiveExecutable).toHaveBeenCalledExactlyOnceWith("/runtime/bun");
   });
   it.each(["", "--max-old-space-size=24576"])("preserves NODE_OPTIONS=%j", async (nodeOptions) => {
     const { plistPath } = fixture("node-options", {});

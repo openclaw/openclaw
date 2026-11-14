@@ -48,7 +48,14 @@ export class HookDispatchSelection<K extends PluginHookName> {
     registration: PluginHookRegistration<K>,
     run: () => T | PromiseLike<T>,
   ): Promise<T | typeof HOOK_REPLACED> {
-    const replace = (error: unknown) => this.awaitReplacement(registration, error);
+    const replace = async (error: unknown): Promise<typeof HOOK_REPLACED> => {
+      if (!isPluginReloadingError(error) || this.replaced.has(registration.pluginId)) {
+        throw error;
+      }
+      await error.replacement;
+      this.replaced.add(registration.pluginId);
+      return HOOK_REPLACED;
+    };
     try {
       const result = run();
       return isPromiseLike(result)
@@ -57,17 +64,5 @@ export class HookDispatchSelection<K extends PluginHookName> {
     } catch (error) {
       return replace(error);
     }
-  }
-
-  private async awaitReplacement(
-    registration: PluginHookRegistration<K>,
-    error: unknown,
-  ): Promise<typeof HOOK_REPLACED> {
-    if (!isPluginReloadingError(error) || this.replaced.has(registration.pluginId)) {
-      throw error;
-    }
-    await error.replacement;
-    this.replaced.add(registration.pluginId);
-    return HOOK_REPLACED;
   }
 }

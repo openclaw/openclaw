@@ -6,6 +6,7 @@ import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-run
 import {
   createMattermostPost,
   deleteMattermostPost,
+  fetchMattermostChannelPosts,
   updateMattermostPost,
   type MattermostClient,
 } from "./client.js";
@@ -17,17 +18,6 @@ type MattermostDraftPublishedPart = {
   messageId: string;
   content: string;
 };
-
-type MattermostFinalTextResolution =
-  | {
-      kind: "full" | "remaining";
-      text: string;
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    }
-  | {
-      kind: "already-delivered";
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    };
 
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
@@ -132,6 +122,7 @@ export function createMattermostDraftStream(params: {
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
     throttleMs: THROTTLE_MS,
+    coalesceInFlight: true,
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
@@ -304,34 +295,52 @@ export function createMattermostDraftStream(params: {
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
   };
-  const resolveFinalText = (text: string): MattermostFinalTextResolution => {
-    const publishedParts = [...publishedAssistantParts.values()];
+  const resolveFinalText = (text: string) => {
+    const publishedParts: readonly MattermostDraftPublishedPart[] = [
+      ...publishedAssistantParts.values(),
+    ];
     if (sealedAssistantTexts.length === 0) {
-      return { kind: "full", text, publishedParts };
+      return { kind: "full" as const, text, publishedParts };
     }
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
       const completed = sealedText.text;
       if (!remainingText.startsWith(completed)) {
-        return { kind: "full", text, publishedParts };
+        return { kind: "full" as const, text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);
       // Canonical assistant block aggregation uses newline separators. A plain-space
       // suffix can be a block-local final that merely shares the prior block's prefix.
       if (sealedText.requiresBlockBoundary && suffix && !/^\r?\n/.test(suffix)) {
-        return { kind: "full", text, publishedParts };
+        return { kind: "full" as const, text, publishedParts };
       }
       remainingText = suffix.replace(sealedText.requiresBlockBoundary ? /^(?:\r?\n)+/ : /^\s+/, "");
     }
     const currentText = currentGeneration.latestAssistantText?.trim() ?? "";
     const remaining = remainingText.trim();
     if (currentText && !remaining.startsWith(currentText)) {
-      return { kind: "full", text, publishedParts };
+      return { kind: "full" as const, text, publishedParts };
     }
     return remaining
-      ? { kind: "remaining", text: remaining, publishedParts }
-      : { kind: "already-delivered", publishedParts };
+      ? { kind: "remaining" as const, text: remaining, publishedParts }
+      : { kind: "already-delivered" as const, publishedParts };
+  };
+
+  // Generations publish in order, so the current preview is this draft's newest post: anything
+  // after it came from someone else (message tool, a person, another bot). Without collapsed
+  // threads every reply renders in the channel stream, so root-level previews check the whole
+  // channel. Accepted gap: 200+ newer channel posts outside a threaded preview's thread.
+  const findPostAfter = async (postId: string): Promise<string | undefined> => {
+    const { messages } = await fetchMattermostChannelPosts(params.client, params.channelId, {
+      after: postId,
+      limit: 200,
+      skipFetchThreads: true,
+    });
+    return messages.find(
+      (post) =>
+        !post.type?.startsWith("system_") && (!params.rootId || post.root_id === params.rootId),
+    )?.id;
   };
 
   params.log?.(
@@ -351,5 +360,6 @@ export function createMattermostDraftStream(params: {
     forceNewMessage,
     settleBoundaries,
     resolveFinalText,
+    findPostAfter,
   };
 }

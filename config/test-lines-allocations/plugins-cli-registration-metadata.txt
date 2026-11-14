@@ -1,0 +1,2 @@
+# Captured/native CLI metadata parity through the real API, retaining callback behavior.
+22

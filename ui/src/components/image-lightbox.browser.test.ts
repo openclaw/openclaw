@@ -81,6 +81,62 @@ function imageSource(width: number, height: number, color = "#264060") {
   return canvas.toDataURL("image/png");
 }
 
+it.each([
+  { name: "portrait trackpad pinch", width: 360, height: 800, input: "pinch" },
+  { name: "landscape mouse wheel", width: 800, height: 360, input: "wheel" },
+  { name: "small image double-click", width: 320, height: 200, input: "double-click" },
+])(
+  "keeps the image point under the pointer during $name zoom",
+  async ({ width, height, input }) => {
+    const { viewer, image } = await mountImage({
+      src: imageSource(width, height, "#264060"),
+      title: "Pointer zoom",
+      ...(input === "double-click" ? {} : { width, height }),
+    });
+    const before = image.getBoundingClientRect();
+    // An off-center point distinguishes pointer zoom from center-only button zoom.
+    const x = before.left + before.width * 0.85;
+    const y = before.top + before.height * 0.4;
+    const stage = viewer.querySelector(".stage")!;
+    // Continue past the 400% cap: a stale transform can reappear when scale stops changing.
+    const steps = input === "double-click" ? 1 : 18;
+    for (let step = 0; step < steps; step += 1) {
+      if (input === "double-click") {
+        stage.dispatchEvent(
+          new MouseEvent("dblclick", { clientX: x, clientY: y, bubbles: true, cancelable: true }),
+        );
+      } else {
+        stage.dispatchEvent(
+          new WheelEvent("wheel", {
+            clientX: x,
+            clientY: y,
+            deltaY: -100,
+            ctrlKey: input === "pinch",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+      await nextFrame();
+      await nextFrame();
+      const after = image.getBoundingClientRect();
+      expect(after.width).toBeGreaterThan(before.width);
+      expect(after.left + after.width * 0.85).toBeCloseTo(x, 0);
+      expect(after.top + after.height * 0.4).toBeCloseTo(y, 0);
+    }
+    if (input !== "double-click") {
+      expect(viewer.querySelector(".zoom-level")?.textContent?.trim()).toBe("400%");
+    }
+
+    viewer.querySelector<HTMLButtonElement>('[aria-label="Reset zoom"]')!.click();
+    await nextFrame();
+    const reset = image.getBoundingClientRect();
+    for (const dimension of ["x", "y", "width", "height"] as const) {
+      expect(reset[dimension]).toBeCloseTo(before[dimension], 0);
+    }
+  },
+);
+
 it.each(["removed", "newer"])("restores tile focus after %s close", async (mode) => {
   const trigger = document.body.appendChild(document.createElement("button"));
   trigger.textContent = "Open image tile";
@@ -152,6 +208,8 @@ it.each([
     await Promise.all(image.getAnimations().map((animation) => animation.finished));
     const zoomBefore = zoom.textContent;
     const before = image.getBoundingClientRect();
+    expect(before.width).toBeGreaterThan(fitted.width);
+    expect(before.height).toBeGreaterThan(fitted.height);
     full.resolve({ src: source, title: "Synthetic screenshot", width, height });
     await expect.poll(() => image.src).toBe(source);
     await image.decode();

@@ -33,7 +33,6 @@ const { agentHandlers } = await import("./agent.js");
 const handleAgent = expectDefined(agentHandlers.agent, "agent RPC handler");
 
 async function invoke(
-  id: string,
   params: Record<string, unknown>,
   client: Parameters<typeof handleAgent>[0]["client"] = null,
   pending?: { dedupe: Map<string, unknown>; sessionKey: string; agent: string },
@@ -41,7 +40,7 @@ async function invoke(
   const respond = vi.fn<RespondFn>();
   const dedupe = pending?.dedupe ?? new Map();
   await handleAgent({
-    req: { type: "req", method: "agent", id },
+    req: { type: "req", method: "agent", id: "deleted-agent" },
     params: { sessionKey: pending?.sessionKey ?? mockDeletedAgentSession(), ...params },
     respond,
     context: { dedupe, getRuntimeConfig: () => ({}) } as never,
@@ -54,7 +53,7 @@ async function invoke(
   });
   expect(dedupe.size).toBe(0);
   expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
-  return { respond, dedupe };
+  return respond;
 }
 
 beforeEach(() => {
@@ -65,43 +64,33 @@ beforeEach(() => {
 });
 
 it.each([
-  { id: "attach", message: "see attachment", attachment: true },
-  { id: "reset", message: "/reset", admin: true },
-  { id: "reset", message: "/reset follow up", admin: true },
-  { id: "followup", message: "approval followup", backend: true },
-])(
-  "agent RPC rejects deleted-agent $message before side effects",
-  async ({ id, message, attachment, admin, backend }) => {
-    const client = admin
+  { message: "see attachment", mode: "attach" },
+  { message: "/reset follow up", mode: "cli" },
+  { message: "approval followup", mode: "backend" },
+])("agent RPC rejects deleted-agent $message before side effects", async ({ message, mode }) => {
+  const client =
+    mode === "cli"
       ? ({ connect: { scopes: ["operator.admin"] } } as never)
-      : backend
+      : mode === "backend"
         ? ({ connect: { client: { mode: "backend" } } } as never)
         : null;
-    const params: Record<string, unknown> = {
-      message,
-      idempotencyKey: backend
-        ? "exec-approval-followup:req-followup"
-        : admin
-          ? `run-reset-${message}`
-          : "run-attach",
-    };
-    if (backend) {
-      params.execApprovalFollowupExpectedSessionId = "old-session";
-    }
-    if (attachment) {
-      params.attachments = [
-        { type: "file", mimeType: "application/pdf", fileName: "doc.pdf", content: "aGVsbG8=" },
-      ];
-    }
-    await invoke(`req-${id}`, params, client);
-    if (attachment) {
-      expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
-    }
-    if (admin) {
-      expect(performGatewaySessionResetMock).not.toHaveBeenCalled();
-    }
-  },
-);
+  const params: Record<string, unknown> = {
+    message,
+    idempotencyKey:
+      mode === "backend" ? "exec-approval-followup:req-followup" : "run-deleted-agent",
+  };
+  if (mode === "backend") {
+    params.execApprovalFollowupExpectedSessionId = "old-session";
+  }
+  if (mode === "attach") {
+    params.attachments = [
+      { type: "file", mimeType: "application/pdf", fileName: "doc.pdf", content: "aGVsbG8=" },
+    ];
+  }
+  await invoke(params, client);
+  expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
+  expect(performGatewaySessionResetMock).not.toHaveBeenCalled();
+});
 
 it("agent RPC reserves pending ACP metadata and clears a refused reservation", async () => {
   const started = Promise.withResolvers<void>();
@@ -114,7 +103,7 @@ it("agent RPC reserves pending ACP metadata and clears a refused reservation", a
     },
   );
   const dedupe = new Map<string, unknown>();
-  const pending = invoke("req-acp", { message: "hi", idempotencyKey: "run-acp" }, null, {
+  const pending = invoke({ message: "hi", idempotencyKey: "run-acp" }, null, {
     dedupe,
     sessionKey,
     agent: "claude",
@@ -122,7 +111,7 @@ it("agent RPC reserves pending ACP metadata and clears a refused reservation", a
   try {
     await awaitGateBeforeSettlement(
       started.promise,
-      pending.then(({ respond }) => expect(respond).not.toHaveBeenCalled()),
+      pending.then((respond) => expect(respond).not.toHaveBeenCalled()),
       "ACP request settled before its metadata check",
     );
     expect(dedupe.size).toBeGreaterThan(0);

@@ -697,10 +697,16 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async ensureSandboxExistsInner(): Promise<void> {
-    const getResult = await this.runCli(["sandbox", "get", this.params.execContext.sandboxName]);
+    const getResult = await this.runCli([
+      "sandbox",
+      "get",
+      this.params.execContext.sandboxName,
+      "--output",
+      "json",
+    ]);
     if (getResult.code === 0) {
       if (this.params.legacyRuntimeAdopted) {
-        const phase = await this.resolveLegacyRuntimePhase();
+        const phase = parseOpenShellSandboxPhase(getResult.stdout);
         if (!phase) {
           throw this.buildLegacyRuntimeUnavailableError(
             "OpenShell did not report a lifecycle phase for this sandbox.",
@@ -785,40 +791,6 @@ class OpenShellSandboxBackendImpl {
         openShellDetachedCreateSupport = undefined;
       }
       throw error;
-    }
-  }
-
-  private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
-    const pageSize = 100;
-    for (let offset = 0; ; offset += pageSize) {
-      const listResult = await this.runCli([
-        "sandbox",
-        "list",
-        "--limit",
-        String(pageSize),
-        "--offset",
-        String(offset),
-        "--output",
-        "json",
-      ]);
-      if (listResult.code !== 0) {
-        throw this.buildLegacyRuntimeUnavailableError(listResult.stderr.trim());
-      }
-      const page = parseOpenShellSandboxPhasePage(
-        listResult.stdout,
-        this.params.execContext.sandboxName,
-      );
-      if (!page) {
-        throw this.buildLegacyRuntimeUnavailableError(
-          "OpenShell returned malformed sandbox lifecycle data.",
-        );
-      }
-      if (page.phase) {
-        return page.phase;
-      }
-      if (page.count < pageSize) {
-        return undefined;
-      }
     }
   }
 
@@ -1104,23 +1076,6 @@ function resolveOpenShellSandboxName(params: {
     return { sandboxName: legacySandboxName, legacyRuntimeAdopted: true };
   }
   return { sandboxName, legacyRuntimeAdopted: false };
-}
-
-function parseOpenShellSandboxPhasePage(
-  stdout: string,
-  sandboxName: string,
-): { count: number; phase?: string } | undefined {
-  const parsed = safeParseJson<unknown>(stdout);
-  if (!Array.isArray(parsed)) {
-    return undefined;
-  }
-  for (const entry of parsed) {
-    const record = asOptionalRecord(entry);
-    if (record?.name === sandboxName && typeof record.phase === "string") {
-      return { count: parsed.length, phase: record.phase };
-    }
-  }
-  return { count: parsed.length };
 }
 
 function parseOpenShellSandboxPhase(stdout: string): string | undefined {

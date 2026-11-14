@@ -91,14 +91,6 @@ function createCurrentEntryRead(
         activeWriterRunId: current.activeWriterRunId,
         skillLibrarySelections: current.skillLibrarySelections,
         executionPolicy: captureSessionExecutionPolicy(current),
-        ...(current.subagentRecovery
-          ? {
-              subagentRecovery: {
-                lastRunId: current.subagentRecovery.lastRunId,
-                sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
-              },
-            }
-          : {}),
       };
       return true;
     },

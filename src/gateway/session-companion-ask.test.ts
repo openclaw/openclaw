@@ -142,6 +142,7 @@ const question = {
   sessionKey: "agent:main:main",
   question: "What is it doing?",
   connId: "conn-1",
+  ownerId: "shared",
 };
 
 function expectAnswer(respond: ReturnType<typeof vi.fn>, answer: unknown = expect.any(String)) {

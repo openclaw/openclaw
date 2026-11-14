@@ -143,17 +143,15 @@ export function createMeetingRealtimeEngineBindings(params: {
   };
 }
 
-type MeetingAgentConsultContext = {
-  surface: MeetingAgentConsultSurface;
-  config: OpenClawConfig;
-  runtime: PluginRuntime;
-  logger: RuntimeLogger;
-  agentId?: string;
-  toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
-};
-
 async function consultMeetingAgent(
-  params: MeetingAgentConsultContext & MeetingAgentConsultParams,
+  params: {
+    surface: MeetingAgentConsultSurface;
+    config: OpenClawConfig;
+    runtime: PluginRuntime;
+    logger: RuntimeLogger;
+    agentId?: string;
+    toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
+  } & MeetingAgentConsultParams,
 ): Promise<{ text: string }> {
   const agentId = params.agentId
     ? normalizeAgentId(params.agentId)

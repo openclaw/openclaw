@@ -1,35 +1,12 @@
+import { X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 const runExecMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:crypto", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:crypto")>();
-  const parseMarker = (value: Buffer, prefix: string): string => {
-    const text = value.toString("utf8");
-    if (!text.startsWith(prefix)) {
-      throw new Error("invalid certificate material");
-    }
-    return text.slice(prefix.length);
-  };
-  return {
-    ...actual,
-    createPrivateKey: (value: Buffer) => ({ marker: parseMarker(value, "ca-material-marker:") }),
-    X509Certificate: class {
-      readonly ca: boolean;
-      readonly marker: string;
-      constructor(value: Buffer) {
-        this.marker = parseMarker(value, "ca-cert-marker:");
-        this.ca = this.marker !== "not-ca";
-      }
-      checkPrivateKey(key: { marker?: string }): boolean {
-        return key.marker === this.marker;
-      }
-    },
-  };
-});
 // mock-isolation: Keep CA generation independent of host OpenSSL discovery.
 vi.mock("../infra/resolve-system-bin.js", () => ({ resolveSystemBin: () => "/usr/bin/openssl" }));
 vi.mock("../process/exec.js", async (importOriginal) => ({
@@ -40,6 +17,13 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 import { ensureDebugProxyCa } from "./ca.js";
 
 const tempDirs = createTrackedTempDirs();
+const caCert = fs.readFileSync(
+  new URL("./fixtures/retained-ca-no-key-identifiers.pem", import.meta.url),
+  "utf8",
+);
+// PEM whitespace distinguishes interrupted/retried writes without a fake crypto parser.
+const pair = (marker: string) =>
+  [caCert, TEST_TLS_KEY_PEM].map((pem) => pem + "\n".repeat(marker.length));
 
 function outputPath(args: string[], flag: "-config" | "-keyout" | "-out"): string {
   const value = args[args.indexOf(flag) + 1];
@@ -51,8 +35,9 @@ function outputPath(args: string[], flag: "-config" | "-keyout" | "-out"): strin
 
 function generatePair(marker: string, afterWrite?: (args: string[]) => void): void {
   runExecMock.mockImplementationOnce(async (_command: string, args: string[]) => {
-    fs.writeFileSync(outputPath(args, "-out"), `ca-cert-marker:${marker}`);
-    fs.writeFileSync(outputPath(args, "-keyout"), `ca-material-marker:${marker}`);
+    const [cert, key] = pair(marker);
+    fs.writeFileSync(outputPath(args, "-out"), cert!);
+    fs.writeFileSync(outputPath(args, "-keyout"), key!);
     afterWrite?.(args);
   });
 }
@@ -103,14 +88,11 @@ it.each(["generation", "publication"] as const)("repairs interrupted CA %s", asy
           })
       : undefined;
   await expect(ensure()).rejects.toBe(failure);
-  expect(read()).toEqual([
-    "stale cert",
-    stage === "publication" ? "ca-material-marker:failed" : "stale key",
-  ]);
+  expect(read()).toEqual(["stale cert", stage === "publication" ? pair("failed")[1] : "stale key"]);
   expect(fs.readdirSync(certDir).toSorted()).toEqual(["root-ca-key.pem", "root-ca.pem"]);
   renameSpy?.mockRestore();
   await expect(Promise.all([ensure(), ensure()])).resolves.toEqual([paths, paths]);
-  expect(read()).toEqual(["ca-cert-marker:retry", "ca-material-marker:retry"]);
+  expect(read()).toEqual(pair("retry"));
   expect(runExecMock).toHaveBeenCalledTimes(2);
   const [command, args, options] = runExecMock.mock.calls[0] as [string, string[], object];
   expect(command).toBe("/usr/bin/openssl");
@@ -125,6 +107,7 @@ it.each(["generation", "publication"] as const)("repairs interrupted CA %s", asy
 
 it("rejects matching certificate material that is not a CA", async () => {
   const { certDir, ensure } = await makeCertPaths();
+  vi.spyOn(X509Certificate.prototype, "ca", "get").mockReturnValue(false);
   generatePair("not-ca");
   await expect(ensure()).rejects.toThrow(
     "openssl generated invalid debug proxy certificate material",

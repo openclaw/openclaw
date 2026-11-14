@@ -6,10 +6,13 @@ import type {
   AgentDeletionJournalCleanupPath,
   AgentDeletionJournalEntry,
 } from "../../state/agent-deletion-journal.js";
-import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
+import {
+  expectNoCalls as expectUncalled,
+  expectObjectFields as expectRecordFields,
+} from "../../test-utils/mock-call-assertions.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
-export { expectRecordFields };
+export { expectRecordFields, expectUncalled };
 
 export async function callAgentHandler(
   handler: GatewayRequestHandler,
@@ -122,12 +125,6 @@ export function deletionJournal(
   };
 }
 
-export function expectUncalled(...callbacks: unknown[]) {
-  for (const callback of callbacks) {
-    expect(callback).not.toHaveBeenCalled();
-  }
-}
-
 export function makeFileStat(
   params: Partial<Pick<Stats, "size" | "mtimeMs" | "dev" | "ino" | "nlink">> = {},
 ): Stats {
@@ -150,10 +147,9 @@ export function expectRespondOk(
   respond: ReturnType<typeof vi.fn>,
   expected: Record<string, unknown>,
 ) {
-  expect(mockCallArg(respond)).toBe(true);
-  const payload = expectRecordFields(mockCallArg(respond, 0, 1), expected);
-  expect(mockCallArg(respond, 0, 2)).toBeUndefined();
-  return payload;
+  const [ok, payload, error] = expectDefined(respond.mock.calls[0], "Expected response");
+  expect([ok, error]).toEqual([true, undefined]);
+  return expectRecordFields(payload, expected);
 }
 
 export function expectPendingDeletion(
@@ -174,9 +170,7 @@ export function expectPendingDeletion(
 export function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: string) {
   expect(mockCallArg(respond)).toBe(false);
   expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-  const error = expectRecordFields(mockCallArg(respond, 0, 2), {});
-  expect(error.message).toEqual(expect.stringContaining(text));
-  return error;
+  return expectRecordFields(mockCallArg(respond, 0, 2), { message: expect.stringContaining(text) });
 }
 
 export function createTrashAssertions(

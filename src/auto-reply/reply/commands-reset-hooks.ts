@@ -3,6 +3,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -25,7 +26,8 @@ export async function readBeforeResetMessages(params: {
   sessionKey?: string;
   storePath?: string;
 }): Promise<unknown[]> {
-  if (!params.sessionId || !params.sessionKey || !params.storePath) {
+  const { sessionId, sessionKey, storePath } = params;
+  if (!sessionId || !sessionKey || !storePath) {
     logVerbose("before_reset: no session identity available, firing hook with empty messages");
     return [];
   }
@@ -33,12 +35,14 @@ export async function readBeforeResetMessages(params: {
     return parseTranscriptMessages(
       // before_reset snapshots the canonical pre-reset rows. sessionFile is
       // hook metadata only and must not be treated as a readable path.
-      await loadTranscriptEvents({
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      }),
+      await withSessionTranscriptHydrationCaller("reset-hook", () =>
+        loadTranscriptEvents({
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          sessionId,
+          sessionKey,
+          storePath,
+        }),
+      ),
     );
   } catch (err: unknown) {
     logVerbose(

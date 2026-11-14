@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { mock } from "node:test";
 import { MessagePort } from "node:worker_threads";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -93,21 +94,16 @@ export function createSqliteWorkerBackend(
         return operation.transaction ? runSqliteImmediateTransactionSync(db, execute) : execute();
       }
       case "assertClosed": {
-        // oxlint-disable-next-line typescript/unbound-method -- Replay with the intercepted receiver below.
-        const original = MessagePort.prototype.postMessage;
-        let sent = false;
-        MessagePort.prototype.postMessage = function (...args) {
-          sent = true;
-          return Reflect.apply(original, this, args);
-        };
+        const postMessage = mock.method(MessagePort.prototype, "postMessage");
         let failure: unknown;
         try {
           db.exec(operation.sql);
         } catch (error) {
           failure = error;
         } finally {
-          MessagePort.prototype.postMessage = original;
+          postMessage.mock.restore();
         }
+        const sent = postMessage.mock.callCount() > 0;
         return { sent, failure: failure instanceof Error ? failure.message : undefined };
       }
     }

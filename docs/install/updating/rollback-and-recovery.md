@@ -31,6 +31,14 @@ or database migrations. Once state has migrated beyond the older release's
 supported format, the supported recovery is to restore a verified pre-update
 backup with its matching OpenClaw release.
 
+When an older Gateway service refuses newer-written config, run the newer
+OpenClaw binary or reinstall the service from that newer installation. Service
+startup ignores `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1`, including
+values set in systemd's environment or unit drop-ins. For an intentional
+downgrade, restore the verified pre-update backup with its matching release as
+described below. The override is for intentional CLI recovery actions; it does
+not reverse migrations or bypass database compatibility checks.
+
 <Warning>
 Fresh shared-state databases created after tenant-container management was retired
 omit `fleet_cells`. Older revisions that require this table can reject them even

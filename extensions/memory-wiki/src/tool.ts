@@ -169,7 +169,13 @@ export function createWikiSearchTool(
       try {
         return await racePromiseWithAbortSignal(
           async () => {
-            await syncMemoryWikiImportedSources({ config, appConfig, signal });
+            // Import and publication share the service lifetime. A search deadline
+            // must not leave committed imports without their compiled snapshot.
+            await syncMemoryWikiImportedSources({
+              config,
+              appConfig,
+              signal: memoryContext.signal ?? signal,
+            });
             signal.throwIfAborted();
             const results = await searchMemoryWiki({
               config,

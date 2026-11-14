@@ -1,0 +1,2 @@
+# Regression: count detached Blink checkpoints without counting nested work twice.
+32

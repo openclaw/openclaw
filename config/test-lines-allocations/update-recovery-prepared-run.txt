@@ -1,0 +1,2 @@
+# Single-observation and PostgreSQL recovery status regression coverage.
+36

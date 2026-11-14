@@ -17,6 +17,7 @@ import { resolveConversationRouteFingerprint } from "../../config/sessions/conve
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   conversation,
+  createClickClackConversationConfig,
   holdConversationWriterForTest,
   readConversationDeliveryStateForTest,
 } from "../../gateway/conversation-delivery.test-support.js";
@@ -193,15 +194,7 @@ describe("conversation completion through the real delivery queue", () => {
         conversationRef: buildConversationRef(address),
         target: "dm:usr_synthetic",
       };
-      const config = {
-        channels: {
-          clickclack: {
-            baseUrl: "https://clickclack.example",
-            workspace: "wsp_synthetic",
-            token: "synthetic-token",
-          },
-        },
-      };
+      const config = createClickClackConversationConfig();
       const operationId = `clickclack-scaffold-${adapter}`;
       const message = "⚠️ 🛠️ `search repos (agent)` failed";
       const { stateDir, scope } = await createOperation(operationId, message, config, destination);

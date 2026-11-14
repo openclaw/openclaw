@@ -3,6 +3,7 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
@@ -114,17 +115,14 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     return tool;
   }
 
-  it.each(["memory flush", "disabled tools", "raw", "restart", "model"])(
+  it.each(["memory flush", "disabled tools", "raw", "model"])(
     "does not widen %s with auxiliary tools",
     async (mode) => {
       const input = createInput([], [createStubTool("read"), createStubTool("write")]);
       input.attempt.config = { mcp: { servers: { chrome: { command: "unused" } } } };
-      input.attempt.toolsAllow = ["raw", "restart", "model"].includes(mode)
-        ? ["chrome*"]
-        : undefined;
+      input.attempt.toolsAllow = ["raw", "model"].includes(mode) ? ["chrome*"] : undefined;
       input.attempt.disableTools = mode === "disabled tools";
       input.isRawModelRun = mode === "raw";
-      input.attempt.forceRestartSafeTools = mode === "restart";
       input.preparedToolBase.toolsEnabled = mode !== "model";
       if (mode === "memory flush") {
         input.attempt.trigger = "memory";
@@ -323,9 +321,17 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
 
     const cleanupScope = createAgentCleanupScope();
-    await expect(cleanupScope.run(() => prepare(createInput()))).rejects.toThrow(
-      "bundle policy failed",
-    );
+    const completed: string[] = [];
+    await expect(
+      withDiagnosticsTimelineObserver(
+        (name) => () => {
+          completed.push(name);
+        },
+        () => cleanupScope.run(() => prepare(createInput())),
+      ),
+    ).rejects.toThrow("bundle policy failed");
+    expect(completed).toContain("attempt.bundle-tools.policy");
+    expect(completed).toContain("attempt.bundle-tools.cleanup");
     expect(cleanupScope.outcome).toBe("uncertain");
     expect(disposeMcp).toHaveBeenCalledOnce();
     expect(disposeLsp).toHaveBeenCalledOnce();

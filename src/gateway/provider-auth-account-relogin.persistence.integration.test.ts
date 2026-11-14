@@ -19,6 +19,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { PROVIDER_AUTH_INTEGRATION_ENV } from "./test-helpers.env.js";
 
 const providerId = "account-relogin-proof";
 const pinnedProfileId = `${providerId}:pinned`;
@@ -84,15 +85,7 @@ afterEach(async () => {
 async function proofFixture(accountId: string, generation = "new", extraProfiles: Profiles = {}) {
   const state = await createOpenClawTestState({
     label: "provider-account-relogin-proof",
-    env: {
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_OAUTH_DIR: undefined,
-      OPENCLAW_GATEWAY_URL: undefined,
-      OPENCLAW_GATEWAY_PORT: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    },
+    env: { ...PROVIDER_AUTH_INTEGRATION_ENV },
   });
   cleanupState = state;
   const config: OpenClawConfig = {

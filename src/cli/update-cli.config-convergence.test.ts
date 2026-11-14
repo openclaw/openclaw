@@ -94,53 +94,87 @@ it("does not migrate authored config for a refused target stable/main", async ()
   );
 });
 
-it("persists a source-bound legacy plan only after same-version target admission", async () => {
-  await f.mockPackageInstallAtCaseDir("openclaw-current-legacy-config", VERSION);
-  const stateDir = f.tempDirs.make("openclaw-legacy-channel-");
-  const configPath = await writeProfile(stateDir, legacyConfig);
-  mocks.readPackageVersion.mockResolvedValue(VERSION);
-  f.primeNpmChannelTag("beta", VERSION);
-  const { createConfigIO } = await import("../config/io.js");
-  const { repairLegacyConfigForUpdateChannel } = await vi.importActual<
-    typeof import("../commands/doctor/legacy-config-repair.js")
-  >("../commands/doctor/legacy-config-repair.js");
-  const { replaceConfigFile: writeActualConfig } = await import("../config/mutate.js");
-  await withConfig(configPath, async () => {
-    const io = createConfigIO({ observe: false, pluginValidation: "skip" });
-    const before = await io.readConfigFileSnapshot();
-    expect(before.valid).toBe(false);
-    vi.mocked(cli.readConfigFileSnapshot).mockImplementation(() => io.readConfigFileSnapshot());
-    vi.mocked(cli.replaceConfigFile).mockImplementation(writeActualConfig);
-    mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementation(
-      async (params) => {
-        expect(cli.resolveNpmChannelTag).toHaveBeenCalled();
+it.each([
+  { channel: undefined, unknown: false },
+  { channel: "beta", unknown: false },
+  { channel: undefined, unknown: true },
+] as const)(
+  "handles same-version legacy config (channel=$channel, unknown=$unknown)",
+  async ({ channel, unknown }) => {
+    await f.mockPackageInstallAtCaseDir("openclaw-current-legacy-config", VERSION);
+    const stateDir = f.tempDirs.make("openclaw-legacy-channel-");
+    const configPath = await writeProfile(stateDir, {
+      ...legacyConfig,
+      ...(unknown ? { unknownSetting: true } : {}),
+    });
+    mocks.readPackageVersion.mockResolvedValue(VERSION);
+    f.primeNpmChannelTag(channel ?? "latest", VERSION);
+    const { createConfigIO } = await import("../config/io.js");
+    const { repairLegacyConfigForUpdateChannel } = await vi.importActual<
+      typeof import("../commands/doctor/legacy-config-repair.js")
+    >("../commands/doctor/legacy-config-repair.js");
+    const { replaceConfigFile: writeActualConfig } = await import("../config/mutate.js");
+    await withConfig(configPath, async () => {
+      const io = createConfigIO({ observe: false, pluginValidation: "skip" });
+      const before = await io.readConfigFileSnapshot();
+      expect(before.valid).toBe(false);
+      vi.mocked(cli.readConfigFileSnapshot).mockImplementation(() => io.readConfigFileSnapshot());
+      vi.mocked(cli.replaceConfigFile).mockImplementation(writeActualConfig);
+      mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementation(
+        async (params) => {
+          expect(cli.resolveNpmChannelTag).toHaveBeenCalled();
+          expect(await fs.readFile(configPath, "utf8")).toBe(before.raw);
+          expect(params.plan?.snapshot).toMatchObject({ hash: before.hash, path: configPath });
+          return repairLegacyConfigForUpdateChannel(params);
+        },
+      );
+      const update = cli.updateCommand({ channel, yes: true, restart: false, json: true });
+      if (unknown) {
+        await expect(update).rejects.toEqual(new cli.ExitError(1));
+        expect(checks.lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason: "invalid-config",
+        });
+        expect(checks.getErrorOutput()).toContain("openclaw doctor --fix");
         expect(await fs.readFile(configPath, "utf8")).toBe(before.raw);
-        expect(params.plan?.snapshot).toMatchObject({ hash: before.hash, path: configPath });
-        return repairLegacyConfigForUpdateChannel(params);
-      },
+        expect(cli.replaceConfigFile).not.toHaveBeenCalled();
+        return;
+      }
+      await update;
+      const after = await io.readConfigFileSnapshot();
+      expect(after).toMatchObject({
+        valid: true,
+        config: { gateway: { bind: "loopback" }, ...(channel ? { update: { channel } } : {}) },
+      });
+      expect(cli.replaceConfigFile).toHaveBeenCalledTimes(channel ? 2 : 1);
+      expect(checks.replaceConfigCall()).toMatchObject({
+        baseHash: before.hash,
+        writeOptions: { expectedConfigPath: configPath },
+      });
+      if (!channel) {
+        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(before.raw);
+      }
+    });
+    if (unknown) {
+      expect(
+        mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
+      ).not.toHaveBeenCalled();
+      expect(checks.packageInstallCommandCall()).toBeUndefined();
+      return;
+    }
+    expect(mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).toHaveBeenCalledTimes(
+      1,
     );
-    await cli.updateCommand({ channel: "beta", yes: true, restart: false, json: true });
-    const after = await io.readConfigFileSnapshot();
-    expect(after).toMatchObject({
-      valid: true,
-      config: { gateway: { bind: "loopback" }, update: { channel: "beta" } },
-    });
-    expect(cli.replaceConfigFile).toHaveBeenCalledTimes(2);
-    expect(checks.replaceConfigCall()).toMatchObject({
-      baseHash: before.hash,
-      writeOptions: { expectedConfigPath: configPath },
-    });
-  });
-  expect(mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).toHaveBeenCalledTimes(1);
-  checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart, mocks.candidateValidation);
-  expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledOnce();
-  expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
-    expect.objectContaining({ coreVersion: VERSION, updateChannel: "beta" }),
-  );
-  expect(checks.packageInstallCommandCall()).toBeUndefined();
-  expect(checks.doctorCommandCall()).toBeUndefined();
-  expect(checks.lastWriteJsonCall()).toMatchObject({ status: "ok" });
-});
+    checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart, mocks.candidateValidation);
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledOnce();
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ coreVersion: VERSION, updateChannel: channel ?? "stable" }),
+    );
+    expect(checks.packageInstallCommandCall()).toBeUndefined();
+    expect(checks.doctorCommandCall()).toBeUndefined();
+    expect(checks.lastWriteJsonCall()).toMatchObject({ status: "ok" });
+  },
+);
 
 it("refuses a foreign legacy caller without an explicit channel request", async () => {
   const root = await f.mockPackageInstallAtCaseDir("openclaw-current-legacy-config", VERSION);

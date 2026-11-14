@@ -8,17 +8,23 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  combineNonStreamingReplyParts,
+  trimTextPreservingCode,
+} from "../../shared/text/trim-code-text.js";
+import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
   mergeDeferredFinalText,
 } from "../../tts/captioned-final.js";
-import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directive-facts.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
@@ -64,11 +70,11 @@ const messageActionRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/message-action-runner.js"),
 );
 
-export type AcpDispatchDeliveryCoordinator = ReturnType<
-  typeof createAcpDispatchDeliveryCoordinator
+export type AcpDispatchDeliveryCoordinator = Awaited<
+  ReturnType<typeof createAcpDispatchDeliveryCoordinator>
 >;
 
-export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDeliveryParams) {
+export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDeliveryParams) {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
@@ -98,14 +104,14 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     accumulatedFinalText: "",
     accumulatedDeliveredFinalText: "",
     pendingTranscriptOutcomes: [],
-    cleanBlockTtsDirectiveText: shouldCleanTtsDirectiveText({
+    cleanBlockTtsDirectiveText: (await shouldCleanTtsDirectiveText({
       cfg: params.cfg,
       preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.sessionTtsAuto,
       agentId: params.agentId,
       channelId: params.ttsChannel,
       accountId: resolvedAccountId,
-    })
+    }))
       ? createTtsDirectiveTextStreamCleaner()
       : undefined,
     deliveredFinalReply: false,
@@ -250,6 +256,8 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         : undefined;
       const prepared = routed
         ? normalizeReplyPayloadOutcome(payload, {
+            preserveLeadingSourceBoundary:
+              kind === "block" && getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
             transformReplyPayload: createChannelReplyTransform({
               messaging,
               cfg: params.cfg,
@@ -288,7 +296,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         if (!visiblePayload.isCommentary && !visiblePayload.isReasoning) {
           blockSource = pendingBlockSource ?? createBlockReplySource();
         }
-        const text = state.cleanBlockTtsDirectiveText.push(rawBlockPayloadText);
+        const text = state.cleanBlockTtsDirectiveText.push(
+          // Keep authored line boundaries without restoring padding removed by
+          // the existing speech-cleaning path (including private-context gaps).
+          visiblePayload.text?.replace(/^[^\S\r\n]+|[^\S\r\n]+$/g, "") ?? rawBlockPayloadText,
+        );
         if (blockSource) {
           const hasPendingText = state.cleanBlockTtsDirectiveText.hasBufferedDirectiveText();
           blockSource.setComplete(!hasPendingText);
@@ -298,6 +310,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
           ...visiblePayload,
           text: text.trim() ? text : undefined,
         });
+        setReplyPayloadMetadata(visiblePayload, { ttsDirectivesParsed: true });
       }
     }
     const rawFinalText =
@@ -305,10 +318,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         ? normalizeOptionalString(visiblePayload.text)
         : undefined;
     if (rawFinalText && !transcriptSource) {
-      if (state.accumulatedFinalText.length > 0) {
-        state.accumulatedFinalText += "\n";
-      }
-      state.accumulatedFinalText += rawFinalText;
+      state.accumulatedFinalText += `${state.accumulatedFinalText ? "\n" : ""}${rawFinalText}`;
     }
     const transcriptFinalText = !transcriptSource
       ? rawFinalText
@@ -676,6 +686,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       }
     },
     getAccumulatedVisibleBlockText: () => joinAcpBlockText(state.blockTexts),
+    // Live chat previews use the same paragraph join as the final webchat message.
+    getVisibleBlockDisplayText: () =>
+      combineNonStreamingReplyParts(
+        state.blockTexts.map((block) => trimTextPreservingCode(block.payload.text ?? "")),
+      ),
     recoverBlockText: async (options?: { onlyUndelivered?: boolean }) => {
       if (!params.suppressBlockUserDelivery) {
         await settleDirectVisibleText();

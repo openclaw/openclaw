@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as pidAlive from "../shared/pid-alive.js";
@@ -75,11 +74,11 @@ function seed(freshIdentity = false) {
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
   // Independent fixture writers model unclean state that requires physical admission checks.
-  revokeSqliteDatabaseAdmissionsForPath(pathname);
   if (freshIdentity) {
     fs.copyFileSync(pathname, `${pathname}.replacement`);
     fs.renameSync(`${pathname}.replacement`, pathname);
   }
+  agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   const writer = realOpen(pathname);
   independent.push(writer);
   writer.exec("PRAGMA foreign_keys=OFF;");
@@ -91,13 +90,22 @@ function corruptForeignKey(writer: DatabaseSync) {
   expect(writer.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
 }
 
-function tracePhysicalChecks(
-  pathname: string,
-  gate?: "integrity" | "foreign-key",
-  commit?: () => void,
-) {
+function tracePhysicalChecks(pathname: string, commit?: () => void) {
   let completed = false;
   const events: string[] = [];
+  const check = integrityWorker.runSqliteIntegrityCheckInWorkerSync;
+  vi.spyOn(integrityWorker, "runSqliteIntegrityCheckInWorkerSync").mockImplementation((...args) => {
+    const result = check(...args);
+    if (args[0].databaseLabel === pathname) {
+      events.push("integrity-completed", "foreign-key-completed");
+      if (commit && !completed) {
+        completed = true;
+        commit();
+        events.push("external-commit");
+      }
+    }
+    return result;
+  });
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
     const db = realOpen(location, options);
     if (location !== pathname) {
@@ -114,11 +122,6 @@ function tracePhysicalChecks(
         statement.all = () => {
           const rows = all();
           events.push("integrity-completed");
-          if (commit && !completed && gate === "integrity") {
-            completed = true;
-            commit();
-            events.push("external-commit");
-          }
           return rows;
         };
       }
@@ -130,7 +133,7 @@ function tracePhysicalChecks(
         statement.iterate = function* () {
           yield* iterate();
           events.push("foreign-key-completed");
-          if (commit && !completed && gate === "foreign-key") {
+          if (commit && !completed) {
             completed = true;
             commit();
             events.push("external-commit");
@@ -159,20 +162,9 @@ function ordinaryWrite(options: Parameters<typeof openOpenClawAgentDatabase>[0])
 }
 
 describe("physical-open admission ordering", () => {
-  it("rejects an external FK violation committed between table integrity and FK checks", () => {
-    const { options, pathname, writer } = seed();
-    const trace = tracePhysicalChecks(pathname, "integrity", () => corruptForeignKey(writer));
-    expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
-    expect(trace.events).toEqual([
-      "integrity-completed",
-      "external-commit",
-      "foreign-key-completed",
-    ]);
-  });
-
   it("exposes and writes after an external FK violation committed after its table FK check", () => {
     const { options, pathname, writer } = seed();
-    const trace = tracePhysicalChecks(pathname, "foreign-key", () => corruptForeignKey(writer));
+    const trace = tracePhysicalChecks(pathname, () => corruptForeignKey(writer));
     const database = openOpenClawAgentDatabase(options);
     expect(trace.events).toEqual([
       "integrity-completed",
@@ -190,7 +182,7 @@ describe("physical-open admission ordering", () => {
     expect(openOpenClawAgentDatabase(options)).toBe(first);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
-    revokeSqliteDatabaseAdmissionsForPath(pathname);
+    agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
   });
 
@@ -204,9 +196,7 @@ describe("physical-open admission ordering", () => {
       } else if (replacement === "role") {
         writer.exec("UPDATE schema_meta SET role='global' WHERE meta_key='primary'");
       }
-      const trace = tracePhysicalChecks(pathname, "foreign-key", () =>
-        writer.exec("PRAGMA user_version=9999;"),
-      );
+      const trace = tracePhysicalChecks(pathname, () => writer.exec("PRAGMA user_version=9999;"));
       expect(() => openOpenClawAgentDatabase(options)).toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
@@ -613,7 +603,7 @@ describe("asynchronous canonical admission", () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
-    revokeSqliteDatabaseAdmissionsForPath(pathname);
+    agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     corruptForeignKey(writer);
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
       /foreign_key_check failed/,

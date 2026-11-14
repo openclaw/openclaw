@@ -1,5 +1,5 @@
 // Run with node --expose-gc --import ./scripts/tsx.mjs.
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { parseArgs } from "node:util";
 import {
   emitAgentEvent,
@@ -8,6 +8,7 @@ import {
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
 } from "../../src/infra/agent-events.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -72,9 +73,6 @@ for (let index = 0; index < events; index++) {
 const elapsedMs = performance.now() - start;
 const { profile } = await inspector.post("HeapProfiler.stopSampling");
 inspector.disconnect();
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 if (
   deliveries !== events * (listeners + captures) ||
   captured !== events * captures ||
@@ -89,7 +87,7 @@ console.log(
     captures,
     deliveries,
     captured,
-    allocatedBytesPerEvent: allocated(profile.head) / events,
+    allocatedBytesPerEvent: sumSampledHeapBytes(profile.head) / events,
     nsPerEvent: (elapsedMs * 1e6) / events,
   }),
 );

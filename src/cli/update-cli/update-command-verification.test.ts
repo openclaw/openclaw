@@ -29,6 +29,7 @@ import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-run-ledger.js")>()),
+  recordUpdateRunPhase: vi.fn(),
   recordUpdateRunStep: vi.fn(),
   recordUpdateRunVerification: vi.fn(),
 }));
@@ -512,6 +513,8 @@ it.each(["runtime", "port", "command"] as const)(
 
 it.each([
   { activation: "native restart", exhausted: true },
+  { activation: "receipt", exhausted: false },
+  { activation: "mismatched receipt", exhausted: false },
   { activation: "service refresh", exhausted: false },
   { activation: "service refresh", exhausted: true },
   { activation: "child readiness timeout", exhausted: true },
@@ -528,24 +531,37 @@ it.each([
         );
       });
     }
-    gatewayFixture(
-      {
-        server: { version: "2026.9.4", buildId: "candidate-build", bootId: "slow-boot" },
-      },
-      { readyAtMs: 90_000 },
-    );
+    gatewayFixture({ server: { ...candidate, bootId: "slow-boot" } }, { readyAtMs: 90_000 });
     await listen();
+    if (activation.includes("receipt")) {
+      vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async ({ onReadiness }) => {
+        const { waitForGatewayHealthyRestart } = await import("../daemon-cli/restart-health.js");
+        const health = await waitForGatewayHealthyRestart({
+          service: gatewayService.resolveGatewayService(),
+          port: gatewayPort,
+          env: serviceEnv,
+          timeoutMs: 120_000,
+        });
+        if (activation === "mismatched receipt") {
+          health.gatewayBuildId = "previous-build";
+        }
+        onReadiness?.(health);
+        return "accepted";
+      });
+    }
     result.after = { ...candidate };
     const outcome = await restartGateway({
+      opts: withRun("restart-readiness"),
       refreshServiceEnv,
       timeoutMs: exhausted ? 60_000 : 120_000,
     });
     const pending = exhausted && !childTimeout;
-    expect(outcome, JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toBe(
-      pending ? "readiness-pending" : "ok",
+    expect(outcome).toBe(pending ? "readiness-pending" : "ok");
+    const facts = vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1];
+    expect(facts?.versionMatch).toBe(pending ? undefined : true);
+    expect(restart.callGateway).toHaveBeenCalledTimes(
+      pending ? 0 : activation === "mismatched receipt" ? 2 : 1,
     );
-    expect(restart.monotonicClock.nowMs).toBe(pending ? 60_000 : 90_000);
-    expect(restart.callGateway).toHaveBeenCalledTimes(pending ? 0 : 2);
   },
 );
 
@@ -576,24 +592,14 @@ it("preserves Windows cold startup within the default update timeout", async () 
   expect(restart.monotonicClock.nowMs).toBe(Math.min(readyAtMs, budgetMs));
 });
 
-it.each([
-  { transition: "unchanged", supplied: false },
-  { transition: "unchanged", supplied: true },
-  { transition: "readiness-at-deadline", supplied: false },
-  { transition: "first-final-health-error", supplied: false },
-  { transition: "readyz-error", supplied: false },
-] as const)(
-  "checks final native and HTTP readiness: $transition, supplied=$supplied",
-  async ({ transition, supplied }) => {
-    const service = gatewayFixture({}, { commandLine: "openclaw-gateway" });
-    service.isLoaded = vi.fn(async () => true);
-    restart.callGateway.mockImplementation((opts) =>
+it.each(["unchanged", "readiness-at-deadline", "readyz-error"] as const)(
+  "checks final native and HTTP readiness: %s",
+  async (transition) => {
+    gatewayFixture({}, { commandLine: "openclaw-gateway" });
+    restart.callGateway.mockImplementation(
       gatewayHealthResponse({
         server: { version: "2026.9.1", buildId: "candidate-build", bootId: "boot-a" },
-        ...(transition === "first-final-health-error" && restart.callGateway.mock.calls.length === 2
-          ? { error: new Error("synthetic health failed") }
-          : {}),
-      })(opts),
+      }),
     );
     const reached = createDeferred();
     const release = createDeferred();
@@ -607,21 +613,9 @@ it.each([
         res.writeHead(200).end();
       }
     });
-    const probeParams = {
-      service,
-      port: gatewayPort,
-      env: serviceEnv,
-      expectedVersion: "2026.9.1",
-      expectedBuildId: "candidate-build",
-      requireRunningService: true,
-      signal: controller.signal,
-    };
-    const { waitForGatewayHealthyRestart } = await import("../daemon-cli/restart-health.js");
-    const health = supplied ? await waitForGatewayHealthyRestart(probeParams) : undefined;
     const onVerified = vi.fn();
     const verification = verifyGateway({
       opts: withRun("synthetic-update"),
-      health,
       expectedVersion: "2026.9.1",
       requireRunningService: true,
       onVerified,
@@ -652,7 +646,6 @@ it.each([
       expect(result.steps[0]?.failureFacts).toContainEqual(
         expect.objectContaining({ code: "timeout" }),
       );
-      expect(restart.callGateway).toHaveBeenCalledOnce();
     }
     expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
   },

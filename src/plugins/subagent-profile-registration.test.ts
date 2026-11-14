@@ -80,14 +80,12 @@ describe("plugin subagent profile registration", () => {
     "/outside.md",
     "C:\\outside.md",
     "escape.md",
-    "linked/brief.md",
+    "linked/outside.md",
   ])("refuses missing or escaping instruction file %s", (instructionsFile) => {
     const { dir, root, builder, register } = fixture();
     fs.writeFileSync(path.join(dir, "outside.md"), "outside");
-    fs.mkdirSync(path.join(dir, "outside"));
-    fs.writeFileSync(path.join(dir, "outside", "brief.md"), "outside");
     fs.symlinkSync(path.join(dir, "outside.md"), path.join(root, "escape.md"));
-    fs.symlinkSync(path.join(dir, "outside"), path.join(root, "linked"), "dir");
+    fs.symlinkSync(dir, path.join(root, "linked"), "dir");
     expect(() => register({ instructionsFile })).toThrow();
     expect(builder.registry.subagentProfiles).toEqual([]);
   });

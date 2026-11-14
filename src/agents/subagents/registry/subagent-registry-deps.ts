@@ -2,8 +2,8 @@ import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../../../context-engine/registry.js";
 import type { callGateway } from "../../../gateway/call.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
 import { importRuntimeModule } from "../../../shared/runtime-import.js";
@@ -23,6 +23,9 @@ const subagentRegistryRuntimeLoader = createLazyPromiseLoader(() =>
 const subagentRegistryPluginRuntimeLoader = createLazyPromiseLoader(
   () => import("../../runtime-plugins.js"),
 );
+const preparedRuntimeLoader = createLazyPromiseLoader(
+  () => import("../../prepared-model-runtime.js"),
+);
 
 export const loadSubagentAnnounceModule = subagentAnnounceLoader.load;
 export const loadSubagentBrowserCleanupModule = browserCleanupLoader.load;
@@ -34,7 +37,7 @@ export function createSubagentRegistryGatewayCaller(
 ): typeof callGateway {
   return async <T>(request: Parameters<typeof callGateway>[0]) => {
     if (request.method === "agent.wait") {
-      const gatewayRuntime = getGatewayContextResolver()?.()?.recoveryRuntime;
+      const gatewayRuntime = getGatewayContextResolver()?.()?.lifecycleRuntime;
       if (gatewayRuntime) {
         // Registry waits are Gateway-owned lifecycle work. Keep them on the
         // owning instance when one exists; standalone processes authenticate normally.
@@ -51,12 +54,24 @@ export function createSubagentRegistryGatewayCaller(
 
 export async function loadSubagentRegistryPluginRuntimeHandle(params: {
   config: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
   workspaceDir?: string;
   allowGatewaySubagentBinding?: boolean;
 }): Promise<PluginRegistry | undefined> {
-  return (await subagentRegistryPluginRuntimeLoader.load()).loadAgentRuntimePluginRegistryHandle(
-    params,
-  );
+  if (params.allowGatewaySubagentBinding && params.agentDir) {
+    const prepared = await preparedRuntimeLoader.load();
+    const registry = prepared.getPreparedInboundPluginRegistry({
+      ...params,
+      agentDir: params.agentDir,
+    });
+    if (registry) {
+      return registry;
+    }
+  }
+  return (
+    await subagentRegistryPluginRuntimeLoader.load()
+  ).loadAgentRuntimePluginRegistryHandleAsync(params);
 }
 
 export async function resolveSubagentRegistryContextEngine(

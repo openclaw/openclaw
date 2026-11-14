@@ -37,9 +37,41 @@ export function observeMainThreadSql(options: SqlObservationOptions = {}) {
   return observeSqlCalls(mainThreadSqlSpies(options));
 }
 
-export function observeMainThreadReads() {
+export function expectNoMainThreadSql(run: () => Promise<void>) {
+  return withoutMainThreadSql(run);
+}
+
+export async function withoutMainThreadSql<T>(run: () => Promise<T>): Promise<T> {
+  const sql = observeMainThreadSql();
+  try {
+    const result = await run();
+    sql.expectIdle();
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
+
+export function observeMainThreadReads(
+  onRead?: (sql: string, bindings: readonly unknown[]) => void,
+) {
   return observeSqlCalls(
-    (["all", "get", "iterate"] as const).map((method) => vi.spyOn(StatementSync.prototype, method)),
+    (["all", "get", "iterate"] as const).map((method) => {
+      const original = StatementSync.prototype[method];
+      const spy = vi.spyOn(StatementSync.prototype, method);
+      if (onRead) {
+        spy.mockImplementation(
+          new Proxy(original, {
+            apply(target, receiver: StatementSync, args) {
+              // Capture before control returns to the statement's disposal owner.
+              onRead(receiver.sourceSQL, args);
+              return Reflect.apply(target, receiver, args);
+            },
+          }),
+        );
+      }
+      return spy;
+    }),
   );
 }
 

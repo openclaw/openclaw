@@ -16,6 +16,7 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { sessionMethodDatabaseAdmission } from "./session-method-policy.js";
 import {
   resolveRequestedSessionAgentId,
   resolveRequestedSessionAgentInput,
@@ -82,6 +83,9 @@ export async function prepareSessionSharingRead(params: {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
     const { cfg, projection } = params;
+    if (!projection) {
+      return prepareSessionMutationFacts({ ...params, allowMissing: true });
+    }
     const query = { key: params.sessionKey, agentId: params.agentId };
     const resident = projection?.sharingTarget(query);
     const source = resident && projection?.readSource({ ...query, storePath: resident.storePath });
@@ -100,7 +104,7 @@ export async function prepareSessionSharingRead(params: {
       source.path === configuredSource.physicalPath
         ? { ...resident, readSource: source }
         : undefined;
-    if (!captured || !projection) {
+    if (!captured) {
       return prepareSessionMutationFacts({ ...params, allowMissing: true });
     }
     const assertRouting = captureSessionMutationRouting(cfg, undefined, [params]);
@@ -120,6 +124,7 @@ export async function prepareSessionSharingRead(params: {
           { sessionKey: params.sessionKey, agentId: params.agentId },
           currentCfg,
           projection,
+          "read",
         );
         if (current.status !== "ready" || !isSameSessionSharingTarget(current.target, captured)) {
           throw new SessionMutationFactsUnavailableError();
@@ -162,8 +167,14 @@ export const readProjectedSessionMutationTarget = (
   targetRef: SessionMutationTarget,
   cfg: OpenClawConfig,
   projection: Pick<SessionSharingReadProjection, "sharingTargetState" | "readSource">,
+  admission: "read" | "write" = "write",
 ): { status: "ready"; target: SessionSharingTarget } | { status: "pending" | "unavailable" } => {
-  const agent = resolveRequestedSessionAgentId(cfg, targetRef.sessionKey, targetRef.agentId);
+  const agent = resolveRequestedSessionAgentId(
+    cfg,
+    targetRef.sessionKey,
+    targetRef.agentId,
+    admission,
+  );
   if (!agent.ok) {
     return { status: "unavailable" };
   }
@@ -192,6 +203,7 @@ export function readSessionMutationTarget(params: {
   method: string;
   requestParams: unknown;
   sessionScope?: SessionOperatorScope;
+  databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
   targetRef: SessionMutationTarget;
 }):
@@ -224,8 +236,10 @@ export function readSessionMutationTarget(params: {
       return { target: facts?.target ?? null };
     }
     const projection = getSessionRowProjection(params.context);
+    const admission = params.databaseAdmission ?? sessionMethodDatabaseAdmission(params.method);
     const projected =
-      projection && readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection);
+      projection &&
+      readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection, admission);
     // Prepared callers retain logical locators; resident rows expose physical store paths.
     if (
       projected?.status === "ready" &&
@@ -249,6 +263,7 @@ export function readSessionMutationTarget(params: {
         params.sessionRowRead.state.cfg,
         params.targetRef.sessionKey,
         params.targetRef.agentId,
+        admission,
       );
       if (!agent.ok) {
         return { error: agent.error };

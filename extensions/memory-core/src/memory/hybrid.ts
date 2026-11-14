@@ -242,7 +242,8 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     a.endLine - b.endLine;
   const nonExact = rankable
     .filter((entry) => entry.exactPathSpecificity === 0)
-    .toSorted((a, b) => b.score - a.score || compareRankingScores(a, b));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The filtered partition is privately owned.
+    .sort((a, b) => b.score - a.score || compareRankingScores(a, b));
 
   // Apply MMR re-ranking if enabled
   const rerankExactGroup = (entries: typeof rankable) => {
@@ -261,7 +262,8 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   const exact = ([3, 2, 1] as const).flatMap((specificity) => {
     const tier = rankable
       .filter((entry) => entry.exactPathSpecificity === specificity)
-      .toSorted(compareRankingScores);
+      // oxlint-disable-next-line unicorn/no-array-sort -- The filtered tier is privately owned.
+      .sort(compareRankingScores);
     if (temporalDecayConfig.enabled) {
       return rerankExactGroup(tier);
     }

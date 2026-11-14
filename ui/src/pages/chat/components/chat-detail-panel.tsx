@@ -698,7 +698,9 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) 
     () => lifecycle.snapshot(),
     () => {
       publishDraft();
-      const request = props.fileNavigation?.view;
+      // Bridge props may already describe the next selection while this frame applies.
+      // Consume only the navigation synchronized with visibleContent by renderPanel.
+      const request = previousNavigation?.view;
       if (request && request !== handledFileViewRequest) {
         // Consume even a mismatched request: it must not wait for a later selection.
         handledFileViewRequest = request;

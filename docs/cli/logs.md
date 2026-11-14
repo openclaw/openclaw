@@ -25,6 +25,10 @@ Tail Gateway file logs over RPC. Works in remote mode.
 `--local-time` and `--utc` are mutually exclusive. Passing both fails before a log
 query; omitting both keeps local timestamps.
 
+`--limit`, `--max-bytes`, and `--interval` require positive integers. Invalid
+values exit with status `1` and name the option and accepted values on stderr,
+without requiring debug mode.
+
 Polling intervals larger than 2,147,000,000 ms are capped at that value to avoid timer overflow.
 
 ## Shared Gateway RPC options

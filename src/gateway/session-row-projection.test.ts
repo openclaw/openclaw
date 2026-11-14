@@ -482,6 +482,19 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", () =>
     expect(children(parentKey, "main")).toEqual([key]);
     expect(projection.selectEntries({ parentSessionKey: "global" })).toEqual([]);
     expectInherited(parentKey, "restored-work-model");
+    const previous = projection.capture({ agentId: "main", key });
+    write(key, {
+      sessionId: "child",
+      updatedAt: 2,
+      parentSessionKey: "agent:main:main",
+      spawnedBy: "agent:main:main",
+    });
+    await projection.ensureMaterialized();
+    expect(children(parentKey, "main")).toEqual([]);
+    expect(children("global", "main")).toEqual([key]);
+    expect(projection.capture({ agentId: "main", key })).not.toBe(previous);
+    expectInherited("global", "main-global-model");
+    expect(snapshotRow(projection, key)?.spawnedBy).toBe("global");
   }));
 
 it.each(["global", "unknown"])(

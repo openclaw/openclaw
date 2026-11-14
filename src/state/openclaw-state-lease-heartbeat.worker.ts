@@ -2,7 +2,7 @@ import { parentPort, workerData, type MessagePort } from "node:worker_threads";
 import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
-import { bindPostgresPool } from "../infra/postgres-sync/pool.js";
+import { bindPostgresPool } from "../infra/postgres-sync/pool-state.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withSqliteDatabaseAdmissionExchange } from "../infra/sqlite-database-admission.js";
@@ -13,10 +13,15 @@ import {
 } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { serveWorkerMemorySamples } from "../infra/worker-memory.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { openExistingStatePostgresConnection } from "./openclaw-state-db-engine.js";
-import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
+import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
+import {
+  openTrackedStateDatabase,
+  closeTrackedStateDatabase,
+  readTrackedStateDatabaseIdentity,
+} from "./openclaw-state-db-handle.js";
 import {
   createOpenClawStateLeaseLostError,
   OpenClawStateLeaseError,
@@ -52,25 +57,41 @@ type HeartbeatDatabase = {
   references: number;
 };
 const databases = new Map<string, HeartbeatDatabase>();
+let openExistingStatePostgresConnection:
+  | typeof import("./openclaw-state-db-engine.js").openExistingStatePostgresConnection
+  | undefined;
 
-function startHeartbeat(
+async function startHeartbeat(
   params: LeaseHeartbeatWorkerData,
   port: MessagePort,
   primary = false,
-): void {
+): Promise<void> {
+  const startupDeadline = Date.now() + LEASE_HEARTBEAT_START_TIMEOUT_MS;
   let retainedDatabase: HeartbeatDatabase | undefined;
   const databaseKey = JSON.stringify([params.path, params.expectedIdentity]);
+  const admissionFailure = (cause: unknown) =>
+    new OpenClawStateLeaseError("state lease heartbeat database admission failed", {
+      code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+      loss: { reason: "admission-failed" },
+      cause,
+    });
+  const operationLoss = (error: unknown) =>
+    error instanceof OpenClawStateLeaseError && error.loss
+      ? error.loss
+      : { reason: "storage-failed" as const };
   function withDatabaseAdmission<T>(operation: () => T): T {
-    return withSqliteDatabaseAdmissionExchange(
-      (admissions, location, create) =>
-        exchangeSqliteDatabaseAdmissions(
+    return withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
+      try {
+        return exchangeSqliteDatabaseAdmissions(
           params.databaseAdmissionPort,
           admissions,
           location,
           create,
-        ),
-      operation,
-    );
+        );
+      } catch (error) {
+        throw admissionFailure(error);
+      }
+    }, operation);
   }
   const shared = new BigInt64Array(params.shared);
   const renewalProgress = new BigInt64Array(params.renewalProgress);
@@ -82,12 +103,14 @@ function startHeartbeat(
   function openHeartbeatDatabase() {
     // The parent's bound is a retry deadline, not ownership. Renewal below still
     // checks the exact current persisted owner/expiry before changing the row.
-    const deadline = Date.now() + LEASE_HEARTBEAT_START_TIMEOUT_MS;
     const remaining = () =>
-      Math.min(deadline, Number(Atomics.load(shared, state.expiresAt))) - Date.now();
+      Math.min(startupDeadline, Number(Atomics.load(shared, state.expiresAt))) - Date.now();
     while (remaining() > 0 && Atomics.load(shared, state.status) === state.starting) {
       try {
-        const postgres = openExistingStatePostgresConnection(params.path, params.expectedIdentity);
+        const postgres = openExistingStatePostgresConnection?.(
+          params.path,
+          params.expectedIdentity,
+        );
         if (postgres) {
           return {
             database: postgres.database.db,
@@ -116,6 +139,18 @@ function startHeartbeat(
     throw new Error("state lease heartbeat startup deadline expired or owner stopped");
   }
   let db: EngineConnection;
+  function assertDatabaseAccess(): void {
+    try {
+      assertStateDatabaseAccessAllowed(params.path);
+      const identity = readTrackedStateDatabaseIdentity(db);
+      if (!identity) {
+        throw new Error("State lease heartbeat database has no admitted physical identity");
+      }
+      assertExistingDatabaseIdentity(params.path, params.expectedIdentity, identity.birthtime);
+    } catch (error) {
+      throw admissionFailure(error);
+    }
+  }
   let processOwner = params.processOwner;
   let heartbeat: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
@@ -126,7 +161,7 @@ function startHeartbeat(
     intervalMs: params.heartbeatMs,
     execute: (operation) =>
       withRenewalProgress(() => {
-        assertStateDatabaseAccessAllowed(params.path);
+        assertDatabaseAccess();
         return operation();
       }),
     complete: (outcome) =>
@@ -154,6 +189,7 @@ function startHeartbeat(
     }
     closed = true;
     params.databaseAdmissionPort.close();
+    params.lossPort.close();
     port.off("message", receiveMessage);
     if (primary) {
       port.postMessage({ closed: true }, []);
@@ -166,8 +202,8 @@ function startHeartbeat(
   const observeLoss = () => {
     try {
       return withDatabaseAdmission(() => readOpenClawStateLeaseLoss(db, params.identity));
-    } catch {
-      return undefined;
+    } catch (error) {
+      return operationLoss(error);
     }
   };
   const recordLoss = (loss: LeaseHeartbeatLoss) => {
@@ -175,12 +211,13 @@ function startHeartbeat(
       return;
     }
     firstLoss = loss;
-    port.postMessage({ loss } satisfies LeaseHeartbeatReply, []);
+    params.lossPort.postMessage(loss, []);
   };
   const lose = (loss: LeaseHeartbeatLoss) => {
+    // Queue the cause before making loss observable to a synchronous parent.
+    recordLoss(loss);
     Atomics.compareExchange(shared, state.status, state.starting, state.lost);
     Atomics.compareExchange(shared, state.status, state.ready, state.lost);
-    recordLoss(loss);
     close();
   };
   const renewInWorker = (
@@ -212,7 +249,7 @@ function startHeartbeat(
         runSqliteImmediateTransactionSync(
           db,
           () => {
-            assertStateDatabaseAccessAllowed(params.path);
+            assertDatabaseAccess();
             if (Atomics.load(shared, state.status) >= state.closed) {
               return undefined;
             }
@@ -252,7 +289,7 @@ function startHeartbeat(
         if (explicit) {
           throw error;
         }
-        lose({ path, outcome: "operation-error" });
+        lose({ path, outcome: "operation-error", leaseLoss: operationLoss(error) });
         return undefined;
       }
       contentionError = error;
@@ -273,6 +310,7 @@ function startHeartbeat(
         }
         return Number(Atomics.load(shared, state.expiresAt));
       }
+      assertDatabaseAccess();
       expiresAt = readOpenClawStateLeaseExpiry(db, params.identity);
     }
     observeDurableExpiry(expiresAt);
@@ -354,7 +392,7 @@ function startHeartbeat(
         );
         return;
       }
-      lose({ path: "activation", outcome: "operation-error" });
+      lose({ path: "activation", outcome: "operation-error", leaseLoss: operationLoss(error) });
       return;
     }
     if (expiresAt === undefined) {
@@ -394,14 +432,16 @@ function startHeartbeat(
     let reply: LeaseHeartbeatReply;
     let lost = false;
     let outcome: LeaseHeartbeatLoss["outcome"] = "operation-error";
+    let leaseLoss: LeaseHeartbeatLoss["leaseLoss"];
     const path = request.operation === "renew" ? "explicit-renew" : "explicit-verify";
     try {
       const expiresAt =
         request.operation === "renew"
           ? renew(true, path)
-          : withDatabaseAdmission(() =>
-              observeDurableExpiry(readOpenClawStateLeaseExpiry(db, params.identity)),
-            );
+          : withDatabaseAdmission(() => {
+              assertDatabaseAccess();
+              return observeDurableExpiry(readOpenClawStateLeaseExpiry(db, params.identity));
+            });
       if (expiresAt === undefined) {
         outcome = "no-current-owned-unexpired-row";
         throw createOpenClawStateLeaseLostError(params.identity, undefined, observeLoss());
@@ -414,8 +454,10 @@ function startHeartbeat(
           ? cause
           : new OpenClawStateLeaseError(`failed to ${request.operation} state lease heartbeat`, {
               code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+              loss: operationLoss(cause),
               cause,
             });
+      leaseLoss = operationLoss(error);
       reply = {
         id: request.id,
         ok: false,
@@ -425,18 +467,18 @@ function startHeartbeat(
     }
     if (lost) {
       // Preserve the first loss before the existing request rejection can escape.
-      recordLoss({ path, outcome });
+      recordLoss({ path, outcome, leaseLoss });
     }
     port.postMessage(reply, []);
     if (lost) {
-      lose({ path, outcome });
+      lose({ path, outcome, leaseLoss });
     }
   };
   function runAutomatic(run: () => unknown, path: LeaseHeartbeatLoss["path"]): void {
     try {
       run();
-    } catch {
-      lose({ path, outcome: "operation-error" });
+    } catch (error) {
+      lose({ path, outcome: "operation-error", leaseLoss: operationLoss(error) });
     }
   }
   function receiveMessage(
@@ -450,6 +492,16 @@ function startHeartbeat(
     }
     if (params.databaseEngineSelection) {
       installDatabaseEngineSelection(params.databaseEngineSelection);
+    }
+    if (stateEngineInput() && !openExistingStatePostgresConnection) {
+      openExistingStatePostgresConnection = (await import("./openclaw-state-db-engine.js"))
+        .openExistingStatePostgresConnection;
+      if (
+        Atomics.load(shared, state.status) !== state.starting ||
+        Math.min(startupDeadline, Number(Atomics.load(shared, state.expiresAt))) <= Date.now()
+      ) {
+        throw new Error("state lease heartbeat startup deadline expired or owner stopped");
+      }
     }
     const existingDatabase = databases.get(databaseKey);
     if (existingDatabase) {
@@ -484,13 +536,16 @@ if (!parentPort) {
   throw new Error("State lease heartbeat requires its parent port");
 }
 serveWorkerMemorySamples(parentPort);
+let registrationStart = Promise.resolve();
 parentPort.on(
   "message",
   (message: LeaseHeartbeatParentMessage | { close: true } | HeartbeatRegistration) => {
     if ("registration" in message) {
-      startHeartbeat(message.registration, message.port);
+      registrationStart = registrationStart.then(() =>
+        startHeartbeat(message.registration, message.port),
+      );
     }
   },
 );
 // SAFETY: The host alone starts this private carrier with the typed initial lease payload.
-startHeartbeat(workerData as LeaseHeartbeatWorkerData, parentPort, true);
+registrationStart = startHeartbeat(workerData as LeaseHeartbeatWorkerData, parentPort, true);

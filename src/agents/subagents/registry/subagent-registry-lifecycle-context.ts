@@ -128,6 +128,8 @@ export type CleanupBookkeepingParams = {
   preserveTranscript?: boolean;
   provisionalKill?: boolean;
   skipRequesterSettleWake?: boolean;
+  /** Keep the settled row until its session and attachment cleanup succeeds. */
+  retainForCleanup?: boolean;
   isCurrent?: () => boolean;
   finalizeDelivery?: (draft: SubagentRunRecord) => void;
 };

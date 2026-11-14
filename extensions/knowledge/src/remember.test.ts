@@ -36,9 +36,8 @@ async function fixture() {
 it("remember links a claim to a uniquely matching page and cites the retained excerpt", async () => {
   const f = await fixture();
   const project = await f.page("Garden Pilot", { aliases: ["pilot"] });
-  const out = await f.remember([
-    { text: "Picked option B because it ships sooner.", kind: "decision", subject: "pilot" },
-  ]);
+  const text = `${"A".repeat(198)}😀 trailer`;
+  const out = await f.remember([{ text, kind: "decision", subject: "pilot" }], { excerpt: text });
   expect(Check(contract.operations.remember.output, out)).toBeTruthy();
   expect(out.receipt!.state).toBe("published");
   expect(out.items.map((i) => [i.status, i.subject, i.subjectId])).toStrictEqual([
@@ -48,6 +47,7 @@ it("remember links a claim to a uniquely matching page and cites the retained ex
     { id: out.items[0]!.id, includeMetadata: true, includeEvidence: true },
     f.owner,
   );
+  expect(read.record!.title).toBe(`${"A".repeat(198)}…`);
   expect(read.record!.metadata!.entities).toStrictEqual([project.id]);
   expect(read.record!.metadata!.claim_kind).toBe("decision");
   expect(read.record!.metadata!.assertion_origin).toBe("source");

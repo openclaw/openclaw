@@ -6,7 +6,6 @@ import {
   Errored,
   For,
   isPending,
-  lazy,
   latest,
   Loading,
   Show,
@@ -22,12 +21,12 @@ import { SettingsSegmented, SettingsPage } from "../../components/solid/settings
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 import { AppearanceSection } from "./view-appearance.tsx";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
-import { ConfigForm, NotificationsSection, SetupSection } from "./view-lazy.ts";
+import { ConfigForm, HighlightedJson, NotificationsSection, SetupSection } from "./view-lazy.ts";
 import {
   CATEGORISED_KEYS,
   ConfigAccordionNav,
@@ -35,6 +34,7 @@ import {
   SECTION_CATEGORIES,
   type SectionCategory,
 } from "./view-navigation.tsx";
+import { rawSecretsLabel } from "./view-raw-secrets.ts";
 import { ConfigReadBoundary, ConfigReadError, ConfigReadLoading } from "./view-readiness.tsx";
 import {
   asConfigSchema,
@@ -52,10 +52,6 @@ import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
-const HighlightedJson = lazy(() => import("../../components/solid/highlighted-json.tsx"), {
-  export: "HighlightedJson",
-});
-
 export function Config(props: ConfigProps) {
   const plainIssues = () => <pre class="code-block">{JSON.stringify(props.issues, null, 2)}</pre>;
   let content: HTMLDivElement | undefined;
@@ -82,15 +78,55 @@ export function Config(props: ConfigProps) {
     return props.viewState;
   };
   const schema = createMemo(() => asConfigSchema(props.schema));
-  const includedSections = createMemo(() =>
-    props.includeSections?.length ? new Set(props.includeSections) : null,
-  );
-  const excludedSections = createMemo(() =>
-    props.excludeSections?.length ? new Set(props.excludeSections) : null,
-  );
+  const include = createMemo(() => props.includeSections);
+  const exclude = createMemo(() => props.excludeSections);
+  const includedSections = createMemo(() => (include()?.length ? new Set(include()) : null));
+  const excludedSections = createMemo(() => (exclude()?.length ? new Set(exclude()) : null));
   const schemaAnalysis = createMemo(() =>
     getConfigSchemaAnalysis(schema(), includedSections(), excludedSections()),
   );
+  const activeSection = createMemo(() => props.activeSection);
+  const subsection = createMemo(() => props.activeSubsection);
+  const uiHints = createMemo(() => props.uiHints);
+  const editorInputs = createMemo(() => {
+    const scoped = schemaAnalysis().schema;
+    const channelSchema = activeSection() === "channels" ? scoped?.properties?.channels : undefined;
+    if (channelSchema) {
+      getLocale();
+    }
+    const channelGroups = channelSchema ? getChannelConfigGroups(channelSchema, uiHints()) : [];
+    const channelGroup = channelGroups.find(({ key }) => key === subsection()) ?? channelGroups[0];
+    const formSchema =
+      channelSchema && channelGroup
+        ? {
+            ...scoped,
+            properties: {
+              ...scoped?.properties,
+              channels: {
+                ...channelSchema,
+                properties: Object.fromEntries(
+                  Object.entries(channelSchema.properties ?? {}).filter(([key]) =>
+                    channelGroup.keys.includes(key),
+                  ),
+                ),
+                required: channelSchema.required?.filter((key) => channelGroup.keys.includes(key)),
+                additionalProperties: false,
+              },
+            },
+          }
+        : scoped;
+    const setupSchema = formSchema?.properties?.wizard;
+    const editorSchemaBase = setupSchema
+      ? {
+          ...formSchema,
+          properties: Object.fromEntries(
+            Object.entries(formSchema.properties ?? {}).filter(([key]) => key !== "wizard"),
+          ),
+        }
+      : formSchema;
+    const editorSchema = editorSchemaBase && omitCuratedOwnedConfigLeaves(editorSchemaBase);
+    return { channelGroups, channelGroup, editorSchema, setupSchema };
+  });
   const state = createMemo(() => {
     const viewState = view();
     const showModeToggle = props.showModeToggle ?? false;
@@ -149,41 +185,6 @@ export function Config(props: ConfigProps) {
     if (extras.length) {
       categories.push({ id: "other", label: t("configView.categories.other"), sections: extras });
     }
-    const channelSchema = props.activeSection === "channels" ? schemaProps.channels : undefined;
-    const channelGroups = channelSchema ? getChannelConfigGroups(channelSchema, props.uiHints) : [];
-    const channelGroup =
-      channelGroups.find((group) => group.key === props.activeSubsection) ?? channelGroups[0];
-    const formSchema =
-      channelSchema && channelGroup
-        ? {
-            ...analysis.schema,
-            properties: {
-              ...schemaProps,
-              channels: {
-                ...channelSchema,
-                properties: Object.fromEntries(
-                  Object.entries(channelSchema.properties ?? {}).filter(([key]) =>
-                    channelGroup.keys.includes(key),
-                  ),
-                ),
-                required: channelSchema.required?.filter((key) => channelGroup.keys.includes(key)),
-                additionalProperties: false,
-              },
-            },
-          }
-        : analysis.schema;
-    const setupSchema = formSchema?.properties?.wizard;
-    const editorSchemaBase = setupSchema
-      ? {
-          ...formSchema,
-          properties: Object.fromEntries(
-            Object.entries(formSchema.properties ?? {}).filter(([key]) => key !== "wizard"),
-          ),
-        }
-      : formSchema;
-    const editorSchema = editorSchemaBase
-      ? omitCuratedOwnedConfigLeaves(editorSchemaBase)
-      : editorSchemaBase;
     const topTabs: Array<{ key: string | null; label: string }> = [
       ...((props.showRootTab ?? true)
         ? [{ key: null, label: props.navRootLabel ?? t("nav.settings") }]
@@ -209,10 +210,10 @@ export function Config(props: ConfigProps) {
     const configBusy = props.loading || props.saving || props.applying || props.updating;
     const formBusy = configBusy || props.schemaLoading;
     const mutationAllowed = props.mutationAllowed !== false;
-    const showSetup = Boolean(
-      setupSchema && (!props.activeSection || props.activeSection === "wizard"),
-    );
-    const showSectionTabs = props.settingsLayout !== "accordion" && topTabs.length > 1;
+    const showSectionTabs =
+      props.settingsLayout !== "accordion" &&
+      props.settingsLayout !== "stack" &&
+      topTabs.length > 1;
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
     return {
@@ -223,14 +224,17 @@ export function Config(props: ConfigProps) {
       analysis,
       unsupportedActivePaths,
       rawAvailable,
+      activeTabLabel: showSectionTabs
+        ? topTabs.find((tab) => tab.key === props.activeSection)?.label
+        : undefined,
+      openRaw: showModeToggle && rawAvailable ? () => props.onFormModeChange("raw") : undefined,
       rawDraftPending,
       formMode,
       categories,
-      channelGroups,
-      channelGroup,
-      editorSchema,
-      setupSchema,
-      showSetup,
+      ...editorInputs(),
+      showSetup: Boolean(
+        editorInputs().setupSchema && (!props.activeSection || props.activeSection === "wizard"),
+      ),
       topTabs,
       hasRawChanges,
       rawDiff,
@@ -244,7 +248,7 @@ export function Config(props: ConfigProps) {
         showToolbar ||
         props.settingsLayout === "accordion" ||
         showValidityWarning ||
-        Boolean(channelGroup),
+        Boolean(editorInputs().channelGroup),
     };
   });
   const schemaRead = createMemo(() => ({ completion: props.schemaRead }), {
@@ -383,9 +387,7 @@ export function Config(props: ConfigProps) {
               >
                 {saving() ? (
                   <>
-                    <span class="config-action-spinner" aria-hidden="true">
-                      <Icon name="loader" />
-                    </span>
+                    <span class="btn__spinner" aria-hidden="true" />
                     {t("common.saving")}
                   </>
                 ) : (
@@ -399,13 +401,7 @@ export function Config(props: ConfigProps) {
                 {sensitiveCount() > 0 ? (
                   <>
                     <span class="settings-count">
-                      {t(
-                        sensitiveCount() === 1
-                          ? "configView.secretCount"
-                          : "configView.secretCountPlural",
-                        { count: String(sensitiveCount()) },
-                      )}{" "}
-                      {t(view().rawRevealed ? "configView.visible" : "configView.redacted")}
+                      {rawSecretsLabel(sensitiveCount(), view().rawRevealed, props.raw)}
                     </span>
                     <openclaw-tooltip
                       prop:content={t(
@@ -457,12 +453,16 @@ export function Config(props: ConfigProps) {
     const editor = (
       <ConfigForm
         schema={state().editorSchema}
+        progressive={props.progressive}
         uiHints={props.uiHints}
         value={props.formValue}
         embedded={props.embeddedEditor === true || state().showSetup}
         rawAvailable={state().rawAvailable}
+        repeatedHeadings={[props.navRootLabel, state().activeTabLabel]}
+        onOpenRaw={state().openRaw}
         disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
         unsupportedPaths={state().analysis.unsupportedPaths}
+        secretFields={props.secretFields}
         onPatch={props.onFormPatch}
         onRemove={props.onFormRemove}
         activeSection={props.activeSection}
@@ -494,7 +494,9 @@ export function Config(props: ConfigProps) {
           ) : undefined
         }
         showSectionDocs={props.showSectionDocs}
+        sectionTitle={props.sectionTitle}
         sectionPrelude={props.sectionPrelude}
+        curatedSections={props.curatedSections}
         revealSensitive={props.activeSection === "env" && view().envRevealed}
         maskSensitive
         isSensitivePathRevealed={(path) => isSensitivePathRevealed(view(), path)}
@@ -517,7 +519,6 @@ export function Config(props: ConfigProps) {
               {state().showModeToggle ? (
                 <SettingsSegmented
                   mode="buttons"
-                  variant="primary"
                   value={state().formMode}
                   onChange={props.onFormModeChange}
                   onReselect={props.onFormModeChange}
@@ -630,17 +631,11 @@ export function Config(props: ConfigProps) {
             ) : null
           ) : state().formMode === "form" ? (
             <>
-              {state().unsupportedActivePaths.length > 0 &&
-              state().showModeToggle &&
-              state().rawAvailable ? (
+              {state().unsupportedActivePaths.length > 0 && state().openRaw ? (
                 <div class="config-content-callout">
                   <div class="callout info">
                     <UnsupportedPathSummary paths={state().unsupportedActivePaths} />{" "}
-                    <button
-                      type="button"
-                      class="btn btn--sm"
-                      onClick={() => props.onFormModeChange("raw")}
-                    >
+                    <button type="button" class="btn btn--sm" onClick={() => state().openRaw?.()}>
                       {t("configView.openRawEditor")}
                     </button>
                   </div>
@@ -664,7 +659,7 @@ export function Config(props: ConfigProps) {
               >
                 <Loading
                   on={hasSchema() ? undefined : schemaRead()}
-                  fallback={<ConfigReadLoading message={t("configView.loadingSchema")} />}
+                  fallback={<ConfigReadLoading message={t("common.loading")} />}
                 >
                   <Show when={readSchemaReady()}>
                     {(message) => (
@@ -675,7 +670,7 @@ export function Config(props: ConfigProps) {
                     )}
                   </Show>
                   <span class="sr-only" role="status">
-                    {isPending(schemaReady) ? t("configView.loadingSchema") : ""}
+                    {isPending(schemaReady) ? t("common.loading") : ""}
                   </span>
                   <FormEditor />
                   {state().showSetup ? (

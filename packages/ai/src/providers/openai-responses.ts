@@ -99,6 +99,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
         replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
         sessionId: options?.sessionId,
         authProfileId: options?.authProfileId,
+        mutableInput: Boolean(options?.onPayload),
         replayMode,
       });
 

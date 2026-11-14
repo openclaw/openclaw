@@ -8,7 +8,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
+import { readSessionGoalOperationInDatabase } from "./goals-operation-receipts.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -80,9 +80,6 @@ describe("first transcript turn initialization", () => {
       sessionLifecyclePatch: {
         status: undefined,
         lifecycleRunId: operation.operationId,
-        restartRecoveryDeliveryRunId: operation.operationId,
-        restartRecoveryDeliverySourceRunId: operation.operationId,
-        restartRecoveryDeliveryRequestFingerprint: operation.requestFingerprint,
       },
       updateMode: "none",
       ...options,
@@ -112,7 +109,7 @@ describe("first transcript turn initialization", () => {
       sessionEntry: {
         ...initialSessionEntry,
         updatedAt: expect.any(Number),
-        restartRecoveryDeliveryRunId: operation.operationId,
+        lifecycleRunId: operation.operationId,
         goal: { objective: operation.objective, status: "active" },
       },
       sessionTurnMutationResult: {

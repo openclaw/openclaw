@@ -29,6 +29,7 @@ export async function appendSessionManagerActor(input: {
   actor: SessionActor;
   append: SessionActorAppend;
   toolResult: boolean;
+  message: { role: string; idempotencyKey?: unknown } | null;
   assertCurrent(this: void): void;
   beforeFreshMessageCommit?: () => void;
   onCommitted?(committed: SessionActorAppendCommitted): void;
@@ -37,7 +38,7 @@ export async function appendSessionManagerActor(input: {
   failure?: SessionManagerActorCommittedError;
 }> {
   const { actor, assertCurrent } = input;
-  const admission = captureSessionMessageAdmission(assertCurrent, input);
+  const admission = captureSessionMessageAdmission(assertCurrent, input, input.message);
   const append: SessionActorAppend =
     input.append.kind === "message"
       ? { ...input.append, input: { ...input.append.input, ...admission.control } }

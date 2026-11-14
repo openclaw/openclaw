@@ -1,5 +1,5 @@
-.agents-home__claw-card,
-.agents-home__claw-skeleton {
+.agents-home__template-card,
+.agents-home__template-skeleton {
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
@@ -7,12 +7,12 @@
   background: var(--bg-elevated);
 }
 
-.agents-home__claw-skeleton {
+.agents-home__template-skeleton {
   min-height: 168px;
   background: var(--bg-accent);
 }
 
-.agents-home__claw-card {
+.agents-home__template-card {
   position: relative;
   /* Card width, not viewport width, decides the title row: multi-column grids
      make cards narrow on laptop-sized screens. */
@@ -22,7 +22,7 @@
   gap: 10px;
 }
 
-.agents-home__claw-card-link {
+.agents-home__template-card-link {
   position: absolute;
   z-index: 1;
   inset: 0;
@@ -33,16 +33,16 @@
   cursor: var(--cursor-action);
 }
 
-.agents-home__claw-card-link:focus-visible {
+.agents-home__template-card-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -3px;
 }
 
-.agents-home__claw-card-link:disabled {
+.agents-home__template-card-link:disabled {
   cursor: default;
 }
 
-.agents-home__claw-head {
+.agents-home__template-head {
   position: relative;
   z-index: 2;
   display: grid;
@@ -56,7 +56,7 @@
 /* Narrow cards: give the name the full card width instead of the gap between
    the artwork and Add, which otherwise breaks names one or two words per line. */
 @container (max-width: 279px) {
-  .agents-home__claw-head {
+  .agents-home__template-head {
     grid-template-areas:
       "art . add"
       "identity identity identity";
@@ -64,13 +64,13 @@
   }
 }
 
-.agents-home__claw-head .btn {
+.agents-home__template-head .btn {
   position: relative;
   z-index: 3;
   pointer-events: auto;
 }
 
-.agents-home__claw-art {
+.agents-home__template-art {
   grid-area: art;
   display: grid;
   width: 36px;
@@ -81,23 +81,23 @@
   color: var(--accent);
 }
 
-.agents-home__claw-art img {
+.agents-home__template-art img {
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
 
-.agents-home__claw-art svg {
+.agents-home__template-art svg {
   width: 20px;
   height: 20px;
 }
 
-.agents-home__claw-identity {
+.agents-home__template-identity {
   grid-area: identity;
   min-width: 0;
 }
 
-.agents-home__claw-identity h3 {
+.agents-home__template-identity h3 {
   display: -webkit-box;
   margin: 0;
   overflow: hidden;
@@ -108,7 +108,7 @@
   -webkit-line-clamp: 2;
 }
 
-.agents-home__claw-identity span {
+.agents-home__template-identity span {
   display: block;
   overflow: hidden;
   color: var(--muted);
@@ -117,11 +117,11 @@
   white-space: nowrap;
 }
 
-.agents-home__claw-add {
+.agents-home__template-add {
   grid-area: add;
 }
 
-.agents-home__claw-summary {
+.agents-home__template-summary {
   position: relative;
   z-index: 2;
   display: -webkit-box;
@@ -135,7 +135,7 @@
   pointer-events: none;
 }
 
-.agents-home__claw-empty {
+.agents-home__template-empty {
   margin: 0 0 16px;
   color: var(--muted);
 }

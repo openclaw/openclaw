@@ -53,6 +53,8 @@ export type ChatSessionSharingProps = {
   state: ChatSessionSharingState | undefined;
   allowedVisibilities?: readonly SessionVisibility[];
   membersAvailable?: boolean;
+  /** Display only until the admitted sharing read confirms public access. */
+  cachedPublished?: boolean;
   openDisabledReason?: string;
   visibilityDisabledReason?: string;
   memberAddDisabledReason?: string;

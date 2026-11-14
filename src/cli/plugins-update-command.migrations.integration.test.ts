@@ -532,6 +532,20 @@ it.each([
         }
       }
       const applyRuntime = vi.fn();
+      const expectedNextRecords = installScenario
+        ? {
+            ...nextRecords,
+            [pluginId]: {
+              ...nextRecords[pluginId],
+              sourceSnapshotDigests: {
+                [pluginId]: {
+                  contentDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                  dependencyClosureDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+                },
+              },
+            },
+          }
+        : nextRecords;
       const command = installScenario
         ? (async () => {
             const prepared = await configIo.readConfigFileSnapshotForWrite();
@@ -567,7 +581,7 @@ it.each([
         expect(auditRefused).toBe(true);
         expect(savedSettings()).toEqual({ listener: { port: 57597 }, label: "kept" });
         expect(pending()).toEqual([]);
-        expect(await records()).toEqual(superseded ? newerRecords : nextRecords);
+        expect(await records()).toEqual(superseded ? newerRecords : expectedNextRecords);
         expect(payload.commit).toHaveBeenCalledTimes(1);
         expect(payload.rollback).not.toHaveBeenCalled();
         expect(gateway.call).not.toHaveBeenCalled();
@@ -640,7 +654,7 @@ it.each([
       expect(pending()).toEqual(
         inactive || pendingState ? beforePending : retainsOther ? [unrelated] : [],
       );
-      expect(await records()).toEqual(nextRecords);
+      expect(await records()).toEqual(expectedNextRecords);
       if (inactive) {
         expect(plugins.entries[pluginId].enabled).toBe(false);
       }

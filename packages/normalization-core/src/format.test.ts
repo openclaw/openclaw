@@ -4,10 +4,10 @@ import { bucketRelativeTimeMs, formatByteSize, formatCompactTokenCount } from ".
 describe("bucketRelativeTimeMs", () => {
   it.each([
     [59_499, { value: 59, unit: "second" }],
-    [59_500, { value: 1, unit: "minute" }],
-    [60 * 60_000, { value: 1, unit: "hour" }],
-    [48 * 3_600_000, { value: 2, unit: "day" }],
-  ] as const)("buckets %sms with nested rounding", (durationMs, expected) => {
+    [89_500, { value: 1, unit: "minute" }],
+    [5_369_500, { value: 1, unit: "hour" }],
+    [2.49 * 86_400_000, { value: 2, unit: "day" }],
+  ] as const)("buckets %sms directly from elapsed milliseconds", (durationMs, expected) => {
     expect(bucketRelativeTimeMs(durationMs)).toEqual(expected);
   });
 });

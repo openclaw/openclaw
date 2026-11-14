@@ -6,8 +6,9 @@ import { readSessionPendingInput } from "../config/sessions/session-pending-inpu
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { sameTranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import { FsSafeError } from "../infra/fs-safe.js";
+import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
+import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
-import { buildInboundMediaUriFromPath, parseInboundMediaUri } from "../media/media-reference.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import type { resolveAssistantMediaPolicy } from "./assistant-media-policy.js";

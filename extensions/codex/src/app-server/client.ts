@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  coerceErrorMessage,
+  materializeErrorStack,
+  toStringifiedError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
@@ -197,7 +201,9 @@ export class CodexAppServerClient {
     child.once("exit", (code, signal) => {
       this.transportExited = true;
       this.closeWithError(
-        child.startupFailure?.error ?? buildCodexAppServerExitError(code, signal, this.stderrTail),
+        child.startupFailure?.error ??
+          child.exitError ??
+          buildCodexAppServerExitError(code, signal, this.stderrTail),
       );
     });
     // Guard against unhandled EPIPE / write-after-close errors on the stdin
@@ -255,7 +261,8 @@ export class CodexAppServerClient {
     }
   }
 
-  static fromTransportForTests(child: CodexAppServerTransport): CodexAppServerClient {
+  /** Wraps an externally owned transport, including worker duplex connections. */
+  static fromTransport(child: CodexAppServerTransport): CodexAppServerClient {
     return new CodexAppServerClient(child);
   }
 
@@ -667,6 +674,7 @@ export class CodexAppServerClient {
     }
     this.closed = true;
     closeCodexCatalogClientSource(this);
+    materializeErrorStack(error);
     this.closeError = error;
     this.closeMessageReader();
     this.catalogWorkerClosed = this.catalogWorker.close(error);

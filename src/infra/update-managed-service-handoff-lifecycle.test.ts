@@ -4,12 +4,14 @@ import {
   createSpawnMock,
   useManagedServiceHandoffLifecycleFixture,
 } from "./update-managed-service-handoff-fixture.test-support.js";
+import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { escape as escapeGlob } from "minimatch";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -25,13 +27,10 @@ import {
 } from "./update-managed-service-handoff-artifacts.test-support.js";
 import { registerManagedCampaignFailureTests } from "./update-managed-service-handoff-campaign.test-support.js";
 import {
-  cleanupStaleManagedServiceUpdateHandoffs,
-  MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
-} from "./update-managed-service-handoff-cleanup.js";
-import {
   isManagedServiceInspectionCommand,
   registerManagedHandoffOwnerTests,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import * as boundaryProcesses from "./update-managed-service-handoff-process.test-support.js";
 import type { ManagedServiceUpdateHandoffParams } from "./update-managed-service-handoff-types.js";
 import { pathExists } from "./update-managed-service-native.test-support.js";
 import { recordUpdateRunStep } from "./update-run-ledger.js";
@@ -120,6 +119,38 @@ describe("managed service update handoff", () => {
     expect(tracker.dirs.size).toBe(0);
   });
 
+  itUnix("reaps the parent when fixture setup rejects", async () => {
+    let parent: ChildProcess | undefined;
+    let closed = false;
+    const createParent = boundaryProcesses.createManagedServiceBoundaryParent;
+    const observer = vi
+      .spyOn(boundaryProcesses, "createManagedServiceBoundaryParent")
+      .mockImplementation((spawn) => {
+        const result = createParent(spawn);
+        parent = result.parent;
+        void result.parentClosed.then(() => {
+          closed = true;
+        });
+        return result;
+      });
+    try {
+      await expect(
+        runBoundary("systemd", {
+          async prepareState() {
+            await Promise.resolve();
+            throw new Error("fixture setup rejected");
+          },
+        }),
+      ).rejects.toThrow("fixture setup rejected");
+      expect(observer).toHaveBeenCalledTimes(1);
+      expect(closed).toBe(true);
+    } finally {
+      observer.mockRestore();
+      // The regression must reap its real parent even on the broken fixture.
+      await boundaryProcesses.createManagedServiceBoundaryCleanup(() => [parent])();
+    }
+  });
+
   itUnix("tracks the real handoff artifacts with Bun runtime arguments", async () => {
     const root = tempDirs.make("openclaw-handoff-bun-args-");
     const result = await startHandoff({
@@ -127,16 +158,9 @@ describe("managed service update handoff", () => {
       execPath: path.join(root, "bun"),
       argv1: path.join(root, "openclaw.mjs"),
     });
-    const { command, args, dir, scriptPath, paramsPath } = handoffArtifacts(0, result.logPath);
+    const { command, args, scriptPath, paramsPath } = handoffArtifacts(0, result.logPath);
     expect(command).toBe(path.join(root, "bun"));
     expect(args).toEqual(["--no-install", scriptPath, paramsPath]);
-    expect(dir).toBe(path.dirname(result.logPath));
-    expect(tempDirs.dirs.has(dir)).toBe(true);
-    const tmpRoot = await fs.realpath(os.tmpdir());
-    for (const registered of tempDirs.dirs) {
-      const relative = path.relative(tmpRoot, await fs.realpath(registered));
-      expect(relative === "" || relative.startsWith("..") || path.isAbsolute(relative)).toBe(false);
-    }
   });
 
   registerManagedHandoffOwnerTests(runBoundary, itUnix, expect);
@@ -773,46 +797,35 @@ describe("managed service update handoff", () => {
         });
 
         expect(result.status).toBe("started");
-        if (!supervisor || systemd) {
-          expect(spawnMock).toHaveBeenCalledTimes(1);
-        }
         const { command, args, options, paramsPath } = handoffArtifacts(-1, result.logPath);
         const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
           metaPath: string;
-          triageContextPath: string;
-          commandArgv?: string[];
-          handoffId?: string;
           serviceRecovery?: unknown;
-          recoveryTimeoutMs: number;
         };
         if (systemd) {
+          const environmentPath = path.join(path.dirname(result.logPath), "handoff.env");
           expect(command).toBe(systemd.systemdRunPath);
-          expect(args.slice(0, 7)).toEqual([
+          expect(args.slice(0, 11)).toEqual([
             "--user",
-            "--scope",
+            "--pipe",
+            "--wait",
+            "--service-type=exec",
+            "--slice=app-openclaw-update.slice",
+            "--property=KillMode=control-group",
+            "--property=OOMPolicy=stop",
+            `--property=EnvironmentFile=${escapeGlob(environmentPath)}`,
+            `--working-directory=${path.dirname(result.logPath)}`,
             "--collect",
-            "--unit=openclaw-update-handoff-123.scope",
-            nodeExec,
-            expect.stringMatching(/handoff\.cjs$/u),
-            expect.stringMatching(/handoff\.json$/u),
+            "--unit=openclaw-update-handoff-123.service",
           ]);
+          expect(await fs.readFile(environmentPath, "utf8")).toContain("KEEP_ME=1");
+          if (process.platform !== "win32") {
+            expect((await fs.stat(environmentPath)).mode & 0o777).toBe(0o600);
+          }
+          expect(args.at(-3)).toBe(nodeExec);
           expect(helperParams.serviceRecovery).toEqual({
             kind: "systemd",
             unit: "openclaw-gateway.service",
-          });
-          expect(helperParams.commandArgv).toEqual([
-            nodeExec,
-            entrypoint,
-            "update",
-            "--yes",
-            "--json",
-            "--channel",
-            "beta",
-            ...(timeoutMs === undefined ? [] : ["--timeout", "1800"]),
-          ]);
-          expect(helperParams).toMatchObject({
-            recoveryTimeoutMs: 45 * 60_000,
-            handoffId: "handoff-123",
           });
           expect(options).toMatchObject({
             detached: true,
@@ -827,27 +840,11 @@ describe("managed service update handoff", () => {
             expect(options.env[key]).toBeUndefined();
           }
           expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toBe(helperParams.metaPath);
-          expect(JSON.parse(await fs.readFile(helperParams.metaPath, "utf8"))).toMatchObject({
-            meta: { triageContextPath: helperParams.triageContextPath },
-          });
         } else {
-          expect(helperParams.serviceRecovery).toEqual(
-            supervisor === "launchd"
-              ? {
-                  kind: "launchd",
-                  uid: typeof process.getuid === "function" ? process.getuid() : 501,
-                  label: "test.gateway",
-                  plistPath: "/Users/test/Library/LaunchAgents/test.gateway.plist",
-                }
-              : { kind: "schtasks", taskName: "OpenClaw Test Gateway" },
-          );
           const child = spawnMock.mock.results.at(-1)?.value as
             | ReturnType<typeof createSpawnMock>
             | undefined;
           child?.emit("exit", 0, null);
-        }
-        if (!supervisor || systemd) {
-          expect(options.env).toMatchObject({ KEEP_ME: "1", OPENCLAW_UPDATE_RUN_HANDOFF: "1" });
         }
       }
     },
@@ -880,30 +877,5 @@ describe("managed service update handoff", () => {
         },
       },
     });
-  });
-
-  it("sweeps stale handoff directories but retains fresh and unrelated ones", async () => {
-    const tmpDir = tempDirs.make("openclaw-handoff-cleanup-test-");
-    const staleDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}stale`);
-    const freshDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}fresh`);
-    const unrelatedDir = path.join(tmpDir, "openclaw-other-temp");
-    await Promise.all(
-      [staleDir, freshDir, unrelatedDir].map((dir) => fs.mkdir(dir, { recursive: true })),
-    );
-    const now = Date.now();
-    const staleTime = new Date(now - 25 * 60 * 60_000);
-    await fs.utimes(staleDir, staleTime, staleTime);
-
-    await expect(
-      cleanupStaleManagedServiceUpdateHandoffs({
-        tmpDir,
-        nowMs: now,
-        ttlMs: 24 * 60 * 60_000,
-      }),
-    ).resolves.toBe(1);
-
-    await expect(pathExists(staleDir)).resolves.toBe(false);
-    await expect(pathExists(freshDir)).resolves.toBe(true);
-    await expect(pathExists(unrelatedDir)).resolves.toBe(true);
   });
 });

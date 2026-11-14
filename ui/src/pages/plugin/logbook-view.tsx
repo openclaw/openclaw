@@ -13,6 +13,7 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerLogbookEnglish } from "../../i18n/locales/en-logbook.ts";
@@ -393,9 +394,11 @@ export function Logbook(props: LogbookProps) {
           >
             {t("logbook.actions.analyzeNow")}
           </ActionButton>
-          <ActionButton onClick={() => void load()} disabled={state().loading}>
-            <Icon name="refresh" />
-          </ActionButton>
+          <RefreshButton
+            label={t("common.refresh")}
+            busy={state().loading}
+            onClick={() => void load()}
+          />
         </div>
       </header>
       <Show when={state().error}>

@@ -112,17 +112,13 @@ export function registerDetachedCleanupAuthorityTest({
 export function registerDirectSessionCleanupAuthorityTests({
   createRunEntry,
   createLifecycleController,
-  completeRun,
   completeAndJoinCleanup,
   gatewayMocks,
-  helperMocks,
 }: Pick<fixtures.LifecycleTestDrivers, "createRunEntry" | "createLifecycleController"> & {
-  completeRun: fixtures.CompleteLifecycleRun;
   completeAndJoinCleanup: fixtures.CompleteLifecycleRun;
   gatewayMocks: {
     callGateway: Mock<(options: CallGatewayOptions) => Promise<Record<string, unknown>>>;
   };
-  helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
 }) {
   it("preserves a delivered receipt while cleaning up a suppressed completion", async () => {
     const entry = createRunEntry({
@@ -181,45 +177,6 @@ export function registerDirectSessionCleanupAuthorityTests({
     expect(persisted.read()?.pauseReason).toBeUndefined();
     expect(cleanupBrowser).toHaveBeenCalledOnce();
     expect(committedBeforeCleanup).toBe(true);
-  });
-
-  it("allows terminal effects after a rejected recovery supplied a retired child guard", async () => {
-    const entry = createRunEntry();
-    const emitProgress = vi.fn(async () => {});
-    const controller = createLifecycleController({
-      entry,
-      emitSubagentProgressEndedForRun: emitProgress,
-    });
-    const prepareRecoveryCurrent = vi.fn(async () => false);
-    const assertRetired = () => {
-      throw new Error("Recovery no longer owns the child session");
-    };
-    await controller.completeSubagentRun({
-      runId: entry.runId,
-      expectedEntry: entry,
-      outcome: { status: "error", error: "rejected recovery" },
-      reason: ended.SUBAGENT_ENDED_REASON_ERROR,
-      triggerCleanup: false,
-      recoverInterrupted: true,
-      recoveryCurrent: {
-        prepare: prepareRecoveryCurrent,
-        isHostCurrent: () => true,
-      },
-      sessionEffects: {
-        isCurrent: async () => false,
-        assertHostCurrent: assertRetired,
-        assertCurrentEntry: assertRetired,
-      },
-    });
-    expect(fixtures.readLifecycleRun(entry).execution.status).toBe("running");
-    expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
-    expect(emitProgress).not.toHaveBeenCalled();
-
-    await completeRun(controller, entry, { triggerCleanup: false });
-
-    expect(fixtures.readLifecycleRun(entry).execution.status).toBe("terminal");
-    expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
-    expect(emitProgress).toHaveBeenCalledOnce();
   });
 
   it.each(["changed during read", "missing lifecycle revision"] as const)(
@@ -357,7 +314,7 @@ export function registerDeliveryRetryOwnerTests({
     },
   );
 
-  it("retains a child result and retries parent restart admission without a sweep", async () => {
+  it("retains a child result and retries parent admission without a sweep", async () => {
     await useRetryTimers();
     vi.setSystemTime(10_000);
     const actualPolicy = await vi.importActual<typeof cleanupPolicy>(

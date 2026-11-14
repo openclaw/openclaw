@@ -1,0 +1,2 @@
+# Preserve existing regression cases through complete typed NodeSession publication fixtures.
+40

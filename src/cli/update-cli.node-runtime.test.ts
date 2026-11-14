@@ -126,7 +126,10 @@ describe("update-cli", () => {
     const serviceInstall = proof
       .commandCalls()
       .find(([argv]) => argv[2] === "gateway" && argv[3] === "install");
-    expect(serviceInstall?.[0].slice(0, 2)).toEqual([process.execPath, newInstall.entrypoint]);
+    expect(serviceInstall?.[0].slice(0, 2)).toEqual([
+      oldInstall.serviceNode,
+      newInstall.entrypoint,
+    ]);
     expect(mocks.serviceStop).toHaveBeenCalledOnce();
     expect(proof.getLogOutput()).toContain("Gateway: restarted and verified");
   });
@@ -325,6 +328,10 @@ describe("update-cli", () => {
     const serviceCommand = [serviceNode, entrypoint, "gateway"];
     setup.primeServiceCommand(serviceCommand);
     mocks.serviceLoaded.mockResolvedValue(true);
+    mocks.serviceDefinitionMutationCapability.mockResolvedValue({
+      kind: "sealed",
+      reason: "sealed-mount",
+    });
     setup.primeNpmChannelTag("latest", "2026.7.1");
     vi.mocked(modules.fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({
@@ -365,7 +372,7 @@ describe("update-cli", () => {
     });
     expect(modules.defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        `Gateway service Node 24.14.0 at ${serviceNode} requires >=24.15.0 <25. Install Node 24.22.1 and update that service definition, then retry; changing the shell's Node alone does not update the service.`,
+        `Gateway service Node 24.14.0 at ${serviceNode} requires >=24.15.0 <25. Install Node 24.16.0 and update that service definition, then retry; changing the shell's Node alone does not update the service.`,
       ),
     );
     expect(proof.packageInstallCommandCall()?.[0]).toBeUndefined();

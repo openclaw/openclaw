@@ -2,7 +2,6 @@ import {
   runWithAgentHarnessCompletionCustody,
   type AgentHarnessCompletionCustody,
 } from "../agents/agent-harness-completion-custody.js";
-import { reconcileHarnessCompletionDelivery } from "../agents/agent-harness-completion-delivery.js";
 import {
   assertAgentHarnessCompletionScope,
   assertHarnessCompletionSourceAdmission,
@@ -184,39 +183,6 @@ async function deliverAgentHarnessCompletionBound(
           recoveryBlocked: true,
           error: "completion requester locator is missing or replaced",
         };
-      }
-      if (requester.agentId && requester.storePath) {
-        const custody = await reconcileHarnessCompletionDelivery({
-          agentId: requester.agentId,
-          storePath: requester.storePath,
-          sessionKey: requester.canonicalKey,
-          sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
-          taskRunId: childSessionKey,
-        });
-        if (!isRequesterCurrent()) {
-          return {
-            delivered: false,
-            path: "none",
-            recoveryBlocked: true,
-            error: "completion requester locator is missing or replaced",
-          };
-        }
-        if (custody === "delivered") {
-          return { delivered: true, path: "direct" };
-        }
-        if (custody !== "unowned") {
-          return {
-            delivered: false,
-            path: "none",
-            ...(custody === "pending"
-              ? { recoveryPending: true as const }
-              : { recoveryBlocked: true as const }),
-            error:
-              custody === "pending"
-                ? "completion is owned by requester recovery"
-                : "completion recovery receipt or owner is unresolved",
-          };
-        }
       }
       return await withAgentHarnessCompletionAdmission(
         {

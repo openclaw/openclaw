@@ -15,15 +15,6 @@ import {
 /** Which key supplied the allowlist a group actually resolves to. */
 type AllowFromSource = "group" | "defaults" | "channel";
 
-type LineGroupCoverage = {
-  covered: boolean;
-  referenceBacked: string[];
-  /** Enabled groups with no sender allowlist anywhere in their resolved config. */
-  uncovered: string[];
-  /** Enabled groups whose resolved allowlist is empty, keyed by the key that supplies it. */
-  empty: Record<AllowFromSource, string[]>;
-};
-
 const GROUP_DEFAULTS_KEY = "*";
 
 function classifyAllowFrom(values?: unknown): { covered: boolean; referenced: boolean } {
@@ -42,37 +33,27 @@ function classifyAllowFrom(values?: unknown): { covered: boolean; referenced: bo
  * map outright instead of merging entry by entry. Reading both scopes together would
  * credit an account with groups its runtime never sees.
  */
-function readGroupEntries(
-  account?: Record<string, unknown>,
-  parent?: Record<string, unknown>,
-): [string, Record<string, unknown>][] {
-  const groups = isRecord(account?.groups) ? account.groups : parent?.groups;
-  if (!isRecord(groups)) {
-    return [];
-  }
-  return Object.entries(groups).filter((entry): entry is [string, Record<string, unknown>] =>
-    isRecord(entry[1]),
-  );
-}
-
-function inspectLineGroupCoverage(params: {
-  account: Record<string, unknown>;
-  parent?: Record<string, unknown>;
-  groupAllowFrom?: unknown;
-}): LineGroupCoverage {
+function readLineGroupCoverage(params: ChannelDoctorEmptyAllowlistAccountContext) {
+  const { account, parent } = params;
+  const groupAllowFrom = firstDefined(account.groupAllowFrom, parent?.groupAllowFrom);
+  // Enabled groups whose resolved allowlist is empty, keyed by its supplying scope.
   const empty: Record<AllowFromSource, string[]> = { group: [], defaults: [], channel: [] };
-  const entries = readGroupEntries(params.account, params.parent);
+  const sourceGroups = isRecord(account.groups) ? account.groups : parent?.groups;
+  const entries = isRecord(sourceGroups)
+    ? Object.entries(sourceGroups).filter((entry): entry is [string, Record<string, unknown>] =>
+        isRecord(entry[1]),
+      )
+    : [];
   const groups = Object.fromEntries(entries);
   const defaults = groups[GROUP_DEFAULTS_KEY];
 
   // A group with no entry of its own resolves to the defaults node alone.
-  const defaultCoverage = classifyAllowFrom(
-    firstDefined(defaults?.allowFrom, params.groupAllowFrom),
-  );
+  const defaultCoverage = classifyAllowFrom(firstDefined(defaults?.allowFrom, groupAllowFrom));
   let covered = defaults?.enabled !== false && defaultCoverage.covered;
   const referenceBacked =
     defaults?.enabled !== false && defaultCoverage.referenced ? [GROUP_DEFAULTS_KEY] : [];
 
+  // Enabled groups with no sender allowlist anywhere in their resolved config.
   const uncovered: string[] = [];
   for (const [id, group] of entries) {
     if (id === GROUP_DEFAULTS_KEY) {
@@ -86,9 +67,7 @@ function inspectLineGroupCoverage(params: {
     if (effectiveGroup?.enabled === false) {
       continue;
     }
-    const allowlist = classifyAllowFrom(
-      firstDefined(effectiveGroup?.allowFrom, params.groupAllowFrom),
-    );
+    const allowlist = classifyAllowFrom(firstDefined(effectiveGroup?.allowFrom, groupAllowFrom));
     if (allowlist.referenced) {
       referenceBacked.push(id);
     }
@@ -100,24 +79,13 @@ function inspectLineGroupCoverage(params: {
       empty.group.push(id);
     } else if (defaults?.allowFrom !== undefined) {
       empty.defaults.push(id);
-    } else if (params.groupAllowFrom !== undefined) {
+    } else if (groupAllowFrom !== undefined) {
       empty.channel.push(id);
     } else {
       uncovered.push(id);
     }
   }
   return { covered, referenceBacked, uncovered, empty };
-}
-
-function readLineGroupCoverage(
-  params: ChannelDoctorEmptyAllowlistAccountContext,
-): LineGroupCoverage {
-  const { account, parent } = params;
-  return inspectLineGroupCoverage({
-    account,
-    ...(parent ? { parent } : {}),
-    groupAllowFrom: firstDefined(account.groupAllowFrom, parent?.groupAllowFrom),
-  });
 }
 
 function isLineGroupAllowlistScope(params: ChannelDoctorEmptyAllowlistAccountContext): boolean {

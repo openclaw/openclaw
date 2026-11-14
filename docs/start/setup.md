@@ -21,7 +21,7 @@ Pick a setup workflow based on how often you want updates and whether you want t
 
 ## Prereqs (from source)
 
-- Node 24.16+ LTS or Node 26.1+ (recommended)
+- Node 24.22.1+ LTS or Node 26.12.1+ (recommended)
 - `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
   `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
   not prepare the full source tree.
@@ -131,6 +131,8 @@ What `gateway:watch` does:
   `openclaw doctor --fix --non-interactive` once and retries. Set
   `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
 
+`pnpm openclaw ...` reuses the existing `dist` when its recorded build-input bytes still match, even if Git marks those inputs dirty, so a second source command in the same checkout does not replace the build a running source Gateway executes. Changed inputs still rebuild, and a foreground Gateway from that checkout then exits on installation replacement.
+
 TypeScript rebuilds triggered by `pnpm openclaw ...` or `pnpm gateway:watch` preserve existing `dist/control-ui` assets. When the Gateway starts, it rebuilds missing, incomplete, or stale bundled UI assets before serving them. UI builds replace `dist/control-ui` only after the complete bundle passes validation, so a failed build leaves the previous bundle in place. If a build is killed while swapping in its output, the next build restores the previous bundle first. Headless commands do not rebuild the UI. Run `pnpm ui:build` after `ui/` changes, or use `pnpm ui:dev` while developing the Control UI.
 
 ### 2) Point the macOS app at your running Gateway
@@ -177,9 +179,7 @@ Use this when debugging auth or deciding what to back up:
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - **Discord bot token**: config/env or SecretRef (env/file/exec/store providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
-- **Pairing allowlists**:
-  - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
-  - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
+- **Pairing allowlists**: shared database (by default, `~/.openclaw/state/openclaw.sqlite`), scoped by channel and account; see [Pairing state](/channels/pairing#where-the-state-lives) and [Database engines](/reference/database-engines)
 - **Model auth profiles**: shared and agent-local SQLite auth stores; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for inheritance and legacy shared-store relocation
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`

@@ -220,51 +220,45 @@ export class GuestWelcome {
       case "failed":
         this.fail(result.message || null);
         return;
-      case "ready":
+      case "ready": {
         this.settled = true;
         this.pendingSince = null;
         this.publish({ kind: "hidden" });
-        await this.land(result, epoch);
-    }
-  }
-
-  private async land(
-    result: Extract<GuestWelcomeEnsureResult, { status: "ready" }>,
-    epoch: number,
-  ): Promise<void> {
-    const key =
-      VISITED_KEY_PREFIX +
-      gatewayOriginScope(this.options.gateway.connection.gatewayUrl) +
-      ":" +
-      encodeURIComponent(result.sessionKey);
-    try {
-      if (getSafeLocalStorage()?.getItem(key) === "1") {
-        return;
+        const key =
+          VISITED_KEY_PREFIX +
+          gatewayOriginScope(this.options.gateway.connection.gatewayUrl) +
+          ":" +
+          encodeURIComponent(result.sessionKey);
+        try {
+          if (getSafeLocalStorage()?.getItem(key) === "1") {
+            return;
+          }
+        } catch {
+          // Unreadable storage cannot prove a visit; the write below decides.
+        }
+        let home = false;
+        try {
+          home = await this.options.isHomeLanding();
+        } catch {
+          // An unresolved landing never redirects.
+        }
+        if (!home || epoch !== this.epoch) {
+          return;
+        }
+        let recorded = false;
+        try {
+          const storage = getSafeLocalStorage();
+          storage?.setItem(key, "1");
+          recorded = storage !== null;
+        } catch {
+          // Blocked or full storage leaves no record.
+        }
+        // Without a durable record, only the call that created the session lands the guest.
+        if (!recorded && !result.created) {
+          return;
+        }
+        this.options.openSession(result.sessionKey, result.agentId);
       }
-    } catch {
-      // Unreadable storage cannot prove a visit; the write below decides.
     }
-    let home = false;
-    try {
-      home = await this.options.isHomeLanding();
-    } catch {
-      // An unresolved landing never redirects.
-    }
-    if (!home || epoch !== this.epoch) {
-      return;
-    }
-    let recorded = false;
-    try {
-      const storage = getSafeLocalStorage();
-      storage?.setItem(key, "1");
-      recorded = storage !== null;
-    } catch {
-      // Blocked or full storage leaves no record.
-    }
-    // Without a durable record, only the call that created the session lands the guest.
-    if (!recorded && !result.created) {
-      return;
-    }
-    this.options.openSession(result.sessionKey, result.agentId);
   }
 }

@@ -34,24 +34,46 @@ export function AgentIdentityAvatar(props: {
   agent: AgentIdentity;
   class?: string;
   onImageError?: () => void;
+  cachedOnly?: boolean;
 }) {
   const gateway = useAvatarGatewayContext();
   const view = createMemo(() => {
     gateway();
-    return resolveAgentIdentityAvatarView(props.agent);
+    return resolveAgentIdentityAvatarView(props.agent, props.cachedOnly);
   });
   const presentation = createIdentityAvatarPresentation(view);
+  function SystemAgentAvatar(childProps: { branding: ThemeBranding }) {
+    return (
+      <Show
+        when={childProps.branding.brandIcon !== "claw"}
+        fallback={
+          <img
+            ref={(element) => props.elementRef?.(element)}
+            class={["identity-avatar--agent", props.class]}
+            src={inferControlUiPublicAssetPath("favicon.svg")}
+            alt={props.agent.name ?? ""}
+            aria-hidden={props.agent.name ? undefined : "true"}
+            decoding="async"
+          />
+        }
+      >
+        <span
+          ref={(element) => props.elementRef?.(element)}
+          class={["identity-avatar--agent", "identity-avatar--neutral", props.class]}
+          role={props.agent.name ? "img" : undefined}
+          aria-label={props.agent.name}
+          aria-hidden={props.agent.name ? undefined : "true"}
+        >
+          <ThemeBrandIcon branding={childProps.branding} />
+        </span>
+      </Show>
+    );
+  }
+
   return (
     <Show
       when={!isReservedSystemAgentId(props.agent.id)}
-      fallback={
-        <SystemAgentAvatar
-          name={props.agent.name}
-          class={props.class}
-          branding={avatarBranding.read()}
-          elementRef={props.elementRef}
-        />
-      }
+      fallback={<SystemAgentAvatar branding={avatarBranding.read()} />}
     >
       <span
         ref={(element) => props.elementRef?.(element)}
@@ -158,43 +180,14 @@ export function AgentAvatarHat(props: { agentId: string; branding: ThemeBranding
   );
 }
 
-function SystemAgentAvatar(props: {
-  name?: string;
-  class?: string;
-  branding: ThemeBranding;
-  elementRef?: (element: HTMLElement) => void;
-}) {
-  return (
-    <Show
-      when={props.branding.brandIcon !== "claw"}
-      fallback={
-        <img
-          ref={(element) => props.elementRef?.(element)}
-          class={["identity-avatar--agent", props.class]}
-          src={inferControlUiPublicAssetPath("favicon.svg")}
-          alt={props.name ?? ""}
-          aria-hidden={props.name ? undefined : "true"}
-          decoding="async"
-        />
-      }
-    >
-      <span
-        ref={(element) => props.elementRef?.(element)}
-        class={["identity-avatar--agent", "identity-avatar--neutral", props.class]}
-        role={props.name ? "img" : undefined}
-        aria-label={props.name}
-        aria-hidden={props.name ? undefined : "true"}
-      >
-        <ThemeBrandIcon branding={props.branding} />
-      </span>
-    </Show>
-  );
-}
-
 export function IdentityAvatar(props: {
   identity: IdentityAvatarInput;
+  cachedOnly?: boolean;
   children: (view: Accessor<IdentityAvatarView>) => JSX.Element;
 }) {
-  const view = useIdentityAvatarView(() => props.identity);
+  const view = useIdentityAvatarView(
+    () => props.identity,
+    () => props.cachedOnly === true,
+  );
   return <>{props.children(view)}</>;
 }

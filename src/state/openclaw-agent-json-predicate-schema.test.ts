@@ -260,6 +260,7 @@ describe("agent JSON predicate migration", () => {
           .prepare(`INSERT INTO transcript_events (session_id, seq, event_json, created_at)
         VALUES ('history', 1, ?, 1)`)
           .run(event);
+        database.exec("CREATE INDEX local_cache_updated ON cache_entries(updated_at)");
         const original = witness(database);
         if (rollback) {
           refuseVersion(database, OPENCLAW_AGENT_SCHEMA_VERSION);
@@ -284,6 +285,16 @@ describe("agent JSON predicate migration", () => {
           expect(
             readRow(database, "SELECT navigation_type, message_role FROM transcript_events"),
           ).toEqual({ navigation_type: null, message_role: null });
+          database.exec("DROP INDEX local_cache_updated");
+          expect(() =>
+            assertOpenClawMigrationWitnessPreserved(original, witness(database)),
+          ).toThrow("Migration changed or lost retained database schema");
+          database.exec(`
+            CREATE INDEX local_cache_updated ON cache_entries(updated_at);
+            DROP INDEX idx_agent_session_input_completions_session_key;
+            CREATE INDEX idx_agent_session_input_completions_session_key ON session_input_completions(run_id);
+          `);
+          expect(() => witness(database)).toThrow(/index/iu);
         }
       });
     },

@@ -225,17 +225,30 @@ function buildCodexSkillReportEntries(
   }));
 }
 
+// Each Codex definition retains only its latest JSON schema revision. The JSON
+// already needed for schemaChars detects nested edits without a freezing contract.
+const toolReportSchemaHashes = new WeakMap<
+  CodexDynamicToolFunctionSpec,
+  { json: string; hash: string }
+>();
+
 function buildCodexToolReportEntry(
   tool: CodexDynamicToolFunctionSpec,
   sourceTool?: AnyAgentTool,
 ): CodexToolReportEntry {
   const summary = tool.description.trim();
   const schema = tool.inputSchema;
-  let schemaChars: number;
+  let schemaJson: string | undefined;
   try {
-    schemaChars = JSON.stringify(schema).length;
+    schemaJson = JSON.stringify(schema);
   } catch {
-    schemaChars = 0;
+    // Preserve reporting for schemas whose raw JSON serialization fails.
+  }
+  const cached = toolReportSchemaHashes.get(tool);
+  const schemaHash =
+    schemaJson !== undefined && cached?.json === schemaJson ? cached.hash : stableJsonHash(schema);
+  if (schemaJson !== undefined && cached?.json !== schemaJson) {
+    toolReportSchemaHashes.set(tool, { json: schemaJson, hash: schemaHash });
   }
   const { source, sourceName, mcp } = classifyAgentToolSource(sourceTool ?? tool);
   const properties =
@@ -247,8 +260,8 @@ function buildCodexToolReportEntry(
     ...(mcp ? { serverName: mcp.serverName } : {}),
     summaryChars: summary.length,
     summaryHash: sha256Text(summary),
-    schemaChars,
-    schemaHash: stableJsonHash(schema),
+    schemaChars: schemaJson?.length ?? 0,
+    schemaHash,
     propertiesCount: properties ? Object.keys(properties).length : null,
   };
 }

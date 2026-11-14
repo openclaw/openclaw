@@ -49,7 +49,7 @@ describe("context engine transcript cursor contract", () => {
     const user = await appendTurnMessage(target, "user", "request", 1_000);
     const terminal = await appendTurnMessage(target, "assistant", "reply", 2_000, user!.messageId);
     const readAnchor = transcriptAnchors.readActiveTranscriptEntryAnchorAsync;
-    const read = vi
+    using read = vi
       .spyOn(transcriptAnchors, "readActiveTranscriptEntryAnchorAsync")
       .mockImplementation(async (...args) => {
         const anchor = await readAnchor(...args);
@@ -58,27 +58,24 @@ describe("context engine transcript cursor contract", () => {
         return anchor;
       });
     const record = vi.fn();
-    try {
-      await finalizeTurn({
-        contextEngine: createEngine(),
-        sessionIdUsed: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionFile: target.storePath,
-        turnCandidate: {
-          admission: { ...user!.anchor!, logicalTurnId: "turn", role: "user" },
-          terminalEntryId: terminal!.messageId,
-          record,
-        },
-      });
-      expect(read).toHaveBeenCalledOnce();
-      expect(record).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          boundary: expect.objectContaining({ terminal: terminal!.anchor }),
-        }),
-      );
-    } finally {
-      read.mockRestore();
-    }
+
+    await finalizeTurn({
+      contextEngine: createEngine(),
+      sessionIdUsed: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionFile: target.storePath,
+      turnCandidate: {
+        admission: { ...user!.anchor!, logicalTurnId: "turn", role: "user" },
+        terminalEntryId: terminal!.messageId,
+        record,
+      },
+    });
+    expect(read).toHaveBeenCalledOnce();
+    expect(record).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        boundary: expect.objectContaining({ terminal: terminal!.anchor }),
+      }),
+    );
   });
 
   it("bootstraps, resumes appends, and rebuilds after replacement through the public SDK", async () => {

@@ -41,6 +41,16 @@ function resolveProviderLabel(providerId: string): string {
 }
 
 const TALK_ADMIN_SCOPE = "operator.admin";
+// The tool factory runs per invocation; a shared schema keeps host schema caches warm.
+const TALK_VOICE_PARAMETERS = {
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["list", "set"] },
+    voice: { type: "string", description: "Voice ID from list; required for set." },
+  },
+  required: ["action"],
+  additionalProperties: false,
+};
 
 export default definePluginEntry({
   id: "talk-voice",
@@ -56,15 +66,7 @@ export default definePluginEntry({
           label: "Talk Voice",
           description:
             "List or change the voice of the active realtime Talk call (browser, iOS, or Android) or Discord voice call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving conversation and ongoing agent work. Success means the replacement call is ready. Saved voice defaults stay unchanged.",
-          parameters: {
-            type: "object",
-            properties: {
-              action: { type: "string", enum: ["list", "set"] },
-              voice: { type: "string", description: "Voice ID from list; required for set." },
-            },
-            required: ["action"],
-            additionalProperties: false,
-          },
+          parameters: TALK_VOICE_PARAMETERS,
           execute: async (...args) =>
             await (await loadTool()).executeTalkVoiceTool(sessionKey, ...args),
         };

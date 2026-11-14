@@ -1,0 +1,2 @@
+# Browser regression for the collapsed goal Resume label, reusing the existing elapsed-time scenario.
+4

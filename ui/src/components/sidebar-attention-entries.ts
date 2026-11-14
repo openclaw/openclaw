@@ -12,7 +12,7 @@ import {
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
 type SidebarInboxEntryBase<
-  Category extends Exclude<IssueTab, "all">,
+  Category extends Exclude<IssueTab, "all"> | "automations",
   Severity extends "error" | "warning" | "neutral" = "error" | "warning",
 > = {
   category: Category;
@@ -27,7 +27,8 @@ export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system
   icon: IconName;
   label: string;
   detail: string;
-  meta?: { context?: string; status: string; time: string };
+  meta?: { context?: string; status: string };
+  arrivedAtMs?: number;
   action:
     | { kind: "navigate"; routeId: NavigationRouteId }
     | { kind: "askCustodian"; alert: CustodianAlert };
@@ -74,6 +75,19 @@ export function buildScopeUpgradeInboxEntry(params: {
   };
 }
 
+function inboxEntryArrivedAt(entry: SidebarInboxEntry): number | undefined {
+  switch (entry.type) {
+    case "approval":
+      return entry.approval.createdAtMs;
+    case "mention":
+      return entry.mention.createdAt;
+    case "attention":
+      return entry.arrivedAtMs;
+    default:
+      return undefined;
+  }
+}
+
 export function buildSidebarInboxEntries(params: {
   approvals: readonly ExecApprovalRequest[];
   attention: readonly SidebarAttentionItem[];
@@ -102,8 +116,8 @@ export function buildSidebarInboxEntries(params: {
       requiresAction: true,
       severity: "neutral",
     }));
-  // Preserve the Inbox's action-first order while every tab reads one list.
-  return [
+  // Newest first. Live states have no arrival time, so they stay on top; ties keep action order.
+  const entries: SidebarInboxEntry[] = [
     ...approvals,
     ...(params.outbox ?? []),
     ...(params.update?.severity === "error" ? [params.update] : []),
@@ -113,10 +127,19 @@ export function buildSidebarInboxEntries(params: {
     ...warnings,
     ...mentions,
   ];
+  return entries.toSorted((left, right) => {
+    const leftAt = inboxEntryArrivedAt(left) ?? Infinity;
+    const rightAt = inboxEntryArrivedAt(right) ?? Infinity;
+    return leftAt === rightAt ? 0 : rightAt - leftAt;
+  });
 }
 
 export function sidebarInboxEntryMatchesTab(entry: SidebarInboxEntry, tab: IssueTab): boolean {
-  return tab === "all" || entry.category === tab;
+  return (
+    tab === "all" ||
+    entry.category === tab ||
+    (tab === "system" && entry.category === "automations")
+  );
 }
 
 export function sidebarInboxTabCounts(
@@ -127,7 +150,6 @@ export function sidebarInboxTabCounts(
     all: actionEntries.length,
     approvals: actionEntries.filter((entry) => entry.category === "approvals").length,
     mentions: actionEntries.filter((entry) => entry.category === "mentions").length,
-    automations: actionEntries.filter((entry) => entry.category === "automations").length,
-    system: actionEntries.filter((entry) => entry.category === "system").length,
+    system: actionEntries.filter((entry) => sidebarInboxEntryMatchesTab(entry, "system")).length,
   };
 }

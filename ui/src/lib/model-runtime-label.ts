@@ -31,12 +31,13 @@ function formatAgentRuntimeLabel(id: string): string {
 export function formatModelRuntimeLabel(
   provider: string,
   runtimeId: string | undefined,
+  translate: typeof t = t,
 ): { label: string; detail?: string } | undefined {
   const route = resolveModelRuntimeRoute(provider, runtimeId);
   if (route) {
     return {
-      label: t(`chat.modelControls.routes.${route}.label`),
-      detail: t(`chat.modelControls.routes.${route}.detail`),
+      label: translate(`chat.modelControls.routes.${route}.label`),
+      detail: translate(`chat.modelControls.routes.${route}.detail`),
     };
   }
   return runtimeId ? { label: formatAgentRuntimeLabel(runtimeId) } : undefined;

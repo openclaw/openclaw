@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { HealthFinding } from "../../flows/health-checks.js";
 import {
+  DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING,
   hasDeferredUpdateModelRetirement,
   recordUpdateModelRetirement,
 } from "../../infra/update-deferred-model-retirement.js";
@@ -52,6 +53,7 @@ import {
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
+import { prepareExplicitModelReplacement } from "./shared/model-replacement-preparation.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import {
   resolveConfigWideDoctorPluginMetadataSnapshot,
@@ -69,6 +71,7 @@ import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
+  modelReplacements?: readonly import("./shared/model-replacement.js").DoctorModelReplacement[];
   installedPluginIdRecovery?: InstalledPluginIdRecovery;
   env?: NodeJS.ProcessEnv;
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
@@ -87,6 +90,7 @@ export async function runDoctorRepairSequence(params: {
   findings: readonly HealthFinding[];
   authProfilesRepaired: boolean;
   modelRetirementRepairRan: boolean;
+  modelRetirementOnly: boolean;
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -104,6 +108,7 @@ export async function runDoctorRepairSequence(params: {
     env,
   );
   let modelRetirementRepairRan = false;
+  let modelRetirementOnly = false;
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const resolveCurrentPluginMetadataScope = () => {
     const config = state.candidate;
@@ -375,7 +380,23 @@ export async function runDoctorRepairSequence(params: {
   if (pluginInstallRepairConverged) {
     // Route retirement reads canonical credentials. Finish auth migration first,
     // and preserve model refs while configured plugin installation needs a retry.
+    if (params.modelReplacements?.length) {
+      appendRepairNotes(
+        await prepareExplicitModelReplacement({
+          cfg: state.candidate,
+          env,
+          choices: params.modelReplacements,
+        }),
+      );
+    }
+    const onlyRetirementPending =
+      !state.pendingChanges &&
+      changeNotes.length === 0 &&
+      warningNotes.length === 0 &&
+      authRepair.findings.length === 0 &&
+      !params.modelReplacements?.length;
     const modelRepair = repairStaleAgentModelRefs(state.candidate, {
+      modelReplacements: params.modelReplacements,
       env,
       pluginMetadataSnapshot: pluginMetadataSnapshotState.current,
     });
@@ -383,9 +404,10 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(modelRepair);
     modelRetirementRepairRan =
       modelRepair.warnings.length === 0 && hasDeferredUpdateModelRetirement(env);
+    modelRetirementOnly = onlyRetirementPending && modelRetirementRepairRan;
   } else if (packageSwapInProgress) {
     recordUpdateModelRetirement("deferred", env);
-    warningNotes.push("Model retirement deferred until configured plugin installation converges.");
+    warningNotes.push(DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING);
   }
   const authProfilesRepaired =
     authFieldRepair.changes.length > 0 ||
@@ -405,6 +427,7 @@ export async function runDoctorRepairSequence(params: {
     findings: authRepair.findings,
     authProfilesRepaired,
     modelRetirementRepairRan,
+    modelRetirementOnly,
     installedPluginIdRecovery: installedPluginRecovery.recovery,
     ...(retiredModelRefConfig ? { retiredModelRefConfig } : {}),
     openAICodexAuthProfileIdMap,

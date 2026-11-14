@@ -1,3 +1,4 @@
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import type {
@@ -52,7 +53,7 @@ function mergeActivity(
 /** Projection of actual listed/touched paths. It never scans or fetches a tree. */
 export function projectWorkspaceCatalog(
   list: SessionWorkspaceListResult | null,
-  directories: Readonly<Record<string, SessionWorkspaceDirectory>> = {},
+  directories: Readonly<Record<string, Pick<SessionWorkspaceDirectory, "browser">>> = {},
 ) {
   const project = new Map<string, WorkspaceCatalogRow>();
   const session = new Map<string, WorkspaceCatalogFile>();
@@ -165,7 +166,7 @@ export function workspaceCatalogFilters(
 }
 
 export function workspaceCatalogChildren(
-  catalog: ReturnType<typeof projectWorkspaceCatalog>,
+  catalog: { project: ReadonlyMap<string, WorkspaceCatalogRow> },
   filter: SessionWorkspaceFilter,
 ): ReadonlyMap<string, readonly WorkspaceCatalogRow[]> {
   const children = new Map<string, WorkspaceCatalogRow[]>();
@@ -202,24 +203,27 @@ export function workspaceCatalogSearch(
   list: SessionWorkspaceListResult | null,
   query: string,
 ): WorkspaceCatalogFile[] {
-  const search = query.trim().toLowerCase();
+  const search = query.trim();
   if (!search) {
     return [];
   }
+  // Canonically equivalent names may arrive in either Unicode form; compare on NFC.
+  const normalizedSearch = foldSearchCase(search).normalize("NFC");
   const catalog = projectWorkspaceCatalog(list);
   const results = new Map<string, WorkspaceCatalogFile>();
   for (const entry of [...catalog.session, ...catalog.project.values()]) {
     if (
       !("directory" in entry && entry.directory) &&
-      [entry.name, entry.workspacePath, entry.path].some((value) =>
-        value?.toLowerCase().includes(search),
+      [entry.name, entry.workspacePath, entry.path].some(
+        (value) =>
+          value !== undefined && foldSearchCase(value).normalize("NFC").includes(normalizedSearch),
       )
     ) {
       results.set(entry.key, entry);
     }
   }
   // A previous query must never supply the next query's project results.
-  if (list?.browser?.search?.toLowerCase() === search) {
+  if (list?.browser?.search?.toLowerCase() === search.toLowerCase()) {
     for (const entry of list.browser.entries) {
       if (entry.kind === "directory") {
         continue;

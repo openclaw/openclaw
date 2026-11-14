@@ -285,15 +285,7 @@ describe("channelsRemoveCommand", () => {
         ),
       },
     };
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockResolvedValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/external-chat-plugin",
-          plugin: scopedPlugin,
-          source: "test",
-        },
-      ]),
-    );
+    mockInstalledPlugin(scopedPlugin);
     return scopedPlugin;
   }
 

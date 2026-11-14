@@ -1,4 +1,5 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
@@ -90,6 +91,18 @@ beforeEach(() => {
   mocks.readConfigFileSnapshot.mockReset();
   mocks.replaceConfigFile.mockReset().mockResolvedValue(undefined);
   mocks.loadModelsConfig.mockReset();
+});
+
+afterEach(() => vi.unstubAllEnvs());
+
+it("saves manifest-owned provider aliases under the canonical model key", async () => {
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+  configure({});
+  await modelsAliasesAddCommand("glm", "z.ai/glm-4.7", runtime);
+  expect(writtenConfig().agents?.defaults?.models).toEqual({
+    "zai/glm-4.7": { alias: "glm" },
+  });
+  expect(runtime.logs).toContain("Alias glm -> zai/glm-4.7");
 });
 
 it.each(["json", "plain", "text"] as const)(

@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
@@ -12,66 +12,50 @@ import * as observeBridge from "./observe-bridge.js";
 import type { DesktopObserveRequester } from "./observe-requester.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
-const cleanups: Array<() => Promise<void>> = [];
+const cleanups: Array<() => void | Promise<void>> = [];
 const credentials = { password: "synthetic-password" };
 
 afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function createRequester() {
   const controller = new AbortController();
-  return {
-    controller,
-    identity: { signal: controller.signal, isCurrent: () => !controller.signal.aborted },
-  };
+  cleanups.push(() => controller.abort());
+  return Object.assign(controller, { isCurrent: () => !controller.signal.aborted });
 }
 
 const rejected = (promise: Promise<unknown>) => promise.then(() => false).catch(() => true);
 
 function createFixture(boundary: "activation" | "pairing" | "attachment") {
   let config: OpenClawConfig = {};
-  const reached = createDeferred();
-  const release = createDeferred();
-  const forwarded: string[] = [];
+  const gate = { reached: createDeferred(), release: createDeferred() };
+  const hold = async <T>(value: T) => {
+    gate.reached.resolve();
+    await gate.release.promise;
+    return value;
+  };
+  const forwarded = vi.fn(() => gate.reached.resolve());
+  const pairing = { identity: "identity", generation: "generation" };
   const nodeRegistry = new NodeRegistry({
-    resolveCurrentPairingState: async () => {
-      if (boundary === "pairing") {
-        reached.resolve();
-        await release.promise;
-      }
-      return { identity: "identity", generation: "generation" };
-    },
+    resolveCurrentPairingState: async () => (boundary === "pairing" ? hold(pairing) : pairing),
   });
   const client = createWorkerSupervisorNodeClient("node-conn");
-  delete client.connect.caps;
   client.connect.commands = [NODE_DESKTOP_STREAM_COMMAND];
   client.connect.client.deviceFamily = "Linux";
-  client.socket.send = (frame) => {
-    const event = JSON.parse(String(frame)) as {
-      event: string;
-      payload: { command: string };
-    };
-    if (event.event !== "node.invoke.request") {
-      return;
-    }
-    forwarded.push(event.payload.command);
-    expect(boundary).toBe("attachment");
-    reached.resolve();
-  };
-  const node = nodeRegistry.register(client, {
+  client.socket.send = forwarded;
+  nodeRegistry.register(client, {
     pairingIdentity: "identity",
     pairingGeneration: "generation",
   });
   const desktopRegistry = createDesktopSessionRegistry();
   if (boundary === "activation") {
     const activate = desktopRegistry.activate;
-    vi.spyOn(desktopRegistry, "activate").mockImplementation(async (request) => {
-      await activate(request);
-      reached.resolve();
-      await release.promise;
-    });
+    vi.spyOn(desktopRegistry, "activate").mockImplementation((request) =>
+      activate(request).then(hold),
+    );
   }
   const streamBroker = createNodeDesktopStreamBroker();
   const attached = createDeferred<Awaited<ReturnType<typeof streamBroker.mint>["attached"]>>();
@@ -91,26 +75,23 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
     streamBroker,
   });
   cleanups.push(async () => {
-    release.resolve();
+    gate.release.resolve();
     await desktopRegistry.stopAll();
     nodeRegistry.unregister(client.connId);
   });
-  const observe = (overrides: Partial<Parameters<typeof service.observe>[0]> = {}) =>
-    service.observe({ nodeId: "node-1", control: false, ...overrides });
   return {
-    node,
     stop: () => service.stopNode("node-1"),
-    observe,
-    async observeAttached(identity?: DesktopObserveRequester, stream = new PassThrough()) {
-      const pending = observe({ credentials, requester: identity });
-      await reached.promise;
-      attached.resolve({ stream, auth: "vnc-password" });
+    observe: async (requester?: DesktopObserveRequester, stream?: PassThrough) => {
+      const pending = service.observe({ nodeId: "node-1", control: false, credentials, requester });
+      if (stream) {
+        await gate.reached.promise;
+        attached.resolve({ stream, auth: "vnc-password" });
+      }
       return pending;
     },
     nodeRegistry,
     desktopRegistry,
-    reached: reached.promise,
-    release: release.resolve,
+    gate,
     attached,
     forwarded,
     revoke() {
@@ -121,106 +102,78 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
 
 it("refuses an advertised desktop without pairing approval", async () => {
   const fixture = createFixture("attachment");
-  fixture.node.pairingGeneration = undefined;
+  fixture.nodeRegistry.get("node-1")!.pairingGeneration = undefined;
   await expect(fixture.observe()).rejects.toThrow("reconnect and approve the node capability");
-  expect(fixture.forwarded).toEqual([]);
+  expect(fixture.forwarded).not.toHaveBeenCalled();
 });
 
-it.each(["release", "stop"] as const)(
-  "joins invocation settlement when owner stop overlaps %s",
-  async (firstAction) => {
-    const fixture = createFixture("attachment");
-    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
-    const canceled = createDeferred();
-    const finishInvocation = createDeferred();
-    const completionOrder: string[] = [];
-    const invoke = fixture.nodeRegistry.invoke.bind(fixture.nodeRegistry);
-    vi.spyOn(fixture.nodeRegistry, "invoke").mockImplementation(async (request) => {
-      const result = await invoke(request);
-      canceled.resolve();
-      await finishInvocation.promise;
-      completionOrder.push("invocation");
-      return result;
-    });
-    const { controller, identity } = createRequester();
-    const owner = { ...identity, connId: "desktop-panel-client" };
-    try {
-      const observed = await fixture.observeAttached(owner);
-      const mintedRequester = mint.mock.calls[0]?.[0].requester;
-      expect(mintedRequester).toBe(owner);
-      expect(controller.signal.aborted).toBe(false);
-      const retiring = (
-        firstAction === "release"
-          ? observeBridge.releaseDesktopObserverToken(observed.wsPath, owner)
-          : fixture.stop()
-      ).then((result) => {
-        completionOrder.push(firstAction);
-        return result;
-      });
-      await canceled.promise;
-      const stopping = fixture.stop().then(() => {
-        completionOrder.push("stop");
-      });
-      await setImmediate();
-      finishInvocation.resolve();
-      expect(await retiring).toBe(firstAction === "release" ? true : undefined);
-      await stopping;
-      expect(completionOrder[0]).toBe("invocation");
-    } finally {
-      finishInvocation.resolve();
-      controller.abort();
-    }
-  },
-);
+it("joins invocation settlement when owner stop overlaps release", async () => {
+  const fixture = createFixture("attachment");
+  const canceled = createDeferred();
+  const finishInvocation = createDeferred();
+  cleanups.push(finishInvocation.resolve);
+  const completionOrder: string[] = [];
+  const invoke = fixture.nodeRegistry.invoke.bind(fixture.nodeRegistry);
+  vi.spyOn(fixture.nodeRegistry, "invoke").mockImplementation(async (request) => {
+    const result = await invoke(request);
+    canceled.resolve();
+    await finishInvocation.promise;
+    completionOrder.push("invocation");
+    return result;
+  });
+  const owner = Object.assign(createRequester(), { connId: "desktop-panel-client" });
+  const observed = await fixture.observe(owner, new PassThrough());
+  const retiring = observeBridge
+    .releaseDesktopObserverToken(observed.wsPath, owner)
+    .finally(() => completionOrder.push("release"));
+  await canceled.promise;
+  const stopping = fixture.stop().then(() => completionOrder.push("stop"));
+  await setImmediate();
+  finishInvocation.resolve();
+  expect(await retiring).toBe(true);
+  await stopping;
+  expect(completionOrder[0]).toBe("invocation");
+});
 
 it.each([false, true])("expires only unclaimed streams (claimed=%s)", async (claimed) => {
   vi.useFakeTimers();
-  const fixture = createFixture("attachment");
+  const { desktopRegistry: registry, observe, nodeRegistry } = createFixture("attachment");
   const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
-  const invoke = vi.spyOn(fixture.nodeRegistry, "invoke");
+  const invoke = vi.spyOn(nodeRegistry, "invoke");
   const stream = new PassThrough();
-  try {
-    const observed = await fixture.observeAttached(undefined, stream);
-    const token = mint.mock.calls[0]![0];
-    if (claimed) {
-      if (token.attachment.kind !== "stream") {
-        throw new Error("expected a streamed node desktop");
-      }
-      expect(fixture.desktopRegistry.claimStream(token.sourceKey, token.attachment)).toBe(stream);
-      expect(
-        fixture.desktopRegistry.attachObserver(token.sourceKey, {
-          ownerEpoch: token.ownerEpoch,
-          control: false,
-          close: () => {},
-        }),
-      ).toBeDefined();
-    }
-    await vi.advanceTimersByTimeAsync(observed.expiresAtMs - Date.now());
-    expect(stream.destroyed).toBe(!claimed);
-    expect(fixture.desktopRegistry.hasActivity(token.sourceKey, token.ownerEpoch)).toBe(claimed);
-    if (!claimed) {
-      await expect(invoke.mock.results[0]!.value).resolves.toMatchObject({ ok: false });
-    }
-  } finally {
-    await fixture.stop();
-    vi.useRealTimers();
+  const observed = await observe(undefined, stream);
+  const { attachment, sourceKey, ownerEpoch } = mint.mock.calls[0]![0];
+  if (claimed) {
+    assert(attachment.kind === "stream", "expected a streamed node desktop");
+    expect(registry.claimStream(sourceKey, attachment)).toBe(stream);
+    const observer = registry.attachObserver(sourceKey, { ownerEpoch, control: false, close() {} });
+    expect(observer).toBeDefined();
+  }
+  await vi.advanceTimersByTimeAsync(observed.expiresAtMs - Date.now());
+  expect(stream.destroyed).toBe(!claimed);
+  expect(registry.hasActivity(sourceKey, ownerEpoch)).toBe(claimed);
+  if (!claimed) {
+    await expect(invoke.mock.results[0]!.value).resolves.toMatchObject({ ok: false });
   }
 });
 
 it.each([
   { boundary: "activation", revoked: "requester" },
   { boundary: "activation", revoked: "policy" },
+  { boundary: "pairing", revoked: "requester" },
   { boundary: "pairing", revoked: "policy" },
   { boundary: "attachment", revoked: "policy" },
 ] as const)("rejects $revoked revocation during $boundary", async ({ boundary, revoked }) => {
   const fixture = createFixture(boundary);
-  const { controller, identity } = createRequester();
-  const observed = rejected(
-    fixture.observe({ credentials, requester: revoked === "requester" ? identity : undefined }),
-  );
-  await fixture.reached;
+  const requester = createRequester();
+  const observed = rejected(fixture.observe(revoked === "requester" ? requester : undefined));
+  await fixture.gate.reached.promise;
   if (revoked === "requester") {
-    controller.abort();
+    requester.abort();
+    if (boundary === "pairing") {
+      expect(await observed).toBe(true);
+      expect(fixture.forwarded).not.toHaveBeenCalled();
+    }
   } else {
     fixture.revoke();
   }
@@ -228,25 +181,13 @@ it.each([
   if (stream) {
     fixture.attached.resolve({ stream, auth: "vnc-password" });
   } else {
-    fixture.release();
+    fixture.gate.release.resolve();
   }
   expect(await observed).toBe(true);
   if (stream) {
     expect(stream.destroyed).toBe(true);
   } else {
-    expect(fixture.forwarded).toEqual([]);
+    await Promise.resolve();
+    expect(fixture.forwarded).not.toHaveBeenCalled();
   }
-});
-
-it("settles a canceled observer while its node pairing lookup is still pending", async () => {
-  const fixture = createFixture("pairing");
-  const { controller, identity } = createRequester();
-  const observed = rejected(fixture.observe({ requester: identity }));
-  await fixture.reached;
-  controller.abort();
-  expect(await observed).toBe(true);
-  expect(fixture.forwarded).toEqual([]);
-  fixture.release();
-  await Promise.resolve();
-  expect(fixture.forwarded).toEqual([]);
 });

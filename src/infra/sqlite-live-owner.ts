@@ -21,6 +21,7 @@ export function hasVerifiedLiveSqliteOwner(databasePath: string): boolean {
     host: owner.processNamespace?.host ?? hostname(),
     startedAt: owner.startTime ?? null,
     processNamespace: owner.processNamespace,
+    machineIdentity: owner.machineIdentity,
   });
   if (ownerStatus === "unknown") {
     throw new GatewayLockNamespaceError(owner, ownerPath);

@@ -39,6 +39,9 @@ serial within each shard. Full manual inventories retain twelve two-worker
 shards, and the browser-extension row remains separate. The extension command
 inherits the same managed Chromium path as setup, so it uses the restored browser
 instead of downloading another copy under its artifact directory.
+The Control UI E2E test step has a 20-minute deadline inside its 25-minute job
+budget, leaving time to upload the current file and case locations when a test
+hangs. Progress artifacts omit test titles and values.
 
 The protected cache warmer collects Gateway methods in sequential batches of
 at most 32 files. This releases the non-isolated Bun module graph between

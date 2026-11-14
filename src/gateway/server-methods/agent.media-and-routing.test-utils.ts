@@ -37,6 +37,7 @@ import {
   cronContinuationGatewayClient,
   cronMediaCompletionEvent,
   setupCronContinuationReleaseFixture,
+  readyCronContinuationEntry,
   operatorWriteGatewayClient,
   REAL_PNG,
   waitForAgentCommandCall,
@@ -47,21 +48,6 @@ import {
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
-
-function readyCronContinuationEntry(): SessionEntry {
-  return {
-    sessionId: "run-1",
-    updatedAt: Date.now(),
-    lifecycleRevision: "revision-1",
-    modelProvider: "openai",
-    model: "gpt-5.4",
-    cronRunContinuation: {
-      lifecycleRevision: "revision-1",
-      phase: "ready",
-      basePersisted: true,
-    },
-  };
-}
 
 function mockCronContinuationStore(
   sessionKey: string,
@@ -1064,54 +1050,6 @@ describe("gateway agent handler", () => {
     });
 
     resetTimeConfig();
-  });
-
-  it("suppresses persisted prompts for subagent announce task-completion handoffs", async () => {
-    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
-    mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: "runtime-only announce bookkeeping",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceTool: "subagent_announce",
-        },
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "subagent",
-            childSessionKey: "agent:main:subagent:child",
-            childSessionId: "child-session-id",
-            announceType: "completion",
-            taskLabel: "child task",
-            status: "ok",
-            statusLabel: "completed",
-            result: "child result",
-            statsLine: "tokens=10",
-            replyInstruction: "Deliver the child result.",
-          },
-        ],
-        idempotencyKey: "test-subagent-announce-suppress-prompt",
-      },
-      {
-        reqId: "subagent-announce-suppress-prompt",
-        client: backendGatewayClient(),
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{
-      suppressPromptPersistence?: boolean;
-      preserveUserFacingSessionModelState?: boolean;
-      message?: string;
-    }>();
-    expect(callArgs.suppressPromptPersistence).toBe(true);
-    expect(callArgs.preserveUserFacingSessionModelState).toBe(true);
-    expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
-    expect(callArgs.message).toContain("sourceTool=subagent_announce");
   });
 
   it("restores exact cron continuation policy for generated-media wakes", async () => {

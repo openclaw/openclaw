@@ -7,8 +7,8 @@ import {
   retainPreparedSessionSharingFacts,
 } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
   runWithSessionActorStorage,
@@ -24,7 +24,6 @@ import {
 import { retainSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 
 type WorkerTranscriptSourceIdentity = Pick<
@@ -40,7 +39,6 @@ type WorkerTranscriptTurn = Pick<
 type PreparedWorkerTranscript = {
   target: BoundAgentRunSessionTarget;
   source: CapturedSessionEntryReadSource & { databaseIdentity: string };
-  env: NodeJS.ProcessEnv;
   readCurrent: (target: BoundAgentRunSessionTarget) => WorkerTranscriptSourceIdentity | undefined;
   assertCurrent: () => void;
   release: () => void | Promise<void>;
@@ -128,7 +126,6 @@ async function prepareWorkerTranscript(
           // The source owns physical routing; turn admission keeps its logical store identity.
           target,
           source,
-          env,
           readCurrent: (requested) =>
             (requested.expectedWriterRunId === undefined
               ? settlementFacts
@@ -332,15 +329,8 @@ export async function withWorkerTurnTranscriptDatabase<T>(
         prepared.assertCurrent();
         assertPreparing();
       };
-      return await withOpenClawAgentDatabaseRuntime(
-        { agentId: prepared.source.agentId, path: prepared.source.path, env: prepared.env },
-        () => {
-          assertAdmission();
-          return preparedWorkerTranscript.run(prepared, () => runAdmitted(prepared.target));
-        },
-        assertAdmission,
-        controls.signal,
-      );
+      assertAdmission();
+      return await preparedWorkerTranscript.run(prepared, () => runAdmitted(prepared.target));
     } finally {
       authority.release();
       authority = undefined;

@@ -1,0 +1,2 @@
+29
+# Browser-control recovery after owner socket loss, scoped to the configured profile and port.

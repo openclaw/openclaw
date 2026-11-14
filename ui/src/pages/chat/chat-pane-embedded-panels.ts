@@ -145,6 +145,7 @@ export function sidebarPanelDefinitions(
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
       icon: "plug",
+      iconSvg: entry?.panelIcon,
       available: entry !== undefined,
       content: null,
       view: entry ? data : undefined,

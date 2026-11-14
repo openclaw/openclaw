@@ -11,7 +11,6 @@ import {
 } from "../../agent-tool-source-execution-guard.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
-import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
@@ -23,6 +22,7 @@ import {
   readPersistedFileStat,
   verifyPersistedUtf8File,
 } from "./file-write-verification.js";
+import { WRITE_DIFF_MAX_BYTES } from "./limits.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";

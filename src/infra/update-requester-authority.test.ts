@@ -6,6 +6,7 @@ import { resolveCommandOwnerAuthority } from "../auto-reply/command-auth.js";
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAdminMemberRoleConfig } from "../gateway/operator-role.test-support.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -69,17 +70,7 @@ beforeEach(async () => {
 });
 
 async function linkedAdmins() {
-  const config: OpenClawConfig = {
-    gateway: {
-      roles: {
-        default: "member",
-        definitions: {
-          admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-          member: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
-        },
-      },
-    },
-  };
+  const config: OpenClawConfig = createAdminMemberRoleConfig();
   await writeConfig(config);
   const options = { env };
   const ada = ensureProfileForEmail("ada@example.test", options);
@@ -258,6 +249,32 @@ it.each(["callback", "local-executor"] as const)(
     } finally {
       selected.mockRestore();
     }
+  },
+);
+
+it.each([true, false])(
+  "keeps a prefixed configured owner current when plugins await Doctor migrations: %s",
+  async (pendingOnly) => {
+    await writeConfig({ commands: { ownerAllowFrom: ["telegram:owner"] } });
+    const registry = createTestPluginRegistry().registry;
+    registry.plugins.push(createPluginRecord({ id: "telegram", status: "error" }));
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: "telegram",
+      message: "pending",
+      ...(pendingOnly ? { code: "plugin-state-migration" as const } : {}),
+    });
+    const { PluginLoadFailureError } = await import("../plugins/loader-shared.js");
+    const error = new PluginLoadFailureError(registry, registry.plugins);
+    vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(error);
+    const authority = await authorityFor({ channel: "telegram", senderId: "owner" });
+    if (!pendingOnly) {
+      expect(() => authority.isCurrent()).toThrow(error);
+      return;
+    }
+    expect(authority.isCurrent()).toBe(true);
+    await writeConfig({ commands: { ownerAllowFrom: ["telegram:other"] } });
+    expect(authority.isCurrent()).toBe(false);
   },
 );
 

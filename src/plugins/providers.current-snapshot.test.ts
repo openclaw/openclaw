@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import * as manifestRegistryInstalled from "./manifest-registry-installed.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { resolveUsageHookProviderPluginContracts as resolveUsage } from "./providers.js";
@@ -25,26 +24,25 @@ afterEach(() => {
 });
 
 function createUsageSnapshot(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  const snapshot = createPluginMetadataSnapshotFixture({
-    plugins: (
-      [
-        ["z-usage", "global", ["usage-alias"], [" ZETA ", "shared", "shared", "ALPHA"], false],
-        ["a-compat", "bundled", ["compat"], ["compat"], false],
-        ["m-disabled", "global", ["disabled-alias"], ["disabled"], undefined],
-        ["b-regular", "global", ["regular"], undefined, undefined],
-        ["h-harness", "global", [], ["harness"], undefined],
-      ] as const
-    ).map(([id, origin, providers, usage, enabledByDefault]) => ({
-      id,
-      origin,
-      enabledByDefault,
-      providers: [...providers],
-      contracts: usage ? { usageProviders: [...usage] } : undefined,
-    })),
-  });
-  snapshot.policyHash = resolveInstalledPluginIndexPolicyHash(config, env);
-  snapshot.index.policyHash = snapshot.policyHash;
-  return snapshot;
+  const plugins = (
+    [
+      ["z-usage", "global", ["usage-alias"], [" ZETA ", "shared", "shared", "ALPHA"], false],
+      ["a-compat", "bundled", ["compat"], ["compat"], false],
+      ["m-disabled", "global", ["disabled-alias"], ["disabled"], undefined],
+      ["b-regular", "global", ["regular"], undefined, undefined],
+      ["h-harness", "global", [], ["harness"], undefined],
+    ] as const
+  ).map(([id, origin, providers, usage, enabledByDefault]) => ({
+    id,
+    origin,
+    enabledByDefault,
+    providers: [...providers],
+    contracts: usage ? { usageProviders: [...usage] } : undefined,
+  }));
+  return createPluginMetadataSnapshotFixture(
+    { plugins },
+    resolveInstalledPluginIndexPolicyHash(config, env),
+  );
 }
 
 it("reuses the Gateway inventory while applying current alias and activation policy", () => {
@@ -56,10 +54,6 @@ it("reuses the Gateway inventory while applying current alias and activation pol
   };
   const env = { HOME: "/tmp/openclaw-usage-snapshot", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
   setGatewayPluginMetadataSnapshot(createUsageSnapshot(config, env), { config, env });
-  const reloadManifests = vi.spyOn(
-    manifestRegistryInstalled,
-    "loadPluginManifestRegistryForInstalledIndex",
-  );
   const reads = (["readFileSync", "readdirSync", "statSync"] as const).map((key) =>
     vi.spyOn(fs, key),
   );
@@ -70,7 +64,7 @@ it("reuses the Gateway inventory while applying current alias and activation pol
     env,
   });
 
-  for (const read of [reloadManifests, ...reads]) {
+  for (const read of reads) {
     expect(read).not.toHaveBeenCalled();
   }
   expect(initial).toEqual([

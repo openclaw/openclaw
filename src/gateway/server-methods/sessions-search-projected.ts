@@ -82,7 +82,8 @@ export async function searchProjectedSessionTranscripts(params: {
           return row ? [{ hit, row }] : [];
         }),
       )
-      .toSorted(
+      // oxlint-disable-next-line unicorn/no-array-sort -- flatMap returns a fresh, private array.
+      .sort(
         (left, right) =>
           right.hit.score - left.hit.score ||
           right.hit.timestamp - left.hit.timestamp ||

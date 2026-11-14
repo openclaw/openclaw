@@ -27,6 +27,28 @@ export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToo
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 
+export type InternalBeforeRequestHook = (
+  signal?: AbortSignal,
+) => Promise<AgentMessage[] | undefined>;
+
+const beforeRequestByOwner = new WeakMap<object, InternalBeforeRequestHook>();
+
+/** Adopt already committed host messages before any initial or continuation request. */
+export function setInternalBeforeRequest(
+  owner: object,
+  hook: InternalBeforeRequestHook | undefined,
+): void {
+  if (hook) {
+    beforeRequestByOwner.set(owner, hook);
+  } else {
+    beforeRequestByOwner.delete(owner);
+  }
+}
+
+export function getInternalBeforeRequest(owner: object): InternalBeforeRequestHook | undefined {
+  return beforeRequestByOwner.get(owner);
+}
+
 type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
@@ -51,6 +73,13 @@ export function commitInternalToolTurnInput(
   }
 }
 
+/** A source-start veto, translated into an unstarted outcome rather than a fatal error. */
+export class InternalToolLoopBlocked extends Error {
+  constructor(readonly intervention: ToolLoopIntervention) {
+    super(intervention.reason);
+  }
+}
+
 export type InternalToolBatchLifecycle = {
   /**
    * Commit admitted calls in assistant order as they launch: prepared calls just
@@ -62,7 +91,10 @@ export type InternalToolBatchLifecycle = {
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
   /** Observe settled outcomes in assistant order, before warning text changes their identity. */
   observeOutcome?: (
-    outcome: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
+    outcome: Pick<
+      AfterToolOutcomeContext,
+      "toolCall" | "args" | "result" | "isError" | "errorKind"
+    >,
     state: ToolLoopRecoveryState,
   ) => ToolLoopIntervention | undefined;
 };

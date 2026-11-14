@@ -16,9 +16,14 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { SidebarApprovalRow } from "./exec-approval-card-solid.tsx";
+import { ScopeUpgradeActions, scopeUpgradeText } from "./scope-upgrade-actions.tsx";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
-import { SidebarDismissButton, SidebarNotificationCard } from "./sidebar-notification-card.tsx";
+import {
+  SidebarDismissButton,
+  SidebarNotificationCard,
+  SidebarRowHeading,
+} from "./sidebar-notification-card.tsx";
 import { SidebarUpdateCard } from "./sidebar-update-card.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
@@ -200,6 +205,7 @@ export function renderSidebarUpdateSurface(params: {
       updateRun={snapshot().updateRun}
       updateRunAcknowledged={snapshot().updateRunAcknowledged}
       connected={gateway().phase === "connected"}
+      serving={gateway().hello?.server}
       onAcknowledge={() => context.overlays.acknowledgeUpdateRun()}
       prepareRetry={prepareRetry}
       canStartNativeUpdate={() =>
@@ -221,28 +227,6 @@ export function renderSidebarUpdateSurface(params: {
   );
 }
 
-function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  switch (state.phase) {
-    case "guidance":
-      return t("connection.scopeUpgrade.guidance");
-    case "available":
-      return t("connection.scopeUpgrade.limited");
-    case "requesting":
-      return t("connection.scopeUpgrade.requesting");
-    case "pending":
-      return t("connection.scopeUpgrade.pending", {
-        command: `openclaw devices approve ${state.requestId}`,
-      });
-    case "rejected":
-      return t(
-        state.expired ? "connection.scopeUpgrade.expired" : "connection.scopeUpgrade.rejected",
-      );
-    case "error":
-      return t("connection.scopeUpgrade.error", { error: state.message });
-  }
-  return state satisfies never;
-}
-
 export function renderSidebarScopeUpgradeItem(params: {
   state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
   onCancel: () => void;
@@ -251,11 +235,12 @@ export function renderSidebarScopeUpgradeItem(params: {
   onRetry: () => void;
 }) {
   const text = () => scopeUpgradeText(params.state);
-  const summary = () => t("connection.scopeUpgrade.inboxState");
-  const retryable = () =>
-    params.state.phase === "error"
-      ? params.state.retryable
-      : params.state.phase === "pending" || params.state.phase === "rejected";
+  const summary = () =>
+    t(
+      params.state.phase === "guidance" && params.state.reason === "role"
+        ? "connection.scopeUpgrade.roleState"
+        : "connection.scopeUpgrade.inboxState",
+    );
   return (
     <details
       class={[
@@ -273,7 +258,7 @@ export function renderSidebarScopeUpgradeItem(params: {
           <Icon name="shieldQuestion" />
         </span>
         <span class="sidebar-issues-panel__content">
-          <span class="sidebar-issues-panel__entity">{t("connection.scopeUpgrade.status")}</span>
+          <SidebarRowHeading title={t("connection.scopeUpgrade.status")} />
           <span class="sidebar-issues-panel__state" title={summary()}>
             {summary()}
           </span>
@@ -282,54 +267,20 @@ export function renderSidebarScopeUpgradeItem(params: {
           itemLabel={t("connection.scopeUpgrade.status")}
           onDismiss={params.onDismiss}
         />
-        <span class="sidebar-issues-panel__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
       </summary>
       <div class="sidebar-issues-panel__body" role="status" aria-live="polite">
         <div>{text()}</div>
-        {params.state.phase === "available" || params.state.phase === "requesting" ? (
+        <Show when={params.state.phase !== "guidance"}>
           <div class="sidebar-issues-panel__actions">
-            <button
-              ref={sidebarAttentionFocusRef()}
-              type="button"
-              class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-              disabled={params.state.phase === "requesting"}
-              onClick={() => {
-                if (params.state.phase === "available") {
-                  params.onRequest();
-                }
-              }}
-            >
-              {t(
-                params.state.phase === "available"
-                  ? "connection.scopeUpgrade.request"
-                  : "connection.scopeUpgrade.requestingAction",
-              )}
-            </button>
+            <ScopeUpgradeActions
+              state={params.state}
+              inbox
+              onRequest={() => params.onRequest()}
+              onRetry={() => params.onRetry()}
+              onCancel={() => params.onCancel()}
+            />
           </div>
-        ) : retryable() || params.state.phase === "error" ? (
-          <div class="sidebar-issues-panel__actions">
-            {retryable() ? (
-              <button
-                ref={sidebarAttentionFocusRef()}
-                type="button"
-                class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                onClick={() => params.onRetry()}
-              >
-                {t("connection.scopeUpgrade.retry")}
-              </button>
-            ) : null}
-            <button
-              ref={sidebarAttentionFocusRef()}
-              type="button"
-              class="sidebar-issues-panel__action"
-              onClick={() => params.onCancel()}
-            >
-              {t("connection.scopeUpgrade.cancel")}
-            </button>
-          </div>
-        ) : null}
+        </Show>
       </div>
     </details>
   );
@@ -347,15 +298,13 @@ function SidebarItemMeta(props: { item: SidebarAttentionItem }) {
     >
       {(meta) => (
         <span class="sidebar-issues-panel__state-row" title={props.item.detail}>
+          <span class="sidebar-issues-panel__meta-status">{meta().status}</span>
           {meta().context ? (
             <>
-              <span class="sidebar-issues-panel__meta-context">{meta().context}</span>
               <span aria-hidden="true">·</span>
+              <span class="sidebar-issues-panel__meta-context">{meta().context}</span>
             </>
           ) : null}
-          <span class="sidebar-issues-panel__meta-status">{meta().status}</span>
-          <span aria-hidden="true">·</span>
-          <span class="sidebar-issues-panel__meta-time">{meta().time}</span>
         </span>
       )}
     </Show>
@@ -365,22 +314,11 @@ function SidebarItemMeta(props: { item: SidebarAttentionItem }) {
 function SidebarIssueContent(props: { item: SidebarAttentionItem }) {
   return (
     <>
-      <span
-        class={[
-          "sidebar-issues-panel__icon",
-          {
-            "sidebar-issues-panel__icon--critical":
-              props.item.action.kind !== "navigate" && props.item.kind === "modelAuthExpired",
-          },
-        ]}
-        aria-hidden="true"
-      >
+      <span class="sidebar-issues-panel__icon" aria-hidden="true">
         <Icon name={props.item.icon} />
       </span>
       <span class="sidebar-issues-panel__content">
-        <span class="sidebar-issues-panel__entity" title={props.item.label}>
-          {props.item.label}
-        </span>
+        <SidebarRowHeading title={props.item.label} timestampMs={props.item.arrivedAtMs} />
         <SidebarItemMeta item={props.item} />
       </span>
     </>
@@ -422,9 +360,6 @@ export function SidebarIssueItem(props: {
               itemLabel={props.item.label}
               onDismiss={props.handlers.onDismiss}
             />
-            <span class="sidebar-issues-panel__chevron" aria-hidden="true">
-              <Icon name="chevronRight" />
-            </span>
           </summary>
           <div class="sidebar-issues-panel__body">
             {visibleFacts().length ? (
@@ -485,9 +420,6 @@ export function SidebarIssueItem(props: {
               itemLabel={props.item.label}
               onDismiss={props.handlers.onDismiss}
             />
-            <span class="sidebar-issues-panel__chevron" aria-hidden="true">
-              <Icon name="chevronRight" />
-            </span>
           </div>
         </div>
       )}

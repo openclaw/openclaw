@@ -49,6 +49,7 @@ export async function proveHotReloadSecurity({
     async () => {
       gateway = await owner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,

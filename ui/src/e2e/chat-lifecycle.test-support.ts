@@ -11,7 +11,7 @@ export function chatControls(page: Page) {
     pane,
     composer: pane.getByRole("textbox", { name: "Chat composer", exact: true }),
     send: pane.getByRole("button", { name: "Send message", exact: true }),
-    stop: pane.getByRole("button", { name: "Stop generating", exact: true }),
+    stop: pane.getByRole("button", { name: "Stop", exact: true }),
   };
 }
 

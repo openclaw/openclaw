@@ -445,7 +445,7 @@ describe("direct compactor through the context-engine delegate", () => {
     async ({ budget, pendingPrompt }) => {
       const fixture = await createFixture("endpoint");
       const compactorPrompt = "Summarize the deployment discussion.";
-      buildConfiguredAgentSystemPromptMock.mockReturnValue(compactorPrompt);
+      buildConfiguredAgentSystemPromptMock.mockResolvedValue(compactorPrompt);
       const requestBudget = requestBudgets.createCompactionRequestBudget({
         contextWindow: model.contextWindow,
         reserveTokens: 16_384,

@@ -31,12 +31,8 @@ export async function withTelegramGetFileRetryClock(
       if (!shouldAdvance) {
         break;
       }
-      try {
-        await vi.advanceTimersByTimeAsync(delayMs);
-      } catch (clockError) {
-        // Ticks consume their range before reporting callback errors; finish the remaining retry.
-        clockErrors.push(clockError);
-      }
+      // Ticks consume their range before reporting callback errors; finish the remaining retry.
+      await vi.advanceTimersByTimeAsync(delayMs).catch((err: unknown) => clockErrors.push(err));
     }
     await handling;
     if (clockErrors.length > 0) {
@@ -63,21 +59,17 @@ export function holdTelegramMediaTimeouts(delayMs: number) {
   });
 }
 
-export function resolveFlushTimerForDelay(
-  setTimeoutSpy: ReturnType<typeof holdTelegramMediaTimeouts>,
-  delayMs: number,
-) {
-  const index = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === delayMs);
-  return setTimeoutSpy.mock.calls[index]?.[0];
+type MediaTimers = ReturnType<typeof holdTelegramMediaTimeouts>;
+
+export function resolveFlushTimerForDelay(setTimeoutSpy: MediaTimers, delayMs: number) {
+  return setTimeoutSpy.mock.calls.findLast(([, delay]) => delay === delayMs)?.[0];
 }
 
 export function runHeldTelegramBufferTimers(
   timers: ReadonlyArray<() => unknown>,
   enqueueSpy: MockInstance<typeof enqueueKeyedTask>,
 ) {
-  for (const timer of timers) {
-    timer();
-  }
+  timers.forEach((timer) => timer());
   const work = enqueueSpy.mock.results.flatMap((queued, index) =>
     enqueueSpy.mock.calls[index]?.[0].key.startsWith("media:") && queued.type === "return"
       ? [Promise.resolve(queued.value)]
@@ -88,7 +80,7 @@ export function runHeldTelegramBufferTimers(
 }
 
 export async function flushChannelPostMediaGroup(
-  setTimeoutSpy: ReturnType<typeof holdTelegramMediaTimeouts>,
+  setTimeoutSpy: MediaTimers,
   enqueueSpy: MockInstance<typeof enqueueKeyedTask>,
   completionTimeoutMs = 75,
   delayMs = 20,

@@ -35,6 +35,30 @@ function usageRequest(
   );
 }
 
+it("retires usage before a restricted reconnect can refresh the mounted page", async () => {
+  vi.useFakeTimers();
+  focusDocument();
+  const snapshot = cacheSnapshot("fresh");
+  const request = usageRequest(() => snapshot.result);
+  const { context, page } = await loadUsagePage(request, false, (application) =>
+    application.setGatewaySnapshot({
+      hello: gatewayHelloForMethods(["sessions.usage", "usage.status"]),
+    }),
+  );
+  await settleUsageTimers(page, 300_001);
+  context.setGatewaySnapshot({ phase: "reconnecting" });
+  request.mockClear();
+  context.setGatewaySnapshot({
+    phase: "connected",
+    hello: gatewayHelloForMethods(["sessions.usage", "usage.status"], ["operator.sessions.read"]),
+  });
+  expect(request).not.toHaveBeenCalled();
+  await settleUsageTimers(page);
+  await page.refresh();
+  expect(request).not.toHaveBeenCalled();
+  expect(page.usageResult).toBeNull();
+});
+
 describe("UsagePage cache convergence", () => {
   it("shows an exhausted empty page as partial and clears its message after refresh", async () => {
     const message =
@@ -47,7 +71,7 @@ describe("UsagePage cache convergence", () => {
     const { page } = await loadUsagePage(request);
     expect(page.querySelector(".callout.danger")).toBeNull();
     expect(
-      page.querySelector(".usage-lower-bound:not(.usage-lower-bound--off)")?.textContent,
+      page.querySelector(".usage-partial-notice:not(.usage-partial-notice--off)")?.textContent,
     ).toContain(message);
     expect(page.textContent).not.toContain("Select a date range and click Refresh");
 
@@ -55,7 +79,9 @@ describe("UsagePage cache convergence", () => {
     refreshButton(page).click();
     await vi.advanceTimersByTimeAsync(0);
     await page.updateComplete;
-    expect(page.querySelector(".usage-lower-bound")?.classList).toContain("usage-lower-bound--off");
+    expect(page.querySelector(".usage-partial-notice")?.classList).toContain(
+      "usage-partial-notice--off",
+    );
   });
 
   beforeEach(() => {

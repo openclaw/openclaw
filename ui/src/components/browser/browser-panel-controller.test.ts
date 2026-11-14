@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { BrowserAnnotationEvent } from "./browser-annotation.ts";
 import type { BrowserPanelTab } from "./browser-client.ts";
@@ -181,7 +181,7 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
     expect(controller.activeTargetId).toBe("stable-tab");
     expect(controller.view).toBe(previousView);
     expect(controller.errorText).toBe(
-      "Browser request failed: The current browser navigation rules block this address. Select another tab or enter an allowed address.",
+      "Couldn’t complete the browser action. Try again.\nThe current browser navigation rules block this address. Select another tab or enter an allowed address.",
     );
     expect(controller.loading).toBe(false);
   });
@@ -268,7 +268,7 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
       committed.resolve({ targetId: "raw-stable", url });
       await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
       expect(controller).toMatchObject({
-        errorText: "Browser request failed: " + error,
+        errorText: "Couldn’t complete the browser action. Try again.\n" + error,
         loading: false,
       });
       if (succeeds) {
@@ -319,7 +319,9 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
 
     expect(controller.view?.url).toBe(committedUrl);
     expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(controller.errorText).toBe("Browser request failed: Latest navigation rejected");
+    expect(controller.errorText).toBe(
+      "Couldn’t complete the browser action. Try again.\nLatest navigation rejected",
+    );
 
     previousSnapshot.resolve({ running: true, tabs: [] });
     await previous;

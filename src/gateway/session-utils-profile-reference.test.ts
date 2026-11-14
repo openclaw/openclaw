@@ -11,6 +11,7 @@ import {
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { resolveSessionListProfileReference } from "./session-identity-projection.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 
@@ -126,6 +127,40 @@ it("resolves retained profile without a durable row", async () => {
   await expect(listActivity([retained], prefix, emptySearch)).rejects.toThrow(
     "Person link is ambiguous",
   );
+});
+
+it("matches retained profile prefixes across case and hyphen placement, with exact precedence", () => {
+  const compact = "abcdef1234567890abcdef1234567890";
+  const unrelated = "fedcba1234567890abcdef1234567890";
+  for (let length = 8; length <= 32; length++) {
+    const reference = compact.slice(0, length);
+    for (const id of [compact.toUpperCase(), `--${compact.split("").join("--")}`]) {
+      const identities = new Map([
+        [reference, undefined],
+        [id, undefined],
+        [unrelated, undefined],
+      ]);
+      for (const fields of [{ createdActor: creator(id) }, participant(id)]) {
+        const entries: [string, SessionEntry][] = [
+          ["retained", { sessionId: "retained", updatedAt: 1, ...fields }],
+          ["unrelated", { sessionId: "unrelated", updatedAt: 1, ...participant(unrelated) }],
+        ];
+        expect(
+          resolveSessionListProfileReference(reference, entries, identities, new Set()),
+        ).toEqual({
+          ok: true,
+          value: id,
+        });
+        entries.push(["exact", { sessionId: "exact", updatedAt: 1, ...participant(reference) }]);
+        expect(
+          resolveSessionListProfileReference(reference, entries, identities, new Set()),
+        ).toEqual({
+          ok: true,
+          value: reference,
+        });
+      }
+    }
+  }
 });
 
 it("resolves qualified retained creators without treating legacy human IDs as profiles", async () => {

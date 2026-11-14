@@ -146,10 +146,15 @@ it("does not reuse a reopened connection claim", () => {
   const { path: databasePath } = open();
   const { claim } = retain(databasePath);
   agentDb.closeOpenClawAgentDatabaseByPath(databasePath);
+  expect(claim.isCurrent()).toBe(false);
+  expect(claim.assertCurrent).toThrow("no longer current");
   open(databasePath);
   const { claim: replacement } = retain(databasePath);
   expect(claim.incarnation).not.toBe(replacement.incarnation);
   expect(claim.isCurrent()).toBe(false);
   expect(replacement.isCurrent()).toBe(true);
   expect(claim.identity).toBe(replacement.identity);
+  claim.release();
+  claim.release();
+  expect(replacement.isCurrent()).toBe(true);
 });

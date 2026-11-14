@@ -84,10 +84,6 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
   return value === "raw" || value === "status" ? value : undefined;
 }
 
-// Short enough that a multi-tool turn is never silent, long enough that a
-// quick answer posts no draft at all: the gate only creates the draft when the
-// timer fires, and finalize cancels it.
-const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
 // Narration is a short paragraph, not a compact tool line; it gets its own
 // budget so the utility-model text is not mid-word truncated at line width.
@@ -583,119 +579,6 @@ export function buildChannelProgressDraftLine(
     }
   }
   return undefined;
-}
-
-export function createChannelProgressDraftGate(params: {
-  onStart: () => void | Promise<void>;
-  /** Delay after the first work event before a draft starts. */
-  initialDelayMs?: number;
-  /** Reports timer-fired startup failures, which have no awaiting caller. */
-  onStartError?: (error: unknown) => void;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
-}) {
-  const initialDelayMs = params.initialDelayMs ?? DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS;
-  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
-  // Timer starts have no awaiting caller, so preserve observability at this SDK boundary.
-  const reportStartError =
-    params.onStartError ??
-    ((error: unknown) => {
-      console.warn(`[progress-draft] channel progress draft failed to start: ${String(error)}`);
-    });
-  let started = false;
-  let disposed = false;
-  let workEvents = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let startPromise: Promise<void> | undefined;
-
-  const clearTimer = () => {
-    if (timer) {
-      clearTimeoutFn(timer);
-      timer = undefined;
-    }
-  };
-
-  const start = (): Promise<void> => {
-    if (disposed || started) {
-      return startPromise ?? Promise.resolve();
-    }
-    clearTimer();
-    started = true;
-    const nextStart = Promise.resolve()
-      .then(params.onStart)
-      .then(() => {
-        if (disposed) {
-          started = false;
-        }
-        if (startPromise === nextStart) {
-          startPromise = undefined;
-        }
-      })
-      .catch((error: unknown) => {
-        if (startPromise === nextStart) {
-          startPromise = undefined;
-        }
-        started = false;
-        throw error;
-      });
-    // Hold one startup promise so timer and explicit starts cannot race into
-    // duplicate draft creation.
-    startPromise = nextStart;
-    return startPromise;
-  };
-
-  const schedule = () => {
-    if (timer || started || disposed || initialDelayMs < 0) {
-      return;
-    }
-    timer = setTimeoutFn(() => {
-      timer = undefined;
-      // Explicit starts rethrow to callers; timer starts must report at the boundary.
-      void start().catch((error: unknown) => {
-        reportStartError(error);
-      });
-    }, initialDelayMs);
-  };
-
-  return {
-    get hasStarted() {
-      return started;
-    },
-    get workEvents() {
-      return workEvents;
-    },
-    async noteWork(): Promise<boolean> {
-      if (disposed) {
-        return false;
-      }
-      workEvents += 1;
-      if (startPromise) {
-        await startPromise;
-        return started;
-      }
-      if (started) {
-        return true;
-      }
-      schedule();
-      return false;
-    },
-    async startNow(): Promise<void> {
-      await start();
-    },
-    cancel(): void {
-      disposed = true;
-      started = false;
-      clearTimer();
-    },
-    reset(): void {
-      clearTimer();
-      started = false;
-      disposed = false;
-      workEvents = 0;
-      startPromise = undefined;
-    },
-  };
 }
 
 export function resolveChannelStreamingChunkMode(

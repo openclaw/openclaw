@@ -10,7 +10,6 @@ import {
   getSubagentActivationRuns,
   getSubagentSessionReadLookup,
   immutableSubagentRunSessionList,
-  isSubagentRunPayloadEvicted,
 } from "./subagent-registry-memory.js";
 import {
   acceptedFullSnapshot,
@@ -28,6 +27,7 @@ import {
 } from "./subagent-registry-read-cache.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 export type SubagentRunReadSelection = {

@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
-import { createInitializationContext } from "../../pages/chat/chat-pane.test-support.ts";
+import { createInitializationContext } from "../../pages/chat/chat-application-context.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import * as confirmation from "../confirm-dialog.ts";
@@ -309,6 +309,7 @@ describe("Terminal panel hosted tabs", () => {
       const id = panel.activeHostedTabId!;
       const closing = panel.closeHostedTab(id);
       if (outcome === "cancel") {
+        await import("../confirm-dialog-view.tsx");
         await waitForFast(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
         const cancel = [
           ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -15,10 +16,8 @@ import {
   type ChannelRead,
 } from "../../lib/channels/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -115,11 +114,6 @@ export function AgentChannels(
   },
 ) {
   const entries = createMemo(() => resolveChannelEntries(params.readState().channelsSnapshot));
-  const lastSuccessLabel = createMemo(() =>
-    params.readState().channelsLastSuccess
-      ? formatRelativeTimestamp(params.readState().channelsLastSuccess)
-      : t("common.never"),
-  );
   return (
     <>
       {renderAgentContextSection(
@@ -138,21 +132,16 @@ export function AgentChannels(
       ) : undefined}
       <SettingsSection
         title={t("agents.channels.title")}
-        description={
-          <>
-            {t("agents.channels.subtitle")}{" "}
-            {t("agents.channels.lastRefresh", { time: lastSuccessLabel() })}
-          </>
-        }
+        description={t("agents.channels.subtitle")}
         actions={
           <ChannelReadBoundary
             read={params.readState().channelsRead}
             retainedError={params.readState().channelsError}
           >
             {(pending) => (
-              <AgentPanelAction
-                label={pending ? t("common.refreshing") : t("common.refresh")}
-                disabled={pending}
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={pending}
                 onClick={params.onRefresh}
               />
             )}

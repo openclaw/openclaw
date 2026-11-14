@@ -40,7 +40,16 @@ function projection(raw: string, settleBefore?: number) {
   return [text, retainStart, retainedOutputStart];
 }
 
-describe("scanPlainTextToolCall JSON branch", () => {
+describe("scanPlainTextToolCall", () => {
+  it.each<[number, boolean]>([
+    [256_000, false],
+    [256_001, true],
+  ])("excludes XML closers from the cap for %i payload bytes", (bytes, overCap) => {
+    const prefix = `<function=read>${" ".repeat(bytes)}</func`;
+    expect(scanPlainTextToolCall(prefix)).toMatchObject({ kind: "prefix", overCap });
+    expect(scanPlainTextToolCall(`${prefix}tion>`)).toMatchObject({ kind: "complete", overCap });
+  });
+
   it("returns the complete Harmony call before a visible suffix", () => {
     const raw = '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file"}<|call|>visible';
     expect(scanPlainTextToolCall(raw).json).toMatchObject({

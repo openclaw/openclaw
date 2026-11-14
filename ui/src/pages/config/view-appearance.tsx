@@ -10,47 +10,33 @@ import {
 } from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
-import {
-  TEXT_SCALE_STOPS,
-  UI_APPEARANCE_DEFAULTS,
-  type TextScaleStop,
-} from "../../app/settings.ts";
+import { UI_APPEARANCE_DEFAULTS } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
-  SettingsDefaultDescription,
   SettingsPage,
   SettingsRow,
   SettingsSegmented,
-  SettingsStatus,
-  SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
+import { formatThemeValidationError } from "./custom-theme-import.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SessionSources } from "./session-sources.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import {
   ChatPreferencesSection,
-  LanguageSection,
   LobsterPetSection,
-  serverUiPrefProvenanceHint,
+  MediaDevicesSection,
+  serverUiPrefsScopeHint,
   SidebarPreferencesSection,
 } from "./view-appearance-preferences.tsx";
-import { Typography } from "./view-appearance-typography.tsx";
+import { TextSection } from "./view-appearance-typography.tsx";
 import { ConfigReadStatus } from "./view-readiness.tsx";
-import { TabIconSection } from "./view-tab-icon.tsx";
+import { TabIconRow } from "./view-tab-icon.tsx";
 import type { ConfigProps } from "./view-types.ts";
-const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
-  90: "configView.textSizes.small",
-  100: "configView.textSizes.default",
-  110: "configView.textSizes.large",
-  125: "configView.textSizes.xl",
-  140: "configView.textSizes.xxl",
-};
 const ACCENT_PRESETS = [
   {
     id: "default",
@@ -95,22 +81,33 @@ const ACCENT_PRESETS = [
 ] as const;
 
 /* Builtin cards preview their real palette (chip colors live in config.css,
-   mirrored from the base.css theme blocks). The custom card only has real
-   colors while active — its chips read the live CSS variables — so it falls
-   back to the download icon otherwise. */
-function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
-  if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
-    return (
-      <span class="settings-theme-card__icon" aria-hidden="true">
-        <Icon name="download" />
-      </span>
-    );
-  }
+   mirrored from the base.css theme blocks). Plugin cards use the live palette.
+   Only the inactive custom import card falls back to the download icon. */
+function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName; selected: boolean }) {
   return (
-    <span class="settings-theme-card__palette" aria-hidden="true">
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
+    <span class="settings-theme-card__swatch" aria-hidden="true">
+      <Show
+        when={props.id !== "custom" || props.activeTheme === props.id}
+        fallback={
+          <span class="settings-theme-card__icon">
+            <Icon name="download" />
+          </span>
+        }
+      >
+        <span class="settings-theme-card__palette">
+          <span class="settings-theme-card__line" />
+          <span class="settings-theme-card__line settings-theme-card__line--short" />
+          <span class="settings-theme-card__chips">
+            <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
+            <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
+          </span>
+        </span>
+      </Show>
+      <Show when={props.selected}>
+        <span class="settings-theme-card__check">
+          <Icon name="check" />
+        </span>
+      </Show>
     </span>
   );
 }
@@ -146,7 +143,8 @@ export function AppearanceSection(props: ConfigProps) {
   }
   const importMessage = () => {
     importResult();
-    return props.customThemeImportMessage;
+    const message = props.customThemeImportMessage;
+    return message?.kind === "error" ? message : null;
   };
   let focusFrame = 0;
   const showCustomThemeImport = () =>
@@ -175,7 +173,7 @@ export function AppearanceSection(props: ConfigProps) {
   const importedName = createMemo(() =>
     props.hasCustomTheme && props.customThemeLabel
       ? props.customThemeLabel
-      : t("configView.appearance.importedTheme"),
+      : t("configView.appearance.customTheme"),
   );
   const themeOptions = createMemo(
     (): Array<{ id: ThemeName; label: string; description: string }> => [
@@ -213,20 +211,12 @@ export function AppearanceSection(props: ConfigProps) {
         label: t("configView.themes.claw.label"),
       },
   );
-  const themeDefault = createMemo(
-    () =>
-      themeOptions().find((option) => option.id === props.themeResetValue)?.label ??
-      t("configView.themes.claw.label"),
-  );
-  const themeModeDefault = () =>
-    props.themeModeResetValue === "light"
-      ? t("common.light")
-      : props.themeModeResetValue === "dark"
-        ? t("common.dark")
-        : t("common.system");
-  const themeProvenance = () => serverUiPrefProvenanceHint(props.themeProvenance);
-  const themeModeProvenance = () => serverUiPrefProvenanceHint(props.themeModeProvenance);
-  const accentProvenance = () => serverUiPrefProvenanceHint(props.accentProvenance);
+  const themeScope = () =>
+    serverUiPrefsScopeHint([
+      props.themeProvenance,
+      props.themeModeProvenance,
+      props.accentProvenance,
+    ]);
   // The theme swatch is selected whenever resetting would land on the current
   // accent. A boolean `overridden` cannot express that: the resolver reports an
   // inherited server or profile accent as overridden too, which is what left the
@@ -251,30 +241,19 @@ export function AppearanceSection(props: ConfigProps) {
     Boolean(
       !defaultAccentSelected() && !themeAccentSelected() && props.accent && !selectedAccentPreset(),
     );
-  const accentSelectionStatus = createMemo(() => {
+  const accentSelectionName = createMemo(() => {
     const preset = selectedAccentPreset();
-    return themeAccentSelected()
-      ? t("configView.appearance.usingThemeAccent")
-      : defaultAccentSelected()
-        ? null
-        : t("configView.appearance.usingAccent", {
-            value: t(
-              preset
-                ? `configView.appearance.accents.${preset.id}`
-                : "configView.appearance.customAccent",
-            ),
-          });
+    return customAccentSelected()
+      ? t("configView.appearance.customAccent")
+      : t(
+          `configView.appearance.accents.${preset && !defaultAccentSelected() ? preset.id : "default"}`,
+        );
   });
   return (
     <SettingsPage>
-      <LanguageSection {...props} />
       <section id={APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <SettingsSectionHeader title={t("configView.appearance.theme")} />
-        <p class="settings-section__desc">
-          {t("configView.appearance.chooseTheme")}{" "}
-          <SettingsDefaultDescription value={themeDefault()} overridden={props.themeOverridden} />{" "}
-          {themeProvenance()}
-        </p>
+        <p class="settings-section__desc">{t("configView.appearance.chooseTheme")}</p>
         {themeUnavailable() ? (
           <p class="settings-section__desc" role="status">
             {t("configView.appearance.themeUnavailable", {
@@ -290,7 +269,7 @@ export function AppearanceSection(props: ConfigProps) {
             const status = () => {
               const error = catalog()?.error;
               if (error) {
-                throw new Error(error);
+                throw error instanceof Error ? error : new Error(error);
               }
               return undefined;
             };
@@ -298,7 +277,7 @@ export function AppearanceSection(props: ConfigProps) {
               <Errored
                 fallback={(error) => (
                   <p class="settings-status settings-status--error" role="alert">
-                    {formatUiError(error())}{" "}
+                    {formatThemeValidationError(error())}{" "}
                     <button
                       type="button"
                       class="btn btn--sm"
@@ -315,6 +294,36 @@ export function AppearanceSection(props: ConfigProps) {
           }}
         </Show>
         <div class="settings-group">
+          <SettingsRow
+            title={t("common.colorMode")}
+            stackedOnNarrow={true}
+            control={
+              <SettingsSegmented
+                value={props.themeMode}
+                options={[
+                  {
+                    value: "system",
+                    label: t("common.system"),
+                  },
+                  {
+                    value: "light",
+                    label: t("common.light"),
+                  },
+                  {
+                    value: "dark",
+                    label: t("common.dark"),
+                  },
+                ]}
+                ariaLabel={t("common.colorMode")}
+                onChange={(mode) => props.setThemeMode(mode)}
+                onReselect={(mode) => {
+                  if (props.themeModeOverridden && mode === props.themeModeResetValue) {
+                    props.setThemeMode(mode);
+                  }
+                }}
+              />
+            }
+          />
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
               <For each={themeOptions()} keyed={(entry) => entry.id}>
@@ -348,85 +357,50 @@ export function AppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    {renderThemeCardVisual(opt().id, presentedTheme().id)}
+                    <ThemeCardVisual
+                      id={opt().id}
+                      activeTheme={presentedTheme().id}
+                      selected={opt().id === presentedTheme().id}
+                    />
                     <span class="settings-theme-card__label">{opt().label}</span>
                   </button>
                 )}
               </For>
             </div>
           </div>
-          <SettingsRow
-            title={t("common.colorMode")}
-            description={
-              <>
-                <SettingsDefaultDescription
-                  value={themeModeDefault()}
-                  overridden={props.themeModeOverridden}
-                />{" "}
-                {themeModeProvenance()}
-              </>
-            }
-            stackedOnNarrow={true}
-            control={
-              <SettingsSegmented
-                value={props.themeMode}
-                options={[
-                  {
-                    value: "system",
-                    label: t("common.system"),
-                  },
-                  {
-                    value: "light",
-                    label: t("common.light"),
-                  },
-                  {
-                    value: "dark",
-                    label: t("common.dark"),
-                  },
-                ]}
-                ariaLabel={t("common.colorMode")}
-                onChange={(mode) => props.setThemeMode(mode)}
-                onReselect={(mode) => {
-                  if (props.themeModeOverridden && mode === props.themeModeResetValue) {
-                    props.setThemeMode(mode);
-                  }
-                }}
-              />
-            }
-          />
-          <div class="settings-row settings-row--stacked">
-            {showCustomThemeImport() ? (
+          {showCustomThemeImport() ? (
+            <div class="settings-row settings-row--stacked">
               <div
                 class="settings-theme-import"
                 onFocusIn={() => props.onCustomThemeImportFocus?.()}
               >
-                <div class="settings-theme-import__copy">
-                  <div class="settings-theme-import__title">
-                    {t("configView.appearance.importFromTweakcn")}
+                <div class="settings-theme-import__head">
+                  <div class="settings-row__text">
+                    <span class="settings-row__title">
+                      {t("configView.appearance.importFromTweakcn")}
+                    </span>
+                    <span class="settings-row__desc">
+                      {t("configView.appearance.tweakcnInstructions")}
+                    </span>
                   </div>
-                  <p class="settings-theme-import__hint">
-                    {t("configView.appearance.tweakcnInstructions")}
-                  </p>
+                  <a
+                    class="btn btn--sm settings-theme-import__external"
+                    href="https://tweakcn.com/editor/theme"
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {t("configView.appearance.browseTweakcn")} <Icon name="externalLink" />
+                  </a>
                 </div>
-                <a
-                  class="settings-theme-import__external"
-                  href="https://tweakcn.com/editor/theme"
-                  target="_blank"
-                  rel="noreferrer noopener"
-                >
-                  {t("configView.appearance.browseTweakcn")} <Icon name="externalLink" />
-                </a>
                 <ConfigReadStatus config={props} />
-                <label class="settings-theme-import__field">
-                  <span class="settings-theme-import__label">
-                    {t("configView.appearance.themeLink")}
-                  </span>
+                <div class="settings-theme-import__field">
                   <input
                     ref={(input) => (customThemeImportInput = input)}
-                    class="settings-theme-import__input"
+                    class="settings-input settings-theme-import__input"
                     data-custom-theme-import-input
                     type="text"
                     spellcheck="false"
+                    aria-label={t("configView.appearance.themeLink")}
                     placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
                     value={props.customThemeImportUrl}
                     onInput={(event: Event) =>
@@ -436,8 +410,6 @@ export function AppearanceSection(props: ConfigProps) {
                       )
                     }
                   />
-                </label>
-                <div class="settings-theme-import__actions">
                   <button
                     class="btn btn--sm primary"
                     disabled={
@@ -455,22 +427,18 @@ export function AppearanceSection(props: ConfigProps) {
                           })
                         : t("configView.appearance.importTheme")}
                   </button>
-                  {props.hasCustomTheme ? (
+                </div>
+                {props.hasCustomTheme ? (
+                  <div class="settings-theme-import__meta">
+                    <span class="settings-row__desc settings-theme-import__meta-value">
+                      {t("configView.appearance.loaded")} · {importedName()} ·{" "}
+                      {props.customThemeSourceUrl ?? "tweakcn"}
+                    </span>
                     <button class="btn btn--sm danger" onClick={() => props.onClearCustomTheme()}>
                       {t("configView.appearance.clear", {
                         name: importedName(),
                       })}
                     </button>
-                  ) : undefined}
-                </div>
-                {props.hasCustomTheme ? (
-                  <div class="settings-theme-import__meta">
-                    <span class="settings-theme-import__meta-label">
-                      {t("configView.appearance.loaded")}
-                    </span>
-                    <span class="settings-theme-import__meta-value">
-                      {importedName()} · {props.customThemeSourceUrl ?? "tweakcn"}
-                    </span>
                   </div>
                 ) : undefined}
                 <Errored
@@ -479,7 +447,8 @@ export function AppearanceSection(props: ConfigProps) {
                       class="settings-theme-import__message settings-theme-import__message--error"
                       role="alert"
                     >
-                      {formatUiError(error())}
+                      <div>{t("configView.appearance.importFailed")}</div>
+                      <div>{formatThemeValidationError(error())}</div>
                     </div>
                   )}
                 >
@@ -500,165 +469,102 @@ export function AppearanceSection(props: ConfigProps) {
                   </Loading>
                 </Errored>
               </div>
-            ) : (
-              <p class="settings-theme-import__inline-hint">
-                {t("configView.appearance.inlineHintBefore")}{" "}
-                <strong>{t("configView.appearance.import")}</strong>{" "}
-                {t("configView.appearance.inlineHintAfter")}
-              </p>
-            )}
-          </div>
-        </div>
-      </section>
-      <AppearanceBackground />
-      <section id={APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
-        <SettingsSectionHeader title={t("configView.appearance.accent")} />
-        <p class="settings-section__desc">{t("configView.appearance.accentHint")}</p>
-        <div class="settings-group">
-          <div class="settings-row settings-row--stacked">
-            <div class="settings-accent-swatches">
-              <For each={ACCENT_PRESETS}>
-                {(preset) => {
-                  const isDefault = preset.hex === undefined;
-                  const selected = () =>
-                    isDefault
-                      ? defaultAccentSelected()
-                      : !defaultAccentSelected() && preset.hex === props.accent;
-                  const label = () => t(`configView.appearance.accents.${preset.id}`);
-                  const themeChipScope = () =>
-                    isDefault
-                      ? `settings-accent-theme--${presentedTheme().id.includes("/") ? "custom" : presentedTheme().id}`
-                      : "";
-                  return (
-                    <button
-                      type="button"
-                      class={[
-                        "settings-accent-swatch",
-                        themeChipScope(),
-                        { "settings-accent-swatch--active": selected() },
-                      ]}
-                      style={{
-                        "--settings-accent-swatch": preset.hex ?? themeAccentColor(),
-                      }}
-                      data-accent-preset={preset.id}
-                      aria-label={label()}
-                      aria-pressed={selected() ? "true" : "false"}
-                      title={label()}
-                      onClick={() => props.setAccent(preset.hex)}
-                    >
-                      {isDefault && !defaultAccentSelected() ? (
-                        <span class="settings-accent-swatch__reset" aria-hidden="true">
-                          <Icon name="rotateCcw" />
-                        </span>
-                      ) : selected() ? (
-                        <span class="settings-accent-swatch__check" aria-hidden="true">
-                          <Icon name="check" />
-                        </span>
-                      ) : undefined}
-                    </button>
-                  );
-                }}
-              </For>
-              <span
-                class={[
-                  "settings-accent-swatch settings-accent-swatch--custom",
-                  { "settings-accent-swatch--active": customAccentSelected() },
-                ]}
-                style={{
-                  "--settings-accent-swatch": accentColor() ?? ACCENT_PRESETS[1].hex,
-                  "--settings-accent-swatch-ink": controlUiAccentInk(
-                    accentColor() ?? ACCENT_PRESETS[1].hex,
-                  ),
-                }}
-              >
-                <input
-                  type="color"
-                  class="settings-accent-swatch__input"
-                  data-accent-custom
-                  aria-label={t("configView.appearance.customAccent")}
-                  aria-describedby="settings-accent-status"
-                  title={t("configView.appearance.customAccent")}
-                  value={accentColor() ?? ACCENT_PRESETS[1].hex}
-                  onInput={(
-                    event: Event & {
-                      currentTarget: HTMLInputElement;
-                    },
-                  ) => props.setAccent(event.currentTarget.value)}
-                />
-                <span class="settings-accent-swatch__picker" aria-hidden="true">
-                  <Icon name="pipette" />
-                </span>
-              </span>
             </div>
-          </div>
-        </div>
-        <p id="settings-accent-status" class="settings-section__desc settings-accent-status">
-          {accentSelectionStatus() ? (
-            <span class="settings-accent-status__selection">{accentSelectionStatus()}</span>
           ) : undefined}
-          <span class="settings-accent-status__scope">{accentProvenance()}</span>
-        </p>
-      </section>
-      <Typography {...props} presentedTheme={presentedTheme()} /> <TabIconSection {...props} />
-      <section id={APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
-        <SettingsSectionHeader title={t("configView.appearance.textSize")} />
-        <p class="settings-section__desc">
-          <SettingsDefaultDescription
-            value={`${UI_APPEARANCE_DEFAULTS.textScale}%`}
-            overridden={props.textScaleOverridden}
-          />{" "}
-          {t("quickSettings.personal.browserOnly")}
-        </p>
-        <div class="settings-group">
-          <div class="settings-row settings-row--stacked">
-            <div class="settings-text-scale">
-              <div class="settings-text-scale__options">
-                <For each={TEXT_SCALE_STOPS}>
-                  {(stop) => (
-                    <button
-                      type="button"
-                      class={["settings-text-scale__btn", { active: stop === props.textScale }]}
-                      aria-pressed={stop === props.textScale ? "true" : "false"}
-                      onClick={() => props.setTextScale(stop)}
-                    >
-                      <span class="settings-text-scale__sample">{t(TEXT_SCALE_LABELS[stop])}</span>
-                      <span class="settings-text-scale__label">{stop}%</span>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-      <SidebarPreferencesSection {...props} sectionRef={(element) => (sidebar = element)} />
-      <LobsterPetSection {...props} />
-      <ChatPreferencesSection {...props} />
-      <SessionSources {...props} sectionRef={(element) => (sessionSources = element)} />
-      <section id={APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
-        <SettingsSectionHeader title={t("configView.connection.title")} />
-        <div class="settings-group">
-          <SettingsRow
-            title={t("configView.connection.gateway")}
-            control={<SettingsValue value={props.gatewayUrl || "-"} mono />}
-          />
-          <SettingsRow
-            title={t("configView.connection.status")}
-            control={
-              <SettingsStatus
-                kind={props.connected ? "ok" : "muted"}
-                label={props.connected ? t("common.connected") : t("common.offline")}
-              />
-            }
-          />
-          {props.assistantName ? (
+          <div id={APPEARANCE_SETTINGS_TARGET_IDS.accent}>
             <SettingsRow
-              title={t("configView.connection.assistant")}
-              control={<SettingsValue value={props.assistantName} />}
+              title={t("configView.appearance.accent")}
+              description={<span id="settings-accent-status">{accentSelectionName()}</span>}
+              stackedOnNarrow={true}
+              control={
+                <div class="settings-accent-swatches">
+                  <For each={ACCENT_PRESETS}>
+                    {(preset) => {
+                      const isDefault = preset.hex === undefined;
+                      const selected = () =>
+                        isDefault
+                          ? defaultAccentSelected()
+                          : !defaultAccentSelected() && preset.hex === props.accent;
+                      const label = () => t(`configView.appearance.accents.${preset.id}`);
+                      const themeChipScope = () =>
+                        isDefault
+                          ? `settings-accent-theme--${presentedTheme().id.includes("/") ? "custom" : presentedTheme().id}`
+                          : "";
+                      return (
+                        <button
+                          type="button"
+                          class={[
+                            "settings-accent-swatch",
+                            themeChipScope(),
+                            { "settings-accent-swatch--active": selected() },
+                          ]}
+                          style={{
+                            "--settings-accent-swatch": preset.hex ?? themeAccentColor(),
+                          }}
+                          data-accent-preset={preset.id}
+                          aria-label={label()}
+                          aria-pressed={selected() ? "true" : "false"}
+                          title={label()}
+                          onClick={() => props.setAccent(preset.hex)}
+                        >
+                          {isDefault && !defaultAccentSelected() ? (
+                            <span class="settings-accent-swatch__reset" aria-hidden="true">
+                              <Icon name="rotateCcw" />
+                            </span>
+                          ) : selected() ? (
+                            <span class="settings-accent-swatch__check" aria-hidden="true">
+                              <Icon name="check" />
+                            </span>
+                          ) : undefined}
+                        </button>
+                      );
+                    }}
+                  </For>
+                  <span
+                    class={[
+                      "settings-accent-swatch settings-accent-swatch--custom",
+                      { "settings-accent-swatch--active": customAccentSelected() },
+                    ]}
+                    style={{
+                      "--settings-accent-swatch": accentColor() ?? ACCENT_PRESETS[1].hex,
+                      "--settings-accent-swatch-ink": controlUiAccentInk(
+                        accentColor() ?? ACCENT_PRESETS[1].hex,
+                      ),
+                    }}
+                  >
+                    <input
+                      type="color"
+                      class="settings-accent-swatch__input"
+                      data-accent-custom
+                      aria-label={t("configView.appearance.customAccent")}
+                      aria-describedby="settings-accent-status"
+                      title={t("configView.appearance.customAccent")}
+                      value={accentColor() ?? ACCENT_PRESETS[1].hex}
+                      onInput={(
+                        event: Event & {
+                          currentTarget: HTMLInputElement;
+                        },
+                      ) => props.setAccent(event.currentTarget.value)}
+                    />
+                    <span class="settings-accent-swatch__picker" aria-hidden="true">
+                      <Icon name="pipette" />
+                    </span>
+                  </span>
+                </div>
+              }
             />
-          ) : undefined}
+          </div>
+          <TabIconRow {...props} />
         </div>
+        <p class="settings-section__desc settings-section__scope">{themeScope()}</p>
       </section>
+      <TextSection {...props} presentedTheme={presentedTheme()} />
+      <AppearanceBackground />
+      <ChatPreferencesSection {...props} />
+      <MediaDevicesSection {...props} />
+      <SidebarPreferencesSection {...props} sectionRef={(element) => (sidebar = element)} />
+      <SessionSources {...props} sectionRef={(element) => (sessionSources = element)} />
+      <LobsterPetSection {...props} />
     </SettingsPage>
   );
 }

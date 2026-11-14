@@ -158,14 +158,7 @@ export function registerNativeHookRelay(
 export function registerOwnedNativeHookRelay(
   params: OwnedNativeHookRelayParams,
 ): OwnedNativeHookRelayRegistrationHandle {
-  const { retention, approvalHost, executionAdmission, postToolUse, ...registrationParams } =
-    params;
-  return registerNativeHookRelayInternal(registrationParams, {
-    retention,
-    approvalHost,
-    executionAdmission,
-    postToolUse,
-  });
+  return registerNativeHookRelayInternal(params, params);
 }
 
 function registerNativeHookRelayInternal(
@@ -253,7 +246,7 @@ function registerNativeHookRelayInternal(
     retainNativeHookRelayOperation(relayId, policyReady);
     setRelayLifetime(registration, {
       foregroundOpen: true,
-      foregroundToken: Symbol("native-hook-relay-foreground"),
+      ...(owner?.requireForegroundTurn ? { foregroundTurn: null } : {}),
       policyReady,
       expiresAtMonotonicMs,
       ...(retained ? { retained } : {}),
@@ -291,12 +284,20 @@ function registerNativeHookRelayInternal(
         return deferMcpToolApprovals;
       },
       ready,
+      bindForegroundTurn: (threadId, turnId) => {
+        const lifetime = readRelayLifetime(registration);
+        if (!lifetime) {
+          throw new Error("native hook relay registration is inactive");
+        }
+        assertNativeHookRelayForegroundCurrent(registration, lifetime);
+        lifetime.foregroundTurn = { threadId, turnId };
+      },
       enableRemoteCallback: () => {
         const lifetime = readRelayLifetime(registration);
         if (!lifetime) {
           throw new Error("native hook relay registration is inactive");
         }
-        assertNativeHookRelayForegroundCurrent(registration, lifetime, lifetime.foregroundToken);
+        assertNativeHookRelayForegroundCurrent(registration, lifetime);
         bridge.remoteEnabled = true;
         return { token: bridge.token };
       },
@@ -305,12 +306,11 @@ function registerNativeHookRelayInternal(
         if (!lifetime) {
           throw new Error("native hook relay registration is inactive");
         }
-        const foregroundToken = lifetime.foregroundToken;
-        assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
+        assertNativeHookRelayForegroundCurrent(registration, lifetime);
         await policyReady;
         // Only direct transport failure may use the existing Gateway route.
         await bridge.ready.catch(() => undefined);
-        assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
+        assertNativeHookRelayForegroundCurrent(registration, lifetime);
       },
       drain: () =>
         drainNativeHookRelayWork({

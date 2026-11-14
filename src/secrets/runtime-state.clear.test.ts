@@ -67,18 +67,17 @@ it("isolates snapshot owners while exposing the active config pair for hot paths
   const resolvedValue = { nested: ["synthetic-value"] };
   const refKey = "env:default:SYNTHETIC_KEY";
   const owner = { ownerKind: "provider" as const, ownerId: "example", refKeys: [refKey] };
+  const degraded = {
+    ...owner,
+    state: "unavailable" as const,
+    paths: ["models.providers.example.apiKey"],
+    reason: "secret provider failed",
+    providerFailures: [{ source: "env" as const, provider: "default" }],
+  };
   const snapshot = preparedSnapshot({
-    sourceConfig: { agents: { entries: { source: {} } } },
-    config: { agents: { entries: { runtime: {} } } },
-    degradedOwners: [
-      {
-        ...owner,
-        state: "unavailable",
-        paths: ["models.providers.example.apiKey"],
-        reason: "secret provider failed",
-        providerFailures: [{ source: "env", provider: "default" }],
-      },
-    ],
+    sourceConfig: { gateway: { port: 19001 } },
+    config: { gateway: { port: 19002 } },
+    degradedOwners: [degraded],
     secretOwners: [{ ...owner, resolvedValues: [{ refKey, value: resolvedValue }] }],
   });
   const expectedOwners = structuredClone({
@@ -86,26 +85,26 @@ it("isolates snapshot owners while exposing the active config pair for hot paths
     secretOwners: snapshot.secretOwners,
   });
   const refreshContext: state.SecretsRuntimeRefreshContext = {
-    env: { SNAPSHOT_FIXTURE: "original" },
+    env: { VALUE: "original" },
     explicitAgentDirs: ["original"],
     includeAuthStoreRefs: true,
     loadablePluginOrigins: new Map(),
   };
 
   state.activateSecretsRuntimeSnapshotState({ snapshot, refreshContext, refreshHandler: null });
-  refreshContext.env.SNAPSHOT_FIXTURE = "caller edit";
+  refreshContext.env.VALUE = "caller edit";
 
-  snapshot.degradedOwners![0]!.paths.push("changed-at-source");
-  snapshot.degradedOwners![0]!.providerFailures![0]!.provider = "changed-at-source";
+  degraded.paths.push("changed-at-source");
+  degraded.providerFailures[0]!.provider = "changed-at-source";
   resolvedValue.nested.push("changed-at-source");
   const configSnapshot = state.getActiveSecretsRuntimeConfigSnapshot();
   const fullSnapshot = state.getActiveSecretsRuntimeSnapshotState();
   const readerContext = state.getPreparedSecretsRuntimeSnapshotRefreshContext(fullSnapshot!);
-  expect(readerContext?.env.SNAPSHOT_FIXTURE).toBe("original");
-  readerContext!.env.SNAPSHOT_FIXTURE = "reader edit";
+  expect(readerContext?.env.VALUE).toBe("original");
+  readerContext!.env.VALUE = "reader edit";
   readerContext!.explicitAgentDirs!.push("reader edit");
   expect(state.getActiveSecretsRuntimeRefreshContext()).toMatchObject({
-    env: { SNAPSHOT_FIXTURE: "original" },
+    env: { VALUE: "original" },
     explicitAgentDirs: ["original"],
   });
 

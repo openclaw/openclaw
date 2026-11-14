@@ -434,19 +434,11 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
     >
       <div class="model-setup__intro">
         <div>
-          {props.embedded ? (
-            <>
-              {" "}
-              <h2>{t("modelSetup.discovery.title")}</h2>
-              <p>{t("modelSetup.discovery.description", { agent: props.agentLabel ?? "" })}</p>{" "}
-            </>
-          ) : (
-            <>
-              {" "}
-              <h1>{t("modelSetup.heading")}</h1>
-              <p>{t("modelSetup.intro")}</p>{" "}
-            </>
-          )}
+          {/* An embedded view gets its title and description from the dialog. */}
+          <Show when={!props.embedded}>
+            <h1>{t("modelSetup.heading")}</h1>
+            <p>{t("modelSetup.intro")}</p>
+          </Show>
         </div>
         <Show when={Boolean(props.connection)}>
           <ModelProviderConnectAction
@@ -596,13 +588,22 @@ function EmbeddedModelSetup(props: {
           event.target === event.currentTarget ? props.view.onDiscoveryShown?.() : undefined
         }
       >
-        <div class="model-setup-wizard model-setup-discovery">
-          <div class="model-setup-wizard__body">{props.content}</div>
-          <openclaw-modal-actions class="model-setup-wizard__footer">
-            <button class="btn" onClick={() => props.view.onClose?.()}>
-              {t("common.close")}
+        <div class="oc-dialog model-setup-wizard model-setup-discovery">
+          <div class="oc-dialog__header">
+            <h2 class="oc-dialog__title">{t("modelSetup.discovery.title")}</h2>
+            <button
+              type="button"
+              class="oc-dialog__close"
+              aria-label={t("common.close")}
+              onClick={() => props.view.onClose?.()}
+            >
+              <Icon name="x" />
             </button>
-          </openclaw-modal-actions>
+            <div class="oc-dialog__description">
+              <p>{t("modelSetup.discovery.description", { agent: props.view.agentLabel ?? "" })}</p>
+            </div>
+          </div>
+          <div class="oc-dialog__body model-setup-wizard__body">{props.content}</div>
         </div>
       </openclaw-modal-dialog>{" "}
     </>

@@ -297,12 +297,7 @@ function sshCommandForPort(inspect: CrabboxInspect, sshPort: string) {
   };
 }
 
-async function sshCommand(params: {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  inspect: CrabboxInspect;
-  runner: CommandRunner;
-}) {
+async function sshCommand(params: Parameters<typeof copyCrabboxArtifacts>[0]) {
   const candidates = crabboxSshPortCandidates(params.inspect);
   if (candidates.length === 1) {
     return sshCommandForPort(params.inspect, candidates[0]).value;

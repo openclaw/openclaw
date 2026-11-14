@@ -1,0 +1,2 @@
+# Native hit testing and pointer dismissal above an expanded table's sticky header.
+17

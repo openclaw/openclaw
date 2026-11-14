@@ -357,32 +357,42 @@ function isClaudeReplaySource(ref: ReplayModelRef): boolean {
   return /(?:^|[-/])claude-/.test(normalizeModelId(modelId));
 }
 
-export function resolveModelBoundThinkingReplayMode(params: {
-  source: ReplayModelRef;
-  target: ReplayModelRef;
-}): "default" | "preserve" | "drop" {
-  const sourceApi = normalizeApi(params.source.api);
-  const targetApi = normalizeApi(params.target.api);
-  const sourceIdentity = resolveReplayModelBoundIdentity(params.source);
-  const targetIdentity = resolveReplayModelBoundIdentity(params.target);
-  const sameRoute =
-    normalizeLowercaseStringOrEmpty(params.source.provider) ===
-      normalizeLowercaseStringOrEmpty(params.target.provider) &&
-    sourceApi === targetApi &&
-    normalizeModelId(params.source.modelId) === normalizeModelId(params.target.modelId);
-  if (!sourceIdentity && !targetIdentity) {
-    return "default";
-  }
-  if (
-    sourceApi === targetApi &&
-    readsPriorClaudeThinking(targetIdentity, sourceIdentity) &&
-    isClaudeReplaySource(params.source)
-  ) {
-    return "preserve";
-  }
-  if (!sourceIdentity && !hasConcreteResponseModel(params.source) && targetIdentity && sameRoute) {
-    return "preserve";
-  }
-  const sameModel = sourceApi === targetApi && sourceIdentity === targetIdentity;
-  return sameModel ? "preserve" : "drop";
+/** The destination is fixed during one synchronous history transform. */
+export function prepareModelBoundThinkingReplay(
+  target: Pick<Model, "api" | "provider" | "id" | "params">,
+) {
+  const targetApi = normalizeApi(target.api);
+  const targetIdentity = resolveReplayModelBoundIdentity({
+    api: target.api,
+    modelId: target.id,
+    modelParams: target.params,
+  });
+  const targetProvider = normalizeLowercaseStringOrEmpty(target.provider);
+  const targetModelId = normalizeModelId(target.id);
+  return (source: ReplayModelRef): "default" | "preserve" | "drop" => {
+    const sourceApi = normalizeApi(source.api);
+    const sourceIdentity = resolveReplayModelBoundIdentity(source);
+    if (!sourceIdentity && !targetIdentity) {
+      return "default";
+    }
+    if (
+      sourceApi === targetApi &&
+      readsPriorClaudeThinking(targetIdentity, sourceIdentity) &&
+      isClaudeReplaySource(source)
+    ) {
+      return "preserve";
+    }
+    if (
+      !sourceIdentity &&
+      !hasConcreteResponseModel(source) &&
+      targetIdentity &&
+      normalizeLowercaseStringOrEmpty(source.provider) === targetProvider &&
+      sourceApi === targetApi &&
+      normalizeModelId(source.modelId) === targetModelId
+    ) {
+      return "preserve";
+    }
+    const sameModel = sourceApi === targetApi && sourceIdentity === targetIdentity;
+    return sameModel ? "preserve" : "drop";
+  };
 }

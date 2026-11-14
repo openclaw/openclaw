@@ -1,0 +1,2 @@
+# Regression coverage for Windows rename denials, bounded retries, cleanup, and collision reuse.
+43

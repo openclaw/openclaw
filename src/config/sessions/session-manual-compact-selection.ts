@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import type { SessionTranscriptManualTrimResult } from "./session-accessor.types.js";
 import {
   scanSessionTranscriptTree,
@@ -17,10 +18,24 @@ export function selectManualCompactTranscriptLines(
     return { lines, result: { compacted: false, kept: lines.length } };
   }
   const maxTailLines = Math.max(0, maxLines - 1);
-  const retained = normalizeManualCompactTranscriptLines(
-    lines[0],
-    maxTailLines > 0 ? lines.slice(1).slice(-maxTailLines) : [],
+  const tailStart = Math.max(1, lines.length - maxTailLines);
+  const tailLines = lines.slice(tailStart);
+  const dependencyIds = new Set(
+    tailLines.flatMap(
+      (line) => readBackgroundResultPlacement(safeParseJsonRecord(line))?.resultEntryIds ?? [],
+    ),
   );
+  // A retained placement owns its original payload even when acceptance predates the trim.
+  const retainedTail = dependencyIds.size
+    ? [
+        ...lines.slice(1, tailStart).filter((line) => {
+          const id = safeParseJsonRecord(line)?.id;
+          return typeof id === "string" && dependencyIds.has(id);
+        }),
+        ...tailLines,
+      ]
+    : tailLines;
+  const retained = normalizeManualCompactTranscriptLines(lines[0], retainedTail);
   return retained
     ? { lines: retained, result: { compacted: true, kept: retained.length } }
     : { lines, result: { compacted: false, kept: 0 } };

@@ -408,58 +408,40 @@ afterEach(async () => {
   await resetSubagentRegistryForTests({ persist: false });
 });
 
-it.each(["active", "paused"] as const)(
-  "delivers exactly one kept-child successor after exact-run Stop of an %s source",
-  async (sourceState) => {
-    const script = startRetirementModel(sourceState);
-    const parentRunId = `subagent-stop-followup-parent-${sourceState}`;
-    await withProof(script, `subagent-stop-followup-${sourceState}`, async (client) => {
+it.each(["active", "paused", "delete", "stop"] as const)(
+  "delivers exactly one successor after retiring an %s source",
+  async (kind) => {
+    const followup = kind === "active" || kind === "paused";
+    const script = startRetirementModel(kind);
+    const label = `subagent-retirement-${kind}`;
+    const parentRunId = `${label}-parent`;
+    await withProof(script, label, async (client) => {
       await startParentTurn(client, parentRunId);
       const source = await script.source;
-      if (sourceState === "active") {
-        await script.started;
-      } else {
+      await script.started;
+      if (kind === "paused" || kind === "delete") {
         await waitForRun(source.runId, (row) => row.pauseReason === "sessions_yield");
       }
-      script.retire();
-      const { runId: successorRunId } = await script.successor;
-      await waitForAgent(client, successorRunId);
-      script.yieldParent();
+      if (followup) {
+        script.retire();
+      }
+      const successor = await script.successor;
+      await waitForAgent(client, successor.runId);
+      if (kind === "delete") {
+        await deleteChild(client, source.sessionKey);
+        expect(owedControllerInputs(source.runId), "deletion retires its inputs").toEqual([]);
+      }
+      if (followup) {
+        script.yieldParent();
+      } else {
+        script.retire();
+      }
       await waitForAgent(client, parentRunId);
-      await waitForRun(successorRunId, (row) => row.delivery?.status === "delivered");
+      await waitForRun(successor.runId, (row) => row.delivery?.status === "delivered");
       await script.delivered;
       expect(script.counts).toEqual({ delivered: 1, retired: 0 });
-      expect(owedControllerInputs(source.runId), "the stopped source owes nothing").toEqual([]);
-      expect(owedControllerInputs(successorRunId), "the successor delivered once").toEqual([]);
-    });
-  },
-);
-
-it.each(["delete", "stop"] as const)(
-  "retires a %s child without blocking its completed sibling or the parent yield",
-  async (retirement) => {
-    const script = startRetirementModel(retirement);
-    const parentRunId = `subagent-retired-${retirement}-parent`;
-    await withProof(script, `subagent-retired-${retirement}`, async (client) => {
-      await startParentTurn(client, parentRunId);
-      const retired = await script.source;
-      await script.started;
-      if (retirement === "delete") {
-        await waitForRun(retired.runId, (row) => row.pauseReason === "sessions_yield");
-      }
-      const sibling = await script.successor;
-      await waitForAgent(client, sibling.runId);
-      if (retirement === "delete") {
-        await deleteChild(client, retired.sessionKey);
-        expect(owedControllerInputs(retired.runId), "deletion retires its inputs").toEqual([]);
-      }
-      script.retire();
-      await waitForAgent(client, parentRunId);
-      await waitForRun(sibling.runId, (row) => row.delivery?.status === "delivered");
-      await script.delivered;
-      expect(script.counts).toEqual({ delivered: 1, retired: 0 });
-      expect(owedControllerInputs(retired.runId), "the retired child owes nothing").toEqual([]);
-      expect(owedControllerInputs(sibling.runId), "the sibling delivered once").toEqual([]);
+      expect(owedControllerInputs(source.runId), "the retired source owes nothing").toEqual([]);
+      expect(owedControllerInputs(successor.runId), "the successor delivered once").toEqual([]);
     });
   },
 );

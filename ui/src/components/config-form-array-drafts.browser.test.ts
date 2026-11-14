@@ -4,6 +4,7 @@ import { createInitialConfigState } from "../lib/config/config-state-model.ts";
 import {
   renderAnalyzedFormFixture,
   disposeConfigFormFixture,
+  expandConfigObjects,
 } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
@@ -141,6 +142,7 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
         kind === "object"
           ? "openclaw-config-form-structured-draft"
           : "openclaw-config-form-collection-draft";
+      await expandConfigObjects(container);
       const draft = Array.from(container.querySelectorAll<HTMLElement>(hostSelector)).at(-1)!;
       flush();
       const details = draft.querySelector("details") ?? draft.closest("details");

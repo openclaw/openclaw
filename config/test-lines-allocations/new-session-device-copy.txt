@@ -1,0 +1,2 @@
+# Cover admin/write/read folder errors, mixed hosted-workspace availability, and wrapping of updated copy assertions.
+41

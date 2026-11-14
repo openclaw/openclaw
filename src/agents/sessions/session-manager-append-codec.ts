@@ -31,12 +31,12 @@ export function decodeMetadataAppendEvent(
   throw new Error("Invalid serialized session transcript entry");
 }
 
-/** Reload decisions retain the canonical adopted identity and actual append parent. */
+/** The append already validated the message; reload needs only its envelope identity. */
 export function sessionMetadataAppendNeedsReload(
   input: SessionMetadataOperations["session.metadata.append"]["input"],
   value: SessionMetadataOperations["session.metadata.append"]["output"],
 ): boolean {
-  const event = decodeMetadataAppendEvent(input);
+  const event = typeof input.event === "string" ? decodeMetadataAppendEvent(input) : input.event;
   if (event.type === "session" || !input.view || !value.snapshot.ok) {
     return false;
   }

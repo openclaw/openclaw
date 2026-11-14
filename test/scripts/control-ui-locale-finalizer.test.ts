@@ -32,7 +32,7 @@ it.each([false, true])("re-pins main and defers only if it moves again: %s", asy
   expect(r).toMatchObject({ sourceAtSetup: r.fresh, admittedSource: r.fresh });
   expect(r.workerRequests).toHaveLength(1);
   expect(r.workerRequests[0]?.ids).toEqual(["keep", "edit", "remove"].map(id));
-  expect(r.providerRequests).toHaveLength(21);
+  expect(r.providerRequests).toHaveLength(22);
   expect(r.providerRequests[0]?.proof).toEqual({
     [id("edit")]: "New locale proof {name}",
     [id("add")]: "Latest locale proof",

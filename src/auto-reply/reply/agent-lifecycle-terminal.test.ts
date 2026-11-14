@@ -196,34 +196,31 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       ],
     ]),
   )("sanitizes %s auth failure %s without provider discovery", (kind, code, expected) => {
-    const classifyProvider = vi
+    using classifyProvider = vi
       .spyOn(providerFailover, "classifyProviderFailoverSignalWithPlugin")
       .mockImplementation(() => {
         throw new Error("Terminal presentation must not discover providers");
       });
-    try {
-      const profileId = "openai:private-profile";
-      const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
-      const terminal = createTerminal({ sessionKey: "agent:main:test" });
 
-      const error =
-        kind === "typed"
-          ? new FailoverError(rawCause, {
-              reason: "auth",
-              code,
-              profileId,
-              cause: new Error(rawCause),
-            })
-          : Object.assign(new Error(rawCause), { code });
-      terminal.emit("error", error);
+    const profileId = "openai:private-profile";
+    const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
+    const terminal = createTerminal({ sessionKey: "agent:main:test" });
 
-      const event = emitted();
-      expect(event.data.error).toBe(expected);
-      expect(JSON.stringify(event)).not.toContain(profileId);
-      expect(JSON.stringify(event)).not.toContain(rawCause);
-      expect(classifyProvider).not.toHaveBeenCalled();
-    } finally {
-      classifyProvider.mockRestore();
-    }
+    const error =
+      kind === "typed"
+        ? new FailoverError(rawCause, {
+            reason: "auth",
+            code,
+            profileId,
+            cause: new Error(rawCause),
+          })
+        : Object.assign(new Error(rawCause), { code });
+    terminal.emit("error", error);
+
+    const event = emitted();
+    expect(event.data.error).toBe(expected);
+    expect(JSON.stringify(event)).not.toContain(profileId);
+    expect(JSON.stringify(event)).not.toContain(rawCause);
+    expect(classifyProvider).not.toHaveBeenCalled();
   });
 });

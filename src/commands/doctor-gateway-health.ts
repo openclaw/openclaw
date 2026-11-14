@@ -419,7 +419,6 @@ export async function checkGatewayHealth(params: {
     if (sqliteWalWarning) {
       report(sqliteWalWarning, "SQLite WAL");
     }
-    noteWarning(status.startupRecoveryWarning, "Startup session recovery");
     noteWarning(status.modelReasoningWarning, "Model reasoning");
     const childRuntimeWarning = status.childRuntime
       ? formatMissingChildRuntimeWarning(status.childRuntime)

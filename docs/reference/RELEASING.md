@@ -147,6 +147,34 @@ approval-status read is reported as unknown, not as no pending approval, and doe
 not stop validation monitoring. Public release evidence can still use its existing
 anonymous rate-limit fallback; caller-specific approval reads cannot.
 
+### Watch publication
+
+After the stable orchestrator has dispatched publication, keep its read-only
+watcher running in a separate shell:
+
+```bash
+pnpm release:stable YYYY.M.PATCH --watch
+```
+
+The watcher uses the orchestrator's retained state to authenticate the publish
+parent and correlate its npm and ClawHub children. It exits as soon as an
+environment approval is pending or a publication parent/child fails, and it
+waits until the observed publication tree succeeds otherwise. It only performs
+GitHub reads; it never approves, reruns, cancels, dispatches, or publishes.
+
+The exit contract is:
+
+- `0`: the observed tree succeeded, or `--once` found no item needing attention.
+- `1`: a pending environment approval or failed publication run needs attention.
+- `2`: usage, identity, transport, truncation, timeout, or observation failed.
+
+Use `--once --json` for a single machine-readable snapshot. JSON has
+`contractVersion: 1` and a top-level `state` of `active`, `attention`, or
+`success`, plus exact parent, child, pending-approval, and failed-run records.
+`--poll-seconds` changes the default 60-second interval and
+`--timeout-seconds` changes the default 12-hour observation deadline. These
+options do not create a daemon or persist watcher state.
+
 ### Plugin SDK evidence transport
 
 SDK comparison reports and release evidence use the

@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import { describe, expect, it } from "vitest";
-import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createModelContextPairing, PREFIX_TOOL_OWNER } from "./session-model-context-pairing.js";
 
@@ -59,23 +58,13 @@ describe("bounded model-context pairing", () => {
     expect([...pairing.read()]).toEqual([[nextResult, next]]);
   });
 
-  it("requires recovery when a new displaced result could become falsely unambiguous", () => {
-    const older = call("X", 257);
-    const recent = call("X");
-    const other = call("Y");
-    const pairing = createModelContextPairing([older, recent, other], [recent, other]);
-
-    expect(pairing.append([result("X")])).toBe(false);
-  });
-
-  it("preserves ambiguous ownership when both unresolved occurrences fit", () => {
-    const older = call("X");
+  it.each([1, 257])("preserves ambiguous ownership or requests recovery (prefix=%i)", (count) => {
+    const older = call("X", count);
     const recent = call("X");
     const other = call("Y");
     const pairing = createModelContextPairing([older, recent, other], [recent, other]);
     const displaced = result("X");
-
-    expect(pairing.append([displaced])).toBe(true);
+    expect(pairing.append([displaced])).toBe(count === 1);
     expect(pairing.read().has(displaced)).toBe(false);
   });
 
@@ -117,16 +106,10 @@ describe("bounded model-context pairing", () => {
   });
 
   it("keeps retained live-frame results canonical across appends beyond the prefix cap", () => {
-    const results = Array.from({ length: 300 }, (_, index) => result(`call-${index}`));
-    const assistant = makeAgentAssistantMessage({
-      content: results.map(({ toolCallId }) => ({
-        type: "toolCall",
-        id: toolCallId,
-        name: "read",
-        arguments: {},
-      })),
-      stopReason: "toolUse",
-    });
+    const results = Array.from({ length: 300 }, (_, index) =>
+      result(index === 0 ? "call" : `call-${index}`),
+    );
+    const assistant = call("call", 300);
     const retained: AgentMessage[] = [assistant];
     const pairing = createModelContextPairing(retained, retained);
 
@@ -136,28 +119,16 @@ describe("bounded model-context pairing", () => {
       retained.push(...appended);
       pairing.retain(retained);
       const actual = pairing.read();
-      expect(actual.size).toBe(retained.length - 1);
-      for (const frame of classifyToolUseResultPairing(retained)) {
-        for (const occurrence of frame.occurrences) {
-          if (occurrence.sourceResult) {
-            expect(actual.get(occurrence.sourceResult)).toBe(frame.assistant);
-          }
-        }
+      expect(actual.size).toBe(start + 100);
+      for (const message of results.slice(0, start + 100)) {
+        expect(actual.get(message)).toBe(assistant);
       }
     }
   });
 
   it("bounds a formerly retained live frame when its assistant leaves the window", () => {
-    const assistant = makeAgentAssistantMessage({
-      content: Array.from({ length: 300 }, (_, index) => ({
-        type: "toolCall",
-        id: `call-${index}`,
-        name: "read",
-        arguments: {},
-      })),
-      stopReason: "toolUse",
-    });
-    const completed = result("call-0");
+    const assistant = call("call", 300);
+    const completed = result("call");
     const pairing = createModelContextPairing([assistant], [assistant]);
     expect(pairing.append([completed])).toBe(true);
 

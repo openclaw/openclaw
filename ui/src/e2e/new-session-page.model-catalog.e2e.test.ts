@@ -76,7 +76,7 @@ suite.define(() => {
               },
             };
           });
-        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
+        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(4);
         const geometryBeforeFocus = await menuGeometry();
         expect(geometryBeforeFocus).not.toBeNull();
         await pollOpacity(secondShortcut).toBe("1");

@@ -8,12 +8,12 @@ import {
   type MenuItem,
   type MenuItemBindings,
 } from "../../../components/solid/menu.tsx";
-import { registerSessionOrganizationEnglish } from "../../../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../../../i18n/locales/en-session-menu.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
 
 export type HeaderSessionMenuPage = {
   key: "session-assign" | "session-group" | "session-advanced" | "session-appearance";
@@ -34,6 +34,7 @@ export type HeaderSessionMenuMobileHost = {
 };
 
 const plainLabel = (label: string) => label.replace(/(?:…|\.{3})$/u, "");
+const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
 const isItem = (entry: MenuEntry): entry is MenuItem =>
   entry.kind !== "content" && entry.kind !== "group";
 
@@ -184,8 +185,7 @@ export function createMobileHeaderSessionMenu(options: {
       return [
         ...groups.filter(
           (entry) =>
-            isItem(entry) &&
-            entry.label.toLocaleLowerCase().includes(query().trim().toLocaleLowerCase()),
+            isItem(entry) && normalizeSearch(entry.label).includes(normalizeSearch(query().trim())),
         ),
         ...rows.filter((entry) => !groups.includes(entry)),
       ];

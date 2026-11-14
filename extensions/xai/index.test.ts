@@ -290,6 +290,21 @@ describe("xai provider plugin", () => {
     },
   );
 
+  it("lets a known subscription model's listed efforts replace its bundled profile", async () => {
+    mockXaiRuntimeOAuth();
+    stubXaiModels({
+      id: "grok-4.7",
+      api_backend: "responses",
+      supports_reasoning_effort: true,
+      reasoning_efforts: ["low", "high", "xhigh"],
+    });
+    const { result } = await runXaiCatalog();
+    const compat = result.models.find((entry) => entry.id === "grok-4.7")?.compat;
+    expect(compat).toMatchObject({ supportedReasoningEfforts: ["low", "high", "xhigh"] });
+    expect(compat).not.toHaveProperty("thinkingLevels");
+    expect(compat).not.toHaveProperty("defaultThinkingLevel");
+  });
+
   it("uses the Grok OAuth proxy catalog for xAI OAuth discovery", async () => {
     mockXaiRuntimeOAuth();
     const fetchMock = stubXaiModels(
@@ -457,6 +472,12 @@ describe("xai provider plugin", () => {
       });
 
       expect(tool).toEqual(expected ? expect.objectContaining({ name: toolName }) : null);
+      if (expected) {
+        const next = factory(xaiToolContext(toolName, "xai", true));
+        assert(tool && next && !Array.isArray(tool) && !Array.isArray(next));
+        expect(next.parameters).toBe(tool.parameters);
+        expect(next.execute).not.toBe(tool.execute);
+      }
     });
   });
 

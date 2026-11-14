@@ -1,0 +1,2 @@
+47
+# Async syntax assertions, repeated-script/module grammar regression, and real-worker error feedback.

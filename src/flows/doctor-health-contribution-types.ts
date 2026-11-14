@@ -35,6 +35,7 @@ type DoctorConfigResult = {
   modelBillingRouteWarnings?: readonly string[];
   /** Successful retirement pass awaiting the config-write/no-change boundary. */
   modelRetirementRepairRan?: boolean;
+  retirementOnly?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -62,6 +63,8 @@ type DoctorConfigResult = {
 };
 
 export type DoctorHealthFlowContext = {
+  /** Cleared when a retained owner discovers work requiring the full pass. */
+  retirementOnly?: boolean;
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;

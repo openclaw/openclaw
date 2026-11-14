@@ -301,7 +301,7 @@ export async function prepareSubagentRegistrationRows(
   selectedRunIds: readonly string[],
   context: OpenClawStateWorkerContext,
 ): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
-  const prepared = await prepareSubagentRunsCache(
+  const snapshot = await prepareSubagentRunsCache(
     persistedSubagentRunsReadCache,
     async (source) => {
       const rows = await readAllSubagentRunsInWorker(source);
@@ -313,14 +313,18 @@ export async function prepareSubagentRegistrationRows(
     context,
   );
   const runIds = new Set(selectedRunIds);
+  const matches = (entry: SubagentRunReadRecord) =>
+    runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey;
+  const prepared = new Map<string, SubagentRunRecord>();
+  for (const entry of snapshot.values()) {
+    if (matches(entry)) {
+      prepared.set(entry.runId, entry);
+    }
+  }
   return () =>
-    mergeSelectedFullRuns(
-      persistedSubagentRunsReadCache,
-      subagentRuns,
-      prepared,
-      (entry) => runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey,
-      { context },
-    );
+    mergeSelectedFullRuns(persistedSubagentRunsReadCache, subagentRuns, prepared, matches, {
+      context,
+    });
 }
 
 export function getSubagentRunsSnapshotForRead(

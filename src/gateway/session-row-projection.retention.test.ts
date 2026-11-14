@@ -1,9 +1,17 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createSessionCatalogRequestEntrySnapshot,
+  type SessionCatalogInstances,
+} from "./server-methods/session-catalog-entry-snapshot.js";
+import {
+  catalogHost,
+  catalogSession,
+} from "./server-methods/session-catalog.fixtures.test-support.js";
+import { expectCollected, weak, weakControl } from "./session-collection.test-support.js";
 import { ready } from "./session-row-projection-record.js";
 import {
   createTestProjection,
@@ -12,13 +20,43 @@ import {
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions, prepareSessionRowSelection } from "./session-utils-list.js";
 
-const weak = (value: object) => new WeakRef(value);
-async function expectCollected(refs: WeakRef<object>[]) {
-  // End the WeakRef creation job; dereferencing before GC would keep targets alive.
-  await nextTurn();
-  queryObjects(WeakRef);
-  expect(refs.filter((ref) => ref.deref())).toHaveLength(0);
-}
+it("releases old catalog planning rosters while published adoption identities remain usable", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:catalog-retention";
+    writeEntry(key, { sessionId: "original", updatedAt: 1 });
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const host = catalogHost({ sessions: [catalogSession("thread", { sessionKey: key })] });
+    const instances: SessionCatalogInstances = new Map();
+    function capture() {
+      const planning = createSessionCatalogRequestEntrySnapshot({
+        cfg,
+        fallbackAgentId: "main",
+        projection,
+      });
+      planning.freeze();
+      planning.captureHostInstances(host, instances);
+      const entries = planning.sessionEntries.entriesForCatalog!();
+      return [weak(entries), ...entries.map(weak)];
+    }
+    const retired = capture();
+    writeEntry(key, { sessionId: "replacement", updatedAt: 2 });
+    await projection.ensureMaterialized();
+    // Publication alone retires the roster; no subsequent catalog request is needed.
+    await expectCollected(weakControl(), ...retired);
+    expect(instances.get(key)?.sessionId).toBe("original");
+    const delivery = createSessionCatalogRequestEntrySnapshot({
+      cfg,
+      fallbackAgentId: "main",
+      projection,
+      sessionKeys: [key],
+    });
+    expect(delivery.projectHostSessions(host, instances).sessions[0]?.sessionKey).toBeUndefined();
+  });
+});
 
 it("collects superseded resident rows and their materializations after metadata refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -38,6 +76,7 @@ it("collects superseded resident rows and their materializations after metadata 
     // Optional transcript work must not borrow a row while collection is measured.
     const release = holdForeground();
     const projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const rows = () => projection.selectEntries().filter(ready);
     const retired: WeakRef<object>[] = [];
     const selections: WeakRef<object>[] = [];
     const snapshots: WeakRef<object>[] = [];
@@ -52,9 +91,9 @@ it("collects superseded resident rows and their materializations after metadata 
         }
       }
     }
-    const control = weak({});
+    const control = weakControl();
     function refreshEntries(revision: number) {
-      for (const row of projection.selectEntries().filter(ready)) {
+      for (const row of rows()) {
         retired.push(...[row, row.entry, row.materialized].map(weak));
         write(row.key, revision);
       }
@@ -82,27 +121,21 @@ it("collects superseded resident rows and their materializations after metadata 
       // A publication must release the last list even when no subsequent viewer arrives.
       refreshEntries(5);
       await projection.ensureMaterialized();
-      await expectCollected([control, ...retired, ...selections, ...snapshots]);
-      expect(projection.selectEntries().filter(ready)).toHaveLength(keys.length);
+      await expectCollected(control, ...retired, ...selections, ...snapshots);
+      expect(rows()).toHaveLength(keys.length);
       await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
-      const materializations = projection
-        .selectEntries()
-        .filter(ready)
-        .map((row) => weak(row.materialized));
+      const materializations = rows().map((row) => weak(row.materialized));
       // An unchanged catalog refresh preserves the current materializations until disposal.
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
-      projection
-        .selectEntries()
-        .filter(ready)
-        .forEach((row, index) => {
-          expect(row.materialized).toBe(materializations[index]!.deref());
-        });
+      rows().forEach((row, index) => {
+        expect(row.materialized).toBe(materializations[index]!.deref());
+      });
       await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
       const disposedEntries = projection.selectEntries().map((row) => weak(row.entry));
       captureSelections();
       projection.dispose();
-      await expectCollected([...materializations, ...disposedEntries, ...selections]);
+      await expectCollected(...materializations, ...disposedEntries, ...selections);
     } finally {
       projection.dispose();
       release();
@@ -128,7 +161,7 @@ it("does not retain a superseded child entry through a held parent display row",
     const retiredChild = new WeakRef(projection.describe({ agentId: "main", key: child })!.entry);
     writeChild(2);
     await projection.ensureMaterialized();
-    await expectCollected([retiredChild]);
+    await expectCollected(retiredChild);
     // Retained consumers may still hold the old parent; it needs only child display facts.
     expect(heldParent.materialized.source.childLinks?.[0]?.entry.sessionId).toBe("compact-child");
     expect(

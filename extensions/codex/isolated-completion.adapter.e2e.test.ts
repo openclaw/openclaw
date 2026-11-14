@@ -5,13 +5,21 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { createIsolatedCompletionBoundaryFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeAll, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { testCodexAppServerBindingStore } from "./src/app-server/session-binding.test-helpers.js";
 import { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+// Compile the source-only lazy adapter before timing the real request; built
+// production modules do not pay Vitest transformation costs inside its deadline.
+beforeAll(async () => {
+  await Promise.all([
+    import("./src/app-server/isolated-completion.js"),
+    import("./src/app-server/config-parsing.js"),
+  ]);
+});
 afterEach(() => vi.unstubAllEnvs());
 
 function unexpectedSessionBinding(): never {

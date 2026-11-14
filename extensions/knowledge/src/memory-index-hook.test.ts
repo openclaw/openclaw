@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { memoryIndexCutoff, readMemoryIndex } from "./memory-index-hook.js";
 import { memoryFixture } from "./memory-provider.test-support.js";
-import type { Stores } from "./stores.js";
-import { useTestTempDirs } from "./test-support.js";
+import { parsePolicy } from "./stores-config.js";
+import { Stores } from "./stores.js";
+import { afterTest, operatorContext, useTestTempDirs } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -62,12 +63,21 @@ it("pins the index per physical store, so a binding moved to a fresh store rende
     },
     client: { call: async () => ({ text: `index of ${vaultId}` }) },
   };
-  // Mirrors the Stores member the hook uses: the binding stays, the physical store changes.
-  const stores = {
+  // Mirrors the Stores members the hook uses: the binding stays, the physical store changes.
+  const stub = {
+    async ensure() {},
+    grantFor: () => undefined,
     async open(_principal: unknown, _options: { provision: boolean }): Promise<unknown> {
-      return { kind: "ready", binding: "agent:main", runtime, access: { assertCurrent() {} } };
+      return {
+        kind: "ready",
+        binding: "agent:main",
+        runtime,
+        access: { scope: { visibility: "private" }, assertCurrent() {} },
+      };
     },
   };
+  // SAFETY: readMemoryIndex calls only the members stubbed above.
+  const stores = stub as unknown as Stores;
   const ctx = {
     agentId: "main",
     sessionKey: `agent:main:pin-${randomUUID()}`,
@@ -76,9 +86,38 @@ it("pins the index per physical store, so a binding moved to a fresh store rende
     memoryAudience: { kind: "owner-private" as const, agentId: "main" },
     assertMemoryAudienceCurrent() {},
   };
-  expect(await readMemoryIndex(stores as Stores, ctx, 1)).toBe("index of vault-shared");
+  expect(await readMemoryIndex(stores, ctx, 1)).toBe("index of vault-shared");
   vaultId = "vault-own";
-  expect(await readMemoryIndex(stores as Stores, ctx, 1)).toBe("index of vault-own");
+  expect(await readMemoryIndex(stores, ctx, 1)).toBe("index of vault-own");
+});
+
+it("a grant revoked while the store opens never releases the pinned private index", async () => {
+  const f = await memoryFixture(tempDirs);
+  await f.save("Private page title");
+  // Real Stores, registry and storage workers over the fixture's host.
+  const stores = new Stores(
+    f.api,
+    parsePolicy({ operatorRead: true, writesEnabled: true }),
+    () => {},
+  );
+  afterTest(() => stores.stop());
+  await stores.ensure();
+  await stores.registry.call("grant", f.conversation.sessionKey, "read", stores.grants().revision);
+  const ctx = hookContext(f, { memoryAudience: f.conversation }),
+    asOf = Date.now();
+  expect(await readMemoryIndex(stores, ctx, asOf)).toContain("Private page title");
+  // Revoke exactly while the next index read opens its store.
+  const open = stores.open.bind(stores);
+  stores.open = async (...args) => {
+    await stores.registry.call(
+      "grant",
+      f.conversation.sessionKey,
+      "none",
+      stores.grants().revision,
+    );
+    return open(...args);
+  };
+  expect(await readMemoryIndex(stores, ctx, asOf)).toBe("");
 });
 
 it("omits the index for conversation, missing and sandboxed audiences and revoked callers", async () => {
@@ -86,12 +125,35 @@ it("omits the index for conversation, missing and sandboxed audiences and revoke
   await f.save("Private page title");
   const hook = f.hooks.before_prompt_build;
   const event = { prompt: "hi", messages: [] };
-  const conversation = { kind: "conversation", agentId: "main", sessionId: f.sessionId };
+  const conversation = f.conversation;
   expect(await hook(event, hookContext(f, { memoryAudience: conversation }))).toBeUndefined();
   expect(await hook(event, hookContext(f, { memoryAudience: undefined }))).toBeUndefined();
   expect(await hook(event, hookContext(f, { sandboxed: true }))).toBeUndefined();
   f.revoke();
   expect(await hook(event, hookContext(f))).toBeUndefined();
+});
+
+it("injects the index into conversations an owner granted read access, threads included", async () => {
+  const f = await memoryFixture(tempDirs);
+  await f.save("Private page title");
+  const hook = f.hooks.before_prompt_build;
+  const event = { prompt: "hi", messages: [] };
+  const thread = { ...f.conversation, sessionKey: `${f.conversation.sessionKey}:thread:7` };
+  const admin = operatorContext(f.api, ["operator.admin"]);
+  for (const [access, injected] of [
+    ["read", true],
+    ["read-write", true],
+    ["none", false],
+  ] as const) {
+    const { grants } = await f.service.stores_snapshot({}, admin);
+    const changed = await f.service.stores_grant(
+      { expectedRevision: grants.revision, sessionKey: f.conversation.sessionKey, access },
+      admin,
+    );
+    expect(changed.outcome).toBe("applied");
+    const result = await hook(event, hookContext(f, { memoryAudience: thread }));
+    expect(result?.appendSystemContext?.includes("Private page title") ?? false).toBe(injected);
+  }
 });
 
 it("uses the first retained message timestamp, never a later one", () => {

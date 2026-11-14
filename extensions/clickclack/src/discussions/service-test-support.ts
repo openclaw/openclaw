@@ -305,7 +305,7 @@ export function createHarness(
   };
 }
 
-export function testBindingGeneration(runtime: PluginRuntime, sessionKey: string): string {
+function testBindingGeneration(runtime: PluginRuntime, sessionKey: string): string {
   const generation = reservedGenerations.get(runtime)?.get(sessionKey);
   if (!generation) {
     throw new Error(`No real discussion generation was reserved for ${sessionKey}`);

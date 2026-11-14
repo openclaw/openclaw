@@ -1,4 +1,5 @@
 import { createMemo, createStore, merge } from "solid-js";
+import { pathForSession } from "../../../app-session-path-builder.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
@@ -25,6 +26,8 @@ type QuestionInput = ChatComposerProps &
       | "getQueue"
       | "transcriptVisible"
       | "connectionEpoch"
+      | "basePath"
+      | "onOpenSessionLink"
     >
   >;
 
@@ -74,25 +77,43 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
       props.disabledBanner?.kind === "composer-replacement"
         ? []
         : [
-            ...gatewayQuestions.map((prompt) => ({
-              key: `gateway:${prompt.id}`,
-              asyncIdentity: null,
-              panel: (options: QuestionPanelOptions) =>
-                createGatewayQuestionPanelProps(prompt, {
-                  ...options,
-                  onChange: props.onGatewayQuestionChange,
-                  onSubmit: props.onGatewayQuestionSubmit
-                    ? (answers) => props.onGatewayQuestionSubmit?.(prompt.id, answers)
-                    : undefined,
-                  onSkip: props.onGatewayQuestionSkip
-                    ? () => props.onGatewayQuestionSkip?.(prompt.id)
-                    : undefined,
-                }),
-            })),
+            ...gatewayQuestions.map((prompt) => {
+              const sessionKey = prompt.sessionKey;
+              const agentId = prompt.agentId ?? props.currentAgentId;
+              const requestedBySession = props.gatewayQuestionSources?.get(prompt.id);
+              return {
+                key: `gateway:${prompt.id}`,
+                asyncIdentity: null,
+                takesOverComposer: requestedBySession === undefined,
+                panel: (options: QuestionPanelOptions) =>
+                  createGatewayQuestionPanelProps(prompt, {
+                    ...options,
+                    requestedBySession,
+                    requestedBySessionHref:
+                      requestedBySession !== undefined && sessionKey
+                        ? (pathForSession("chat", agentId, sessionKey, props.basePath, {
+                            exactKey: true,
+                          }) ?? undefined)
+                        : undefined,
+                    onOpenSession:
+                      sessionKey && props.onOpenSessionLink
+                        ? () => props.onOpenSessionLink?.({ sessionKey, agentId })
+                        : undefined,
+                    onChange: props.onGatewayQuestionChange,
+                    onSubmit: props.onGatewayQuestionSubmit
+                      ? (answers) => props.onGatewayQuestionSubmit?.(prompt.id, answers)
+                      : undefined,
+                    onSkip: props.onGatewayQuestionSkip
+                      ? () => props.onGatewayQuestionSkip?.(prompt.id)
+                      : undefined,
+                  }),
+              };
+            }),
             ...(asyncQuestions.submit
               ? asyncQuestions.pending.map((question) => ({
                   key: JSON.stringify([asyncQuestions.scope, question.itemId]),
                   asyncIdentity: asyncIdentity(question.itemId),
+                  takesOverComposer: false,
                   panel: (options: QuestionPanelOptions) =>
                     createAsyncQuestionPanelProps(question, asyncQuestions, options),
                 }))

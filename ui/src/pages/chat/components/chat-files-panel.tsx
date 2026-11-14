@@ -44,7 +44,13 @@ type Props = {
   folderView: boolean;
   workspace?: SessionWorkspaceProps;
   browserPresented: () => boolean;
-  renderDetail: ((props: { content: SidebarContent; previewId: string }) => JSX.Element) | null;
+  renderDetail:
+    | ((props: {
+        content: SidebarContent;
+        previewId: string;
+        onBrowseFiles: () => void;
+      }) => JSX.Element)
+    | null;
   onSelect: (id: string | null) => void;
   onClose: (id: string) => void | boolean | Promise<boolean>;
 };
@@ -266,6 +272,9 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
           <div
             ref={(element) => (catalog = element)}
             class="chat-files-panel__page chat-files-panel__catalog"
+            role="region"
+            aria-label={t("chat.sidePanel.files")}
+            tabindex={-1}
             inert={reading() && !rendered().treeVisible}
             hidden={
               !reading() &&
@@ -310,6 +319,22 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
               const entry = () => {
                 rendered();
                 return preview();
+              };
+              const browseFiles = () => {
+                if (props.activeId !== entry().id) {
+                  return;
+                }
+                const sessionKey = props.sessionKey;
+                showBrowser();
+                onSettled(() => {
+                  if (
+                    host.isConnected &&
+                    props.sessionKey === sessionKey &&
+                    props.activeId === null
+                  ) {
+                    catalog.focus();
+                  }
+                });
               };
               const FilePath = () => (
                 <span
@@ -387,6 +412,11 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                                 icon={<Icon name="fileText" />}
                                 heading={t("chat.detailPanel.unavailable")}
                                 description={formatUiError(error())}
+                                action={
+                                  <button type="button" class="btn" onClick={browseFiles}>
+                                    {t("chat.workspaceFiles.browseFiles")}
+                                  </button>
+                                }
                               />
                             </div>
                           </section>
@@ -399,7 +429,13 @@ export const ChatFilesPanel = defineSolidBridge<Props, Methods>(
                         }
                       >
                         <Show when={detail()}>
-                          {(content) => <Detail content={content()} previewId={entry().id} />}
+                          {(content) => (
+                            <Detail
+                              content={content()}
+                              previewId={entry().id}
+                              onBrowseFiles={browseFiles}
+                            />
+                          )}
                         </Show>
                       </Loading>
                     </Errored>

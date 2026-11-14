@@ -355,6 +355,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionStep.env.FRV_TEST_EXCLUDE_PATHS_JSON).toBe(
       "${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}",
     );
+    expect(extensionStep.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
     expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 

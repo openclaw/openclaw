@@ -20,7 +20,7 @@ import {
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
+async function createDeferredMcpCall(result: CallToolResult) {
   const catalog = {
     version: 1 as const,
     generatedAt: 0,
@@ -39,7 +39,7 @@ function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
       }),
     ],
   };
-  return staticRuntime({
+  const runtime: SessionMcpRuntime = staticRuntime({
     sessionId: "session-tool-search-mcp-error",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
@@ -47,6 +47,9 @@ function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
     peekCatalog: () => catalog,
     callTool: async () => result,
   });
+  const materialized = await materializeBundleMcpToolsForRun({ runtime });
+  const target = expectDefined(materialized.tools[0], "materialized MCP tool");
+  return { callTool: createDeferredCall(target), target };
 }
 
 function createDeferredCall(target: AnyAgentTool) {
@@ -58,12 +61,6 @@ function createDeferredCall(target: AnyAgentTool) {
     controls.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME),
     `${TOOL_CALL_RAW_TOOL_NAME} control`,
   );
-}
-
-async function createDeferredMcpCall(result: CallToolResult) {
-  const materialized = await materializeBundleMcpToolsForRun({ runtime: makeMcpRuntime(result) });
-  const target = expectDefined(materialized.tools[0], "materialized MCP tool");
-  return { callTool: createDeferredCall(target), target };
 }
 
 describe("Tool Search MCP failures", () => {

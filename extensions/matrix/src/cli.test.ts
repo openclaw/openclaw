@@ -863,12 +863,12 @@ describe("matrix CLI verification commands", () => {
       replaced.channels.matrix.accounts.ops.accessToken = "replacement-token";
     }
     mutationConfig = replaced;
-    await runMatrixCli(encryptedSetupArgs(command, "--json"));
+    await expect(runMatrixCli(encryptedSetupArgs(command, "--json"))).rejects.toThrow(
+      /changed during setup.*run the setup command again/,
+    );
 
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
-    expect(jsonOutput().error).toContain("changed during setup");
-    expect(jsonOutput().error).toContain("run the setup command again");
+    expect(mocks.stdout).not.toHaveBeenCalled();
   });
 
   it("saves an encrypted account and reports bootstrap, profile, and device-health failures", async () => {
@@ -937,14 +937,12 @@ describe("matrix CLI verification commands", () => {
     expectLogs("Account: alerts", "Config path: channels.matrix.accounts.alerts");
   });
 
-  it("returns JSON errors for invalid account setup input", async () => {
+  it("leaves JSON error rendering to the host for invalid account setup input", async () => {
     mocks.validateInput.mockReturnValue("Matrix requires --homeserver");
-    await runMatrixCli("account add", "--json");
-
-    expect(process.exitCode).toBe(1);
-    expect(jsonOutput(0)).toEqual({
-      error: "Matrix requires --homeserver",
-    });
+    await expect(runMatrixCli("account add", "--json")).rejects.toThrow(
+      "Matrix requires --homeserver",
+    );
+    expect(mocks.stdout).not.toHaveBeenCalled();
   });
 
   it("fails status with re-login guidance when the current Matrix device is missing on the server", async () => {

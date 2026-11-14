@@ -30,9 +30,7 @@ async function openTui(
   const result = await executeSystemAgentOperation(
     { kind: "open-tui", ...options },
     output.runtime,
-    {
-      deps: { loadOverview: async () => overview },
-    },
+    { deps: { loadOverview: async () => overview } },
   );
   return { ...output, result };
 }

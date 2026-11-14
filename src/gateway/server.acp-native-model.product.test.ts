@@ -26,6 +26,8 @@ type ChatEvent = {
     runId?: string;
     state?: string;
     text?: string;
+    deltaText?: string;
+    replace?: boolean;
     isError?: boolean;
     message?: unknown;
     errorMessage?: string;
@@ -44,10 +46,18 @@ it("preserves ACP across native policy, overrides and failures", { timeout: 120_
   });
   const requests: Array<{ model: string; input: unknown }> = [];
   const events: ChatEvent[] = [];
+  const streamedText = new Map<string, string>();
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => state.cleanup());
   let rejectNativeRequest = false;
+  let releaseAcpStream: (() => void) | undefined;
+  let acpStreamWaiting = false;
   const providerServer = createServer((request, response) => {
+    if (request.url === "/v1/acp-stream") {
+      acpStreamWaiting = true;
+      releaseAcpStream = () => response.writeHead(200).end();
+      return;
+    }
     void (async () => {
       const body = JSON.parse(await readRequestText(request)) as (typeof requests)[number];
       requests.push(body);
@@ -135,11 +145,16 @@ module.exports = {
         if (key === "model") session.model = value;
         return { configOptions: [{ id: "model", currentValue: session.model }] };
       },
-      async *runTurn({ handle }) {
+      async *runTurn({ handle, text }) {
+        const liveProof = text.includes("Stream live ACP.");
         yield {
           type: "text_delta",
-          text: "ACP:" + sessions.get(keyFor(handle)).model + ":" + handle.backendSessionId,
+          text: "ACP:" + sessions.get(keyFor(handle)).model + ":" + handle.backendSessionId + (liveProof ? ". " : ""),
         };
+        if (liveProof) {
+          await fetch(${JSON.stringify(`${baseUrl}/acp-stream`)});
+          yield { type: "text_delta", text: "Complete." };
+        }
         yield { type: "done", stopReason: "end_turn" };
       },
       async cancel() {},
@@ -184,7 +199,12 @@ module.exports = {
         qualified: { model: { primary: qualified.modelRef }, runtime: acpRuntime },
       },
     },
-    acp: { enabled: true, backend: BACKEND_ID, allowedAgents: ["cursor"] },
+    acp: {
+      enabled: true,
+      backend: BACKEND_ID,
+      allowedAgents: ["cursor"],
+      stream: { deliveryMode: "live" },
+    },
     models: {
       mode: "replace",
       providers: {
@@ -217,7 +237,20 @@ module.exports = {
     configPath: state.configPath,
     token: TOKEN,
     scopes: ["operator.admin", "operator.read", "operator.write"],
-    onEvent: (event) => events.push(event as ChatEvent),
+    onEvent: (event) => {
+      const chatEvent = event as ChatEvent;
+      events.push(chatEvent);
+      const payload = chatEvent.payload;
+      if (chatEvent.event === "chat" && payload?.state === "delta" && payload.runId) {
+        const snapshot = extractFirstTextBlock(payload.message);
+        streamedText.set(
+          payload.runId,
+          snapshot ??
+            (payload.replace ? "" : (streamedText.get(payload.runId) ?? "")) +
+              (payload.deltaText ?? ""),
+        );
+      }
+    },
   });
   cleanup.defer(async () => {
     try {
@@ -288,6 +321,31 @@ module.exports = {
     sessions.push({ agentId, sessionKey });
     const acpAnswer = `ACP:${harnessModel}:${initialized.handle.backendSessionId}`;
     acpAnswers.set(agentId, acpAnswer);
+    if (agentId === "main") {
+      const runId = "acp-live-stream";
+      await client.request("chat.send", {
+        sessionKey,
+        message: "Stream live ACP.",
+        idempotencyKey: runId,
+      });
+      let firstStreamed = "";
+      try {
+        await expect
+          .poll(() => acpStreamWaiting || findTerminal(runId)?.payload, { timeout: 30_000 })
+          .toBe(true);
+        await expect.poll(() => streamedText.get(runId)).toBeDefined();
+        firstStreamed = streamedText.get(runId) ?? "";
+        expect(findTerminal(runId)).toBeUndefined();
+      } finally {
+        releaseAcpStream?.();
+      }
+      await expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined();
+      const terminalText = extractFirstTextBlock(findTerminal(runId)?.payload?.message) ?? "";
+      expect(terminalText).toBe(acpAnswer + ".\n\nComplete.");
+      expect(firstStreamed).toContain(acpAnswer);
+      expect(terminalText.startsWith(firstStreamed)).toBe(true);
+      expect(streamedText.get(runId)).toBe(terminalText);
+    }
     const requestCount = requests.length;
     expect(await send(sessionKey, "Remember this ACP context.", `${agentId}-first`)).toEqual({
       text: acpAnswer,

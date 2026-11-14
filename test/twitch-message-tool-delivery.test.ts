@@ -118,7 +118,8 @@ it.each<[string, boolean, string, string, ("sameSource" | "bareTarget" | "single
           messageDelivery: { status: "suppressed" },
         });
       }
-      expect.soft(transcriptUpdated).toHaveBeenCalledTimes(sent ? 1 : 0);
+      // The producing conversation owns source replies; only cross-target sends add history.
+      expect.soft(transcriptUpdated).toHaveBeenCalledTimes(sent && explicit && !sameSource ? 1 : 0);
       expect.soft(isDeliveredMessagingToolResult({ args, result })).toBe(sent);
       const actionResult = await runAction.mock.results[0]?.value;
       expect

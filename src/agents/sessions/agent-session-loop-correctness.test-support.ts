@@ -73,6 +73,16 @@ export function createAssistantResultStream(message: AssistantMessage) {
   });
 }
 
+export function mockToolTurn(content: AssistantMessage["content"]) {
+  streamMocks.streamSimple
+    .mockImplementationOnce((model: Model) =>
+      createAssistantResultStream(createAssistant(model, content, "toolUse")),
+    )
+    .mockImplementation((model: Model) =>
+      createAssistantResultStream(createAssistant(model, "Done.")),
+    );
+}
+
 export function holdAssistantResponse(text: string | (() => AssistantMessage)) {
   const response = createAssistantMessageEventStream();
   let released = false;

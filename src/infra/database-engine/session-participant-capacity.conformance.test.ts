@@ -13,6 +13,20 @@ import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
+function participantSession(sessionId: string) {
+  const { db, path: storePath } = openOpenClawAgentDatabase({ agentId: "main" });
+  const scope = { agentId: "main", storePath, sessionKey: `agent:main:${sessionId}` };
+  replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+  return {
+    db,
+    scope,
+    record: (
+      identity: Parameters<typeof recordSessionParticipant>[1]["identity"],
+      promptedAt: number,
+    ) => recordSessionParticipant(scope, { identity, promptedAt }),
+  };
+}
+
 for (const engine of ["sqlite", "postgres"] as const) {
   describe.skipIf(engine === "postgres" && !mixedAgentConnection)(
     `${engine} participant capacity`,
@@ -21,27 +35,21 @@ for (const engine of ["sqlite", "postgres"] as const) {
 
       it("admits the last slot, rejects an absent identity without publication, and updates at capacity", () =>
         withEngineStoreAdmission(() => {
-          const database = openOpenClawAgentDatabase({ agentId: "main" });
-          const scope = {
-            agentId: "main",
-            storePath: database.path,
-            sessionKey: "agent:main:participant-capacity",
-          };
-          replaceSessionEntrySync(scope, { sessionId: "participant-capacity", updatedAt: 1 });
+          const { db, scope, record } = participantSession("participant-capacity");
           const identity = { type: "agent", id: "last" } as const;
           const namespace = participantIdentityNamespace(identity);
-          runSqliteImmediateTransactionSync(database.db, () => {
-            ensureSessionParticipantsSchema(database.db);
-            const insert = database.db.prepare(
+          runSqliteImmediateTransactionSync(db, () => {
+            ensureSessionParticipantsSchema(db);
+            const insert = db.prepare(
               "INSERT INTO session_participants (session_key, identity_namespace, actor_id, contribution_count, first_prompted_at, last_prompted_at) VALUES (?, ?, ?, 1, NULL, NULL)",
             );
             for (let i = 0; i < MAX_SESSION_PARTICIPANTS - 1; i++) {
               insert.run(scope.sessionKey, namespace, `seed-${i}`);
             }
           });
-          expect(recordSessionParticipant(scope, { identity, promptedAt: 10 })).toBe("inserted");
+          expect(record(identity, 10)).toBe("inserted");
           const rows = () =>
-            database.db
+            db
               .prepare("SELECT * FROM session_participants WHERE session_key = ? ORDER BY actor_id")
               .all(scope.sessionKey);
           const before = rows();
@@ -52,18 +60,13 @@ for (const engine of ["sqlite", "postgres"] as const) {
             }
           });
           try {
-            expect(
-              recordSessionParticipant(scope, {
-                identity: { type: "agent", id: "overflow" },
-                promptedAt: 20,
-              }),
-            ).toBe("capped");
+            expect(record({ type: "agent", id: "overflow" }, 20)).toBe("capped");
             expect(rows()).toEqual(before);
             expect(events).toEqual([]);
-            expect(recordSessionParticipant(scope, { identity, promptedAt: 30 })).toBe("updated");
+            expect(record(identity, 30)).toBe("updated");
             expect(events).toEqual(["participants"]);
             expect(
-              database.db
+              db
                 .prepare(
                   "SELECT contribution_count, first_prompted_at, last_prompted_at FROM session_participants WHERE session_key = ? AND actor_id = ?",
                 )
@@ -81,34 +84,15 @@ for (const engine of ["sqlite", "postgres"] as const) {
         );
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         withEngineStoreAdmission(() => {
-          const database = openOpenClawAgentDatabase({ agentId: "main" });
-          const scope = {
-            agentId: "main",
-            storePath: database.path,
-            sessionKey: "agent:main:participant-alias",
-          };
-          replaceSessionEntrySync(scope, { sessionId: "participant-alias", updatedAt: 1 });
-          expect(
-            recordSessionParticipant(scope, {
-              identity: { type: "profile", id: old.id },
-              promptedAt: 10,
-            }),
-          ).toBe("inserted");
+          const { db, scope, record } = participantSession("participant-alias");
+          expect(record({ type: "profile", id: old.id }, 10)).toBe("inserted");
           for (let i = 1; i < MAX_SESSION_PARTICIPANTS; i++) {
-            recordSessionParticipant(scope, {
-              identity: { type: "agent", id: `seed-${i}` },
-              promptedAt: 10,
-            });
+            record({ type: "agent", id: `seed-${i}` }, 10);
           }
           linkEmail("old@example.test", current.id);
+          expect(record({ type: "profile", id: current.id }, 20)).toBe("updated");
           expect(
-            recordSessionParticipant(scope, {
-              identity: { type: "profile", id: current.id },
-              promptedAt: 20,
-            }),
-          ).toBe("updated");
-          expect(
-            database.db
+            db
               .prepare(
                 "SELECT actor_id, contribution_count FROM session_participants WHERE session_key = ? AND identity_namespace = ?",
               )

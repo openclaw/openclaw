@@ -235,3 +235,23 @@ it("puts sanitized HTTP 400 prompt-size guidance in the terminal reply payload",
 
   expect(payload).toMatchObject({ isError: true, text: promptSizeGuidance });
 });
+
+it("preserves local capacity guidance through provider-looking wrappers without leaking detail", () => {
+  const local = new WorkerTaskError("private-capacity-detail", "overloaded");
+  const wrapped = new FailoverError("503 overloaded private-wrapper-detail", {
+    reason: "overloaded",
+    status: 503,
+    cause: local,
+  });
+  for (const error of [local, wrapped, new AggregateError([local], "503 overloaded")]) {
+    expect(knownReply(error)).toMatchObject({
+      text: "OpenClaw's local workers are at capacity. Check the conversation for completed work before trying again.",
+      isError: true,
+    });
+  }
+  const provider = Object.assign(new Error("provider overloaded", { cause: local }), {
+    status: 503,
+  });
+  expect(knownReply(provider)?.text).not.toContain("local workers");
+  expect(knownReply(provider)).toBeDefined();
+});

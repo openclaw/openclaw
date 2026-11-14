@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { vi } from "vitest";
+import { assert, vi } from "vitest";
 import {
   holdTelegramMediaTimeouts,
   resolveFlushTimerForDelay,
@@ -94,9 +94,7 @@ export function holdForwardWindow() {
   return {
     flush: () => {
       const flush = resolveFlushTimerForDelay(timers, 1_000);
-      if (!flush) {
-        throw new Error("Expected the forwarded burst's flush timer");
-      }
+      assert(flush, "Expected the forwarded burst's flush timer");
       flush();
     },
     restore: () => timers.mockRestore(),

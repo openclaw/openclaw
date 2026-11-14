@@ -12,7 +12,7 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import { ClawCreatorReview } from "../claws/creator-review.tsx";
+import { TemplateCreatorReview } from "../templates/creator-review.tsx";
 import type { DropIndicator } from "./chat-page-drop-indicator.ts";
 import { registerUnboundPane } from "./chat-pane-elements.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
@@ -202,6 +202,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
         visuallyPresented={presented()}
         active={active()}
         draft={draft()}
+        ownsRouteComposer={active() && routeData() !== undefined}
         focusComposer={props.options.draftFocus.shouldFocusPane(
           active(),
           draft(),
@@ -380,7 +381,7 @@ export function ChatPageBody(props: {
       {(snapshot) => (
         <div class="chat-split-view__drop-container" ref={props.containerRef}>
           <SplitLayout snapshot={snapshot()} />
-          <ClawCreatorReview context={props.context} />
+          <TemplateCreatorReview context={props.context} />
           <Show when={props.indicator}>
             {(indicator) => (
               <div

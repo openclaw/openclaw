@@ -74,3 +74,19 @@ jobs:
 
           timeout --kill-after=30s 2m docker run --rm openclaw-sandbox-common-smoke:trixie-slim sh -lc \
             'set -e; test "$(id -un)" = sandbox; node --version; pnpm --version'
+
+      - name: Launch Chromium with system fonts as sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          playwright_version="$(node -p 'require("./package.json").dependencies["playwright-core"]')"
+          timeout --kill-after=30s 5m docker run --rm \
+            --env "PLAYWRIGHT_VERSION=$playwright_version" \
+            openclaw-sandbox-common-smoke:trixie-slim sh -lc '
+              set -eu
+              npm exec --yes --package="playwright-core@$PLAYWRIGHT_VERSION" -- playwright-core install --only-shell chromium
+              npm exec --yes --package="playwright-core@$PLAYWRIGHT_VERSION" -- playwright-core screenshot --browser chromium "data:text/html,%3Cp%3EBrowser%20font%20smoke%3C%2Fp%3E" /tmp/browser-smoke.png
+              font="$(find /usr/share/fonts -type f \( -name "*.ttf" -o -name "*.otf" -o -name "*.ttc" \) -print -quit)"
+              test -n "$font" && test -r "$font"
+            '

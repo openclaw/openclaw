@@ -5,6 +5,7 @@ import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-c
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
+  CRON_SCOPE,
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
@@ -31,6 +32,7 @@ const OperatorScopeSchema = z.enum([
   ADMIN_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
+  CRON_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,
@@ -93,6 +95,8 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Cloud profiles this role may explicitly dispatch its own sessions to. */
+  workerProfiles: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
   /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
   modelPolicy: z
     .strictObject({
@@ -105,6 +109,14 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
         .optional(),
       allow: z.array(z.string().trim().min(1)).optional(),
       deny: z.array(z.string().trim().min(1)).optional(),
+    })
+    .optional(),
+  /** Nonstandard Access requires an explicit grant, independent of model membership. */
+  accessPrograms: z
+    .strictObject({
+      cyber: z
+        .array(z.enum(["daybreak_blue", "daybreak_red"]))
+        .transform((programs) => uniqueValues(programs)),
     })
     .optional(),
   /** Ceiling applied to the authenticated profile's granted operator scopes. */
@@ -180,6 +192,7 @@ export const GatewayConfigSchema = z
       })
       .optional(),
     github: GatewayGitHubEndpointSchema.optional(),
+    repositoryIntegration: z.string().trim().min(1).optional(),
     projects: z
       .strictObject({
         defaultRepository: z
@@ -205,10 +218,10 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         experimental: z
           .strictObject({
-            /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+            /** Advanced native UI opt-out (default true; existing false stays off, bundled UI unaffected). */
             customPlugins: z.boolean().optional(),
-            /** Show the official Claw catalog and Add flow in Control UI (default false). */
-            claws: z.boolean().optional(),
+            /** Show the official Template catalog and Add flow in Control UI (default false). */
+            templates: z.boolean().optional(),
             /** Enable experimental speech bubbles in the Control UI (default false). */
             chatBubbles: z.boolean().optional(),
             /** Optional, tool-free next-message suggestions (disabled by default). */

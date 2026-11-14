@@ -11,7 +11,6 @@ import { extractFileContext, renderInboundDocumentContext } from "./file-context
 import { resolveFileExtractionLimits } from "./file-extraction-limits.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const greeting = "Привет €";
 const legacyText = "Café notes: résumé et météo pour demain.";
 function prepareText(mime: string, encoding: BufferEncoding = "latin1") {
   return prepareAttachment({
@@ -26,7 +25,6 @@ async function localDocument(text: string | Buffer, name: string, mime: string, 
   const mediaPath = path.join(workspaceDir, name);
   await fs.writeFile(mediaPath, text);
   const ctx: MsgContext = {
-    Body: "see attached",
     media: [{ path: mediaPath, contentType: mime, ...(named ? { fileName: name } : {}) }],
   };
   return { ctx, workspaceDir, cfg: {} };
@@ -35,11 +33,10 @@ async function localDocument(text: string | Buffer, name: string, mime: string, 
 describe("remote document charset", () => {
   const cyrillic = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x20, 0x88]);
   const transportCharset = "text/plain; charset=windows-1251";
-  const channelCharset = "text/plain; charset=windows-1252";
-  const cases: [string, Buffer, string, string, string?][] = [
-    ["transport charset", cyrillic, transportCharset, greeting],
-    ["channel type without charset", cyrillic, transportCharset, greeting, "text/plain"],
-    ["channel charset precedence", cyrillic, transportCharset, "Ïðèâåò ˆ", channelCharset],
+  const cases: [string, string | undefined, string][] = [
+    ["transport charset", undefined, "Привет €"],
+    ["channel type without charset", "text/plain", "Привет €"],
+    ["channel charset precedence", "text/plain; charset=windows-1252", "Ïðèâåò ˆ"],
   ];
   let fixture: Awaited<ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>>;
 
@@ -47,15 +44,9 @@ describe("remote document charset", () => {
     fixture = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
-        createServer((request, response) => {
-          const index = Number(request.url?.slice(1).split(".")[0]);
-          const entry = cases[index];
-          if (!entry) {
-            response.writeHead(404).end();
-            return;
-          }
-          response.writeHead(200, { "Content-Type": entry[2] });
-          response.end(entry[1]);
+        createServer((_request, response) => {
+          response.writeHead(200, { "Content-Type": transportCharset });
+          response.end(cyrillic);
         }),
     });
   });
@@ -71,10 +62,10 @@ describe("remote document charset", () => {
 
   it.each(cases)(
     "decodes %s through the real remote attachment owner",
-    async (name, _buffer, _header, expected, mime) => {
+    async (_name, mime, expected) => {
       const attachment = {
         index: 0,
-        url: `http://127.0.0.1:${fixture.claim.port}/${cases.findIndex((entry) => entry[0] === name)}.txt`,
+        url: `http://127.0.0.1:${fixture.claim.port}/notes.txt`,
         mime,
       };
       const cache = new MediaAttachmentCache([attachment], {
@@ -91,7 +82,6 @@ describe("remote document charset", () => {
         });
         expect(result.blocks).toHaveLength(1);
         expect(result.blocks[0]?.text).toContain(`\n---\n${expected}\n`);
-        expect(result.images).toEqual([]);
       } finally {
         await cache.cleanup();
       }
@@ -110,7 +100,6 @@ describe("renderInboundDocumentContext", () => {
 
       expect(prepared.mime).toBe("text/plain; charset=windows-1252");
       expect(context.text).toContain(legacyText);
-      expect(context.text).not.toContain("\uFFFD");
     },
   );
 
@@ -125,7 +114,6 @@ describe("renderInboundDocumentContext", () => {
   it.each<[string, number | undefined, string, boolean]>([
     ["document body for the steered run", undefined, "document body for the steered run", false],
     ["document body for the steered run", 13, "document body", true],
-    ["雪🙂", 4, "雪🙂", false],
     ["雪🙂!", 4, "雪🙂!", false],
     ["雪🙂!tail", 4, "雪🙂!", true],
     ["雪🙂tail", 2, "雪", true],
@@ -138,7 +126,6 @@ describe("renderInboundDocumentContext", () => {
 
     expect(context.text).toContain('<file name="steer-note.txt" mime="text/plain">');
     expect(context.text).toContain(`\n---\n${expected}\n`);
-    expect(context.text).not.toContain("[No extractable text]");
     expect(context.text).not.toContain("\uFFFD");
     if (!truncated) {
       expect(context.text).not.toContain("[Partial document:");

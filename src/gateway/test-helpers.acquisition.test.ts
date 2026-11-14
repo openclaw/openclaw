@@ -206,19 +206,15 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
       errors,
       unownedErrors,
       requests,
-      waitForUpgrade: (signal: AbortSignal) => once(server, "upgrade", { signal }),
-      waitForOpen: async (signal: AbortSignal) => {
-        await once(server, "upgrade", { signal });
-        const client = clients.at(-1);
-        if (!client) {
-          throw new Error("acquisition peer has no opening client");
+      waitForPhase: async (phase: "upgrade" | "challenge" | "response", signal: AbortSignal) => {
+        if (phase === "response") {
+          return await racePromiseWithAbortSignal(connectReceived.promise, signal);
         }
-        if (client.readyState !== WebSocket.OPEN) {
-          await once(client, "open", { signal });
+        await once(server, "upgrade", { signal });
+        if (phase === "challenge" && clients.at(-1)!.readyState !== WebSocket.OPEN) {
+          await once(clients.at(-1)!, "open", { signal });
         }
       },
-      waitForConnect: (signal: AbortSignal) =>
-        racePromiseWithAbortSignal(connectReceived.promise, signal),
       isListening: () => server.listening,
       failTransport: () => {
         for (const socket of sockets) {
@@ -274,55 +270,6 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
     process.env.OPENCLAW_GATEWAY_PORT = String(peer.port);
     return server;
   });
-}
-
-async function verifyAcquisitionTimeout(
-  peer: AcquisitionPeer,
-  timeoutMs: number,
-  signal: AbortSignal,
-  acquire: () => Promise<unknown>,
-  verifyFailure: (failure: unknown) => void,
-  phase: "upgrade" | "challenge" | "response" = "upgrade",
-): Promise<void> {
-  const readinessAbort = new AbortController();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const readinessSignal = AbortSignal.any([signal, readinessAbort.signal]);
-  const ready =
-    phase === "upgrade"
-      ? peer.waitForUpgrade(readinessSignal)
-      : phase === "challenge"
-        ? peer.waitForOpen(readinessSignal)
-        : peer.waitForConnect(readinessSignal);
-  const failure = failureOf(acquire());
-  // Observe settlement before the clock driver can process later native cleanup.
-  const checked = failure.then(verifyFailure);
-  void checked.catch(() => {});
-  try {
-    expect(await Promise.race([ready.then(() => "ready"), failure.then(() => "settled")])).toBe(
-      "ready",
-    );
-    // Opening settles before shared-auth installs its challenge waiter.
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-    expect(peer.clients[0]?.readyState).toBe(
-      phase === "upgrade" ? WebSocket.CONNECTING : WebSocket.OPEN,
-    );
-    await vi.advanceTimersByTimeAsync(1);
-    await racePromiseWithAbortSignal(checked, signal);
-  } catch (error) {
-    vi.useRealTimers();
-    return await runQaGatewayFixture(
-      async () => {
-        throw error;
-      },
-      () => Promise.all(peer.clients.map(closeGatewayTestWebSocket)),
-      () => Promise.allSettled([failure, checked]),
-    );
-  } finally {
-    readinessAbort.abort();
-    vi.useRealTimers();
-    await Promise.allSettled([ready]);
-  }
 }
 
 type CompositeAcquisitionCase = {
@@ -484,17 +431,45 @@ describe("raw Gateway helper acquisition ownership", async () => {
           const client = expectClosedClient(peer);
           expect(client.listenerCount("open")).toBe(0);
         };
-        if (timeoutMs) {
-          await verifyAcquisitionTimeout(
-            peer,
-            timeoutMs,
-            context.signal,
-            acquire,
-            verifyFailure,
-            phase,
-          );
-        } else {
+        if (!timeoutMs) {
           verifyFailure(await failureOf(acquire()));
+          return;
+        }
+        const readinessAbort = new AbortController();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const ready = peer.waitForPhase(
+          phase,
+          AbortSignal.any([context.signal, readinessAbort.signal]),
+        );
+        const failure = failureOf(acquire());
+        // Observe settlement before the clock driver can process later native cleanup.
+        const checked = failure.then(verifyFailure);
+        void checked.catch(() => {});
+        try {
+          expect(
+            await Promise.race([ready.then(() => "ready"), failure.then(() => "settled")]),
+          ).toBe("ready");
+          // Opening settles before shared-auth installs its challenge waiter.
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+          expect(peer.clients[0]?.readyState).toBe(
+            phase === "upgrade" ? WebSocket.CONNECTING : WebSocket.OPEN,
+          );
+          await vi.advanceTimersByTimeAsync(1);
+          await racePromiseWithAbortSignal(checked, context.signal);
+        } catch (timeoutError) {
+          vi.useRealTimers();
+          await runQaGatewayFixture(
+            async () => {
+              throw timeoutError;
+            },
+            () => Promise.all(peer.clients.map(closeGatewayTestWebSocket)),
+            () => Promise.allSettled([failure, checked]),
+          );
+        } finally {
+          readinessAbort.abort();
+          vi.useRealTimers();
+          await Promise.allSettled([ready]);
         }
       });
     },

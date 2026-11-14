@@ -34,7 +34,7 @@ describe("configured transcript source provenance", () => {
   it.each(["reorder", "title"] as const)(
     "retains capture and retry diagnostics across an accepted %s change",
     async (change) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       const sources = ["ready", "waiting"].map((sessionId) =>
         Object.assign({}, room, {
           sessionId,
@@ -102,7 +102,7 @@ describe("configured transcript source provenance", () => {
 
   it("uses the published future title after title removal with original routing authority", async () => {
     const titles = ["First title", undefined];
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
     const source = { ...room, title: "Before", sessionId: "future-title" };
     const f = fixture({
       logging: { level: "info" },
@@ -177,7 +177,7 @@ describe("configured transcript source provenance", () => {
     }
   });
   it("does not borrow a retry title from changed unknown provider field intent", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
     const source = {
       ...room,
       sessionId: "original-intent",
@@ -219,7 +219,7 @@ describe("configured transcript source provenance", () => {
   ])(
     "retains admission and notes after $outcome (failures=$failures)",
     async ({ outcome, failures }) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       const source = { ...room, sessionId: undefined, title: undefined };
       const f = fixture({ transcripts: { autoStart: [source] } });
       let current = f.ctx.config;
@@ -302,7 +302,7 @@ describe("configured transcript source provenance", () => {
     "cancels generated retries after %s stop",
     async (mode) => {
       const pending = mode === "pending";
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       const f = fixture();
       const gate = createDeferred();
       const start = vi.fn(async (request: TranscriptStartRequest) => {
@@ -359,7 +359,7 @@ describe("configured transcript source provenance", () => {
   );
 
   it("rejects a duplicate fixed ID after its first capture ends without changing saved notes", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
     // Crossing midnight lets an accidental second capture create a distinct archive row.
     vi.setSystemTime(new Date("2026-09-05T23:59:58.000Z"));
     const entry = { ...room, sessionId: "daily" };
@@ -614,7 +614,7 @@ describe("configured transcript source provenance", () => {
       await stopped;
     }
     f.provider.start = async ({ session }) => ({ ok: true, session });
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     vi.setSystemTime(new Date(Date.parse(retainedSession!.startedAt) + 86_400_000));
     await f.start({ ...room, sessionId: "retained" });
     expect((await f.read()).configuredSources[0]).toMatchObject({
@@ -664,7 +664,7 @@ describe("configured transcript occupancy diagnostics", () => {
   it.each(["retrying", "reopened", "starting", "reoccupied"] as const)(
     "settles a %s capture when its room becomes empty",
     async (mode) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied: true }] } });
       const failed = mode === "retrying" || mode === "reopened";
       const original: TranscriptSessionDescriptor = {
@@ -745,7 +745,7 @@ describe("configured transcript occupancy diagnostics", () => {
   it.each(["unsupported", "guild-conflict", "empty"] as const)(
     "settles occupancy watcher retries after %s registration",
     async (mode) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
       const entry = { ...room, whenOccupied: true };
       const entries =
         mode === "guild-conflict" ? [entry, { ...entry, channelId: "other-room" }] : [entry];
@@ -799,7 +799,7 @@ describe("configured transcript occupancy diagnostics", () => {
 it.each(["same date", "next date"] as const)(
   "reconciles a fixed ID on the %s after provider-selective stop",
   async (date) => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
     const startedAt = Date.parse("2026-09-05T10:00:00.000Z");
     vi.setSystemTime(startedAt);
     const f = fixture({ transcripts: { autoStart: [{ ...room, sessionId: "daily" }] } });

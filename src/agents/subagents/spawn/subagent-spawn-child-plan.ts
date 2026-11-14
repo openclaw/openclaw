@@ -29,6 +29,7 @@ import { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import {
   resolveRequesterFastMode,
   resolveRequesterPreferences,
+  resolveSubagentCyberAccessProgram,
 } from "./subagent-spawn-requester-prefs.js";
 import {
   normalizeDeliveryContext,
@@ -186,6 +187,7 @@ export async function resolveSubagentChildPlan(params: {
         ? (params.ctx.requesterModel ?? requesterPreferences?.model)
         : undefined,
     fastMode: params.request.fastMode,
+    cyberAccessProgram: params.request.cyberAccessProgram,
     workspaceDir: spawnedWorkspaceDir,
     requiresTools: params.request.outputSchema !== undefined,
   });
@@ -232,6 +234,16 @@ export async function resolveSubagentChildPlan(params: {
       modelPlan.initialSessionPatch.fastMode = fastMode;
     }
   }
+  const cyberAccessProgram = resolveSubagentCyberAccessProgram({
+    ...params,
+    requested: params.request.cyberAccessProgram,
+    requesterModel: params.ctx.requesterModel,
+    childModel: resolvedModel,
+  });
+  if (cyberAccessProgram !== undefined) {
+    modelPlan.initialSessionPatch.cyberAccessProgram = cyberAccessProgram;
+  }
+  const resolvedModelMetadata = { resolvedModel, resolvedProvider: modelPlan.modelRef.provider };
   const launchAuthorization: SubagentLaunchAuthorization | undefined = params.request.model?.trim()
     ? { modelOverride: modelPlan.modelRef }
     : undefined;
@@ -259,9 +271,12 @@ export async function resolveSubagentChildPlan(params: {
       targetAgentDir,
       modelPlan,
       launchAuthorization,
-      resolvedModelMetadata: {
-        resolvedModel,
-        resolvedProvider: modelPlan.modelRef.provider,
+      resolvedModelMetadata,
+      // Model facts echoed on the accepted spawn result.
+      acceptedModelFields: {
+        ...resolvedModelMetadata,
+        modelApplied: modelPlan.modelApplied || undefined,
+        cyberAccessProgram,
       },
     },
   };

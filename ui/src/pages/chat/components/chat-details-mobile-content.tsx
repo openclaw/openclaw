@@ -7,7 +7,7 @@ import {
 } from "../../../components/session-progress-card.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { listSubagents } from "../chat-subagent-wait.ts";
+import { listSubagents, projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileList,
   type SessionAutomationMobileListProps,
@@ -58,7 +58,6 @@ import {
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
 import "../../../styles/chat/details.css";
-import { SessionAutomationResult } from "./session-automation-result.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -171,6 +170,12 @@ function MobileRoot(
           props.details.selectedSession?.startedAt,
           props.details.selectedSession?.endedAt,
           props.details.runActive,
+          projectProgressCardRuntime(
+            props.details.selectedSession,
+            props.details,
+            card.updatedAt,
+            props.details.connected,
+          ),
         )
       : undefined;
   });
@@ -228,7 +233,6 @@ function MobileRoot(
       items: inventory.jobs().map((job) => ({
         value: job.id,
         label: job.name.trim() || job.id,
-        status: <SessionAutomationResult job={job} />,
         // Keep asynchronous schedule reads inside the rendered automations section.
         get description() {
           return job.autoDisabled
@@ -439,6 +443,14 @@ function mobileProgressProps(
     startedAt: details.selectedSession?.startedAt,
     endedAt: details.selectedSession?.endedAt,
     hasActiveRun: details.runActive,
+    runtime: details.progressCard
+      ? projectProgressCardRuntime(
+          details.selectedSession,
+          details,
+          details.progressCard.updatedAt,
+          details.connected,
+        )
+      : undefined,
   };
 }
 

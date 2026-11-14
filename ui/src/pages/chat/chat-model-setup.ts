@@ -1,4 +1,4 @@
-import type { ModelCatalogResult } from "../../api/types.ts";
+import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import {
   chatModelUnavailableMessage,
@@ -23,8 +23,8 @@ export function resolveChatModelSetup(
   state: ChatModelSetupState &
     Pick<
       Parameters<typeof resolveChatModelOverrideValue>[0],
-      "activeSession" | "chatModelCatalog" | "modelOverrides" | "sessionKey" | "sessionsResult"
-    > & { catalogError: string | null; onSetup: () => void },
+      "chatModelCatalog" | "modelOverrides" | "sessionKey" | "sessionsResult"
+    > & { activeSession?: GatewaySessionRow; catalogError: string | null; onSetup: () => void },
 ) {
   const policy = state.modelSelectionPolicy;
   const model = policy?.restricted

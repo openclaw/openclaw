@@ -1,6 +1,7 @@
 // Project recall against real session lineage and a registered native provider.
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
+import { withDiagnosticsTimelineObserver } from "../infra/diagnostics-timeline.js";
 import {
   AUDIENCE_ROOT_KEY,
   NATIVE_PROVIDER_ID,
@@ -19,6 +20,8 @@ it.each([
   ["goes stale during provider close", "close"],
 ] as const)("returns project lines only while the audience %s", async (_name, staleDuring) => {
   await withChildAudience(true, async ({ audience, root, write }) => {
+    let elapsed = 0;
+    const durations = new Map<string, number>();
     // A lineage parent reset revokes the child's inherited audience.
     const revoke = (stage: "candidates" | "close") => {
       if (stage === staleDuring) {
@@ -36,6 +39,7 @@ it.each([
       get: async () => ({ status: "not_found" }),
       health: async () => ({ status: "ready" }),
       candidates: async () => {
+        elapsed += 5_800;
         revoke("candidates");
         return {
           hits: [
@@ -47,18 +51,34 @@ it.each([
           ],
         };
       },
-      close: async () => revoke("close"),
+      close: async () => {
+        elapsed += 40;
+        revoke("close");
+      },
     };
-    const lines = await withNativeMemoryProvider(
-      () => provider,
+    const lines = await withDiagnosticsTimelineObserver(
+      (name) => {
+        const start = elapsed;
+        return () => durations.set(name, (durations.get(name) ?? 0) + elapsed - start);
+      },
       () =>
-        prepareProjectMemoryBootstrap({
-          cfg: {},
-          agentId: "main",
-          activeProjectKeys: [PROJECT_KEY],
-          context: childMemoryContext(audience),
-        }),
+        withNativeMemoryProvider(
+          () => provider,
+          () =>
+            prepareProjectMemoryBootstrap({
+              cfg: {},
+              agentId: "main",
+              activeProjectKeys: [PROJECT_KEY],
+              context: childMemoryContext(audience),
+            }),
+        ),
     );
+    expect(durations.get("project-memory.provider")).toBe(0);
+    expect(durations.get("memory.provider-open.open")).toBe(0);
+    expect(durations.get("project-memory.candidates")).toBe(5_800);
+    expect(durations.get("memory.provider-call.execute")).toBe(5_800);
+    expect(durations.get("project-memory.close")).toBe(40);
+    expect(durations.get("project-memory.publish")).toBe(0);
     if (staleDuring) {
       expect(lines).toEqual([]);
     } else {

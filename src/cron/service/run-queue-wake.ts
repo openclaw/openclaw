@@ -1,4 +1,3 @@
-import { cronStoreKey } from "../store/key.js";
 import type { CronServiceState } from "./state.js";
 
 const pendingQueues = new Map<CronServiceState, () => Promise<void>>();
@@ -24,21 +23,19 @@ export function releaseCronRunQueue(state: CronServiceState): void {
 }
 
 export function listCronRunQueueOwners(state: CronServiceState): CronServiceState[] {
-  const storeKey = cronStoreKey(state.deps.storePath);
-  return [...pendingQueues.keys()].filter(
-    (owner) => cronStoreKey(owner.deps.storePath) === storeKey,
-  );
+  const storeKey = state.deps.storeKey;
+  return [...pendingQueues.keys()].filter((owner) => owner.deps.storeKey === storeKey);
 }
 
 export function wakeCronRunQueues(state: CronServiceState): void {
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   for (const [owner, refresh] of schedulers) {
-    if (cronStoreKey(owner.deps.storePath) === storeKey) {
+    if (owner.deps.storeKey === storeKey) {
       refresh();
     }
   }
   for (const [owner, drain] of pendingQueues) {
-    if (cronStoreKey(owner.deps.storePath) === storeKey) {
+    if (owner.deps.storeKey === storeKey) {
       void drain().catch((error: unknown) =>
         owner.deps.log.warn({ err: String(error) }, "cron: queue drain delayed"),
       );

@@ -3,8 +3,9 @@ import { providerDisplayLabel } from "../../../components/provider-icon-data.ts"
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import "../../../components/tooltip.ts";
+import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
 import {
   formatModelContextMeta,
   formatModelLabel,
@@ -23,7 +24,7 @@ function ModelShortcut(props: { rowKey: string }) {
     <kbd
       class="shortcut-kbd"
       aria-hidden="true"
-      hidden={number() === undefined}
+      hidden={number() === undefined || !keyboardHintsVisible()}
       data-chat-model-shortcut="true"
       data-shortcut={number()}
       data-chat-model-shortcut-number={number()}
@@ -37,6 +38,13 @@ export function ChatModelProviderIcon(props: { provider: string }) {
 
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
 
+function optionNeedsAuth(entry: ModelPresentationProps["entry"]) {
+  return (
+    entry.disabled &&
+    (entry.unavailableReason === "missing-auth" || entry.unavailableReason === "auth-failed")
+  );
+}
+
 function optionPresentation(options: ModelPresentationProps) {
   const selected = isModelPickerOptionSelected(
     options.entry,
@@ -44,7 +52,7 @@ function optionPresentation(options: ModelPresentationProps) {
     options.selectedAgentRuntime,
   );
   const modelLabel = formatModelLabel(options.entry);
-  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId);
+  const runtime = formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId, t);
   const runtimeLabel = runtime?.label ?? "";
   const routeDetail = runtime?.detail ?? "";
   const chatOnlyHelp =
@@ -52,16 +60,13 @@ function optionPresentation(options: ModelPresentationProps) {
   const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
   // Resetting a recorded pin remains possible even when its default model is unavailable.
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
-  const needsAuth =
-    options.entry.disabled &&
-    (options.entry.unavailableReason === "missing-auth" ||
-      options.entry.unavailableReason === "auth-failed");
+  const needsAuth = optionNeedsAuth(options.entry);
   const onModelSetup = needsAuth ? options.onModelSetup : undefined;
   const modelMeta = needsAuth
     ? runtime?.detail !== undefined
       ? runtimeLabel
       : ""
-    : [formatModelContextMeta(options.entry), runtimeLabel].filter(Boolean).join(" · ");
+    : [formatModelContextMeta(options.entry, t), runtimeLabel].filter(Boolean).join(" · ");
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
     : options.entry.unavailableReason === "unsupported-runtime"
@@ -85,20 +90,30 @@ function createOptionPresentation(props: ChatModelPickerOptionProps) {
   return createMemo(() => optionPresentation(props));
 }
 
-export function modelOptionSearchRow(options: ModelPresentationProps): ChatModelSearchRow {
-  const view = optionPresentation(options);
+export function modelOptionSearchRow(
+  options: ModelPresentationProps,
+  defaultLabel: string,
+): ChatModelSearchRow {
+  const selected = isModelPickerOptionSelected(
+    options.entry,
+    options.selectedModelValue,
+    options.selectedAgentRuntime,
+  );
+  const runtimeLabel =
+    formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId)?.label ?? "";
+  const resetsPin = options.entry.isDefault && options.sessionModelPinned;
+  const onModelSetup = optionNeedsAuth(options.entry) ? options.onModelSetup : undefined;
   return {
     key: modelPickerOptionKey(options.entry),
-    name: view.modelLabel.toLocaleLowerCase(),
-    keywords: [options.entry.isDefault ? t("chat.modelControls.default") : "", view.runtimeLabel]
+    name: formatModelLabel(options.entry).toLocaleLowerCase(),
+    keywords: [options.entry.isDefault ? defaultLabel : "", runtimeLabel]
       .join(" ")
       .toLocaleLowerCase(),
     providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
     reference: options.entry.value,
-    selected: view.selected,
-    hasShortcut: !view.selected,
-    disabled:
-      options.disabled || Boolean(options.entry.disabled && !view.onModelSetup && !view.resetsPin),
+    selected,
+    hasShortcut: !selected,
+    disabled: options.disabled || Boolean(options.entry.disabled && !onModelSetup && !resetsPin),
   };
 }
 
@@ -108,11 +123,14 @@ function ModelOptionButton(
   props: ChatModelPickerOptionProps & { presentation: OptionPresentation },
 ) {
   const search = useContext(ChatModelSearchContext);
+  const defaultLabel = createMemo(() =>
+    props.entry.isDefault ? t("chat.modelControls.default") : "",
+  );
   const key = createMemo(() => modelPickerOptionKey(props.entry));
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
-  const highlighted = createMemo(() => search?.highlighted() === key());
+  const highlighted = createMemo(() => search?.isHighlighted(key()));
   return (
     <button
       ref={search?.rowRef(key)}
@@ -131,10 +149,7 @@ function ModelOptionButton(
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
       data-chat-model-index={props.index}
-      data-chat-model-keywords={[
-        props.entry.isDefault ? t("chat.modelControls.default") : "",
-        props.presentation.runtimeLabel,
-      ]
+      data-chat-model-keywords={[defaultLabel(), props.presentation.runtimeLabel]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase()}
@@ -183,7 +198,7 @@ function ModelOptionButton(
           <span class="chat-controls__model-option-name">{props.presentation.modelLabel}</span>
           <Show when={props.entry.isDefault}>
             <span class="chat-controls__model-state-label chat-controls__model-state-label--default">
-              {t("chat.modelControls.default")}
+              {defaultLabel()}
             </span>
           </Show>
           <Show when={props.presentation.modelMeta}>
@@ -232,7 +247,7 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
   const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
-  const highlighted = createMemo(() => search?.highlighted() === key());
+  const highlighted = createMemo(() => search?.isHighlighted(key()));
   return (
     <button
       ref={search?.rowRef(key)}

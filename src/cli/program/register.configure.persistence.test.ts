@@ -67,7 +67,6 @@ afterEach(() => {
 it("registered configure continues with canonical config after the committed-path channel callback", () =>
   withOpenClawTestState(
     {
-      label: "registered-configure-post-write",
       layout: "split",
       env: { SETUP_REPLY_PREFIX: "resolved prefix" },
     },

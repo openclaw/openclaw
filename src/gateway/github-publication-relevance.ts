@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createRetainedCache } from "../infra/retained-cache.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
 import { prepareSessionPullRequestGitHubRead } from "./control-ui-session-pr-request.js";
@@ -9,6 +10,9 @@ type AcceptedSnapshot = Pick<
   "repository" | "branch" | "source_head_commit" | "workspace_tree"
 >;
 const gitObjectId = /^[a-f0-9]{40}$/iu;
+// Retain completed immutable proofs only; pending reads keep their own live authority.
+const coverage = createRetainedCache<number>();
+const COVERAGE_TTL_MS = 90_000;
 
 /** Published history can supersede a failed attempt without changing its durable outcome. */
 export async function isGitHubPublicationSuperseded(
@@ -50,6 +54,11 @@ export async function isGitHubPublicationSuperseded(
   for (const { pr, head } of candidates) {
     try {
       const root = sessionPullRequestRepositoryApiUrl({ ...pr, apiBaseUrl: read.apiBaseUrl });
+      const key = JSON.stringify([read.cacheScope, root, head, tree, snapshot.source_head_commit]);
+      read.assertCurrent();
+      if ((coverage.get(key) ?? 0) > Date.now()) {
+        return true;
+      }
       // Git commit metadata omits file patches and proves dirty/re-written snapshots
       // when the published tree is byte-for-byte identical to the accepted tree.
       const published = await read.request(`${root}/git/commits/${head}`);
@@ -63,6 +72,7 @@ export async function isGitHubPublicationSuperseded(
         continue;
       }
       if (published.tree.sha === tree) {
+        coverage.set(key, Date.now() + COVERAGE_TTL_MS);
         return true;
       }
       const source = snapshot.source_head_commit;
@@ -80,6 +90,7 @@ export async function isGitHubPublicationSuperseded(
       const baseTree = commit && isRecord(commit.tree) ? commit.tree : null;
       const mergeBase = isRecord(compared.merge_base_commit) ? compared.merge_base_commit : null;
       if (base?.sha === source && mergeBase?.sha === source && baseTree?.sha === tree) {
+        coverage.set(key, Date.now() + COVERAGE_TTL_MS);
         return true;
       }
     } catch {

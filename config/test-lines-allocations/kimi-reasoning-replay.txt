@@ -1,0 +1,2 @@
+90
+# Required reasoning replay across direct/managed transports, off/none, stale metadata, and negative control.

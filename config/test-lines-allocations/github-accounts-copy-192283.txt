@@ -1,0 +1,2 @@
+# Preserve GitHub identity, publication, and credential-boundary assertions during copy integration.
+36

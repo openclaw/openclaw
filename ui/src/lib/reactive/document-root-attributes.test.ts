@@ -5,29 +5,21 @@ import { observeDocumentRootAttributes } from "./document-root-attributes.ts";
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   cleanup.splice(0).forEach((stop) => stop());
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 it("shares root observation while preserving filters, queued work and independent lifetimes", async () => {
   const NativeObserver = MutationObserver;
-  const observers: { targets: Set<Node>; filters: MutationObserverInit[] }[] = [];
+  const observers: MutationObserver[] = [];
+  const observe = vi.spyOn(NativeObserver.prototype, "observe");
+  const disconnect = vi.spyOn(NativeObserver.prototype, "disconnect");
   vi.stubGlobal(
     "MutationObserver",
     class extends NativeObserver {
-      readonly targets = new Set<Node>();
-      readonly filters: MutationObserverInit[] = [];
       constructor(callback: MutationCallback) {
         super(callback);
         observers.push(this);
-      }
-      override observe(target: Node, options?: MutationObserverInit) {
-        super.observe(target, options);
-        this.targets.add(target);
-        this.filters.push(options!);
-      }
-      override disconnect() {
-        super.disconnect();
-        this.targets.clear();
       }
     },
   );
@@ -40,9 +32,10 @@ it("shares root observation while preserving filters, queued work and independen
   );
   cleanup.push(...siblings);
   expect(observers).toHaveLength(1);
-  expect(observers[0]!.filters).toEqual([
-    { attributes: true, attributeFilter: ["data-theme-mode", "style"] },
-  ]);
+  expect(observe).toHaveBeenCalledExactlyOnceWith(root, {
+    attributes: true,
+    attributeFilter: ["data-theme-mode", "style"],
+  });
 
   // Growing the native filter must not discard an earlier consumer's queued record.
   root.style.setProperty("--card", "white");
@@ -56,7 +49,7 @@ it("shares root observation while preserving filters, queued work and independen
   await Promise.resolve();
   expect(changed).toHaveBeenCalledTimes(100);
   expect(mascot).not.toHaveBeenCalled();
-  expect(observers[0]!.filters).toHaveLength(2);
+  expect(observe).toHaveBeenCalledTimes(2);
 
   const separate = vi.fn();
   cleanup.push(observeDocumentRootAttributes(secondDocument, ["data-theme-mode"], separate));
@@ -77,8 +70,8 @@ it("shares root observation while preserving filters, queued work and independen
   expect(changed).toHaveBeenCalledTimes(99);
   expect(mascot).toHaveBeenCalledOnce();
   siblings.slice(1).forEach((stop) => stop());
-  expect(observers[0]!.targets.size).toBe(1);
-  expect(observers[0]!.filters).toHaveLength(2);
+  expect(disconnect).not.toHaveBeenCalled();
+  expect(observe).toHaveBeenCalledTimes(3);
   changed.mockClear();
   root.style.setProperty("--card", "gray");
   secondDocument.documentElement.dataset.themeMode = "dark";
@@ -88,8 +81,7 @@ it("shares root observation while preserving filters, queued work and independen
   expect(separate).toHaveBeenCalledOnce();
 
   stopMascot();
-  expect(observers[0]!.targets.size).toBe(0);
-  expect(observers[1]!.targets.size).toBe(1);
+  expect(disconnect.mock.contexts).toEqual([observers[0]]);
   cleanup.push(observeDocumentRootAttributes(firstDocument, ["data-theme-mode"], changed));
   expect(observers).toHaveLength(3);
   root.dataset.themeMode = "light";

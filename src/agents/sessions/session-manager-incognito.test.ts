@@ -8,8 +8,8 @@ import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/ses
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "../../config/sessions/session-actor-storage-binding.js";

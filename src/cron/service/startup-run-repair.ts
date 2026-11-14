@@ -154,6 +154,7 @@ export function restoreFinalizedStartupRun(params: {
     job,
     {
       ...entry,
+      errorReason: entry.errorReason,
       completionStatus,
       // Recovery uses the finished run's fact, never the job's possibly edited route.
       deliveryState: {

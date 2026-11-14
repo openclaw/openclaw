@@ -165,6 +165,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
 }));
 // mock-isolation: Observe custody without registering real database lifecycle resources.
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
+  registerAgentDatabaseResourceReleaseHandler: () => {},
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
   registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {

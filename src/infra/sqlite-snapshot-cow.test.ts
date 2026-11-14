@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { readCloneFileMetadata } from "@openclaw/fs-safe/copy";
-import { afterEach, expect, it } from "vitest";
+import { assert, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   prepareSqliteReadOnlyCopyInProcess,
@@ -64,11 +64,11 @@ it.each(["auto", "off"] as const)("keeps synchronous snapshots independent (%s)"
     using _ = defer(() => {
       expect(prepared.cleanup()).toBe(true);
     });
-    expect(await fs.readFile(prepared.location)).toEqual(bytes);
+    assert(bytes.equals(await fs.readFile(prepared.location)), prepared.location);
     await expectIndependent([sourcePath, prepared.location], mode);
     exec(prepared.location, "DELETE FROM payload");
     expect(read(prepared.location, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
-    expect(await fs.readFile(sourcePath)).toEqual(bytes);
+    assert(bytes.equals(await fs.readFile(sourcePath)), sourcePath);
   }
   expect(await fs.readdir(directory)).toEqual(["source.sqlite"]);
 });
@@ -114,10 +114,10 @@ it.each(["auto", "off"] as const)(
     exec(paths[3]!, "UPDATE payload SET value='restored-write' WHERE rowid=71;");
     exec(sourcePath, "DELETE FROM payload;");
     for (const retained of paths.slice(1, 3)) {
-      expect(await fs.readFile(retained)).toEqual(bytes);
+      assert(bytes.equals(await fs.readFile(retained)), retained);
     }
     await fs.unlink(paths[2]!);
-    expect(await fs.readFile(paths[1]!)).toEqual(bytes);
+    assert(bytes.equals(await fs.readFile(paths[1]!)), paths[1]);
     expect(read(paths[3]!, "SELECT value FROM payload")).toEqual([{ value: "restored-write" }]);
     expect(read(paths[3]!, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect((await fs.readdir(directory)).toSorted()).toEqual(
@@ -141,7 +141,7 @@ it.each(["empty WAL", "source alias"])("keeps an independent raw copy with %s", 
     await using _ = deferAsync(async () => {
       expect(await prepared.cleanupAsync()).toBe(true);
     });
-    expect(await fs.readFile(prepared.location)).toEqual(bytes);
+    assert(bytes.equals(await fs.readFile(prepared.location)), prepared.location);
     const output = await fs.stat(prepared.location);
     expect(output.nlink).toBe(1);
     expect(output.ino).not.toBe((await fs.stat(sourcePath)).ino);
@@ -154,11 +154,11 @@ it.each(["empty WAL", "source alias"])("keeps an independent raw copy with %s", 
     } else {
       exec(prepared.location, "DELETE FROM payload");
       expect(read(prepared.location, "SELECT count(*) count FROM payload")).toEqual([{ count: 0 }]);
-      expect(await fs.readFile(alias)).toEqual(bytes);
+      assert(bytes.equals(await fs.readFile(alias)), alias);
     }
-    expect(await fs.readFile(sourcePath)).toEqual(bytes);
+    assert(bytes.equals(await fs.readFile(sourcePath)), sourcePath);
   }
-  expect(await fs.readFile(sourcePath)).toEqual(bytes);
+  assert(bytes.equals(await fs.readFile(sourcePath)), sourcePath);
   if (layout === "empty WAL") {
     expect((await fs.stat(`${sourcePath}-wal`)).size).toBe(0);
   }

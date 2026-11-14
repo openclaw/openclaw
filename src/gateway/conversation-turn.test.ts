@@ -336,7 +336,6 @@ describe("runGatewayConversationTurn", () => {
         gatewayOwnedDelivery: true,
         forceCoreDelivery: true,
         requireQueuePersistence: true,
-        suppressTranscriptMirror: true,
       });
       await persistIntent(input);
       capture = claimReply("reef-authoritative-a", "durable id acknowledged", "reef-inbound-race");

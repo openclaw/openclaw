@@ -5,6 +5,7 @@ import type { ModelsListResult } from "../../../packages/gateway-protocol/src/sc
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
+  catalogTransportModels,
   catalogReply,
   catalogSessionRpc,
   createCatalogAuthProfiles,
@@ -163,18 +164,7 @@ async function withDispatchLifecycle(
     );
     const token = "dispatch-lifecycle-gateway-token";
     const cfg = modelsTestConfig(state, token, {
-      models: {
-        providers: {
-          opencode: {
-            baseUrl: "",
-            models: [],
-            request: {
-              allowPrivateNetwork: true,
-              headers: { "X-Dispatch-Request": "initial-transport" },
-            },
-          },
-        },
-      },
+      models: catalogTransportModels("opencode", "initial-transport"),
       agents: {
         defaults: {
           skipBootstrap: true,

@@ -69,6 +69,7 @@ import { invokeNodeWorkerDesktopStream } from "./desktop-stream-command.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
+import type { NodeWorkerMcpSession } from "./node-worker-mcp.js";
 import {
   projectNodeWorkerSupervisorReceipt,
   type NodeWorkerSupervisorControl,
@@ -203,6 +204,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   command: string;
   paramsJSON?: string | null;
   supervisor?: NodeWorkerSupervisorControl;
+  localMcp?: NodeWorkerMcpSession;
   bundleInstaller?: NodeWorkerBundleInstallerControl;
   workspace?: NodeWorkerWorkspaceRuntime;
   gatewayUrl?: string;
@@ -308,6 +310,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
           parseNodeWorkerLaunchInput(paramsJSON),
           resolveWorkerConnectionEndpoint(params),
           signal,
+          params.localMcp,
         )
         .then(receipt),
     [NODE_WORKER_SUPERVISOR_STATUS_COMMAND]: () => {

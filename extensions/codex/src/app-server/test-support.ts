@@ -149,6 +149,9 @@ export function createCodexRuntimePlanFixture(): NonNullable<
       modelId: "gpt-5.4-codex",
       harnessId: "codex",
     },
+    transport: {
+      resolveExtraParams: () => ({}),
+    },
     prompt: {
       resolveSystemPromptContribution: () => undefined,
     },
@@ -213,6 +216,38 @@ export async function waitForHarnessRequest(
 
 export function withoutCodexSkillDiscovery(methods: string[]): string[] {
   return methods.filter((method) => method !== "skills/list");
+}
+
+function readCodexInjectedDeveloperText(params: unknown): string | undefined {
+  if (!isJsonObject(params) || !Array.isArray(params.items)) {
+    return undefined;
+  }
+  const item = params.items[0];
+  if (!isJsonObject(item) || item.role !== "developer" || !Array.isArray(item.content)) {
+    return undefined;
+  }
+  const content = item.content[0];
+  return isJsonObject(content) && content.type === "input_text" && typeof content.text === "string"
+    ? content.text
+    : undefined;
+}
+
+export function isCodexTurnContextHandoff(params: unknown): boolean {
+  return (
+    readCodexInjectedDeveloperText(params)?.startsWith(
+      "Current OpenClaw conversation instructions (replace earlier conversation context, not persistent policy):",
+    ) === true
+  );
+}
+
+export function withoutCodexTurnContextHandoffs(
+  requests: ReadonlyArray<{ method: string; params?: unknown }>,
+): string[] {
+  return withoutCodexSkillDiscovery(
+    requests
+      .filter((request) => !isCodexTurnContextHandoff(request.params))
+      .map(({ method }) => method),
+  );
 }
 
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
@@ -300,7 +335,7 @@ export function createClientHarness(
       }
     });
   });
-  const client = CodexAppServerClient.fromTransportForTests(process);
+  const client = CodexAppServerClient.fromTransport(process);
   return {
     client,
     process,

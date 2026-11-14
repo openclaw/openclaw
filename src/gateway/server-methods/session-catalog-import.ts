@@ -123,6 +123,7 @@ export async function importAuthorizedSessionCatalog(params: {
     let created = false;
     const session = await createGatewaySession({
       cfg,
+      getCurrentConfig: context.getRuntimeConfig,
       agentId,
       key,
       ...(isSessionVisibilityAllowed(cfg, "draft") ? { defaultVisibility: "draft" as const } : {}),

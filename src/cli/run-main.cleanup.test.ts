@@ -415,8 +415,7 @@ describe("CLI process harness cleanup", () => {
       const { withCliProcessScope, getCliPluginInvocationResources } =
         await import("./runtime-cleanup-scope.js");
       const { getAsyncWorkSignal, trackAsyncWork } = await import("../shared/async-work-scope.js");
-      const { exitAfterSignalExitBarriers, waitForCliSignalExit } =
-        await import("./signal-exit-barrier.js");
+      const { waitForCliSignalExit } = await import("./signal-exit-barrier.js");
       const { runCli } = await import("./run-main.js");
       const entered = createDeferredCore();
       const cancelled = createDeferredCore();
@@ -425,6 +424,8 @@ describe("CLI process harness cleanup", () => {
       const failure = new Error("command failed with an admitted proxy tail");
       const signalCode = mode === "SIGTERM" ? 143 : mode === "SIGINT" ? 130 : undefined;
       const previousExitCode = process.exitCode;
+      const signalListeners = vi.spyOn(process, "once");
+      let cancellation: unknown;
       let proxyAlive = true;
       let tailFinished = false;
       let tailObservedProxy: boolean | undefined;
@@ -449,7 +450,14 @@ describe("CLI process harness cleanup", () => {
         restoreSettlementObserver = () => observer.mockRestore();
         const signal = getAsyncWorkSignal()!;
         tail = trackAsyncWork(async () => {
-          signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => {
+              cancellation = signal.reason;
+              cancelled.resolve();
+            },
+            { once: true },
+          );
           await finish.promise;
           tailObservedProxy = proxyAlive;
           tailFinished = true;
@@ -470,7 +478,14 @@ describe("CLI process harness cleanup", () => {
       try {
         await awaitGateBeforeSettlement(entered.promise, outcome, "command never dispatched");
         if (signalCode !== undefined) {
-          exitAfterSignalExitBarriers(signalCode);
+          const listener = signalListeners.mock.calls.find(([event]) => event === mode)?.[1];
+          expect(listener).toBeTypeOf("function");
+          listener!();
+          expect(cancellation).toMatchObject({
+            name: "AbortError",
+            code: 20,
+            message: `CLI stopping (${mode})`,
+          });
         }
         await awaitGateBeforeSettlement(settling.promise, outcome, "command skipped its work join");
         expect(tailFinished).toBe(false);
@@ -497,6 +512,7 @@ describe("CLI process harness cleanup", () => {
         await tail;
         await waitForCliSignalExit();
         restoreSettlementObserver?.();
+        signalListeners.mockRestore();
         process.exitCode = previousExitCode;
       }
     },

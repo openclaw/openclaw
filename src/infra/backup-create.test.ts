@@ -18,13 +18,9 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  type OpenClawTestState,
-  withOpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sleepModule from "../utils/sleep.js";
 import {
-  backupCase,
   createOwnedSqliteDatabase,
   declarePluginSqliteResources,
   expectDatabaseRows,
@@ -37,7 +33,8 @@ import {
   createBackupClassificationInventory,
   listArchiveEntries,
   listArchiveEntryDetails,
-  useIsolatedBackupTempRoot,
+  isolatedBackupCase as backupCase,
+  withIsolatedBackupState as withOpenClawTestState,
 } from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
@@ -93,7 +90,6 @@ async function pluginDatabaseFixture(state: OpenClawTestState, filename: string)
 }
 
 const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
-useIsolatedBackupTempRoot();
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
@@ -1107,100 +1103,92 @@ describe("createBackupArchive", () => {
     }),
   );
 
-  it.each(["._cron.sqlite"])(
-    "scrubs deleted plugin SQLite bytes from archive snapshots: %s",
-    async (filename) => {
-      await withState(async (state) => {
-        const { outputDir, dbPath } = await pluginDatabaseFixture(state, filename);
-        const deletedValue = `deleted-plugin-secret-${"x".repeat(256)}`;
-        const sqlite = requireNodeSqlite();
-        const db = new sqlite.DatabaseSync(dbPath);
-        db.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
-        const insert = db.prepare("INSERT INTO records (value) VALUES (?)");
-        insert.run("survivor");
-        insert.run(deletedValue);
-        db.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
-        db.close();
+  it(
+    "scrubs deleted plugin SQLite bytes from archive snapshots: ._cron.sqlite",
+    withState(async (state) => {
+      const { outputDir, dbPath } = await pluginDatabaseFixture(state, "._cron.sqlite");
+      const deletedValue = `deleted-plugin-secret-${"x".repeat(256)}`;
+      const sqlite = requireNodeSqlite();
+      const db = new sqlite.DatabaseSync(dbPath);
+      db.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
+      const insert = db.prepare("INSERT INTO records (value) VALUES (?)");
+      insert.run("survivor");
+      insert.run(deletedValue);
+      db.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
+      db.close();
 
-        expect((await fs.readFile(dbPath)).includes(deletedValue)).toBe(true);
-        const result = await createStateArchive(outputDir);
-        const entries = await listArchiveEntries(result.archivePath);
-        const extractedPath = await extractArchive(state, result);
-        const archivedPath = extractedPath(
-          archiveEntry(entries, `/state/plugins/dedicated/${filename}`),
-        );
-        expect((await fs.readFile(archivedPath)).includes(deletedValue)).toBe(false);
-        expectDatabaseRows(archivedPath, "SELECT value FROM records", [{ value: "survivor" }]);
-      })();
-    },
+      expect((await fs.readFile(dbPath)).includes(deletedValue)).toBe(true);
+      const result = await createStateArchive(outputDir);
+      const entries = await listArchiveEntries(result.archivePath);
+      const extractedPath = await extractArchive(state, result);
+      const archivedPath = extractedPath(
+        archiveEntry(entries, "/state/plugins/dedicated/._cron.sqlite"),
+      );
+      expect((await fs.readFile(archivedPath)).includes(deletedValue)).toBe(false);
+      expectDatabaseRows(archivedPath, "SELECT value FROM records", [{ value: "survivor" }]);
+    }),
   );
 
-  it.each(["._cron.sqlite"])(
-    "fails instead of raw-copying malformed declared plugin SQLite databases: %s",
-    async (filename) => {
-      await withState(async (state) => {
-        const { outputDir, dbPath } = await pluginDatabaseFixture(state, filename);
-        await fs.writeFile(dbPath, "not a sqlite database", "utf8");
+  it(
+    "fails instead of raw-copying malformed declared plugin SQLite databases: ._cron.sqlite",
+    withState(async (state) => {
+      const { outputDir, dbPath } = await pluginDatabaseFixture(state, "._cron.sqlite");
+      await fs.writeFile(dbPath, "not a sqlite database", "utf8");
 
-        await expect(createStateArchive(outputDir)).rejects.toThrow(
-          /file is not a database|malformed/i,
-        );
-      })();
-    },
+      await expect(createStateArchive(outputDir)).rejects.toThrow(
+        /file is not a database|malformed/i,
+      );
+    }),
   );
 
-  it.each(["late.sqlite"])(
-    "fails when declared plugin SQLite appears after snapshot discovery: %s",
-    async (lateName) => {
-      await withState(async (state) => {
-        const { outputDir, dbPath: latePath } = await pluginDatabaseFixture(state, lateName);
+  it(
+    "fails when declared plugin SQLite appears after snapshot discovery: late.sqlite",
+    withState(async (state) => {
+      const { outputDir, dbPath: latePath } = await pluginDatabaseFixture(state, "late.sqlite");
 
-        const originalReaddir = fs.readdir.bind(fs);
-        let createdLatePath = false;
-        let stagedArchiveCleanupAttempts = 0;
-        const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (
-          ...args: unknown[]
-        ) => {
-          const entries = await (
-            originalReaddir as (...readdirArgs: unknown[]) => Promise<unknown>
-          )(...args);
-          if (
-            !createdLatePath &&
-            path.resolve(String(args[0])) === path.resolve(path.dirname(latePath))
-          ) {
-            createdLatePath = true;
-            await fs.writeFile(latePath, "late SQLite state");
-          }
-          return entries;
-        }) as typeof fs.readdir);
-        const originalUnlinkSync = fsSync.unlinkSync.bind(fsSync);
-        const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
-          const targetPath = path.resolve(String(target));
-          if (
-            targetPath.startsWith(path.resolve(outputDir)) &&
-            targetPath.includes(".openclaw-backup-publish-")
-          ) {
-            stagedArchiveCleanupAttempts += 1;
-            if (stagedArchiveCleanupAttempts === 1) {
-              throw Object.assign(new Error("busy"), { code: "EBUSY" });
-            }
-          }
-          return originalUnlinkSync(target);
-        });
-
-        try {
-          await expect(createStateArchive(outputDir)).rejects.toThrow(
-            /SQLite state appeared after snapshot discovery/,
-          );
-          expect(createdLatePath).toBe(true);
-          expect(stagedArchiveCleanupAttempts).toBeGreaterThanOrEqual(2);
-          expect(await fs.readdir(outputDir)).toEqual([]);
-        } finally {
-          unlinkSpy.mockRestore();
-          readdirSpy.mockRestore();
+      const originalReaddir = fs.readdir.bind(fs);
+      let createdLatePath = false;
+      let stagedArchiveCleanupAttempts = 0;
+      const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (...args: unknown[]) => {
+        const entries = await (originalReaddir as (...readdirArgs: unknown[]) => Promise<unknown>)(
+          ...args,
+        );
+        if (
+          !createdLatePath &&
+          path.resolve(String(args[0])) === path.resolve(path.dirname(latePath))
+        ) {
+          createdLatePath = true;
+          await fs.writeFile(latePath, "late SQLite state");
         }
-      })();
-    },
+        return entries;
+      }) as typeof fs.readdir);
+      const originalUnlinkSync = fsSync.unlinkSync.bind(fsSync);
+      const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
+        const targetPath = path.resolve(String(target));
+        if (
+          targetPath.startsWith(path.resolve(outputDir)) &&
+          targetPath.includes(".openclaw-backup-publish-")
+        ) {
+          stagedArchiveCleanupAttempts += 1;
+          if (stagedArchiveCleanupAttempts === 1) {
+            throw Object.assign(new Error("busy"), { code: "EBUSY" });
+          }
+        }
+        return originalUnlinkSync(target);
+      });
+
+      try {
+        await expect(createStateArchive(outputDir)).rejects.toThrow(
+          /SQLite state appeared after snapshot discovery/,
+        );
+        expect(createdLatePath).toBe(true);
+        expect(stagedArchiveCleanupAttempts).toBeGreaterThanOrEqual(2);
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      } finally {
+        unlinkSpy.mockRestore();
+        readdirSpy.mockRestore();
+      }
+    }),
   );
 
   it(
@@ -1324,13 +1312,11 @@ describe("createBackupArchive", () => {
         if (directory) {
           await fs.mkdir(targetPath);
           await fs.writeFile(path.join(targetPath, "external.txt"), "outside\n");
-          if (marker) {
-            await fs.writeFile(
-              path.join(targetPath, ".openclaw-private-update-capture"),
-              marker === "malformed" ? "invalid" : "openclaw-private-update-capture-v1\n",
-              { mode: marker === "unreadable" ? 0o000 : 0o600 },
-            );
-          }
+          await fs.writeFile(
+            path.join(targetPath, ".openclaw-private-update-capture"),
+            marker === "malformed" ? "invalid" : "openclaw-private-update-capture-v1\n",
+            { mode: marker === "unreadable" ? 0o000 : 0o600 },
+          );
         } else if (targetExists) {
           await fs.writeFile(targetPath, "target\n");
         }
@@ -1416,20 +1402,12 @@ describe("createBackupArchive", () => {
         const outputPath = state.path(`declared-${kind}-symlink.tar.gz`);
         const restorePath = state.path(`restored-${kind}`);
         const sourcePath = volatile
-          ? state.statePath(
-              "cache.tmp",
-              "managed",
-              kind === "config" ? "openclaw.json" : "credentials",
-            )
+          ? state.statePath("cache.tmp", "managed", "openclaw.json")
           : kind === "config"
             ? state.configPath
             : state.statePath("credentials");
         if (volatile) {
-          if (kind === "config") {
-            state.envVars.OPENCLAW_CONFIG_PATH = sourcePath;
-          } else {
-            state.envVars.OPENCLAW_OAUTH_DIR = sourcePath;
-          }
+          state.envVars.OPENCLAW_CONFIG_PATH = sourcePath;
           state.applyEnv();
           await fs.mkdir(path.dirname(sourcePath), { recursive: true });
           await fs.writeFile(path.join(path.dirname(sourcePath), "neighbor.tmp"), "omit\n");
@@ -1844,16 +1822,15 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it.each(["equal"])("keeps one manifest when the tempdir is %s to state", async (placement) => {
-    await withState(async (state) => {
+  it(
+    "keeps one manifest when the tempdir is equal to state",
+    withState(async (state) => {
       await declarePluginSqliteResources(state);
       const outputDir = state.path("backups");
       const emptyDbPath = state.statePath("plugins", "dedicated", "empty.sqlite");
       await mkdirs(path.dirname(emptyDbPath), outputDir);
       await fs.writeFile(emptyDbPath, "");
-      const tempDir = placement === "nested" ? state.statePath("tmp") : state.stateDir;
-      await fs.mkdir(tempDir, { recursive: true });
-      const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(tempDir);
+      const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(state.stateDir);
 
       try {
         const result = await createStateArchive(outputDir);
@@ -1880,7 +1857,7 @@ describe("createBackupArchive", () => {
       } finally {
         tmpdirSpy.mockRestore();
       }
-    })();
-  });
+    }),
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -24,6 +24,7 @@ import {
 } from "./openclaw-agent-db.js";
 import {
   ensureSessionPendingInputsSchema,
+  ensureSessionInputCompletionsSchema,
   hasSessionPendingInputsSchema,
 } from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -58,11 +59,32 @@ async function stage(
     assertCurrent() {},
   });
   receipt!.finish("interrupted");
+  await receipt!.settled?.();
   return receipt!;
 }
 const metadataSql = "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'";
 
 describe("pending input additive schema", () => {
+  it("installs the completion cascade index once through first-use schema facts", () => {
+    using database = openNodeSqliteDatabase(":memory:");
+    database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    database.exec("DROP INDEX IF EXISTS idx_agent_session_input_completions_session_key");
+    admitSqliteSchema(database);
+    ensureSessionInputCompletionsSchema(database);
+    expect(
+      database
+        .prepare("EXPLAIN QUERY PLAN DELETE FROM session_nodes WHERE session_key=?")
+        .all("missing"),
+    ).not.toContainEqual(expect.objectContaining({ detail: "SCAN session_input_completions" }));
+    const exec = vi.spyOn(database, "exec");
+    try {
+      ensureSessionInputCompletionsSchema(database);
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
   });
@@ -94,6 +116,8 @@ describe("pending input additive schema", () => {
     );
     await stage(scope, "schema-run", "Retain this accepted input");
     ensureSessionPendingInputsSchema(candidate.db);
+    const acceptedSql = "SELECT state, message_json FROM session_pending_inputs";
+    const accepted = readRow(candidate.db, acceptedSql);
     await closeAgents();
     const older = new DatabaseSync(filename);
     const previousSql = OPENCLAW_AGENT_SCHEMA_SQL.slice(
@@ -107,10 +131,8 @@ describe("pending input additive schema", () => {
     expect(older.prepare("PRAGMA user_version").get()).toEqual(version);
     expectRow(older, metadataSql, metadata);
     older.close();
-    expect(await listSessionPendingInputs(scope)).toMatchObject({
-      total: 1,
-      items: [{ state: "interrupted", message: { content: "Retain this accepted input" } }],
-    });
+    expect(await listSessionPendingInputs(scope)).toEqual({ total: 0, items: [] });
+    expectRow(openOpenClawAgentDatabase(options).db, acceptedSql, accepted);
     expectRow(openOpenClawAgentDatabase(options).db, "PRAGMA user_version", version);
   });
 
@@ -136,7 +158,7 @@ describe("pending input additive schema", () => {
         sessionId: "column-session",
       };
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const receipt = await stage(scope, "column-run", "Retain exact input");
+      await stage(scope, "column-run", "Retain exact input");
       const filename = openOpenClawAgentDatabase(options).path;
       const old = await previousDatabase(filename);
       old.exec("ALTER TABLE session_pending_inputs DROP COLUMN consumed_event_id");
@@ -160,10 +182,7 @@ describe("pending input additive schema", () => {
         }
         current.close();
       }
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [{ state: "interrupted", message: receipt.message }],
-      });
+      expect(await listSessionPendingInputs(scope)).toEqual({ total: 0, items: [] });
       using reopened = new DatabaseSync(filename, { readOnly: true });
       expectRow(reopened, "PRAGMA user_version", version);
       expectRows(reopened, "SELECT * FROM schema_meta", metadata);

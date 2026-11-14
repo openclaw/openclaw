@@ -100,6 +100,12 @@ The aspect ratio must be between 1:3 and 3:1.
 
 ### Other Image Models
 
+OpenClaw maps size and aspect-ratio hints to the selected model's supported
+dimensions. GPT Image 1.x uses `1024x1024`, `1536x1024`, or `1024x1536`.
+Explicit `dall-e-2` and `dall-e-3` overrides use their legacy size limits;
+OpenAI has retired these models, so this does not restore public API access.
+Custom deployment names retain their endpoint's geometry behavior.
+
 For a transparent-background request, call `image_generate` with
 `model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and
 `background: "transparent"`; the older `openai.background` provider option is

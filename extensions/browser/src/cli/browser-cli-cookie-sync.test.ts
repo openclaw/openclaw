@@ -10,22 +10,24 @@ const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture
 const { push, watch, readCookies } = vi.hoisted(() => ({
   push: vi.fn(async () => ({ ok: true, targetId: "tab-1", added: 1 })),
   watch: vi.fn(),
-  readCookies: vi.fn(async () => ({
-    browser: "chrome" as const,
-    systemProfile: "Default",
-    cookies: [
-      {
-        name: "session",
-        value: "cookie-secret",
-        domain: ".example.com",
-        path: "/",
-        httpOnly: true,
-        secure: true,
-      },
-    ],
-    counts: { total: 2, imported: 1, failed: 0, skipped: 1 },
-    domains: [".example.com"],
-  })),
+  readCookies: vi.fn<typeof import("../browser/system-profiles.js").readSystemProfileCookies>(
+    async () => ({
+      browser: "chrome" as const,
+      systemProfile: "Default",
+      cookies: [
+        {
+          name: "session",
+          value: "cookie-secret",
+          domain: ".example.com",
+          path: "/",
+          httpOnly: true,
+          secure: true,
+        },
+      ],
+      counts: { total: 2, imported: 1, failed: 0, skipped: 1 },
+      domains: [".example.com"],
+    }),
+  ),
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -125,18 +127,14 @@ describe("browser cookie-sync CLI", () => {
       ["--system", "Profile 1"],
     );
 
-    expect(readCookies).toHaveBeenCalledWith(
-      {
-        browser: "chrome",
-        systemProfile: "Profile 1",
-        domains: ["example.com", "accounts.example.com"],
-        signal: undefined,
-      },
-      { readSecret: undefined },
-    );
-    expect(push).toHaveBeenCalledWith(
+    expect(readCookies.mock.calls[0]?.[0]).toMatchObject({
+      browser: "chrome",
+      systemProfile: "Profile 1",
+      domains: ["example.com", "accounts.example.com"],
+    });
+    expect(push.mock.calls[0]).toMatchObject([
       "browser.request",
-      expect.objectContaining({ url: "wss://gateway.example", token: "test-token" }),
+      { url: "wss://gateway.example", token: "test-token" },
       {
         method: "POST",
         path: "/cookies/set-many",
@@ -144,10 +142,9 @@ describe("browser cookie-sync CLI", () => {
         body: {
           cookies: [expect.objectContaining({ name: "session", domain: ".example.com" })],
         },
-        timeoutMs: 30_000,
       },
       { scopes: ["operator.admin"] },
-    );
+    ]);
     const summary = runtime.log.mock.calls.at(-1)?.[0];
     expect(summary).toContain("chrome/Default -> work via wss://gateway.example");
     expect(summary).not.toContain("cookie-secret");

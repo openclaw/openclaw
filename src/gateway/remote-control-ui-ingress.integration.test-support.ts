@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/schema/frames.js";
+import type { SessionsFilesPreviewResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -45,6 +46,8 @@ export type IngressFrame = {
   event?: string;
   ok?: boolean;
   payload?: {
+    status?: SessionsFilesPreviewResult["status"];
+    sandboxPath?: SessionsFilesPreviewResult["sandboxPath"];
     nonce?: string;
     controlUiUrl?: string;
     auth?: { method: string; role: string; scopes: string[]; deviceToken?: string };

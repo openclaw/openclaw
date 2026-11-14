@@ -1,18 +1,26 @@
 import * as tar from "tar";
-import { afterEach, beforeEach, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { BackupResourceInventory } from "../commands/backup-resource-inventory.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { backupCase, isolateBackupScratch } from "./backup-create-family.test-support.js";
 import type { BackupCreateResult } from "./backup-create.js";
 
-export function useIsolatedBackupTempRoot(): void {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  beforeEach(() => {
-    // Backup maintenance must not inspect another test's in-flight scratch.
-    const tempRoot = tempDirs.make("backup-tests-");
-    vi.stubEnv("TMPDIR", tempRoot);
-    vi.stubEnv("TMP", tempRoot);
-    vi.stubEnv("TEMP", tempRoot);
+export const withIsolatedBackupState: typeof withOpenClawTestState = (options, run) =>
+  withOpenClawTestState(options, async (state) => {
+    await isolateBackupScratch(state);
+    return run(state);
   });
+
+export function isolatedBackupCase(options: Parameters<typeof backupCase>[0]) {
+  return <Args extends unknown[]>(
+    run: (state: OpenClawTestState, ...args: Args) => Promise<void>,
+  ) =>
+    backupCase(options)(async (state, ...args: Args) => {
+      await isolateBackupScratch(state);
+      await run(state, ...args);
+    });
 }
 
 export function createBackupClassificationInventory(stateDir: string): BackupResourceInventory {

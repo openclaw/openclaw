@@ -47,6 +47,7 @@ type NodeCell = {
   replies?: SettledBridgeRequest[];
   replyIndex: number;
   rejections: Map<Promise<unknown>, unknown>;
+  moduleImportRejected?: boolean;
   outcome?: GuestOutcome;
   admissionError?: string;
   networkContentObserved?: true;
@@ -135,8 +136,18 @@ function isBridgeMethod(method: string): method is PendingBridgeRequest["method"
   return bridgeMethods.has(method);
 }
 
+function rejectModuleImport(): never {
+  if (cell) {
+    cell.moduleImportRejected = true;
+  }
+  throw new Error(CODE_MODE_MODULE_ACCESS_ERROR);
+}
+
 function compileController(source: string): Script {
-  return new Script(source, { filename: "openclaw-code-mode:controller.js" });
+  return new Script(source, {
+    filename: "openclaw-code-mode:controller.js",
+    importModuleDynamically: rejectModuleImport,
+  });
 }
 
 // Compile trusted control scripts once per worker; each cell still owns a fresh context.
@@ -179,28 +190,9 @@ const initializeScript = compileController(
     (() => {
       const finish = globalThis.__openclawNodeFinish;
       delete globalThis.__openclawNodeFinish;
-      const stringify = JSON.stringify;
-      const string = String;
-      const encodeError = (error) => {
-        const bridgeCode = __openclawBridgeFailureCode(error) ?? null;
-        const diagnostic = (read, fallback) => {
-          try { return read(); } catch { return fallback; }
-        };
-        // Guest error properties may throw; recorded bridge identity must still reach finish.
-        const stack = diagnostic(() => error?.stack, "");
-        // Provenance records contain primitives and never inherit guest toJSON hooks.
-        return stringify({
-          __proto__: null,
-          bridgeCode,
-          name: diagnostic(() => string(error?.name ?? "Error"), "Error"),
-          message: diagnostic(() => string(error?.message ?? error), "Error"),
-          stack: typeof stack === "string" ? stack : "",
-        });
-      };
       Object.defineProperties(globalThis, {
-        __openclawNodeEncodeError: { value: encodeError },
         __openclawNodeObserveResult: { value: (result) => {
-          result.then(value => finish(true, value), error => finish(false, encodeError(error)));
+          result.then(value => finish(true, value), error => finish(false, __openclawEncodeError(error)));
         }},
       });
     })();
@@ -219,7 +211,7 @@ const rejectionScript = compileController(
   `(() => {
     const error = __openclawNodeRejection;
     delete globalThis.__openclawNodeRejection;
-    return __openclawNodeEncodeError(error);
+    return __openclawEncodeError(error);
   })()`,
 );
 
@@ -257,7 +249,10 @@ function createCell(
     throw new CodeModeHeadlessTimeoutError();
   }
   const program = buildUserSource(source, input.prelude, "utf16");
-  const context = createContext(Object.create(null), { microtaskMode: "afterEvaluate" });
+  const context = createContext(Object.create(null), {
+    microtaskMode: "afterEvaluate",
+    importModuleDynamically: rejectModuleImport,
+  });
   cellCount++;
   const current: NodeCell = {
     context,
@@ -328,13 +323,20 @@ function createCell(
   context["__openclawHostOutput"] = (json: string) => current.progress.append(json);
   context["__openclawNodeInit"] = new TextDecoder().decode(input.initialization);
   context["__openclawNodeMaxPending"] = input.config.maxPendingToolCalls;
+  context["__openclawMaxOutputBytes"] = input.config.maxOutputBytes;
   context["__openclawNodeFinish"] = (ok: boolean, json: string) => {
     current.outcome = { ok, json };
   };
   progress.deadline = performance.timeOrigin + deadline;
   consumed?.();
   evaluate(current, initializeScript);
-  evaluate(current, new Script(program.source, { filename: USER_SOURCE_FILE }));
+  evaluate(
+    current,
+    new Script(program.source, {
+      filename: USER_SOURCE_FILE,
+      importModuleDynamically: rejectModuleImport,
+    }),
+  );
   evaluate(current, observeResultScript);
   return current;
 }
@@ -440,6 +442,11 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       }
       // Native rejection/handled notifications arrive at the end of the turn.
       await setImmediate();
+      // Import rejection crosses Node's loader microtasks before guest catch/await can run.
+      if (current.moduleImportRejected) {
+        current.moduleImportRejected = false;
+        continue;
+      }
       output = progress.output();
       const pending = !current.outcome;
       if (pending && current.pendingRequests.length === 0) {

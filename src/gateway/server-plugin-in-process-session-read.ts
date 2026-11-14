@@ -45,6 +45,10 @@ export async function prepareInProcessSessionRead(
         const visible = createSessionListEntryFilter({
           cfg: projection.getPolicyConfig(),
           client: resolved.client,
+          membership:
+            current && entry
+              ? projection.readMembership({ ...query, storePath: current.storeTarget.storePath })
+              : undefined,
         });
         if (
           !current ||

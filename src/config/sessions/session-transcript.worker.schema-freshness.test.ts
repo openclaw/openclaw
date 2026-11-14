@@ -17,7 +17,7 @@ import {
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import type { ChatHistoryPageParams } from "./session-history-types.js";
 import { withTranscriptDatabase } from "./session-transcript-fixture.test-support.js";
 import type {
@@ -225,7 +225,15 @@ it.for([
           message: {
             role: "assistant",
             timestamp: 1_800_000_000_000 + index,
-            content: [{ type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` }],
+            content: [
+              { type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` },
+              {
+                type: "toolCall",
+                id: `tool-${index}`,
+                name: "read",
+                arguments: { path: "synthetic.txt" },
+              },
+            ],
           },
         });
       }
@@ -269,6 +277,13 @@ it.for([
       assert(body);
       expect(body.byteLength).toBeLessThanOrEqual(params.maxHistoryBytes);
       expect(JSON.parse(new TextDecoder().decode(body))).toEqual(expected.messages);
+      const activity = page.encodedResponse?.activity;
+      if (expected.activity) {
+        expect(activity).toBeInstanceOf(Uint8Array);
+        expect(new TextDecoder().decode(activity)).toBe(JSON.stringify(expected.activity));
+      } else {
+        expect(activity).toBeUndefined();
+      }
       expect([page.pagination, page.anchor]).toEqual([undefined, undefined]);
       expect(Object.hasOwn(page, "activeLeafEntryId")).toBe(offset === 0);
       expect(page.encodedResponse?.totalMessages).toBe(2);
@@ -285,6 +300,9 @@ it.for([
       }
       const received = structuredClone(reply, { transfer: worker.transfers(reply) });
       expect(body.byteLength).toBe(0);
+      if (activity) {
+        expect(activity.byteLength).toBe(0);
+      }
       if (deflated) {
         expect(deflated.byteLength).toBe(0);
       }

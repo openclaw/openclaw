@@ -1,0 +1,2 @@
+# Verify hover guard output preserves declarations in existing cases.
+5

@@ -11,7 +11,7 @@ export type RuntimeCompatibilityRule =
   | "loader-patch"
   | "runtime-code-generation";
 
-export type RuntimeCompatibilitySourceWarning = {
+type RuntimeCompatibilitySourceWarning = {
   ruleId: RuntimeCompatibilityRule;
   line: number;
   column: number;

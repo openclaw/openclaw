@@ -10,9 +10,26 @@ import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+
+export function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
+}
+
+export function createFreshSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
+  return createSessionEntry({
+    totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    ...overrides,
+  });
+}
+
+export function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
+}
 
 export async function seedMemoryAccountingTranscript(
   scope: SessionTranscriptRuntimeTarget,
@@ -81,8 +98,8 @@ export function createModifiedMemoryFlushPlan(overrides: Partial<FileFlushPlan>)
 }
 
 export type ModelFallbackParams = {
-  provider?: string;
-  model?: string;
+  provider: string;
+  model: string;
   abortSignal?: AbortSignal;
   agentId?: string;
   sessionId?: string;
@@ -106,6 +123,25 @@ export type ModelFallbackParams = {
     },
   ) => Promise<EmbeddedAgentRunResult>;
 };
+
+export function modelRoutingProvenance(
+  requestedProvider: string,
+  requestedModel: string,
+  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
+): ModelFallbackAttemptProvenance {
+  return { requestedProvider, requestedModel, stage };
+}
+
+export async function runSelectedMemoryModel({ provider, model, run }: ModelFallbackParams) {
+  return {
+    result: await run(provider, model, {
+      modelRoutingProvenance: modelRoutingProvenance(provider, model),
+    }),
+    provider,
+    model,
+    attempts: [],
+  };
+}
 
 export function createMemoryRunEntryMockImplementation(deps: {
   runWithModelFallback: (params: ModelFallbackParams) => Promise<unknown>;

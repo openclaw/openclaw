@@ -16,8 +16,10 @@ import {
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
-import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
-import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
+import {
+  loadOriginDeviceToken,
+  storeOriginDeviceToken as seedOriginDeviceToken,
+} from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
@@ -371,6 +373,9 @@ test.each([
     const { ws, connected } = await connect({ scopes: scenario.deviceScopes });
     try {
       expectScopes(connected, scenario.expectedScopes);
+      expect(responseAuth(connected)).toMatchObject({
+        roleAllowsAdmin: scenario.assignedRole === "admin-only",
+      });
       expect((await rpcReq(ws, "status")).ok).toBe(scenario.expectedScopes.length > 0);
       if (scenario.assignedRole === "read-only") {
         await expectWriteDenied(ws, "agent:main:denied");
@@ -574,7 +579,7 @@ test.each<[string, string | undefined, boolean]>([
     if (!initialAuth.deviceToken) {
       throw new Error("expected a Gateway-issued device token");
     }
-    seedOriginDeviceToken({
+    await seedOriginDeviceToken({
       ...cacheKey,
       token: initialAuth.deviceToken,
       scopes: initialAuth.scopes,

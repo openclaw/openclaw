@@ -1,11 +1,14 @@
 import type { ModelInferenceCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { z } from "zod";
 import type { ModelDataMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
-import type { OpenAICompletionsCompat, RawModelCostConfig } from "../llm/types.js";
+import type { RawModelCostConfig } from "../llm/types.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { ModelsConfigSchema } from "./zod-schema.core.js";
+import type { ModelCompatConfig } from "./zod-schema.model-compat.js";
+
+export type { ModelCompatConfig } from "./zod-schema.model-compat.js";
 
 export {
   MODEL_APIS,
@@ -20,13 +23,6 @@ type ModelsSchemaInput = NonNullable<z.input<typeof ModelsConfigSchema>>;
 type ModelProviderSchemaInput = NonNullable<ModelsSchemaInput["providers"]>[string];
 
 type ModelDefinitionSchemaInput = NonNullable<ModelProviderSchemaInput["models"]>[number];
-
-/** Provider/model compatibility switches consumed by request builders and tool schema adapters. */
-export type ModelCompatConfig = Omit<
-  NonNullable<ModelDefinitionSchemaInput["compat"]>,
-  "openRouterRouting" | "vercelGatewayRouting"
-> &
-  Pick<OpenAICompletionsCompat, "openRouterRouting" | "vercelGatewayRouting">;
 
 export type ModelMediaInputConfig = ModelDataMediaInputConfig;
 

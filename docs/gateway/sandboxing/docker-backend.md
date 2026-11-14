@@ -94,6 +94,29 @@ On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `wor
 These Codex bwrap checks run in standalone `openclaw doctor` and are omitted during `openclaw update`; run `openclaw doctor` after the update. Doctor checks the user namespace with `unshare`. When Docker sandbox egress is disabled and a local Codex runtime is configured, it also runs the configured Codex binary's own `workspace-write` sandbox with network access disabled, exercising Bubblewrap's loopback setup. Unrecognized check failures are reported as unverified rather than as a namespace diagnosis. If doctor reports a Codex bwrap namespace check failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable. Do not grant broader Docker container privileges just to satisfy nested `bwrap`.
 </Warning>
 
+### Container user
+
+When `agents.defaults.sandbox.docker.user` is unset, Docker uses the mounted
+workspace owner's numeric `uid:gid`: the agent workspace for
+`workspaceAccess: "rw"`, otherwise the sandbox workspace. A root-owned workspace can therefore
+run as root; if ownership cannot be read, the image's default user applies.
+Set `docker.user` explicitly to override this. `setupCommand` runs as the same
+container user. See [Podman backend](/gateway/sandboxing/podman-backend) for its
+user-namespace and root-user restrictions.
+
+### Docker daemon
+
+The Docker CLI inherits the Gateway process environment. Choose the daemon with
+`DOCKER_HOST` or `DOCKER_CONTEXT` (set only one), or the CLI's current context;
+there is no `sandbox.docker` daemon-selection config key. For rootless Docker,
+set `DOCKER_HOST=unix:///run/user/<uid>/docker.sock` in the
+[Gateway service environment](/help/environment), then restart the Gateway.
+This differs from `sandbox.docker.env`, which configures the container environment.
+
+For local Unix sockets, OpenClaw records the endpoint and daemon ID per runtime
+and refuses reuse if the selected daemon changes. Restore the original connection
+or recreate the runtime while its recorded daemon is reachable.
+
 ### Sandboxed browser
 
 - The sandbox browser auto-starts and waits for CDP to become reachable when the browser tool needs it. Configure via `agents.defaults.sandbox.browser.autoStart` (default `true`) and `autoStartTimeoutMs` (default 12s).

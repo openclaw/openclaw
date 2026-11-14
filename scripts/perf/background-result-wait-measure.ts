@@ -1,12 +1,11 @@
 // Synthetic controller + real transcript storage; no Gateway or provider traffic.
 import assert from "node:assert/strict";
-import { writeSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -44,14 +43,9 @@ const startAt = parseStrictIntegerOption({
 });
 assert(global.gc && values["gc-log"], "Run with --expose-gc --trace-gc-nvp and --gc-log");
 const profilePath = path.join(root, "gc-window");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 const [storage, lifecycle, admission, background, diagnostics, logging, database, work, deferred] =
   await Promise.all([
     import("../../src/config/sessions/session-accessor.js"),
@@ -104,7 +98,7 @@ if (startAt) {
 global.gc();
 await delay(0);
 diagnostics.setDiagnosticsEnabledForProcess(true);
-marker("diagnostics-start");
+writeGatewayGcTraceMarker("diagnostics-start", profilePath);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 const gc: Array<{ durationMs: number; kind: number }> = [];
 const observer = new PerformanceObserver((list) => {
@@ -167,7 +161,7 @@ try {
     await delay(Math.max(0, holdMs + 1200 - (performance.now() - began)));
   }
 } finally {
-  marker("diagnostics-stop");
+  writeGatewayGcTraceMarker("diagnostics-stop", profilePath);
   loop.disable();
   observer.disconnect();
   await logging.flushLogger();

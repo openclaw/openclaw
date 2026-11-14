@@ -36,10 +36,9 @@ export async function createTalkParityNodeFixture(
   });
   const nodeId = identity.identity.deviceId;
   const pairing = await requestNodePairing({ ...nodeMeta, nodeId, caps, commands });
-  const approved = await approveNodePairing(pairing.request.requestId, {
-    callerScopes: ["operator.admin"],
-  });
-  expect(approved).toHaveProperty("node");
+  expect(
+    await approveNodePairing(pairing.request.requestId, { callerScopes: ["operator.admin"] }),
+  ).toHaveProperty("node");
   const tasks: Promise<void>[] = [];
   const invokes: NodeInvokeRequestPayload[] = [];
   const url = "ws://127.0.0.1:" + port;
@@ -63,11 +62,9 @@ export async function createTalkParityNodeFixture(
       }
       if (event.event === "node.invoke.request") {
         const frame = coerceNodeInvokePayload(event.payload);
-        if (!frame || !active) {
-          throw new Error("Node invocation arrived outside its owner");
-        }
-        invokes.push(frame);
-        const task = active.invoke(frame);
+        const invocation = expectDefined(frame, "Node invocation payload");
+        invokes.push(invocation);
+        const task = expectDefined(active, "Node invocation owner").invoke(invocation);
         void task.catch(() => {});
         tasks.push(task);
       }
@@ -93,10 +90,7 @@ export async function createTalkParityNodeFixture(
 export async function installTalkParityProviderFixture(publicOnly = false) {
   const plugins = await import("../plugins/runtime.js");
   const snapshot = plugins.captureActivePluginRegistrySnapshot();
-  const registry = plugins.getActivePluginRegistry();
-  if (!registry) {
-    throw new Error("Missing suite plugin registry");
-  }
+  const registry = expectDefined(plugins.getActivePluginRegistry(), "suite plugin registry");
   let request: RealtimeVoiceBrowserSessionCreateRequest | undefined;
   const provider: RealtimeVoiceProviderPlugin = {
     id: "openai",

@@ -109,11 +109,7 @@ function isBotCommandsTooMuchError(err: unknown): boolean {
 export function buildPluginTelegramMenuCommands<TSpec extends TelegramPluginCommandSpec>(params: {
   specs: readonly TSpec[];
   existingCommands: Set<string>;
-}): {
-  commands: TelegramMenuCommand[];
-  selectedCommands: TelegramSelectedPluginMenuCommand<TSpec>[];
-  issues: string[];
-} {
+}) {
   const { specs, existingCommands } = params;
   const selectedCommands: TelegramSelectedPluginMenuCommand<TSpec>[] = [];
   const issues: string[] = [];
@@ -309,41 +305,6 @@ function buildEffectiveTelegramCommandLocalizations(
   return [...effective.entries()].toSorted(([a], [b]) => a.localeCompare(b));
 }
 
-function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
-  variants: Array<{ languageCode: LanguageCode; commands: TelegramMenuCommand[] }>;
-  unsupportedLanguageCodes: string[];
-} {
-  const locales = new Set<LanguageCode>();
-  const unsupportedLanguageCodes = new Set<string>();
-  const commandsWithLocalizations = commands.map((command) => {
-    const localizations = new Map(
-      buildEffectiveTelegramCommandLocalizations(
-        command.descriptionLocalizations,
-        unsupportedLanguageCodes,
-      ),
-    );
-    for (const languageCode of localizations.keys()) {
-      locales.add(languageCode);
-    }
-    return { command, localizations };
-  });
-  const variants = [...locales].toSorted().map((languageCode) => {
-    const localizedCommands = commandsWithLocalizations.map(({ command, localizations }) =>
-      Object.assign({}, command, {
-        description: localizations.get(languageCode) ?? command.description,
-      }),
-    );
-    return {
-      languageCode,
-      commands: buildCappedTelegramMenuCommands(localizedCommands).commandsToRegister,
-    };
-  });
-  return {
-    variants,
-    unsupportedLanguageCodes: [...unsupportedLanguageCodes].toSorted(),
-  };
-}
-
 async function applyTelegramMenuCommandsForScopes(params: {
   bot: Bot;
   runtime: RuntimeEnv;
@@ -516,7 +477,32 @@ export async function syncTelegramMenuCommands(params: {
       }
     }
 
-    const { variants, unsupportedLanguageCodes } = buildLocalizedCommandVariants(retryCommands);
+    const locales = new Set<LanguageCode>();
+    const unsupportedLanguageCodeSet = new Set<string>();
+    const commandsWithLocalizations = retryCommands.map((command) => {
+      const localizations = new Map(
+        buildEffectiveTelegramCommandLocalizations(
+          command.descriptionLocalizations,
+          unsupportedLanguageCodeSet,
+        ),
+      );
+      for (const languageCode of localizations.keys()) {
+        locales.add(languageCode);
+      }
+      return { command, localizations };
+    });
+    const variants = [...locales].toSorted().map((languageCode) => {
+      const localizedCommands = commandsWithLocalizations.map(({ command, localizations }) =>
+        Object.assign({}, command, {
+          description: localizations.get(languageCode) ?? command.description,
+        }),
+      );
+      return {
+        languageCode,
+        commands: buildCappedTelegramMenuCommands(localizedCommands).commandsToRegister,
+      };
+    });
+    const unsupportedLanguageCodes = [...unsupportedLanguageCodeSet].toSorted();
     if (unsupportedLanguageCodes.length > 0) {
       runtime.log?.(
         `Telegram command menu ignored unsupported description localization codes: ${unsupportedLanguageCodes.join(", ")}.`,

@@ -42,6 +42,7 @@ export function FileDownloadButton(props: {
     const failed = (error: unknown) => {
       if (current()) {
         showToast({
+          severity: "error",
           message: t("chat.detailPanel.downloadFailed", { error: formatUiError(error) }),
         });
       }

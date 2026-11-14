@@ -36,6 +36,7 @@ async function mount(overrides: Partial<Parameters<typeof DecisionModelPicker>[0
   const find = (selector: string) => picker.querySelector<HTMLElement>(selector)!;
   const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
   await userEvent.click(trigger);
+  await userEvent.click(find(".header-search__toggle"));
   await expect.element(find("input")).toHaveFocus();
   const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
   const search = (value: string) => userEvent.fill(find("input"), value);

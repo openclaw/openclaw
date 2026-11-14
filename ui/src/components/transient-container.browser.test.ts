@@ -48,7 +48,7 @@ describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfa
     await menu!.updateComplete;
     await page
       .elementLocator(menu!)
-      .getByRole("menuitem", { name: "Open in Browser Panel" })
+      .getByRole("menuitem", { name: "Open in browser panel" })
       .click();
     expect(openInline).toHaveBeenCalledOnce();
     expect(dialog.open).toBe(true);

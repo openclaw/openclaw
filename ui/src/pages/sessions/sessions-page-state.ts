@@ -1,4 +1,4 @@
-import { onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -14,12 +14,8 @@ import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { normalizeSessionsGroupBy } from "../../lib/sessions/grouping.ts";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  filterSessionRows,
-  type SessionArchivedFilter,
-  type SessionListSnapshot,
-} from "../../lib/sessions/index.ts";
+import type { SessionArchivedFilter, SessionListSnapshot } from "../../lib/sessions/index.ts";
+import { filterSessionRows } from "../../lib/sessions/navigation.ts";
 import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -27,6 +23,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   sessionAgentId,
@@ -412,7 +409,7 @@ export function createSessionsPage(
     if (result !== appliedListResult) {
       appliedListResult = result;
       state.result = filterSessionRows(result, { archivedFilter: state.statusFilter });
-      void application.agentIdentity.ensure(sessionAgentIds(state.result));
+      void application.agentIdentity.ensure(sessionAgentIds(state.result.sessions));
     }
     if (!snapshot.loading && !snapshot.error && state.result && state.selectedSessions.size > 0) {
       state.selectedSessions = reconcileSelectedSessions(
@@ -550,10 +547,7 @@ export function createSessionsPage(
         hello: application.gateway.snapshot.hello,
       }),
       transcriptSearchAvailable: application.gateway.snapshot.phase === "connected",
-      agentIdentityById: sessionAgentIdentityById(
-        state.result,
-        (agentId) => application.agentIdentity.get(agentId) ?? undefined,
-      ),
+      agentIdentityById: agentIdentityById(),
       personGroupingAvailable,
       // Keep the stored Person preference while the owner roster is unavailable.
       groupBy:
@@ -693,12 +687,17 @@ export function createSessionsPage(
     archive: archiveActions.archive,
   };
 
-  const presentationSources = [
-    application.agentIdentity,
-    application.navigation,
-    application.runtimeConfig,
-    application.plugins,
-  ].map((owner) => projectOwner(owner, (source) => source));
+  const identities = projectOwner(application.agentIdentity, (source) => source);
+  const identityRows = createMemo(() => observation.read().result?.sessions ?? []);
+  const agentIdentityById = createMemo(() =>
+    sessionAgentIdentityById(
+      identityRows(),
+      (agentId) => identities.read().get(agentId) ?? undefined,
+    ),
+  );
+  const presentationSources = [application.navigation, application.plugins].map((owner) =>
+    projectOwner(owner, (source) => source),
+  );
   const revision = () =>
     presentationSources.reduce((sum, source) => sum + source.revision(), observation.revision());
   onSettled(() => {

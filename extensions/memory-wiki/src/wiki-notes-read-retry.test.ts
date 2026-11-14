@@ -24,6 +24,10 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
   return {
     ...actual,
+    readRegularFile: async (params: Parameters<typeof actual.readRegularFile>[0]) => {
+      injectPageReadFailure(params.filePath);
+      return actual.readRegularFile(params);
+    },
     root: async (...args: Parameters<typeof actual.root>) => {
       const vault = await actual.root(...args);
       return new Proxy(vault, {
@@ -32,17 +36,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
             return Reflect.get(target, prop, receiver);
           }
           return async (relativePath: string) => {
-            if (securityRuntimeMock.failReadTextAlwaysFor === relativePath) {
-              securityRuntimeMock.readTextFailureInjected = true;
-              throw securityRuntimeMock.readTextError;
-            }
-            if (
-              securityRuntimeMock.failReadTextOnceFor === relativePath &&
-              !securityRuntimeMock.readTextFailureInjected
-            ) {
-              securityRuntimeMock.readTextFailureInjected = true;
-              throw securityRuntimeMock.readTextOnceError;
-            }
+            injectPageReadFailure(relativePath);
             return target[prop](relativePath);
           };
         },
@@ -61,19 +55,18 @@ async function addNotes(pagePath: string, note: string) {
   await fs.writeFile(pagePath, page, "utf8");
 }
 
-function failPageReads(pagePath: string, error: Error, once = false) {
-  const readFile = fs.readFile.bind(fs);
-  let injected = false;
-  vi.spyOn(fs, "readFile").mockImplementation(
-    async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-      if (args[0] === pagePath && (!once || !injected)) {
-        injected = true;
-        throw error;
-      }
-      return readFile(...args);
-    },
-  );
-  return { readFile, injected: () => injected };
+function injectPageReadFailure(pagePath: string) {
+  if (securityRuntimeMock.failReadTextAlwaysFor === pagePath) {
+    securityRuntimeMock.readTextFailureInjected = true;
+    throw securityRuntimeMock.readTextError;
+  }
+  if (
+    securityRuntimeMock.failReadTextOnceFor === pagePath &&
+    !securityRuntimeMock.readTextFailureInjected
+  ) {
+    securityRuntimeMock.readTextFailureInjected = true;
+    throw securityRuntimeMock.readTextOnceError;
+  }
 }
 
 async function createImportedFixture() {
@@ -297,13 +290,12 @@ describe("memory-wiki existing-page read retry", () => {
     const userNote = "KEY INSIGHT: covers the Q2 roadmap";
     await addNotes(pagePath, userNote);
     await changeSource();
-    const error = new Error("transient existing-page read failure");
-    const failure = failPageReads(pagePath, error, true);
+    securityRuntimeMock.failReadTextOnceFor = pagePath;
 
     await update();
 
-    const after = await failure.readFile(pagePath, "utf8");
-    expect(failure.injected()).toBe(true);
+    const after = await fs.readFile(pagePath, "utf8");
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
     expect(after).toContain("v2 content updated");
     expect(after).toContain(userNote);
   });
@@ -335,11 +327,13 @@ describe("memory-wiki existing-page read retry", () => {
     const before = await fs.readFile(pagePath, "utf8");
     await changeSource();
     const error = Object.assign(new Error("resource busy"), { code: "EBUSY" });
-    const failure = failPageReads(pagePath, error);
+    securityRuntimeMock.failReadTextAlwaysFor = pagePath;
+    securityRuntimeMock.readTextError = error;
 
-    await expect(update()).rejects.toMatchObject({ code: "EBUSY" });
+    await expect(update()).rejects.toMatchObject({ cause: error });
 
-    await expect(failure.readFile(pagePath, "utf8")).resolves.toBe(before);
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(before);
   });
 
   it("preserves synthesis notes and frontmatter after a transient existing-page read failure", async () => {

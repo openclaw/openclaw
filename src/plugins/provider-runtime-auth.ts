@@ -8,25 +8,44 @@ import {
 } from "./provider-auth-authority.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { resolveProviderRefOwnership } from "./providers.js";
-import type { ProviderPlugin, ProviderPrepareRuntimeAuthContext } from "./types.js";
+import type {
+  ProviderPlugin,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
+} from "./types.js";
 
 type ProviderAuthRuntimeLookup = Pick<
   Parameters<typeof resolveProviderRuntimePlugin>[0],
   "provider" | "config" | "workspaceDir" | "env"
 >;
 
+export class UnsupportedProviderRuntimeAuthCapabilityError extends Error {
+  constructor() {
+    super("Provider credential exchange requires a full chat model; use prepareRuntimeAuthV2.");
+    this.name = "UnsupportedProviderRuntimeAuthCapabilityError";
+  }
+}
+
 export async function prepareProviderRuntimeAuth(
   params: ProviderAuthRuntimeLookup & {
     assertCurrent?: () => void;
-    context: ProviderPrepareRuntimeAuthContext;
+    context: ProviderPrepareRuntimeAuthContext | ProviderPrepareRuntimeAuthContextV2;
   },
 ) {
   if (resolveMergedModelProviderConfig(params.config, params.provider)?.auth === "none") {
     return undefined;
   }
-  const prepareRuntimeAuth = resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth;
-  if (!prepareRuntimeAuth) {
+  const plugin = resolveProviderRuntimePlugin(params);
+  const prepareRuntimeAuth = plugin?.prepareRuntimeAuth;
+  const prepareRuntimeAuthV2 = plugin?.prepareRuntimeAuthV2;
+  if (!prepareRuntimeAuth && !prepareRuntimeAuthV2) {
     return undefined;
+  }
+  const context = params.context;
+  // A legacy exchange may require costs or context limits. Never skip it or
+  // manufacture those fields when a capability provides only transport identity.
+  if (!prepareRuntimeAuthV2 && "capability" in context) {
+    throw new UnsupportedProviderRuntimeAuthCapabilityError();
   }
   // The lazy runtime import may outlive the caller's authority to exchange credentials.
   params.assertCurrent?.();
@@ -37,10 +56,15 @@ export async function prepareProviderRuntimeAuth(
     params.context.apiKey,
     "provider runtime auth exchange",
   );
-  const prepared = await prepareRuntimeAuth({
-    ...params.context,
-    apiKey: preparedInput,
-  });
+  const prepared = prepareRuntimeAuthV2
+    ? await prepareRuntimeAuthV2({
+        ...context,
+        capability: "capability" in context ? context.capability : "chat",
+        apiKey: preparedInput,
+      })
+    : !("capability" in context)
+      ? await prepareRuntimeAuth!({ ...context, apiKey: preparedInput })
+      : undefined;
   params.assertCurrent?.();
   assertProviderAuthAuthority(params.context.model);
   return prepared

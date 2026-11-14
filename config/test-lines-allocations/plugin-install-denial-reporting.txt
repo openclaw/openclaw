@@ -1,0 +1,2 @@
+27
+# Existing install boundary cases protect terminal codes, warning asymmetry, and uncoded denials.

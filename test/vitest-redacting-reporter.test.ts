@@ -15,6 +15,122 @@ afterAll(() => preparedCli.cleanup());
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("coalesces fork checkpoints while retaining locations and flushing failures", () => {
+  const root = tempDirs.make("oc-reporter-progress-");
+  const diagnostics = path.join(root, "diagnostics");
+  fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"), "junction");
+  const reporter = path.join(root, "reporter.mjs");
+  const proof = path.join(root, "checkpoints.json");
+  fs.writeFileSync(
+    reporter,
+    `import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { mock } from "node:test";
+import Reporter from ${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-resource-reporter.mts"))};
+const read = () => fs.readFileSync(path.join(${JSON.stringify(diagnostics)}, fs.readdirSync(${JSON.stringify(diagnostics)})[0], "failure.public.json"), "utf8");
+const checks = { deferredStarts: 0, deferredResults: 0, immediateFailures: 0 };
+function checkpoint(action, immediate = false) {
+  const before = read();
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    action();
+    if (immediate) {
+      assert.notEqual(read(), before);
+      const flushed = read();
+      mock.timers.tick(1000);
+      assert.equal(read(), flushed);
+    } else {
+      assert.equal(read(), before);
+      mock.timers.tick(999);
+      assert.equal(read(), before);
+      mock.timers.tick(1);
+      assert.notEqual(read(), before);
+    }
+  } finally {
+    mock.timers.reset();
+  }
+}
+export default class extends Reporter {
+  onTestCaseReady(test) {
+    checkpoint(() => super.onTestCaseReady(test));
+    checks.deferredStarts++;
+  }
+  onTestCaseResult(test) {
+    const failed = test.result().state === "failed";
+    checkpoint(() => super.onTestCaseResult(test), failed);
+    checks[failed ? "immediateFailures" : "deferredResults"]++;
+  }
+  onTestRunEnd(...args) {
+    super.onTestRunEnd(...args);
+    fs.writeFileSync(${JSON.stringify(proof)}, JSON.stringify(checks));
+  }
+}`,
+  );
+  const config = path.join(root, "vitest.config.mts");
+  fs.writeFileSync(
+    config,
+    `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
+export default {
+  ...sharedVitestConfig, root: ${JSON.stringify(root)},
+  test: {
+    ...sharedVitestConfig.test, root: ${JSON.stringify(root)}, dir: ${JSON.stringify(root)},
+    include: ["synthetic.test.ts"], exclude: [], setupFiles: [], runner: undefined,
+    pool: "forks", isolate: true, includeTaskLocation: true, maxWorkers: 1,
+    reporters: ["default", ${JSON.stringify(reporter)}],
+  },
+};`,
+  );
+  fs.writeFileSync(
+    path.join(root, "synthetic.test.ts"),
+    `import fs from "node:fs";
+import path from "node:path";
+import { it, expect } from "vitest";
+it(${JSON.stringify(synthetic)}, async () => {
+  const directory = ${JSON.stringify(diagnostics)};
+  const read = () => fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0], "failure.public.json"), "utf8");
+  await expect.poll(() => JSON.parse(read()).active[0]?.cases.length).toBe(1);
+  const report = read();
+  const { active } = JSON.parse(report);
+  expect(active).toHaveLength(1);
+  expect(active[0]).toMatchObject({ file: "synthetic.test.ts", pool: "forks", phase: "running" });
+  expect(active[0].cases).toEqual([{ id: expect.any(String), location: { line: 4, column: 1 } }]);
+  expect(report).not.toContain(${JSON.stringify(synthetic)});
+});
+it("synthetic failed case", () => expect(false).toBe(true));`,
+  );
+  const child = spawnSync(
+    resolveTestNodeExecPath(),
+    [path.join(preparedCli.root, "scripts/run-vitest.mjs"), "run", "--config", config],
+    {
+      cwd: repoRoot,
+      env: preparedCli.env({
+        ...testRunnerFixtureEnv(),
+        OPENCLAW_VITEST_RUNTIME: "node",
+        OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: diagnostics,
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "module-cache"),
+      }),
+      encoding: "utf8",
+      timeout: 45_000,
+      maxBuffer: 4 * 1024 * 1024,
+    },
+  );
+  expect(child.error).toBeUndefined();
+  expect(child, child.stdout + child.stderr).toMatchObject({ signal: null, status: 1 });
+  expect(JSON.parse(fs.readFileSync(proof, "utf8"))).toEqual({
+    deferredStarts: 2,
+    deferredResults: 1,
+    immediateFailures: 1,
+  });
+  const finalReport = JSON.parse(
+    fs.readFileSync(
+      path.join(diagnostics, fs.readdirSync(diagnostics)[0]!, "failure.public.json"),
+      "utf8",
+    ),
+  );
+  expect(finalReport).toMatchObject({ active: [], reason: "failed" });
+});
+
 it.each([
   ["deep-equality", "EXAMPLE_TOKEN", synthetic],
   ["spy-call", "EXAMPLE_TOKEN", synthetic],
@@ -67,6 +183,7 @@ it("synthetic ${kind} failure", async ({ annotate }) => {
     HOME: root,
     USERPROFILE: root,
     OPENCLAW_STATE_DIR: path.join(root, "state"),
+    OPENCLAW_VITEST_RUNTIME: "node",
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "module-cache"),
     GITHUB_ACTIONS: "true",
     GITHUB_STEP_SUMMARY: path.join(root, "summary.md"),

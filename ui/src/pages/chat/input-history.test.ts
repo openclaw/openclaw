@@ -42,8 +42,9 @@ it("refreshes composer recall after leaving a round", async () => {
     expect.objectContaining({
       sessionKey: state.sessionKey,
       limit: 1000,
-      offset: 2,
+      cursor: "older-2",
     }),
+    { signal: expect.any(AbortSignal) },
   );
   // Loading an older page must not change an active traversal's order.
   expect(press("ArrowUp").handled).toBe(false);

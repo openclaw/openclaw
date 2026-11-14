@@ -55,6 +55,28 @@ test.each([999.9, 1_000])(
   },
 );
 
+test.each([false, true])(
+  "does not format fast-send timings with diagnostics enabled=%s",
+  async (enabled) => {
+    setDiagnosticsEnabledForProcess(enabled);
+    using _ = {
+      [Symbol.dispose]: onTrustedInternalDiagnosticEvent(() => {}, {
+        include: ["diagnostic.phase.completed"],
+      }),
+    };
+    const { info, diagnostics } = createDiagnostics();
+    const round = vi.spyOn(Math, "round");
+    diagnostics.scope("authority");
+    diagnostics.observeSpan("attempt.tool_catalog", undefined, 40);
+    at(100, () => diagnostics.acknowledge());
+    diagnostics.observeSpan("workspace", undefined, 20);
+    at(200, diagnostics.finish);
+    expect(info).not.toHaveBeenCalled();
+    expect(round).not.toHaveBeenCalled();
+    await waitForDiagnosticEventsDrained();
+  },
+);
+
 test.each(["startup", "steer", "queued"] as const)(
   "acknowledgement splits overlapping phases into request and %s observations",
   async (stage) => {
@@ -66,6 +88,7 @@ test.each(["startup", "steer", "queued"] as const)(
     using _ = { [Symbol.dispose]: stop };
     const { info, diagnostics } = createDiagnostics();
     const request = diagnostics.scope("persist")!;
+    diagnostics.setRunIdentity("synthetic-session", "synthetic-run");
     at(10, () => request.mark("response"));
     const snapshot = diagnostics.scope("snapshot")!;
     at(15, request.finish);
@@ -81,7 +104,10 @@ test.each(["startup", "steer", "queued"] as const)(
       isTerminal: () => false,
     });
     expect(events).toEqual([]);
-    expectLog(info, `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`);
+    expectLog(
+      info,
+      `slow chat send 1400ms stage=${stage} sessionId=synthetic-session runId=synthetic-run ack=15ms snapshot=2000ms dispatch=200ms`,
+    );
 
     at(4_000, () => snapshot.mark("effects"));
     snapshot.finish();

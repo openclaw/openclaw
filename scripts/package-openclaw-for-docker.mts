@@ -725,9 +725,12 @@ export async function prepareBundledAiRuntimePackage(
     // Root owns these exact dependencies. Removing them from the staged copy keeps npm from
     // recursively bundling duplicate packages alongside the one private workspace runtime.
     delete stagedPackageJson.dependencies;
-    // npm skips extracting the SDK's required API when this bundled copy also declares it a peer.
-    delete stagedPackageJson.peerDependencies?.["@opentelemetry/api"];
-    delete stagedPackageJson.peerDependenciesMeta?.["@opentelemetry/api"];
+    // npm may omit required dependencies when the bundled copy also declares them as peers.
+    // Root owns composed dependencies; the Anthropic SDK also requires the API transitively.
+    for (const peer of ["@opentelemetry/api", ...Object.keys(packageJson.dependencies!)]) {
+      delete stagedPackageJson.peerDependencies?.[peer];
+      delete stagedPackageJson.peerDependenciesMeta?.[peer];
+    }
     await fs.writeFile(stagedPackageJsonPath, `${JSON.stringify(stagedPackageJson, null, 2)}\n`);
 
     packageJson.dependencies![AI_RUNTIME_PACKAGE] = stagedPackageJson.version;
@@ -996,9 +999,10 @@ export async function packOpenClawPackageForDocker(
       );
       // AI staging materializes the bundled tree; pack must not inherit the
       // source workspace's isolated linker setting for that prepared bundle.
+      // npm's silent level hides failure causes as well as routine notices.
       const packArgs = [
         "pack",
-        "--silent",
+        packTool === "npm" ? "--loglevel=error" : "--silent",
         ...(packTool === "pnpm"
           ? ["--config.ignore-scripts=true", "--config.node-linker=hoisted"]
           : ["--ignore-scripts"]),

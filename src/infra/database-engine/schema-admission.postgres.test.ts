@@ -1,5 +1,4 @@
 import { channel } from "node:diagnostics_channel";
-import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -7,12 +6,14 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import {
   captureSqliteDatabaseAdmissions,
-  publishSqliteDatabaseSchemaChange,
   revokeSqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
-import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
+import {
+  createPostgresEngineTestFixture,
+  openPostgresEngineTestStore,
+} from "./engine-store.test-support.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -33,35 +34,14 @@ function fixture(
   }) => void,
 ) {
   withEngineStoreAdmission(() => {
-    const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-schema-"), "anchor.sqlite"));
-    const connections: PostgresSyncConnection[] = [];
-    const open = (selected = schema, existingVersion = false) => {
-      const db = openPostgresEngineTestStore({
-        anchor,
-        schema: selected,
-        existingVersion,
-        input: { connection: connection!, schemaPrefix: "r2" },
-      });
-      if (!(db instanceof PostgresSyncConnection)) {
-        throw new Error("Expected PostgreSQL connection");
-      }
-      connections.push(db);
-      return db;
-    };
-    try {
-      const db = open();
-      test({ open, db, invalidate: () => publishSqliteDatabaseSchemaChange(anchor) });
-    } finally {
-      try {
-        const db = connections[0];
-        if (db) {
-          db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
-        }
-      } finally {
-        connections.forEach((item) => item.close());
-        anchor.close();
-      }
-    }
+    using store = createPostgresEngineTestFixture({
+      directory: dirs.make("pg-schema-"),
+      connection: connection!,
+      schemaPrefix: "r2",
+      schema,
+    });
+    const { open, invalidate } = store;
+    test({ open, db: open(), invalidate });
   });
 }
 

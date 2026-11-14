@@ -12,13 +12,13 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const names = [
   "knowledge-automation",
   "knowledge-capture",
+  "knowledge-claim-consolidation",
   "knowledge-correct",
   "knowledge-entities",
   "knowledge-ingest",
   "knowledge-meeting-ingest",
   "knowledge-recall",
   "knowledge-source-ingest",
-  "knowledge-unlinked-claims",
 ];
 
 it("packaged skills have discoverable metadata and self-contained readable references", async () => {

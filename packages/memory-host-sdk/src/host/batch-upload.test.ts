@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { uploadBatchJsonlFile } from "./batch-upload.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import { createPendingResponse } from "./response-snippet.test-harness.js";
@@ -84,35 +84,41 @@ it("accepts leading-zero content-length values on successful file-upload JSON", 
   await expect(upload({ maxResponseBytes: 32 })).resolves.toBe("file_123");
 });
 
-it.each([
+it.for([
   { status: 500, label: "snippet", reason: "upload aborted" },
   { status: 200, label: "JSON", reason: "upload json aborted" },
 ])(
   "passes caller abort signals through file-upload $label reads",
-  async ({ status, label, reason }) => {
+  async ({ status, label, reason }, { signal }) => {
     const fixture = createPendingResponse({ status });
     respond(fixture.response);
     const controller = new AbortController();
     const expected = new Error(reason);
-    const settled = upload({ signal: controller.signal }).then(
+    const operation = upload({ signal: controller.signal });
+    const settled = operation.then(
       () => undefined,
       (error: unknown) => error,
     );
     try {
-      await withTestTimeout(fixture.readStarted, 1_000, `upload ${label} read did not start`);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          fixture.readStarted,
+          operation,
+          `upload ${label} read did not start`,
+        ),
+        signal,
+      );
       expect(fixture.response.body?.locked).toBe(true);
       controller.abort(expected);
 
-      await expect(
-        withTestTimeout(settled, 1_000, `upload ${label} abort did not settle`),
-      ).resolves.toBe(expected);
+      await expect(withinTest(settled, signal)).resolves.toBe(expected);
       expect(fixture.cancel).toHaveBeenCalledOnce();
       expect(fixture.response.body?.locked).toBe(false);
       expect(remoteHttpMock.mock.calls[0]?.[0].signal).toBe(controller.signal);
     } finally {
       controller.abort(expected);
       fixture.dispose();
-      await withTestTimeout(settled, 1_000, `upload ${label} cleanup did not settle`);
+      await settled;
     }
   },
 );

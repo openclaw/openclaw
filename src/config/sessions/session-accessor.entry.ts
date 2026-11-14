@@ -21,6 +21,7 @@ import {
 } from "./session-accessor.memory-exact-read.js";
 import "./plugin-host-cleanup.js";
 import "./session-accessor.sqlite-canonical-repair.js";
+import { resolveSessionEntry as resolveSessionEntrySelection } from "./session-accessor.sqlite-entry-admitted-read.js";
 import {
   listSessionEntryRows,
   listSessionEntriesReadOnly,
@@ -28,7 +29,6 @@ import {
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "./session-accessor.sqlite-entry.js";
-import { resolveSessionEntry as resolveSessionEntrySelection } from "./session-accessor.sqlite-exact-read.js";
 import "./session-accessor.sqlite-summary.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type {

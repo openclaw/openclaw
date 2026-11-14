@@ -8,6 +8,7 @@ import type { CronJobState, CronStoredJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { type getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -90,6 +91,7 @@ export class CronStreamJobOwner {
   constructor(
     job: CronStreamJob,
     private readonly params: CronStreamOwnerParams,
+    private readonly spawnBroker: ReturnType<typeof getSpawnBroker>,
   ) {
     this.job = job;
     this.scheduleKey = cronStreamScheduleKey(job.schedule, job.streamSandbox);
@@ -305,7 +307,8 @@ export class CronStreamJobOwner {
   private enqueue(label: string, operation: () => Promise<void>): Promise<void> {
     // The owner queue outlives whichever request submitted this operation.
     return runInDetachedAsyncContext(() => {
-      const result = this.opTail.then(operation, operation);
+      const run = () => runWithSpawnBroker(this.spawnBroker, operation);
+      const result = this.opTail.then(run, run);
       this.opTail = result.catch((error: unknown) => {
         this.params.logger.warn(
           { jobId: this.job.id, operation: label, err: formatErrorMessage(error) },

@@ -272,6 +272,24 @@ it.skipIf(typeof sqlite.requireNodeSqlite().DatabaseSync.prototype.setAuthorizer
   },
 );
 
+it("reuses one idle timer and expires the reader after its last completed read", () => {
+  const { read, value } = fixture();
+  const timers = vi.spyOn(globalThis, "setTimeout");
+  const reader = read(({ db }) => db);
+  for (let index = 0; index < 3; index++) {
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    expect(value()).toBe(1);
+    expect(reader.isOpen).toBe(true);
+  }
+  expect(timers.mock.calls.filter(([, delay]) => delay === SQLITE_IDLE_HANDLE_TTL_MS)).toHaveLength(
+    1,
+  );
+  vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+  expect(reader.isOpen).toBe(true);
+  vi.advanceTimersByTime(1);
+  expect(reader.isOpen).toBe(false);
+});
+
 it("retries idle reader disposal while other databases remain active", () => {
   const first = fixture();
   const sibling = fixture();

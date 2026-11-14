@@ -1,0 +1,3 @@
+# Mounted AppSidebar regression: inactive native work, mode disposal, retained scroll and pin/group rows.
+# Exact net LF growth in sidebar-agent-roster-work.browser.test.tsx against 66004e076d4dcfb7e6d1ff14c1a894a03f475908.
+75

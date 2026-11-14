@@ -12,7 +12,6 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { prepareSubagentTerminalObservation } from "./subagent-registry-completion-runtime.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
@@ -22,6 +21,7 @@ import {
 } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export function createSubagentRegistryListener(config: {
   runs: Map<string, SubagentRunRecord>;
@@ -50,10 +50,10 @@ export function createSubagentRegistryListener(config: {
       if (!evt || evt.stream !== "lifecycle") {
         return;
       }
-      // Own lifecycle writes before their first await, including restart preservation.
+      // Own lifecycle writes before their first await.
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         const phase = evt.data?.phase;
-        const entry = runs.get(evt.runId);
+        let entry = runs.get(evt.runId);
         if (!entry) {
           if (phase === "end" && typeof evt.sessionKey === "string") {
             const sessionKey = evt.sessionKey;
@@ -63,13 +63,14 @@ export function createSubagentRegistryListener(config: {
           return;
         }
         const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        const runId = entry.runId;
         const context = captureOpenClawStateWorkerContext();
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         const assertCurrent = () => {
           assertSubagentRegistryWriteSourceCurrent(context);
           if (
             !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-            !isSameSubagentRunOwner(runs.get(evt.runId), entry)
+            !isSameSubagentRunOwner(runs.get(runId), entry)
           ) {
             throw new Error("Subagent lifecycle event lost its original run");
           }
@@ -77,9 +78,9 @@ export function createSubagentRegistryListener(config: {
         if (phase === "start") {
           if (startedAt) {
             await mutateSubagentRuns(
-              [evt.runId],
+              [runId],
               (rows) => {
-                const current = rows.get(evt.runId);
+                const current = rows.get(runId);
                 if (!current || !isSameSubagentRunOwner(current, entry)) {
                   throw new Error("Subagent lifecycle start lost its original run");
                 }
@@ -87,7 +88,7 @@ export function createSubagentRegistryListener(config: {
                   current.execution.status === "terminal" ||
                   current.killIntent ||
                   current.killReconciliation ||
-                  (shouldSuppressSubagentRecoverySessionEffects(current) &&
+                  (shouldSuppressSubagentSessionEffects(current) &&
                     resolveSubagentChildAuthority(current).status !== "legacy-unverified") ||
                   (current.execution.status === "running" &&
                     current.execution.startedAt === startedAt &&
@@ -99,7 +100,7 @@ export function createSubagentRegistryListener(config: {
                   value: undefined,
                   postimages: new Map([
                     [
-                      evt.runId,
+                      runId,
                       {
                         ...current,
                         sessionStartedAt: current.sessionStartedAt ?? startedAt,
@@ -113,12 +114,28 @@ export function createSubagentRegistryListener(config: {
             );
           }
           assertCurrent();
-          pendingLifecycle.clearPriorAttempt(evt.runId);
+          pendingLifecycle.clearPriorAttempt(runId);
           return;
         }
         if (phase !== "end" && phase !== "error") {
           return;
         }
+        // A retry's start may still be publishing when its terminal event arrives.
+        // Join the existing per-run mutation queue before selecting that attempt.
+        const observed = await mutateSubagentRuns([runId], (rows) => ({ value: rows.get(runId) }), {
+          runs,
+          context,
+          assertCurrent,
+        });
+        if (
+          !observed ||
+          (startedAt !== undefined &&
+            observed.execution.startedAt !== undefined &&
+            observed.execution.startedAt !== startedAt)
+        ) {
+          return;
+        }
+        entry = observed;
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
         const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
         const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
@@ -140,7 +157,7 @@ export function createSubagentRegistryListener(config: {
           runs,
           context,
           assertCurrent,
-          clearPending: () => pendingLifecycle.clear(evt.runId),
+          clearPending: () => pendingLifecycle.clear(runId),
           adoptPaused: config.adoptPausedSubagentRunIntoSuccessor,
           resumePaused: (paused) => config.resumeRequesterSettleWake(paused.runId, paused),
         });
@@ -149,7 +166,7 @@ export function createSubagentRegistryListener(config: {
         }
         assertCurrent();
         const pendingTerminal = {
-          runId: evt.runId,
+          runId,
           expectedEntry: completion.expectedEntry,
           endedAt,
           startedAt,
@@ -176,7 +193,7 @@ export function createSubagentRegistryListener(config: {
           });
           return;
         }
-        pendingLifecycle.clear(evt.runId);
+        pendingLifecycle.clear(runId);
         await completeSubagentRunWithRecovery(
           completion,
           `lifecycle-${terminalOutcome.reason}-event`,

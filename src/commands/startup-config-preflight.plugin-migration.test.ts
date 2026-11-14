@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { prepareGatewayPluginLoad } from "../gateway/server-plugin-bootstrap.js";
 import {
   readDeferredPluginMigrationsAsync,
@@ -56,38 +57,37 @@ it("defers startup runtime and divergent engine ownership until Doctor migrates 
         plugins: {
           allow: [pluginId],
           load: { paths: [root] },
-          entries: { [pluginId]: { enabled: true, config: { label: "operator label" } } },
+          entries: {
+            [pluginId]: { enabled: true, config: { enabled: false, label: "operator label" } },
+          },
           slots: { contextEngine: engineId },
         },
       };
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(root, { recursive: true });
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(config));
+      await writeFixtureJson(configPath, config);
       await fs.writeFile(legacyPath, legacyBytes);
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: "@example/pending-data-fixture",
-          version: "2.1.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      await fs.writeFile(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          kind: "context-engine",
-          contextEngineIds: [engineId],
-          activation: { onStartup: true },
-          configSchema: {
-            type: "object",
-            additionalProperties: false,
-            properties: { label: { type: "string" } },
-          },
-          doctorContract: { stateMigrations: [{ id: "retained-records" }] },
-        }),
-      );
+      await writeFixtureJson(path.join(root, "package.json"), {
+        name: "@example/pending-data-fixture",
+        version: "2.1.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      await writeFixtureJson(path.join(root, "openclaw.plugin.json"), {
+        id: pluginId,
+        kind: "context-engine",
+        contextEngineIds: [engineId],
+        activation: { onStartup: true },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: { enabled: { type: "boolean" }, label: { type: "string" } },
+        },
+        configContracts: {
+          compatibilityMigrationPaths: [`plugins.entries.${pluginId}.config`],
+        },
+        doctorContract: { stateMigrations: [{ id: "retained-records" }] },
+      });
       await fs.writeFile(
         path.join(root, "index.cjs"),
         `const fs = require("node:fs");
@@ -130,6 +130,8 @@ module.exports = { stateMigrations: [{
             reason: "The replacement package still needs its data migration",
             command: "openclaw doctor --fix",
             requiresStateMigration: true as const,
+            configPaths: [["plugins", "entries", pluginId, "config"]],
+            validationExcludedPaths: [["plugins", "entries", pluginId, "config"]],
           },
         ],
       };

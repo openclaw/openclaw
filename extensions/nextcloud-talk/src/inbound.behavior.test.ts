@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createPluginRuntimeMock,
   createTestRegistry,
@@ -19,6 +20,7 @@ import type { PluginRuntime } from "../runtime-api.js";
 import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
   createAccount as createFixtureAccount,
+  createAttachment,
   createMessage,
   requireFirstMockArg,
 } from "./inbound-media.test-fixtures.js";
@@ -424,6 +426,65 @@ describe("nextcloud-talk inbound behavior", () => {
       .find((status) => status.lastOutboundAt !== undefined);
     expect(typeof outboundStatus?.lastOutboundAt).toBe("number");
     expect(outboundStatus?.lastOutboundAt).toBeGreaterThanOrEqual(1_736_380_800_000);
+  });
+
+  it.each([
+    { message: "its own file share", senderId: "users/openclaw-api", fileId: "81", own: true },
+    { message: "another API user file", senderId: "users/openclaw-api", fileId: "82", own: false },
+    { message: "API user text", senderId: "users/openclaw-api", fileId: undefined, own: false },
+    { message: "another sender's same file", senderId: "user-1", fileId: "81", own: false },
+  ])("pairing DM policy: $message", async ({ senderId, fileId, own }) => {
+    const issueChallenge = vi.fn();
+    installPairingController(
+      vi.fn(async () => []),
+      issueChallenge,
+    );
+    // The identity the native send records before it publishes its own share.
+    recordOutboundMessageIdentity({
+      channel: "nextcloud-talk",
+      accountId: "default",
+      conversationId: "room-1",
+      sourceId: "file:users/openclaw-api:81",
+    });
+    const runtime = createRuntimeSpies();
+    await inbound({
+      message: createMessage(
+        fileId ? { senderId, text: "", attachment: createAttachment(fileId) } : { senderId },
+      ),
+      runtime,
+    });
+    expect(issueChallenge).toHaveBeenCalledTimes(own ? 0 : 1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      own
+        ? "nextcloud-talk: ignored own outbound file share"
+        : `nextcloud-talk: drop DM sender ${senderId} (reason=dm_policy_pairing_required)`,
+    );
+  });
+
+  it("pairing DM policy: no challenge after the ingress is cancelled", async () => {
+    const issueChallenge = vi.fn();
+    installPairingController(
+      vi.fn(async () => []),
+      issueChallenge,
+    );
+    const controller = new AbortController();
+    const reason = new Error("ingress claim retired");
+    mocks.roomKind.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return "direct";
+    });
+    await expect(
+      inbound({
+        turnAdoptionLifecycle: {
+          abortSignal: controller.signal,
+          onAdopted: vi.fn(),
+          onDeferred: vi.fn(),
+          onAdoptionFinalizing: vi.fn(),
+          onAbandoned: vi.fn(),
+        },
+      }),
+    ).rejects.toBe(reason);
+    expect(issueChallenge).not.toHaveBeenCalled();
   });
 
   it.each([

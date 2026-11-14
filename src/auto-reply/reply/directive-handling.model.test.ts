@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { prepareModelCatalogAuthLabels } from "../../agents/model-catalog-auth-labels.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";

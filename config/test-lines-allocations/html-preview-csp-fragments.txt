@@ -1,0 +1,2 @@
+# Browser regression for CSP-limited in-document fragment navigation.
+124

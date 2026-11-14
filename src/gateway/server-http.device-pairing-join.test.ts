@@ -161,26 +161,19 @@ it("approves the joined node's initial surface but gates a later manifest escala
 });
 
 it("burns once and malformed payloads, expires opaquely, and serializes concurrent misses", async () => {
-  const expired = await mintJoinUrl();
-  accessJoinCode(expired.joinUrl, { expires_at_ms: 0 });
-
-  const expiredResponse = await fetch(expired.joinUrl);
-  expect([expiredResponse.status, await expiredResponse.text()]).toEqual([
-    404,
-    JSON.stringify(opaqueNotFound),
-  ]);
-  expect(accessJoinCode(expired.joinUrl)).toEqual([]);
-
-  for (const payloadJson of ["{malformed", null]) {
-    await expectJoined(await mintJoinUrl("/public-gateway"));
-    const malformed = await mintJoinUrl();
-    accessJoinCode(malformed.joinUrl, { payload_json: payloadJson });
-    const malformedResponse = await fetch(malformed.joinUrl);
-    expect([malformedResponse.status, await malformedResponse.json()]).toEqual([
-      404,
-      opaqueNotFound,
-    ]);
-    expect(accessJoinCode(malformed.joinUrl)).toEqual([]);
+  for (const [index, values] of [
+    { expires_at_ms: 0 },
+    { payload_json: "{malformed" },
+    { payload_json: null },
+  ].entries()) {
+    if (index > 0) {
+      await expectJoined(await mintJoinUrl("/public-gateway"));
+    }
+    const setup = await mintJoinUrl();
+    accessJoinCode(setup.joinUrl, values);
+    const response = await fetch(setup.joinUrl);
+    expect([response.status, await response.text()]).toEqual([404, JSON.stringify(opaqueNotFound)]);
+    expect(accessJoinCode(setup.joinUrl)).toEqual([]);
   }
 
   const raced = await mintJoinUrl();

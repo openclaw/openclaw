@@ -8,13 +8,13 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../gateway/agent-runtime-approval-authority.js";
 import { createPreparedTestApprovalManager } from "../gateway/exec-approval-manager.test-support.js";
 import { createChatRunState } from "../gateway/server-chat-state.js";
+import { waitForApprovalAccepted } from "../gateway/server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "../gateway/server-methods/exec-approval.js";
 import {
   createApprovalRuntimeClient,
   requestExecApproval,
   resolveExecApproval,
 } from "../gateway/server-methods/exec-approval.test-support.js";
-import type { RespondFn } from "../gateway/server-methods/response-types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -441,28 +441,18 @@ for (const { policyState, shouldExecute } of [
         rpc.mockImplementation(async (method, options, params) => {
           if (method === "exec.approval.request") {
             approvalId = params.id;
-            const firstResponse = createDeferred<Parameters<RespondFn>>();
-            const pending = approvalFixture.track(
-              requestExecApproval({
-                handlers: approvalHandlers,
-                respond: (...response) => {
-                  firstResponse.resolve(response);
-                },
-                context: approvalContext,
-                params,
-                client: runtimeClient,
-              }),
+            const { response } = await waitForApprovalAccepted(vi.fn(), (respond) =>
+              approvalFixture.track(
+                requestExecApproval({
+                  handlers: approvalHandlers,
+                  respond,
+                  context: approvalContext,
+                  params,
+                  client: runtimeClient,
+                }),
+              ),
             );
-            const [ok, payload, error] = await Promise.race([
-              firstResponse.promise,
-              pending.then(() => {
-                throw new Error("Exec approval request ended before acceptance");
-              }),
-            ]);
-            if (!ok) {
-              throw new Error(error?.message ?? "Exec approval registration failed");
-            }
-            return payload;
+            return response[1];
           }
           if (method === "exec.approval.resolve") {
             const respond = vi.fn();

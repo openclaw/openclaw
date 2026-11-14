@@ -33,30 +33,6 @@ export function toolOutputSourceLabel(card: ToolCard): string {
   );
 }
 
-function formatResponseText(text: string): string {
-  const value = safeParseJson(text);
-  const execution =
-    isRecord(value) &&
-    typeof value.wall_time_seconds === "number" &&
-    typeof value.exit_code === "number" &&
-    typeof value.output === "string" &&
-    Object.keys(value).every((key) =>
-      ["chunk_id", "wall_time_seconds", "exit_code", "original_token_count", "output"].includes(
-        key,
-      ),
-    )
-      ? { text: value.output, exitCode: value.exit_code }
-      : undefined;
-  const output = execution?.text ?? text;
-  // Whitespace-only edits preserve duplicate members and exact number/string lexemes.
-  const formatted = parseMarkdownJson(output)?.root
-    ? applyEdits(output, format(output, undefined, { insertSpaces: true, tabSize: 2 }))
-    : output;
-  return execution && execution.exitCode !== 0
-    ? `${t("chat.toolCards.exitCode", { code: String(execution.exitCode) })}\n${formatted}`
-    : formatted;
-}
-
 /** Format for display while preserving the captured bytes for Raw/Copy/Download. */
 export function formatToolOutput(card: ToolCard): string | undefined {
   const text = card.outputText;
@@ -87,6 +63,28 @@ export function formatToolOutput(card: ToolCard): string | undefined {
         parts.length === 1 ||
         !/^Script completed\nWall time [\d.]+ seconds\nOutput:\n$/u.test(part.text),
     )
-    .map((part) => formatResponseText(part.text))
+    .map(({ text: responseText }) => {
+      const value = safeParseJson(responseText);
+      const execution =
+        isRecord(value) &&
+        typeof value.wall_time_seconds === "number" &&
+        typeof value.exit_code === "number" &&
+        typeof value.output === "string" &&
+        Object.keys(value).every((key) =>
+          ["chunk_id", "wall_time_seconds", "exit_code", "original_token_count", "output"].includes(
+            key,
+          ),
+        )
+          ? { text: value.output, exitCode: value.exit_code }
+          : undefined;
+      const output = execution?.text ?? responseText;
+      // Whitespace-only edits preserve duplicate members and exact number/string lexemes.
+      const formatted = parseMarkdownJson(output)?.root
+        ? applyEdits(output, format(output, undefined, { insertSpaces: true, tabSize: 2 }))
+        : output;
+      return execution && execution.exitCode !== 0
+        ? `${t("chat.toolCards.exitCode", { code: String(execution.exitCode) })}\n${formatted}`
+        : formatted;
+    })
     .join("\n");
 }

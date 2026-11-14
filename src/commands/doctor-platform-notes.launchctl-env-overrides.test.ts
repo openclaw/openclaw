@@ -1,14 +1,24 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { LAUNCH_AGENT_ENV_FILE_HEADER } from "../daemon/launchd-env-wrapper.js";
+import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
+import { prepareDoctorInteractiveMaintenance } from "../flows/doctor-health-startup.js";
+import { defaultRuntime } from "../runtime.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
+import * as doctorPrompter from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   runExec: vi.fn(),
   note: vi.fn(),
   readCommand: vi.fn(),
   findJobs: vi.fn(),
+  schemaPreflight: vi.fn(async () => {}),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -19,6 +29,20 @@ vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: mocks.readCommand }),
 }));
 vi.mock("../daemon/launchd.js", () => ({ findStaleOpenClawUpdateLaunchdJobs: mocks.findJobs }));
+// mock-isolation: keep real service locks in this test invocation's temporary directory.
+vi.mock("../infra/tmp-openclaw-dir.js", async () => ({
+  resolvePreferredOpenClawTmpDir: (await import("node:os")).tmpdir,
+}));
+// mock-isolation: foreign launchd inventory is a separate native boundary from env-file repair.
+vi.mock("./doctor-foreign-launchd-jobs.js", () => ({ noteMacForeignLaunchdJobs: async () => {} }));
+// mock-isolation: startup reads synthetic authored config, never operator files.
+vi.mock("../config/io.runtime.js", () => ({ readSourceConfigBestEffort: async () => ({}) }));
+// mock-isolation: supply schema availability without opening unrelated databases.
+vi.mock("./doctor-database-preflight.js", () => ({
+  prepareDoctorDatabasePreflight: mocks.schemaPreflight,
+}));
+// mock-isolation: this repair must not check for or install a release.
+vi.mock("./doctor-update.js", () => ({ maybeOfferUpdateBeforeDoctor: async () => false }));
 
 import {
   collectGatewayPlatformWarnings,
@@ -27,6 +51,133 @@ import {
 } from "./doctor-platform-notes.js";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["gateway", "node"])(
+  "repairs confirmed quote corruption in the profiled %s env file with a private backup",
+  async (kind) => {
+    const home = tempDirs.make("doctor-env-quotes-");
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      username: "doctor-fixture",
+      homedir: home,
+      uid: 1000,
+      gid: 1000,
+      shell: "/bin/sh",
+    });
+    const env = { HOME: home, OPENCLAW_PROFILE: "quoteproof" };
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
+    vi.stubEnv("OPENCLAW_HOME", undefined);
+    vi.stubEnv("OPENCLAW_PROFILE", "quoteproof");
+    vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", undefined);
+    const label = kind === "node" ? "ai.openclaw.node.quoteproof" : "ai.openclaw.quoteproof";
+    const directory = path.join(home, ".openclaw-quoteproof", "service-env");
+    const file = path.join(directory, `${label}.env`);
+    fs.mkdirSync(directory, { recursive: true });
+    const before = `${LAUNCH_AGENT_ENV_FILE_HEADER}\nexport AWS_REGION='"us-east-1"'\nexport API_KEY='"synthetic-private-key"'\nexport UNRELATED='has "inner" quotes'\nexport MULTILINE='prefix\nexport INSIDE='\\''"keep"'\\''\nsuffix'\n`;
+    fs.writeFileSync(file, before, { mode: 0o600 });
+    const prompter = {
+      ...createDoctorPrompter({ runtime: defaultRuntime, options: {} }),
+      confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
+    };
+
+    await runGatewayServicesHealth({
+      cfg: {},
+      cfgForPersistence: {},
+      configResult: { cfg: {} },
+      configPath: path.join(home, ".openclaw-quoteproof", "openclaw.json"),
+      sourceConfigValid: true,
+      runtime: defaultRuntime,
+      options: {},
+      prompter,
+      env,
+      gatewayMaintenanceActive: true,
+    });
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(fs.readdirSync(directory)).toHaveLength(1);
+    expect(JSON.stringify(mocks.note.mock.calls)).toContain("API_KEY");
+    vi.spyOn(doctorPrompter, "createDoctorPrompter").mockReturnValue(prompter);
+    const admission = {
+      runtime: defaultRuntime,
+      options: {},
+      databasePreflight: undefined,
+      root: null,
+      outro: () => {},
+    };
+    mocks.schemaPreflight.mockRejectedValueOnce(new Error("synthetic incompatible schema"));
+    await expect(prepareDoctorInteractiveMaintenance(admission)).rejects.toThrow(
+      "synthetic incompatible schema",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(fs.readdirSync(directory)).toHaveLength(1);
+    await expect(prepareDoctorInteractiveMaintenance(admission)).resolves.toBe("accepted");
+
+    expect(fs.readFileSync(file, "utf8")).toBe(
+      before
+        .replace("'\"us-east-1\"'", "'us-east-1'")
+        .replace("'\"synthetic-private-key\"'", "'synthetic-private-key'"),
+    );
+    const backups = fs.readdirSync(directory).filter((name) => name.endsWith(".bak"));
+    expect(backups).toHaveLength(1);
+    const backup = path.join(directory, backups[0]!);
+    expect(fs.readFileSync(backup, "utf8")).toBe(before);
+    expect(fs.statSync(backup).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    execFileSync("/bin/sh", [
+      "-c",
+      '. "$1"; test "$AWS_REGION" = us-east-1 && test "$API_KEY" = synthetic-private-key',
+      "proof",
+      file,
+    ]);
+    expect(JSON.stringify(mocks.note.mock.calls)).toContain(
+      `openclaw --profile quoteproof ${kind} restart`,
+    );
+    expect(JSON.stringify(mocks.note.mock.calls)).not.toContain("synthetic-private-key");
+    await noteMacGatewayPlatformWarnings({}, prompter, env);
+    expect(fs.readdirSync(directory)).toHaveLength(2);
+  },
+);
+
+it.each([
+  { repair: true, nonInteractive: true },
+  { repair: true, yes: true },
+])("reports ambiguous quote shapes without auto-approving them: %j", async (options) => {
+  const home = tempDirs.make("doctor-env-quotes-");
+  const file = path.join(home, ".openclaw", "service-env", "ai.openclaw.gateway.env");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const before = `${LAUNCH_AGENT_ENV_FILE_HEADER}\nexport API_KEY='"synthetic-private-key"'\n`;
+  fs.writeFileSync(file, before, { mode: 0o600 });
+  await noteMacGatewayPlatformWarnings(
+    {},
+    createDoctorPrompter({ runtime: defaultRuntime, options }),
+    { HOME: home },
+  );
+  expect(JSON.stringify(mocks.note.mock.calls)).toContain("API_KEY");
+  expect(JSON.stringify(mocks.note.mock.calls)).not.toContain("synthetic-private-key");
+  expect(fs.readFileSync(file, "utf8")).toBe(before);
+  expect(fs.readdirSync(path.dirname(file))).toHaveLength(1);
+});
+
+it("does not overwrite service env changed while the operator considers the repair", async () => {
+  const home = tempDirs.make("doctor-env-quotes-");
+  const directory = path.join(home, ".openclaw", "service-env");
+  const file = path.join(directory, "ai.openclaw.gateway.env");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(file, `${LAUNCH_AGENT_ENV_FILE_HEADER}\nexport AWS_REGION='"us-east-1"'\n`);
+  const replacement = `${LAUNCH_AGENT_ENV_FILE_HEADER}\nexport AWS_REGION='eu-west-1'\n`;
+  const prompter = {
+    ...createDoctorPrompter({ runtime: defaultRuntime, options: {} }),
+    confirmRuntimeRepair: async () => {
+      fs.writeFileSync(file, replacement);
+      return true;
+    },
+  };
+  await noteMacGatewayPlatformWarnings({}, prompter, { HOME: home });
+  expect(fs.readFileSync(file, "utf8")).toBe(replacement);
+  expect(fs.readdirSync(directory)).toEqual(["ai.openclaw.gateway.env"]);
+  expect(JSON.stringify(mocks.note.mock.calls)).toContain("rerun doctor");
+});
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -150,6 +301,37 @@ describe("macOS Gateway environment warnings", () => {
 });
 
 describe("macOS stale updater warnings", () => {
+  it("scans the installed service without caller state selectors", async () => {
+    vi.stubEnv("OPENCLAW_HOME", "/tmp/caller-home");
+    vi.stubEnv("OPENCLAW_PROFILE", "caller");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "/tmp/caller.json");
+    mocks.readCommand.mockResolvedValue({
+      programArguments: ["node", "openclaw.mjs", "gateway"],
+      environment: { HOME: "/tmp/service-home" },
+    });
+    await collectGatewayPlatformWarnings({});
+    const [env] = expectDefined<NodeJS.ProcessEnv[]>(
+      mocks.findJobs.mock.calls[0],
+      "scan environment",
+    );
+    expect(
+      Object.fromEntries(
+        [
+          "HOME",
+          "OPENCLAW_HOME",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_PROFILE",
+          "OPENCLAW_CONFIG_PATH",
+        ].map((key) => [key, env?.[key]]),
+      ),
+    ).toEqual({
+      HOME: "/tmp/service-home",
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: undefined,
+      OPENCLAW_PROFILE: undefined,
+      OPENCLAW_CONFIG_PATH: undefined,
+    });
+  });
   it("uses service env for gateway platform stale updater warnings", async () => {
     const serviceEnv = {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",

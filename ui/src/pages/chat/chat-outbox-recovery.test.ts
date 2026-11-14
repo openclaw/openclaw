@@ -28,7 +28,8 @@ it("loads recovery storage only for an admitted owner and ignores retired import
     await release.promise;
     throw new Error("Synthetic recovery module unavailable");
   });
-  const { createInitializationContext } = await import("./chat-pane.test-support.ts");
+  const { createInitializationContext } =
+    await import("./chat-application-context.test-support.ts");
   const { PaneOutboxRecovery } = await import("./chat-outbox-recovery.tsx");
   const host = createPageState(
     createInitializationContext(),

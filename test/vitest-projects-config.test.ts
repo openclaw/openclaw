@@ -79,7 +79,7 @@ afterEach(() => patternFiles.cleanup());
 
 function runConfigScript(source: string) {
   const result = spawnNodeEvalSync(source, {
-    imports: ["tsx"],
+    imports: ["./scripts/tsx.mjs"],
     env: { ...process.env, GITHUB_ACTIONS: "true", OPENCLAW_VITEST_INCLUDE_FILE: undefined },
     timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
   });
@@ -98,6 +98,32 @@ describe("projects vitest config", () => {
     });
   });
 
+  it("keeps actual full-shard exports aligned with inventory and worker policy", () => {
+    runConfigScript(
+      `
+        import assert from "node:assert/strict";
+        import { pathToFileURL } from "node:url";
+        import { nonIsolatedRunnerPath, sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
+        import { fullSuiteVitestShards } from "./test/vitest/vitest.test-shards.mjs";
+        const shards = fullSuiteVitestShards.filter(shard => shard.name !== "core-unit-fast");
+        assert.equal(shards.length, 11);
+        for (const shard of shards) {
+          process.env.OPENCLAW_VITEST_MAX_WORKERS = "8";
+          const { default: config } = await import(pathToFileURL(process.cwd() + "/" + shard.config).href);
+          const tooling = shard.name === "core-tooling";
+          assert.deepEqual(config.test, {
+            ...sharedVitestConfig.test,
+            runner: nonIsolatedRunnerPath,
+            projects: shard.projects,
+            ...(tooling ? { fileParallelism: false, maxWorkers: 1 } : {}),
+          }, shard.config);
+          assert.equal(process.env.OPENCLAW_VITEST_MAX_WORKERS, tooling ? "1" : "8", shard.config);
+          assert.notEqual(config.test.projects, shard.projects, "aggregate must own its project array");
+        }
+      `,
+    );
+  });
+
   it("keeps the resolved root and generated projects in their explicit environments", () => {
     runConfigScript(
       `
@@ -105,6 +131,8 @@ describe("projects vitest config", () => {
         import { resolveConfig } from "vitest/node";
         import rootConfig from "./vitest.config.ts";
         import { sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
+        // File ownership is audited separately; resolve every project with bounded discovery.
+        process.argv = [process.execPath, "vitest", "test/vitest-projects-config.test.ts"];
         const resolved = await resolveConfig({ config: false }, rootConfig);
         const generated = await resolveConfig({ config: false }, {
           plugins: sharedVitestConfig.plugins,
@@ -119,12 +147,10 @@ describe("projects vitest config", () => {
             })),
           },
         });
-        const projects = [
-          resolved.test,
-          ...resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
-          generated.test,
-          ...generated.test.resolvedProjects.map(({ projectConfig }) => projectConfig),
-        ];
+        const projects = [resolved.test, generated.test].flatMap(test => [
+          test,
+          ...test.resolvedProjects.map(({ projectConfig }) => projectConfig),
+        ]);
         for (const project of projects) {
           if (!/^ui(?:-|$)/u.test(project.name ?? "")) {
             assert.equal(project.environment, "node", project.name || "root");

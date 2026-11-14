@@ -138,3 +138,33 @@ export function isTerminalDiagnosticProgressReason(reason: string | undefined): 
     reason.includes("output_item.done")
   );
 }
+
+export function formatSessionActivityLogFields(
+  activity: DiagnosticSessionActivitySnapshot,
+): string {
+  const fields: string[] = [];
+  if (activity.lastProgressReason) {
+    fields.push(`lastProgress=${activity.lastProgressReason}`);
+  }
+  if (activity.lastProgressAgeMs !== undefined) {
+    fields.push(`lastProgressAge=${Math.round(activity.lastProgressAgeMs / 1000)}s`);
+  }
+  if (activity.activeToolName) {
+    fields.push(`activeTool=${activity.activeToolName}`);
+  }
+  if (activity.activeToolCallId) {
+    fields.push(`activeToolCallId=${activity.activeToolCallId}`);
+  }
+  if (activity.activeToolAgeMs !== undefined) {
+    fields.push(`activeToolAge=${Math.round(activity.activeToolAgeMs / 1000)}s`);
+  }
+  if (activity.repeatedRequestNoProgressAgeMs !== undefined) {
+    fields.push(
+      `repeatedRequestNoProgressAge=${Math.round(activity.repeatedRequestNoProgressAgeMs / 1000)}s`,
+    );
+  }
+  if (isTerminalDiagnosticProgressReason(activity.lastProgressReason)) {
+    fields.push("terminalProgressStale=true");
+  }
+  return fields.join(" ");
+}

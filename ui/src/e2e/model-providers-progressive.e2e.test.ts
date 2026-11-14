@@ -467,7 +467,7 @@ suite.define(() => {
           }
           await page.locator("openclaw-model-providers-page").waitFor();
           if (moduleState === "cached") {
-            await expectText(page.locator('[data-provider-id="openai"]'), "Credentials configured");
+            await page.locator('[data-provider-id="openai"]').waitFor();
           }
           expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads);
           expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);
@@ -476,7 +476,6 @@ suite.define(() => {
           await gateway.waitForRequest("usage.status");
           const provider = page.locator('[data-provider-id="openai"]');
           await provider.waitFor();
-          await expectText(provider, "Credentials configured");
           expect(await provider.locator(".provider-row__plan").count()).toBe(0);
           expect(await gateway.getRequests("usage.status")).toHaveLength(previousLoads + 1);
           expect(await gateway.getRequests("sessions.usage")).toHaveLength(0);

@@ -1,9 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
-import {
-  resolveSqliteReadScope,
-  toDatabaseOptions,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { resolveSqliteReadScope } from "../config/sessions/session-accessor.sqlite-read-scope.js";
+import { toDatabaseOptions } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";

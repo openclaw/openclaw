@@ -73,6 +73,28 @@ export async function adoptStagedWorkerWorkspaceHistory(params: {
 export const workerHistoryNotAdopted = (reason: string) =>
   `Cloud worker commits were not adopted: ${reason}. File changes were reconciled and kept for review.`;
 
+export function repositoryHistoryNote(
+  baseCommit: string,
+  history: { gitHistory?: WorkerWorkspaceGitHistory; gitHistoryNote?: string },
+): string | undefined {
+  if (history.gitHistoryNote) {
+    return history.gitHistoryNote;
+  }
+  const gitHistory = history.gitHistory;
+  if (!gitHistory) {
+    return workerHistoryNotAdopted("worker did not provide Git history");
+  }
+  if (gitHistory.baseCommit !== baseCommit) {
+    return workerHistoryNotAdopted("worker history does not descend from the dispatch base");
+  }
+  if (gitHistory.unavailableReason) {
+    return workerHistoryNotAdopted(gitHistory.unavailableReason);
+  }
+  return gitHistory.descendsFromBase
+    ? undefined
+    : workerHistoryNotAdopted("worker history does not descend from the dispatch base");
+}
+
 export async function restoreWorkerWorkspaceHistory(params: {
   root: string;
   gitHistory?: WorkerWorkspaceGitHistory;

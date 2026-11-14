@@ -16,6 +16,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { gatewayOwnerPayload } from "../../infra/gateway-owner-payload.test-support.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -52,14 +53,7 @@ it.each([
       // Subscriptions and session writers share the serving Gateway's state custody.
       const stateOwner = acquireGatewayStateOwner({
         databasePath: resolveOpenClawStateSqlitePath(state.env),
-        payload: {
-          pid: process.pid,
-          processNamespace: readGatewayLockProcessNamespace(),
-          createdAt: new Date().toISOString(),
-          configPath: state.configPath,
-          stateDir: state.stateDir,
-          role: "gateway",
-        },
+        payload: gatewayOwnerPayload(state, readGatewayLockProcessNamespace),
       });
       await using _ = {
         [Symbol.asyncDispose]: () => state.restoreEnv().finally(stateOwner.release),

@@ -7,7 +7,18 @@ import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 
 // mock-isolation: the projection uses synthetic preferences without a Gateway/SQLite owner.
 vi.mock("../state/user-preferences.js", () => ({
-  getCanonicalUserPreferences: vi.fn(async () => ({ entries: { "ui.themeMode": "light" } })),
+  getCanonicalUserPreferences: vi.fn(async (_profileId: string, keys: string[]) => ({
+    entries: {
+      "ui.themeMode": "light",
+      ...(keys.includes("ui.personalSessionGroups")
+        ? {
+            "ui.personalSessionGroups": [
+              { id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] },
+            ],
+          }
+        : {}),
+    },
+  })),
 }));
 
 it("includes only the viewer's presentation data and redacts MCP credentials", async () => {
@@ -48,7 +59,12 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
   expect(bootstrap).toMatchObject({
     profileId: "synthetic-viewer",
     config: { ui: { prefs: { locale: "de" } }, tts: { maxTextLength: 1234 } },
-    entries: { "ui.themeMode": "light" },
+    entries: {
+      "ui.themeMode": "light",
+      "ui.personalSessionGroups": [
+        { id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] },
+      ],
+    },
   });
   expect(getCanonicalUserPreferences).toHaveBeenCalledWith(
     "synthetic-viewer",

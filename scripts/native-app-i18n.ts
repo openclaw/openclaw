@@ -12,7 +12,7 @@ import {
   lineNumber,
   selectDeterministicTranslation,
 } from "./android-app-i18n.ts";
-import { translateNativeEntries } from "./control-ui-i18n.ts";
+import type { translateNativeEntries } from "./control-ui-i18n.ts"; // Verification never initializes providers.
 import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
 import type { GlossaryEntry } from "./lib/control-ui-i18n-sync-plan.ts";
 import {
@@ -1434,7 +1434,7 @@ export async function syncNativeLocale(
   const translatePending = !migratingV1 || options.force || refreshIds.size > 0;
   const translated =
     pending.length && translatePending
-      ? await (options.translate ?? translateNativeEntries)(
+      ? await (options.translate ?? (await import("./control-ui-i18n.ts")).translateNativeEntries)(
           pending,
           locale,
           glossary,

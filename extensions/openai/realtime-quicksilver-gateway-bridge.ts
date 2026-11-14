@@ -231,6 +231,12 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         throw openAIQuicksilverConnectAbortError(connectSignal);
       }
       this.connected = true;
+      if (this.ready) {
+        this.config.onReady?.();
+      }
+      if (this.closed || connectSignal.aborted) {
+        throw openAIQuicksilverConnectAbortError(connectSignal);
+      }
       if (!this.timer) {
         this.scheduleExpiry(QUICKSILVER_SESSION_TTL_MS);
       }
@@ -346,8 +352,10 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     if (call.kind !== "gpt-live") {
       throw new Error("GPT-Live gateway relay unexpectedly used the GA realtime call shape");
     }
-    await waitForOpenAIQuicksilverConnectStep(this.peer.applyAnswer(call.answerSdp), connectSignal);
+    // Applying the answer can emit the only session.started event.
     await this.connectSocket(auth, requestIds, call.sidebandUrl, connectSignal);
+    connectSignal.throwIfAborted();
+    await waitForOpenAIQuicksilverConnectStep(this.peer.applyAnswer(call.answerSdp), connectSignal);
   }
 
   private async connectSocket(
@@ -430,15 +438,15 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       this.directSocket = directSocket;
       directSocket.sendAudio(this.pendingRawAudio.take());
     }
-    for (const frame of connected.bufferedFrames) {
-      this.delegations?.handleFrame(frame.data, frame.isBinary);
-    }
     if (terminalEvent?.kind === "error") {
       throw terminalEvent.error;
     }
     if (terminalEvent?.kind === "close") {
       const reason = normalizeSidebandCloseReason(terminalEvent.reason);
       throw new Error(describeSidebandClose(terminalEvent.code, reason));
+    }
+    for (const frame of connected.bufferedFrames) {
+      this.delegations?.handleFrame(frame.data, frame.isBinary);
     }
   }
 
@@ -472,15 +480,13 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
             );
           }
           if (!this.ready) {
-            this.connected = true;
             this.ready = true;
             if (this.transport === "direct") {
               this.directSocket?.startAudio();
             }
-            if (this.closed) {
-              return;
+            if (this.connected && !this.closed) {
+              this.config.onReady?.();
             }
-            this.config.onReady?.();
           }
           params?.onSessionStarted?.();
         },

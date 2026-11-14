@@ -7,7 +7,7 @@ import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidPortOption } from "../error-format.js";
-import { ExpectedCliError } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { formatHelpExamples } from "../help-format.js";
 import { addNodeCommandOptions, createNodeWorkerCommand } from "./command-options.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
@@ -64,6 +64,9 @@ export function registerNodeCli(program: Command) {
   )
     .option("--session-host", "Host worker sessions for this foreground process")
     .addOption(new Option("--ephemeral").hideHelp())
+    .addOption(
+      new Option("--resume-device <id>", "Resume only this saved paired device").hideHelp(),
+    )
     .addOption(new Option("--desktop-sharing").hideHelp())
     .addOption(new Option("--no-desktop-sharing").hideHelp())
     .option(
@@ -121,6 +124,7 @@ export function registerNodeCli(program: Command) {
         installedAppsSharing: opts.shareInstalledApps,
         desktopSharingEnabled: opts.desktopSharing,
         gatewayAuthFromEnv: opts.authFromEnv,
+        resumeDeviceId: opts.resumeDevice,
         parentStdin: opts.parentStdin,
         commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
         allCommands: opts.allCommands ?? inheritOptionFromParent<boolean>(command, "allCommands"),
@@ -175,7 +179,7 @@ export function registerNodeCli(program: Command) {
   )
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
-    .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
+    .option("--runtime <runtime>", "Service runtime (node|bun|standalone). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
     .addOption(
       new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),

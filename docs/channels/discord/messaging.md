@@ -26,6 +26,10 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
 
 Messages in the same channel continue reaching the [reply queue](/concepts/queue) while an earlier message waits for its turn. Discord messages use durable ingress admission, so `collect` keeps queued messages as separate followup turns, like `followup`. This prevents one message from committing before another rejects a combined turn. Deferring a message preserves its durable recovery state.
 
+During recovery, native bot mentions sent within the last 15 minutes take priority
+over other pending messages. An active claim or retry backoff can still delay them.
+Ambient messages remain queued and pass through normal preflight and history recording.
+
 ## Message behavior
 
 <AccordionGroup>

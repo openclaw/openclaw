@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { runExec } from "../process/exec.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { TailscaleBackendStoppedError } from "./tailscale-backend-stopped-error.js";
 
 const TAILSCALE_BACKEND_READY_WAIT_MS = 90_000;
@@ -51,7 +52,7 @@ export async function waitForTailscaleBackendReady(params: {
   info: (message: string) => void;
   signal?: AbortSignal;
 }): Promise<void> {
-  const deadline = Date.now() + TAILSCALE_BACKEND_READY_WAIT_MS;
+  const deadline = monotonicNow() + TAILSCALE_BACKEND_READY_WAIT_MS;
   let announced: string | undefined;
   for (;;) {
     params.signal?.throwIfAborted();
@@ -82,7 +83,7 @@ export async function waitForTailscaleBackendReady(params: {
       }
       pending = "daemon not reachable";
     }
-    if (Date.now() >= deadline) {
+    if (monotonicNow() >= deadline) {
       return;
     }
     if (announced !== pending) {

@@ -23,6 +23,11 @@ import {
   readResponseTextLimited,
   summarizeProviderTransportError,
 } from "./provider-http-errors.js";
+import {
+  attachLocalServiceDiagnostics,
+  getLocalServiceDiagnosticTail,
+} from "./provider-local-service-diagnostics.js";
+import { withLocalServiceResponseDiagnostics } from "./provider-local-service-response.js";
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import { ensureModelProviderLocalService } from "./provider-local-service.js";
 import {
@@ -369,11 +374,12 @@ export function buildGuardedModelFetch(
           : guardedFetchOptions,
       );
     } catch (error) {
-      const remediatedError = withModelProviderNetworkRemediation(error, {
-        baseUrl: model.baseUrl,
-        providerId: model.provider,
-        url,
-      });
+      const remediatedError = withModelProviderNetworkRemediation(
+        localServiceSignal?.aborted
+          ? error
+          : attachLocalServiceDiagnostics(error, localServiceLease),
+        { baseUrl: model.baseUrl, providerId: model.provider, url },
+      );
       emitModelTransportError(
         log,
         "model-fetch",
@@ -385,6 +391,14 @@ export function buildGuardedModelFetch(
       throw remediatedError;
     }
     let response = result.response;
+    if (localServiceLease && !response.ok) {
+      response = await withLocalServiceResponseDiagnostics(
+        response,
+        getLocalServiceDiagnosticTail(localServiceLease),
+        localServiceSignal,
+        swappedEgress.headers ?? rawHeaders,
+      );
+    }
     const elapsedMs = Date.now() - fetchStartedAt;
     const responseMessage =
       `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +

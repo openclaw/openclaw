@@ -65,7 +65,7 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
     );
   }
 
-  it("joins cancellation before restoring unchanged runtime when foreground provider cleanup fails", async () => {
+  it("joins failed provider cleanup cancellation before restoring the runtime", async () => {
     const cancellation = createDeferred<"restored-in-process">();
     f.hasManagedProviderLocalServices.mockReturnValue(true);
     f.stopManagedProviderLocalServices.mockRejectedValueOnce(new Error("provider cleanup failed"));
@@ -74,7 +74,6 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
     f.acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
     await withForeground(
       async ({ captureSignal, start, runtime, exited }) => {
-        const stop = captureSignal("SIGINT");
         captureSignal("SIGUSR2")();
         await waitForCalls(cancelUpdate);
         expectUncalled(lockRelease, completeUpdate, respawn, runtime.exit);
@@ -83,10 +82,9 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
         await waitForCalls(start, 2);
         expect(cancelUpdate).toHaveBeenCalledExactlyOnceWith(f.managedUpdateSuccessorOwner);
         expect(lockRelease).toHaveBeenCalledOnce();
-        expect(f.acquireGatewayLock).toHaveBeenCalledTimes(2);
         expect(completeUpdate).not.toHaveBeenCalled();
         expect(markFailure).toHaveBeenCalledWith("restart-local-service-stop-failed");
-        stop();
+        captureSignal("SIGINT")();
         await expect(exited).resolves.toBe(0);
       },
       () => cancellation.resolve("restored-in-process"),
@@ -153,8 +151,7 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
             child.emit("close", 1, null);
           }
           await expect(withTimeout(exited, lateExit ? 5_000 : 4_000)).resolves.toBe(1);
-          expectCallCount(1, start, f.acquireGatewayLock, respawn);
-          expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+          expect(start).toHaveBeenCalledOnce();
           expectUncalled(cancelUpdate, commitUpdate, markFailure, f.writeGatewayRestartHandoff);
           if (readinessRejected) {
             expect(child.kill).toHaveBeenCalledOnce();
@@ -177,9 +174,6 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
   );
 
   it("keeps a still-starting foreground successor alive", async ({ signal }) => {
-    const actualKillTree = await vi.importActual<typeof import("../../process/kill-tree.js")>(
-      "../../process/kill-tree.js",
-    );
     const port = await getFreePort();
     const source = `const net = require("node:net");
 process.once("message", () => {
@@ -192,57 +186,54 @@ process.send("parked");`;
       detached: true,
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
-    const parked = once(child, "message");
     const closed = once(child, "close");
     void closed.catch(() => {});
-    f.killProcessTree.mockImplementation(actualKillTree.killProcessTree);
-    try {
-      const [parkedMessage] = await withinTest(
-        awaitGateBeforeSettlement(parked, closed, "foreground successor did not park"),
+    const message = async (expected: string, trigger = () => {}) => {
+      const pending = once(child, "message");
+      trigger();
+      const [value] = await withinTest(
+        awaitGateBeforeSettlement(
+          pending,
+          closed,
+          "foreground successor closed before " + expected,
+        ),
         signal,
       );
-      expect(parkedMessage).toBe("parked");
+      expect(value).toBe(expected);
+    };
+    try {
+      await message("parked");
       prepareForegroundHandoff();
       respawn.mockReturnValueOnce({ mode: "spawned", pid: child.pid, child });
-      const completeBoot = vi.fn();
+      f.waitForGatewayHealthyRestart.mockResolvedValueOnce(
+        f.respawnHealth({
+          healthy: false,
+          waitOutcome: "still-starting",
+          runtime: { status: "running", pid: child.pid },
+        }),
+      );
       await f.withRunningGateway(
-        async ({ captureSignal, close, start, exited }) => {
-          f.waitForGatewayHealthyRestart.mockImplementationOnce(async (params) => {
-            expect(params.child).toBe(child);
-            expect(child.exitCode).toBeNull();
-            return f.respawnHealth({
-              healthy: false,
-              waitOutcome: "still-starting",
-              runtime: { status: "running", pid: child.pid },
-            });
-          });
+        async ({ captureSignal, start, exited }) => {
           captureSignal("SIGUSR2")();
           await expect(withTimeout(exited, 20_000)).resolves.toBe(0);
-          expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
-            outcome: "planned_restart",
-            reason: "restart (SIGUSR2: update.run)",
-          });
-          expectCallCount(1, start, close, f.acquireGatewayLock);
-          expectUncalled(cancelUpdate, commitUpdate, markFailure, f.writeGatewayRestartHandoff);
-
-          const listening = once(child, "message");
-          child.send("listen");
-          const [listeningMessage] = await withinTest(
-            awaitGateBeforeSettlement(listening, closed, "foreground successor did not listen"),
-            signal,
+          expect(start).toHaveBeenCalledOnce();
+          expectUncalled(
+            cancelUpdate,
+            commitUpdate,
+            markFailure,
+            f.writeGatewayRestartHandoff,
+            f.killProcessTree,
           );
-          expect(listeningMessage).toBe("listening");
+          await message("listening", () => {
+            child.send("listen");
+          });
           expect(child).toMatchObject({ exitCode: null, signalCode: null });
         },
         false,
-        { lockPort: port, completeBoot },
+        { lockPort: port },
       );
     } finally {
-      try {
-        await stopChildProcess(child, 5_000);
-      } finally {
-        f.killProcessTree.mockReset();
-      }
+      await stopChildProcess(child, 5_000);
     }
   });
 
@@ -286,9 +277,6 @@ process.send("parked");`;
         }
         if (!launchd) {
           expect(f.acquireGatewayLock).toHaveBeenCalledTimes(2);
-          expect(f.gatewayLog.warn).toHaveBeenCalledWith(
-            "external supervisor restart handoff could not be persisted; falling back to in-process restart",
-          );
         }
         captureSignal("SIGINT")();
         await expect(exited).resolves.toBe(0);

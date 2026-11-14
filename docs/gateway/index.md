@@ -75,6 +75,13 @@ Gateway config reload watches the active config file path (resolved from profile
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
 - Auth is required by default. Shared-secret setups use `gateway.auth.token` / `gateway.auth.password` (or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
+Worker startup recovery retries transient SQLite locks during tool recovery,
+stale turn-claim cleanup, and workspace-journal pruning, logging each retry.
+Workspace recovery must finish
+before worker placements start. If the lock persists through five attempts,
+startup stops with guidance to run `openclaw doctor` or
+`openclaw gateway status --deep`; it does not bypass workspace rollback safety.
+
 ### Module compile cache
 
 The Gateway main thread runs without Node's on-disk module compile cache. Node
@@ -184,7 +191,7 @@ What to expect:
 
 Checklist per instance:
 
-- Unique `gateway.port`
+- Unique `gateway.port`, with base ports at least 120 apart to avoid derived-port overlap
 - Unique `OPENCLAW_CONFIG_PATH`
 - Unique `OPENCLAW_STATE_DIR`
 - Unique `agents.defaults.workspace`
@@ -193,7 +200,7 @@ Example:
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/a.json OPENCLAW_STATE_DIR=~/.openclaw-a openclaw gateway --port 19001
-OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19002
+OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19121
 ```
 
 Detailed setup: [/gateway/multiple-gateways](/gateway/multiple-gateways).
@@ -317,7 +324,7 @@ KillMode=mixed
 WantedBy=default.target
 ```
 
-`TimeoutStopSec=330` covers the Gateway's maximum 315-second stop drain plus a 15-second cleanup and exit margin. The Gateway clamps its drain to the installed unit's effective stop timeout; see [Systemd stop deadlines](/gateway/restart-recovery#systemd-stop-deadlines). To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
+`TimeoutStopSec=330` is the generated unit's outer stop allowance. A committed stop marks running root sessions and aborts work promptly, then bounds persistence and cleanup. The Gateway caps cleanup to the installed unit's effective stop timeout; see [Systemd stop deadlines](/gateway/restart-recovery#systemd-stop-deadlines). To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
 
   </Tab>
 
@@ -383,7 +390,7 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
   </Tab>
 </Tabs>
 
-Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, main-session restart recovery pauses until the full breaker window drains and then resumes automatically in the same process, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
+Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
 
 ## Dev profile quick path
 

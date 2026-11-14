@@ -1,0 +1,2 @@
+2
+# Cover the outer chat pane in the existing browser curvature table and fixture.

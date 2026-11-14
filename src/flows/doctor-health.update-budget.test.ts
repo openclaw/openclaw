@@ -26,9 +26,10 @@ const repairIds = doctorIds(
   "auth-profiles structured-health-repairs session-transcripts write-config final-config-validation",
 );
 const repairAnd = (names: string) => new Set([...repairIds, ...doctorIds(names)]);
-const deferredChecks = "hooks-model provider-catalog-projection runtime-tool-schemas"
-  .split(" ")
-  .map((id) => `core/doctor/${id}`);
+const deferredChecks =
+  "database-engine hooks-model provider-catalog-projection runtime-tool-schemas"
+    .split(" ")
+    .map((id) => `core/doctor/${id}`);
 const updateBudget = (phase: "validation" | "activation" = "activation") => ({
   agentCount: 1,
   phase,
@@ -74,6 +75,9 @@ vi.mock("./doctor-health-contribution-runners.state.js", async (importOriginal) 
 vi.mock("./doctor-health-contribution-runners.config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-health-contribution-runners.config.js")>()),
   runWriteConfigHealth: async () => observed.events.push("config-write"),
+}));
+vi.mock("./doctor-config-validation-findings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-config-validation-findings.js")>()),
   runFinalConfigValidationHealth: async () => observed.events.push("final-readiness"),
 }));
 
@@ -88,7 +92,9 @@ it.each(["rehearsal", "partial-markers"])(
       OPENCLAW_SERVICE_REPAIR_POLICY: "external",
       ...(mode === "partial-markers" ? { HOME: "/synthetic/operator" } : {}),
     };
-    const advisoryIds = doctorIds("security runtime-tool-schemas provider-catalog-projection");
+    const advisoryIds = doctorIds(
+      "database-engine security runtime-tool-schemas provider-catalog-projection",
+    );
     const retainedIds = repairAnd("skills memory-search auth-profile-migration");
     const priorWarnings = Array.from({ length: 31 }, (_, index) => `Repair warning ${index}`);
     const { contributions, executed } = recordContributions(
@@ -123,39 +129,45 @@ it.each([
   { budget: true, marker: undefined, receipt: true },
   { budget: true, marker: "1", receipt: true },
   { budget: true, marker: "reported-checks", receipt: false },
-])("defers lint only to an owned post-restart receipt: %j", async ({ budget, marker, receipt }) => {
-  const deferredIds = doctorIds("runtime-tool-schemas provider-catalog-projection hooks-model");
-  // Security gates readiness; ingress dead letters has no equivalent post-restart lint.
-  const retainedIds = repairAnd(
-    "session-snapshots workspace-status security channel-ingress-dead-letters",
-  );
-  const { contributions, executed } = recordContributions([deferredIds, retainedIds]);
-  const ctx = createDoctorHealthFlowContext({
-    env: {
-      ...updateEnv,
-      OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: marker,
-    },
-    updateBudget: budget ? updateBudget() : undefined,
-  });
-  const deferred = receipt && marker === "reported-checks";
-  if (receipt) {
-    await captureUpdateDoctorConfigWrites(ctx.configPath, async (capture) => {
-      await runDoctorHealthContributionList(ctx, contributions);
-      expect(capture.deferredInspectionCheckIds).toEqual(deferred ? deferredChecks : undefined);
-    });
-  } else {
-    await runDoctorHealthContributionList(ctx, contributions);
-  }
-  expect(new Set(executed)).toEqual(
-    deferred ? retainedIds : new Set([...retainedIds, ...deferredIds]),
-  );
-  expect(ctx.updateWarnings ?? []).toEqual([]);
-  if (deferred) {
-    expect(ctx.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(deferredChecks.join(", ")),
+  { budget: false, marker: undefined, receipt: false, ordinary: true },
+])(
+  "defers lint only to an owned post-restart receipt: %j",
+  async ({ budget, marker, receipt, ordinary }) => {
+    const deferredIds = doctorIds(
+      "database-engine runtime-tool-schemas provider-catalog-projection hooks-model",
     );
-  }
-});
+    // Security gates readiness; ingress dead letters has no equivalent post-restart lint.
+    const retainedIds = repairAnd(
+      "session-snapshots workspace-status security channel-ingress-dead-letters",
+    );
+    const { contributions, executed } = recordContributions([deferredIds, retainedIds]);
+    const ctx = createDoctorHealthFlowContext({
+      env: {
+        ...(ordinary ? {} : updateEnv),
+        OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: marker,
+      },
+      updateBudget: budget ? updateBudget() : undefined,
+    });
+    const deferred = receipt && marker === "reported-checks";
+    if (receipt) {
+      await captureUpdateDoctorConfigWrites(ctx.configPath, async (capture) => {
+        await runDoctorHealthContributionList(ctx, contributions);
+        expect(capture.deferredInspectionCheckIds).toEqual(deferred ? deferredChecks : undefined);
+      });
+    } else {
+      await runDoctorHealthContributionList(ctx, contributions);
+    }
+    expect(new Set(executed)).toEqual(
+      deferred ? retainedIds : new Set([...retainedIds, ...deferredIds]),
+    );
+    expect(ctx.updateWarnings ?? []).toEqual([]);
+    if (deferred) {
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(deferredChecks.join(", ")),
+      );
+    }
+  },
+);
 
 it("records only skips preceding a required failure", async () => {
   const executed: string[] = [];

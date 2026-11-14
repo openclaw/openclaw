@@ -1,3 +1,4 @@
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -6,10 +7,7 @@ import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import { moveSessionFromMenu } from "../../components/session-placement-action.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../../lib/session-pull-requests.ts";
+import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
 import { sessionAgentId, sessionPathAgentId } from "./agent-scope.ts";

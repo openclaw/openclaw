@@ -6,6 +6,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -46,7 +47,6 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
-import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { hashToolCall, recordToolCall } from "./tool-loop-detection.js";

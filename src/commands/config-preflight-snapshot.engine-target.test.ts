@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { createPathResolutionEnv } from "../test-utils/env.js";
@@ -22,28 +23,22 @@ it.each([
     const target = path.join(home, "target");
     fs.mkdirSync(bootstrap);
     fs.mkdirSync(target);
-    fs.writeFileSync(
-      path.join(bootstrap, "openclaw.json"),
-      JSON.stringify({
-        env: {
-          vars: {
-            OPENCLAW_STATE_DIR: target,
-            ENGINE_TARGET_TEST_DSN: "postgresql://synthetic@127.0.0.1:1/engine_target",
-          },
+    writeFixtureJsonSync(path.join(bootstrap, "openclaw.json"), {
+      env: {
+        vars: {
+          OPENCLAW_STATE_DIR: target,
+          ENGINE_TARGET_TEST_DSN: "postgresql://synthetic@127.0.0.1:1/engine_target",
         },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(target, "openclaw.json"),
-      JSON.stringify({
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: { source: "env", provider: "default", id: "ENGINE_TARGET_TEST_DSN" },
-          },
+      },
+    });
+    writeFixtureJsonSync(path.join(target, "openclaw.json"), {
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: { source: "env", provider: "default", id: "ENGINE_TARGET_TEST_DSN" },
         },
-      }),
-    );
+      },
+    });
     const env = createPathResolutionEnv(home, {
       OPENCLAW_CONFIG_PATH: undefined,
       ENGINE_TARGET_TEST_DSN: undefined,

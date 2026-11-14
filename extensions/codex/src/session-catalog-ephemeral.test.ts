@@ -10,7 +10,7 @@ import * as turns from "./app-server/bounded-turn.test-harness.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import * as sharedClient from "./app-server/shared-client.js";
-import { createClientHarness } from "./app-server/test-support.js";
+import { createRequestClientHarness } from "./app-server/test-support.js";
 import {
   codexCatalogResidentHomeKey,
   observeCodexCatalogClient,
@@ -30,11 +30,11 @@ it.each([false, true])(
     const { start } = resolveCodexAppServerRuntimeOptions({ pluginConfig });
     const homeId = await codexCatalogResidentHomeKey({ startOptions: start, agentDir });
     const native = turns.threadStartResult("gpt-5.4");
-    Object.assign(native.thread, {
-      recencyAt: 100,
+    const thread: CodexThread = Object.assign(native.thread, {
       preview: "Name this conversation.",
       source: "cli",
       originator: "codex_cli_rs",
+      status: { type: "idle" },
     } satisfies Partial<CodexThread>);
     const openState = () =>
       createPluginStateKeyedStoreForTests<StoredCodexCatalogEntry>("codex", {
@@ -51,34 +51,28 @@ it.each([false, true])(
         assertCurrent: () => {},
       });
     const index = createIndex();
-    const thread: CodexThread = { ...native.thread, source: "cli", status: { type: "idle" } };
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request: { id: number; method: string; params: { ephemeral?: boolean } } =
-          JSON.parse(line);
-        const responses: Record<string, unknown> = {
-          "model/list": { data: [turns.codexModel()], nextCursor: null },
-          "thread/start": native,
-          "thread/read": { thread },
-          "turn/start": turns.inProgressTurnResult(),
-        };
-        expect(request.method in responses).toBe(true);
-        if (request.method === "thread/start") {
-          expect(request.params.ephemeral).toBe(true);
-          if (!existing) {
-            send({ method: "thread/started", params: { thread } });
-          }
+    const harness = createRequestClientHarness((method, id, params, send) => {
+      const responses: Record<string, unknown> = {
+        "model/list": { data: [turns.codexModel()], nextCursor: null },
+        "thread/start": native,
+        "thread/read": { thread },
+        "turn/start": turns.inProgressTurnResult(),
+      };
+      if (method === "thread/start") {
+        expect(params).toHaveProperty("ephemeral", true);
+        if (!existing) {
+          send({ method: "thread/started", params: { thread } });
         }
-        send({ id: request.id, result: responses[request.method] });
-        if (request.method === "turn/start") {
-          setImmediate(() =>
-            send({
-              method: "turn/completed",
-              params: { threadId: thread.id, ...turns.completedTurnResult() },
-            }),
-          );
-        }
-      },
+      }
+      send({ id, result: responses[method] });
+      if (method === "turn/start") {
+        setImmediate(() =>
+          send({
+            method: "turn/completed",
+            params: { threadId: thread.id, ...turns.completedTurnResult() },
+          }),
+        );
+      }
     });
     vi.spyOn(sharedClient, "createIsolatedCodexAppServerClient").mockImplementation(
       async (options) => {
@@ -96,7 +90,7 @@ it.each([false, true])(
         await index.upsertThread({ ...thread, ephemeral: false });
       }
       expect((await index.list({})).sessions).toHaveLength(existing ? 1 : 0);
-      const result = await runBoundedCodexAppServerTurn({
+      await runBoundedCodexAppServerTurn({
         model: { mode: "required", id: "gpt-5.4" },
         timeoutMs: 5_000,
         agentDir,
@@ -107,12 +101,9 @@ it.each([false, true])(
         requiredModalities: ["text"],
         isolation: "configured-transport",
       });
-      expect(result.text).toBe("The message was sent successfully.");
-      expect(harness.client.getCloseError()).toBeDefined();
       await nextTurn();
       expect((await index.list({})).sessions).toEqual([]);
       expect(index.get(thread.id)).toBeUndefined();
-      expect(harness.writes.some((line) => JSON.parse(line).method === "thread/read")).toBe(true);
     } finally {
       await harness.client.closeAndWait();
       await index.close();

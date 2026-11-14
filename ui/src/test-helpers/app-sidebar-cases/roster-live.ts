@@ -37,7 +37,7 @@ it("AppSidebar updates held off-window rows without rendering", async () => {
   expect(lastElement()?.textContent).toContain("Quiet latest title");
 });
 it.each(["navigation", "contextual"] as const)(
-  "AppSidebar parks roster publications under %s until reveal",
+  "AppSidebar parks %s roster updates",
   async (surface) => {
     const { sidebar, context, sessions, result } = await R.mountRoster();
     await R.toggleRoster(sidebar);
@@ -73,22 +73,19 @@ it.each(["navigation", "contextual"] as const)(
       await router.navigate("cron", {});
     }
     await R.settleRoster(sidebar);
-    expect(
-      sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__preview')
-        ?.textContent,
-    ).toContain("Latest work 2");
+    const preview = sidebar.querySelector(
+      '[data-agent-group="main"] .sidebar-agent-roster__preview',
+    );
+    expect(preview?.textContent).toContain("Latest work 2");
     expect(prepare).toHaveBeenCalledTimes(1);
   },
 );
 it("AppSidebar retains roster mode after remount, then restores chip sessions", async () => {
   const { sidebar, provider } = await R.mountRoster();
-  expect(sidebar.querySelector(".sidebar-agent-roster")).toBeNull();
-  expect(R.sessionKeys(sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
   await R.toggleRoster(sidebar);
   await vi.waitFor(() => expect(R.agentIds(sidebar)).toHaveLength(3));
   expect(loadSettings().sidebarAgentsMode).toBe("roster");
   expect(R.sessionKeys(sidebar)).toEqual([]);
-  expect(sidebar.querySelector("[data-agent-collapse]")).toBeNull();
   provider.remove();
   const { sidebar: restored } = await R.mountRoster();
   restored.sidebarAgentsMode = loadSettings().sidebarAgentsMode ?? "chip";

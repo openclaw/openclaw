@@ -394,7 +394,7 @@ export class ShellChromeOwner {
       !this.shouldIgnoreSettingsEscape(event)
     ) {
       event.preventDefault();
-      host.shellNavigation.exitSettings();
+      host.shellNavigation.leaveSettingsLevel();
     }
   };
 
@@ -428,7 +428,9 @@ export class ShellChromeOwner {
     // A replaced workspace can retain its palette ref after the DOM is detached.
     if (!host.elements.commandPalette?.isConnected && isCommandPaletteShortcut(event)) {
       event.preventDefault();
-      this.togglePalette();
+      if (!event.repeat) {
+        this.togglePalette();
+      }
       return;
     }
     if (

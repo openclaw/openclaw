@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -11,14 +10,19 @@ import { tryProcessCwd } from "./safe-cwd.js";
 
 export { resolveEffectiveHomeDir, resolveOsHomeDir };
 
-const userPathBaseDirectory = resolveGlobalSingleton(
-  Symbol.for("openclaw.userPathBaseDirectory"),
-  () => new AsyncLocalStorage<string>(),
-);
+function getUserPathBaseDirectory() {
+  // Path resolution can be imported by browser-safe helpers before Node context is needed.
+  return resolveGlobalSingleton(Symbol.for("openclaw.userPathBaseDirectory"), () => {
+    const { AsyncLocalStorage } = process.getBuiltinModule("async_hooks");
+    return new AsyncLocalStorage<string>();
+  });
+}
 
 /** Preserve invocation-relative paths while an updater parks its physical cwd. */
 export function withUserPathBaseDirectory<T>(cwd: string | undefined, operation: () => T): T {
-  return cwd === undefined ? operation() : userPathBaseDirectory.run(path.resolve(cwd), operation);
+  return cwd === undefined
+    ? operation()
+    : getUserPathBaseDirectory().run(path.resolve(cwd), operation);
 }
 
 /** Resolves the effective home or falls back to cwd when no home source exists. */
@@ -91,7 +95,7 @@ function resolvePathWithHome(
         homedir: opts?.homedir,
       })
     : trimmed;
-  const base = userPathBaseDirectory.getStore();
+  const base = getUserPathBaseDirectory().getStore();
   return base ? path.resolve(base, expanded) : path.resolve(expanded);
 }
 

@@ -13,6 +13,7 @@ import {
   createComposerContainer,
   createComposerProps,
   disposeComposer,
+  findPrimaryButton,
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
@@ -141,10 +142,12 @@ it("publishes attachment read progress through the composer owner without a draf
     [new File(["progress"], "progress.txt", { type: "text/plain" })],
     props,
   );
-  await waitForSolid(() => expect(view.query(".chat-attachment-loading > span")).not.toBeNull());
+  await waitForSolid(() =>
+    expect(view.query('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
+  );
   reportProgress?.();
   flush();
-  expect(view.query<HTMLElement>(".chat-attachment-loading > span")?.style.transform).toBe(
+  expect(view.query<HTMLElement>(".chat-attachment-loading__line > span")?.style.transform).toBe(
     "scaleX(0.5)",
   );
   expect(view.textarea().value).toBe("");
@@ -172,6 +175,31 @@ it("publishes submitted and restored drafts without remounting the input", () =>
   flush();
   expect(textarea.value).toBe("A recoverable draft");
   expect(view.textarea()).toBe(textarea);
+});
+
+it("retires submitted command suggestions before a delayed catalog refresh", async () => {
+  const refresh = createDeferred();
+  const onSend = vi.fn(() => {
+    clearSubmittedComposerState(state, state.chatMessage, [], [], null);
+  });
+  const { state, view, input } = mountOwnedComposer({
+    onSend,
+    onSlashIntent: () => refresh.promise,
+  });
+  input("/help");
+  await waitForSolid(() => expect(view.query('[role="listbox"]')).not.toBeNull());
+
+  findPrimaryButton(view.container).click();
+  flush();
+  expect(onSend).toHaveBeenCalledOnce();
+  expect(state.chatMessage).toBe("");
+  expect(view.textarea().value).toBe("");
+  expect(view.query('[role="listbox"]')).toBeNull();
+  expect(view.textarea().hasAttribute("aria-controls")).toBe(false);
+
+  refresh.resolve();
+  await refresh.promise;
+  await waitForSolid(() => expect(view.query('[role="listbox"]')).toBeNull());
 });
 
 it("publishes a restored persisted draft and queue after adopting their revision", () => {
@@ -308,7 +336,8 @@ it("updates composer text on a live locale change without disturbing an IME draf
   );
   const textarea = view.textarea();
   const heading = view.query(".chat-controls__permission-heading")!;
-  expect(heading.textContent).toBe("Execution permissions");
+  const learnMore = () => view.query(".chat-controls__permission-learn-more")?.textContent?.trim();
+  expect(learnMore()).toBe("Learn more");
   expect(textarea.placeholder).toBe("Message Locale fixture");
 
   textarea.focus();
@@ -321,7 +350,7 @@ it("updates composer text on a live locale change without disturbing an IME draf
   await i18n.setLocale("de");
   flush();
 
-  expect(heading.textContent).toBe("Ausführungsberechtigungen");
+  expect(learnMore()).toBe("Mehr erfahren");
   expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
   expect(view.query(".chat-controls__permission-heading")).toBe(heading);
   expect(view.textarea()).toBe(textarea);

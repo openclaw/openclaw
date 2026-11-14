@@ -271,13 +271,6 @@ it.each<InvalidRequest>([
   },
 );
 
-function connectedProfileClient() {
-  return {
-    authenticatedUserProfile: { ...profileBinding },
-    connect: { scopes: ["operator.write"] },
-  };
-}
-
 it("keeps unresolved users.self unavailable and retryable when GitHub lookup fails", async () => {
   const providerClient: Record<string, unknown> = {
     authenticatedUserId: "ada@github",
@@ -587,7 +580,8 @@ it.each(
 )("settles $method before publishing after $change", async ({ method, change }) => {
   const connection = new AbortController();
   const client = {
-    ...connectedProfileClient(),
+    connect: selfClient.connect,
+    authenticatedUserProfile: { ...profileBinding },
     connectionSignal: connection.signal,
   };
   const avatar = method === "users.setAvatar";

@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   gitNullConfigPath,
   normalizeGitPathForFilesystem,
+  quoteGitConfig,
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -115,7 +116,7 @@ export async function withWorktreeGitConfig<T>(
   if (settings.code !== 0 && settings.code !== 1) {
     throw commandError("git config layout", settings);
   }
-  const layout = new Map<string, string>();
+  const layout = new Map<string, string>([["core.symlinks", String(process.platform !== "win32")]]);
   for (const field of settings.stdout.split("\0").filter(Boolean)) {
     const separator = field.indexOf("\n");
     layout.set(
@@ -164,19 +165,13 @@ export async function withWorktreeGitConfig<T>(
   };
   try {
     await prepareMetadata(directory);
+    // Serialize only the selected filesystem/ignore settings; never program drivers.
     // Windows cannot represent executable bits; POSIX content checks remain strict.
     await fs.writeFile(
       path.join(directory, "config"),
-      `[core]\nrepositoryformatversion=${format === "sha256" || refStorage === "reftable" ? 1 : 0}\nbare=false\nfilemode=${process.platform !== "win32"}\nsymlinks=${process.platform !== "win32"}\n[gc]\nauto=0\n[maintenance]\nauto=false\n[extensions]\n${format === "sha256" ? "objectFormat=sha256\n" : ""}${refStorage === "reftable" ? "refStorage=reftable\n" : ""}`,
+      `[core]\nrepositoryformatversion=${format === "sha256" || refStorage === "reftable" ? 1 : 0}\nbare=false\nfilemode=${process.platform !== "win32"}\n${[...layout].map(([key, value]) => `${key.slice("core.".length)}=${quoteGitConfig(value)}\n`).join("")}[gc]\nauto=0\n[maintenance]\nauto=false\n[extensions]\n${format === "sha256" ? "objectFormat=sha256\n" : ""}${refStorage === "reftable" ? "refStorage=reftable\n" : ""}`,
     );
-    // Preserve filesystem/ignore behavior, never program drivers or relaxed path protections.
-    for (const [key, value] of layout) {
-      await requireGit(
-        cwd,
-        ["config", "--file", path.join(directory, "config"), key, value],
-        configOptions,
-      );
-    }
+    assertActive();
     const optionsFor = async <Options extends GitConfigOptions>(
       args: string[],
       options: Options,

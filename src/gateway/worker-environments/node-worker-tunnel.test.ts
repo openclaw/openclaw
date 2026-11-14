@@ -45,6 +45,7 @@ import {
   parseRemoteWorkspaceManifestEnvelope,
   type RemoteWorkspaceManifestEnvelope,
 } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import type { WorkspaceComputationHashResult } from "./workspace-manifest-computation.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -67,6 +68,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
 
 describe("node worker tunnel manager", () => {
   it.for<[string, boolean]>([
@@ -893,12 +895,16 @@ describe("node worker tunnel manager", () => {
         if (input.argv.at(-1) === "memo-v1") {
           memoInputs.push(JSON.parse(input.input!));
         }
-        const result = await runCommandWithTimeout([process.execPath, ...input.argv.slice(1)], {
-          input: input.input,
-          cwd: remoteWorkspaceDir,
-          timeoutMs: 10_000,
-          baseEnv: { PATH: process.env.PATH, HOME: remoteHome },
-        });
+        const clock = `data:text/javascript,Date.now=()=>${Date.now() + 60_000};`;
+        const result = await runCommandWithTimeout(
+          [process.execPath, "--import", clock, ...input.argv.slice(1)],
+          {
+            input: input.input,
+            cwd: remoteWorkspaceDir,
+            timeoutMs: 10_000,
+            baseEnv: { PATH: process.env.PATH, HOME: remoteHome },
+          },
+        );
         const { stdout, stderr, code, signal, killed, termination } = result;
         if (input.argv.at(-1) === "memo-v1") {
           remoteReports.push(parseRemoteWorkspaceManifestEnvelope(stdout));

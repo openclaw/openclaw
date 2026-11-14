@@ -22,6 +22,7 @@ import {
 } from "./hook-agent-observations.js";
 import { createChannelIngressHookRunner } from "./hook-channel-ingress.js";
 import { readClaimingHookAdmission } from "./hook-claim-admission.js";
+import { isHookContextEligible } from "./hook-context-eligibility.js";
 import {
   type GateHookResult,
   type InputGateDecision,
@@ -49,10 +50,9 @@ import type {
   VoidHookRunOptions,
 } from "./hook-runner-types.js";
 import { withHookTimeout } from "./hook-timeout.js";
-import { isPluginHookReplyDispatchKind, PLUGIN_HOOK_METADATA } from "./hook-types.js";
+import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import type {
   PluginHookAgentContext,
-  PluginHookAgentTrigger,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
@@ -134,27 +134,6 @@ type PluginTargetedInboundClaimOutcome =
 type SyncHookName = "tool_result_persist" | "before_message_write";
 type SyncHookMessage = PluginHookToolResultPersistEvent["message"];
 type SyncMessageHookStepResult = { message?: SyncHookMessage; block?: true };
-
-function isHookContextEligible(hook: PluginHookRegistration, ctx?: unknown): boolean {
-  if (hook.hookName === "reply_dispatch" && hook.eligibleDispatchKinds !== undefined) {
-    const kind =
-      typeof ctx === "object" && ctx !== null && "dispatchKind" in ctx
-        ? ctx.dispatchKind
-        : undefined;
-    // Unknown callers cannot prove exclusion from a hook, including during recovery checks.
-    return !isPluginHookReplyDispatchKind(kind) || hook.eligibleDispatchKinds.includes(kind);
-  }
-  if (hook.hookName !== "before_agent_reply" || hook.eligibleTriggers === undefined) {
-    return true;
-  }
-  const trigger =
-    typeof ctx === "object" && ctx !== null && "trigger" in ctx
-      ? (ctx as { trigger?: unknown }).trigger
-      : undefined;
-  return (
-    typeof trigger === "string" && hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
-  );
-}
 
 /** Get hooks for a specific hook name, sorted by priority (higher first). */
 function getHooksForName<K extends PluginHookName>(
@@ -595,8 +574,10 @@ export function createHookRunner(
       runModifyingHook(hookName, event, ctx, policy);
 
   // Keep the optional handler scope in host arguments, never in the plugin context.
-  const bindClaimingHook = <K extends ClaimingHookName>(hookName: K) =>
-    (runClaimingHook<K, HookResult<K>>).bind(undefined, hookName);
+  const bindClaimingHook = <K extends ClaimingHookName>(
+    hookName: K,
+    stopOnError?: (ctx: HookContext<K>) => boolean,
+  ) => (runClaimingHook<K, HookResult<K>>).bind(undefined, hookName, stopOnError);
 
   /**
    * Handlers are executed sequentially in priority order, and results are merged.
@@ -723,18 +704,22 @@ export function createHookRunner(
    */
   async function runClaimingHook<K extends PluginHookName, TResult extends { handled: boolean }>(
     hookName: K,
+    stopOnError: ((ctx: HookContext<K>) => boolean) | undefined,
     event: HookEvent<K>,
     ctx: HookContext<K>,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName, ctx);
-    if (hooks.length === 0) {
-      return undefined;
-    }
-
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
 
-    const outcome = await runClaimingHooksList(hooks, hookName, event, ctx, runHandler);
+    const outcome = await runClaimingHooksList(
+      hooks,
+      hookName,
+      event,
+      ctx,
+      runHandler,
+      stopOnError?.(ctx),
+    );
     return outcome.status === "handled" ? outcome.result : undefined;
   }
 
@@ -747,6 +732,7 @@ export function createHookRunner(
     event: HookEvent<K>,
     ctx: HookContext<K>,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
+    stopOnError = false,
   ): Promise<
     | { status: "handled"; result: TResult }
     | { status: "declined" }
@@ -786,6 +772,11 @@ export function createHookRunner(
         } catch (err) {
           firstError ??= sanitizeHookError(err);
           handleHookError({ hookName, pluginId: current.pluginId, error: err });
+          // An invoked ACP handler may already have started work, including after a timeout.
+          // Only a decline or a reload refusal before invocation permits another runtime.
+          if (stopOnError) {
+            throw err;
+          }
         }
         if (replaced) {
           registration = selection.current(hook);
@@ -824,10 +815,10 @@ export function createHookRunner(
     if (!sourceFingerprint) {
       return undefined;
     }
-    const activeToolNames = [
-      ...new Set(params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean)),
-    ].toSorted();
-    const activeToolNameSet = new Set(activeToolNames);
+    const activeToolNameSet = new Set(
+      params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean),
+    );
+    const activeToolNames = Object.freeze([...activeToolNameSet].toSorted());
     const token = { active: true };
     const assertActive = () => {
       if (!token.active) {
@@ -844,6 +835,10 @@ export function createHookRunner(
       allows(toolName: string): boolean {
         assertActive();
         return activeToolNameSet.has(normalizeToolPolicyName(toolName));
+      },
+      list(): readonly string[] {
+        assertActive();
+        return activeToolNames;
       },
       assertActive,
     });
@@ -922,6 +917,7 @@ export function createHookRunner(
       : undefined;
     return runClaimingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
       "before_dispatch",
+      undefined,
       event,
       ctx,
       runHandler,
@@ -1111,7 +1107,7 @@ export function createHookRunner(
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
     runMessageReceived: bindVoidHook("message_received"),
     runBeforeDispatch,
-    runReplyDispatch: bindClaimingHook("reply_dispatch"),
+    runReplyDispatch: bindClaimingHook("reply_dispatch", (ctx) => ctx.dispatchKind === "acp"),
     runReplyPayloadSending: bindModifyingHook("reply_payload_sending", {
       // Handlers see the latest payload without inheriting host-only media trust.
       eventForHandler: (event, result) => ({
@@ -1164,6 +1160,7 @@ export function createHookRunner(
           getPluginValueInstance(hook.handler)?.lifecycle.signal,
         ),
       ),
+    runRunStopped: bindVoidHook("run_stopped"),
     runSubagentDeliveryTarget: bindModifyingHook("subagent_delivery_target", {
       mergeResults: (acc, next): PluginHookSubagentDeliveryTargetResult =>
         acc?.origin ? acc : next,

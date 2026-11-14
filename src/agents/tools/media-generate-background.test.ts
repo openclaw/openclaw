@@ -191,6 +191,11 @@ it("wakes the original conversation with generated attachments and visible-reply
     ...completed,
     attachments,
   });
+  expect(announce.mock.lastCall?.[0]).toMatchObject({
+    completionRequesterSessionId: completed.handle.requesterTranscript?.sessionId,
+    completionRequesterLifecycleRevision:
+      completed.handle.requesterTranscript?.lifecycleRevision ?? undefined,
+  });
   expectFallbackMediaAnnouncement({
     deliverAnnouncementMock: announce,
     requesterSessionKey: completed.handle.requesterSessionKey,
@@ -208,6 +213,11 @@ it("wakes the original conversation with generated attachments and visible-reply
     "current visible-reply contract",
   ]);
   expect(event?.attachments).toEqual(attachments);
+  musicGenerationTaskLifecycle.completeTaskRun({ handle: completed.handle, count: 1 });
+  await expect(musicGenerationTaskLifecycle.wakeTaskCompletion(completed)).resolves.toEqual({
+    status: "permanent_failure",
+  });
+  expect(announce).toHaveBeenCalledOnce();
 });
 it("keeps the detached video tool run context registered until terminal status", async () => {
   const handle = await videoGenerationTaskLifecycle.createTaskRun({

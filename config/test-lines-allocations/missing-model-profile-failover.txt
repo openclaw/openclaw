@@ -1,0 +1,2 @@
+70
+# Regression: missing models skip profiles while account-specific failures still rotate.

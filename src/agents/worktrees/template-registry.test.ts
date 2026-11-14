@@ -13,7 +13,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { expectNoMainThreadSql as withoutMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import * as registry from "./template-registry-async.js";
 import type { WorktreeTemplateRecord } from "./template-registry.js";
@@ -37,16 +37,6 @@ const owner = { pid: 1, host: "synthetic-remote-owner", startedAt: null };
 const retain = (input: Parameters<typeof registry.retainTemplateReaderAsync>[1]) =>
   registry.retainTemplateReaderAsync(env, input, guard);
 const retire = () => retain({ id: template.id, key: "retire", owner, unpublish: true });
-
-async function withoutMainThreadSql(run: () => Promise<void>) {
-  const sql = observeMainThreadSql();
-  try {
-    await run();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
-}
 
 function worker(databasePath?: string, revokeAtCommit = false) {
   const location = { env, path: databasePath };

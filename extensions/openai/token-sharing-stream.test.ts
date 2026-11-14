@@ -4,20 +4,10 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import { expect, it } from "vitest";
 import { wrapOpenAIResponsesStream } from "./responses-stream.runtime.js";
 import { buildOpenAIResponsesProviderHooks } from "./shared.js";
+import { createOpenAIResponsesTestModel } from "./test-support/responses-model.test-support.js";
 import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
 
-const model: Parameters<StreamFn>[0] = {
-  provider: "openai",
-  id: "gpt-5.4",
-  name: "Test model",
-  api: "openai-responses",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  contextWindow: 128000,
-  maxTokens: 8192,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+const model = createOpenAIResponsesTestModel();
 
 const apiControls = {
   metadata: { caller: "must-not-send" },
@@ -28,6 +18,13 @@ const apiControls = {
 };
 
 const sharingAuth = { mode: "oauth", authFlow: TOKEN_SHARING_AUTH_FLOW } as const;
+const preserved = () => ({
+  input: [{ role: "user", content: "Hello" }],
+  prompt_cache_options: { ttl: "30m" },
+  service_tier: "priority",
+  text: { verbosity: "low", format: { type: "json_object" } },
+});
+const userTool = () => ({ type: "function", name: "read_file", parameters: {} });
 const baseContext = { provider: "openai", modelId: model.id, model, auth: sharingAuth };
 type RequestParams = Partial<ProviderWrapStreamFnContext> & { completion?: boolean };
 
@@ -52,82 +49,69 @@ async function request(
     : wrapOpenAIResponsesStream(context);
   const stream = wrapped ?? streamFn;
   await stream(model, completion ? { messages: [], tools: [] } : { messages: [] }, requestOptions);
-  return { wrapped, options: observed, payload: await result };
+  return { options: observed, payload: await result };
 }
 
-it("enforces HTTP and complete-context replay after caller/provider payload transforms", async () => {
-  const { payload, options } = await request(
-    {
-      input: [{ role: "user", content: "Hello" }],
-      tools: [{ type: "function", name: "read_file", parameters: {} }],
-    },
-    { extraParams: { transport: "websocket", store: true, responsesServerCompaction: true } },
-    {
-      transport: "websocket",
-      headers: { "X-OpenAI-ChatPass-Test": "stale", "X-Custom": "preserved" },
-      onPayload: async (rawRequest) => ({
-        ...(rawRequest as Record<string, unknown>),
-        store: true,
-        ...apiControls,
-        prompt_cache_options: { ttl: "30m" },
-        service_tier: "priority",
-        text: { verbosity: "low", format: { type: "json_object" } },
-        context_management: [{ type: "compaction", compact_threshold: 1000 }],
-      }),
-    },
-  );
-  expect(options).toMatchObject({ transport: "sse", replayResponsesItemIds: false });
-  expect(Object.fromEntries(new Headers(omitNullRequestHeaders(options?.headers)))).toMatchObject({
-    "x-openai-chatpass-test": "codex-direct",
-    "x-custom": "preserved",
-  });
-  for (const field of ["context_management", ...Object.keys(apiControls)]) {
-    expect(payload).not.toHaveProperty(field);
-  }
-  expect(payload).toMatchObject({
-    store: false,
-    prompt_cache_options: { ttl: "30m" },
-    service_tier: "priority",
-    text: { verbosity: "low", format: { type: "json_object" } },
-    tools: expect.arrayContaining([
-      { type: "function", name: "read_file", parameters: {} },
-      { type: "web_search" },
-    ]),
-  });
-  expect(payload).toHaveProperty("input", [{ role: "user", content: "Hello" }]);
-});
+it.each([false, true])(
+  "enforces sharing policy after payload transforms (completion=%s)",
+  async (completion) => {
+    const tools = completion ? [] : [userTool()];
+    const { payload, options } = await request(
+      { input: preserved().input, tools },
+      {
+        completion,
+        extraParams: { transport: "websocket", store: true, responsesServerCompaction: true },
+      },
+      {
+        transport: "websocket",
+        headers: { "X-OpenAI-ChatPass-Test": "stale", "X-Custom": "preserved" },
+        onPayload: async (rawRequest) => ({
+          ...(rawRequest as Record<string, unknown>),
+          store: true,
+          ...apiControls,
+          ...preserved(),
+          context_management: [{ type: "compaction", compact_threshold: 1000 }],
+        }),
+      },
+    );
+    expect(options).toMatchObject({ transport: "sse", replayResponsesItemIds: false });
+    expect(Object.fromEntries(new Headers(omitNullRequestHeaders(options?.headers)))).toMatchObject(
+      {
+        "x-openai-chatpass-test": "codex-direct",
+        "x-custom": "preserved",
+      },
+    );
+    for (const field of ["context_management", ...Object.keys(apiControls)]) {
+      expect(payload).not.toHaveProperty(field);
+    }
+    expect(payload).toMatchObject({
+      store: false,
+      ...preserved(),
+      tools: completion ? [] : expect.arrayContaining([userTool(), { type: "web_search" }]),
+    });
+  },
+);
 
 it.each([
-  { auth: sharingAuth, completion: true, sharing: true },
-  { auth: { mode: "oauth" }, completion: true, sharing: false },
-  { auth: { mode: "api_key" }, completion: false, sharing: false },
-  { auth: { mode: "oauth" }, completion: false, sharing: false },
+  { auth: { mode: "oauth" }, completion: true },
+  { auth: { mode: "api_key" }, completion: false },
+  { auth: { mode: "oauth" }, completion: false },
 ] as const)(
-  "credential route: $auth.mode / completion=$completion / sharing=$sharing",
-  async ({ auth, completion, sharing }) => {
-    const controls = { ...apiControls, service_tier: sharing ? "priority" : "flex" };
-    const { wrapped, options, payload } = await request(
+  "leaves non-sharing credentials unchanged: $auth.mode / completion=$completion",
+  async ({ auth, completion }) => {
+    const controls = { ...apiControls, service_tier: "flex" };
+    const { options, payload } = await request(
       { ...controls, tools: [], store: true },
       { auth, completion },
       { headers: { "x-custom": "preserved" } },
     );
-    if (completion && !sharing) {
-      expect(wrapped).toBeUndefined();
-    }
     const headers = new Headers(omitNullRequestHeaders(options?.headers));
-    expect(headers.get("x-openai-chatpass-test")).toBe(sharing ? "codex-direct" : null);
+    expect(headers.get("x-openai-chatpass-test")).toBeNull();
     expect(headers.get("x-custom")).toBe("preserved");
     if (completion) {
-      expect(payload).toMatchObject({ tools: [], store: !sharing });
+      expect(payload).toMatchObject({ tools: [], store: true });
     }
-    if (sharing) {
-      for (const field of Object.keys(apiControls)) {
-        expect(payload).not.toHaveProperty(field);
-      }
-      expect(options).toMatchObject({ transport: "sse", replayResponsesItemIds: false });
-    } else {
-      expect(payload).toMatchObject(controls);
-    }
+    expect(payload).toMatchObject(controls);
   },
 );
 

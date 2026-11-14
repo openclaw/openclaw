@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({ archive: "", warnings: [] as string[] }));
 vi.mock("./node-bootstrap-artifact-worker.js", () => ({
   prepareNodeArtifactInWorker: async (
     _kind: string,
-    { temporaryRoot }: { temporaryRoot: string },
+    { temporaryRoot, options }: { temporaryRoot: string; options: { install?: "npm" | "bundle" } },
   ) => {
     const tarballPath = path.join(temporaryRoot, "node-runtime.tgz");
     await fs.copyFile(state.archive, tarballPath);
@@ -22,6 +22,7 @@ vi.mock("./node-bootstrap-artifact-worker.js", () => ({
       tarballSha256: "a".repeat(64),
       openclawVersion: "1.0.0",
       buildId: "fixture",
+      install: options.install ?? "bundle",
       enabledPluginIds: [],
     };
   },
@@ -37,9 +38,13 @@ afterEach(() => {
   state.warnings.length = 0;
 });
 
-it.each([false, true])(
-  "caches the archive's npm lock outcome for subsequent worker starts (failure: %s)",
-  async (fail) => {
+it.each([
+  { install: "npm", fail: false },
+  { install: "npm", fail: true },
+  { install: "bundle", fail: false },
+] as const)(
+  "caches the archive lock outcome for $install (failure: $fail)",
+  async ({ install, fail }) => {
     const root = tempDirs.make("bootstrap-install-lock-");
     state.archive = path.join(root, "original.tgz");
     await fs.writeFile(state.archive, "archive");
@@ -67,6 +72,7 @@ it.each([false, true])(
         });
       });
     const provider = createNodeBootstrapArtifactProvider({
+      install,
       packageRoot: root,
       runningBuildId: "fixture",
       plugins: [],
@@ -75,8 +81,11 @@ it.each([false, true])(
       const [first, concurrent] = await Promise.all([provider.prepare(), provider.prepare()]);
       expect(await provider.prepare()).toBe(first);
       expect(concurrent).toBe(first);
-      expect(npm).toHaveBeenCalledTimes(1);
-      if (fail) {
+      expect(npm).toHaveBeenCalledTimes(install === "npm" ? 1 : 0);
+      if (install === "bundle") {
+        expect(first.installLock).toBeUndefined();
+        expect(state.warnings).toEqual([]);
+      } else if (fail) {
         expect(first.installLock).toBeUndefined();
         expect(state.warnings).toEqual([expect.stringContaining("EALLOWREMOTE")]);
       } else {

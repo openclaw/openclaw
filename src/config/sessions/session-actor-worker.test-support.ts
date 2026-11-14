@@ -75,13 +75,14 @@ export function sessionActorFileTarget(
 
 export function seedSessionActorOutcomeTransferEntry(
   fixture: Pick<ReturnType<typeof createSessionCompoundWorkerFixture>, "database" | "scope">,
+  bytes = SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024,
 ): void {
   // Transfer coverage needs a genuinely oversized result, not copied history indexes.
   runSqliteImmediateTransactionSync(fixture.database.db, () =>
     writeSessionEntry(fixture.database, fixture.scope.sessionKey, {
       sessionId: fixture.scope.sessionId,
       updatedAt: 1,
-      skillsSnapshot: { prompt: "s".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024), skills: [] },
+      skillsSnapshot: { prompt: "s".repeat(bytes), skills: [] },
     }),
   );
 }

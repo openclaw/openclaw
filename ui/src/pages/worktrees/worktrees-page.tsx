@@ -225,6 +225,9 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                     <datalist id="worktrees-create-branches">
                       <For each={view().createBranches}>{(name) => <option value={name} />}</For>
                     </datalist>
+                    {view().createBranchesRefreshing ? (
+                      <span role="status">{t("common.refreshing")}</span>
+                    ) : undefined}
                   </>
                 }
               />

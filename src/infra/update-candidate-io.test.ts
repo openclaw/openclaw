@@ -1,10 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -13,8 +11,8 @@ afterEach(() => {
 function pendingIo(options: Partial<Parameters<typeof withUpdateCandidateIoBudget>[0]> = {}) {
   const exit = createDeferred();
   const state: { signal?: AbortSignal; settled: boolean } = { settled: false };
-  const directory = options.directory ?? tempDirs.make("openclaw-io-");
-  const operation = withUpdateCandidateIoBudget({ bytes: 0, ...options, directory }, (signal) => {
+  const params = { directory: "unused", bytes: 0, ...options };
+  const operation = withUpdateCandidateIoBudget(params, (signal) => {
     state.signal = signal;
     return exit.promise;
   }).finally(() => {
@@ -45,8 +43,8 @@ it.each([
 );
 
 it("checks completion against the absolute allowance before its timer runs", async () => {
-  const now = Date.now();
-  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(now);
   const { exit, operation } = pendingIo({ bytes: 32 * 1024 ** 2 });
   const rejected = expect(operation).rejects.toThrow("exceeded its 340 second allowance");
   clock.mockReturnValue(now + 340_000);
@@ -55,14 +53,13 @@ it("checks completion against the absolute allowance before its timer runs", asy
 });
 
 it("expires the active snapshot after a completed inspection with a moving clock", async () => {
-  let now = Date.now();
-  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  let now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
   const expireDeadline = captureUpdateCandidateDeadline();
-  const directory = tempDirs.make("openclaw-io-active-deadline-");
-  await withUpdateCandidateIoBudget({ directory, bytes: 0 }, async () => undefined);
+  await withUpdateCandidateIoBudget({ directory: "unused", bytes: 0 }, async () => undefined);
   clock.mockImplementation(() => now++);
 
-  const pending = pendingIo({ directory, operation: "snapshot" });
+  const pending = pendingIo({ operation: "snapshot" });
   const operation = pending.operation.catch((error: unknown) => error);
   try {
     clock.mockReturnValue(now + 400_000);
@@ -97,4 +94,15 @@ it("preserves uncertain worker settlement instead of replacing it with expiry", 
   await vi.advanceTimersByTimeAsync(300_000);
   exit.reject(failure);
   await rejected;
+});
+
+it("does not let a wall-clock rollback stretch the update I/O stall deadline", async () => {
+  vi.useFakeTimers();
+  const allowance = 300_000;
+  const { exit, state, operation } = pendingIo({ bytes: 0, timeoutMs: 1 });
+  vi.setSystemTime(Date.now() - 90_000);
+  await vi.advanceTimersByTimeAsync(allowance);
+  expect(state).toMatchObject({ signal: { aborted: true }, settled: false });
+  exit.resolve();
+  await operation.catch(() => undefined);
 });

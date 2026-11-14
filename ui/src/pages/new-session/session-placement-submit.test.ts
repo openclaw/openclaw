@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
   clearSessionPlacementRecovery,
@@ -45,7 +46,9 @@ function advanceSessionPlacementDraft(
   recovery: SessionPlacementRecovery,
   options: AdvanceOptions = {},
 ) {
-  const client = clientWith(request);
+  const client: Pick<GatewayBrowserClient, "request"> = {
+    request: request as GatewayBrowserClient["request"],
+  };
   return advanceSessionPlacementDraftWithRecovery({
     client,
     recovery,
@@ -58,10 +61,6 @@ function advanceSessionPlacementDraft(
     cleanupOnCancellation: () => true,
     ...options,
   });
-}
-
-function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
-  return { request: request as GatewayBrowserClient["request"] };
 }
 
 async function expectPaused(
@@ -81,7 +80,14 @@ async function expectPaused(
 }
 
 const recoveryStorageKey = (sessionKey: string) =>
-  sessionPlacementRecoveryExactStorageKey("ws://gateway.example", "principal-a", sessionKey);
+  sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, sessionKey);
+const readRecovery = (key: string) => readSessionPlacementRecovery(gatewayUrl, recoveryScope, key);
+const storedRecovery = (key: string) =>
+  JSON.parse(sessionStorage.getItem(recoveryStorageKey(key)) ?? "null");
+const methods = (request: ReturnType<typeof vi.fn>) => request.mock.calls.map(([method]) => method);
+const storageError = () => {
+  throw new DOMException("storage disabled", "SecurityError");
+};
 
 describe("session placement draft advancement", () => {
   beforeEach(() => sessionStorage.clear());
@@ -96,26 +102,22 @@ describe("session placement draft advancement", () => {
     });
     storeRecovery(recovery);
     vi.stubGlobal("sessionStorage", {
-      getItem: vi.fn(() => {
-        throw new DOMException("storage disabled", "SecurityError");
-      }),
+      getItem: vi.fn(storageError),
       removeItem: vi.fn(),
-      setItem: vi.fn(() => {
-        throw new DOMException("storage disabled", "SecurityError");
-      }),
+      setItem: vi.fn(storageError),
     });
     const request = vi.fn().mockRejectedValue(new Error("connection unavailable"));
     await expect(
       advanceSessionPlacementDraft(request, recovery, { mode: "recover" }),
     ).resolves.toEqual({ status: "pending", recovery, retryAfterMs: 500 });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
+    expect(methods(request)).toEqual(["chat.send"]);
   });
 
   it("normalizes recovered mentions without replacing a newer durable session", async () => {
     const sessionKey = "agent:cloud:older";
     const storedMention = { profileId: "profile-alex", start: 0, end: 5, displayName: "Alex" };
     storeRecovery(recoveryRecord(sessionKey, "@Alex older task", { mentions: [storedMention] }));
-    const recovered = readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey);
+    const recovered = readRecovery(sessionKey);
     if (!recovered) {
       throw new Error("Expected the older startup to remain recoverable");
     }
@@ -148,20 +150,14 @@ describe("session placement draft advancement", () => {
       ),
     ).resolves.toMatchObject({ status: "started", messageId: "message-older" });
     expect(setRecoveryPhase).toHaveBeenCalledWith("sending", true, "physical-startup-session");
-    expect(
-      readSessionPlacementRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey),
-    ).toEqual({
+    expect(readRecovery(newerRecovery.sessionKey)).toEqual({
       ...newerRecovery,
       mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
     });
-    expect(
-      JSON.parse(sessionStorage.getItem(recoveryStorageKey(newerRecovery.sessionKey)) ?? "null")
-        .mentions,
-    ).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.dispatch",
-      "chat.send",
+    expect(storedRecovery(newerRecovery.sessionKey).mentions).toEqual([
+      { profileId: "profile-alex", start: 0, end: 5 },
     ]);
+    expect(methods(request)).toEqual(["sessions.dispatch", "chat.send"]);
     expect(request).toHaveBeenCalledWith(
       "chat.send",
       {
@@ -186,9 +182,7 @@ describe("session placement draft advancement", () => {
         vi.stubGlobal("sessionStorage", {
           getItem: storage.getItem.bind(storage),
           removeItem: storage.removeItem.bind(storage),
-          setItem: vi.fn(() => {
-            throw new DOMException("storage disabled", "SecurityError");
-          }),
+          setItem: vi.fn(storageError),
         });
         return Promise.resolve({ placement: { state: "active", environmentId: "worker-current" } });
       }
@@ -218,63 +212,51 @@ describe("session placement draft advancement", () => {
   });
 
   it.each([
-    {
-      name: "the page is interrupted after accepted delivery",
-      lifecycleCurrent: false,
-      recoveryOwned: true,
-      status: "interrupted",
-      retirement: "interrupted",
-    },
-    {
-      name: "a newer owner takes over",
-      lifecycleCurrent: true,
-      recoveryOwned: false,
-      status: "ownership-lost",
-      retirement: "resolved",
-    },
-  ] as const)("retires only the completed submission when $name", async (testCase) => {
-    const { lifecycleCurrent, recoveryOwned, retirement, status } = testCase;
-    const sessionKey = "agent:cloud:stale";
-    const newerRecovery = recoveryRecord("agent:cloud:newer", "newer task");
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ placement: { state: "active", environmentId: "environment-1" } })
-      .mockImplementationOnce(async () => {
-        if (!recoveryOwned) {
-          expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
-        }
-        return { runId: "run-stale", status: "started" };
-      });
-    // Both fences stay current through the helper's five safety checks. One
-    // independent fact changes before the caller classifies accepted delivery.
-    let lifecycleChecks = 0;
-    let ownershipChecks = 0;
-    const clearRecovery = vi.fn(() =>
-      clearSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey),
-    );
+    ["the page is interrupted after accepted delivery", false, true, "interrupted", "interrupted"],
+    ["a newer owner takes over", true, false, "ownership-lost", "resolved"],
+  ] as const)(
+    "retires only the completed submission when %s",
+    async (_name, lifecycleCurrent, recoveryOwned, status, retirement) => {
+      const sessionKey = "agent:cloud:stale";
+      const newerRecovery = recoveryRecord("agent:cloud:newer", "newer task");
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ placement: { state: "active", environmentId: "environment-1" } })
+        .mockImplementationOnce(async () => {
+          if (!recoveryOwned) {
+            expect(writeSessionPlacementRecovery(newerRecovery)).toBe(true);
+          }
+          return { runId: "run-stale", status: "started" };
+        });
+      // Both fences stay current through the helper's five safety checks. One
+      // independent fact changes before the caller classifies accepted delivery.
+      let lifecycleChecks = 0;
+      let ownershipChecks = 0;
+      const clearRecovery = vi.fn(() =>
+        clearSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey),
+      );
 
-    await expect(
-      advanceSessionPlacementDraft(
-        request,
-        recoveryRecord(sessionKey, "interrupted task", { messageId: "message-interrupted" }),
-        {
-          isLifecycleCurrent: () => {
-            lifecycleChecks += 1;
-            return lifecycleCurrent || lifecycleChecks < 6;
+      await expect(
+        advanceSessionPlacementDraft(
+          request,
+          recoveryRecord(sessionKey, "interrupted task", { messageId: "message-interrupted" }),
+          {
+            isLifecycleCurrent: () => {
+              lifecycleChecks += 1;
+              return lifecycleCurrent || lifecycleChecks < 6;
+            },
+            ownsRecovery: () => {
+              ownershipChecks += 1;
+              return recoveryOwned || ownershipChecks < 6;
+            },
+            clearRecovery,
           },
-          ownsRecovery: () => {
-            ownershipChecks += 1;
-            return recoveryOwned || ownershipChecks < 6;
-          },
-          clearRecovery,
-        },
-      ),
-    ).resolves.toEqual({ status });
-    expect(clearRecovery).toHaveBeenCalledWith(retirement);
-    expect(
-      readSessionPlacementRecovery(gatewayUrl, recoveryScope, newerRecovery.sessionKey),
-    ).toEqual(recoveryOwned ? null : newerRecovery);
-  });
+        ),
+      ).resolves.toEqual({ status });
+      expect(clearRecovery).toHaveBeenCalledWith(retirement);
+      expect(readRecovery(newerRecovery.sessionKey)).toEqual(recoveryOwned ? null : newerRecovery);
+    },
+  );
 
   it.each([
     ["stale", "stale task", "message-stale"],
@@ -311,9 +293,9 @@ describe("session placement draft advancement", () => {
         : { status: "cancelled" },
     );
     if (cleanupFails) {
-      expect(
-        JSON.parse(sessionStorage.getItem(recoveryStorageKey(recovery.sessionKey)) ?? "null"),
-      ).toMatchObject({ sessionKey: "agent:cloud:cancelled" });
+      expect(storedRecovery(recovery.sessionKey)).toMatchObject({
+        sessionKey: "agent:cloud:cancelled",
+      });
       expect(clearRecovery).not.toHaveBeenCalled();
       expect(request).toHaveBeenLastCalledWith("sessions.patch", {
         key: recovery.sessionKey,
@@ -322,9 +304,9 @@ describe("session placement draft advancement", () => {
         expectedSessionId: "session-cancelled",
       });
     } else if (id === "stale") {
-      expect(
-        JSON.parse(sessionStorage.getItem(recoveryStorageKey("agent:cloud:newer")) ?? "null"),
-      ).toMatchObject({ sessionKey: "agent:cloud:newer" });
+      expect(storedRecovery("agent:cloud:newer")).toMatchObject({
+        sessionKey: "agent:cloud:newer",
+      });
       expect(clearRecovery).toHaveBeenCalledOnce();
     } else {
       expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -346,7 +328,7 @@ describe("session placement draft advancement", () => {
     await expect(
       advanceSessionPlacementDraft(request, recovery, { mode: "recover" }),
     ).resolves.toEqual({ status: "started", messageId: "message-recovered" });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.send"]);
+    expect(methods(request)).toEqual(["chat.send"]);
   });
 
   it("keeps the visible session after a definitive redispatch rejection", async () => {
@@ -404,9 +386,6 @@ describe("session placement draft advancement", () => {
       },
       { mode: "recover" },
     );
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.describe",
-      "sessions.reclaim",
-    ]);
+    expect(methods(request)).toEqual(["sessions.describe", "sessions.reclaim"]);
   });
 });

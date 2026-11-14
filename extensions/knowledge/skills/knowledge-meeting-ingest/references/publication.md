@@ -35,6 +35,10 @@ insert; empty replacement deletes. Preserve semantic review; never infer offsets
 from raw/frontmatter or overwrite unread prose. Each edit is a complete normal
 revision, not a staged upload. Retain exact payloads for replay; reread/reconcile
 on stale fences. Attach sources rather than copying large originals into profiles.
+Page bodies also have a size budget, smaller for hub pages; growth past it is
+rejected with section sizes and connected candidates. Extract sections with
+`knowledge_extract_section` rather than trimming prose (see
+[page budgets](publish.md#page-budgets)).
 
 Record, revision and recovery reads remain paginated. Follow returned offsets;
 for recovery use file offset plus contentField/charOffset and compare field hashes.

@@ -1,3 +1,4 @@
+import type { LocalWorkspaceManifestValue } from "./local-workspace-store.types.js";
 import type {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileSnapshotWithLimit,
@@ -17,6 +18,13 @@ import type {
 export type WorkspaceComputationHashes = {
   owner: "gateway" | "worker";
   entries: Array<[string, string]>;
+};
+
+export type WorkspaceManifestHostEffects = {
+  "workspace.manifest.read": {
+    input: { knownTreeRoot?: string };
+    output: Uint8Array<ArrayBuffer>;
+  };
 };
 
 export type WorkspaceComputationHashResult<T> = {
@@ -75,6 +83,8 @@ export type WorkspaceStageInputSource<Raw = Uint8Array<ArrayBuffer>> =
       currentManifestRef: string;
       baseManifestRaw: Raw;
       currentManifestRaw: Raw;
+      /** Immutable blob facts supplied by the accepted checkpoint owner, never the worker. */
+      existingObjects?: Array<[string, string]>;
     }
   | {
       publication: {
@@ -121,6 +131,10 @@ export type WorkspaceManifestComputationOperations = {
     output: WorkspaceManifestValueOutputs[Type];
   };
 } & {
+  "workspace.manifest.local": {
+    input: { owner: string };
+    output: LocalWorkspaceManifestValue;
+  };
   "workspace.manifest.base-refresh": {
     input: {
       beforeRoot: string;
@@ -167,6 +181,7 @@ export type WorkspaceManifestComputationOperations = {
   };
   "workspace.manifest.pair": {
     input: {
+      buildCacheInputs?: string[];
       baseRaw: Uint8Array<ArrayBuffer>;
       baseRef: string;
       currentRaw: Uint8Array<ArrayBuffer>;

@@ -10,14 +10,13 @@ import {
   loadMemorySessionMetadataAsync,
   loadMemorySessionMetadataBatchAsync,
 } from "../../plugin-sdk/memory-core-host-engine-sessions.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../../plugin-sdk/memory-core-host-transcript-stats.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { memoryStorage } from "./session-actor-memory-publication.test-support.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import {
   readSessionTranscriptCorpusInWorker,
   resolveMemorySessionTargetsInWorker,
@@ -325,6 +324,9 @@ describe("Memory export from the session actor", () => {
     });
     expect(() => statSessionEntrySync(scope.sessionKey, scope)).toThrow(
       "statSessionEntrySync cannot access an incognito session synchronously. Await statSessionEntry instead.",
+    );
+    expect(() => readTranscriptStatsBatchReadOnlySync([scope])).toThrow(
+      "Await readTranscriptStatsBatchReadOnlyAsync",
     );
   });
 

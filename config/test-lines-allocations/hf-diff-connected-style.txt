@@ -1,0 +1,2 @@
+# Observe connected diff syntax spans atomically without weakening the color assertion.
+4

@@ -2,7 +2,6 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { extractDeliveryInfoBatch } from "../../config/sessions/delivery-info.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import type { SessionEntrySummary } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { foldedSessionKeyAliasCandidates } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -72,30 +71,52 @@ export async function readCronDeliveryTargetContexts(
       targets.add(item.value);
     }
   }
-  // Leave worker admission headroom for other session reads while listing large inventories.
-  const { results: rows } = await runTasksWithConcurrency({
-    limit: 8,
-    tasks: [...targets].map(
-      ({ agentId, storePath, threadSessionKey, mainSessionKey }) =>
-        async (): Promise<Result<SessionEntrySummary[], unknown>> => {
-          try {
-            const result = await readSessionEntriesFromStoreInWorker({
-              agentId,
-              storePath,
-              projection: "list",
-              snapshotFields: [],
-              sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
+  const batches = new Map<string, CronDeliveryReadPlan[]>();
+  for (const plan of targets) {
+    const key = JSON.stringify([plan.agentId, plan.storePath]);
+    const batch = batches.get(key);
+    if (batch) {
+      batch.push(plan);
+    } else {
+      batches.set(key, [plan]);
+    }
+  }
+  type Entries = Result<Map<string, SessionEntry>, unknown>;
+  const read = async (plans: CronDeliveryReadPlan[]): Promise<Entries> => {
+    const { agentId, storePath } = plans[0]!;
+    try {
+      const result = await readSessionEntriesFromStoreInWorker({
+        agentId,
+        storePath,
+        projection: "list",
+        snapshotFields: [],
+        sessionKeys: [
+          ...new Set(
+            plans.flatMap(({ threadSessionKey, mainSessionKey }) =>
+              [threadSessionKey, mainSessionKey].flatMap((key) =>
                 key ? [key].concat(foldedSessionKeyAliasCandidates(key)) : [],
               ),
-            });
-            return ok(result.entries);
-          } catch (error) {
-            return err(error);
-          }
-        },
-    ),
+            ),
+          ),
+        ],
+      });
+      return ok(new Map(result.entries.map(({ sessionKey, entry }) => [sessionKey, entry])));
+    } catch (error) {
+      return err(error);
+    }
+  };
+  const entries = new Map<CronDeliveryReadPlan, Entries>();
+  // Leave worker admission headroom for other session reads while listing large inventories.
+  await runTasksWithConcurrency({
+    limit: 8,
+    tasks: [...batches.values()].map((batch) => async () => {
+      const result = await read(batch);
+      for (const plan of batch) {
+        // One unreadable target must not suppress healthy targets in the same store.
+        entries.set(plan, !result.ok && batch.length > 1 ? await read([plan]) : result);
+      }
+    }),
   });
-  const entries = new Map([...targets].map((plan, offset) => [plan, rows[offset]!]));
   return planned.map((item, index) => {
     if (!item.ok) {
       return item;
@@ -111,8 +132,8 @@ export async function readCronDeliveryTargetContexts(
     if (result && !result.ok) {
       return result;
     }
-    const threadEntry = result?.value.find((row) => row.sessionKey === threadSessionKey)?.entry;
-    const mainEntry = result?.value.find((row) => row.sessionKey === mainSessionKey)?.entry;
+    const threadEntry = threadSessionKey ? result?.value.get(threadSessionKey) : undefined;
+    const mainEntry = result?.value.get(mainSessionKey);
     const selected = threadEntry ?? mainEntry;
     return ok({
       mainSessionKey,

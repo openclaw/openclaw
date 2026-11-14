@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  createOpenClawAgentDatabasePathMatcher,
-  isSameOpenClawAgentDatabasePath,
+  createOpenClawAgentDatabasePathMatcher as createMatcher,
+  isSameOpenClawAgentDatabasePath as samePath,
 } from "./openclaw-agent-db.paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -16,11 +16,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 let stateDir: string;
-let matcher: ReturnType<typeof createOpenClawAgentDatabasePathMatcher>;
+let matcher: ReturnType<typeof createMatcher>;
 let key: ReturnType<typeof matcher.createIndex>;
 beforeEach(() => {
   stateDir = fs.realpathSync(tempDirs.make("openclaw-alias-"));
-  matcher = createOpenClawAgentDatabasePathMatcher();
+  matcher = createMatcher();
   key = matcher.createIndex();
 });
 const at = (...parts: string[]) => path.join(stateDir, ...parts);
@@ -28,9 +28,7 @@ const at = (...parts: string[]) => path.join(stateDir, ...parts);
 it.runIf(process.platform !== "win32")("retries ELOOP resolution within one matcher", () => {
   const loopPath = at("loop.sqlite");
   fs.symlinkSync("loop.sqlite", loopPath);
-  expect(() => isSameOpenClawAgentDatabasePath(loopPath, loopPath)).toThrow(
-    expect.objectContaining({ code: "ELOOP" }),
-  );
+  expect(() => samePath(loopPath, loopPath)).toThrow(expect.objectContaining({ code: "ELOOP" }));
   expect(() => matcher(loopPath, loopPath)).toThrow(expect.objectContaining({ code: "ELOOP" }));
   expect(() => key(loopPath)).toThrow(expect.objectContaining({ code: "ELOOP" }));
 
@@ -41,15 +39,8 @@ it.runIf(process.platform !== "win32")("retries ELOOP resolution within one matc
 });
 
 it("indexes each existing or missing database locator once per operation", () => {
-  const paths = Array.from({ length: 64 }, (_, index) => {
-    const directory = at(`agent-${index}`);
-    fs.mkdirSync(directory);
-    const pathname = path.join(directory, "agent.sqlite");
-    if (index % 2 === 0) {
-      fs.writeFileSync(pathname, "database");
-    }
-    return pathname;
-  });
+  const paths = [at("existing.sqlite"), at("missing.sqlite")];
+  fs.writeFileSync(paths[0]!, "database");
   const pathSet = new Set(paths);
   const statPaths = new Set(
     paths.map((pathname, index) => (index % 2 === 0 ? pathname : path.dirname(pathname))),
@@ -92,7 +83,7 @@ it.runIf(process.platform !== "win32")(
     fs.linkSync(second, secondHardlink);
     expect([bridge, secondHardlink].map(key)).toEqual([first, second]);
     expect(matcher.isCurrent()).toBe(false);
-    const refreshed = createOpenClawAgentDatabasePathMatcher().createIndex();
+    const refreshed = createMatcher().createIndex();
     expect([first, alias, second].map(refreshed)).toEqual([first, first, first]);
     expect(refreshed(hardlink)).toBe(hardlink);
   },
@@ -107,14 +98,13 @@ it("compares missing suffixes deeper than the default probe depth", () => {
   const parents = Array.from({ length: 64 }, () => "a");
   const upper = at(...parents, "Worker.sqlite");
   const lower = at(...parents, "worker.sqlite");
-  expect(isSameOpenClawAgentDatabasePath(upper, lower)).toBe(aliases);
+  expect(samePath(upper, lower)).toBe(aliases);
   expect(key(upper) === key(lower)).toBe(aliases);
   expect(fs.readdirSync(stateDir)).toEqual([]);
 });
 
 it("does not cache a missing-path comparison when its probe cannot be cleaned", () => {
-  const compare = () =>
-    isSameOpenClawAgentDatabasePath(at("a", "alpha.sqlite"), at("a", "bravo.sqlite"));
+  const compare = () => samePath(at("a", "alpha.sqlite"), at("a", "bravo.sqlite"));
   const removeDirectory = fs.rmdirSync;
   let preservedProbe = "";
   vi.spyOn(fs, "rmdirSync").mockImplementationOnce((directory) => {

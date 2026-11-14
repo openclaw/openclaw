@@ -27,6 +27,7 @@ import {
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import {
   readSelectedMemoryProviderStatus,
   resolveForeignMemorySlotOwner,
@@ -101,7 +102,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
   const deep = resolveMemoryDeepDreamingConfig({ pluginConfig, cfg });
   const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
   const timezone = deep.timezone ?? light.timezone ?? rem.timezone;
-  const formatCron = (cron: string) => (timezone ? `${cron} (${timezone})` : cron);
+  const formatCron = (cron: string) => terminalText`${cron}${timezone ? ` (${timezone})` : ""}`;
   const lightSummary = light.enabled
     ? `light=${formatCron(light.cron)} · limit=${light.limit} · lookbackDays=${light.lookbackDays}`
     : null;
@@ -161,7 +162,7 @@ async function runSelectedMemoryProviderStatus(
 ) {
   if (opts.deep || opts.index || opts.fix) {
     const message = `memory status --deep, --index, and --fix inspect Memory Core's own index, but plugins.slots.memory selects "${owner}". Run "openclaw memory index" to maintain the Memory Core sidecar index.`;
-    defaultRuntime.error(message);
+    defaultRuntime.error(terminalText`${message}`);
     if (opts.json) {
       defaultRuntime.writeJson(formatCliJsonFailure(message));
     }
@@ -180,9 +181,9 @@ async function runSelectedMemoryProviderStatus(
   for (const { agentId, provider, health } of results) {
     const healthColor = health.status === "ready" ? success : warn;
     const lines = [
-      `${heading("Memory")} ${muted(`(${agentId})`)}`,
-      `${label("Provider")} ${info(provider)} ${muted("(selected memory slot)")}`,
-      `${label("Health")} ${healthColor(health.status)}${health.message ? ` ${muted(health.message)}` : ""}`,
+      `${heading("Memory")} ${muted(terminalText`(${agentId})`)}`,
+      `${label("Provider")} ${info(terminalText`${provider}`)} ${muted("(selected memory slot)")}`,
+      `${label("Health")} ${healthColor(terminalText`${health.status}`)}${health.message ? ` ${muted(terminalText`${health.message}`)}` : ""}`,
       `${label("Memory Core")} ${muted("consolidation sidecar only; its index is not this agent's memory")}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ];
@@ -257,7 +258,7 @@ export async function runMemoryStatus(
             options: opts,
             onError: (err) => {
               indexError = formatErrorMessage(err);
-              defaultRuntime.error(`Memory index failed: ${indexError}`);
+              defaultRuntime.error(terminalText`Memory index failed: ${indexError}`);
               process.exitCode = 1;
             },
           });
@@ -328,7 +329,7 @@ export async function runMemoryStatus(
       const line = indexError
         ? `Memory index failed: ${indexError}`
         : formatMemoryIndexOutcome(status, scan, agentId);
-      defaultRuntime.log(line);
+      defaultRuntime.log(terminalText`${line}`);
     }
     const requestedProvider = status.requestedProvider ?? status.provider;
     const modelLabel = status.model ?? status.provider;
@@ -339,23 +340,25 @@ export async function runMemoryStatus(
       ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
       : [];
     const lines = [
-      `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
-      `${label("Provider")} ${info(status.provider)} ${muted(`(requested: ${requestedProvider})`)}`,
-      `${label("Model")} ${info(modelLabel)}`,
-      sourceList ? `${label("Sources")} ${info(sourceList)}` : null,
+      `${heading("Memory Search")} ${muted(terminalText`(${agentId})`)}`,
+      `${label("Provider")} ${info(terminalText`${status.provider}`)} ${muted(terminalText`(requested: ${requestedProvider})`)}`,
+      `${label("Model")} ${info(terminalText`${modelLabel}`)}`,
+      sourceList ? `${label("Sources")} ${info(terminalText`${sourceList}`)}` : null,
       excludedConfiguredSources
         ? `${label("Excluded source")} ${warn("sessions requested but disabled; set memory.search.experimental.sessionMemory=true for this agent, or memory.search.rememberAcrossConversations=true for private cross-conversation recall")}`
         : null,
-      extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
+      extraPaths.length
+        ? `${label("Extra paths")} ${info(terminalText`${extraPaths.join(", ")}`)}`
+        : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
-      `${label("Store")} ${info(storePath)}`,
-      `${label("Workspace")} ${info(workspacePath)}`,
+      `${label("Store")} ${info(terminalText`${storePath}`)}`,
+      `${label("Workspace")} ${info(terminalText`${workspacePath}`)}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
     const addField = (name: string, value: string | undefined, color = info) => {
       if (value) {
-        lines.push(`${label(name)} ${color(value)}`);
+        lines.push(`${label(name)} ${color(terminalText`${value}`)}`);
       }
     };
     const addPath = (name: string, value: string | undefined) =>
@@ -390,7 +393,9 @@ export async function runMemoryStatus(
     if (runtime) {
       const backend = runtime.backend ?? "unknown";
       const build = runtime.buildInfo ? ` (${runtime.buildInfo})` : "";
-      lines.push(`${label("llama.cpp server")} ${info(backend)}${muted(build)}`);
+      lines.push(
+        `${label("llama.cpp server")} ${info(terminalText`${backend}`)}${muted(terminalText`${build}`)}`,
+      );
       addField("Server model", runtime.model?.id);
       addPath("Model path", runtime.model?.path);
       if (runtime.capabilities) {
@@ -406,7 +411,7 @@ export async function runMemoryStatus(
         lines.push(
           `${label("Endpoints")} ${info(
             Object.entries(runtime.endpoints)
-              .map(([name, state]) => `${name}=${state}`)
+              .map(([name, state]) => terminalText`${name}=${state}`)
               .join(" "),
           )}`,
         );
@@ -415,9 +420,9 @@ export async function runMemoryStatus(
     }
     const identityWarning = formatMemoryIndexIdentityWarning(status, agentId);
     if (identityWarning) {
-      lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
-      lines.push(`${label("Vector search")} ${warn(identityWarning.paused)}`);
-      lines.push(`${label("Fix")} ${muted(identityWarning.fix)}`);
+      lines.push(`${label("Index identity")} ${warn(terminalText`${identityWarning.reason}`)}`);
+      lines.push(`${label("Vector search")} ${warn(terminalText`${identityWarning.paused}`)}`);
+      lines.push(`${label("Fix")} ${muted(terminalText`${identityWarning.fix}`)}`);
     }
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
@@ -433,11 +438,13 @@ export async function runMemoryStatus(
           entry.chunkBytes === undefined
             ? ""
             : ` · ${formatMemoryByteSize(entry.chunkBytes)} text + embeddings`;
-        lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts + payload)}`);
+        lines.push(
+          `  ${accent(terminalText`${entry.source}`)} ${muted("·")} ${muted(counts + payload)}`,
+        );
       }
     }
     if (status.fallback) {
-      lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
+      lines.push(`${label("Fallback")} ${warn(terminalText`${status.fallback.from}`)}`);
     }
     if (status.vector) {
       const vector = status.vector;
@@ -493,7 +500,9 @@ export async function runMemoryStatus(
     }
     if (audit) {
       lines.push(`${label("Recall store")} ${info(formatAuditCounts(audit))}`);
-      lines.push(`${label("Recall path")} ${info(shortenHomePath(audit.storePath))}`);
+      lines.push(
+        `${label("Recall path")} ${info(terminalText`${shortenHomePath(audit.storePath)}`)}`,
+      );
       addField("Recall updated", audit.updatedAt);
     }
     if (dreamingAudit) {
@@ -501,10 +510,10 @@ export async function runMemoryStatus(
         `${label("Dreaming artifacts")} ${info(formatDreamingAuditSummary(dreamingAudit))}`,
       );
       lines.push(
-        `${label("Dream corpus")} ${info(shortenHomePath(dreamingAudit.sessionCorpusDir))}`,
+        `${label("Dream corpus")} ${info(terminalText`${shortenHomePath(dreamingAudit.sessionCorpusDir)}`)}`,
       );
       lines.push(
-        `${label("Dream ingestion")} ${info(shortenHomePath(dreamingAudit.sessionIngestionPath))}`,
+        `${label("Dream ingestion")} ${info(terminalText`${shortenHomePath(dreamingAudit.sessionIngestionPath)}`)}`,
       );
       addPath("Dream diary", dreamingAudit.dreamsPath);
     }
@@ -516,13 +525,13 @@ export async function runMemoryStatus(
       addPath("Dream archive", dreamingRepair.archiveDir);
     }
     if (status.fallback?.reason) {
-      lines.push(muted(status.fallback.reason));
+      lines.push(muted(terminalText`${status.fallback.reason}`));
     }
     addField("Index error", indexError, warn);
     if (scan?.issues.length) {
       lines.push(label("Issues"));
       for (const issue of scan.issues) {
-        lines.push(`  ${warn(issue)}`);
+        lines.push(`  ${warn(terminalText`${issue}`)}`);
       }
     }
     let hasIssues = Boolean(scan?.issues.length);
@@ -535,10 +544,14 @@ export async function runMemoryStatus(
       }
       hasIssues = true;
       for (const issue of report.issues) {
-        lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
+        lines.push(
+          `  ${issue.severity === "error" ? warn(terminalText`${issue.message}`) : muted(terminalText`${issue.message}`)}`,
+        );
       }
       if (!opts.fix && report.issues.some((issue) => issue.fixable)) {
-        lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
+        lines.push(
+          `  ${muted(terminalText`Fix: openclaw memory status --fix --agent ${agentId}`)}`,
+        );
       }
     }
     defaultRuntime.log(lines.join("\n"));

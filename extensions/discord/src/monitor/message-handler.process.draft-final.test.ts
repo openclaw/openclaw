@@ -105,6 +105,27 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expectFreshFinalText("Hello\nWorld");
   });
 
+  it("preserves compaction notices alongside the progress draft and final answer", async () => {
+    const notices = [
+      { text: "🧹 Compacting context...", isCompactionNotice: true },
+      { text: "🧹 Compaction complete", isCompactionNotice: true },
+    ];
+    mockDispatch(async (params) => {
+      await params?.dispatcher.sendBlockReply({ text: "private answer delta" });
+      for (const notice of notices) {
+        await params?.dispatcher.sendBlockReply(notice);
+      }
+      await sendFinal(params, { text: "final answer" });
+    });
+    await runDraft({ discordConfig: { streaming: { mode: "progress" } } });
+
+    expect(createDiscordDraftStream).toHaveBeenCalledOnce();
+    expect(deliverDiscordReply.mock.calls.map(([delivery]) => delivery)).toEqual([
+      ...notices.map((notice) => expect.objectContaining({ kind: "block", replies: [notice] })),
+      expect.objectContaining({ kind: "final", replies: [{ text: "final answer" }] }),
+    ]);
+  });
+
   it("does not attach a progress receipt when final delivery starts before the delay", async () => {
     vi.useFakeTimers();
     const draftStream = createMockDraftStreamForTest();
@@ -497,6 +518,45 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     expect(draftStream.messageId()).toBeUndefined();
   });
+});
+
+describe("processDiscordMessage queued thread replies", () => {
+  it.each([true, false])(
+    "recognizes a thread answer when queued execution starts before dispatch returns: %s",
+    async (startsBeforeReturn) => {
+      let endQueuedRoute: (() => void) | void = undefined;
+      mockDispatch(async (params) => {
+        if (startsBeforeReturn) {
+          endQueuedRoute = params?.replyOptions?.queuedDeliveryCorrelations?.at(-1)?.begin();
+        }
+        return createNoQueuedDispatchResult();
+      });
+      await runDraft({ discordConfig: { streaming: { mode: "off" } } });
+      const options = getLastDispatchReplyOptions();
+      if (!startsBeforeReturn) {
+        endQueuedRoute = options?.queuedDeliveryCorrelations?.at(-1)?.begin();
+      }
+      const sessionKey = String(firstDispatchParams().ctx?.SessionKey);
+      const reply = (threadId = "thread-queued") =>
+        notifyDiscordActiveTurnThreadReplyDelivered({ sessionKey, accountId: "default", threadId });
+      try {
+        // Creating a thread alone or answering another thread is not a source reply.
+        expect(reply()).toBe(false);
+        await notifyDiscordActiveTurnThreadCreated({
+          sessionKey,
+          accountId: "default",
+          sourceChannelId: "c1",
+          sourceMessageId: "1001",
+          threadId: "thread-queued",
+        });
+        expect(reply("unrelated-thread")).toBe(false);
+        expect(reply()).toBe(true);
+      } finally {
+        endQueuedRoute?.();
+      }
+      expect(reply()).toBe(false);
+    },
+  );
 });
 
 describe("processDiscordMessage draft streaming reasoning", () => {

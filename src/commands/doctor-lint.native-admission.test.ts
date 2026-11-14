@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { runtimeToolSchemaCheck } from "../flows/doctor-tool-schema-check.js";
@@ -62,18 +63,15 @@ it("keeps private Doctor native admissions out of the caller and persisted index
         version: "1.0.0",
       });
       const packageJson = path.join(packageDir, "package.json");
-      fs.writeFileSync(
-        packageJson,
-        JSON.stringify({ ...JSON.parse(fs.readFileSync(packageJson, "utf8")), type: "module" }),
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          contracts: { tools: [toolName] },
-          configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
+      writeFixtureJsonSync(packageJson, {
+        ...JSON.parse(fs.readFileSync(packageJson, "utf8")),
+        type: "module",
+      });
+      writeFixtureJsonSync(path.join(packageDir, "openclaw.plugin.json"), {
+        id: pluginId,
+        contracts: { tools: [toolName] },
+        configSchema: { type: "object", additionalProperties: false },
+      });
       fs.writeFileSync(path.join(packageDir, "README.md"), "Native companion fixture.\n");
       fs.writeFileSync(path.join(packageDir, "dist", "fixture.bin"), "native fixture bytes");
       fs.writeFileSync(

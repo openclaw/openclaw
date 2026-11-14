@@ -3,9 +3,10 @@ import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-muta
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronSchedule from "../schedule.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
+import { readCronJobScratchState } from "../scratch-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
+import { writeCronJobScratch } from "../store.worker.test-support.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJobCreate } from "../types.js";
 import { add, remove, removeAgentJobsTransactional, update } from "./ops-mutations.js";

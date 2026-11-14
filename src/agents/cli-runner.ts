@@ -167,7 +167,7 @@ async function runCliAgentInternal(
             abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
             assertCurrent,
           }
-        : params;
+        : { ...params, assertCurrent };
     const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
     let context: PreparedCliRunContext;
     try {
@@ -579,11 +579,28 @@ async function runPreparedCliAgentOwned(
               context.cwd ?? context.workspaceDir,
               { skipTranscriptProbe: acceptsCliLiveSession(context) },
             );
+        // Claude saves each narration and the final answer as its own native row. Keep only the
+        // final message here, keyed to its native row, so imported history shows each row once.
+        const nativeFinal =
+          !output.yielded &&
+          !output.terminalInterruption &&
+          output.resumeCheckpointId &&
+          effectiveCliSessionId &&
+          preparedReply.finalMessageText
+            ? {
+                text: preparedReply.finalMessageText,
+                identity: {
+                  cliSessionId: effectiveCliSessionId,
+                  externalId: output.resumeCheckpointId,
+                },
+              }
+            : undefined;
         const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
-          text: sourceReplyWasDelivered ? "" : output.text,
+          text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? output.text),
+          ...(nativeFinal ? { nativeIdentity: nativeFinal.identity } : {}),
           modelId: context.modelId,
           usage: output.usage,
           turnUsage: output.diagnosticUsage,

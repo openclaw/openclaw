@@ -40,6 +40,8 @@ import {
   mockGitInstallSurface,
 } from "./update.test-harness.js";
 
+const restarting = "⏳ Preparing to restart OpenClaw… The update is not complete yet.";
+
 function expectHandoff(fields: Record<string, unknown>) {
   expect(startHandoff).toHaveBeenCalledWith(expect.objectContaining(fields));
 }
@@ -309,7 +311,7 @@ describe("update.run acknowledgement", () => {
     ).toEqual(["requested", "staging", "validating"]);
     expect(sendNotice).toHaveBeenCalledTimes(2);
     expect(sendNotice).toHaveBeenLastCalledWith(
-      expect.objectContaining({ message: "⏳ Restarting OpenClaw…" }),
+      expect.objectContaining({ message: restarting }),
       expect.any(Object),
     );
   });
@@ -341,7 +343,7 @@ describe("update.run acknowledgement", () => {
             type: "message",
             message: expect.objectContaining({
               idempotencyKey: `update-run-activating:${runId}`,
-              content: [{ type: "text", text: "⏳ Restarting OpenClaw…" }],
+              content: [{ type: "text", text: restarting }],
             }),
           }),
         );

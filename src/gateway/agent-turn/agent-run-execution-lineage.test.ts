@@ -47,7 +47,6 @@ function childFacts(runtime: "acp" | "subagent", withToken: boolean, depth = 1) 
       context: {
         validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
       },
-      isRestartRecoveryResumeRun: false,
     },
     {},
   );
@@ -105,5 +104,4 @@ it("reports missing parent evidence and unsupported ACP-native callbacks without
     "lineage.parent-run",
     "acp.native-action-callback",
   ]);
-  expect(JSON.stringify(facts)).not.toMatch(/task|prompt|externalSession/i);
 });

@@ -108,3 +108,94 @@ it("keeps roster deferrals separate from child queries", async ({ gatewayPage })
   expect(ids(rosterRequests)).toEqual(["roster-held", "roster-next"]);
   expect(gateway.deferNext("sessions.list", rosterMatch)).toBe(rosterRequests.length);
 });
+
+it.for(["resolve", "reject"] as const)(
+  "%ss startup held inside the subscription response without a second wire request",
+  async (outcome, { gatewayPage }) => {
+    const messages = [{ role: "assistant", content: "Live witness" }];
+    gatewayPage.execute(
+      createControlUiMockGatewayInitScript({
+        deferredMethods: ["chat.startup"],
+        historyMessages: messages,
+      }),
+    );
+    const { send, frames } = gatewayPage.connect();
+    const gateway = (gatewayPage.window as MockGatewayWindow).openclawControlUiE2eGateway!;
+    await flush();
+    send("subscription", "sessions.messages.subscribe", {
+      key: "agent:main:main",
+      initialHistory: {},
+    });
+    await flush();
+    expect(frames.filter((frame) => frame.type === "res")).toEqual([]);
+    expect(gateway.findRequests("chat.startup")).toEqual([]);
+    expect(gateway.findRequests("sessions.messages.subscribe")).toHaveLength(1);
+
+    if (outcome === "resolve") {
+      gateway.resolveDeferred("chat.startup");
+    } else {
+      gateway.rejectDeferred("chat.startup", { message: "History unavailable" });
+    }
+    expectReply(frames, "subscription", {
+      key: "agent:main:main",
+      initialHistory:
+        outcome === "resolve"
+          ? { ok: true, payload: expect.objectContaining({ messages }) }
+          : { ok: false, error: expect.objectContaining({ message: "History unavailable" }) },
+    });
+  },
+);
+
+it("preserves explicitly supplied deferred subscription payloads", async ({ gatewayPage }) => {
+  gatewayPage.execute(
+    createControlUiMockGatewayInitScript({
+      heldMethods: ["chat.startup"],
+    }),
+  );
+  const { send, frames } = gatewayPage.connect();
+  const gateway = (gatewayPage.window as MockGatewayWindow).openclawControlUiE2eGateway!;
+  await flush();
+  const key = "agent:main:main";
+  const payloads = [
+    { key },
+    { key, initialHistory: { ok: true, payload: { messages: ["Explicit history"] } } },
+  ];
+  for (const [index, payload] of payloads.entries()) {
+    const id = `explicit-${index}`;
+    gateway.deferNext("sessions.messages.subscribe");
+    send(id, "sessions.messages.subscribe", { key, initialHistory: {} });
+    await flush();
+    gateway.resolveDeferred("sessions.messages.subscribe", payload);
+    expect(frames.at(-1)).toMatchObject({ id, ok: true });
+    expect(frames.at(-1)?.payload).toEqual(payload);
+  }
+});
+
+it("replaces the static startup and history transcript together", async ({ gatewayPage }) => {
+  const stale = { messages: [{ role: "assistant", content: "Saved witness" }], hasMore: false };
+  gatewayPage.execute(
+    createControlUiMockGatewayInitScript({
+      methodResponses: { "chat.startup": stale, "chat.history": stale },
+    }),
+  );
+  const { request } = gatewayPage.connect();
+  const gateway = (gatewayPage.window as MockGatewayWindow).openclawControlUiE2eGateway!;
+  await flush();
+  const messages = [{ role: "assistant", content: "Live witness" }];
+  gateway.setHistoryMessages(messages);
+  for (const method of ["chat.startup", "chat.history"]) {
+    expect(await request(method, method, { sessionKey: "agent:main:main" })).toEqual({
+      messages,
+      hasMore: false,
+    });
+  }
+  expect(
+    await request("subscription", "sessions.messages.subscribe", {
+      key: "agent:main:main",
+      initialHistory: {},
+    }),
+  ).toEqual({
+    key: "agent:main:main",
+    initialHistory: { ok: true, payload: { messages, hasMore: false } },
+  });
+});

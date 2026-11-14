@@ -1,0 +1,3 @@
+# Native paused I/O, immutable capture reuse, and exact disk Move runtime recovery.
+# Includes host/native refusal controls and revoked-install effect proof; no baseline increase.
+546

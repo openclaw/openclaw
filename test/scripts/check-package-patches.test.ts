@@ -37,10 +37,10 @@ it("allows approved pnpm patches together", () => {
   const approvedPatches = [
     ["@homebridge/ciao@1.3.12", "patches/@homebridge__ciao@1.3.12.patch"],
     ["proper-lockfile@4.1.2", "patches/proper-lockfile@4.1.2.patch"],
-    ["@clawdbot/lobster@2026.9.16", "patches/@clawdbot__lobster@2026.9.16.patch"],
+    ["@clawdbot/lobster@2026.10.1", "patches/@clawdbot__lobster@2026.10.1.patch"],
     ["apache-arrow@21.2.0", "patches/apache-arrow@21.2.0.patch"],
     ["@shinyoshiaki/binary-data@0.6.1", "patches/@shinyoshiaki__binary-data@0.6.1.patch"],
-    ["@openclaw/crabline@0.1.30", "patches/@openclaw__crabline@0.1.30.patch"],
+    ["@openclaw/crabline@0.1.31", "patches/@openclaw__crabline@0.1.31.patch"],
     ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
     ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
     ["tar@7.5.22", "patches/tar@7.5.22.patch"],

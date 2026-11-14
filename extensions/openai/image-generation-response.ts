@@ -2,7 +2,6 @@ import {
   inlineOpenAiCompatibleImageUrls,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
-  type GeneratedImageAsset,
 } from "openclaw/plugin-sdk/image-generation";
 import {
   assertOkOrThrowHttpError,
@@ -59,10 +58,7 @@ type ResponseParams = Pick<
 export async function readOpenAIImageGenerationResponse(
   response: Response,
   params: ResponseParams,
-): Promise<{
-  images: GeneratedImageAsset[];
-  usage?: Record<string, number | Record<string, number>>;
-}> {
+) {
   const timeoutMs = () =>
     resolveProviderOperationTimeoutMs({
       deadline: params.deadline,

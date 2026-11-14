@@ -34,6 +34,11 @@ function startWorker(channel: MessageChannel, source: string, budgetMs?: number)
        const { register } = await import(workerData.loader);
        register();
        const { exchangeSqliteDatabaseAdmissions, withSqliteDatabaseAdmissionWait } = await import(workerData.relay);
+       const exchange = () => exchangeSqliteDatabaseAdmissions(workerData.port, []);
+       const outcome = (run) => {
+         try { return { value: run() }; }
+         catch (error) { return { message: error.message, code: error.code }; }
+       };
        ${source}
      })().catch((error) => { throw error; });`,
     {
@@ -98,18 +103,12 @@ it("does not carry a completed operation's deadline into the next operation on a
     `const { AsyncResource } = require("node:async_hooks");
        let retained;
        parentPort.on("message", (operation) => {
-         try {
-           const exchange = () => exchangeSqliteDatabaseAdmissions(workerData.port, []);
-           const value = operation === "expired"
+         parentPort.postMessage({ operation, ...outcome(() => operation === "expired"
              ? withSqliteDatabaseAdmissionWait({ deadlineAtMs: Date.now() - 1 }, () => {
                  retained = new AsyncResource("retained-worker-owner");
                  return exchange();
                })
-             : retained.runInAsyncScope(() => withSqliteDatabaseAdmissionWait({}, exchange));
-           parentPort.postMessage({ operation, value });
-         } catch (error) {
-           parentPort.postMessage({ operation, message: error.message, code: error.code });
-         }
+             : retained.runInAsyncScope(() => withSqliteDatabaseAdmissionWait({}, exchange))) });
        });
        parentPort.postMessage({ ready: true });`,
   );
@@ -151,33 +150,25 @@ it.each([
          return "timed-out";
        };
        try {
-         const exchange = () => exchangeSqliteDatabaseAdmissions(workerData.port, []);
-         if (workerData.budgetMs === undefined) exchange();
-         else withSqliteDatabaseAdmissionWait({ deadlineAtMs: Date.now() + workerData.budgetMs }, exchange);
-         parentPort.postMessage({ unexpectedSuccess: true });
-       } catch (error) {
-         parentPort.postMessage({ message: error.message, code: error.code });
+         parentPort.postMessage(outcome(() => workerData.budgetMs === undefined ? exchange()
+           : withSqliteDatabaseAdmissionWait({ deadlineAtMs: Date.now() + workerData.budgetMs }, exchange)));
        } finally {
          workerData.port.close();
          parentPort.close();
        }`,
     budgetMs,
   );
-  const result = await new Promise((resolve, reject) => {
-    let reply: unknown;
-    worker.on("error", reject);
-    // Exit can drain the result message and fire before an await continuation.
-    worker.once("exit", () => resolve(reply));
-    worker.on("message", (message) => {
-      if ("waiting" in message) {
-        waitedPastThirtySeconds = true;
-        expect(message.waiting).toBeGreaterThan(480_000);
-        expect(message.waiting).toBeLessThanOrEqual(488_000);
-      } else {
-        reply = message;
-      }
-    });
+  let result: unknown;
+  worker.on("message", (message) => {
+    if ("waiting" in message) {
+      waitedPastThirtySeconds = true;
+      expect(message.waiting).toBeGreaterThan(480_000);
+      expect(message.waiting).toBeLessThanOrEqual(488_000);
+    } else {
+      result = message;
+    }
   });
+  await once(worker, "exit");
   expect(waitedPastThirtySeconds).toBe(budgetMs === undefined);
   expect(result).toEqual({
     message: "SQLite admission facts exchange timed out; the host did not reply",

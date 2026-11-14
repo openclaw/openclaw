@@ -53,7 +53,13 @@ export function getModelCatalogWarnings(result: ModelsListResult | undefined) {
 export async function readModelCatalog(config: OpenClawConfig, agentId?: string) {
   return readSelectedGatewayModelCatalog(
     config,
-    { view: "all", includeDetails: true, preparedOnly: true, ...(agentId ? { agentId } : {}) },
+    {
+      view: "all",
+      includeDetails: true,
+      includeDefaultModels: true,
+      preparedOnly: true,
+      ...(agentId ? { agentId } : {}),
+    },
     5000,
   ).catch(() => undefined);
 }

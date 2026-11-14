@@ -10,6 +10,7 @@ import {
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { isSqliteSnapshotStagingMode } from "../infra/sqlite-readonly-worker-protocol.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -109,6 +110,12 @@ export function setupDoctorAdmissionFixture() {
       native.close();
       fs.writeFileSync(path.join(root, 'sqlite-open-guard-' + process.pid + '.json'),
         JSON.stringify({ pid: process.pid, entry: process.argv[1], databasePath: expected }));
+      process.on('message', (message) => {
+        if (message && typeof message === 'object' && Array.isArray(message.args)) {
+          fs.appendFileSync(path.join(root, 'sqlite-readonly-requests-' + process.pid + '.jsonl'),
+            JSON.stringify(message.args) + '\\n');
+        }
+      });
     `,
     );
     const childEnv = withRuntimePreload(
@@ -189,7 +196,23 @@ export function setupDoctorAdmissionFixture() {
             fs.readFileSync(path.join(root, `sqlite-open-guard-${pid}.json`), "utf8"),
           );
           expect(guarded).toEqual({ pid, entry, databasePath: binding.databasePath });
-          expect([database, resolveClientCredentialStorePath(env)]).toContain(args[marker + 2]);
+          const requests: string[][] =
+            args[marker + 1] === "session"
+              ? fs
+                  .readFileSync(path.join(root, `sqlite-readonly-requests-${pid}.jsonl`), "utf8")
+                  .trim()
+                  .split("\n")
+                  .map((line) => JSON.parse(line))
+              : [args.slice(marker + 1)];
+          expect(requests.length).toBeGreaterThan(0);
+          for (const [mode, sourcePath] of requests) {
+            // Allocation/retirement requests name private directories; actual reads still
+            // prove their source, including those delivered over the persistent child's IPC.
+            if (isSqliteSnapshotStagingMode(mode) || mode === "reclaim") {
+              continue;
+            }
+            expect([database, resolveClientCredentialStorePath(env)]).toContain(sourcePath);
+          }
           // An actual resolver consumer must have its own witness. Explicit-path
           // workers need no fabricated consumer; their native opener is fenced.
           if (records.some((record) => record.phase === "consumer")) {

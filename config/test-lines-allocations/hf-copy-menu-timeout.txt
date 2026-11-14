@@ -1,0 +1,2 @@
+# Deterministic regression for a floating control stealing the message context-menu press.
+18

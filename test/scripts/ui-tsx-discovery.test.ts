@@ -183,7 +183,7 @@ describe("TSX discovery", () => {
     for (const [file, expected] of [
       ["src/component.test.tsx", "unit"],
       ["src/component.node.test.tsx", "unit-node"],
-      ["src/pages/chat/chat-pane-session-controls.permissions.node.test.ts", "unit-mock-registry"],
+      ["src/pages/chat/chat-pane-session-controls.permissions.node.test.ts", "unit-node"],
       ["src/component.browser.test.tsx", "browser"],
       ["../extensions/example/browser/view.test.tsx", "unit"],
     ] as const) {
@@ -223,9 +223,7 @@ describe("TSX discovery", () => {
               ).length,
           )
           .map((test) => test.name),
-      ).toEqual(
-        expected === "browser" ? [] : [expected === "unit-mock-registry" ? "ui-isolated" : "ui"],
-      );
+      ).toEqual(expected === "browser" ? [] : ["ui"]);
     }
   });
 

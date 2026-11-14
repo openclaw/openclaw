@@ -1,0 +1,2 @@
+# Reject incomplete history at export/read/copy and verify live caller/source authority at child checkpoint publication and binding.
+251

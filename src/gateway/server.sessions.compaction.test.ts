@@ -33,7 +33,7 @@ import {
   listSessionStateEventsSince,
 } from "../sessions/session-state-events.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import {
   isCompactOperationEvent,
   loadSessionEntry,
@@ -90,7 +90,7 @@ async function createCompactionSession(
 }
 
 function getSuiteGatewayContextResolver() {
-  const runtime = getGatewayRecoveryRuntime();
+  const runtime = getGatewayLifecycleRuntime();
   const resolveGatewayContext = runtime && getGatewayContextResolver(runtime);
   if (!resolveGatewayContext) {
     throw new Error("Suite Gateway runtime is unavailable");
@@ -762,7 +762,7 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
   }
   const queue = getExistingFollowupQueue(sessionKey)!;
   expect(queue.summaryElisions).toHaveLength(1);
-  const elidedSource = queue.summaryElisions[0]!.sources[0]!;
+  const elidedSource = queue.summaryElisions[0]!.entries[0]!.source;
   expect(elidedSource.controllerInput).toBeDefined();
 
   const { ws } = await openClient();
@@ -770,9 +770,9 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
     const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
 
     expect(compacted.ok).toBe(true);
-    expect(getExistingFollowupQueue(sessionKey)?.summaryElisions[0]?.sources).toContain(
-      elidedSource,
-    );
+    expect(
+      getExistingFollowupQueue(sessionKey)?.summaryElisions[0]?.entries.map(({ source }) => source),
+    ).toContain(elidedSource);
     expect(elidedSource.controllerInput?.retirementRequested).not.toBe(true);
     expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledOnce();
     expectNoSessionQueueCleanup();

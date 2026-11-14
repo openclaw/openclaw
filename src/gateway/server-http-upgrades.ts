@@ -297,7 +297,7 @@ export function attachGatewayUpgradeHandler(opts: {
       }
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
-        rejectUpgradeAuth(socket, { ok: false, reason: "unauthorized" });
+        rejectWebSocketUpgrade(socket, { status: scopedNodeCapability.scopedPath ? 400 : 401 });
         return;
       }
       if (scopedNodeCapability.rewrittenUrl) {

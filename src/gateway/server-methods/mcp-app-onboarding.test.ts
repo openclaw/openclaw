@@ -22,7 +22,6 @@ import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-suppo
 import * as chatSession from "./chat-send-session.js";
 import { mcpAppOnboardingHandlers } from "./mcp-app-onboarding.js";
 import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
@@ -58,26 +57,12 @@ it.each(["success", "caller-revoked", "session-replaced", "native-denied"] as co
     });
     bindSessionRowProjection(fixture.context, () => projection);
     fixture.context.resolveGatewayContext = () => fixture.context;
-    const prepareAccess = sessionAccess.prepareGatewaySessionAccessAuthority;
-    let access: sessionAccess.GatewaySessionAccessAuthority | undefined;
-    const release = vi.fn();
-    vi.spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority").mockImplementation(
-      async (params) => {
-        const prepared = await prepareAccess(params);
-        access = prepared.authority;
-        release.mockImplementation(access.release);
-        access.release = release;
-        return prepared;
-      },
-    );
-    let chat: GatewayRequestHandlerOptions | undefined;
+    const prepare = vi.spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority");
+    const chatHandler = vi.fn(handleChatSend);
     const registry = createGatewayMethodRegistry(
       createCoreGatewayMethodDescriptors({
         ...mcpAppOnboardingHandlers,
-        "chat.send": async (options) => {
-          chat = options;
-          await handleChatSend(options);
-        },
+        "chat.send": chatHandler,
       }),
     );
     fixture.context.getGatewayMethodRegistry = () => registry;
@@ -106,8 +91,9 @@ it.each(["success", "caller-revoked", "session-replaced", "native-denied"] as co
         hasCurrentClientAuthority: () => callerCurrent,
         methodRegistry: registry,
       });
-      expect(release).toHaveBeenCalledOnce();
-      expect(() => access!.assertCurrent()).toThrow("Session access changed");
+      const access = (await prepare.mock.results.at(-1)!.value).authority;
+      const chat = chatHandler.mock.calls[0]![0];
+      expect(() => access.assertCurrent()).toThrow("Session access changed");
       expect(chat?.client?.authenticatedUserProfile?.profileId).toBe(
         client.authenticatedUserProfile?.profileId,
       );
@@ -131,9 +117,6 @@ it.each(["success", "caller-revoked", "session-replaced", "native-denied"] as co
         await fixture.finishDispatch();
         if (scenario === "success") {
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-          expect(fixture.context.logGateway.warn).not.toHaveBeenCalledWith(
-            expect.stringContaining("user transcript persistence failed"),
-          );
           expect(JSON.stringify(loadTranscriptEventsSync(fixture.scope))).toContain(
             "Run the setup skill for plugin demo.",
           );

@@ -14,8 +14,9 @@ It changes the returned `tool_result`, not the command itself. Tokenjuice does
 not rewrite shell input, rerun commands, or change exit codes.
 
 Today this applies to OpenClaw embedded runs and OpenClaw dynamic tools in the Codex
-app-server harness. Tokenjuice hooks OpenClaw's tool-result middleware and
-trims the output before it goes back into the active harness session.
+app-server harness. Native codex-rs shell (`bash`/`exec`) results returned to the
+model are not compacted. Native `PostToolUse` events can run the middleware for
+observers, but Codex does not accept a replacement tool response.
 
 ## Enable the plugin
 
@@ -61,9 +62,11 @@ If you prefer editing config directly:
 ## Verify it is working
 
 1. Enable the plugin.
-2. Start a session that can call `exec`.
+2. Start a session that can call OpenClaw's `exec` tool, either in an embedded run or as a dynamic tool in the Codex app-server harness.
 3. Run a noisy command such as `git status`.
 4. Check that the returned tool result is shorter and more structured than the raw shell output.
+
+Native codex-rs shell results stay unchanged, so this check does not apply to them.
 
 ## Disable the plugin
 

@@ -10,7 +10,7 @@ import {
   isRpcSourceQueued,
   listRpcSourceEntries,
 } from "../../sessions/session-controller.rpc-sources.js";
-import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,

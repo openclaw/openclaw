@@ -1,12 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import {
-  validateUsersLinkChannelIdentityResult as validLink,
-  validateUsersLinkEmailResult as validEmail,
-  validateUsersListChannelIdentitiesResult as validList,
-  validateUsersUnlinkChannelIdentityResult as validUnlink,
-  validateUsersSetRoleResult as validRole,
-} from "../../packages/gateway-protocol/src/index.js";
+import { validateUsersLinkEmailResult as validProfile } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
 import {
@@ -16,6 +10,7 @@ import {
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { gatewayRequest } from "./request-frame.test-support.js";
 import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -28,10 +23,7 @@ function createRequests(profileId: string, expectedProfileId?: string, cfg: Open
     const respond = vi.fn();
     await handleGatewayRequest({
       req: {
-        type: "req",
-        id: method,
-        method,
-        params,
+        ...gatewayRequest(method, method, params),
         ...(expectedProfileId ? { expectedProfileId } : {}),
       },
       respond,
@@ -78,32 +70,30 @@ it.each(["person", "shared owner"] as const)(
       const request = createRequests(admin.id, admin.id, cfg);
       const email = { email: "secondary@example.test", targetProfileId: person.id };
       const operations = [
-        ["linkChannelIdentity", link, validLink, link],
-        ["listChannelIdentities", { profileId: person.id }, validList, { links: [link] }],
-        ["unlinkChannelIdentity", link, validUnlink, { removed: true }],
-        ["setRole", { profileId: person.id, role: "admin" }, validRole, undefined],
-        ["linkEmail", email, validEmail, undefined],
+        ["linkChannelIdentity", link, link],
+        ["listChannelIdentities", { profileId: person.id }, { links: [link] }],
+        ["unlinkChannelIdentity", link, { removed: true }],
+        ["setRole", { profileId: person.id, role: "admin" }, validProfile],
+        ["linkEmail", email, validProfile],
       ] as const;
       for (const [method, params] of operations) {
         const denied = await request(method, params, ["operator.read", "operator.write"]);
         expect(denied).toEqual([false, undefined, expect.objectContaining({ code: "FORBIDDEN" })]);
       }
       expect(resolveUserChannelIdentity(identity)).toBeUndefined();
-      const queries = vi.spyOn(DatabaseSync.prototype, "prepare");
-      try {
-        // Cover initial selected-account/role admission, worker grants and response guards
-        // through the registered in-process route, which has no WS worker brand.
-        for (const [method, params, validate, expected] of operations) {
+      {
+        using queries = vi.spyOn(DatabaseSync.prototype, "prepare");
+        // Cover admission, worker grants and response guards without a WS worker brand.
+        for (const [method, params, expected] of operations) {
           const result = await request(method, params);
           expect(result?.[0]).toBe(true);
-          expect(validate(result?.[1])).toBe(true);
-          if (expected !== undefined) {
+          if (typeof expected === "function") {
+            expect(expected(result?.[1])).toBe(true);
+          } else {
             expect(result).toEqual([true, expected]);
           }
         }
         expect(queries).not.toHaveBeenCalled();
-      } finally {
-        queries.mockRestore();
       }
       expect(resolveUserChannelIdentity(identity)).toBeUndefined();
       expect(readResidentUserProfileIdentity(person.id)?.role).toBe("admin");

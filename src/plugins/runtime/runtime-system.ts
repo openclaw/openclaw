@@ -1,6 +1,10 @@
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
 import { captureSessionEventTarget, enqueueSessionEvent } from "./runtime-session-events.js";
+import {
+  capturePluginSessionGeneration,
+  postPluginSessionNotice,
+} from "./runtime-session-notice.js";
 import { enqueueSystemEventFromSdk } from "./system-events.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -10,6 +14,8 @@ export function createRuntimeSystem(): PluginRuntime["system"] {
     captureSessionEventTarget,
     enqueueSessionEvent,
     enqueueSystemEvent: enqueueSystemEventFromSdk,
+    captureSessionGeneration: capturePluginSessionGeneration,
+    postSessionNotice: postPluginSessionNotice,
     runCommandWithTimeout,
     formatNativeDependencyHint,
   };

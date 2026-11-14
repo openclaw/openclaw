@@ -111,4 +111,5 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "database.prepareWrite": { input: undefined; output: void };
+    "database.integrityVerified": { input: { verifiedAt: number }; output: void };
   };

@@ -259,6 +259,8 @@ export function preparePluginToolExecutionCapabilities(params: {
                 throw new Error("This sandbox backend does not support piped command input.");
               }
               const result = await runCommandWithTimeout(spec.argv, {
+                executionIntent: "agent-tool",
+                executionScopeKey: params.sessionKey,
                 cwd: spec.cwd,
                 baseEnv: spec.env,
                 input: input ?? "",

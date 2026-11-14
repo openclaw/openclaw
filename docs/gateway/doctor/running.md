@@ -156,6 +156,11 @@ inventory, or historical cleanup. Use `doctor --lint --all` when you want the
 full registered lint audit, including those opt-in checks, or `--only <id>` for
 a targeted check.
 
+Heartbeat migration checks use the configured heartbeat agents and their real
+workspaces, including with `--all`. A `heartbeat-file-migration-blocked` error
+identifies the same unsafe `HEARTBEAT.md` source that blocks repair and update
+admission; `--severity-min error` fails on that finding.
+
 The `core/doctor/model-references` check also consults the selected Gateway's
 prepared catalog. Models it publishes do not receive an offline-catalog advisory;
 server-reported missing models and legacy-reference migrations still do. If the

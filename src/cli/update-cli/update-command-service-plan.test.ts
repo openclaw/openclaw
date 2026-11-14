@@ -115,7 +115,7 @@ vi.mock("../../../node-sqlite.mjs", async (importOriginal) => {
 
 describe("package runtime compatibility guidance", () => {
   beforeEach(() => {
-    vi.mocked(resolveBunRuntimeInfo).mockResolvedValue(runtimeInfo("1.4.3"));
+    vi.mocked(resolveBunRuntimeInfo).mockResolvedValue(runtimeInfo("1.4.4"));
     stubRuntime({ node: "24.22.1", bun: undefined }, { execPath: path.resolve("/fixture/node") });
   });
   afterEach(() => {
@@ -126,6 +126,18 @@ describe("package runtime compatibility guidance", () => {
     vi.mocked(resolveBunRuntimeInfo).mockReset();
     vi.mocked(resolvePinnedDaemonRuntimePath).mockReset();
     vi.mocked(resolveTargetNodeRuntime).mockReset();
+  });
+
+  it("reports the patched Bun minimum when the selected runtime is unsupported", async () => {
+    stubRuntime({ bun: "1.4.3" });
+    vi.mocked(resolveBunRuntimeInfo).mockResolvedValue({
+      ...runtimeInfo("1.4.3"),
+      status: "unsupported",
+    });
+    expect(await preflight()).toEqual({
+      ok: false,
+      error: "Bun 1.4.4+ with WAL-reset-safe node:sqlite is required.",
+    });
   });
 
   const processEnv = {
@@ -152,7 +164,7 @@ describe("package runtime compatibility guidance", () => {
         NODE_OPTIONS: "--require /unrelated/preload.cjs",
       };
       stubRuntime(
-        { bun: "1.4.3", node: "24.3.0" },
+        { bun: "1.4.4", node: "24.3.0" },
         {
           env: current ? serviceEnv : processEnv,
           execPath: path.resolve("/fixture/app-runtime"),
@@ -161,7 +173,7 @@ describe("package runtime compatibility guidance", () => {
       if (failed) {
         vi.mocked(resolveBunRuntimeInfo).mockResolvedValue({
           status: "probe-failed",
-          error: new Error("Bun 1.4.3+ with WAL-reset-safe node:sqlite is required."),
+          error: new Error("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required."),
         });
       }
       const result = await preflight({
@@ -187,7 +199,7 @@ describe("package runtime compatibility guidance", () => {
                 },
               },
             }
-          : { ok: false, error: "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required." },
+          : { ok: false, error: "Bun 1.4.4+ with WAL-reset-safe node:sqlite is required." },
       );
       expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(executable, runtimeEnv);
       if (homebrew) {
@@ -198,8 +210,10 @@ describe("package runtime compatibility guidance", () => {
   );
 
   it("does not offer the current Bun as a fallback for a managed Node service", async () => {
-    stubRuntime({ bun: "1.4.3" }, { execPath: path.resolve("/fixture/app-runtime") });
-    vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
+    stubRuntime({ bun: "1.4.4" }, { execPath: path.resolve("/fixture/app-runtime") });
+    vi.mocked(resolveNodeRuntimeInfo).mockImplementation(async (node) =>
+      node === "/recovered/node" ? runtimeInfo() : unsupportedServiceRuntimeFixture,
+    );
     vi.mocked(resolveTargetNodeRuntime).mockResolvedValue("/recovered/node");
     const result = await preflight({
       nodeRunner: "/old/node",
@@ -494,7 +508,7 @@ describe("package runtime compatibility guidance", () => {
       ]),
       error: expect.stringContaining(
         [
-          `Node ${node}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix`,
+          `Node ${node}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`,
           expectedPlainRecovery("2026.9.3", "24.22.1", "refresh", "", path.resolve("/fixture/cli")),
         ].join("\n"),
       ),
@@ -502,10 +516,10 @@ describe("package runtime compatibility guidance", () => {
   });
 
   it.each([
-    [">=22.19.0", "24.22.1"],
-    [">=24.18.0 <25", "24.22.1"],
-    ["^22 || >=25 <27", "26.12.1"],
-    [">=26.2.0-rc.1 <27", "26.12.1"],
+    [">=22.19.0", "24.16.0"],
+    [">=24.18.0 <25", "24.18.0"],
+    ["^22 || >=25 <27", "26.1.0"],
+    [">=26.2.0-rc.1 <27", "26.2.0"],
     [">=90.2.0 <91 || >=92.5.0", "90.2.0"],
     [">=22.22.3 <23", null],
     [">=25.0.0 <26", null],
@@ -528,11 +542,11 @@ describe("package runtime compatibility guidance", () => {
     expect(result.error).toContain(
       minimum
         ? expectedPlainRecovery("2027.1.0", minimum)
-        : "No Node version satisfies both this range and this updater's supported range (>=24.22.1 <25 || >=26.12.1).",
+        : "No Node version satisfies both this range and this updater's supported range (>=24.16.0 <25 || >=26.1.0).",
     );
     if (minimum !== "90.2.0" && minimum) {
       expect(result.error).toContain(
-        `Node ${node}: openclaw requires Node >=24.22.1 <25, or >=26.12.1.`,
+        `Node ${node}: openclaw requires Node >=24.16.0 <25, or >=26.1.0.`,
       );
     }
   });

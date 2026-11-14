@@ -8,17 +8,15 @@ type OperatorAuth = {
   scopes?: readonly string[];
   sessionCap?: NonNullable<ApplicationGatewaySnapshot["hello"]>["auth"]["sessionCap"];
 } | null;
-type OperatorScope =
-  | "operator.read"
-  | "operator.sessions.read"
-  | "operator.write"
-  | "operator.admin"
-  | "operator.pairing"
-  | "operator.approvals";
-
 function hasOperatorScope(
   auth: OperatorAuth,
-  requestedScope: OperatorScope,
+  requestedScope:
+    | "operator.read"
+    | "operator.sessions.read"
+    | "operator.write"
+    | "operator.admin"
+    | "operator.pairing"
+    | "operator.approvals",
   missingAuthHasAccess: boolean,
 ): boolean {
   if (!auth) {

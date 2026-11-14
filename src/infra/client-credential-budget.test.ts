@@ -12,12 +12,25 @@ import {
   generateStoredDeviceIdentity,
   storedDeviceIdentityToRow,
 } from "./device-identity-material.js";
-import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const statementKinds: [RegExp, string][] = [
+  [/^pragma journal_mode$/, "journal"],
+  [/^pragma locking_mode=exclusive$/, "custody"],
+  [/^(begin|commit|rollback)\b/, "transaction"],
+  [/pragma_user_version/, "receiptAndVersion"],
+  [/^pragma user_version$/, "coldVersion"],
+  [/^pragma schema_version$/, "schemaVersion"],
+  [/pragma (integrity_check|foreign_key_check)/, "integrity"],
+  [/^select \* from "device_identities"/, "identityRead"],
+  [/^insert into "device_identities"/, "identityInsert"],
+  [/^insert into "client_credential_migration"/, "receiptWrite"],
+  [/^select \* from "client_credential_migration"/, "receiptRead"],
+  [/sqlite_schema|pragma table_list|pragma_table|pragma_index|pragma_foreign_key/, "catalog"],
+];
 
-it("admits the six-call census identity workload once and dispatches one request per call", async () => {
+it("admits the six-call census identity workload once and bounds its database work", async () => {
   const root = dirs.make("credential-budget-");
   const env = { HOME: root, OPENCLAW_STATE_DIR: root };
   {
@@ -61,19 +74,6 @@ it("admits the six-call census identity workload once and dispatches one request
   const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(123), 456);
   const read = { kind: "identity.read", identity_key: "node" } as const;
   const create = { kind: "identity.create", identity } as const;
-  let requests = 0;
-  const stop = onInternalDiagnosticEvent(
-    (event) => {
-      if (
-        event.type === "worker.request" &&
-        event.phase === "queued" &&
-        (event.kind === "clientCredentials" || event.kind === "sqlite_writer")
-      ) {
-        requests++;
-      }
-    },
-    { include: ["worker.request"] },
-  );
   try {
     await withEnvAsync(
       { ...env, ...sqliteWorkerPreloadEnv(preload), CREDENTIAL_SQL_TRACE: statements },
@@ -88,42 +88,13 @@ it("admits the six-call census identity workload once and dispatches one request
         await drainGlobalSingletonLifecycleState();
       },
     );
-    await waitForDiagnosticEventsDrained();
   } finally {
-    stop();
     await drainGlobalSingletonLifecycleState();
   }
   const counts: Record<string, number> = {};
   for (const line of fs.readFileSync(statements, "utf8").trim().split("\n")) {
     const sql = String(JSON.parse(line)).trim().toLowerCase();
-    const kind =
-      sql === "pragma journal_mode"
-        ? "journal"
-        : sql === "pragma locking_mode=exclusive"
-          ? "custody"
-          : /^(begin|commit|rollback)\b/.test(sql)
-            ? "transaction"
-            : sql.includes("pragma_user_version")
-              ? "receiptAndVersion"
-              : sql === "pragma user_version"
-                ? "coldVersion"
-                : sql === "pragma schema_version"
-                  ? "schemaVersion"
-                  : /pragma (integrity_check|foreign_key_check)/.test(sql)
-                    ? "integrity"
-                    : sql.startsWith('select * from "device_identities"')
-                      ? "identityRead"
-                      : sql.startsWith('insert into "device_identities"')
-                        ? "identityInsert"
-                        : sql.startsWith('insert into "client_credential_migration"')
-                          ? "receiptWrite"
-                          : sql.startsWith('select * from "client_credential_migration"')
-                            ? "receiptRead"
-                            : /sqlite_schema|pragma table_list|pragma_table|pragma_index|pragma_foreign_key/.test(
-                                  sql,
-                                )
-                              ? "catalog"
-                              : "unexpected";
+    const kind = statementKinds.find(([pattern]) => pattern.test(sql))?.[1] ?? "unexpected";
     counts[kind] = (counts[kind] ?? 0) + 1;
   }
   expect.soft(counts).toEqual({
@@ -139,5 +110,4 @@ it("admits the six-call census identity workload once and dispatches one request
     identityInsert: 1,
     receiptWrite: 1,
   });
-  expect.soft(requests).toBe(6);
 });

@@ -1,27 +1,14 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import {
-  createGatewayHarness,
-  createTestSessionCapability,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
-import type { SessionListOptions, SessionListSnapshot } from "./session-capability.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
+import type { SessionListSnapshot } from "./session-capability.ts";
 import { sessionRow } from "./session-fixtures.test-support.ts";
 import { canApplySessionListSnapshot } from "./session-list-query.ts";
+import { rosterReadFixture } from "./session-roster-refresh.test-support.ts";
 
 const row = (key: string, extra: Partial<GatewaySessionRow> = {}) =>
   sessionRow(`agent:main:${key}`, { sessionId: `${key}-session`, ...extra });
-type Request = Parameters<typeof createTestGatewayClient>[0];
-function fixture(request: Request, query: SessionListOptions) {
-  const { gateway } = createGatewayHarness(createTestGatewayClient(request));
-  const sessions = createTestSessionCapability(gateway);
-  const updates = vi.fn<(snapshot: SessionListSnapshot) => void>();
-  onTestFinished(sessions.subscribeList(query, updates));
-  return { sessions, updates, refresh: () => sessions.refresh({ agentId: "main", force: true }) };
-}
-
 it.each([
   [200, 60, true],
   [200, 59, false],
@@ -59,75 +46,42 @@ it.each([
   },
 );
 
-it("keeps deliberate dock-inclusive queries separate from the ordinary roster", async () => {
-  const ordinary: GatewaySessionRow = { key: "agent:main:ordinary", kind: "direct" };
-  const dock: GatewaySessionRow = { key: "agent:main:board-agent", kind: "direct", isDock: true };
-  const request = vi.fn(async (_method: string, params?: unknown) =>
-    sessionsResult(
-      asOptionalRecord(params)?.excludeDock === false ? [ordinary, dock] : [ordinary],
-      1,
-    ),
-  );
-  const query = { agentId: "main", excludeDock: false };
-  const { sessions, updates, refresh } = fixture(request, query);
-  const expectOrdinary = () => {
-    expect(request).toHaveBeenLastCalledWith(
-      "sessions.list",
-      expect.objectContaining({ excludeDock: true }),
-    );
-    expect(sessions.state.result?.sessions).toEqual([ordinary]);
-  };
-  await refresh();
-  expectOrdinary();
-  await sessions.refreshList(query);
-  expect(request).toHaveBeenLastCalledWith("sessions.list", expect.objectContaining(query));
-  expect(sessions.state.result?.sessions).toEqual([ordinary]);
-  expect(sessions.listSnapshot(query).result?.sessions).toEqual([ordinary, dock]);
-  expect(updates.mock.lastCall?.[0].result?.sessions).toEqual([ordinary, dock]);
-  await refresh();
-  expectOrdinary();
-  expect(sessions.listSnapshot(query).result?.sessions).toEqual([ordinary, dock]);
-});
-
 it.each([
-  ["unfiltered", "system:maintenance"],
-  ["excludeSubagents", "subagent:worker"],
-  ["excludeCron", "cron:scheduled"],
-  ["excludeSystem", "system:maintenance"],
-] as const)("keeps list and subscription membership scoped for %s", async (flag, excludedKey) => {
+  ["unfiltered", "system:maintenance", {}],
+  ["excludeSubagents", "subagent:worker", { excludeSubagents: true }],
+  ["excludeCron", "cron:scheduled", { excludeCron: true }],
+  ["excludeSystem", "system:maintenance", { excludeSystem: true }],
+  ["dock-inclusive", "board-agent", { excludeDock: false }],
+] as const)("keeps list and subscription membership scoped for %s", async (name, key, filter) => {
   const ordinary = row("ordinary", { agentId: "main" });
-  const excluded: GatewaySessionRow = {
-    ...ordinary,
-    key: `agent:main:${excludedKey}`,
-    sessionId: "excluded-session",
-  };
-  let primaryRows = [ordinary, excluded];
+  const dock = name === "dock-inclusive";
+  const excluded = row(key, { isDock: dock });
+  const primary = name === "unfiltered";
+  let primaryRows = dock ? [ordinary] : [ordinary, excluded];
+  const expectedRows = primary ? primaryRows : dock ? [ordinary, excluded] : [ordinary];
   let issued = 0;
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method !== "sessions.list") {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    const filtered = flag !== "unfiltered" && asOptionalRecord(params)?.[flag] === true;
-    return sessionsResult(filtered ? [ordinary] : primaryRows, ++issued);
-  });
-  const query: SessionListOptions = { agentId: "main" };
-  const primary = flag === "unfiltered";
-  if (!primary) {
-    query[flag] = true;
-  }
-  const { sessions, updates, refresh } = fixture(request, query);
-  const descriptor = sessions.observeRow({ key: excluded.key, agentId: "main" }, () => {});
+  const read = (params?: unknown) => {
+    const scoped = Object.entries(filter).every(
+      ([field, value]) => asOptionalRecord(params)?.[field] === value,
+    );
+    return sessionsResult(!primary && scoped ? expectedRows : primaryRows, ++issued);
+  };
+  const query = { agentId: "main", ...filter };
+  const { sessions, watch } = rosterReadFixture(read);
+  const updates = vi.fn<(snapshot: SessionListSnapshot) => void>();
+  watch(sessions.subscribeList(query, updates));
+  const refresh = () => sessions.refresh({ agentId: "main", force: true });
+  const tracked = dock ? ordinary : excluded;
+  const descriptor = sessions.observeRow({ key: tracked.key, agentId: "main" }, () => {});
   onTestFinished(() => descriptor.dispose());
   await refresh();
   const primaryBefore = sessions.state.result;
-  const canonicalRevision = sessions.canonicalListRevision;
   const heldDescriptor = descriptor.row;
-  expect(heldDescriptor).toMatchObject(excluded);
+  expect(heldDescriptor).toMatchObject(tracked);
+  expect(primaryBefore?.sessions).toEqual(primaryRows);
   updates.mockClear();
 
   const result = await sessions.list(query);
-  const expectedRows = primary ? primaryRows : [ordinary];
-  expect(request.mock.calls.at(-1)?.[1]).toMatchObject(query);
   expect(result?.sessions).toEqual(expectedRows);
   expect(sessions.state.result).toBe(primaryBefore);
   expect(updates).not.toHaveBeenCalled();
@@ -139,11 +93,6 @@ it.each([
   expect(descriptor.isCurrent()).toBe(true);
   expect(descriptor.row).toBe(heldDescriptor);
   expect(sessions.state.result).toBe(primary ? queryWindow : primaryBefore);
-  expect(sessions.canonicalListRevision).toBe(canonicalRevision + Number(primary));
-  if (!primary) {
-    expect(sessions.state.result?.sessions).toEqual(primaryRows);
-    expect(queryWindow).not.toBe(primaryBefore);
-  }
 
   updates.mockClear();
   primaryRows = [...primaryRows, row("later", { agentId: "main" })];
@@ -154,6 +103,6 @@ it.each([
     expect(updates.mock.calls.at(-1)?.[0].result).toBe(sessions.state.result);
   } else {
     expect(updates).not.toHaveBeenCalled();
-    expect(sessions.listSnapshot(query).result?.sessions).toEqual([ordinary]);
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(expectedRows);
   }
 });

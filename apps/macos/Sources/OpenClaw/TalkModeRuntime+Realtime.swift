@@ -337,6 +337,10 @@ extension TalkModeRuntime {
         realtimeSession = session
         do {
             try await session.start()
+            // A cancelled startup can return normally without a ready relay.
+            guard await MainActor.run(body: { session.isReady }) else {
+                throw CancellationError()
+            }
         } catch {
             await MainActor.run { session.stop() }
             if realtimeSession === session {
@@ -348,6 +352,8 @@ extension TalkModeRuntime {
             else {
                 throw CancellationError()
             }
+            // Only the current startup may reset the phase.
+            self.phase = .idle
             throw error
         }
         guard isCurrent(lifecycleGeneration), !isPaused,
@@ -469,6 +475,10 @@ extension TalkModeRuntime {
 
     func handleRealtimeSpeakingChanged(_ speaking: Bool, relayGeneration: UInt64) async {
         guard let session = self.activeRealtimeRelay(relayGeneration) else { return }
+        // Closing an unready startup reports speaking false without becoming ready.
+        guard await MainActor.run(body: { session.isReady }),
+              self.activeRealtimeRelay(relayGeneration) === session
+        else { return }
         let phase: TalkModePhase = speaking ? .speaking : .listening
         self.phase = phase
         _ = await self.projectRealtimeRelay(relayGeneration, session) {

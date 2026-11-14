@@ -4,6 +4,7 @@ import {
   type ChannelDirectoryEntry,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
 import { resolveWhatsAppAuthDir } from "./accounts.js";
@@ -87,7 +88,8 @@ async function fetchLiveGroups(
 ): Promise<ChannelDirectoryEntry[]> {
   try {
     const groups = await sock.groupFetchAllParticipating();
-    const query = params.query?.trim().toLowerCase() ?? "";
+    // Canonical forms compare equal here; group subjects keep their original spelling.
+    const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
     const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
     const entries = Object.entries(groups)
       .map(([jid, metadata]) => ({
@@ -99,7 +101,10 @@ async function fetchLiveGroups(
         if (!query) {
           return true;
         }
-        return entry.id.toLowerCase().includes(query) || entry.name?.toLowerCase().includes(query);
+        return (
+          normalizeLowercaseStringOrEmpty(entry.id).normalize("NFC").includes(query) ||
+          normalizeLowercaseStringOrEmpty(entry.name).normalize("NFC").includes(query)
+        );
       })
       .toSorted((left, right) => left.id.localeCompare(right.id));
     return limit ? entries.slice(0, limit) : entries;

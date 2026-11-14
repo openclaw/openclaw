@@ -1,10 +1,8 @@
 import { getModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  validateDecisionResultV2,
-  type DecisionBatchV2,
-  type DecisionEntry,
-  type DecisionProviderContextV2,
-  type ProviderDecisionOutcomeV2,
+import type {
+  DecisionBatchV2,
+  DecisionProviderContextV2,
+  ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -18,127 +16,20 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { decodeBasetenDecisionResult, encodeBasetenDecisionRequest } from "./decision-codec.js";
 import { BASETEN_BASE_URL, BASETEN_DECISION_MODEL_IDS } from "./models.js";
 
-function text(value: DecisionEntry | undefined): string {
-  return typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value);
-}
-
-function questions(batch: DecisionBatchV2) {
-  return Object.fromEntries(
-    Object.entries(batch.questions).map(([id, q]) => {
-      const instructions = text(q.instructions);
-      if (q.type === "boolean") {
-        return [
-          id,
-          {
-            type: "noul",
-            instructions: q.criteria
-              ? `${instructions}\nTrue criterion: ${text(q.criteria.true)}\nFalse criterion: ${text(q.criteria.false)}`
-              : instructions,
-          },
-        ];
-      }
-      if (q.type === "choice") {
-        return [
-          id,
-          {
-            type: "choice",
-            instructions,
-            criteria: Object.fromEntries(
-              Object.entries(q.criteria).map(([key, value]) => [key, text(value)]),
-            ),
-          },
-        ];
-      }
-      if (q.type === "score") {
-        return [id, { type: "score", instructions, criteria: q.criteria.map(text) }];
-      }
-      throw new Error("Unsupported Baseten decision question");
-    }),
-  );
-}
-
-function parseResult(
-  batch: DecisionBatchV2,
-  payload: Record<string, unknown>,
-): ProviderDecisionOutcomeV2 {
-  const invalid = { status: "unavailable", reason: "invalid-response" } as const;
-  if (
-    !isRecord(payload.answers) ||
-    Object.keys(payload.answers).length !== Object.keys(batch.questions).length ||
-    !isRecord(payload.usage)
-  ) {
-    return invalid;
-  }
-  const usage = payload.usage;
-  if (
-    !Number.isSafeInteger(usage.input_tokens) ||
-    typeof usage.input_tokens !== "number" ||
-    usage.input_tokens < 0 ||
-    usage.output_tokens !== Object.keys(batch.questions).length
-  ) {
-    return invalid;
-  }
-  const answers: Record<string, unknown> = Object.create(null);
-  for (const [id, q] of Object.entries(batch.questions)) {
-    const answer = payload.answers[id];
-    if (!isRecord(answer)) {
-      return invalid;
-    }
-    if (q.type === "boolean") {
-      if (answer.type !== "noul") {
-        return invalid;
-      }
-      answers[id] = { type: "boolean", probabilityTrue: answer.noul };
-      continue;
-    }
-    if (
-      answer.type !== q.type ||
-      !isRecord(answer.probabilities) ||
-      typeof answer.confidence !== "number" ||
-      answer.confidence < 0 ||
-      answer.confidence > 1
-    ) {
-      return invalid;
-    }
-    if (q.type === "choice") {
-      answers[id] = {
-        type: "choice",
-        choice: answer.choice,
-        probabilities: answer.probabilities,
-        confidence: answer.confidence,
-      };
-    } else if (q.type === "score") {
-      const legend = answer.legend;
-      const probabilities = answer.probabilities;
-      if (
-        !isRecord(legend) ||
-        Object.keys(legend).length !== q.criteria.length ||
-        Object.keys(probabilities).length !== q.criteria.length ||
-        q.criteria.some((value, index) => legend[String(index)] !== text(value))
-      ) {
-        return invalid;
-      }
-      answers[id] = {
-        type: "score",
-        score: answer.score,
-        probabilities: q.criteria.map((_, index) => probabilities[String(index)]),
-        confidence: answer.confidence,
-      };
-    } else {
-      return invalid;
-    }
-  }
-  // The backend model may differ from the requested public slug. Preserve it.
-  const result = {
-    model: payload.model,
-    answers,
-    usage: { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens },
+type BasetenDecisionExecution = Pick<
+  DecisionProviderContextV2,
+  "signal" | "deadlineMonotonicMs" | "isAdmissible"
+> & {
+  modelId: string;
+  apiKey: string;
+  prepareTransport: () => ReturnType<typeof resolveProviderHttpRequestConfig> & {
+    preparedRequest: ReturnType<typeof getModelProviderRequestTransport>;
+    configuredHeaderNames: string[];
   };
-  return validateDecisionResultV2(batch, result) ? { status: "ok", result } : invalid;
-}
+};
 
 export async function evaluateBasetenDecision(
   batch: DecisionBatchV2,
@@ -158,34 +49,15 @@ export async function evaluateBasetenDecision(
   if (auth.mode !== "api-key" || !auth.apiKey) {
     return { status: "unavailable", reason: "credentials-unavailable" };
   }
-  const timeoutMs = context.deadlineMonotonicMs - performance.now();
-  if (timeoutMs <= 0) {
-    return { status: "unavailable", reason: "transport" };
-  }
-  const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
+  return executeBasetenDecision(batch, {
+    modelId: context.model.id,
+    apiKey: auth.apiKey,
     signal: context.signal,
-    timeoutMs,
-    operation: "Baseten decision",
-  });
-  const signal = timeoutSignal ?? context.signal;
-  let admissionError: { error: unknown } | undefined;
-  const assertActive = () => {
-    signal.throwIfAborted();
-    let admitted: boolean;
-    try {
-      admitted = context.isAdmissible();
-    } catch (error) {
-      admissionError = { error };
-      throw error;
-    }
-    if (!admitted || performance.now() >= context.deadlineMonotonicMs) {
-      throw new Error("Baseten decision is no longer admitted.");
-    }
-  };
-  try {
-    const preparedRequest = getModelProviderRequestTransport(context.model);
-    const { baseUrl, headers, dispatcherPolicy, allowPrivateNetwork } =
-      resolveProviderHttpRequestConfig({
+    deadlineMonotonicMs: context.deadlineMonotonicMs,
+    isAdmissible: context.isAdmissible,
+    prepareTransport: () => {
+      const preparedRequest = getModelProviderRequestTransport(context.model);
+      const requestConfig = resolveProviderHttpRequestConfig({
         provider: "baseten",
         capability: "other",
         transport: "http",
@@ -207,6 +79,52 @@ export async function evaluateBasetenDecision(
             }
           : undefined,
       });
+      return {
+        ...requestConfig,
+        preparedRequest,
+        configuredHeaderNames: Object.keys(context.model.headers ?? {}),
+      };
+    },
+  });
+}
+
+async function executeBasetenDecision(
+  batch: DecisionBatchV2,
+  execution: BasetenDecisionExecution,
+): Promise<ProviderDecisionOutcomeV2> {
+  const timeoutMs = execution.deadlineMonotonicMs - performance.now();
+  if (timeoutMs <= 0) {
+    return { status: "unavailable", reason: "transport" };
+  }
+  const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
+    signal: execution.signal,
+    timeoutMs,
+    operation: "Baseten decision",
+  });
+  const signal = timeoutSignal ?? execution.signal;
+  let admissionError: { error: unknown } | undefined;
+  const assertActive = () => {
+    signal.throwIfAborted();
+    let admitted: boolean;
+    try {
+      admitted = execution.isAdmissible();
+    } catch (error) {
+      admissionError = { error };
+      throw error;
+    }
+    if (!admitted || performance.now() >= execution.deadlineMonotonicMs) {
+      throw new Error("Baseten decision is no longer admitted.");
+    }
+  };
+  try {
+    const {
+      baseUrl,
+      headers,
+      dispatcherPolicy,
+      allowPrivateNetwork,
+      preparedRequest,
+      configuredHeaderNames,
+    } = execution.prepareTransport();
     const url = baseUrl.replace(/\/$/, "") + "/systemone";
     const request = {
       url,
@@ -218,16 +136,7 @@ export async function evaluateBasetenDecision(
       init: {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          model: context.model.id,
-          state:
-            batch.state.type === "text"
-              ? batch.state.text
-              : batch.state.type === "json"
-                ? JSON.stringify(batch.state.value)
-                : "",
-          questions: questions(batch),
-        }),
+        body: encodeBasetenDecisionRequest(batch, execution.modelId),
       },
     };
     const { response, release } = await fetchWithProviderHttpGuard(
@@ -268,23 +177,23 @@ export async function evaluateBasetenDecision(
       assertActive();
       const serialized = JSON.stringify(payload);
       if (
-        serialized.includes(auth.apiKey) ||
+        serialized.includes(execution.apiKey) ||
         createProviderCredentialMatcher({
           headers,
           request: preparedRequest,
-          configuredHeaderNames: Object.keys(context.model.headers ?? {}),
+          configuredHeaderNames,
           defaultAuthHeader: "Authorization",
           defaultAuthPrefix: "Bearer ",
         })(serialized)
       ) {
         return { status: "unavailable", reason: "invalid-response" };
       }
-      return parseResult(batch, payload);
+      return decodeBasetenDecisionResult(batch, payload);
     } finally {
       await release();
     }
   } catch {
-    context.signal.throwIfAborted();
+    execution.signal.throwIfAborted();
     if (admissionError) {
       throw admissionError.error;
     }

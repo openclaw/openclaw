@@ -35,7 +35,7 @@ const SVG_ATTRIBUTE_PATTERNS = new Map<string, RegExp>([
   ["fill-rule", /^(?:evenodd|nonzero)$/u],
   ["stroke-linecap", /^(?:butt|round|square)$/u],
   ["stroke-linejoin", /^(?:bevel|miter|round)$/u],
-  ["transform", /^(?:\s*(?:matrix|rotate|scale|skewX|skewY|translate)\(\s*[0-9eE+.,\s-]+\)\s*)+$/u],
+  ["transform", /^(?:(?:matrix|rotate|scale|skewX|skewY|translate)\([0-9eE+.,\s-]+\)\s*)+$/u],
   ["cx", SVG_NUMBER_VALUE_RE],
   ["cy", SVG_NUMBER_VALUE_RE],
   ["height", SVG_NUMBER_VALUE_RE],

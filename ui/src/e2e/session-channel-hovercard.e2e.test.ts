@@ -98,7 +98,7 @@ suite.define(() => {
       expect(await card.textContent()).toContain("In this session");
       expect(await detail("attribution")).toContain("cli");
       expect(await card.textContent()).not.toMatch(/members|120363000001/);
-      expect(await card.textContent()).toContain("The picnic is booked for Saturday.");
+      expect(await card.textContent()).not.toContain("The picnic is booked for Saturday.");
       await gateway.waitForRequest("progressCard.get", { match: { sessionKey: group.key } });
 
       await imessageRow.hover();

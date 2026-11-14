@@ -190,43 +190,59 @@ export async function prepareCachedPlacementPreservationRead(
   try {
     signal?.throwIfAborted();
     assertUsable();
-    const baseline = owner.preservation ?? (await read());
+    const baseline =
+      owner.preservation ??
+      new Map(
+        freezeJsonSnapshot(await read()).map((placement) => [placement.sessionId, placement]),
+      );
     signal?.throwIfAborted();
     assertUsable();
     if (!observation.revoked && !hasPendingPublication(owner)) {
-      owner.preservation = freezeJsonSnapshot(baseline);
+      owner.preservation = baseline;
     }
-    return {
-      get placements() {
-        assertUsable();
-        const placements = new Map(baseline.map((placement) => [placement.sessionId, placement]));
-        // Replica reads cannot publish beyond the owner's sequence at capture.
-        if (owner.sequence >= sequence) {
-          for (const [sessionId, published] of owner.placements) {
-            if (published.sequence < sequence) {
-              continue;
-            }
-            const placement = published.placement;
-            if (placement && placement.state !== "local" && placement.state !== "reclaimed") {
-              placements.set(sessionId, placement);
-            } else {
-              placements.delete(sessionId);
-            }
+    // Consume while holding this read; records are immutable owner facts.
+    function* placements() {
+      assertUsable();
+      for (const [sessionId, original] of baseline) {
+        const published = owner.placements.get(sessionId);
+        const placement =
+          published && published.sequence >= sequence ? published.placement : original;
+        if (placement && placement.state !== "local" && placement.state !== "reclaimed") {
+          yield placement;
+        }
+      }
+      // Replica reads cannot publish beyond the owner's sequence at capture.
+      if (owner.sequence >= sequence) {
+        for (const [sessionId, published] of owner.placements) {
+          const placement = published.placement;
+          if (
+            published.sequence >= sequence &&
+            !baseline.has(sessionId) &&
+            placement &&
+            placement.state !== "local" &&
+            placement.state !== "reclaimed"
+          ) {
+            yield placement;
           }
         }
-        // Pending postimages can add protection, but cannot withdraw committed protection.
-        const pending = Array.from(owner.pending).flatMap((change) => {
-          const placement =
-            change.kind === "claim"
-              ? change.workspacePlacement
-              : change.kind === "workspace-result"
-                ? change.facts?.placement
-                : undefined;
-          return placement && placement.state !== "local" && placement.state !== "reclaimed"
-            ? [placement]
-            : [];
-        });
-        return structuredClone([...placements.values(), ...pending]);
+      }
+      // Pending postimages can add protection, but cannot withdraw committed protection.
+      for (const change of owner.pending) {
+        const placement =
+          change.kind === "claim"
+            ? change.workspacePlacement
+            : change.kind === "workspace-result"
+              ? change.facts?.placement
+              : undefined;
+        if (placement && placement.state !== "local" && placement.state !== "reclaimed") {
+          yield placement;
+        }
+      }
+    }
+    return {
+      get placements(): Iterable<WorkerSessionPlacementRecord> {
+        assertUsable();
+        return placements();
       },
       assertCurrent: assertUsable,
       release: authority.release,

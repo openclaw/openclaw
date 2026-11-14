@@ -14,6 +14,8 @@ const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 export const CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE = "cli_partial_output_rejected";
 /** Host-authored planner diagnostic that names a saved login; never provider reply copy. */
 export const AUTH_PROFILE_COOLDOWN_ERROR_CODE = "auth_profile_cooldown";
+/** The host refused another warm CLI process because its free memory is low. */
+export const CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE = "cli_live_session_host_memory";
 
 export type CliTimeoutContext = {
   mode: "overall" | "no-output";

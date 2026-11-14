@@ -26,10 +26,17 @@ function matchesSchedule(
   );
 }
 
+function targetFailed(target: BackupStatusResult["targets"][number]) {
+  return (
+    target.latest.status === "failed" ||
+    (target.kind === "git" && target.latest.status === "ok" && target.latest.pushFailed === true)
+  );
+}
+
 function renderTarget(target: BackupStatusResult["targets"][number], status: BackupStatusResult) {
   const { latest, latestOk } = target;
   const pushFailed = target.kind === "git" && latest.status === "ok" && latest.pushFailed === true;
-  const failed = latest.status === "failed" || pushFailed;
+  const failed = targetFailed(target);
   const storedLocation = latest.location ?? latestOk?.location;
   const location = status.locations.find(
     (entry) =>
@@ -91,7 +98,7 @@ function renderTarget(target: BackupStatusResult["targets"][number], status: Bac
   );
 }
 
-export function SystemsBackups(props: { controller: Systems }) {
+export function SystemsBackups(props: { controller: Systems; onDetails?: () => void }) {
   const status = () => props.controller.state.backups;
   const read = createSystemsRead(() => props.controller.backupsRead);
   const readStatus = () => {
@@ -104,25 +111,33 @@ export function SystemsBackups(props: { controller: Systems }) {
         {t(props.controller.connected() ? "systems.backups.loading" : "systems.offlineGateway")}
       </p>
     ) : null;
+  const failedCount = () => status()?.targets.filter(targetFailed).length ?? 0;
   const failure = (message: string) => (
-    <p class="systems-backup__error" role="alert">
+    <p class="systems-backup__error" role="alert" title={message}>
       {message}
-      <button
-        class="systems-backups__check"
-        disabled={read.pending() || !props.controller.connected()}
-        onClick={() => void props.controller.refreshBackups()}
-      >
-        {t("common.retry")}
-      </button>
+      {props.onDetails ? null : (
+        <button
+          class="systems-backups__check"
+          disabled={read.pending() || !props.controller.connected()}
+          onClick={() => void props.controller.refreshBackups()}
+        >
+          {t("common.retry")}
+        </button>
+      )}
     </p>
   );
   return (
     <section
-      class="systems-backups"
+      class={["systems-backups", { "systems-backups--summary": Boolean(props.onDetails) }]}
       aria-label={t("systems.backups.title")}
       aria-busy={read.pending() ? "true" : "false"}
     >
       <h2>{t("systems.backups.title")}</h2>
+      {props.onDetails ? (
+        <button class="systems-summary-link" onClick={() => props.onDetails?.()}>
+          {t("systems.backups.details")}
+        </button>
+      ) : null}
       <Show
         when={!props.controller.state.backupsError}
         fallback={failure(props.controller.state.backupsError!)}
@@ -138,7 +153,16 @@ export function SystemsBackups(props: { controller: Systems }) {
           )}
         </Show>
       </Show>
-      {status() ? (
+      {status() && props.onDetails ? (
+        <p class="systems-backups__summary" data-status={failedCount() ? "failed" : "ok"}>
+          {status()!.targets.length
+            ? t("systems.backups.summary", {
+                count: String(status()!.targets.length),
+                failed: String(failedCount()),
+              })
+            : t("systems.backups.empty")}
+        </p>
+      ) : status() ? (
         <>
           {status()!.targets.length ? (
             <ul class="systems-backups__targets">

@@ -1,5 +1,5 @@
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
@@ -8,7 +8,7 @@ import {
 } from "../../lib/chat/outbox-store-codec.ts";
 import { chatOutboxDeliveryKey, storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
-import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
@@ -41,7 +41,7 @@ import {
 } from "./chat-send-queue-state.ts";
 import { requestChatSend } from "./chat-send-request.ts";
 import {
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
   retireDeliveredQueuedUserTurn,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
@@ -119,7 +119,7 @@ export async function sendPreparedChatQueueItem(
           })) ?? "pending";
       }
       if (typeof prepared === "string") {
-        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+        setChatError(host, chatOfflineQueueStorageError());
         return prepared;
       }
       if (approvedReset) {
@@ -153,12 +153,12 @@ export async function sendPreparedChatQueueItem(
           return "failed";
         }
         if (!waiting) {
-          setState("failed", OFFLINE_QUEUE_STORAGE_ERROR);
+          setState("failed", chatOfflineQueueStorageError());
           surfaceChatDeliveryFailure(
             host,
             sessionKey,
             prepared.agentId,
-            OFFLINE_QUEUE_STORAGE_ERROR,
+            chatOfflineQueueStorageError(),
           );
         }
         return "pending";
@@ -194,7 +194,12 @@ export async function sendPreparedChatQueueItem(
         agentId: prepared.agentId,
       }));
       if (!sendingItem) {
-        surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
+        surfaceChatDeliveryFailure(
+          host,
+          sessionKey,
+          prepared.agentId,
+          chatOfflineQueueStorageError(),
+        );
         return "pending";
       }
       const scope = {
@@ -439,7 +444,7 @@ export async function sendPreparedChatQueueItem(
             host,
             sessionKey,
             prepared.agentId,
-            OFFLINE_QUEUE_STORAGE_ERROR,
+            chatOfflineQueueStorageError(),
           );
           return "pending";
         }

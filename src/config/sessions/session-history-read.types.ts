@@ -106,6 +106,25 @@ export type SessionTranscriptEventMatch =
     }
   | { kind: "active-assistant"; runId: string };
 
+export type SessionTranscriptMatchCaller =
+  | "background-result"
+  | "internal-source-reply"
+  | "committed-source-reply"
+  | "subagent-final-answer"
+  | "canvas-widget"
+  | "public-session-widget";
+
+/** Fixed-size attribution emitted only with an existing slow transaction hold. */
+export type SessionTranscriptMatchDiagnostics = {
+  caller?: SessionTranscriptMatchCaller;
+  selector: SessionTranscriptEventMatch["kind"];
+  outcome: "incomplete" | "hit" | "miss";
+  rowsVisited: number;
+  projectedRows: number;
+  identityRows: number;
+  coldRows: number;
+};
+
 export type SessionContextMessagesWorkerInput = {
   kind: "context-messages";
   target: SessionTranscriptRuntimeTarget;

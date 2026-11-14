@@ -111,7 +111,11 @@ it.each([
       if (settlement === "error") {
         throw new Error("late acquisition failed");
       }
-      return { snapshot: preparedModelRuntime, [Symbol.asyncDispose]: releaseRuntimeLease };
+      return {
+        snapshot: preparedModelRuntime,
+        run: <T>(run: () => T): T => run(),
+        [Symbol.asyncDispose]: releaseRuntimeLease,
+      };
     });
     const reason =
       entry === "core"

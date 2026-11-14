@@ -28,6 +28,16 @@ activity icon and the opaque white package tile.
 
 The name and mark remain the property of Abliteration AI, Inc.
 
+## Particle icon
+
+`ProviderIcon-particle.svg` uses the official Particle symbol from the inline
+SVG wordmark at https://particle.ai/, retrieved on October 29, 2026. The wordmark
+paths are removed and the view box is cropped to the 35 × 35 symbol. The symbol
+paths retain their original geometry and use `currentColor` for light and dark
+themes.
+
+The name and mark remain the property of Particle.
+
 ## Pi icon
 
 `ProviderIcon-pi.svg` is a metadata-cleaned copy of the official Pi logo:

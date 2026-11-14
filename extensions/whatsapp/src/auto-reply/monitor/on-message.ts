@@ -47,7 +47,6 @@ import { whatsappInboundLog } from "../loggers.js";
 import { buildMentionConfig, isBotMentioned, resolveOwnerList } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
-import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
@@ -392,11 +391,21 @@ export function createWebOnMessageHandler(params: {
             body: mentionText ?? msg.payload.commandBody ?? msg.payload.body,
           },
         };
-        const commandBody = stripMentionsForCommand(
-          mentionMsg.payload.body,
-          mentionConfig.mentionRegexes,
-          self.e164,
-        );
+        let commandBody = mentionMsg.payload.body;
+        const mentionRegexes = mentionConfig.mentionRegexes;
+        const selfE164 = self.e164;
+        for (const re of mentionRegexes) {
+          commandBody = commandBody.replace(re, " ");
+        }
+        if (selfE164) {
+          // `selfE164` is usually like "+1234"; strip down to digits so we can match "+?1234" safely.
+          const digits = selfE164.replace(/\D/g, "");
+          if (digits) {
+            const pattern = new RegExp(`\\+?${digits}`, "g");
+            commandBody = commandBody.replace(pattern, " ");
+          }
+        }
+        commandBody = commandBody.replace(/\s+/g, " ").trim();
         const activationCommand = parseActivationCommand(commandBody);
         const ownerSender = normalizeE164(getSenderIdentity(msg, account.authDir).e164 ?? "");
         const owner =

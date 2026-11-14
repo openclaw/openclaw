@@ -1,6 +1,10 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page, Locator } from "playwright";
 import { assert, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { exactButton, polledClipboard, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -44,6 +48,102 @@ async function expectMobileFit(page: Page, alert: Locator) {
 }
 
 suite.define(() => {
+  it("keeps archived child failures out of the composer while paging past tool activity", async () => {
+    await suite.withPage(diagnosticContext, async ({ page }) => {
+      const childKey = "agent:main:dashboard:archived-child";
+      const row = {
+        key: childKey,
+        sessionId: "archived-child",
+        kind: "direct",
+        label: "Prototype grouped commands",
+        parentSessionKey: sessionKey,
+        archived: true,
+        archivedAt: 2,
+        updatedAt: 2,
+        status: "failed",
+        hasActiveRun: false,
+        lastRunId: "failed-child-run",
+        lastRunError: "Synthetic provider interrupted the reply.",
+      };
+      const activity = Array.from({ length: 3 }, (_, index) => [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: `read-${index}`,
+              name: "read",
+              arguments: { path: "example.txt" },
+            },
+          ],
+          __openclaw: { id: `call-${index}`, seq: 2 + index * 2 },
+        },
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: `read-${index}`,
+          content: "Synthetic file contents",
+          __openclaw: { id: `result-${index}`, seq: 3 + index * 2 },
+        },
+      ]).flat();
+      const gateway = await installMockGateway(page, {
+        sessionKey: childKey,
+        sessions: [row],
+        deferredRequests: [{ method: "chat.history", match: { cursor: "older-child" } }],
+        methodResponses: {
+          "chat.startup": {
+            sessionId: row.sessionId,
+            sessionInfo: row,
+            messages: activity,
+            hasMore: true,
+            olderCursor: "older-child",
+          },
+          "chat.history": {
+            sessionId: row.sessionId,
+            sessionInfo: row,
+            hasMore: false,
+            messages: [
+              {
+                role: "user",
+                content: "Please prototype grouped commands.",
+                __openclaw: { id: "first", seq: 1 },
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, childKey));
+      const archived = page.getByText(
+        "This session is archived. Unarchive it to continue the conversation.",
+        { exact: true },
+      );
+      await archived.waitFor();
+      const activityRow = page.locator(".chat-tool-row, .chat-activity-group__summary").first();
+      await activityRow.waitFor();
+      await gateway.waitForRequest("chat.history");
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const directory = createControlUiE2eArtifactDir("archived-child");
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [archived, activityRow],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(directory, "archived-child.png"), frame.png);
+      }
+      await expect.poll(() => page.locator(".chat-error").count()).toBe(0);
+      await gateway.resolveDeferred("chat.history", undefined, {
+        match: { cursor: "older-child" },
+      });
+      await page.getByText("Please prototype grouped commands.", { exact: true }).waitFor();
+      expect(await page.locator(".chat-history-boundary").count()).toBe(0);
+      expect(await gateway.getRequests("chat.history")).toMatchObject([
+        { params: { cursor: "older-child" } },
+      ]);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
+
   it("keeps a rejected session-change message visible with recovery guidance and diagnostic details", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const prompt = "Continue reviewing the example project";

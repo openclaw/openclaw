@@ -49,7 +49,11 @@ export function createExecution(
         effectiveAllowModelOverride: false,
         lifecycleStorePath: "",
         operationalRunInstance: {},
-        preparedModelRuntimeLease: { [Symbol.asyncDispose]: runtimeRelease, snapshot: {} },
+        preparedModelRuntimeLease: {
+          run: <T>(run: () => T): T => run(),
+          [Symbol.asyncDispose]: runtimeRelease,
+          snapshot: {},
+        },
         replyDispatchRuntime: { config: { runtime: "A" }, pluginGeneration: "generation-A" },
         unpersistedOffloadedRefs: [],
         userTurn: {
@@ -70,7 +74,6 @@ export function createExecution(
       isNewSession: false,
       isRawModelRun: true,
       isOneShotModelRun: true,
-      isRestartRecoveryResumeRun: false,
       suppressVisibleSessionEffects: true,
       images: [],
       imageOrder: [],

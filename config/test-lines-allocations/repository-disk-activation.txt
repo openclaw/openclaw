@@ -1,0 +1,3 @@
+# Configured retained dispatch, native atomic activation/rollback, and legacy-mode preservation.
+# Includes exact receipt refusal, zero-mirror turn settlement, and stale-fork guards.
+613

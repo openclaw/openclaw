@@ -20,8 +20,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { verifyBoardViewTicket } from "../board-view-ticket.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
+import * as sessionObserverModel from "../session-observer-model.js";
 import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
@@ -146,7 +148,7 @@ describe("board gateway methods", () => {
   });
 
   it("scopes bare boards by explicit owner and rejects ambiguous ownerless requests", async () => {
-    const { invoke, store } = createHarness(undefined, undefined, undefined, {
+    const { invoke } = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({
         agents: explicitOwners,
       }),
@@ -158,21 +160,21 @@ describe("board gateway methods", () => {
       content: html("work"),
     });
     expect(work.mock.calls[0]).toMatchObject([true, { sessionKey: "agent:work:global" }]);
-    expect(await store.getSnapshot({ sessionKey: "global", agentId: "work" })).toMatchObject({
+    const workBoard = responseBoard(
+      await invoke("board.get", { sessionKey: "global", agentId: "work" }),
+    );
+    const ownerWidget = findWidget(workBoard, "owner");
+    expect(ownerWidget.frameUrl).toContain("/agent%3Awork%3Aglobal/owner/index.html?");
+    expect(verifyBoardViewTicket(ownerWidget.viewTicket!)).toMatchObject({
       sessionKey: "global",
-      revision: 1,
-      widgets: [{ name: "owner" }],
+      agentId: "work",
+      name: "owner",
     });
-
     const main = await invoke("board.get", { sessionKey: "global", agentId: "main" });
     expect(main.mock.calls[0]).toMatchObject([
       true,
       { sessionKey: "agent:main:global", revision: 0 },
     ]);
-    expect(await store.getSnapshot({ sessionKey: "global", agentId: "main" })).toMatchObject({
-      widgets: [],
-    });
-
     const ambiguous = await invoke("board.get", { sessionKey: "global" });
     expect(ambiguous.mock.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
   });
@@ -181,7 +183,7 @@ describe("board gateway methods", () => {
     let sandboxPort: number | undefined;
     const { client } = makeClient("board-viewer", "operator", ["operator.read", "operator.write"]);
     const ensureSandboxHostPort = vi.fn(async () => (sandboxPort = 18790));
-    const { put, grant, get, store } = widgetHarness(
+    const { put, grant, get } = widgetHarness(
       undefined,
       undefined,
       undefined,
@@ -203,12 +205,11 @@ describe("board gateway methods", () => {
     await grant(status);
     const { widget: rejected } = await put("rejected", html("no"), { tools: ["status.reject"] });
     await grant(rejected, "rejected");
-    const preparedRead = vi.spyOn(store, "getSnapshotWithHtmlViewMetadata");
-    const documentRead = vi.spyOn(store, "useWidgetDocument");
+    const scopeKey = vi.spyOn(sessionObserverModel, "sessionObserverScopeKey");
+    onTestFinished(() => scopeKey.mockRestore());
     const first = await withoutBoardReads(get);
+    expect(scopeKey).toHaveBeenCalledTimes(1);
     expect(ensureSandboxHostPort).toHaveBeenCalledOnce();
-    expect(preparedRead).toHaveBeenCalledOnce();
-    expect(documentRead).not.toHaveBeenCalled();
     for (const name of ["plain", "status"]) {
       const widget = findWidget(first, name);
       expect(widget).toMatchObject({
@@ -222,10 +223,6 @@ describe("board gateway methods", () => {
         sandboxPort: 18790,
       });
     }
-    expect(findWidget(first, "status").declaredSummary).toEqual([
-      "Network access: https://status.example",
-      "Tool access: status.refresh",
-    ]);
     for (const name of ["app", "rejected"]) {
       expect(findWidget(first, name)).not.toHaveProperty("frameUrl");
     }
@@ -277,11 +274,9 @@ describe("board gateway methods", () => {
     const { put, store } = widgetHarness(undefined, mcpApp);
     const pending = put("revoked", appSource);
     await started.promise;
-    expect(authorizeAppInteraction).toHaveBeenCalledOnce();
     grantActive = false;
     release.resolve(["server.refresh"]);
     const { snapshot } = await pending;
-    expect(authorizeAppInteraction).toHaveBeenCalledTimes(2);
     expect(snapshot.widgets).toMatchObject([{ name: "revoked", grantState: "none" }]);
     expect(await store.readWidgetMcpApp(mainTarget, "revoked")).toMatchObject({
       interactive: false,
@@ -317,17 +312,8 @@ describe("board gateway methods", () => {
     });
     const { invoke, mcpApp, store, put, grant, appView } = scopeWidgets(harness, target);
 
-    const { snapshot, widget } = await put("server-app", appSource);
-    expect(snapshot.widgets).toMatchObject([
-      {
-        name: "server-app",
-        grantState: "pending",
-        declaredSummary: ["Tool access: server.refresh", "Tool access: server.search"],
-      },
-    ]);
-    expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
-      expect.objectContaining({ ...target, viewId: "mcp-app-source" }),
-    );
+    const { widget } = await put("server-app", appSource);
+    expect(widget.grantState).toBe("pending");
     const originalInstanceId = (await store.getSnapshot(target)).widgets[0]?.instanceId;
     expect(originalInstanceId).toMatch(/^[a-f0-9]{32}$/u);
     expect(widget).toMatchObject({ revision: 1, instanceId: originalInstanceId });

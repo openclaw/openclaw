@@ -5,11 +5,9 @@ import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
 import { getOrCreateWeakOwnerMap } from "../../../../src/shared/weak-owner-map.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
+import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  isHiddenAssistantStreamText,
-  shouldHideAssistantChatMessage,
-} from "../../lib/chat/message-visibility.ts";
+import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
@@ -110,7 +108,7 @@ function finalAssistantReplyHasPullRequestLink(
   const isVisible = (text: string | null | undefined) =>
     typeof text === "string" && text.trim().length > 0 && !isHiddenAssistantStreamText(text);
   return (
-    ((isVisible(finalText) && !shouldHideAssistantChatMessage(payload.message)) ||
+    ((isVisible(finalText) && !isAssistantHeartbeatAckForDisplay(payload.message)) ||
       streamTexts.some(isVisible)) &&
     [finalText, ...streamTexts].some((text) => pullRequestLinksIn(text).length > 0)
   );
@@ -248,7 +246,7 @@ function applyPageGatewayEvent(
           if (sessionMatches) {
             chatRunPresentation(state).publish(
               payload?.state === "delta" ? "animation-frame" : "immediate",
-              payload?.state === "delta",
+              payload?.state !== "delta",
             );
           }
         },
@@ -310,8 +308,13 @@ function applyPageGatewayEvent(
   }
   if (event.event === "agent" || event.event === "session.tool") {
     // SAFETY: AgentEvent streams; the reducer checks session, sequence, and stream-specific data.
-    if (handleAgentEvent(state, event.payload as AgentEventPayload | undefined)) {
-      chatRunPresentation(state).publish("animation-frame");
+    const payload = event.payload as AgentEventPayload | undefined;
+    const knownToolActivity =
+      (payload?.stream === "tool" || payload?.stream === "item") &&
+      state.knownAgentRunIds?.has(payload.runId);
+    if (handleAgentEvent(state, payload)) {
+      // Tool messages publish at their flush; first observed activity still wakes the pane.
+      chatRunPresentation(state).publish("animation-frame", !knownToolActivity);
     }
     return;
   }

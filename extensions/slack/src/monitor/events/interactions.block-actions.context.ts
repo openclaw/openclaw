@@ -28,24 +28,7 @@ export type SlackBlockActionRespond = NonNullable<SlackActionMiddlewareArgs["res
 export type SlackBlockActionHandlerArgs = SlackActionMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
 
-export type ParsedSlackBlockAction = {
-  typedBody: SlackBlockActionBody;
-  typedAction: Record<string, unknown>;
-  typedActionWithText: {
-    action_id?: string;
-    action_ts?: string;
-    block_id?: string;
-    type?: string;
-    text?: { text?: string };
-  };
-  actionId: string;
-  blockId?: string;
-  userId: string;
-  channelId?: string;
-  messageTs?: string;
-  threadTs?: string;
-  actionSummary: SlackActionSummary;
-};
+export type ParsedSlackBlockAction = NonNullable<ReturnType<typeof parseSlackBlockAction>>;
 
 export type SlackBlockActionContext = {
   ctx: SlackMonitorContext;
@@ -111,7 +94,7 @@ export function parseSlackBlockAction(params: {
   body: unknown;
   action: unknown;
   log?: (message: string) => void;
-}): ParsedSlackBlockAction | null {
+}) {
   // SAFETY: The Bolt action listener supplies the Slack-owned body; this projection reads only its optional interaction fields.
   const typedBody = params.body as SlackBlockActionBody;
   const typedAction = asOptionalRecord(params.action);
@@ -124,7 +107,13 @@ export function parseSlackBlockAction(params: {
     return null;
   }
   // SAFETY: Bolt owns action metadata and plain-text labels; the record check above rejects absent action payloads.
-  const typedActionWithText = typedAction as ParsedSlackBlockAction["typedActionWithText"];
+  const typedActionWithText = typedAction as {
+    action_id?: string;
+    action_ts?: string;
+    block_id?: string;
+    type?: string;
+    text?: { text?: string };
+  };
   return {
     typedBody,
     typedAction,

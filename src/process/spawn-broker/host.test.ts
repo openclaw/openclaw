@@ -264,35 +264,34 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     await settlement;
   });
 
-  it.each(["coalesced", "later"])("orders native lifecycle events for %s exits", async (timing) => {
-    const argv =
-      timing === "coalesced"
-        ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
-        : [process.execPath, "-e", "setTimeout(()=>process.exit(0),50)"];
-    const starting = runWithSpawnBroker(host, () =>
-      spawnAndWait({ argv, options: { stdio: "ignore" } }),
-    );
-    await Promise.resolve();
-    if (timing === "coalesced") {
-      const resumeAt = performance.now() + 20;
-      while (performance.now() < resumeAt) {
-        /* Batch the broker's native lifecycle messages. */
+  it.for(["immediate", "stdin EOF"])(
+    "orders native lifecycle events for %s exits",
+    async (timing, { signal }) => {
+      const child = await runWithSpawnBroker(host, () =>
+        spawnAndWait({
+          argv:
+            timing === "immediate"
+              ? [process.platform === "darwin" ? "/usr/bin/true" : "/bin/true"]
+              : [process.execPath, "-e", "process.stdin.resume()"],
+          options: { stdio: timing === "immediate" ? "ignore" : ["pipe", "ignore", "ignore"] },
+        }),
+      );
+      try {
+        const events: string[] = [];
+        for (const event of ["exit", "close"]) {
+          child.on(event, () => events.push(event));
+        }
+        expect(child.exitCode).toBe(null);
+        const closed = once(child, "close", { signal });
+        child.stdin?.end();
+        expect(await closed).toEqual([0, null]);
+        expect(child.exitCode).toBe(0);
+        expect(events).toEqual(["exit", "close"]);
+      } finally {
+        child.stdin?.end();
       }
-    }
-    const child = await starting;
-    await Promise.resolve();
-    await Promise.resolve();
-    const events: string[] = [];
-    for (const event of ["exit", "close"]) {
-      child.on(event, () => events.push(event));
-    }
-    expect(child.exitCode).toBe(null);
-    const [code] = await once(child, "close", { signal: AbortSignal.timeout(1000) });
-    await delay(0);
-    expect(code).toBe(0);
-    expect(child.exitCode).toBe(0);
-    expect(events).toEqual(["exit", "close"]);
-  });
+    },
+  );
 
   it("preserves real inherited stdin across the host and broker", async () => {
     const input = "inherited-input:".repeat(32_000);

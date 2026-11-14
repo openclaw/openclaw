@@ -14,10 +14,10 @@ import {
   warmAllocation,
 } from "./crabbox-warm-scenarios.test-support.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-records.js";
 import {
   listCrabboxWarmImages,
   openCrabboxWarmImageStore,
-  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   checkpointResult,
@@ -109,20 +109,21 @@ it.each(["held", "capturing", "pinned", "unknown"] as const)(
   },
 );
 
-it.each([false, true])("acknowledges deletion (failure=%s)", async (initialFailure) => {
+it.each([false, true])("cleans with legacy profiles (maintenance=%s)", async (initialFailure) => {
   let fails = initialFailure;
   const s = await captured(({ argv }) =>
     fails && argv[2] === "delete" ? commandResult({ code: 7, stderr: "unavailable" }) : undefined,
   );
   const checkpointId = (await firstWarmImage())!.checkpointId!;
-  expect(await s.provider.images.delete(checkpointId, [PROFILE])).toEqual({
+  const profiles = [{ ...PROFILE, setupEnv: ["OPENCLAW_CW_TS_AUTHKEY"] }, PROFILE];
+  expect(await s.provider.images.delete(checkpointId, fails ? [PROFILE] : profiles)).toEqual({
     status: fails ? "retiring" : "deleted",
   });
   if (fails) {
     expect((await firstWarmImage())?.retirement).toEqual({ checkpointId });
     await expect(s.provider.images.pin(checkpointId, true)).rejects.toThrow("retirement");
     fails = false;
-    await s.provider.maintain!(maintenanceContext());
+    await s.provider.maintain!({ ...maintenanceContext(), profiles });
   }
   expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
 });
@@ -331,6 +332,8 @@ it.each([false, true])("fences old retirement completion (fails=%s)", async (fai
     clock.mockReturnValue(now + 2 * DAY_MS);
     await s.capture("newer-refresh");
     expect(catalog.captures).toBe(3);
+    // Newer captures report their holders; the stale completion must stay silent.
+    s.warn.mockClear();
   } finally {
     gate.release();
   }

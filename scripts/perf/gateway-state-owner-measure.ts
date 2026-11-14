@@ -11,7 +11,7 @@ import { parseArgs } from "node:util";
 import { transformSync } from "esbuild";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import {
-  GATEWAY_GC_TRACE_MARKER,
+  writeGatewayGcTraceMarker,
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayGcTrace,
   readGatewayHeapProfile,
@@ -118,10 +118,7 @@ const hooks = registerHooks({
 });
 const marker = (phase: string) => {
   if (traced) {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-    );
+    writeGatewayGcTraceMarker(phase, profilePath);
   }
 };
 if (traced) {

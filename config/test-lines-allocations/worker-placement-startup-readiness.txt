@@ -1,0 +1,2 @@
+# Nonblocking startup with shutdown drainage; recovery preserves newly admitted/replaced worker and remote-exec claims while settling pre-start claims.
+52

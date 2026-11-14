@@ -46,10 +46,6 @@ export type SessionEntryCurrentFacts = {
   delegatedToolPolicy?: unknown;
   skillLibrarySelections?: unknown;
   executionPolicy?: unknown;
-  subagentRecovery?: {
-    lastRunId?: unknown;
-    sessionLifecycleRunId?: unknown;
-  };
 };
 
 export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &

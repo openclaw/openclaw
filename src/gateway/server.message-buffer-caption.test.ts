@@ -19,6 +19,7 @@ import {
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayArtifactTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -111,19 +112,7 @@ it(
       },
     ];
     const configPath = path.join(state, "openclaw.json");
-    const environment = {
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("dist/extensions"),
-    };
+    const environment = createGatewayArtifactTestEnv(root, state, configPath);
     const snapshot = captureEnv(Object.keys(environment));
     for (const [key, value] of Object.entries(environment)) {
       setTestEnvValue(key, value);
@@ -180,7 +169,8 @@ it(
         await listenProvider(provider),
         "buffer-proof",
       );
-      Object.assign(model.config.models[0], { contextWindow: 16000, maxTokens: 256 });
+      // The messaging schema and system prompt project 22K tokens before the first tool call.
+      Object.assign(model.config.models[0], { contextWindow: 32768, maxTokens: 256 });
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {

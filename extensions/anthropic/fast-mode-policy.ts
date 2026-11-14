@@ -5,6 +5,7 @@ import {
   supportsClaudeFastMode,
 } from "openclaw/plugin-sdk/claude-model-runtime";
 import type { ProviderFastModePolicyContext } from "openclaw/plugin-sdk/provider-model-types";
+import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 
 export type AnthropicServiceTier = "auto" | "standard_only";
 
@@ -28,6 +29,11 @@ export function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceT
 export function resolveAnthropicFastModePlan(
   context: ProviderFastModePolicyContext,
 ): "native" | "service-tier" | false | undefined {
+  // The bundled Claude CLI backend ignores fastMode in its spawn args, so Fast has no
+  // request mapping there. Report support once the backend forwards it.
+  if (context.runtimeId === CLAUDE_CLI_BACKEND_ID) {
+    return false;
+  }
   if (
     context.provider.trim().toLowerCase() !== "anthropic" ||
     (context.runtimeId !== undefined &&

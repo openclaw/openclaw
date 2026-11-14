@@ -57,7 +57,10 @@ suite.define(() => {
       const panel = page.locator("section.bp");
       await panel
         .getByRole("status")
-        .getByText("Browser request failed: Screenshot fetch failed (404).", { exact: true })
+        .getByText(
+          "Couldn’t complete this browser request. Try again. Screenshot fetch failed (404).",
+          { exact: true },
+        )
         .waitFor();
       expect(mediaRequest).toEqual({
         authorization: "Bearer e2e-device-token",

@@ -4,8 +4,10 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import type { NodeHostConfig, NodeHostGatewayConfig } from "../node-host/config.js";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerConnectCli } from "./connect-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -155,6 +157,61 @@ describe("connect cli", () => {
     expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("init");
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
+
+  it.each(["before", "headers", "body", "release"])(
+    "settles join lookup interrupted during %s without entering the node runtime",
+    async (phase) => {
+      const scope = new AsyncWorkScope();
+      const release = vi.fn(async () => {
+        if (phase === "release") {
+          scope.beginClose();
+        }
+      });
+      const bodyCanceled = vi.fn();
+      if (phase === "before") {
+        scope.beginClose();
+      } else {
+        mocks.fetchWithSsrFGuard.mockImplementationOnce(async ({ signal }: GuardedFetchOptions) => {
+          if (phase === "headers") {
+            scope.beginClose();
+            signal?.throwIfAborted();
+          }
+          const response =
+            phase === "body"
+              ? new Response(
+                  new ReadableStream(
+                    {
+                      pull() {
+                        scope.beginClose();
+                      },
+                      cancel: bodyCanceled,
+                    },
+                    { highWaterMark: 0 },
+                  ),
+                  { headers: { "content-type": "application/json" } },
+                )
+              : new Response(JSON.stringify(payload), {
+                  headers: { "content-type": "application/json" },
+                });
+          return { response, release };
+        });
+      }
+
+      const flags = phase === "release" ? ["--service", "--session-host"] : [];
+      await scope.run(() => runConnect([`https://gateway.example/j/${"a".repeat(22)}`, ...flags]));
+
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
+      expect(release).toHaveBeenCalledTimes(phase === "before" || phase === "headers" ? 0 : 1);
+      if (phase === "body") {
+        expect(bodyCanceled).toHaveBeenCalledOnce();
+      }
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+      expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

@@ -14,6 +14,7 @@ import {
 import { runAgentHarnessSettledTurnFinalization } from "../../harness/selection.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { observeReplyDelivery, resolveReplyExpectation } from "../../reply-completion.js";
+import { withSessionManagerWriteAssertion } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -162,11 +163,13 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
       ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
       : undefined;
-  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
-    attempt: preparedAttempt,
-    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+  const finalizationParams = {
+    ...preparedAttempt,
     sessionTarget: committedSessionTarget,
-  });
+    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+    sessionFile: initial.sessionFileUsed ?? preparedAttempt.sessionFile,
+  };
+  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority(finalizationParams);
   let attempt = initial.attempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
   const preparation = await prepareSettledTurnFinalization(
@@ -211,21 +214,22 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     for (;;) {
       finalizationAttempt += 1;
       assertFinalizationActive();
-      finalization = await runPreparedSettledTurnFinalization({
-        attempt: {
-          ...input.finalization.preparedAttempt,
-          // The first transcript append may have committed the writer after
-          // dispatch preparation. The summary must retain that original fence.
-          ...(committedSessionTarget ? { sessionTarget: committedSessionTarget } : {}),
-          sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
-          sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
-        },
-        settledAttempt: initial.attempt,
-        harness: input.finalization.harness,
-        prompt,
-        createAttemptControls: input.finalization.createAttemptControls,
-        abortSignal: input.finalization.abortSignal,
-      });
+      const runFinalization = () =>
+        runPreparedSettledTurnFinalization({
+          attempt: finalizationParams,
+          settledAttempt: initial.attempt,
+          harness: input.finalization.harness,
+          prompt,
+          createAttemptControls: input.finalization.createAttemptControls,
+          abortSignal: input.finalization.abortSignal,
+        });
+      finalization = finalizationParams.sessionManager
+        ? await withSessionManagerWriteAssertion(
+            finalizationParams.sessionManager,
+            assertFinalizationActive,
+            runFinalization,
+          )
+        : await runFinalization();
       assertFinalizationActive();
       finalizerAnswered = finalization.outcome === "answered";
       attempt = finalization.attempt;
@@ -383,13 +387,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   };
 }
 
-function resolveSessionWriterDeliveryAuthority(input: {
-  attempt: EmbeddedRunAttemptParams;
-  sessionId: string;
-  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-}): ReplyPayloadMetadata["sessionWriterDeliveryAuthority"] {
-  const target = input.sessionTarget ?? input.attempt.sessionTarget;
-  const sessionKey = target?.sessionKey ?? input.attempt.sessionKey;
+function resolveSessionWriterDeliveryAuthority(
+  attempt: EmbeddedRunAttemptParams,
+): ReplyPayloadMetadata["sessionWriterDeliveryAuthority"] {
+  const target = attempt.sessionTarget;
+  const sessionKey = target?.sessionKey ?? attempt.sessionKey;
   const expectedLifecycleRevision = target?.expectedLifecycleRevision;
   const expectedWriterRunId = target?.expectedWriterRunId;
   if (
@@ -399,10 +401,8 @@ function resolveSessionWriterDeliveryAuthority(input: {
     return undefined;
   }
   return {
-    ...(target?.agentId || input.attempt.agentId
-      ? { agentId: target?.agentId ?? input.attempt.agentId }
-      : {}),
-    expectedSessionId: input.sessionId,
+    ...(target?.agentId || attempt.agentId ? { agentId: target?.agentId ?? attempt.agentId } : {}),
+    expectedSessionId: attempt.sessionId,
     ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
     ...(expectedWriterRunId !== undefined ? { expectedWriterRunId } : {}),
     sessionKey,
@@ -457,14 +457,10 @@ async function runPreparedSettledTurnFinalization(input: {
         input.harness,
       ),
     );
-    const outcome = finalization.outcome;
-    const result = finalization.result;
-    const settledAttempt = input.settledAttempt;
-    const prompt = input.prompt;
-    const agentHarnessId = input.attempt.agentHarnessId;
-    const runtimePlan = input.attempt.runtimePlan;
+    const { outcome, result } = finalization;
+    const { settledAttempt, prompt } = input;
+    const { agentHarnessId, runtimePlan } = input.attempt;
     const { preparedTerminalReply } = result;
-    const text = preparedTerminalReply.text;
     // Finalization replaces terminal ownership, not host-private facts from settled tools.
     // Its response model does not replace the original runtime-owned selection.
     // Replay, abort, and lifecycle state remain finalizer-local.
@@ -488,7 +484,7 @@ async function runPreparedSettledTurnFinalization(input: {
         finalPromptText: prompt,
         ...copyAttemptDeliveryState(settledAttempt),
         messagesSnapshot: [...settledAttempt.messagesSnapshot, result.assistant],
-        assistantTexts: text ? [text] : [],
+        assistantTexts: preparedTerminalReply.text ? [preparedTerminalReply.text] : [],
         assistantTranscriptOwned: result.assistantTranscriptOwned,
         assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey,
         lastAssistantTextMessageIndex: result.assistantMessageIndex,

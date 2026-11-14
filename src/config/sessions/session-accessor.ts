@@ -183,10 +183,6 @@ export {
   updateSessionEntry,
   updateSessionLastRoute,
 } from "./session-accessor.entry-mutation.js";
-export {
-  recoverSessionEntryFromRestartTombstone,
-  type RestartTombstoneRecoveryResult,
-} from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 export { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 export { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
@@ -260,7 +256,7 @@ export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,
 } from "./session-accessor.transcript-turn.js";
-export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
   isSessionTranscriptProjectionUnavailableError,

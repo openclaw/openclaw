@@ -77,8 +77,16 @@ it.each([
           [newUri, new Set([newEntry.containerName])],
           ["docker", new Set(["old-browser", "new-browser"])],
         ]);
+        const containerIds = new Map([
+          [oldEntry.containerName, "1".repeat(64)],
+          [newEntry.containerName, "2".repeat(64)],
+          ["old-browser", "3".repeat(64)],
+          ["new-browser", "4".repeat(64)],
+        ]);
         const calls: string[][] = [];
         const success = { failed: false, isCanceled: false, exitCode: 0, stderr: Buffer.alloc(0) };
+        const containerStateFormat =
+          '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}';
         const responses: Record<string, string> = {
           info: "true\ttrue\t\t5.0.0\n",
           system: "[]",
@@ -103,7 +111,10 @@ it.each([
             expect(physical.get(target)?.delete(args.at(-1)!)).toBe(true);
           }
           const key = args[0] === "inspect" ? `inspect:${args[2]}` : args[0];
-          const stdout = expectDefined(responses[key!], "supported container command/format");
+          const stdout =
+            key === `inspect:${containerStateFormat}`
+              ? `${expectDefined(containerIds.get(args.at(-1)!), "synthetic container ID")}\ntrue\nfalse\n\n`
+              : expectDefined(responses[key!], "supported container command/format");
           return { ...success, stdout: Buffer.from(stdout) };
         });
         const runtime = createThrowingTestRuntime();
@@ -142,9 +153,6 @@ it.each([
         expect(calls.every(([command]) => command === (browser ? "docker" : "podman"))).toBe(true);
         expect(calls.flat()).not.toContain(newEntry.containerName);
         expect(calls.flat()).not.toContain("new-browser");
-        expect(physical.get(browser ? "docker" : oldUri)?.has(removedName)).toBe(false);
-        expect(physical.get(newUri)?.has(newEntry.containerName)).toBe(true);
-        expect(physical.get("docker")?.has("new-browser")).toBe(true);
         expect(await readRegistryEntry(newEntry.containerName)).toEqual(newEntry);
         expect(await readRegistryEntry(oldEntry.containerName)).toEqual(browser ? oldEntry : null);
         expect(

@@ -1,6 +1,6 @@
 ---
 summary: "Watch or control a desktop-capable cloud worker from the Control UI"
-title: "Cloud Worker Desktop"
+title: "Cloud device desktop"
 read_when: "You want to observe or drive a cloud worker's desktop, or you are enabling the desktop lab."
 ---
 
@@ -25,7 +25,7 @@ requesting browser cannot receive the initial presentation, a fresh reservation
 is canceled before provisioning; an existing attachment remains available.
 
 For a native app, use a profile for its operating system with `settings.desktop: true`
-and enable the **Cloud Worker Desktop** lab. The agent launches the application and opens
+and enable the **Cloud device desktop** lab. The agent launches the application and opens
 the Desktop panel. When its model supports vision and tool policy permits
 `computer`, it can observe and control the same desktop using the attachment's
 `environmentId`. Taking manual control pauses agent input; observations remain
@@ -81,7 +81,7 @@ for the backup, retention, and re-upgrade contract.
 
 ## Desktop (interactive)
 
-Cloud Worker Desktop lets an administrator watch or control a capable worker from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud Worker Desktop** lab, then set `settings.desktop: true` on a Linux, prepared macOS, or native Windows Crabbox profile. Select `windows/normal` for Windows; WSL2 desktops are unsupported. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned. Warm-image capture remains Linux only. Native desktops provision cold even when the shared profile enables warm images.
+Cloud device desktop lets an admin watch or control a capable cloud device from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud device desktop** lab, then set `settings.desktop: true` on a Linux, prepared macOS, or native Windows Crabbox profile. Select `windows/normal` for Windows; WSL2 desktops are unsupported. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned. Warm-image capture remains Linux only. Native desktops provision cold even when the shared profile enables warm images.
 
 The lab switch applies without restarting the Gateway. Connected Control UI
 pages update desktop availability automatically. Disabling it closes worker

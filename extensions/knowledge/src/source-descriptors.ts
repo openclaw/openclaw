@@ -29,11 +29,8 @@ const canonical = (value: SourceDescriptor) =>
     Object.fromEntries(Object.entries(value).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
   ) + "\n";
 
-/** Return the fixed scoped sidecar path; reject paths masquerading as IDs. */
-export function sourceDescriptorPath(id: string): string {
-  if (!/^[a-f0-9]{64}$/.test(id)) {
-    throw new Error("Invalid source descriptor identity.");
-  }
+/** IDs come from our SHA-256 digest or the validated citation boundary. */
+function sourceDescriptorPath(id: string): string {
   return "artifacts/sources/" + id + ".json";
 }
 
@@ -50,12 +47,7 @@ function assertRange(evidence: Pick<Evidence, "start_line" | "end_line">): void 
 }
 
 /** Build a deterministic descriptor without conflating equal bytes from different origins. */
-export function describeSource(evidence: Evidence): {
-  id: string;
-  path: string;
-  raw: string;
-  descriptor: SourceDescriptor;
-} {
+export function describeSource(evidence: Evidence) {
   if (!Check(Evidence, evidence)) {
     throw new Error("Invalid source evidence.");
   }

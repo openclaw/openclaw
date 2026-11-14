@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { expectNoMainThreadSql as withoutMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { assertAgentHarnessExecutionEnvironment } from "./execution-environment.js";
 import type { AgentHarness } from "./types.js";
@@ -30,16 +30,6 @@ async function createSession(
     upsertSessionEntryCore(scope, value);
   await update({ sessionId, updatedAt: 1, sandboxMode: "off", permissionMode: "full", ...entry });
   return { update, params: { ...scope, sessionId, permissionMode: "full" as const, config } };
-}
-
-async function withoutMainThreadSql(run: () => Promise<void>) {
-  const calls = observeMainThreadSql();
-  try {
-    await run();
-    calls.expectIdle();
-  } finally {
-    calls.restore();
-  }
 }
 
 it("reads native consent in the worker and observes a committed revocation", async () => {

@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import packageJson from "../package.json" with { type: "json" };
 import {
   commitArgs,
   createContentGuardFixture,
@@ -24,7 +25,7 @@ afterEach(() => cleanupTempDirs(tempDirs));
 let dir: string;
 const write = (name: string, text: string) => writeFileSync(path.join(dir, name), text);
 const writeScripts = (scripts: Record<string, string>) =>
-  write("package.json", JSON.stringify({ scripts }));
+  write("package.json", JSON.stringify({ packageManager: packageJson.packageManager, scripts }));
 
 // Real guard, real freshness selector and a real `node` check runner; only the
 // checker is a fixture that echoes working-tree bytes like markdownlint's MD051 context.
@@ -65,14 +66,7 @@ describe("pre-commit freshness checks", () => {
     stage(
       dir,
       ".oxlintrc.json",
-      JSON.stringify({
-        overrides: [
-          {
-            files: ["src/**/*.ts"],
-            rules: { "max-lines": ["error", { max: 3, skipBlankLines: true, skipComments: true }] },
-          },
-        ],
-      }),
+      '{"overrides":[{"files":["src/**/*.ts"],"rules":{"max-lines":["error",{"max":3,"skipBlankLines":true,"skipComments":true}]}}]}',
     );
     const underCap = "export const a = 1;\nexport const b = 2;\n";
     stage(dir, "src/line-cap.ts", underCap);
@@ -102,11 +96,8 @@ describe("pre-commit freshness checks", () => {
 
   it.each([0, 1])("runs package-script checks and preserves exit code %i", (exitCode) => {
     // Quoted executables take the package-manager path, not the direct-node fast path.
-    stage(
-      dir,
-      "package.json",
-      JSON.stringify({ scripts: { "lint:docs": 'node "lint-docs.cjs"' } }),
-    );
+    writeScripts({ "lint:docs": 'node "lint-docs.cjs"' });
+    run(dir, "git", ["add", "package.json"]);
     stage(
       dir,
       "lint-docs.cjs",

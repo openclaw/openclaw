@@ -10,9 +10,9 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.entry.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { restoreSessionColdTranscript as restore } from "./session-cold-storage.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 

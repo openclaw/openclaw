@@ -210,7 +210,11 @@ it("routes current mobile PRs to Checks and rejects hidden or superseded navigat
   });
   expect(destination.backTo).toEqual({ area: "details" });
   await show(destination);
+  await vi.dynamicImportSettled();
+  await settle(element);
   expect(query(".chat-pr-mobile__diff")?.textContent).toContain("+1,234−2,000");
+  expect(query("openclaw-chat-ci-details")).toBeNull();
+  expect(query("openclaw-chat-ci-automation")).toBeNull();
 
   rootRow.click();
   expect(navigate).toHaveBeenCalledOnce();
@@ -225,11 +229,18 @@ it("routes current mobile PRs to Checks and rejects hidden or superseded navigat
   await show(checks);
   const checksPage = query('[data-details-page="pull-request-checks"]')!;
   expect(checksPage.hidden).toBe(false);
-  expect(checksPage.querySelector("openclaw-chat-ci-details")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(checksPage.querySelector("openclaw-chat-ci-details")).not.toBeNull(),
+  );
+  const checksOwner = checksPage.querySelector("openclaw-chat-ci-details");
+  expect(query("openclaw-chat-ci-automation")).toBeNull();
   rootRow.click();
   expect(navigate).toHaveBeenCalledTimes(2);
 
   await show(destination);
+  expect(checksPage.hidden).toBe(true);
+  expect(checksPage.querySelector("openclaw-chat-ci-details")).toBe(checksOwner);
+  expect(query("openclaw-chat-ci-automation")).toBeNull();
   const staleChecks = button("Checks");
   // Native receipts change synchronously; the previous rendered handler must retire before flush.
   element.details = details({ pullRequests: [pullRequest({ title: "Replacement PR" })] });

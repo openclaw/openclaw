@@ -45,6 +45,7 @@ import {
 } from "./sqlite.js";
 import {
   loadAuthProfileStoreForRuntime as loadStore,
+  loadAuthProfileStoreForRuntimeAsync,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock as updateStore,
 } from "./store-runtime.js";
@@ -52,6 +53,7 @@ import * as publication from "./store-update-publication.js";
 import { withEnvOnlyAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
+import { markAuthProfileBlockedUntil } from "./usage.js";
 
 const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
 const credential = (key: string) => ({ type: "api_key" as const, provider: "fixture", key });
@@ -136,6 +138,45 @@ async function prepareCredentialReader(env: NodeJS.ProcessEnv, agentDir?: string
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
+});
+
+it("publishes a durable shared block without withdrawing inherited snapshots", async () => {
+  await withState(async (state) => {
+    const agentDir = state.agentDir("child");
+    save(makeStore({ shared: "synthetic-shared" }));
+    save(makeStore({ local: "synthetic-local" }), agentDir);
+    const options = { externalCli: { mode: "none" as const } };
+    setSnapshot(await loadAuthProfileStoreForRuntimeAsync(undefined, options));
+    const child = await loadAuthProfileStoreForRuntimeAsync(agentDir, options);
+    setSnapshot(child, agentDir);
+    expect(snapshot(agentDir)?.profiles).toEqual(child.profiles);
+    const observed: Array<{ availabilityOnly: boolean; childPresent: boolean }> = [];
+    const unregister = registerRuntimeAuthProfileStoreMutationListener((event) => {
+      observed.push({
+        availabilityOnly: event.availabilityOnly,
+        childPresent: snapshot(agentDir) !== undefined,
+      });
+    });
+    const blockedUntil = Date.now() + 60_000;
+    try {
+      await markAuthProfileBlockedUntil({
+        store: child,
+        profileId: "shared",
+        blockedUntil,
+        source: "codex_rate_limits",
+        agentDir,
+      });
+      expect(readPersistedStore()?.usageStats?.shared?.blockedUntil).toBe(blockedUntil);
+      expect(snapshot(agentDir)?.usageStats?.shared?.blockedUntil).toBe(blockedUntil);
+      expect(snapshot(agentDir)?.profiles).toEqual(child.profiles);
+      expect(observed.length).toBeGreaterThan(0);
+      for (const event of observed) {
+        expect(event).toEqual({ availabilityOnly: true, childPresent: true });
+      }
+    } finally {
+      unregister();
+    }
+  });
 });
 
 it.each(["shared", "agent"] as const)(

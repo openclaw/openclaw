@@ -1,7 +1,7 @@
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { DatabaseSearchCapabilityUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-transcript-stats";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import type {
   MemoryOriginReadFilters,

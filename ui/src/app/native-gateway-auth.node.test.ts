@@ -297,7 +297,7 @@ describe("native authenticated Control UI", () => {
       }
       const socket = connect();
       if (transport === "native reply") {
-        expect(request).toBeDefined();
+        await vi.waitFor(() => expect(request).toBeDefined());
       }
       gateway!.stop();
       if (transport === "legacy port") {

@@ -115,6 +115,7 @@ vi.mock("../plugins/plugin-registry.js", async (importActual) => {
   };
 });
 
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { stageLaunchAgent } from "../daemon/launchd.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 
@@ -597,22 +598,19 @@ describe("buildGatewayInstallPlan", () => {
     const pluginRoot = path.join(isolatedHome, pluginId);
     createSecurePluginRoot(pluginRoot);
     writeSecurePluginEntrypoint(path.join(pluginRoot, "index.js"));
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: { type: "object", additionalProperties: false },
-        setup: { providers: [{ id: pluginId, envVars: ["THIRD_PARTY_API_KEY"] }] },
-        providerAuthChoices: [
-          {
-            provider: pluginId,
-            method: "api-key",
-            choiceId: "third-party-api-key",
-            appGuidedSecret: true,
-          },
-        ],
-      }),
-    );
+    writeFixtureJsonSync(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: pluginId,
+      configSchema: { type: "object", additionalProperties: false },
+      setup: { providers: [{ id: pluginId, envVars: ["THIRD_PARTY_API_KEY"] }] },
+      providerAuthChoices: [
+        {
+          provider: pluginId,
+          method: "api-key",
+          choiceId: "third-party-api-key",
+          appGuidedSecret: true,
+        },
+      ],
+    });
     mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const env = isolatedPlanEnv({
       OPENAI_API_KEY: "bundled-openai",
@@ -1032,6 +1030,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       existingEnvironment: {
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
         OPENCLAW_CONFIG_READONLY: "1",
+        OPENCLAW_CONFIG_READONLY_NOTICE: "Edit the deployment.",
         OPENCLAW_GATEWAY_PORT: "18789",
         OPENCLAW_GATEWAY_RESTART_TRACE: "1",
         CUSTOM_TOOL_HOME: "/custom-tool",
@@ -1039,6 +1038,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     });
     expect(plan.environment.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
     expect(plan.environment.OPENCLAW_CONFIG_READONLY).toBe("1");
+    expect(plan.environment.OPENCLAW_CONFIG_READONLY_NOTICE).toBe("Edit the deployment.");
     expect(plan.environment.OPENCLAW_GATEWAY_PORT).toBe("3000");
     expect(plan.environment.OPENCLAW_GATEWAY_RESTART_TRACE).toBeUndefined();
     expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/custom-tool");

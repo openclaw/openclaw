@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
@@ -106,6 +108,63 @@ async function expectGit(workspace: string, queries: Array<[string[], string]>) 
     expect((await requireGit(workspace, args)).trim()).toBe(expected);
   }
 }
+
+it("discards a failed origin clone before transferring the Gateway Git base", async () => {
+  const root = await fs.realpath(tempDirs.make("node-workspace-origin-fallback-"));
+  const origin = path.join(root, "origin");
+  const localPath = path.join(root, "gateway-workspace");
+  await fs.mkdir(origin);
+  await fs.mkdir(localPath);
+  await fs.writeFile(path.join(origin, "README"), "unrelated upstream repository\n");
+  await commitWorkspace(origin, "upstream base");
+  await requireGit(origin, ["update-server-info"]);
+  await fs.writeFile(path.join(localPath, "project.txt"), "unpublished local project\n");
+  await commitWorkspace(localPath, "unpublished local base");
+  const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    const pathname = new URL(request.url ?? "/", "http://fixture.test").pathname;
+    requests.push(pathname);
+    void fs.readFile(path.join(origin, ".git", pathname)).then(
+      (bytes) => response.end(bytes),
+      () => {
+        response.statusCode = 404;
+        response.end();
+      },
+    );
+  });
+  const sourceOrigin = `${await listenLoopback(server)}/`;
+  try {
+    await requireGit(localPath, ["remote", "add", "origin", sourceOrigin]);
+    const fixture = await runtimeFixture(root, "origin-fallback");
+    try {
+      const synced = await fixture.createActions().syncWorkspace({
+        source: { kind: "local", path: localPath },
+        sessionId: fixture.sessionId,
+        generation: fixture.ownerEpoch,
+      });
+      expect(requests).toContain("/HEAD");
+      await expectGit(synced.remoteWorkspaceDir, [
+        [["rev-parse", "HEAD"], baseCommit],
+        [["ls-files"], "project.txt"],
+        [["status", "--porcelain"], ""],
+        [["remote", "get-url", "origin"], sourceOrigin],
+      ]);
+      await workspaceFiles(synced.remoteWorkspaceDir).expect(
+        "project.txt",
+        "unpublished local project\n",
+      );
+      await workspaceFiles(synced.remoteWorkspaceDir).missing("README");
+    } finally {
+      await fixture.close();
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+});
 
 it.each([
   "git",

@@ -43,6 +43,7 @@ type MattermostDraftPreviewDeliverParams = {
   // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
   // caller record thread participation on that path too.
   recordThreadParticipation?: () => Promise<void> | void;
+  findPostAfterPreview?: (previewPostId: string) => Promise<string | undefined>;
 };
 
 export async function deliverMattermostReplyWithDraftPreview(
@@ -110,6 +111,23 @@ export async function deliverMattermostReplyWithDraftPreview(
           return { message: previewFinalText };
         },
         editFinal: async (previewPostId, edit) => {
+          // Mattermost lists posts by create_at, and an edit neither moves a post nor notifies.
+          // Once anything was posted after the preview, decline the edit: core then sends a
+          // fresh final that lands last and notifies, and deletes the preview.
+          const newerPostId = await params
+            .findPostAfterPreview?.(previewPostId)
+            .catch((err: unknown) => {
+              params.logVerboseMessage(
+                `mattermost preview order check failed; finalizing in place (${String(err)})`,
+              );
+              return undefined;
+            });
+          if (newerPostId) {
+            params.logVerboseMessage(
+              `mattermost preview ${previewPostId} is above newer post ${newerPostId}; sending the final as a new post`,
+            );
+            return { visibleReplySent: false };
+          }
           const post = await updateMattermostPost(params.client, previewPostId, edit);
           const receipt = createPreviewMessageReceipt({ id: post.id ?? previewPostId });
           return {

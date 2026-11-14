@@ -182,7 +182,7 @@ export function PanelLoadingSkeleton(props: {
       overlay={props.overlay ? "" : undefined}
     >
       <style>{panelStyles}</style>
-      {content()}
+      <div class="panel-loading-content">{content()}</div>
     </openclaw-panel-loading-skeleton>
   );
 }

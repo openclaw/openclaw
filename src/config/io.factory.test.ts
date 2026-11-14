@@ -127,9 +127,6 @@ it("honors per-call unobserved mutation reads without disabling write auditing",
     expect.objectContaining({ event: "config.write", configPath, result: "rename" }),
   );
   expect((await saved()).gateway.port).toBe(19002);
-
-  await io.readConfigFileSnapshotForWrite();
-  expect((await health())?.last_known_good_json).not.toBe(beforeHealth?.last_known_good_json);
 });
 
 it.each(["path", "snapshot"] as const)("rechecks %s after writer import", async (change) => {

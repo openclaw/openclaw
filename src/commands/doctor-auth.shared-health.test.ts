@@ -209,13 +209,13 @@ describe("Doctor shared auth health", () => {
 it("reports ambient Copilot activation once", async () => {
   await withFleet(async (state) => {
     const env = { ...state.env, GITHUB_TOKEN: "github-test-token" };
-    expect(collectCopilotAmbientTokenFindings({}, env)).toEqual([
+    expect(await collectCopilotAmbientTokenFindings({}, env)).toEqual([
       expect.objectContaining({
         category: "recommended",
         fixHint: expect.stringContaining("No action needed if you do not use Copilot"),
       }),
     ]);
-    expect(collectCopilotAmbientTokenFindings({}, env)).toEqual([]);
+    expect(await collectCopilotAmbientTokenFindings({}, env)).toEqual([]);
   });
 });
 
@@ -237,13 +237,13 @@ it.each(["provider", "profile", "token", "stored"] as const)(
         });
       }
       expect(
-        collectCopilotAmbientTokenFindings(cfg, {
+        await collectCopilotAmbientTokenFindings(cfg, {
           ...env,
           ...(kind === "token" ? { COPILOT_GITHUB_TOKEN: "copilot-test-token" } : {}),
         }),
       ).toEqual([]);
       if (kind !== "stored") {
-        expect(collectCopilotAmbientTokenFindings({}, env)).toHaveLength(1);
+        expect(await collectCopilotAmbientTokenFindings({}, env)).toHaveLength(1);
       }
     });
   },
@@ -255,7 +255,7 @@ it("reports legacy shared auth until its owner is relocated", async () => {
       { "openai:default": { type: "api_key", provider: "openai", key: "test-key" } },
       resolveSharedMainAuthAgentDir(state.env),
     );
-    expect(collectSharedAuthStoreFindings(state.env)).toEqual([
+    expect(await collectSharedAuthStoreFindings(state.env)).toEqual([
       expect.objectContaining({
         category: "recommended",
         fixHint: expect.stringContaining("openclaw doctor --fix"),
@@ -263,7 +263,7 @@ it("reports legacy shared auth until its owner is relocated", async () => {
     ]);
     const env = { ...state.env, OPENCLAW_STATE_DIR: state.statePath("relocated") };
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
-    expect(collectSharedAuthStoreFindings(env)).toEqual([]);
+    expect(await collectSharedAuthStoreFindings(env)).toEqual([]);
   }, false);
 });
 
@@ -287,7 +287,7 @@ it.each([false, true])("warns about legacy Codex overrides (stored OAuth: %s)", 
       },
     });
     const findings = stored
-      ? collectLegacyCodexProviderOverrideFindings(cfg)
+      ? await collectLegacyCodexProviderOverrideFindings(cfg)
       : await collectAuthProfileHealthFindings({ cfg });
     expect(findings).toEqual([
       expect.objectContaining({

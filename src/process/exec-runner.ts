@@ -55,12 +55,15 @@ import {
   waitForCommandSpawn,
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
+import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
 export type CommandOptions = {
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   timeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
@@ -239,6 +242,8 @@ async function runCommandWithOutputEncoding(
   let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
+    executionIntent: options.executionIntent,
+    executionScopeKey: options.executionScopeKey,
     buffer: false,
     cancelSignal: cancelController.signal,
     inheritScopeCancellation: false,
@@ -602,7 +607,12 @@ async function runCommandWithOutputEncoding(
     throw failedProcess(error);
   });
   const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
-  if (cleanup === "normal" && resolvedSignal) {
+  // An explicit POSIX tree join already confirmed extinction in the exit handler.
+  if (
+    cleanup === "normal" &&
+    resolvedSignal &&
+    !(ownsExitedProcessTree && options.requireProcessTreeExtinction)
+  ) {
     cleanup = "uncertain";
   }
   if (inputAdmissionError) {

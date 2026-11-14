@@ -142,7 +142,7 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
   });
   resolveContextWindowInfoMock.mockReturnValue({ tokens: contextTokens });
   resolveModelMock.mockImplementation(() => ({ ...createCompactHooksResolvedModel(), model }));
-  buildConfiguredAgentSystemPromptMock.mockReturnValue(systemPrompt);
+  buildConfiguredAgentSystemPromptMock.mockResolvedValue(systemPrompt);
   limitHistoryTurnsMock.mockImplementation((messages) => messages);
   vi.mocked(guardSessionManager).mockReturnValue(manager);
   vi.mocked(createAgentSession).mockImplementation(() =>

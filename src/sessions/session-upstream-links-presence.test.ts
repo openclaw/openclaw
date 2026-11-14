@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
@@ -9,7 +10,10 @@ import {
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { handleSessionStateSessionDeleted } from "./session-state-events.js";
-import { sessionUpstreamPresencePublication } from "./session-upstream-links-publication.js";
+import {
+  sessionUpstreamPresencePublication,
+  withSessionUpstreamPublication,
+} from "./session-upstream-links-publication.js";
 import {
   captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamPresence,
@@ -104,6 +108,33 @@ it.each([
         await handleSessionStateSessionDeleted(sessionKey, "main");
       }
       expectPresence(prepared, false);
+    });
+  },
+);
+
+it.for(["not-entered", "unknown"] as const)(
+  "preserves prepared presence only after confirmed %s settlement",
+  async (outcome) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      expect(await upsertSessionUpstreamLinkAsync(link())).toBe(true);
+      const source = captureSessionUpstreamLinkReadSource();
+      using prepared = await presence(source);
+      expectPresence(prepared, true);
+      const error = new Error("Synthetic dispatch refusal");
+      const retained = withSessionUpstreamPublication(
+        createSqliteWorkerWriteAdmission(() => {}, [source.context.admission.databasePath]),
+        source.context,
+      )({ settled: Promise.resolve({ kind: outcome, error }) });
+      try {
+        retained.admission.finish(outcome === "not-entered" ? "not-entered" : undefined);
+        if (outcome === "not-entered") {
+          expectPresence(prepared, true);
+        } else {
+          expect(() => prepared.current()).toThrow("Session upstream source is unavailable");
+        }
+      } finally {
+        retained.admission.finish();
+      }
     });
   },
 );

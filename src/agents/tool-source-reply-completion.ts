@@ -1,8 +1,8 @@
-import { getAgentToolInputScope } from "../../packages/agent-core/src/tool-execution-context.js";
 import {
   attachInternalToolResultProvenance,
   getInternalToolResultProvenance,
-} from "./runtime/internal-hooks.js";
+} from "../../packages/agent-core/src/internal-hooks.js";
+import { getAgentToolInputScope } from "../../packages/agent-core/src/tool-execution-context.js";
 
 const finalSourceReply = {};
 type SourceReplyControl = { cell: ToolSourceReplyCell; inputScope: object | undefined };
@@ -84,14 +84,17 @@ export function createSourceReplyBatchCompletion() {
       }
       // Observations can survive failed message publication or arrive late.
       // Only this invocation's input may enroll a cell in the current batch.
-      const cells = new Set(
-        [...observed]
-          .filter((control) => control.inputScope === inputScope)
-          .map(({ cell }) => cell),
-      );
+      const cells = new Set<ToolSourceReplyCell>();
+      for (const control of observed) {
+        if (control.inputScope === inputScope) {
+          cells.add(control.cell);
+        }
+      }
       observed.clear();
       // A wait may share a new batch with another cell. Preserve every original
       // sibling until all of those owners have returned a settled control result.
+      let settled = true;
+      let delivered = hasDirectFinal;
       for (const cell of cells) {
         const batch = batchByCell.get(cell);
         if (batch) {
@@ -101,13 +104,11 @@ export function createSourceReplyBatchCompletion() {
           }
           forget(batch);
         }
+        settled &&= cell.settled;
+        delivered ||=
+          hasDirectFinal ||
+          (cell.inputScope === inputScope && cell.finalDelivered && !consumed.has(cell));
       }
-      const settled = [...cells].every((cell) => cell.settled);
-      const delivered =
-        hasDirectFinal ||
-        [...cells].some(
-          (cell) => cell.inputScope === inputScope && cell.finalDelivered && !consumed.has(cell),
-        );
       if (settled) {
         for (const cell of cells) {
           consumed.add(cell);

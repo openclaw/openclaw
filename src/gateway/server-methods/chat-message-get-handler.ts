@@ -5,7 +5,7 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-pro
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   projectChatDisplayMessage,

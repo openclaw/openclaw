@@ -13,6 +13,45 @@ vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it("reuses child metadata while deferring external source links", () => {
+  const root = fs.realpathSync(temp.make("plugin-child-metadata-"));
+  const source = path.join(root, "source");
+  const external = path.join(root, "external");
+  fs.mkdirSync(source);
+  fs.mkdirSync(external);
+  fs.writeFileSync(path.join(external, "private.txt"), "external bytes");
+  const files = new Set<string>();
+  for (let index = 0; index < 8; index++) {
+    const filename = path.join(source, `file-${index}.txt`);
+    files.add(filename);
+    fs.writeFileSync(filename, `captured ${index}`);
+  }
+  const capture = (executable: boolean) => {
+    const lstat = vi.spyOn(fs, "lstatSync");
+    const artifact = capturePluginGenerationArtifact(
+      source,
+      undefined,
+      executable ? (run) => run() : undefined,
+    );
+    const reads = lstat.mock.calls.filter(([filename]) => files.has(String(filename))).length;
+    lstat.mockRestore();
+    try {
+      for (let index = 0; index < 8; index++) {
+        expect(
+          fs.readFileSync(artifact.resolve(path.join(source, `file-${index}.txt`)), "utf8"),
+        ).toBe(`captured ${index}`);
+      }
+      expect(fs.existsSync(path.join(artifact.rootDir, "external"))).toBe(false);
+      return reads;
+    } finally {
+      artifact.dispose();
+    }
+  };
+  const ordinaryReads = capture(false);
+  fs.symlinkSync(external, path.join(source, "external"), "junction");
+  expect(capture(true)).toBe(ordinaryReads);
+});
+
 it.each(["success", "capture failure", "receipt failure"] as const)(
   "closes guarded open batches before capture retirement: %s",
   (phase) => {

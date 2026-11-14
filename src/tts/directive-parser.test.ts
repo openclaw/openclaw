@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createSpeechDirectiveParser } from "./directive-parser.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
-import { createFullSpeechPolicy } from "./speech-provider.test-support.js";
+import { createSpeechPolicy } from "./speech-provider.test-support.js";
 
-const policy: SpeechModelOverridePolicy = createFullSpeechPolicy();
+const policy: SpeechModelOverridePolicy = createSpeechPolicy(true);
 
 describe("speech directive dispatch", () => {
   it("maps exact aliases and leaves unknown tokens unhandled", () => {

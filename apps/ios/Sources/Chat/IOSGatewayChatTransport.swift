@@ -446,6 +446,16 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
     }
 
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        guard let route = await self.gateway.currentRoute() else { throw CancellationError() }
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: target.sessionKey, agentID: target.agentID, cursor: cursor, maxBytes: 256 * 1024)
+        let data = try await self.gateway.request(request, ifCurrentRoute: route)
+        guard await self.gateway.currentRoute() == route else { throw CancellationError() }
+        return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let route = await currentSessionMutationRoute() else { return nil }
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)

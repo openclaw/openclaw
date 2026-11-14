@@ -19,12 +19,13 @@ import {
 } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import {
   prepareSessionActorEntryWrite,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-write.js";
 import { applySessionActorAppend } from "./session-actor-append.worker.js";
-import { projectSessionActorAuthority } from "./session-actor-command.js";
+import type { projectSessionActorAuthority } from "./session-actor-command.js";
 import type {
   SessionActorOutcome,
   SessionActorPhaseResults,
@@ -39,7 +40,6 @@ import {
   forkSessionActorStoredState,
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
-import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import { applySessionTranscriptEvent } from "./session-message-rewrite.worker.js";
 import { mutatePendingInput } from "./session-pending-input-operations.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
@@ -109,8 +109,6 @@ export function applySessionActorPhase(
       );
     },
     validateSources: (sources) => readSessionSourceValidation(database, sources, incarnation),
-    validateRecoveryInput: (claim) =>
-      readHarnessCompletionSourceInDatabase(database, claim).validInput,
     mutatePendingInput: (input) => mutatePendingInput(input, context, () => {}),
     admit: (stage, publication) => context.admit(stage, publication),
   });
@@ -212,6 +210,7 @@ export function deferSessionActorOutcome({
   database,
   outcome,
   state,
+  projectAuthority,
   publication,
   admit,
   diagnosticContext,
@@ -224,13 +223,29 @@ export function deferSessionActorOutcome({
     { kind: "committed" }
   >;
   state: SessionActorStoredState;
+  projectAuthority: typeof projectSessionActorAuthority;
   publication: unknown;
   admit: AgentWorkerOperationContext["admit"];
   diagnosticContext: Record<string, number | boolean | undefined>;
   recordReceipt: () => void;
   requiresTransaction?: Error;
 }): void {
-  const captured = captureSqliteWorkerCommitReceipt(outcome);
+  let captured: ReturnType<typeof captureSqliteWorkerCommitReceipt>;
+  try {
+    captured = captureSqliteWorkerCommitReceipt(outcome);
+  } catch (error) {
+    const append = outcome.receipt.transcript.append;
+    if (append?.kind !== "metadata" || !append.value.reload?.ok) {
+      throw error;
+    }
+    // A failed optional reload must not discard the append. The receipt capture
+    // owns serialization, avoiding a second history-sized preflight on success.
+    append.value.reload = {
+      ok: false,
+      error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+    };
+    captured = captureSqliteWorkerCommitReceipt(outcome);
+  }
   diagnosticContext.actorReceiptBytes =
     captured.kind === "inline" ? captured.payloadBytes : captured.serialized.byteLength;
   if (captured.kind === "oversized") {
@@ -252,7 +267,7 @@ export function deferSessionActorOutcome({
         }
         admit("transaction", {
           kind: "session-actor-admission",
-          snapshot: projectSessionActorAuthority(state.hot),
+          snapshot: projectAuthority(state.hot),
           publication: {
             kind: "session-actor-outcome",
             transfer: { handle, frames: [frame] },
@@ -268,7 +283,7 @@ export function deferSessionActorOutcome({
       recordReceipt();
       admit("commit", {
         kind: "session-actor-admission",
-        snapshot: projectSessionActorAuthority(state.hot),
+        snapshot: projectAuthority(state.hot),
         publication: {
           kind: "session-actor-outcome",
           transfer: { handle, frames: finalFrames },
@@ -286,7 +301,7 @@ export function deferSessionActorOutcome({
   recordReceipt();
   admit("commit", {
     kind: "session-actor-admission",
-    snapshot: projectSessionActorAuthority(state.hot),
+    snapshot: projectAuthority(state.hot),
     publication,
     conversationPublication: outcome.receipt.conversationPublication,
     final: true,

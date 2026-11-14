@@ -6,10 +6,6 @@ import type { PluginCapabilityConsentReview } from "../plugins/capability-summar
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { promptYesNo } from "./prompt.js";
 
-export type PluginCapabilityConsentCliOptions = {
-  onCapabilityConsent?: PluginCapabilityConsentHandler;
-};
-
 function sanitizeCapabilityValues(values: readonly string[]): string {
   return values.map((value) => sanitizeTerminalText(value)).join(", ");
 }
@@ -75,7 +71,9 @@ export function resolvePluginCapabilityConsentCliOptions(params: {
   action: "install" | "enable" | "update" | "reload";
   allowPrompt?: boolean;
   runtime?: RuntimeEnv;
-}): PluginCapabilityConsentCliOptions {
+}): {
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
+} {
   if (params.acceptCapabilities) {
     return {
       onCapabilityConsent: async (details) => ({ reviewToken: details.reviewToken }),

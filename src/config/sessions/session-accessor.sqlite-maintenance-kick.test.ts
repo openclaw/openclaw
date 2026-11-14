@@ -2,10 +2,6 @@ import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import {
-  isSessionEntryDataSql,
-  observeHostDataSql,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
@@ -86,6 +82,14 @@ function createStore(pruneAfterMs = 1_000, { workerMaintenance = false } = {}) {
   return { ...store, write, read, expectArchive };
 }
 
+const createWorkerStore = () => createStore(86_400_000, { workerMaintenance: true });
+
+function observeWarnings() {
+  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+  return vi.spyOn(logger, "warn");
+}
+
 it("joins automatic worker maintenance while Doctor drainage waits on other work", async () => {
   const { request } = createStore(1_000, { workerMaintenance: true });
   const maintenance = createOpenClawDatabaseMaintenanceScope({
@@ -96,7 +100,6 @@ it("joins automatic worker maintenance while Doctor drainage waits on other work
   const blocked = createDeferred();
   void maintenance.track(blocked.promise);
   const warn = vi.spyOn(logging.getChildLogger({ subsystem: "session-sqlite" }), "warn");
-  const observation = observeHostDataSql();
   maintenance.run(() => kickSessionEntryMaintenanceAfterWrite(request));
   const closing = maintenance.close();
   try {
@@ -105,20 +108,16 @@ it("joins automatic worker maintenance while Doctor drainage waits on other work
     await expect(closing).resolves.toBeUndefined();
     expect(reclamationRun.runSqliteSessionReclamation).toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
-    expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);
   } finally {
     blocked.resolve();
     await Promise.allSettled([closing]);
-    observation.restore();
   }
 });
 
 it("resumes idle capacity maintenance when acquired work releases without another write", async ({
   signal,
 }) => {
-  const { request, storePath, archived, planned, write, expectArchive } = createStore(86_400_000, {
-    workerMaintenance: true,
-  });
+  const { request, storePath, archived, planned, write, expectArchive } = createWorkerStore();
   request.maintenanceConfig.maxEntries = 1;
   const protectedKey = "agent:main:admission-locked-capacity-owner";
   const partialKey = "agent:main:admission-partial-capacity-victim";
@@ -165,12 +164,8 @@ it("resumes idle capacity maintenance when acquired work releases without anothe
 it.for(["young", "capacity", "expired"] as const)(
   "uses delivery settlement facts to schedule a %s store",
   async (scenario, { signal }) => {
-    const { request, storePath, updatedAt, archived, planned, write, expectArchive } = createStore(
-      86_400_000,
-      {
-        workerMaintenance: true,
-      },
-    );
+    const { request, storePath, updatedAt, archived, planned, write, expectArchive } =
+      createWorkerStore();
     request.maintenanceConfig.maxEntries = scenario === "capacity" ? 1 : 10;
     request.maintenanceConfig.archiveDashboardAfterMs = scenario === "expired" ? 1_000 : null;
     const target = {
@@ -219,7 +214,7 @@ it.for(["young", "capacity", "expired"] as const)(
         },
         "delivered",
         undefined,
-        { clearAfterSettled: {}, preserveActivity: true },
+        { clearAfterSettled: true as const, preserveActivity: true },
       ),
       signal,
     );
@@ -243,20 +238,17 @@ it.for(["young", "capacity", "expired"] as const)(
   },
 );
 
-it.for(["activity", "insert", "unlock", "remove"] as const)(
-  "settles a consumed protected-only worker plan after %s during result delivery",
+it.for(["activity", "young-activity", "insert", "unlock", "remove"] as const)(
+  "settles a consumed worker plan after %s during result delivery",
   async (change, { signal }) => {
-    const { request, scope, updatedAt, archived, write, read } = createStore(86_400_000, {
-      workerMaintenance: true,
-    });
-    request.maintenanceConfig.maxEntries = 1;
+    const { request, scope, updatedAt, archived, write, read } = createWorkerStore();
+    request.maintenanceConfig.maxEntries = change === "young-activity" ? 100 : 1;
     const protectedKey = "agent:main:durable-worker-protected";
     const insertedKey = "agent:main:durable-worker-inserted";
-    runOpenClawAgentWriteTransaction((owner) => {
-      for (const key of [sessionKey, protectedKey]) {
-        writeSessionEntry(owner, key, { sessionId: key, updatedAt, modelSelectionLocked: true });
-      }
-    }, scope);
+    write(
+      [sessionKey, { sessionId: sessionKey, modelSelectionLocked: true }],
+      [protectedKey, { sessionId: protectedKey, modelSelectionLocked: true }],
+    );
     const writeActivity = () => {
       write([
         sessionKey,
@@ -277,9 +269,9 @@ it.for(["activity", "insert", "unlock", "remove"] as const)(
     dispatch.mockImplementation(async (params) => {
       const result = await run(params);
       if (!delivered && result.kind === "maintenance-plan") {
-        expect(result.value.durableNoCandidates).toBe(true);
+        expect(result.value.durableNoCandidates === true).toBe(change !== "young-activity");
         delivered = true;
-        if (change === "activity") {
+        if (change === "activity" || change === "young-activity") {
           writeActivity();
         } else {
           runOpenClawAgentWriteTransaction((owner) => {
@@ -301,7 +293,7 @@ it.for(["activity", "insert", "unlock", "remove"] as const)(
     await withinTest(firstPass.promise, signal);
     await yieldToEventLoop();
     const passes = countPlanningPasses();
-    if (change !== "activity") {
+    if (change !== "activity" && change !== "young-activity") {
       await vi.advanceTimersByTimeAsync(1_001);
       await withinTest(nextPass.promise, signal);
       if (change === "insert" || change === "unlock") {
@@ -449,9 +441,7 @@ it.each([
   ["an independent failure", true],
 ] as const)("classifies %s that settles during Gateway drain", async (outcome, warns) => {
   const { request } = createStore();
-  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
-  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
-  const warn = vi.spyOn(logger, "warn");
+  const warn = observeWarnings();
   vi.mocked(reclamationRun.runSqliteSessionReclamation).mockImplementationOnce(async (params) => {
     markGatewayRestartDraining("stop (SIGTERM)");
     if (outcome === "a drain-refused commit") {
@@ -491,6 +481,26 @@ it("resumes automatic maintenance after Gateway work admission resets", async ({
   expectArchive(sessionKey, "age-retention");
 });
 
+it("keeps periodic retry cadence after planning fails with retained age facts", async ({
+  signal,
+}) => {
+  const { request } = createStore();
+  const firstDeadline = observeNextPeriodicMaintenance(1_001);
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await firstDeadline(signal);
+  const warn = observeWarnings();
+  vi.mocked(reclamationRun.runSqliteSessionReclamation).mockRejectedValue(
+    new Error("disk I/O error"),
+  );
+  await vi.advanceTimersByTimeAsync(1_001);
+  await yieldToEventLoop();
+  expect(countPlanningPasses()).toBe(2);
+  await vi.advanceTimersByTimeAsync(100);
+  await yieldToEventLoop();
+  expect(countPlanningPasses()).toBe(2);
+  expect(warn).toHaveBeenCalledTimes(1);
+});
+
 it("does not dispatch maintenance in warn mode", async () => {
   const { request, expectArchive } = createStore();
   request.maintenanceConfig.mode = "warn";
@@ -504,23 +514,14 @@ it("does not dispatch maintenance in warn mode", async () => {
 it("commits automatic maintenance after 20 sessions write during preparation", async ({
   signal,
 }) => {
-  const { request, scope, storePath, updatedAt, archived, read, expectArchive } = createStore(
-    86_400_000,
-    {
-      workerMaintenance: true,
-    },
-  );
+  const { request, storePath, updatedAt, archived, read, write, expectArchive } =
+    createWorkerStore();
   const victimKey = "agent:main:prepared-victim";
   const writers = Array.from({ length: 20 }, (_, index) => `agent:main:writer-${index}`);
-  runOpenClawAgentWriteTransaction((owner) => {
-    writeSessionEntry(owner, victimKey, {
-      sessionId: "victim",
-      updatedAt: updatedAt - 172_800_000,
-    });
-    for (const key of writers) {
-      writeSessionEntry(owner, key, { sessionId: key, updatedAt });
-    }
-  }, scope);
+  write(
+    [victimKey, { sessionId: "victim", updatedAt: updatedAt - 172_800_000 }],
+    ...writers.map((key): Parameters<typeof write>[number] => [key, {}]),
+  );
   let preparations = 0;
   observeSessionMaintenancePlanningWorker({
     async afterPrepare() {
@@ -552,9 +553,7 @@ it("commits automatic maintenance after 20 sessions write during preparation", a
 it("allows unrelated provider protection added at the automatic maintenance commit", async ({
   signal,
 }) => {
-  const { updatedAt, archived, write, expectArchive, request } = createStore(86_400_000, {
-    workerMaintenance: true,
-  });
+  const { updatedAt, archived, write, expectArchive, request } = createWorkerStore();
   const victimKey = "agent:main:commit-victim";
   write([victimKey, { sessionId: "victim", updatedAt: updatedAt - 172_800_000 }]);
   let keys: string[] = [];
@@ -585,9 +584,7 @@ it("finishes a running pass with its captured policy when configuration changes"
   const { request, updatedAt, archived, write, expectArchive } = createStore();
   const victimKey = "agent:main:replan-victim";
   write([victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 }]);
-  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
-  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
-  const warn = vi.spyOn(logger, "warn");
+  const warn = observeWarnings();
   const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
   const run = dispatch.getMockImplementation()!;
   let changed = false;

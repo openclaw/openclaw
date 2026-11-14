@@ -14,11 +14,11 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { isTuiBusyActivityStatus } from "./tui-activity-status.js";
+import { resolveLocalAuthSpawnInvocation } from "./tui-auth-invocation.js";
 import { resolveFinalAssistantText } from "./tui-formatters.js";
 import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
   formatTuiAuthCommandArgv,
-  resolveLocalAuthSpawnInvocation,
   withEmbeddedTuiStateLock,
   createBackspaceDeduper,
   createDeferredTuiFinish,

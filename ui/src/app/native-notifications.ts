@@ -1,7 +1,7 @@
 import { listen } from "../lib/reactive/listener.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
-export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
+type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
 
 type NativeNotificationTestOutcome =
   | { state: "pending" }

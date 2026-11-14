@@ -35,17 +35,20 @@ export function createCronPresentation(deps: CronPresentationDeps) {
   type ModelReceipt = { state: CronState; agentId: string; result: Promise<void> };
   const [modelReceipt, setModelReceipt] = createSignal<ModelReceipt | null>(null);
   const modelRead = createMemo(() => modelReceipt()?.result.then(() => null) ?? null);
-  const cronModelSuggestions = createMemo(() => {
-    const state = deps.readState();
-    const agentId = deps.context().agentSelection.state.selectedId;
-    const receipt = modelReceipt();
-    if (receipt?.state !== state || receipt.agentId !== agentId) {
-      return [];
-    }
-    return readAgentModelCatalog(state.client, agentId)
-      .models.filter((entry) => entry.manualSelectionAllowed !== false)
-      .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
-  });
+  const cronModelSuggestions = createMemo(
+    () => {
+      const state = deps.readState();
+      const agentId = deps.context().agentSelection.state.selectedId;
+      const receipt = modelReceipt();
+      if (receipt?.state !== state || receipt.agentId !== agentId) {
+        return [];
+      }
+      return readAgentModelCatalog(state.client, agentId)
+        .models.filter((entry) => entry.manualSelectionAllowed !== false)
+        .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+    },
+    { lazy: true },
+  );
   let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
   let stopModelSuggestions: (() => void) | undefined;
   // Receipts describe work already admitted by the plain owner. Reading them

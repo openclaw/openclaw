@@ -1,3 +1,4 @@
+import { operatorRecoverySnapshotFixture } from "../gateway/server/client-fixtures.test-support.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 
 export function createOperatorRecoveryAuthority(profileId: string, grantGeneration: string) {
@@ -5,22 +6,8 @@ export function createOperatorRecoveryAuthority(profileId: string, grantGenerati
     profileId,
     scopes: ["operator.read"],
     assertCurrent() {},
-    recoverySnapshot: {
-      profileId,
-      scopes: ["operator.read"],
-      assignedRole: null,
-      githubLogin: null,
-      grant: null,
-      aliasBindingIds: [],
-      authPolicy: {
-        generation: "",
-        grantGeneration,
-        role: "operator",
-        authMethod: "token",
-      },
-      controlUiAdmin: false,
-      localOperator: false,
+    recoverySnapshot: operatorRecoverySnapshotFixture(profileId, grantGeneration, {
       sourceIngress: "control-ui",
-    },
+    }),
   });
 }

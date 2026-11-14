@@ -9,17 +9,15 @@ import {
   type AttachmentItem,
 } from "./chat-message-media.ts";
 
-type VideoSource =
-  | {
-      status: "available";
-      source: { src: string; playback: ChatMediaPlaybackMode; authToken: string | null };
-    }
-  | { status: "checking" | "unavailable"; onRetry?: () => void };
-
 /** The gallery owns selection; existing attachment/source owners own authorization and playback. */
 export function videoLightboxItem(
   attachment: AttachmentItem["attachment"],
-  resolveSource: (update: () => void) => VideoSource,
+  resolveSource: (update: () => void) =>
+    | {
+        status: "available";
+        source: { src: string; playback: ChatMediaPlaybackMode; authToken: string | null };
+      }
+    | { status: "checking" | "unavailable"; onRetry?: () => void },
   mediaOwner?: object,
 ): ImageLightboxItem {
   return {

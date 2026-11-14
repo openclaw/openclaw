@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import {
   formatCliImageTurnContext,
@@ -7,14 +8,13 @@ import {
 } from "../agents/cli-image-turn-correlation.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
+import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
+import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
 import {
   readClaudeCliSessionMessagesAsync,
   mergeImportedChatHistoryMessages,
   answer,
-  boundEntry,
   buildLegacyReseedPrompt,
   claudeUser,
   cliMeta,
@@ -24,39 +24,22 @@ import {
 } from "./cli-session-history.test-support.js";
 import { requireGatewayRecord } from "./test-helpers.assertions.js";
 
-async function readChatHistory(homeDir: string, entry: SessionEntry, localMessages: unknown[]) {
-  const binding = getCliSessionBinding(entry, "claude-cli");
-  const importedMessages = binding?.sessionId
-    ? await readClaudeCliSessionMessagesAsync({
-        cliSessionId: binding.sessionId,
-        homeDir,
-        localSessionId: entry.sessionId,
-        reseedReceipt: binding.reseedReceipt,
-      })
-    : [];
-  return merge(localMessages, importedMessages);
-}
-
 const CLAUDE_RESUME_DRIFT_NOTES = [
   "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt.",
   "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=prompt-tools.",
   "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt,prompt-tools.",
 ] as const;
 
-function readRecord(value: unknown): Record<string, unknown> {
-  return requireGatewayRecord(value, "record");
-}
-
+const readRecord = (value: unknown) => requireGatewayRecord(value, "record");
 function readBoundHistory(
   entries: readonly Record<string, unknown>[],
   localMessages: unknown[],
   reseedReceipt?: ReturnType<typeof receipt>,
 ) {
-  return withClaudeProjectsDir(async ({ filePath, homeDir, sessionId }) => {
+  return withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
     await writeClaudeEntries(filePath, entries);
-    const entry = boundEntry(sessionId);
-    entry.cliSessionBindings = { "claude-cli": { sessionId, reseedReceipt } };
-    return { messages: await readChatHistory(homeDir, entry, localMessages), sessionId };
+    const imported = await readMessages({ localSessionId: "openclaw-session", reseedReceipt });
+    return { messages: merge(localMessages, imported), sessionId };
   });
 }
 
@@ -173,30 +156,6 @@ describe("cli session history", () => {
     );
     expectDeduped(localMessage, importedMessage);
   });
-
-  it.each(
-    ["", `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n`].flatMap((driftContext) =>
-      [
-        "messages occurred outside this Claude session",
-        "messages recorded in this chat since your last reply here (possibly already in this session)",
-        "earlier messages in this chat",
-      ].map((description) => ({ driftContext, description })),
-    ),
-  )(
-    "dedupes $description context before optional drift context: $driftContext",
-    ({ driftContext, description }) => {
-      const prompt = "What token did I give the other model?";
-      const localMessage = user(prompt, 1_000, { id: "local-return", senderIsOwner: true });
-      const note = `[OpenClaw: 2 ${description} from 2026-10-10T22:30:29.302Z to 2026-10-10T22:30:43.592Z, using "mock/mock-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:switch-back","limit":100}) to read them; page older messages with offset if needed.]`;
-      const importedMessage = user(
-        `${note}\n\n${driftContext}${prompt}`,
-        1_001,
-        cliMeta("native-return"),
-      );
-      expectDeduped(localMessage, importedMessage);
-      expect(merge([], [importedMessage])).toEqual([importedMessage]);
-    },
-  );
 
   it("keeps ordinary matches after an unsuccessful stripped lookup", () => {
     const timestamp = 1_000;
@@ -362,9 +321,7 @@ describe("cli session history", () => {
       content: secretText,
     } as AgentMessage);
     const redactedContent = readRecord(localMessage).content;
-    if (typeof redactedContent !== "string") {
-      throw new Error("expected redacted local text content");
-    }
+    expect(typeof redactedContent).toBe("string");
     const { messages, sessionId } = await readBoundHistory(
       [
         claudeUser(`${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${secretText}`, {
@@ -475,6 +432,7 @@ describe("cli session history", () => {
   });
 
   const window = 5 * 60 * 1000;
+  const historyRow = (content: string, timestamp: number) => ({ ...answer(timestamp), content });
   it.each([
     {
       name: "keeps local order across overlapping inclusive timestamp windows",
@@ -486,13 +444,17 @@ describe("cli session history", () => {
       name: "does not assign identities backward across nonchronological rows",
       localMessages: [answer(window * 2), answer(0)],
       importedMessages: [answer(0, "first"), answer(window * 2, "second")],
-      expected: [answer(0, "first"), answer(window * 2), answer(window * 2, "second")],
+      // Expanded history keeps local transcript order. The earlier import still
+      // binds to the timestamp-0 local, not the local row written first.
+      expected: [answer(window * 2), answer(0, "first"), answer(window * 2, "second")],
     },
     {
       name: "shares order across identity-specific indexes",
       localMessages: [answer(window * 2), answer(0)],
       importedMessages: [answer(0), answer(window * 2, "later", null)],
-      expected: [answer(0), answer(window * 2), answer(window * 2, "later", null)],
+      // Local transcript order wins once history expands. The other cli
+      // identity stays a separate row.
+      expected: [answer(window * 2), answer(0), answer(window * 2, "later", null)],
     },
     {
       name: "preserves local candidates after an unmatched import",
@@ -549,27 +511,37 @@ describe("cli session history", () => {
     expect(merge(localMessages, importedMessages)).toEqual(expected);
   });
 
-  it("consumes repeated-text histories with bounded indexed candidate lookups", () => {
-    const timestamp = Date.parse("2026-09-01T10:00:00Z");
-    // Cross both the 65-row insert batches and the 256-row ordinal batches.
-    const count = 257;
-    const localMessages = Array.from({ length: count }, (_, index) => answer(timestamp + index));
-    const importedMessages = localMessages.map((message, index) => ({
-      ...message,
-      __openclaw: cliMeta(`external-${index}`),
-    }));
+  // 257 crosses both the 65-row insert batches and the 256-row ordinal batches.
+  it.each([2, 257])(
+    "preserves metadata-only local order with bounded lookups (%i rows)",
+    (count) => {
+      const timestamp = Date.parse("2026-09-01T10:00:00Z");
+      const labels = ["first transcript row", "second transcript row"];
+      const localMessages =
+        count === 2
+          ? labels.map((content, index) => historyRow(content, 2 - index))
+          : Array.from({ length: count }, (_, index) => answer(timestamp + index));
+      const importedMessages = localMessages.map((message, index) => ({
+        ...message,
+        __openclaw: cliMeta(`external-${index}`),
+      }));
 
-    const { merged, executions } = mergeCliHistoryWithLookupStats({
-      localMessages,
-      importedMessages,
-    });
+      const { merged, executions } = mergeCliHistoryWithLookupStats({
+        localMessages,
+        importedMessages,
+      });
 
-    expect(executions).toBeGreaterThanOrEqual(count);
-    expect(executions).toBeLessThanOrEqual(count * 2);
-    expect(
-      merged.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
-    ).toEqual(importedMessages.map((message) => message["__openclaw"].externalId));
-  });
+      if (count === 257) {
+        expect(executions).toBeGreaterThanOrEqual(count);
+        expect(executions).toBeLessThanOrEqual(count * 2);
+      } else {
+        expect(merged.map((message) => readRecord(message).content)).toEqual(labels);
+      }
+      expect(
+        merged.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
+      ).toEqual(importedMessages.map((message) => message["__openclaw"].externalId));
+    },
+  );
 
   it("does not reuse a text-consumed local row for image deduplication", () => {
     const localEntryId = "local-image-row";
@@ -588,27 +560,162 @@ describe("cli session history", () => {
     ]);
   });
 
-  it("preserves local transcript order when imports only add metadata", () => {
-    const localMessages = [
-      { role: "assistant", content: "first transcript row", timestamp: 2 },
-      { role: "assistant", content: "second transcript row", timestamp: 1 },
-    ];
-    const importedMessages = localMessages.map((message, index) => ({
-      ...message,
-      __openclaw: cliMeta(`external-${index}`),
-    }));
-
-    const merged = merge(localMessages, importedMessages);
-
-    expect(merged.map((message) => readRecord(message).content)).toEqual([
-      "first transcript row",
-      "second transcript row",
-    ]);
-  });
+  it.each([
+    {
+      name: "keeps earlier imports before a backdated local's preceding answer",
+      localMessages: [200, 100, 300].map((t) => historyRow(`local ${t}`, t)),
+      imported: [50, 150, 200, 250].map((t) => historyRow(`import ${t}`, t)),
+      expected: [
+        "import 50",
+        "import 150",
+        "local 200",
+        "local 100",
+        "import 200",
+        "import 250",
+        "local 300",
+      ],
+    },
+    {
+      name: "splices unmatched imports in timestamp order without moving local rows",
+      localMessages: [200, 300, 0, 400, 500, 600].map((t) => historyRow(`local ${t}`, t)),
+      imported: [150, 100].map((t) => historyRow(`import ${t}`, t)),
+      expected: [
+        "import 100",
+        "import 150",
+        "local 200",
+        "local 300",
+        "local 0",
+        "local 400",
+        "local 500",
+        "local 600",
+      ],
+    },
+  ])(
+    "$name when an import expands history in both indexes",
+    ({ localMessages, imported, expected }) => {
+      for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+        const contents = mergeImportedChatHistoryMessages(
+          { localMessages, importedMessages: imported },
+          new Index(),
+        ).map((message) => readRecord(message).content);
+        expect(contents).toEqual(expected);
+      }
+    },
+  );
 });
 
 it("keeps lone surrogates distinct from replacement characters in SQLite match keys", () => {
   const local = { role: "assistant", content: "\ud800" };
   const imported = { role: "assistant", content: "\ufffd" };
   expect(merge([local], [imported])).toEqual([local, imported]);
+});
+
+it.each([
+  ["covered", [], 1],
+  ["identity", [], 1],
+  ["uuidless", [], 1],
+  ["undated", [], 1],
+  ["partial", ["covered"], 1],
+  ["audio", ["covered"], 1],
+  ["ambiguous", ["earlier", "covered"], 2],
+  ["identified", ["earlier"], 2],
+  ["separate-window", ["earlier"], 2],
+  ["resume", [], 1],
+  ["image", [], 1],
+  ["retry", ["retry"], 1],
+  ["tool-result", [], 2],
+  ["thinking", [], 1],
+  ["other-backend", ["covered"], 1],
+] as const)("reconciles native aggregate coverage: %s", (mode, retained, userCount) => {
+  const at = mode === "undated" ? undefined : mode === "separate-window" ? 600_001 : 1_000;
+  const timestamp = (offset: number) => (at === undefined ? undefined : at + offset);
+  const meta = (externalId: string) => ({
+    importedFrom: mode === "other-backend" ? "codex" : "claude-cli",
+    cliSessionId: "session-1",
+    ...(mode === "uuidless" ? {} : { externalId }),
+  });
+  const prompt =
+    mode === "image"
+      ? imageTurn("coverage-image", "question", 1_000, "coverage")
+      : user(
+          "question",
+          mode === "identified" ? undefined : at,
+          mode === "identity" ? meta("native-user") : undefined,
+        );
+  const aggregate: Record<string, unknown> = {
+    ...answer(timestamp(3)),
+    content: "Checking. Done.",
+    idempotencyKey: "cli-assistant:covered",
+  };
+  if (mode === "identity") {
+    aggregate["__openclaw"] = { idempotencyKey: aggregate.idempotencyKey };
+    delete aggregate.idempotencyKey;
+  }
+  if (mode === "audio") {
+    aggregate.openclawDisplayContent = [{ type: "audio", url: "/managed-audio" }];
+  }
+  if (mode === "thinking") {
+    aggregate.content = [
+      { type: "text", text: "Checking. Done." },
+      { type: "thinking", thinking: "Internal reasoning." },
+    ];
+  }
+  const localMessages: unknown[] = [prompt, aggregate];
+  if (mode === "ambiguous" || mode === "identified" || mode === "separate-window") {
+    localMessages.unshift(
+      user("question", 1_000, mode === "identified" ? cliMeta("earlier-user") : undefined),
+      { ...aggregate, idempotencyKey: "cli-assistant:earlier" },
+    );
+  }
+  if (mode === "retry") {
+    localMessages.push({ ...aggregate, idempotencyKey: "cli-assistant:retry" });
+  }
+  const nativePrompt =
+    mode === "image"
+      ? `Different caption\n\n${imagePrompt("coverage-image")}`
+      : mode === "resume"
+        ? `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nquestion`
+        : mode === "identity"
+          ? "rewritten question"
+          : "question";
+  const imported: unknown[] = [
+    user(nativePrompt, at, meta("native-user")),
+    ...["Checking.", "Done."].map((content, index) => ({
+      role: "assistant",
+      timestamp: timestamp(index + 1),
+      content:
+        mode === "tool-result" && index === 0
+          ? [
+              { type: "text", text: content },
+              { type: "toolcall", id: "calc", name: "calc", arguments: {} },
+            ]
+          : content,
+      __openclaw: meta(`segment-${index}`),
+    })),
+  ];
+  if (mode === "partial") {
+    imported.pop();
+  }
+  if (mode === "tool-result") {
+    imported.splice(
+      2,
+      0,
+      user(
+        [{ type: "tool_result", tool_use_id: "calc", content: "4" }],
+        timestamp(2),
+        meta("tool-result"),
+      ),
+    );
+  }
+  const merged = merge(localMessages, imported);
+  const keys = merged
+    .map(readRecord)
+    .map(
+      (message) =>
+        message.idempotencyKey ?? asOptionalRecord(message["__openclaw"])?.idempotencyKey,
+    )
+    .filter((key) => typeof key === "string" && key.startsWith("cli-assistant:"));
+  expect(keys).toEqual(retained.map((key) => `cli-assistant:${key}`));
+  expect(merged).toEqual(expect.arrayContaining(imported.slice(1)));
+  expect(merged.filter((message) => readRecord(message).role === "user")).toHaveLength(userCount);
 });

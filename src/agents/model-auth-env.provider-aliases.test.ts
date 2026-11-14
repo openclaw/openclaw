@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   resolveEnvApiKey,
   resolveProviderDirectAuthPlanningEvidence,
   resolveProviderEnvAuthEvidence,
 } from "./model-auth-env.js";
+import * as providerAuthAliases from "./provider-auth-aliases.js";
 
 const { current, load, setup } = vi.hoisted(() => ({
   current: vi.fn(),
@@ -71,6 +73,19 @@ describe("resolveEnvApiKey provider auth aliases", () => {
       source: "env",
     });
     expect(setup).toHaveBeenCalledWith({ provider: "setup-cloud", ...scope, env: {} });
+  });
+
+  it("derives auth maps once for captured env reads while observing credential changes", () => {
+    const config = freezeJsonSnapshot({ plugins: {} });
+    using aliases = vi.spyOn(providerAuthAliases, "resolveProviderAuthAliasMap");
+
+    for (let index = 0; index < 50; index++) {
+      expect(
+        resolveEnvApiKey("cloud-alias", { EXTERNAL_CLOUD_API_KEY: `fixture-${index}` }, { config }),
+      ).toEqual({ apiKey: `fixture-${index}`, source: "env: EXTERNAL_CLOUD_API_KEY" });
+    }
+    expect(resolveEnvApiKey("cloud-alias", {}, { config })).toBeNull();
+    expect(aliases).toHaveBeenCalledTimes(1);
   });
 
   it.each(["environment", "setup-provider"])(

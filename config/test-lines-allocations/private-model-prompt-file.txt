@@ -1,0 +1,2 @@
+# CLI boundary coverage for bounded private prompt files.
+79

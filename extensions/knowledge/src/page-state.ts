@@ -22,6 +22,8 @@ export type PageState = {
   storeMessage: string | undefined;
   tab: KnowledgeLocation["tab"];
   selectedId: string;
+  /** Scribe detail on the Scribes tab; empty for the list. */
+  scribe: string;
   query: string;
   kind: KnowledgeLocation["kind"];
   type: string;
@@ -55,6 +57,10 @@ export type PageState = {
   timer: ReturnType<typeof setTimeout> | undefined;
   suggestGeneration: number;
   vocabulary: Awaited<ReturnType<typeof loadVocabulary>> | undefined;
+  /** Agent whose Scribes tab count is shown; another agent's count is read again. */
+  scribesCountAgent: string;
+  /** Last committed content of recently left views, keyed by view key, shown again on return. */
+  retainedViews: Map<string, Node[]>;
   refreshing: boolean;
   refreshAgain: boolean;
   pendingReplaceLocation: boolean;
@@ -79,6 +85,7 @@ export function createPageState(
     storeMessage: undefined,
     tab: location.tab,
     selectedId: location.record,
+    scribe: location.scribe,
     query: location.query,
     kind: location.kind,
     type: location.type,
@@ -112,6 +119,8 @@ export function createPageState(
     timer: undefined,
     suggestGeneration: 0,
     vocabulary: undefined,
+    scribesCountAgent: "",
+    retainedViews: new Map(),
     refreshing: false,
     refreshAgain: false,
     pendingReplaceLocation: true,

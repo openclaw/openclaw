@@ -11,6 +11,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   withOpenClawTestState,
@@ -297,6 +298,7 @@ export function registerDoctorConfigReceiptTests(
     "restored-config",
     "schema-refusal",
     "wrapped-refusal",
+    "lease-loss",
   ] as const)("publishes consumed input and final committed hash (%s)", async (outcome) => {
     await withDoctorState(async (state) => {
       const resultPath = state.path("doctor-result.json");
@@ -323,6 +325,12 @@ export function registerDoctorConfigReceiptTests(
       };
       const failures: Partial<Record<typeof outcome, Error>> = {
         error: new Error("health failed after commit"),
+        "lease-loss": new Error("maintenance failed", {
+          cause: new OpenClawStateLeaseError("state lease heartbeat is not running", {
+            code: "OPENCLAW_STATE_LEASE_LOST",
+            loss: { reason: "admission-failed" },
+          }),
+        }),
         "partial-config": new AggregateError([configFailure("partial", "unknown")]),
         "unrestored-config": configFailure("complete", "not-restored"),
         "restored-config": configFailure("partial", "restored"),
@@ -403,7 +411,12 @@ export function registerDoctorConfigReceiptTests(
                 ? ["gateway-stop", "stale-gateway-stop-failed"]
                 : ["doctor", "doctor-failed"];
         result.failureFacts = [
-          { check, code, message: outcome === "error" ? failure.message : expect.any(String) },
+          {
+            check,
+            code,
+            message: outcome === "error" ? failure.message : expect.any(String),
+            ...(outcome === "lease-loss" ? { leaseLoss: { reason: "admission-failed" } } : {}),
+          },
         ];
       }
       if (outcome !== "unchanged") {

@@ -6,7 +6,6 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization, resolveCommandAuthorizationAsync } from "./command-auth.js";
 import {
-  hasCommandSyntax,
   hasControlCommand,
   hasInlineCommandTokens,
   shouldComputeCommandAuthorized,
@@ -16,6 +15,7 @@ import { markInboundContextLabel } from "./reply/inbound-context-marker.js";
 import { resolveAuthorizedSessionResetCommand } from "./reply/session-reset-command.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
+import { nativeGroupContext } from "./test-helpers/command-context-fixtures.js";
 
 installDiscordRegistryHooks();
 
@@ -136,18 +136,15 @@ describe("resolveCommandAuthorization", () => {
         },
       },
     });
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const authorization = await resolveCommandAuthorizationAsync({
-        ctx: { SenderId: "owner" },
-        cfg: { commands: { allowFrom: { "*": ["owner"] } } },
-        commandAuthorized: true,
-      });
-      expect(authorization.isAuthorizedSender).toBe(false);
-      expect(resolveLegacy).not.toHaveBeenCalled();
-    } finally {
-      warning.mockRestore();
-    }
+    using _ = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const authorization = await resolveCommandAuthorizationAsync({
+      ctx: { SenderId: "owner" },
+      cfg: { commands: { allowFrom: { "*": ["owner"] } } },
+      commandAuthorized: true,
+    });
+    expect(authorization.isAuthorizedSender).toBe(false);
+    expect(resolveLegacy).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -373,14 +370,7 @@ describe("resolveCommandAuthorization", () => {
       } as OpenClawConfig;
 
       const auth = authorize(
-        {
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
-          From: "telegram:999",
-          SenderId: "999",
-          CommandSource: "native",
-        } as MsgContext,
+        nativeGroupContext("telegram", "telegram:999", "999") as MsgContext,
         cfg,
       );
 
@@ -400,14 +390,7 @@ describe("resolveCommandAuthorization", () => {
       } as OpenClawConfig;
 
       const auth = authorize(
-        {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "group",
-          From: "discord:helper",
-          SenderId: "helper",
-          CommandSource: "native",
-        } as MsgContext,
+        nativeGroupContext("discord", "discord:helper", "helper") as MsgContext,
         cfg,
       );
 
@@ -576,29 +559,26 @@ describe("resolveCommandAuthorization", () => {
     it("does not log raw resolution messages from thrown allowFrom errors", () => {
       registerAllowFromPlugins(createThrowingAllowFromPlugin("telegram", "SECRET-TOKEN-123"));
 
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        authorize(
-          {
-            Provider: "telegram",
-            Surface: "telegram",
-            SenderId: "123",
-          } as MsgContext,
-          {
-            channels: {
-              telegram: {
-                allowFrom: ["123"],
-              },
+      using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      authorize(
+        {
+          Provider: "telegram",
+          Surface: "telegram",
+          SenderId: "123",
+        } as MsgContext,
+        {
+          channels: {
+            telegram: {
+              allowFrom: ["123"],
             },
-          } as OpenClawConfig,
-        );
-        expect(warn).toHaveBeenCalledTimes(1);
-        const warning = String(warn.mock.calls[0]?.[0] ?? "");
-        expect(warning).toContain("Error");
-        expect(warning).not.toContain("SECRET-TOKEN-123");
-      } finally {
-        warn.mockRestore();
-      }
+          },
+        } as OpenClawConfig,
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+      const warning = String(warn.mock.calls[0]?.[0] ?? "");
+      expect(warning).toContain("Error");
+      expect(warning).not.toContain("SECRET-TOKEN-123");
     });
   });
 
@@ -682,7 +662,6 @@ describe("control command parsing", () => {
     "![nested [diagram]][figure]",
     "@bot ![diagram](https://example.com/diagram.png)",
   ])("keeps Markdown images out of command classification: %s", (body) => {
-    expect(hasCommandSyntax(body)).toBe(false);
     expect(shouldComputeCommandAuthorized(body)).toBe(false);
     expect(hasControlCommand(body)).toBe(false);
   });

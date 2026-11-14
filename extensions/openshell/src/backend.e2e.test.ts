@@ -311,10 +311,12 @@ it
     const scopeSuffix = `${process.pid}-${Date.now()}`;
     const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
     const testRunId = `${process.pid.toString(36)}${Date.now().toString(36)}`;
+    const imageTag = `openclaw-openshell-e2e:${testRunId}`;
     const openShellWorkspace = `oc-w-${testRunId.slice(-14)}`;
     let hostPolicyServer: Awaited<ReturnType<typeof startHostPolicyServer>> | undefined;
     let mirrorSocketServer: net.Server | undefined;
     let workspaceCreated = false;
+    let imageBuilt = false;
     const defaults = createOpenShellBackendSandboxConfig();
     const sandboxCfg = {
       ...defaults,
@@ -332,7 +334,7 @@ it
       command: OPENCLAW_OPENSHELL_COMMAND,
       gateway: gatewayName,
       workspace: openShellWorkspace,
-      from: dockerfilePath,
+      from: imageTag,
       mode: "remote",
       autoProviders: false,
       policy: denyPolicyPath,
@@ -444,6 +446,12 @@ it
       socketServer.listen(mirrorSocketPath);
       await once(socketServer, "listening");
       await fs.writeFile(dockerfilePath, CUSTOM_IMAGE_DOCKERFILE, "utf8");
+      await runCommand({
+        command: "docker",
+        args: ["build", "--tag", imageTag, dockerfileDir],
+        timeoutMs: 5 * 60_000,
+      });
+      imageBuilt = true;
       const policyPort = hostPolicyServer.port;
       const writePolicy = (file: string, binaryPath: string) =>
         fs.writeFile(
@@ -501,9 +509,14 @@ it
       expect(verifyResult.stdout.replace(/\r?\n$/, "")).toContain("Host ");
 
       const policyRequest = `curl --fail --silent --show-error --max-time 15 "http://host.openshell.internal:${hostPolicyServer.port}/policy-test"`;
+      const allowedGetResult = await exec(allowBackend, policyRequest);
+      expect(allowedGetResult.code).toBe(0);
+      expect(allowedGetResult.stdout).toContain('"message":"hello-from-host"');
+
+      // v0.1.3 rejects unauthorized binaries at TCP admission, before any HTTP response.
       const blockedGetResult = await exec(backend, policyRequest, { allowFailure: true });
-      expect(blockedGetResult.code).not.toBe(0);
-      expect(`${blockedGetResult.stdout}\n${blockedGetResult.stderr}`).toMatch(/403|deny/i);
+      expect(blockedGetResult.code).toBe(7);
+      expect(blockedGetResult.stdout).not.toContain('"message":"hello-from-host"');
 
       const mirrorExecResult = await exec(
         mirrorBackend,
@@ -555,10 +568,6 @@ it
       });
       await expectFile(mirrorWorkspaceDir, "nested/mirror-note.txt", "mirror-write\n");
       await expectExec(mirrorBackend, "cat nested/mirror-note.txt", "mirror-write\n");
-
-      const allowedGetResult = await exec(allowBackend, policyRequest);
-      expect(allowedGetResult.code).toBe(0);
-      expect(allowedGetResult.stdout).toContain('"message":"hello-from-host"');
 
       const overlappingExec = await prepareExec(
         mirrorBackend,
@@ -647,6 +656,15 @@ it
           const socketServer = mirrorSocketServer;
           if (socketServer) {
             await closeServer(socketServer);
+          }
+        },
+        async () => {
+          if (imageBuilt) {
+            await runCommand({
+              command: "docker",
+              args: ["image", "rm", imageTag],
+              timeoutMs: 30_000,
+            });
           }
         },
         () => hostPolicyServer?.close(),

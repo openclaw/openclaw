@@ -1,12 +1,14 @@
 // Image input normalization converts HEIC/HEIF payloads through the shared
 // input-file media path before provider execution.
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
-import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
 import { normalizeInputImageBuffer } from "../media/input-files.js";
 import { readImageMetadataFromHeader } from "../media/media-services.js";
-import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
+import {
+  effectiveImageBytesCap,
+  optimizeImageBufferForWebMedia,
+  type ImageCompressionModelPolicy,
+} from "../media/web-media.js";
 import { MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 
 const HEIC_MIME_RE = /^image\/hei[cf](?:-sequence)?$/i;
@@ -46,14 +48,10 @@ export async function optimizeImageDescriptionInput(params: {
   fileName?: string;
   mime?: string;
   maxBytes?: number;
-  cfg?: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentDir?: string;
-  workspaceDir?: string;
+  modelPolicy: ImageCompressionModelPolicy;
 }): Promise<{ buffer: Buffer; fileName?: string; mime?: string }> {
   const maxBytes = params.maxBytes ?? MEDIA_CAPABILITY_DEFAULTS.image.maxBytes;
-  const modelPolicy = await resolveImageCompressionModelPolicy(params);
+  const { modelPolicy } = params;
   const imageCompression = { imageCount: 1, models: [modelPolicy] };
   const effectiveMaxBytes = effectiveImageBytesCap(maxBytes, imageCompression) ?? maxBytes;
   const hasModelLimits = [

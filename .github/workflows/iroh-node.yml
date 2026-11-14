@@ -1,0 +1,155 @@
+name: iroh Node binding
+
+# Builds and tests crates/openclaw-iroh-node, a standalone Cargo workspace that nothing in OpenClaw
+# loads yet. Runs only when the crate or this workflow changes, in its own concurrency group, so
+# it never adds to the main CI path.
+
+on:
+  push:
+    branches: [main]
+    paths: &iroh_node_paths
+      - ".github/workflows/iroh-node.yml"
+      - "crates/openclaw-iroh-node/**"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: *iroh_node_paths
+  workflow_dispatch:
+
+concurrency:
+  group: iroh-node-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RUSTUP_TOOLCHAIN: "1.99.0"
+  NAPI_CLI: "@napi-rs/cli@3.10.9"
+
+jobs:
+  build:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The full lane: lint, build, unit tests, wire compat and the throughput floor.
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            full: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: xcode-27
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+    defaults:
+      run:
+        shell: bash
+        working-directory: crates/openclaw-iroh-node
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node.js
+        if: runner.os != 'macOS'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Setup Node.js (macOS)
+        if: runner.os == 'macOS'
+        working-directory: .
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "24.22.1"
+
+      - name: Install Rust
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          fi
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy,rustfmt --target "$TARGET"
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          prefix-key: iroh-node
+          key: ${{ matrix.target }}
+          workspaces: crates/openclaw-iroh-node -> target
+          cache-bin: "false"
+          cmd-format: rustup run 1.99.0 {0}
+
+      - name: Check formatting and Clippy
+        if: matrix.full
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo clippy --locked --release --all-targets -- -D warnings
+
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: npx --yes --package="$NAPI_CLI" -- napi build --platform --release --strip --target "$TARGET"
+
+      - name: Check generated loader and types are current
+        run: git diff --exit-code -- index.js index.d.ts
+
+      - name: Test binding
+        run: node --test test/binding.test.cjs
+
+      - name: Restore iroh-relay
+        if: matrix.full
+        id: relay-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/iroh-relay
+          key: iroh-relay-1.4.1-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install iroh-relay
+        if: matrix.full && steps.relay-cache.outputs.cache-hit != 'true'
+        run: cargo install iroh-relay@1.4.1 --locked --features server --root "$RUNNER_TEMP/iroh-relay"
+
+      - name: Install @number0/iroh for compat checks
+        if: matrix.full
+        run: npm install --prefix "$RUNNER_TEMP/number0" --no-save --no-package-lock --ignore-scripts @number0/iroh@1.2.0
+
+      - name: Test wire compatibility
+        if: matrix.full
+        run: |
+          set -euo pipefail
+          IROH_RELAY_BIN="$RUNNER_TEMP/iroh-relay/bin/iroh-relay" \
+          IROH_NUMBER0_DIR="$RUNNER_TEMP/number0" \
+            node --test test/compat.test.cjs
+
+      - name: Check throughput floor
+        if: matrix.full
+        env:
+          IROH_NODE_BENCH: "1"
+          # Hosted runners are slower than fsn1; 50 MB/s still sits 5x above the Array<number> cap.
+          IROH_NODE_MIN_MBPS: "50"
+        run: node --test test/throughput.test.cjs
+
+      - name: Upload binding
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iroh-node-${{ matrix.target }}
+          path: crates/openclaw-iroh-node/*.node
+          retention-days: 7
+          if-no-files-found: error

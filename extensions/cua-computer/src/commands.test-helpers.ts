@@ -18,66 +18,42 @@ const geometry = {
   screen_height: 50,
   scale_factor: 1,
 };
+const sessionState = { captureScope: 2, effectiveScope: 1, desktopUnlocked: true };
 
 const CUA_DRIVER_ENDPOINT_ENV = "OPENCLAW_CUA_DRIVER_ENDPOINT";
 
-export function macOsEndpoint(overrides: Record<string, unknown> = {}): NodeJS.ProcessEnv {
-  return {
-    [CUA_DRIVER_ENDPOINT_ENV]: JSON.stringify({
-      v: 1,
-      socketPath: "/tmp/openclaw-cua-test/driver.sock",
-      binaryPath: process.execPath,
-      ...overrides,
-    }),
-  };
-}
+export const macOsEndpoint = (overrides: Record<string, unknown> = {}): NodeJS.ProcessEnv => ({
+  [CUA_DRIVER_ENDPOINT_ENV]: JSON.stringify({
+    v: 1,
+    socketPath: "/tmp/openclaw-cua-test/driver.sock",
+    binaryPath: process.execPath,
+    ...overrides,
+  }),
+});
 
-export function invalidMacOsEndpoints(): Array<[string, NodeJS.ProcessEnv]> {
-  return [
-    ["missing", {}],
-    ["malformed JSON", { [CUA_DRIVER_ENDPOINT_ENV]: "{" }],
-    [
-      "partial",
-      {
-        [CUA_DRIVER_ENDPOINT_ENV]: JSON.stringify({
-          v: 1,
-          socketPath: "/tmp/openclaw-cua-test/driver.sock",
-        }),
-      },
-    ],
-    ["unsupported version", macOsEndpoint({ v: 2 })],
-    ["extra field", macOsEndpoint({ extra: true })],
-    ["relative socket", macOsEndpoint({ socketPath: "relative.sock" })],
-    ["relative binary", macOsEndpoint({ binaryPath: "cua-driver" })],
-    ["nul socket", macOsEndpoint({ socketPath: "/tmp/cua\0.sock" })],
-    ["missing binary", macOsEndpoint({ binaryPath: "/missing/cua-driver" })],
-    ["oversized", macOsEndpoint({ socketPath: `/${"x".repeat(4_096)}` })],
-  ];
-}
+export const invalidMacOsEndpoints = (): Array<[string, NodeJS.ProcessEnv]> => [
+  ["missing", {}],
+  ["malformed JSON", { [CUA_DRIVER_ENDPOINT_ENV]: "{" }],
+  ["partial", macOsEndpoint({ binaryPath: undefined })],
+  ["unsupported version", macOsEndpoint({ v: 2 })],
+  ["extra field", macOsEndpoint({ extra: true })],
+  ["relative socket", macOsEndpoint({ socketPath: "relative.sock" })],
+  ["relative binary", macOsEndpoint({ binaryPath: "cua-driver" })],
+  ["nul socket", macOsEndpoint({ socketPath: "/tmp/cua\0.sock" })],
+  ["missing binary", macOsEndpoint({ binaryPath: "/missing/cua-driver" })],
+  ["oversized", macOsEndpoint({ socketPath: `/${"x".repeat(4_096)}` })],
+];
 
-export function result(structured: Record<string, unknown>, image = false): CuaToolResult {
-  return cuaToolResult(structured, { image });
-}
+export const result = (structured: Record<string, unknown>, image = false): CuaToolResult =>
+  cuaToolResult(structured, { image });
 
-export function driver(
-  options: {
-    geometry?: typeof geometry;
-    screenSize?: { width: number; height: number; scale_factor: number };
-  } = {},
-) {
+export function driver(options: { geometry?: typeof geometry } = {}) {
   let generation = "execution-1";
   const activeGeometry = options.geometry ?? geometry;
+  const { screen_width: width, screen_height: height, scale_factor } = activeGeometry;
   const methods = {
     getDesktopState: vi.fn(async () => result(activeGeometry, true)),
-    getScreenSize: vi.fn(async () =>
-      result(
-        options.screenSize ?? {
-          width: activeGeometry.screen_width,
-          height: activeGeometry.screen_height,
-          scale_factor: activeGeometry.scale_factor,
-        },
-      ),
-    ),
+    getScreenSize: vi.fn(async () => result({ width, height, scale_factor })),
     click: vi.fn(async () => result({})),
     drag: vi.fn(async () => result({})),
     moveCursor: vi.fn(async () => result({})),
@@ -86,13 +62,7 @@ export function driver(
     pressKey: vi.fn(async () => result({})),
     callTool: vi.fn<CuaDriverSession["callTool"]>(async () => result({})),
     getCursorPosition: vi.fn<CuaDriverSession["getCursorPosition"]>(async () => result({})),
-    getSessionState: vi.fn(async () => ({
-      session: "openclaw-test",
-      captureScope: 2,
-      effectiveScope: 1,
-      desktopCaptureAuthorized: true,
-      desktopUnlocked: true,
-    })),
+    getSessionState: vi.fn(async () => ({ ...sessionState })),
     dispose: vi.fn(async () => {}),
   };
   const session: CuaDriverSession = {
@@ -121,11 +91,7 @@ export function createTestProvider(
   createDriver.mockReturnValueOnce(session);
   onTestFinished(() => createDriver.mockRestore());
   const endpoint = process.env[CUA_DRIVER_ENDPOINT_ENV];
-  const hostPlatform = process.platform;
-  const platformSpy = vi
-    .spyOn(process, "platform", "get")
-    .mockReturnValue(hostPlatform)
-    .mockReturnValueOnce(platform);
+  const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValueOnce(platform);
   vi.stubEnv(CUA_DRIVER_ENDPOINT_ENV, env[CUA_DRIVER_ENDPOINT_ENV]);
   try {
     return createCuaComputerProvider();
@@ -137,26 +103,21 @@ export function createTestProvider(
 
 export async function execution(session: CuaDriverSession, platform: NodeJS.Platform = "linux") {
   const provider = createTestProvider(session, platform);
-  try {
-    const computer = await provider.openExecution({ executionId: randomUUID() });
-    const send = (action: string | Record<string, unknown>, params: Record<string, unknown> = {}) =>
-      computer.act(JSON.stringify(typeof action === "string" ? { action, ...params } : action));
-    const read = async <T>(action: string, params: Record<string, unknown> = {}): Promise<T> =>
-      JSON.parse(await send(action, params)) as T;
-    return Object.assign(computer, {
-      send,
-      read,
-      capture: async (
-        input: Record<string, unknown> = { format: "png", maxWidth: 100 },
-      ): Promise<Screen> => JSON.parse(await computer.snapshot(JSON.stringify(input))),
-      window: async () =>
-        (await read<{ details: { windows: Array<{ windowRef: string }> } }>("list_windows")).details
-          .windows[0]!.windowRef,
-      observe: (windowRef: string) => read<WindowObservation>("get_window_state", { windowRef }),
-    });
-  } finally {
-    vi.mocked(platform === "darwin" ? createCuaMcpDriver : createCuaDriver).mockRestore();
-  }
+  const computer = await provider.openExecution({ executionId: randomUUID() });
+  const send = (action: string | Record<string, unknown>, params: Record<string, unknown> = {}) =>
+    computer.act(JSON.stringify(typeof action === "string" ? { action, ...params } : action));
+  const read = async <T>(action: string, params: Record<string, unknown> = {}): Promise<T> =>
+    JSON.parse(await send(action, params)) as T;
+  return Object.assign(computer, {
+    send,
+    read,
+    capture: async (): Promise<Screen> =>
+      JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')),
+    window: async () =>
+      (await read<{ details: { windows: Array<{ windowRef: string }> } }>("list_windows")).details
+        .windows[0]!.windowRef,
+    observe: (windowRef: string) => read<WindowObservation>("get_window_state", { windowRef }),
+  });
 }
 
 export type ComputerExecution = Awaited<ReturnType<typeof execution>>;
@@ -166,12 +127,10 @@ export type WindowObservation = {
   observation: { base64?: string; observationId: string; elements: Array<{ elementRef: string }> };
 };
 
-export function pngImage(width: number, height: number) {
-  return {
-    mimeType: "image/png",
-    dataBase64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString("base64"),
-  };
-}
+export const pngImage = (width: number, height: number) => ({
+  mimeType: "image/png",
+  dataBase64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString("base64"),
+});
 
 export function frameTarget(screen: Screen) {
   return { displayFrameId: screen.displayFrameId, refWidth: screen.width };

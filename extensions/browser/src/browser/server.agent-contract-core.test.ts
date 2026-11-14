@@ -356,6 +356,22 @@ describe("browser control server", () => {
     );
   });
 
+  it("refuses strict-policy Chrome MCP navigation before dispatching uninspectable redirects", async () => {
+    setBrowserControlServerProfiles({ openclaw: { color: "#FF4500", driver: "existing-session" } });
+    setBrowserControlServerSsrFPolicy({ dangerouslyAllowPrivateNetwork: false });
+    const response = await postResponse(await startServerAndBase(), "/navigate", {
+      url: "http://93.184.216.34/redirect",
+      targetId: "7",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining("requires redirect-hop inspection"),
+    });
+    const chromeMcp = await import("./chrome-mcp.js");
+    expect(chromeMcp.navigateChromeMcpPage).not.toHaveBeenCalled();
+  });
+
   it("agent contract: navigation + common act commands", async () => {
     await startServerAndBase();
     expect(await post("/navigate", { url: TAB_URL })).toMatchObject({ ok: true, targetId });

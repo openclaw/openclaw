@@ -89,16 +89,14 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
   return patch;
 }
 
-type ResolvedPatchTarget = {
-  agentId: string;
-  key: string;
-  isRequesterSession: boolean;
-};
-
 export async function runSessionsToolPatchMany(params: {
   targets: unknown;
   patch: SessionsPatchMutation;
-  resolveTarget: (sessionKey: string) => Promise<ResolvedPatchTarget>;
+  resolveTarget: (sessionKey: string) => Promise<{
+    agentId: string;
+    key: string;
+    isRequesterSession: boolean;
+  }>;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   if (

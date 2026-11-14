@@ -34,7 +34,7 @@ export function createGatewayCloseTestHandlerFactory({
     completeGatewayClose(params, await prepareGatewayClose(params, opts));
 }
 
-export function createTestChatRunState() {
+function createTestChatRunState() {
   const state = createChatRunState();
   const clear = state.clear;
   state.clear = vi.fn(() => clear());
@@ -84,7 +84,6 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       cron: { stop: vi.fn() },
       stopScheduledServices: vi.fn(async () => {}),
       updateCheckStop: null,
-      broadcast: vi.fn(),
       maintenance: {
         stopPeriodicTasks: vi.fn(async () => {}),
         startMediaCleanup: vi.fn(),
@@ -96,11 +95,6 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createTestChatRunState(),
-      restartRecoveryCandidates: new Map(),
-      removeChatRun: vi.fn(),
-      agentRunSeq: new Map(),
-      nodeSendToSession: vi.fn(),
-      getPendingReplyCount: vi.fn(() => 0),
       clients: new Set<GatewayCloseClient>(),
       configReloader: { stop: vi.fn(async () => undefined) },
       wss: {

@@ -3,25 +3,33 @@ import { versions } from "node:process";
 import * as v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { hasProfilerConflict } from "./diagnostic-profile.js";
+import { createStallKernelRecorder } from "./diagnostic-stall-kernel.js";
 import {
-  hasProfilerConflict,
-  parseNativeCpuProfile,
-  sanitizeDiagnosticProfileFrame,
-} from "./diagnostic-profile.js";
+  formatStallProfile,
+  MAX_PROFILE_BYTES,
+  MAX_SAMPLES,
+  SAMPLE_MS,
+  type StallProfileWindow,
+  type StallProfileSnapshot,
+} from "./diagnostic-stall-profile.js";
 
 const WINDOW_MS = 5_000;
-const SAMPLE_MS = 25;
-const MAX_SAMPLES = 1_024;
-const MAX_PROFILE_BYTES = 1_048_576;
 
 /** Two short native profiles retain recent stacks without a listener or on-demand heap scan. */
 export function createStallFlightRecorder(warn: (message: string) => void) {
+  let kernel: ReturnType<typeof createStallKernelRecorder>;
   let active: v8.SyncCPUProfileHandle | undefined;
-  let previous: { json: string; endedAt: number } | undefined;
+  let previous: StallProfileWindow | undefined;
   let startedAt = 0;
   let disabled = !isMainThread || Boolean(versions.bun) || Number(versions.node.split(".")[0]) < 26;
   let packageRoot: string | null = null;
+  const captureSymbol = Symbol.for("openclaw.stallFlightRecorder.capture");
   const stop = () => {
+    if (Object.getOwnPropertyDescriptor(globalThis, captureSymbol)?.value === capture) {
+      Reflect.deleteProperty(globalThis, captureSymbol);
+    }
+    kernel?.stop();
     disabled = true;
     previous = undefined;
     const handle = active;
@@ -33,6 +41,23 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
     }
   };
   const start = () => v8.startCpuProfile({ sampleInterval: SAMPLE_MS, maxBufferSize: MAX_SAMPLES });
+  const capture = (): StallProfileSnapshot | undefined => {
+    if (disabled || !active) {
+      return undefined;
+    }
+    const captureStartedAt = performance.now();
+    const old = active;
+    // Keep the native code map and sampler alive; restarting the last profile scans the heap.
+    active = start();
+    startedAt = performance.now();
+    // Native endTime precedes serialization; anchoring afterward shifts samples forward.
+    const endedAt = performance.now();
+    const json = old.stop();
+    const current = { json: json.length <= MAX_PROFILE_BYTES ? json : undefined, endedAt };
+    const windows = previous ? [previous, current] : [current];
+    previous = current.json === undefined ? undefined : current;
+    return { windows, endedAt, captureMs: performance.now() - captureStartedAt };
+  };
   try {
     if (!disabled) {
       disabled =
@@ -44,87 +69,27 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
       packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
       active = start();
       startedAt = performance.now();
+      // Inspector interrupts can obtain the bounded native snapshot while ordinary JS is stuck.
+      // Parsing and output stay in the observer; no inspector listener is opened.
+      Object.defineProperty(globalThis, captureSymbol, { configurable: true, value: capture });
+      kernel = createStallKernelRecorder(warn, packageRoot);
     }
   } catch {
     disabled = true;
     warn("stall flight recorder unavailable: profiler-start-failed");
   }
   return {
-    sample(stall?: { startedAt: number; endedAt: number }): string | undefined {
+    sample(stall?: { startedAt: number; endedAt: number; task?: string }): string | undefined {
+      const kernelSummary = kernel?.take(stall) ?? "";
       if (disabled || !active || (!stall && performance.now() - startedAt < WINDOW_MS)) {
         return undefined;
       }
       try {
-        const old = active;
-        // Keep the native code map and sampler alive; restarting the last profile scans the heap.
-        active = start();
-        startedAt = performance.now();
-        // Native endTime precedes serialization; anchoring afterward shifts samples forward.
-        const endedAt = performance.now();
-        const current = { json: old.stop(), endedAt };
-        const windows = previous ? [previous, current] : [current];
-        previous = current.json.length <= MAX_PROFILE_BYTES ? current : undefined;
-        if (!stall) {
+        const snapshot = capture();
+        if (!stall || !snapshot) {
           return undefined;
         }
-        const counts = new Map<string, number>();
-        let samples = 0;
-        let truncated = false;
-        for (const window of windows) {
-          if (window.json.length > MAX_PROFILE_BYTES) {
-            truncated = true;
-            continue;
-          }
-          const profile = parseNativeCpuProfile(window.json);
-          const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
-          const parents = new Map<number, number>();
-          for (const node of profile.nodes) {
-            for (const child of node.children ?? []) {
-              parents.set(child, node.id);
-            }
-          }
-          let at = profile.startTime;
-          const from = profile.endTime + (stall.startedAt - window.endedAt) * 1_000;
-          const to = profile.endTime + (stall.endedAt - window.endedAt) * 1_000;
-          truncated ||= (profile.samples?.length ?? 0) >= MAX_SAMPLES;
-          for (const [index, id] of (profile.samples ?? []).entries()) {
-            at += profile.timeDeltas?.[index] ?? 0;
-            if (at < from || at > to) {
-              continue;
-            }
-            samples++;
-            const seen = new Set<string>();
-            let cursor: number | undefined = id;
-            while (cursor !== undefined) {
-              const node = nodes.get(cursor);
-              if (!node) {
-                break;
-              }
-              const { callFrame: frame } = sanitizeDiagnosticProfileFrame(
-                node.callFrame,
-                packageRoot,
-              );
-              if (
-                frame.url ||
-                frame.functionName === "[native]" ||
-                frame.functionName === "(garbage collector)"
-              ) {
-                const label =
-                  `${frame.functionName || "(anonymous)"}@${frame.url}:${frame.lineNumber + 1}`.slice(
-                    0,
-                    240,
-                  );
-                if (!seen.has(label)) {
-                  seen.add(label);
-                  counts.set(label, (counts.get(label) ?? 0) + 1);
-                }
-              }
-              cursor = parents.get(cursor);
-            }
-          }
-        }
-        const frames = [...counts].toSorted((a, b) => b[1] - a[1]).slice(0, 8);
-        return `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} samples=${samples} intervalMs=${SAMPLE_MS} truncated=${truncated} inclusive=${JSON.stringify(frames)}`;
+        return formatStallProfile(snapshot.windows, stall, packageRoot, kernelSummary);
       } catch {
         stop();
         warn("stall flight recorder unavailable: profiler-capture-failed");

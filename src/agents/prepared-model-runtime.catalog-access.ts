@@ -684,6 +684,7 @@ export async function createFullModelCatalogAccess(
   return {
     accountCatalog,
     initialAuth: currentAuth,
+    readUsage: readCurrentUsage,
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,
     loadAuth: (scope) => loadScopedModelCatalogAuth(authOwner, scope),

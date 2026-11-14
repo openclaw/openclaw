@@ -25,6 +25,7 @@ import {
   createOpenAiCodexOauthHealthSummary,
   createStaticApiKeyProvider,
   healthProfile,
+  oauthCredential,
 } from "./models-auth-status.health.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -133,6 +134,7 @@ import { modelsAuthOrderHandlers } from "./models-auth-order.js";
 import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import { modelsAuthStatusHandlers } from "./models-auth-status.js";
 import { registerModelAuthLogoutTests } from "./models-auth-status.logout.test-support.js";
+import { registerModelAuthSetApiKeyTests } from "./models-auth-status.set-api-key.test-support.js";
 import type { ModelAuthStatusResult } from "./models-auth-status.types.js";
 import { registerModelAuthStatusUsageRefreshTests } from "./models-auth-status.usage-refresh.test-support.js";
 
@@ -164,20 +166,6 @@ const orderHandler = expectDefined(
   modelsAuthOrderHandlers["models.authOrderSet"],
   "auth-order handler",
 );
-
-function oauthCredential(
-  provider: string,
-  overrides: Partial<Extract<AuthProfileStore["profiles"][string], { type: "oauth" }>> = {},
-) {
-  return {
-    type: "oauth" as const,
-    provider,
-    access: "access",
-    refresh: "refresh",
-    expires: 1_000_000,
-    ...overrides,
-  };
-}
 
 function mockHealthProvider(provider: AuthHealthSummary["providers"][number], now = 0) {
   mockHealthProviders([provider], now);
@@ -224,6 +212,7 @@ function createOrderOptions(params: Record<string, unknown>): RespondOptions {
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 let preparedAuthStore: AuthProfileStore = { version: 1, profiles: {} };
 let preparedMetadataSnapshot: unknown;
+const isPreparedOwnerCurrent = () => true;
 
 function setPreparedAuthStore(store: RuntimeAuthProfileStore): void {
   preparedAuthStore = store;
@@ -254,6 +243,7 @@ function createPreparedOwnerSnapshot(agentId: string) {
     authStore: preparedAuthStore,
     authMaterializations: [],
     metadataSnapshot: preparedMetadataSnapshot as never,
+    isCurrent: isPreparedOwnerCurrent,
   };
 }
 
@@ -1101,29 +1091,7 @@ describe("models.authOrderSet", () => {
   });
 });
 
-it("models.authSetApiKey reports both application and refresh warnings after saving", async () => {
-  const config = { agents: { entries: { main: {}, writer: {} } } };
-  const warning = "Provider settings were saved but not applied.";
-  mocks.getRuntimeConfig.mockReturnValue(config);
-  mocks.listAgentIds.mockReturnValue(["main", "writer"]);
-  mocks.saveModelProviderApiKey.mockResolvedValueOnce({ profileId: "openrouter:manual", warning });
-  mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValueOnce(new Error("refresh failed"));
-  const opts = createOptions({ provider: "OpenRouter", apiKey: "test-key", agentId: "Writer" });
-  await setApiKeyHandler(opts);
-  expect(mocks.saveModelProviderApiKey).toHaveBeenCalledWith({
-    config,
-    provider: "openrouter",
-    apiKey: "test-key",
-    agentDir: "/tmp/agent-writer",
-  });
-  expectSuccess(opts, {
-    provider: "openrouter",
-    profileId: "openrouter:manual",
-    warning: expect.any(String),
-  });
-  expect(firstRespondCall(opts)?.[1]?.warning).toContain(warning);
-  expect(firstRespondCall(opts)?.[1]?.warning).toContain("openclaw gateway restart");
-});
+registerModelAuthSetApiKeyTests({ mocks, createOptions, setApiKeyHandler });
 
 registerModelAuthLogoutTests({
   mocks,

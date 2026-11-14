@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -205,7 +205,17 @@ describe("parent Swarm outcome projection", () => {
           : {}),
       }),
     );
-    const summary = buildSessionSwarmSummary(runs, parent, "main");
+    Object.freeze(runs);
+    const copyingSort = vi.spyOn(Array.prototype, "toSorted");
+    let summary: ReturnType<typeof buildSessionSwarmSummary>;
+    let copies: number;
+    try {
+      summary = buildSessionSwarmSummary(runs, parent, "main", { includeChildren: true });
+      copies = copyingSort.mock.calls.length;
+    } finally {
+      copyingSort.mockRestore();
+    }
+    expect(copies).toBe(0);
     expect(summary?.groups.map((group) => group.groupId)).toEqual([
       "group-5",
       "group-4",
@@ -214,6 +224,19 @@ describe("parent Swarm outcome projection", () => {
       "group-7",
     ]);
     expect(summary?.otherActiveGroups).toBe(2);
+    expect(summary?.groups[0]?.children).toEqual([
+      { sessionKey: "agent:main:subagent:5", status: "queued" },
+    ]);
+    expect(runs.map((run) => run.groupId)).toEqual([
+      "group-0",
+      "group-1",
+      "group-2",
+      "group-3",
+      "group-4",
+      "group-5",
+      "group-6",
+      "group-7",
+    ]);
   });
   it("does not infer missing collector ownership from completion routing", () => {
     expect(

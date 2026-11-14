@@ -15,6 +15,7 @@ import {
   ensureModelSelectionRuntimePlugins,
   repairModelSelectionRuntimePlugins,
 } from "./runtime-plugin-install.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -280,16 +281,12 @@ describe("Codex runtime plugin install repair", () => {
           baseUrl: "https://api.githubcopilot.com",
           agentRuntime: { id: "copilot" },
           models: [
-            {
-              id: "gpt-4o",
+            createTestModelDefinition("gpt-4o", {
               name: "GPT-4o",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 128_000,
               maxTokens: 16_384,
               agentRuntime: { id: "pi" },
-            },
+            }),
           ],
         },
       },

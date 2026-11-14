@@ -7,6 +7,8 @@ import type {
   ChatHistoryPageParams,
   ChatHistoryResponsePage,
 } from "../config/sessions/session-history-types.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   buildOversizedHistoryPlaceholder,
@@ -42,8 +44,7 @@ export function enrichChatHistoryCompactionMarkers(
     return messages;
   }
   const checkpointByEntryId = new Map(metrics.map((metric) => [metric.entryId, metric]));
-  let changed = false;
-  const enriched = messages.map((message) => {
+  return mapChatDisplayMessages(messages, (message) => {
     const record = asOptionalRecord(message);
     const metadata = asOptionalRecord(record?.["__openclaw"]);
     if (metadata?.kind !== "compaction" || typeof metadata.id !== "string") {
@@ -58,7 +59,6 @@ export function enrichChatHistoryCompactionMarkers(
     if (tokensBefore === undefined && tokensAfter === undefined) {
       return message;
     }
-    changed = true;
     return {
       ...record,
       __openclaw: {
@@ -68,7 +68,6 @@ export function enrichChatHistoryCompactionMarkers(
       },
     };
   });
-  return changed ? enriched : messages;
 }
 
 function resolveChatHistoryMessageGroup(
@@ -77,26 +76,28 @@ function resolveChatHistoryMessageGroup(
   messageCost: (message: unknown) => number,
   messageSequences?: MessageSequences,
 ): { start: number; end: number; cost: number } {
-  const sequence = (message: unknown) => readPageMessageSequence(message, messageSequences);
-  const seq = sequence(messages[index]);
+  const seq = readPageMessageSequence(messages[index], messageSequences);
   let start = index;
   let end = index + 1;
   let cost = messageCost(messages[index]);
   if (seq === undefined) {
     return { start, end, cost };
   }
-  while (start > 0 && sequence(messages[start - 1]) === seq) {
+  while (start > 0 && readPageMessageSequence(messages[start - 1], messageSequences) === seq) {
     start -= 1;
     cost += messageCost(messages[start]);
   }
-  while (end < messages.length && sequence(messages[end]) === seq) {
+  while (
+    end < messages.length &&
+    readPageMessageSequence(messages[end], messageSequences) === seq
+  ) {
     cost += messageCost(messages[end]);
     end += 1;
   }
   return { start, end, cost };
 }
 
-export function prepareChatHistoryResponsePage(
+function selectChatHistoryResponsePage(
   historyPage: ChatHistoryPage,
   {
     entry: historyEntry,
@@ -110,39 +111,43 @@ export function prepareChatHistoryResponsePage(
   >,
   messageSequences: MessageSequences | undefined = historyPage.pagination?.messageSequences ??
     historyPage.anchor?.messageSequences,
-): ChatHistoryResponsePage {
+  measureJsonBytes = jsonUtf8Bytes,
+) {
   const normalized = enrichChatHistoryCompactionMarkers(
     historyPage.messages,
     historyEntry,
     compactionMetrics,
   );
   const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
-  const byteCounter = createChatHistoryByteCounter(activity);
+  const byteCounter = createChatHistoryByteCounter(activity, measureJsonBytes);
   const framingCost = 1 + byteCounter.framingBytes(normalized);
   const maxCost = responseHistoryBytes - framingCost;
   const messageCost = (message: unknown) => byteCounter.messageBytes(message) + 1;
-  const groups: unknown[] = [];
+  let groups: unknown[] | undefined;
   for (let index = 0; index < normalized.length;) {
     const group = resolveChatHistoryMessageGroup(normalized, index, messageCost, messageSequences);
     // A source row is the fetchable unit; replacing its display siblings keeps
     // numeric offsets lossless without letting one row escape the page budget.
-    groups.push(
-      ...(group.cost > maxCost
-        ? [
-            buildOversizedHistoryPlaceholder(
-              normalized
-                .slice(group.start, group.end)
-                .find((message) => readChatHistoryMessageId(message) === messageId) ??
-                normalized[group.end - 1],
-            ),
-          ]
-        : normalized.slice(group.start, group.end)),
-    );
+    if (group.cost > maxCost) {
+      groups ??= normalized.slice(0, group.start);
+      groups.push(
+        buildOversizedHistoryPlaceholder(
+          normalized
+            .slice(group.start, group.end)
+            .find((message) => readChatHistoryMessageId(message) === messageId) ??
+            normalized[group.end - 1],
+        ),
+      );
+    } else if (groups) {
+      for (let cursor = group.start; cursor < group.end; cursor++) {
+        groups.push(normalized[cursor]);
+      }
+    }
     index = group.end;
   }
   const replaced = replaceOversizedChatHistoryMessages({
     byteCounter,
-    messages: groups,
+    messages: groups ?? normalized,
     maxSingleMessageBytes: Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxCost - 1),
   });
   const messages = replaced.messages;
@@ -209,6 +214,27 @@ export function prepareChatHistoryResponsePage(
           : messageId,
       )
     : capChatHistoryTail();
+  return { normalized, activity, byteCounter, messages, capped, responseHistoryBytes };
+}
+
+/** Scanning consumes the selection decision without composing a discarded wire response. */
+export function isChatHistoryResponsePageByteLimited(
+  ...args: Parameters<typeof selectChatHistoryResponsePage>
+): boolean {
+  const { normalized, messages, capped } = selectChatHistoryResponsePage(...args);
+  if (capped.length >= messages.length) {
+    return false;
+  }
+  const survivors = new Set(capped);
+  return normalized.some((message) => !survivors.has(message));
+}
+
+export function prepareChatHistoryResponsePage(
+  ...args: Parameters<typeof selectChatHistoryResponsePage>
+): ChatHistoryResponsePage {
+  const [historyPage] = args;
+  const { normalized, activity, byteCounter, messages, capped, responseHistoryBytes } =
+    selectChatHistoryResponsePage(...args);
   const pagination = historyPage.pagination;
   let candidateNextOffset: number | undefined;
   if (pagination !== undefined) {
@@ -225,9 +251,13 @@ export function prepareChatHistoryResponsePage(
         ? pagination.offset + pagination.rawPageMessages
         : Math.max(pagination.offset + 1, pagination.totalMessages - oldestSeq + 1);
   }
+  const cursors = resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized);
+  // Numeric pages may have no encodable IDs. Honor reader exhaustion unless
+  // response budgeting dropped older source rows from this page.
   const hasMore =
     pagination !== undefined && candidateNextOffset !== undefined
-      ? candidateNextOffset < pagination.totalMessages
+      ? candidateNextOffset < pagination.totalMessages &&
+        (!historyPage.anchor || historyPage.anchor.hasOlder || capped.length < messages.length)
       : undefined;
   const survivors = new Set(capped);
   const omittedCount = normalized.reduce<number>(
@@ -245,12 +275,12 @@ export function prepareChatHistoryResponsePage(
           omission: {
             omittedCount,
             normalizedBytes: byteCounter.messagesBytes(normalized),
-            ...(capped.length < replaced.messages.length ? { byteLimited: true as const } : {}),
+            ...(capped.length < messages.length ? { byteLimited: true as const } : {}),
           },
         }
       : {}),
     responseHistoryBytes,
-    ...resolveChatHistoryPageCursors(historyPage.anchor, capped, normalized),
+    ...cursors,
     ...(hasMore ? { nextOffset: candidateNextOffset } : {}),
     ...(hasMore !== undefined ? { hasMore } : {}),
     ...(pagination !== undefined ? { totalMessages: pagination.totalMessages } : {}),
@@ -264,8 +294,43 @@ export function encodeChatHistoryResponsePage(
   if (!params.encodeResponse) {
     return page;
   }
-  const response = prepareChatHistoryResponsePage(page, params);
-  const messages = new TextEncoder().encode(JSON.stringify(response.messages));
+  // Budgeting and transport consume the same synchronous plain-data projection.
+  // Keep its JSON only until this response is encoded, never across requests.
+  const serialized = new Map<unknown, string | undefined>();
+  const serialize = (value: unknown) => {
+    if (!serialized.has(value)) {
+      serialized.set(value, JSON.stringify(value));
+    }
+    return serialized.get(value);
+  };
+  const response = prepareChatHistoryResponsePage(page, params, undefined, (value) => {
+    try {
+      return Buffer.byteLength(serialize(value) ?? String(value), "utf8");
+    } catch {
+      return Buffer.byteLength(String(value), "utf8");
+    }
+  });
+  const encoder = new TextEncoder();
+  const encodeArray = (values: unknown[]) => {
+    const parts = values.map((value) => serialize(value) ?? "null");
+    const bytes = new Uint8Array(
+      2 +
+        Math.max(0, parts.length - 1) +
+        parts.reduce((size, part) => size + Buffer.byteLength(part), 0),
+    );
+    bytes[0] = 0x5b;
+    let offset = 1;
+    for (const [index, part] of parts.entries()) {
+      if (index > 0) {
+        bytes[offset++] = 0x2c;
+      }
+      offset += encoder.encodeInto(part, bytes.subarray(offset)).written;
+    }
+    bytes[offset] = 0x5d;
+    return bytes;
+  };
+  const messages = encodeArray(response.messages);
+  const activity = response.activity ? encodeArray(response.activity) : undefined;
   return {
     ...page,
     messages: [],
@@ -283,6 +348,7 @@ export function encodeChatHistoryResponsePage(
     encodedResponse: {
       ...response,
       messages,
+      activity,
     },
   };
 }

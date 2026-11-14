@@ -332,7 +332,9 @@ it.each([
     }
     expect(note?.textContent?.includes("Images too large to preview here") ?? false).toBe(omitted);
     if (error) {
-      expect(note?.querySelector('[role="status"]')?.textContent).toBe("Couldn't load images");
+      expect(note?.querySelector('[role="status"]')?.textContent).toBe(
+        "Couldn’t load images. Try again.",
+      );
       expect(note?.querySelector("button")?.textContent?.trim()).toBe("Retry");
     }
     const action = olderAction(row);
@@ -347,7 +349,9 @@ it.each([
     if (revalidate) {
       const nodes = [...media!.querySelectorAll("*")];
       const markup = media!.innerHTML;
-      expect(media!.textContent).toContain(error ? "Couldn't load images" : "Older images");
+      expect(media!.textContent).toContain(
+        error ? "Couldn’t load images. Try again." : "Older images",
+      );
       const settledCalls = request.mock.calls.length;
       request.mockReturnValueOnce(refresh.promise);
       update({ revision: 1 });

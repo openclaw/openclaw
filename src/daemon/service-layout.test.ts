@@ -3,12 +3,63 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gatewayServiceCommandUsesRoot } from "../cli/update-cli/update-command-service-plan.js";
-import { summarizeGatewayServiceLayout } from "./service-layout.js";
+import {
+  resolveManagedServiceStartupRuntime,
+  summarizeGatewayServiceLayout,
+} from "./service-layout.js";
+import type { GatewayServiceState } from "./service-types.js";
+import { standaloneManifestFixture } from "./standalone-manifest.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each([
+  ["/runtime/bun", true],
+  ["/runtime/node", true],
+  ["C:\\runtime\\bun.exe", true],
+  ["C:\\runtime\\node.exe", true],
+  ["bun", false],
+  ["./node", false],
+  ["/runtime/openclaw", false],
+  [undefined, false],
+] as const)("selects only the observed external startup runtime: %s", (executable, selected) => {
+  const state: GatewayServiceState = {
+    installed: true,
+    loadState: { status: "loaded" },
+    running: true,
+    env: {},
+    command: { programArguments: ["/different/node", "gateway"] },
+    effectiveExecutable: executable,
+  };
+  expect(resolveManagedServiceStartupRuntime(state)).toBe(selected ? executable : undefined);
+});
+
 describe("summarizeGatewayServiceLayout", () => {
+  it("identifies the standalone executable as the entrypoint even when it is named bun", async () => {
+    const root = dirs.make("standalone-service-layout-");
+    const executable = path.join(root, "bun");
+    await fs.writeFile(executable, "");
+    await fs.writeFile(
+      path.join(root, "manifest.json"),
+      JSON.stringify(standaloneManifestFixture("aot", "bun", "2026.10.25", "1.4.4")),
+    );
+    expect(
+      resolveManagedServiceStartupRuntime({
+        installed: true,
+        loadState: { status: "loaded" },
+        running: true,
+        env: {},
+        command: { programArguments: [executable, "gateway"] },
+        effectiveExecutable: executable,
+      }),
+    ).toBeUndefined();
+    await expect(
+      summarizeGatewayServiceLayout({
+        programArguments: [executable, "gateway", "--port", "19876"],
+      }),
+    ).resolves.toHaveProperty("entrypoint", executable);
+  });
+
   it("preserves optional physical fields and lexical source paths on probe failure", async () => {
     vi.spyOn(fs, "realpath").mockRejectedValue(
       Object.assign(new Error("denied"), { code: "EACCES" }),

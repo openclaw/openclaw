@@ -43,3 +43,30 @@ it("projects startup and decision catalog tiers per recipient without rewriting 
   expect(model.effectiveFastMode).toBe("ultrafast");
   expect(model.runtimeChoices?.[0]?.effectiveFastMode).toBe("ultrafast");
 });
+
+it("retains catalog rows and runtime choices that need no legacy speed conversion", () => {
+  const legacy: GatewayClient = { connect: gatewayConnect(["operator.read"]) };
+  const unchanged: ModelChoice = {
+    id: "ordinary",
+    provider: "fixture",
+    name: "Ordinary",
+    effectiveFastMode: "auto",
+    runtimeChoices: [
+      { agentRuntime: { id: "openclaw", source: "model" }, effectiveFastMode: true },
+    ],
+  };
+  const changed: ModelChoice = { ...unchanged, id: "fast", effectiveFastMode: "ultrafast" };
+  const catalog = { models: [unchanged, changed], decisionModels: [unchanged] };
+  const before = JSON.stringify(catalog);
+  const projected = projectModelFastModeCatalog(catalog, legacy);
+  expect(JSON.stringify(projected)).toBe(
+    JSON.stringify({
+      models: [unchanged, { ...changed, effectiveFastMode: true }],
+      decisionModels: [unchanged],
+    }),
+  );
+  expect(projected.models[0]).toBe(unchanged);
+  expect(projected.models[1]?.runtimeChoices).toBe(unchanged.runtimeChoices);
+  expect(projected.decisionModels[0]).toBe(unchanged);
+  expect(JSON.stringify(catalog)).toBe(before);
+});

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -14,12 +15,7 @@ function createOwnedInstance(id = "swap") {
 }
 
 function refusal(run: () => unknown): unknown {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected the call to be refused");
+  return captureThrown(run, "expected the call to be refused");
 }
 
 describe("plugin calls during a replacement", () => {

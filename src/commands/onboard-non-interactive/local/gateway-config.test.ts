@@ -5,24 +5,10 @@ import type { OnboardOptions } from "../../onboard-types.js";
 import { applyNonInteractiveGatewayConfig } from "./gateway-config.js";
 
 const randomToken = vi.hoisted(() => vi.fn(() => "generated-random-token"));
-vi.mock("../../onboard-helpers.js", () => ({
-  normalizeGatewayTokenInput: (value: unknown): string => {
-    if (typeof value !== "string") {
-      return "";
-    }
-    const trimmed = value.trim();
-    if (trimmed === "undefined" || trimmed === "null") {
-      return "";
-    }
-    return trimmed;
-  },
-  randomToken,
-}));
+// mock-isolation: Keep generated credentials deterministic while exercising the real normalizer.
+vi.mock("../../random-token.js", () => ({ randomToken }));
 
-let runtime: ReturnType<typeof createRuntime>;
-function createRuntime() {
-  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-}
+const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
 const SAMPLE_SECRET_REF = {
   source: "env" as const,
@@ -55,33 +41,33 @@ function applyGatewayConfig({
 }
 
 describe("applyNonInteractiveGatewayConfig auth resolution", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    runtime = createRuntime();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
+  const ambientToken = { OPENCLAW_GATEWAY_TOKEN: "ambient" };
   it.each([
-    ["existing-user-token", undefined, { OPENCLAW_GATEWAY_TOKEN: "stale-env-token" }],
-    ["existing-user-token", "flag-token", {}],
-    [SAMPLE_SECRET_REF, undefined, { OPENCLAW_GATEWAY_TOKEN: "stale-env-token" }],
-    [SAMPLE_SECRET_REF, undefined, { [SAMPLE_SECRET_REF.id]: "resolved-secret-value" }],
-    [SAMPLE_SECRET_REF, "flag-token", {}],
+    ["saved", undefined, ambientToken, "saved"],
+    ["saved", "flag-token", {}, "flag-token"],
+    [SAMPLE_SECRET_REF, undefined, ambientToken, SAMPLE_SECRET_REF],
+    [SAMPLE_SECRET_REF, undefined, { [SAMPLE_SECRET_REF.id]: "resolved" }, SAMPLE_SECRET_REF],
+    [SAMPLE_SECRET_REF, "flag-token", {}, "flag-token"],
+    [undefined, undefined, { OPENCLAW_GATEWAY_TOKEN: "env-token" }, "env-token"],
+    [undefined, undefined, {}, "generated-random-token"],
   ] as const)(
     "preserves token precedence and reference ownership (%#)",
-    async (token, gatewayToken, env) => {
+    async (token, gatewayToken, env, expected) => {
       const result = await applyGatewayConfig({
         auth: { mode: "token", token },
         opts: { gatewayToken },
         env,
       });
-      expect(result?.nextConfig.gateway?.auth?.token).toEqual(gatewayToken ?? token);
-      expect(randomToken).not.toHaveBeenCalled();
+      expect(result?.nextConfig.gateway?.auth?.token).toEqual(expected);
+      expect(randomToken).toHaveBeenCalledTimes(expected === "generated-random-token" ? 1 : 0);
     },
   );
 
   it("selects token auth when --gateway-token overrides a no-auth config", async () => {
     const result = await applyGatewayConfig({
-      nextConfig: { gateway: { auth: { mode: "none" } } },
+      auth: { mode: "none" },
       opts: { gatewayToken: "flag-token" } as OnboardOptions,
     });
 
@@ -114,26 +100,16 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     });
   });
 
-  it.each([
-    {
-      name: "an existing plaintext password",
-      password: "existing-password",
+  it.each(["existing-password", { ...SAMPLE_SECRET_REF, id: "EXISTING_GATEWAY_PASSWORD" }])(
+    "preserves existing password %j in reference mode without an explicit replacement",
+    async (password) => {
+      const result = await applyGatewayConfig({
+        auth: { mode: "password", password },
+        opts: { secretInputMode: "ref" },
+      });
+      expect(result?.nextConfig.gateway?.auth?.password).toEqual(password);
     },
-    {
-      name: "an existing password SecretRef",
-      password: {
-        source: "env" as const,
-        provider: "default",
-        id: "EXISTING_GATEWAY_PASSWORD",
-      },
-    },
-  ])("preserves $name in reference mode without an explicit replacement", async ({ password }) => {
-    const result = await applyGatewayConfig({
-      auth: { mode: "password", password },
-      opts: { secretInputMode: "ref" },
-    });
-    expect(result?.nextConfig.gateway?.auth?.password).toEqual(password);
-  });
+  );
 
   it.each([
     { name: "an explicit auth mode", opts: { gatewayAuth: "token" as const } },
@@ -191,20 +167,6 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     },
   );
 
-  it("uses OPENCLAW_GATEWAY_TOKEN to fill an empty config on first-run", async () => {
-    const result = await applyGatewayConfig({ env: { OPENCLAW_GATEWAY_TOKEN: "env-token" } });
-
-    expect(result?.nextConfig.gateway?.auth?.token).toBe("env-token");
-    expect(randomToken).not.toHaveBeenCalled();
-  });
-
-  it("generates a random token only when flag, env, and existing config are all empty", async () => {
-    const result = await applyGatewayConfig();
-
-    expect(randomToken).toHaveBeenCalledOnce();
-    expect(result?.nextConfig.gateway?.auth?.token).toBe("generated-random-token");
-  });
-
   it("establishes token auth when explicitly enabling Tailscale Serve from no-auth", async () => {
     const result = await applyGatewayConfig({
       auth: { mode: "none" },
@@ -236,35 +198,6 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("fails when --gateway-token-ref-env points to a missing env var", async () => {
-    const message =
-      'Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing or empty. Export it first, then rerun openclaw onboard --non-interactive.';
-    const result = await applyGatewayConfig({
-      opts: { gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV", json: true } as OnboardOptions,
-    });
-    expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
-    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
-      JSON.stringify(
-        { ok: false, error: { type: "cli_error", message }, phase: "options", message },
-        null,
-        2,
-      ),
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(randomToken).not.toHaveBeenCalled();
-  });
-
-  it("rejects an explicitly empty password instead of preserving the existing password", async () => {
-    const result = await applyGatewayConfig({
-      auth: { mode: "password", password: "test-password" },
-      opts: { gatewayPassword: " " } as OnboardOptions,
-    });
-    expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--gateway-password"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
-
   it("preserves environment-backed password auth without persisting the password", async () => {
     const result = await applyGatewayConfig({
       auth: { mode: "password" },
@@ -274,18 +207,39 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
   });
 
   it.each([
-    { customBindHost: undefined, message: "--gateway-bind custom requires gateway.customBindHost" },
-    { customBindHost: "not-an-ip", message: "Invalid IPv4 address" },
-  ])("rejects invalid custom bind host $customBindHost", async ({ customBindHost, message }) => {
-    const result = await applyGatewayConfig({
-      gateway: { customBindHost },
-      opts: { gatewayBind: "custom" },
-    });
-
-    expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(message));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
+    [
+      { opts: { gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" } },
+      'Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing or empty.',
+    ],
+    [
+      { auth: { mode: "password", password: "test-password" }, opts: { gatewayPassword: " " } },
+      "Missing --gateway-password",
+    ],
+    [{ opts: { gatewayBind: "custom" } }, "--gateway-bind custom requires gateway.customBindHost"],
+    [
+      { gateway: { customBindHost: "not-an-ip" }, opts: { gatewayBind: "custom" } },
+      "Invalid IPv4 address",
+    ],
+  ] satisfies Array<[Parameters<typeof applyGatewayConfig>[0], string]>)(
+    "rejects invalid gateway options %#",
+    async (input, message) => {
+      expect(
+        await applyGatewayConfig({ ...input, opts: { ...input?.opts, json: true } }),
+      ).toBeNull();
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(message));
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      const logged = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+      const error = String(runtime.error.mock.calls[0]?.[0]);
+      expect(runtime.log).toHaveBeenCalledOnce();
+      expect(logged).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: error },
+        phase: "options",
+        message: error,
+      });
+      expect(randomToken).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { gateway: { customBindHost: "192.168.1.100" }, tailscale: undefined, bind: "custom" },

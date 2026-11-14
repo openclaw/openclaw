@@ -1,0 +1,2 @@
+# SVG metadata recognition and desktop/mobile reader lifecycle regression.
+76

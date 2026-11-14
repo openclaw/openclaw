@@ -34,6 +34,10 @@ type CodeModeWorkerResult = CodeModeVmResult<Snapshot>;
 type CodeModeWorkerThreadResult = SharedWorkerThreadResult<Snapshot>;
 type CodeModeFailure = Extract<CodeModeWorkerResult, { status: "failed" }>;
 
+// This worker and its pinned WASM build share one trusted controller program.
+// Cache bytecode only: every fresh cell still initializes an independent guest heap.
+let controllerBytecode: Uint8Array | undefined;
+
 class CodeModeWorkerFailure extends Error {
   constructor(
     readonly code: CodeModeFailure["code"],
@@ -331,10 +335,15 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState) {
         ["__openclawApiFiles", input.apiFiles ?? []],
         ["__openclawSwarmEnabled", input.swarmEnabled === true],
         ["__openclawMaxPendingToolCalls", input.config.maxPendingToolCalls],
+        ["__openclawMaxOutputBytes", input.config.maxOutputBytes],
       ] as const) {
         vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));
       }
-      vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
+      controllerBytecode ??= vm.compile(
+        CODE_MODE_CONTROLLER_SOURCE,
+        "openclaw-code-mode:controller.js",
+      );
+      vm.evalBytecode(controllerBytecode).dispose();
     }
     return {
       vm,
@@ -434,26 +443,29 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
     return settled.error.consume((error) => {
-      // vm.dump rebuilds a host Error carrying the QuickJS name/message/stack;
-      // format it like the synchronous path so async rejections keep their cause
-      // and location instead of collapsing to the bare message.
-      const dumped = vm.dump(error);
-      const bridgeCode = vm.global.getProp("__openclawBridgeFailureCode").consume((read) =>
-        vm
-          .callFunction(read, vm.undefined, error)
-          .consume((value): "invalid_input" | "internal_error" | undefined => {
-            const code: unknown = vm.dump(value);
-            return code === "invalid_input" || code === "internal_error" ? code : undefined;
-          }),
-      );
+      const isError = error.isError;
+      const json = vm.global
+        .getProp("__openclawEncodeError")
+        .consume((encode) =>
+          vm.callFunction(encode, vm.undefined, error).consume((value) => value.toString()),
+        );
+      // Never serialize the rejection object here; the controller owns conversion.
+      // SAFETY: The immutable encoder returns bounded strings and a recorded bridge code.
+      const diagnostic = JSON.parse(json) as {
+        name: string;
+        message: string;
+        stack: string;
+        bridgeCode: "invalid_input" | "internal_error" | null;
+      };
+      const { bridgeCode } = diagnostic;
       // Node module globals are deliberately absent from the WASI guest. Keep
       // aliases fail-closed at that runtime boundary rather than guessing source
       // provenance or installing a host-backed loader.
       if (
-        bridgeCode === undefined &&
-        dumped instanceof Error &&
-        dumped.name === "ReferenceError" &&
-        /^(?:require|module|process) is not defined$/u.test(dumped.message)
+        bridgeCode === null &&
+        isError &&
+        diagnostic.name === "ReferenceError" &&
+        /^(?:require|module|process) is not defined$/u.test(diagnostic.message)
       ) {
         throw new CodeModeWorkerFailure(
           "invalid_input",
@@ -461,14 +473,16 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
           "input",
         );
       }
-      const text =
-        dumped instanceof Error
-          ? formatQuickJsError(dumped.name, dumped.message, dumped.stack, readSourceLocation(vm))
-          : errorMessage(dumped);
+      const text = formatQuickJsError(
+        diagnostic.name,
+        diagnostic.message,
+        diagnostic.stack,
+        readSourceLocation(vm),
+      );
       throw new CodeModeWorkerFailure(
         bridgeCode ?? "internal_error",
         text,
-        bridgeCode === undefined ? "guest" : "bridge",
+        bridgeCode === null ? "guest" : "bridge",
       );
     });
   }

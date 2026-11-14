@@ -247,7 +247,7 @@ it.each<ActivationCase>([
   ],
   [
     "authored entry settings",
-    { ...enabledEntry, hooks: { allowPromptInjection: false } },
+    { ...enabledEntry, hooks: { allowPromptModification: false } },
     bothProviders,
     false,
   ],

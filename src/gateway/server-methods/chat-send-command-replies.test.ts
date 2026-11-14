@@ -54,15 +54,28 @@ it("keeps consumed reply policy when raw duplicate replies are folded", () => {
   ]);
 });
 it.each(["raw", "prepared"] as const)(
-  "keeps a sensitive prepared final from exposing matching %s block media",
+  "keeps distinct writers and sensitive media when a prepared final matches a %s block",
   (blockKind) => {
-    const blockPayload = setReplyPayloadMetadata(
-      { text: "preview", mediaUrl: "/tmp/paired.png" },
-      { assistantMessageIndex: 1 },
-    );
+    const writerPayload = (expectedWriterRunId: string, sensitiveMedia?: true) =>
+      setReplyPayloadMetadata(
+        {
+          text: "done",
+          mediaUrl: "/tmp/paired.png",
+          ...(sensitiveMedia ? { sensitiveMedia } : {}),
+        },
+        {
+          assistantMessageIndex: 1,
+          sessionWriterDeliveryAuthority: {
+            sessionKey: "agent:main:main",
+            expectedSessionId: "session-1",
+            expectedWriterRunId,
+          },
+        },
+      );
+    const blockPayload = writerPayload("first-writer");
     const [blockPlan, finalPlan] = createStructuredOutboundPayloadPlan([
       blockPayload,
-      { text: "private", mediaUrl: "/tmp/paired.png", sensitiveMedia: true },
+      writerPayload("second-writer", true),
     ]);
     assert(blockPlan && finalPlan, "expected both media plans");
     const blockInput: ReplyDispatchOperation =
@@ -70,41 +83,18 @@ it.each(["raw", "prepared"] as const)(
     const inputs = selectReplies(blockInput, { kind: "prepared", plan: finalPlan });
 
     expect(inputs.map((input) => readPayload(input).sensitiveMedia)).toEqual([true, true]);
+    expect(inputs.map((input) => input.kind)).toEqual([blockKind, "prepared"]);
+    expect(
+      inputs.map(
+        (input) =>
+          getReplyPayloadMetadata(readPayload(input))?.sessionWriterDeliveryAuthority
+            ?.expectedWriterRunId,
+      ),
+    ).toEqual(["first-writer", "second-writer"]);
     expect(getReplyPayloadMetadata(readPayload(inputs[0]!))?.assistantMessageIndex).toBe(1);
     expect(blockPayload).not.toHaveProperty("sensitiveMedia");
   },
 );
-
-it("keeps prepared replies from distinct writers separate when visible content matches", () => {
-  const plans = createStructuredOutboundPayloadPlan(
-    ["first-writer", "second-writer"].map((expectedWriterRunId) =>
-      setReplyPayloadMetadata(
-        { text: "done" },
-        {
-          sessionWriterDeliveryAuthority: {
-            sessionKey: "agent:main:main",
-            expectedSessionId: "session-1",
-            expectedWriterRunId,
-          },
-        },
-      ),
-    ),
-  );
-  assert(plans[0] && plans[1]);
-  const inputs = selectReplies(
-    { kind: "prepared", plan: plans[0] },
-    { kind: "prepared", plan: plans[1] },
-  );
-
-  expect(inputs.map((input) => input.kind === "prepared" && input.plan)).toEqual(plans);
-  expect(
-    inputs.map(
-      (input) =>
-        getReplyPayloadMetadata(readPayload(input))?.sessionWriterDeliveryAuthority
-          ?.expectedWriterRunId,
-    ),
-  ).toEqual(["first-writer", "second-writer"]);
-});
 
 it("keeps final replies and suppresses already-persisted media replies", () => {
   const block = raw({ text: "progress" });
@@ -151,24 +141,20 @@ it.each([true, false])("merges attachment metadata (matching captions: %s)", (ma
     ...trust,
     ...semantics,
   };
-  const remainingFinal = {
-    text: "done",
-    mediaUrl: undefined,
-    mediaUrls: undefined,
-    audioAsVoice: true,
-    attachments: [attachment],
-  };
+  const remainingFinal = { ...readPayload(final), mediaUrl: undefined, mediaUrls: undefined };
   expect(replies).toEqual(matching ? [merged] : [merged, remainingFinal]);
   expect([block, final]).toEqual(originalReplies);
 });
 type TranscriptCase = [name: string, payloads: ReplyPayload[], expected: string, project?: boolean];
 it.each<TranscriptCase>([
-  ...["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"].map((text): TranscriptCase => [
-    `literal ${text}`,
-    [{ text: "First instruction" }, { text }, { text: "Done" }],
-    `First instruction\n\n${text}\n\nDone`,
+  [
+    "literal control words",
+    ["First instruction", "NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP", "Done"].map((text) => ({
+      text,
+    })),
+    "First instruction\n\nNO_REPLY\n\nANNOUNCE_SKIP\n\nREPLY_SKIP\n\nDone",
     true,
-  ]),
+  ],
   [
     "CRLF boundaries and whitespace-only chunks",
     [{ text: "```yaml\r\nroot:\r\n" }, { text: "  \t\n" }, { text: "  nested: true\r\n```" }],

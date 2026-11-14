@@ -73,73 +73,69 @@ export class BrowserPanelViewportOwner {
     }
     this.timer ??= setTimeout(() => {
       this.timer = undefined;
-      this.syncViewport();
+      const targetId = this.controller.activeTargetId;
+      const observed = this.observedViewportSize;
+      const view = this.controller.view;
+      if (
+        !this.controller.canAutoResizeViewport ||
+        this.controller.native.activeTab ||
+        !this.controller.host.browserPanelIsOpen() ||
+        !this.controller.operations.captureClient() ||
+        !targetId ||
+        !observed ||
+        view?.targetId !== targetId ||
+        this.resizing
+      ) {
+        return;
+      }
+      const width = Math.min(
+        MAX_VIEWPORT_DIMENSION,
+        Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.width)),
+      );
+      const height = Math.min(
+        MAX_VIEWPORT_DIMENSION,
+        Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.height)),
+      );
+      const remoteWidth = view.metrics?.cssWidth;
+      const remoteHeight = view.metrics?.cssHeight;
+      if (
+        remoteWidth !== undefined &&
+        remoteHeight !== undefined &&
+        Math.abs(remoteWidth - width) <= 1 &&
+        Math.abs(remoteHeight - height) <= 1
+      ) {
+        this.lastResize = null;
+        return;
+      }
+      const previous = this.lastResize;
+      // Suppress an unchanged refusal, not a later resize by another browser user.
+      if (
+        previous?.targetId === targetId &&
+        !previous.acknowledged &&
+        previous.width === width &&
+        previous.height === height &&
+        previous.remoteWidth === remoteWidth &&
+        previous.remoteHeight === remoteHeight
+      ) {
+        return;
+      }
+      const request = {
+        targetId,
+        width,
+        height,
+        remoteWidth,
+        remoteHeight,
+        acknowledged: false,
+      };
+      this.lastResize = request;
+      // Invalidation retires observations, but an issued resize still has to settle.
+      this.resizing = true;
+      void this.controller
+        .runAction((client) => resizeBrowserViewport(client, request))
+        .finally(() => {
+          this.resizing = false;
+          this.schedule();
+        });
     }, VIEWPORT_RESIZE_DELAY_MS);
-  }
-
-  private syncViewport(): void {
-    const targetId = this.controller.activeTargetId;
-    const observed = this.observedViewportSize;
-    const view = this.controller.view;
-    if (
-      !this.controller.canAutoResizeViewport ||
-      this.controller.native.activeTab ||
-      !this.controller.host.browserPanelIsOpen() ||
-      !this.controller.operations.captureClient() ||
-      !targetId ||
-      !observed ||
-      view?.targetId !== targetId ||
-      this.resizing
-    ) {
-      return;
-    }
-    const width = Math.min(
-      MAX_VIEWPORT_DIMENSION,
-      Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.width)),
-    );
-    const height = Math.min(
-      MAX_VIEWPORT_DIMENSION,
-      Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.height)),
-    );
-    const remoteWidth = view.metrics?.cssWidth;
-    const remoteHeight = view.metrics?.cssHeight;
-    if (
-      remoteWidth !== undefined &&
-      remoteHeight !== undefined &&
-      Math.abs(remoteWidth - width) <= 1 &&
-      Math.abs(remoteHeight - height) <= 1
-    ) {
-      this.lastResize = null;
-      return;
-    }
-    const previous = this.lastResize;
-    // Suppress an unchanged refusal, not a later resize by another browser user.
-    if (
-      previous?.targetId === targetId &&
-      !previous.acknowledged &&
-      previous.width === width &&
-      previous.height === height &&
-      previous.remoteWidth === remoteWidth &&
-      previous.remoteHeight === remoteHeight
-    ) {
-      return;
-    }
-    const request = {
-      targetId,
-      width,
-      height,
-      remoteWidth,
-      remoteHeight,
-      acknowledged: false,
-    };
-    this.lastResize = request;
-    // Invalidation retires observations, but an issued resize still has to settle.
-    this.resizing = true;
-    void this.controller
-      .runAction((client) => resizeBrowserViewport(client, request))
-      .finally(() => {
-        this.resizing = false;
-        this.schedule();
-      });
   }
 }

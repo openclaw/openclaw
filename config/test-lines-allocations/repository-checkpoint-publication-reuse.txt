@@ -1,0 +1,2 @@
+# Reused accepted checkpoint publishes queued refs and companions atomically under live final-input authority.
+50

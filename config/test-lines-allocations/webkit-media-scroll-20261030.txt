@@ -1,0 +1,2 @@
+# Native resize delivery must not commit transcript geometry before the next frame.
+63

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingHttpHeaders } from "node:http";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type ClientOptions,
   WebSocket,
@@ -9,6 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
+import { isTerminalResponse } from "./inference-dispatch.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
@@ -179,6 +181,79 @@ async function fixture(
   };
   return { proxy, controller, registration, body };
 }
+
+const providerDnsCases = [
+  { address: "198.18.0.42", family: 4, allowed: true },
+  { address: "fc00::42", family: 6, allowed: true },
+  { address: "127.0.0.1", family: 4, allowed: false },
+  { address: "10.0.0.5", family: 4, allowed: false },
+  { address: "169.254.169.254", family: 4, allowed: false },
+  { address: "fd00:ec2::254", family: 6, allowed: false },
+] as const;
+
+it.each(providerDnsCases)(
+  "routes HTTP provider DNS $address with allowed=$allowed",
+  async ({ address, family, allowed }) => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      await new Response(init?.body).arrayBuffer();
+      return new Response("synthetic provider response");
+    });
+    const lookupFn = async () => [{ address, family }];
+    transport.fetch.mockImplementation(
+      async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+        const guarded = await actual.fetchWithSsrFGuard({
+          ...params,
+          lookupFn,
+          dispatcherPolicy: { mode: "direct" },
+          fetchImpl,
+        });
+        await expect(
+          actual.resolvePinnedHostnameWithPolicy("other.example.com", {
+            lookupFn,
+            policy: params.policy,
+          }),
+        ).rejects.toThrow("Blocked hostname (not in allowlist)");
+        return guarded;
+      },
+    );
+    const { proxy, body } = await fixture();
+    const result = await post(proxy.baseUrl + "/responses", body);
+    expect(result.status).toBe(allowed ? 200 : 502);
+    expect(await result.text()).toBe(
+      allowed
+        ? "synthetic provider response"
+        : "Codex parent-local inference transport failed; retry on a fresh connection.",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  },
+);
+
+it("reports bounded stage and cause without exposing private upstream errors", async () => {
+  const debug = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  try {
+    const { proxy, body } = await fixture();
+    transport.fetch.mockRejectedValue(
+      new Error(`Bearer synthetic-secret at ${proxy.baseUrl}`, { cause: { code: "ECONNRESET" } }),
+    );
+    const result = await post(proxy.baseUrl + "/responses", body);
+    expect(result.status).toBe(502);
+    expect(await result.text()).toBe(
+      "Codex parent-local inference transport failed; retry on a fresh connection.",
+    );
+    expect(debug).toHaveBeenCalledWith("codex inference HTTP relay failed", {
+      stage: "upstream",
+      reason: "ECONNRESET",
+      responseStarted: false,
+    });
+    expect(JSON.stringify(debug.mock.calls)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(proxy.baseUrl);
+  } finally {
+    debug.mockRestore();
+  }
+});
 
 it.each(["HTTP", "WebSocket"] as const)(
   "admits a fresh %s assignment after its listener's startup binding lease closes",
@@ -411,6 +486,35 @@ describe("private inference HTTP relay", () => {
 });
 
 describe("private inference WebSocket relay", () => {
+  it("does not decode ordinary deltas while preserving terminal JSON semantics", () => {
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      for (const type of ["response.output_text.delta", "response.function_call_arguments.delta"]) {
+        expect(isTerminalResponse(Buffer.from(JSON.stringify({ type, delta: "synthetic" })))).toBe(
+          false,
+        );
+      }
+      expect(parse).not.toHaveBeenCalled();
+      for (const [wire, terminal] of [
+        ['{"type":"response.completed","response":{"id":"synthetic"}}', true],
+        ['{"type":"response.failed"}', true],
+        ['{"type":"response.incomplete"}', true],
+        ['{"type":"response.completed"}', false],
+        ['{"type":"response.completed","response":{"id":1}}', false],
+        ['{"type":"response.failed"', false],
+        ['{"type":"response.failed","type":"response.output_text.delta"}', false],
+        ['{"nested":{"type":"response.failed"}}', false],
+        ['{"type":"delta","delta":"response.failed"}', false],
+        ['{"ty\\u0070e":"response.fa\\u0069led"}', true],
+        ['{"type":"response.completed","response":{"id":"\\u0061"}}', true],
+      ] as const) {
+        expect(isTerminalResponse(Buffer.from(wire)), wire).toBe(terminal);
+      }
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("rejects WebSocket OAuth without resolving a bearer or dialing upstream", async () => {
     const resolve = vi.fn();
     const { proxy } = await fixture(true, undefined, { resolve });
@@ -421,28 +525,55 @@ describe("private inference WebSocket relay", () => {
     expect(transport.resolve).not.toHaveBeenCalled();
     expect(transport.dials).toEqual([]);
   });
-  it("rejects private destination DNS on a direct WebSocket route", async () => {
-    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
-      "openclaw/plugin-sdk/ssrf-runtime",
-    );
-    transport.resolve.mockImplementation((hostname: string, options: { signal?: AbortSignal }) =>
-      actual.resolvePinnedHostnameWithPolicy(hostname, {
-        ...options,
-        lookupFn: async () => [{ address: "127.0.0.1", family: 4 }],
-      }),
-    );
-    const { proxy } = await fixture();
-    const socket = connect(proxy);
-    socket.on("error", () => {});
-    const { response, text } = await rejectedResponse(socket);
-    expect(response.statusCode).toBe(502);
-    expect(text).toBe(
-      "Codex parent-local inference transport failed; retry on a fresh connection.",
-    );
-    expect(transport.resolve).toHaveBeenCalledOnce();
-    expect(transport.proxyAgent).toHaveBeenCalledOnce();
-    expect(transport.dials).toEqual([]);
-  });
+  it.each(providerDnsCases)(
+    "routes direct WebSocket provider DNS $address with allowed=$allowed",
+    async ({ address, family, allowed }) => {
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+        "openclaw/plugin-sdk/ssrf-runtime",
+      );
+      const lookupFn = async () => [{ address, family }];
+      transport.resolve.mockImplementation(
+        async (
+          hostname: string,
+          options: Parameters<typeof actual.resolvePinnedHostnameWithPolicy>[1],
+        ) => {
+          const pinned = await actual.resolvePinnedHostnameWithPolicy(hostname, {
+            ...options,
+            lookupFn,
+          });
+          await expect(
+            actual.resolvePinnedHostnameWithPolicy("other.example.com", {
+              lookupFn,
+              policy: options?.policy,
+            }),
+          ).rejects.toThrow("Blocked hostname (not in allowlist)");
+          return pinned;
+        },
+      );
+      const final = '{"type":"response.completed","response":{"id":"synthetic-response"}}';
+      const received = allowed ? await upstreamFixture(final) : [];
+      const { proxy, body } = await fixture();
+      const socket = connect(proxy);
+      if (allowed) {
+        await once(socket, "open");
+        const response = once(socket, "message");
+        socket.send(JSON.stringify({ ...body, type: "response.create" }));
+        expect((await response)[0].toString()).toBe(final);
+        expect(received).toHaveLength(1);
+        expect(transport.dials).toEqual(["wss://api.openai.com/v1/responses"]);
+        return;
+      }
+      socket.on("error", () => {});
+      const { response, text } = await rejectedResponse(socket);
+      expect(response.statusCode).toBe(502);
+      expect(text).toBe(
+        "Codex parent-local inference transport failed; retry on a fresh connection.",
+      );
+      expect(transport.resolve).toHaveBeenCalledOnce();
+      expect(transport.proxyAgent).toHaveBeenCalledOnce();
+      expect(transport.dials).toEqual([]);
+    },
+  );
 
   it("rejects blocked hostnames before proxy or DNS work", async () => {
     const agent = proxyAgent();
@@ -508,8 +639,15 @@ describe("private inference WebSocket relay", () => {
           null,
           2,
         );
-        socket.send(wire);
-        expect((await response)[0].toString()).toBe(final);
+        const compose = vi.spyOn(AbortSignal, "any");
+        try {
+          socket.send(wire);
+          expect((await response)[0].toString()).toBe(final);
+          // Dispatch composes cancellation once; forwarding reuses the admitted signal.
+          expect(compose).toHaveBeenCalledTimes(1);
+        } finally {
+          compose.mockRestore();
+        }
       }
       const expected = {
         ...body,

@@ -51,7 +51,7 @@ function agentResponses(agents: Array<{ id: string; name?: string }>) {
 }
 
 suite.define(() => {
-  it("opens every new-session plus as a native link without creating sessions", async () => {
+  it("keeps every new-session plus native and opens group and catalog targets without creating sessions", async () => {
     await suite.withPage(desktop, async ({ context, page }) => {
       const agentId = "research";
       const group = "Client & ops / α";
@@ -106,18 +106,23 @@ suite.define(() => {
         section,
         params: { agent: agentId, ...params },
       });
-      const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
-        [
-          railAction,
-          sectionAction(`category:${group}`, { group }),
-          sectionAction("ungrouped"),
-          {
-            selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
-            section: `catalog:${catalogId}`,
-            params: { agent: agentId, catalog: catalogId },
-          },
-          railAction,
-        ];
+      const actions: Array<{
+        selector: string;
+        section?: string;
+        params: Record<string, string>;
+        newTab?: "middle" | "modified";
+      }> = [
+        railAction,
+        { ...sectionAction(`category:${group}`, { group }), newTab: "middle" },
+        sectionAction("ungrouped"),
+        {
+          selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
+          section: `catalog:${catalogId}`,
+          params: { agent: agentId, catalog: catalogId },
+          newTab: "modified",
+        },
+        railAction,
+      ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
           await page.locator('[data-navigation-view][aria-pressed="true"]').click();
@@ -129,6 +134,16 @@ suite.define(() => {
         }
         const link = page.locator(action.selector);
         await link.hover();
+        if (index === 0) {
+          // Exercise the neighboring header with the shortcut hint already open.
+          await expect
+            .poll(() =>
+              link.evaluate(
+                (element) => element.closest("openclaw-tooltip")?.hasAttribute("open") ?? false,
+              ),
+            )
+            .toBe(true);
+        }
         const expectedUrl = new URL(`${basePath}/new`, suite.server.baseUrl);
         expectedUrl.search = new URLSearchParams(action.params).toString();
         expect(await link.getAttribute("href")).toBe(
@@ -142,10 +157,14 @@ suite.define(() => {
           }),
         ).toBe(false);
 
+        if (!action.newTab) {
+          continue;
+        }
+
         // Native tab gestures do not retain an opener, so observe the browser context.
         const [popup] = await Promise.all([
           context.waitForEvent("page"),
-          index % 2 === 0
+          action.newTab === "modified"
             ? link.click({ modifiers: ["ControlOrMeta"] })
             : link.click({ button: "middle" }),
         ]);
@@ -221,7 +240,7 @@ suite.define(() => {
 
   it("shows one row per agent plus Show all and reaches them with menu keys", async () => {
     await suite.withPage(desktop, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         methodResponses: {
           "agent.identity.get": {
             cases: [
@@ -241,6 +260,9 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const draft = "Keep this draft while opening agent settings";
+      await composer.fill(draft);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator(".sidebar-agent-menu");
@@ -248,11 +270,11 @@ suite.define(() => {
       const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
       await expect
         .poll(() =>
-          researchSwitch.evaluate(
-            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-list") ?? false,
-          ),
+          menu
+            .locator(".sidebar-agent-menu__agent-list .agent-select__option-label")
+            .allTextContents(),
         )
-        .toBe(true);
+        .toEqual(["Show all", "Scheduled Automations", "Research", "Forge", "Support"]);
       await expect
         .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
@@ -285,6 +307,21 @@ suite.define(() => {
       await pressAndExpectFocus(page, "r", researchSwitch);
       const researchSettings = researchSwitch.getByRole("button", { name: "Research settings" });
       await pressAndExpectFocus(page, "Tab", researchSettings);
+      const refreshAfter = (await gateway.getRequests("agent.identity.get", { agentId: "forge" }))
+        .length;
+      await gateway.deferNext("agent.identity.get", { agentId: "forge" });
+      await gateway.emitGatewayEvent("agent.identity.changed", { agentId: "forge" });
+      await gateway.waitForRequest("agent.identity.get", {
+        after: refreshAfter,
+        match: { agentId: "forge" },
+      });
+      await gateway.resolveDeferred(
+        "agent.identity.get",
+        { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge refreshed" },
+        { match: { agentId: "forge" } },
+      );
+      await menu.getByRole("menuitem", { name: "Forge refreshed", exact: true }).waitFor();
+      await expectFocused(researchSettings);
       await page.keyboard.press("Enter");
       await waitForControlUiRoute(page, {
         routeId: "agents",
@@ -295,6 +332,7 @@ suite.define(() => {
       );
       await page.locator(".settings-sidebar__back").click();
       await waitForControlUiRoute(page, { routeId: "chat" });
+      expect(await composer.inputValue()).toBe(draft);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await expectAttribute(mainSwitch, "aria-current", "true");
       await researchSwitch.focus();
@@ -309,7 +347,13 @@ suite.define(() => {
         .toBe(1);
       await sidebar.locator(".sidebar-agent-card__main").click();
       await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
+      await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
       await sidebar.locator(".sidebar-workspace-header__main").click();
+      await expectAttribute(
+        menu.getByRole("menuitem", { name: "Show all", exact: true }),
+        "aria-current",
+        "true",
+      );
     });
   });
 

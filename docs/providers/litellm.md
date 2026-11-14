@@ -32,6 +32,9 @@ spend limits, and backend failover without changing OpenClaw config.
       --litellm-api-key "$LITELLM_API_KEY" --custom-base-url "https://litellm.example/v1"
     ```
 
+    The URL must be a full `http://` or `https://` URL. Non-interactive setup reports an invalid
+    proxy URL and exits with status 1 without saving credentials or configuration.
+
   </Tab>
 
   <Tab title="Manual setup">

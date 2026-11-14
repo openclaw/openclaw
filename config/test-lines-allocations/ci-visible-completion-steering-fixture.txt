@@ -1,0 +1,2 @@
+# Required reply adoption, visible answer, terminal cleanup and duplicate-dispatch coverage.
+15

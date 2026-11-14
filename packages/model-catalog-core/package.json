@@ -43,6 +43,11 @@
       "import": "./dist/model-catalog-types.mjs",
       "default": "./dist/model-catalog-types.mjs"
     },
+    "./model-inference-capabilities": {
+      "types": "./dist/model-inference-capabilities.d.mts",
+      "import": "./dist/model-inference-capabilities.mjs",
+      "default": "./dist/model-inference-capabilities.mjs"
+    },
     "./provider-id": {
       "types": "./dist/provider-id.d.mts",
       "import": "./dist/provider-id.mjs",

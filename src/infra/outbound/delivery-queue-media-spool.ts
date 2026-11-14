@@ -7,6 +7,7 @@ import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-sourc
 import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveDeliveryQueueMediaDir } from "../../config/paths.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   buildOutboundMediaLoadOptions,
   type OutboundMediaAccess,
@@ -18,6 +19,7 @@ import {
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { ignoreMissingPath } from "../errno.js";
+import { FsSafeError } from "../fs-safe.js";
 import { generateSecureUuid } from "../secure-random.js";
 import { getOrLoadSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import {
@@ -35,6 +37,7 @@ import {
 const ARTIFACT_EXT_RE = /^\.[A-Za-z0-9]{1,10}$/;
 const PART_SUFFIX = ".part";
 const ORPHAN_GRACE_MS = 24 * 60 * 60_000;
+const log = createSubsystemLogger("outbound/deliver");
 
 function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
   return fileStore({
@@ -203,7 +206,11 @@ export async function releaseSpoolArtifacts(
     if (relative) {
       try {
         await openSpoolStore(stateDir).remove(relative);
-      } catch {}
+      } catch (err) {
+        if (!(err instanceof FsSafeError && err.code === "not-found")) {
+          log.warn(`failed to remove delivery queue media artifact ${relative}: ${String(err)}`);
+        }
+      }
     }
   }
 }

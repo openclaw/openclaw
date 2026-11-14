@@ -61,9 +61,6 @@ it.each([
     const payloads =
       kind === "app" ? attachApp(input, "telegram") : attachConnect({ payloads: input, action });
     expect(payloads[1]).toEqual({ text: "First answer" });
-    if (kind === "app") {
-      expect(payloads[2]).toEqual({ text, presentation });
-    }
     expect(renderFallback(payloads[2]!)).toBe(`${text}\n\n- ${fallback}`);
     expect(
       ["writer-original", "writer-replacement"].map((activeWriterRunId) =>
@@ -81,19 +78,17 @@ it("preserves payloads when no channel action can be attached", () => {
     { text: "error", isError: true },
     { mediaUrl: "https://example.test/image.png" },
   ];
-  const cases: Array<
-    [string, ReplyPayload[], (payloads: ReplyPayload[]) => ReplyPayload[], boolean?]
-  > = [
-    ["Control UI", visible, (payloads) => attachApp(payloads, "webchat")],
-    ["unresolved channel", visible, (payloads) => attachApp(payloads, undefined)],
-    ["no terminal text", ineligible, (payloads) => attachApp(payloads, "telegram")],
-    ["no connect action", error, (payloads) => attachConnect({ payloads })],
-    ["connect error", error, (payloads) => attachConnect({ payloads, action })],
-    ["unavailable", visible, (payloads) => attachApp(payloads, "telegram"), true],
-  ];
+  const cases = [
+    ["Control UI", visible, () => attachApp(visible, "webchat"), false],
+    ["unresolved channel", visible, () => attachApp(visible, undefined), false],
+    ["no terminal text", ineligible, () => attachApp(ineligible, "telegram"), false],
+    ["no connect action", error, () => attachConnect({ payloads: error }), false],
+    ["connect error", error, () => attachConnect({ payloads: error, action }), false],
+    ["unavailable", visible, () => attachApp(visible, "telegram"), true],
+  ] as const;
   for (const [name, payloads, attach, unavailable] of cases) {
     materialize.mockReset().mockReturnValue(unavailable ? undefined : presentation);
-    expect(attach(payloads), name).toBe(payloads);
+    expect(attach(), name).toBe(payloads);
     if (!unavailable) {
       expect(materialize, name).not.toHaveBeenCalled();
     }

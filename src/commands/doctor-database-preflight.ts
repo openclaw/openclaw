@@ -6,6 +6,7 @@ import {
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -87,6 +88,11 @@ export async function prepareDoctorDatabasePreflight(
     preserveSourceArtifacts?: true;
   } = {},
 ): Promise<DoctorDatabasePreflight> {
+  // Delegated update Doctor enters without CLI boot's process-wide engine selection.
+  if (!getDatabaseEngineSelection()) {
+    const { readConfigSnapshotForEngineSelection } = await import("./config-preflight-snapshot.js");
+    await readConfigSnapshotForEngineSelection();
+  }
   const { scope, preserveSourceArtifacts } = options;
   const databasePreflight = await import("../state/openclaw-database-preflight.js");
   const [

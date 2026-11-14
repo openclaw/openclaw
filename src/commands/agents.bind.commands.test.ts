@@ -103,6 +103,28 @@ describe("agents bind/unbind commands", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("matches channel case-insensitively for bind conflicts and unbind removal (gh-184636)", async () => {
+    const config = {
+      agents: explicitAgents,
+      bindings: [{ ...route("telegram", "default", "ops"), match: { channel: "Telegram" } }],
+    };
+    setConfig(config);
+
+    // bind for another agent on the same channel: cased route must conflict
+    await update("bind", { agent: "main", bind: ["telegram:default"], json: true });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+
+    // unbind for the owning agent: cased route must be found and removed
+    setConfig({
+      agents: explicitAgents,
+      bindings: [{ ...route("telegram", "default", "ops"), match: { channel: "Telegram" } }],
+    });
+    await update("unbind", { agent: "ops", bind: ["telegram:default"] });
+    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    expect(written.bindings ?? []).toEqual([]);
+  });
+
   it("matches normalized account identities for conflicts, repeats, and removal", async () => {
     const config = { agents: explicitAgents, bindings: [route("telegram", "Work", "ops")] };
     setConfig(config);

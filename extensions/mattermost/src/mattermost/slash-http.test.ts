@@ -1,10 +1,18 @@
+import assert from "node:assert/strict";
+import {
+  createPluginRuntimeMock,
+  expectPairingReplyText,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime-api.js";
+import { setMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
 const clientMocks = vi.hoisted(() => ({
   createMattermostClient: vi.fn(),
+  fetchMattermostChannel: vi.fn(),
 }));
 
 vi.mock("./client.js", async () => {
@@ -12,6 +20,7 @@ vi.mock("./client.js", async () => {
   return {
     ...actual,
     createMattermostClient: clientMocks.createMattermostClient,
+    fetchMattermostChannel: clientMocks.fetchMattermostChannel,
   };
 });
 
@@ -181,6 +190,7 @@ describe("slash-http", () => {
     slashTestAccountId = `slash-test-${++slashTestSequence}`;
     accountFixture.accountId = slashTestAccountId;
     clientMocks.createMattermostClient.mockReset();
+    clientMocks.fetchMattermostChannel.mockReset();
   });
 
   it("rejects non-POST methods", async () => {
@@ -314,4 +324,37 @@ describe("slash-http", () => {
       expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
     },
   );
+  it.each(["PAIR1234", ""])("answers a pairing request with code=%s", async (code) => {
+    const runtime = createPluginRuntimeMock();
+    vi.mocked(runtime.channel.pairing.upsertPairingRequest).mockResolvedValue({
+      code,
+      created: false,
+    });
+    vi.mocked(runtime.channel.pairing.buildPairingReply).mockImplementation(buildPairingReply);
+    setMattermostRuntime(runtime);
+    clientMocks.createMattermostClient.mockReturnValue(
+      createCommandLookupClient({ command: createCurrentCommand() }),
+    );
+    clientMocks.fetchMattermostChannel.mockResolvedValue({ id: "c1", type: "D" });
+
+    const response = await runSlashRequest({
+      registeredCommands: [createRegisteredCommand()],
+      body: "token=valid-token&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_status&text=",
+    });
+
+    expect(response.statusCode).toBe(200);
+    assert.ok(response.body, "Expected JSON response body");
+    const { text } = JSON.parse(response.body) as { text: string };
+    if (code) {
+      expectPairingReplyText(text, {
+        channel: "mattermost",
+        idLine: "Your Mattermost user id: u1",
+        code,
+      });
+    } else {
+      expect(text).toContain("DM pairing is full");
+      expect(text).toContain("no pairing request was saved");
+      expect(text).not.toContain("pairing approve");
+    }
+  });
 });

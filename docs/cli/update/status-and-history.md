@@ -17,6 +17,15 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+A failed or interrupted attempt becomes history only when its saved observation
+of a running Gateway differs in version or build ID from the live serving
+Gateway. Text status then shows a past-failure note without recovery advice.
+`openclaw status` and the Control UI use the same comparison; a manual tag
+checkout, build, and restart can leave the old failure behind. The installed
+package's starting identity alone is insufficient. Missing observations, unknown
+identities, and observations that still match the live Gateway keep the failure
+actionable. The saved record and JSON history retain the original outcome.
+
 Status inspection has a 30-second overall limit, extended when `--timeout <seconds>`
 requests a longer check. Shorter check timeouts do not shorten local history inspection.
 If an inspection stalls or fails, status returns the facts already available
@@ -26,6 +35,16 @@ does not mean that no update, history, or migration exists. Shared-state reads
 run asynchronously so a blocked snapshot does not freeze the command.
 A fresh profile without Gateway credentials can report a `channels` inspection
 error while still returning update availability and empty recovery history.
+
+Status does not acquire the managed handoff file lock. A live holder of
+`managed-update-handoffs.sqlite.lock` therefore does not prevent read-only status.
+When an updater times out acquiring that lock, its error includes
+`file_lock_timeout`, the lock path, elapsed wait, timeout budget, recorded holder
+PID and start identity, holder liveness, any recorded command or phase, and the
+waiting phase. Dead or unregistered self-held sidecars are reclaimed with a warning;
+active local holders and recorded sibling workers remain protected. For an admitted
+run, `lastRun` retains the failed step and lock reason code. A failure before run
+admission does not replace earlier history.
 
 When a package publication journal no longer matches its installation, status
 names the changed parent, control directory, or journal bindings with their
@@ -163,7 +182,14 @@ keep a skipped or failed record with their reason. A fresh-profile dry-run leave
 the database absent and records no run. CLI invocations rejected before admission
 leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
-the outcome. Post-core finalization children report back to their parent without
+the outcome. An external supervisor's native update keeps the run ID from its
+`update migrate` receipt. It is recorded as a succeeded CLI run, starting at
+migration, when the supervisor accepts the release and runs `update finish`.
+Retrying `update finish` keeps that one record. Native updates record pending
+advisory Doctor inspections before running them against the serving Gateway.
+Their findings appear in the same history; interrupted or incomplete inspections
+remain retryable with `update finish` without changing the accepted outcome.
+Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
@@ -382,8 +408,10 @@ When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source
 database and its sidecar files. The Gateway's `update.status` reads its two run
 records through the already-open database when available, avoiding full-database
-copies on each poll. Cold status reads prepare one private snapshot. When
-diagnostics are enabled, status requests lasting at least one second log phase
+copies on each poll. Ordinary status reads use a native read-only connection;
+explicit artifact-preserving inspection, including `openclaw update status`,
+retains private snapshots when required. When diagnostics are enabled, status
+requests lasting at least one second log phase
 durations for sentinel refresh, checkout refresh, install identity, reconciliation,
 history, and response.
 
@@ -417,6 +445,12 @@ version is not proof of the version currently serving requests. Optional Doctor
 diagnostic failures remain warnings, while refused config writes and incomplete
 required migrations remain errors. Historical runs cannot recover facts that
 their updater never recorded.
+
+Reviewed public failure reports keep known ledger diagnostics when a matching
+restart sentinel has no exit code or failure facts. Supplied errors use the same
+bounded public diagnostic redaction as failed steps; private paths, commands, and
+arbitrary error text remain excluded. The reporting Gateway or CLI must contain
+this fix; it does not repair the failed update itself.
 
 If a candidate check exits by signal, its failed step retains `termination`,
 `signal`, and a redacted `stderrTail` (up to 80 lines, 512 characters per line,

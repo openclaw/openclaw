@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createUsageDetailFixture } from "./usage-details.test-support.ts";
 import { cleanupUsagePageTest, contextWithClient } from "./usage-page.test-support.ts";
@@ -114,8 +115,7 @@ it("clears retained details and preserves read authorization errors while draini
   pending.reject(authorizationError);
   await Promise.all([timeline, conversation]);
 
-  const error =
-    "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.";
+  const error = "Couldn’t view usage details. Ask an admin to grant read access.";
   for (const detail of [details.timeSeries, details.sessionLogs]) {
     expect(detail.data).toBeNull();
     expect(detail.status).toEqual(status(error, false));

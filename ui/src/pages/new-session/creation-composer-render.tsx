@@ -62,6 +62,7 @@ export function CreationComposer(props: {
             mentions: composer.mentions,
             getMentions: () => composer.mentions,
             mentionsUnsupported: composer.incognito,
+            incognito: composer.incognito,
             modelCatalog: [],
             modelSwitching: false,
             sessions: null,

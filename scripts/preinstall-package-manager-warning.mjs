@@ -348,7 +348,7 @@ export function enforceSupportedNodeRuntime(
       return true;
     }
     reportError(
-      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.3+ (detected ${detectedRuntime.bunVersion}).`,
+      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.4+ (detected ${detectedRuntime.bunVersion}).`,
     );
     return false;
   }
@@ -464,7 +464,12 @@ export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (enforceSupportedNodeRuntime() && removeLegacyPackageInstallGuard()) {
+  // `npm exec` hides lifecycle output and failures, and replaces no installed release.
+  // Let its throwaway install finish so the launcher can report the runtime problem.
+  if (
+    (enforceSupportedNodeRuntime() || process.env.npm_command === "exec") &&
+    removeLegacyPackageInstallGuard()
+  ) {
     warnIfNonPnpmLifecycle();
   } else {
     process.exitCode = 1;

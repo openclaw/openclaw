@@ -1,21 +1,16 @@
 /* @vitest-environment jsdom */
 import type { ComponentProps } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
-import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatPastedText } from "./chat-pasted-text.tsx";
 
-registerEnglishCatalog(registerChatComposerEnglish);
 afterEach(() => vi.unstubAllGlobals());
 
 function pendingFetch() {
-  const requests: Array<{
+  const requests: (Pick<PromiseWithResolvers<Response>, "resolve" | "reject"> & {
     signal: AbortSignal;
-    resolve: (response: Response) => void;
-    reject: (error: Error) => void;
-  }> = [];
+  })[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((_src, init) => {
@@ -25,66 +20,18 @@ function pendingFetch() {
       return response.promise;
     }),
   );
-  onTestFinished(() => {
-    for (const request of requests) {
-      request.reject(new DOMException("Test finished", "AbortError"));
-    }
-  });
+  onTestFinished(() =>
+    requests.forEach(({ reject }) => reject(new DOMException("Test finished", "AbortError"))),
+  );
   return requests;
 }
 
-function mountPaste(initial: ComponentProps<typeof ChatPastedText>, composer = false) {
-  const restore = vi.fn();
-  const view = mountSolid((props: ComponentProps<typeof ChatPastedText>) => {
-    const action = composer ? (
-      <button class="chat-attachment-text-action" onClick={restore}>
-        Restore paste
-      </button>
-    ) : undefined;
-    return <ChatPastedText {...props} composerAction={action} />;
-  }, initial);
+function mountPaste(initial: ComponentProps<typeof ChatPastedText>) {
+  const view = mountSolid(ChatPastedText, initial);
   document.body.append(view.container);
   onTestFinished(view.dispose);
-  return { ...view, restore };
+  return view;
 }
-
-it.each([false, true])(
-  "keeps the pending and enriched card interactive (composer=%s)",
-  async (composer) => {
-    const requests = pendingFetch();
-    const initial = { src: "/paste.txt", scope: "first", sizeBytes: 20, onOpen: vi.fn() };
-    const view = mountPaste(initial, composer);
-    const chip = view.container.querySelector<HTMLElement>(".chat-attachment-thumb")!;
-    const open = composer
-      ? view.container.querySelector<HTMLElement>(".chat-attachment-file__open")!
-      : chip;
-    const focused = composer
-      ? view.container.querySelector<HTMLButtonElement>(".chat-attachment-text-action")!
-      : chip;
-    expect(chip.textContent).toContain("Pasted text");
-    open.click();
-    expect(initial.onOpen).toHaveBeenCalledOnce();
-    focused.focus();
-
-    const nextOpen = vi.fn();
-    view.update({ ...initial, onOpen: nextOpen });
-    expect(requests).toHaveLength(1);
-    expect(requests[0]!.signal.aborted).toBe(false);
-    expect(document.activeElement).toBe(focused);
-    requests[0]!.resolve(new Response("# Clear **excerpt**"));
-    await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(chip.textContent).toContain("Clear excerpt"));
-
-    expect(view.container.querySelector(".chat-attachment-thumb")).toBe(chip);
-    expect(document.activeElement).toBe(focused);
-    open.click();
-    expect(nextOpen).toHaveBeenCalledOnce();
-    if (composer) {
-      focused.click();
-      expect(view.restore).toHaveBeenCalledOnce();
-    }
-  },
-);
 
 it.each(["src", "sizeBytes", "scope"] as const)(
   "retires excerpt work when %s changes and when the card is disposed",
@@ -93,6 +40,7 @@ it.each(["src", "sizeBytes", "scope"] as const)(
     const initial = { src: "/paste.txt", scope: "first", sizeBytes: 20 };
     const view = mountPaste(initial);
     const chip = view.container.querySelector<HTMLElement>(".chat-attachment-thumb")!;
+    chip.focus();
     const replacement = {
       ...initial,
       [field]: field === "src" ? "/next.txt" : field === "sizeBytes" ? 30 : "second",
@@ -106,9 +54,16 @@ it.each(["src", "sizeBytes", "scope"] as const)(
     requests[0]!.resolve(new Response("Outdated excerpt"));
     await vi.dynamicImportSettled();
     expect(chip.textContent).toBe("Pasted text");
-    requests[1]!.resolve(new Response("Current excerpt"));
+    requests[1]!.resolve(new Response("# Current **excerpt**"));
     await waitForSolid(() => expect(chip.textContent).toBe("Current excerpt"));
     expect(view.container.querySelector(".chat-attachment-thumb")).toBe(chip);
+    expect(document.activeElement).toBe(chip);
+    const onOpen = vi.fn();
+    view.update({ ...replacement, onOpen });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]!.signal.aborted).toBe(false);
+    chip.click();
+    expect(onOpen).toHaveBeenCalledOnce();
 
     view.update({ ...replacement, src: "/pending.txt" });
     expect(chip.textContent).toBe("Pasted text");

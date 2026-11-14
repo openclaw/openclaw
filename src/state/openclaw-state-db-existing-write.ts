@@ -24,10 +24,14 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
-import { createStateSchemaAdmission } from "./openclaw-state-db-admission.js";
+import {
+  adoptPeerPublishedStateSchemaVersion,
+  createStateSchemaAdmission,
+} from "./openclaw-state-db-admission.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import {
@@ -76,11 +80,16 @@ function assertExistingOpenClawStateSchemaMetadata(
   db: DatabaseSync,
   pathname: string,
   version: number,
-): void {
+): number {
   const metadata = assertOpenClawStateDatabaseOwner(db, { pathname });
-  if (version < 1 || metadata?.schema_version !== version) {
-    throw new Error("Existing-state schema metadata is inconsistent.");
+  if (version >= 1 && metadata?.schema_version === version) {
+    return version;
   }
+  // Facts admitted before BEGIN can predate a peer's publication this transaction now sees.
+  if (version >= 1 && adoptPeerPublishedStateSchemaVersion(db, metadata)) {
+    return OPENCLAW_STATE_SCHEMA_VERSION;
+  }
+  throw new Error("Existing-state schema metadata is inconsistent.");
 }
 
 /** Validate only the stable storage subset used by an existing-schema owner.
@@ -93,8 +102,11 @@ function assertExistingOpenClawStateSchema(
   compatibility?: SqliteSchemaCompatibility,
   integrityCheck: "quick" | "full" = "full",
 ): number {
-  const version = assertSupportedStateSchemaVersion(db, pathname);
-  assertExistingOpenClawStateSchemaMetadata(db, pathname, version);
+  const version = assertExistingOpenClawStateSchemaMetadata(
+    db,
+    pathname,
+    assertSupportedStateSchemaVersion(db, pathname),
+  );
   if (integrityCheck === "quick") {
     assertSqliteIntegrity(db, pathname, {
       check: "quick",

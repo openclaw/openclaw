@@ -250,6 +250,30 @@ it("selects later pages and reports partial extraction to both models", async ()
   expect(result.details).toMatchObject({ native: false, model: OPENAI });
 });
 
+it("keeps partial-document notices in PDF order", async () => {
+  const { pdf, extract } = await extraction();
+  extract
+    .mockResolvedValueOnce({
+      text: "First document",
+      images: [],
+      metadata: { textTruncated: true, imagesTruncated: false },
+    })
+    .mockResolvedValueOnce({
+      text: "Second document",
+      images: [],
+      metadata: { textTruncated: false, imagesTruncated: true },
+    });
+  const result = await pdf.execute("pdf", { pdfs: ["/tmp/first.pdf", "/tmp/second.pdf"] });
+  expect(contextText()).toContain("[PDF 1 text]\n[Partial document: text truncated.]");
+  expect(contextText()).toContain("[PDF 2 text]\n[Partial document: image rendering truncated.]");
+  expect(result.content).toEqual(
+    textContent(
+      "PDF 1: [Partial document: text truncated.]\n" +
+        "PDF 2: [Partial document: image rendering truncated.]\nfallback summary",
+    ),
+  );
+});
+
 it.each([
   { stopReason: "stop", errorMessage: "  bad request  ", expected: ": bad request" },
   { stopReason: "error", errorMessage: undefined, expected: "" },
@@ -280,29 +304,36 @@ it("rejects extracted PDF responses without visible text", async () => {
   );
 });
 
-it.each([true, false])(
-  "reuses only successful extraction across fallbacks (overloaded=%s)",
-  async (overloaded) => {
-    const { pdf, extract } = await extraction("openai-responses", {
-      agents: { defaults: { pdfModel: { primary: OPENAI, fallbacks: [FALLBACK] } } },
-    });
-    extract.mockResolvedValue({ text: "Recovered document content", images: [] });
-    if (overloaded) {
-      extract.mockRejectedValueOnce(
-        new WorkerTaskError("worker task capacity reached", "overloaded"),
-      );
-    } else {
-      completeMock.mockRejectedValueOnce(new Error("temporary provider failure"));
-    }
-    completeMock.mockResolvedValue(summary("Recovered PDF summary"));
-    const result = await pdf.execute("pdf", { pdf: "/tmp/doc.pdf", prompt: "summarize" });
-    expect(result.content).toEqual(textContent("Recovered PDF summary"));
-    expect(result.details).toMatchObject({ model: FALLBACK, native: false });
-    expect(contextText()).toContain("Recovered document content");
-    expect(extract).toHaveBeenCalledTimes(overloaded ? 2 : 1);
-    expect(completeMock).toHaveBeenCalledTimes(overloaded ? 1 : 2);
-  },
-);
+it("keeps local extraction worker overload out of provider fallback", async () => {
+  const { pdf, extract } = await extraction("openai-responses", {
+    agents: { defaults: { pdfModel: { primary: OPENAI, fallbacks: [FALLBACK] } } },
+  });
+  const overload = new WorkerTaskError("worker task capacity reached", "overloaded");
+  extract.mockRejectedValueOnce(overload);
+
+  await expect(pdf.execute("pdf", { pdf: "/tmp/doc.pdf", prompt: "summarize" })).rejects.toBe(
+    overload,
+  );
+  expect(extract).toHaveBeenCalledOnce();
+  expect(completeMock).not.toHaveBeenCalled();
+});
+
+it("reuses successful extraction after a genuine provider failure", async () => {
+  const { pdf, extract } = await extraction("openai-responses", {
+    agents: { defaults: { pdfModel: { primary: OPENAI, fallbacks: [FALLBACK] } } },
+  });
+  extract.mockResolvedValue({ text: "Recovered document content", images: [] });
+  completeMock
+    .mockRejectedValueOnce(Object.assign(new Error("temporary provider failure"), { status: 503 }))
+    .mockResolvedValue(summary("Recovered PDF summary"));
+
+  const result = await pdf.execute("pdf", { pdf: "/tmp/doc.pdf", prompt: "summarize" });
+  expect(result.content).toEqual(textContent("Recovered PDF summary"));
+  expect(result.details).toMatchObject({ model: FALLBACK, native: false });
+  expect(contextText()).toContain("Recovered document content");
+  expect(extract).toHaveBeenCalledOnce();
+  expect(completeMock).toHaveBeenCalledTimes(2);
+});
 
 it.each(["bedrock-converse-stream", "openai-completions"])(
   "allows keyless AWS SDK auth only for the Bedrock transport (%s)",
@@ -476,6 +507,7 @@ it("uses the committed runtime generation for native PDF model selection", async
       config: pdfConfig("google/gemini-2.5-pro"),
       createStores: () => ({ authStorage: { setRuntimeApiKey: vi.fn() }, modelRegistry }),
     }),
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: release,
   } as never);
   const analyze = vi

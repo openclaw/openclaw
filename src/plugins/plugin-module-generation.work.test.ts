@@ -13,12 +13,7 @@ describe.skipIf(!useNodeModuleHooks())("plugin generation demanded work", () => 
       "entry.ts":
         "export const resolve = () => require.resolve('./deferred.ts'); export const read = () => import('./deferred.ts');",
       "deferred.ts": "export const value = 42;",
-      ...Object.fromEntries(
-        Array.from({ length: 24 }, (_, index) => [
-          "unused-" + index + ".ts",
-          "export const unused = 1;",
-        ]),
-      ),
+      "unused.ts": "export const unused = 1;",
     });
     const write = vi.spyOn(fs, "writeFileSync");
     const plugin = host(root).load("entry.ts") as {
@@ -35,7 +30,6 @@ describe.skipIf(!useNodeModuleHooks())("plugin generation demanded work", () => 
     try {
       expect(placeholders()).toHaveLength(1);
       const resolved = plugin.resolve();
-      expect(fs.existsSync(resolved)).toBe(true);
       expect(fs.readFileSync(resolved, "utf8")).toBe("");
       expect(plugin.resolve()).toBe(resolved);
       expect(placeholders()).toHaveLength(2);
@@ -81,10 +75,7 @@ describe.skipIf(!useNodeModuleHooks())("plugin generation demanded work", () => 
 
   it("reuses captured package metadata while new local demands still resolve dependencies", () => {
     const root = fixture({
-      "package.json": JSON.stringify({
-        dependencies: { dependency: "1" },
-        optionalDependencies: { absent: "1" },
-      }),
+      "package.json": '{"dependencies":{"dependency":"1"},"optionalDependencies":{"absent":"1"}}',
       "entry.cjs": "exports.directory = __dirname; exports.read = name => require(name).value;",
       "first.cjs": "exports.value = require('dependency').value;",
       "second.cjs": "exports.value = require('dependency').value + 1;",

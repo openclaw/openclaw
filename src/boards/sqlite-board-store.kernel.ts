@@ -11,7 +11,7 @@ import { ensureOpenClawAgentBoardSchemaInTransaction } from "../state/openclaw-a
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
+import { applyBoardOps, BoardValidationError, normalizeOwnedBoardLayout } from "./board-layout.js";
 import {
   createBoardWidgetPutResult,
   createBoardGrantSnapshot,
@@ -97,7 +97,7 @@ function readStoredBoard(database: BoardDatabaseHandle, sessionKey: string): Sto
         htmlViewMetadata.set(row.name, metadata);
       }
     }
-    const layout = normalizeBoardLayout({
+    const layout = normalizeOwnedBoardLayout({
       tabs: tabRows.map(rowToTab),
       widgets: admittedWidgetRows.map(({ row, manifest }) => rowToWidget(row, manifest)),
     });

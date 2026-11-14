@@ -25,6 +25,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
@@ -34,7 +35,6 @@ import {
   PaletteSessionAttachments,
   PaletteSessionControls,
   PaletteSessionAuxiliary,
-  PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { createSubmissionAction } from "../pages/new-session/submission-action.ts";
@@ -42,10 +42,12 @@ import "../styles/command-palette.css";
 import {
   commandPaletteCategoryLabel,
   filterCommandPaletteItems,
+  getStaticCommandPaletteCatalogItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
 import { COMMAND_PALETTE_DIALOG_STYLE } from "./command-palette-contract.ts";
 import { COMMAND_PALETTE_INPUT_ID, CommandPaletteInput } from "./command-palette-input.tsx";
+import { createCommandPaletteMatches } from "./command-palette-matches.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
@@ -203,16 +205,26 @@ function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
   return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
 }
 
-function resolvePaletteResults(snapshot: CommandPaletteProps) {
+function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: CommandPaletteItem[]) {
   const hideSearch =
     snapshot.promptMode || snapshot.mentionMenu.open || snapshot.draft.mentions.length > 0;
-  const matches = hideSearch
-    ? []
-    : filterCommandPaletteItems({
-        ...snapshot,
-        query: snapshot.searchQuery,
-        includeSlashCommands: Boolean(snapshot.onSlashCommand),
-      });
+  const matches =
+    prepared ??
+    (hideSearch
+      ? []
+      : filterCommandPaletteItems({
+          ...snapshot,
+          catalogItems: [
+            ...getStaticCommandPaletteCatalogItems(
+              snapshot.canAdmin,
+              snapshot.nativeDeviceSettings,
+            ),
+            ...snapshot.catalogItems,
+            ...snapshot.modelItems,
+          ],
+          query: snapshot.searchQuery,
+          includeSlashCommands: Boolean(snapshot.onSlashCommand),
+        }));
   const grouped = groupItems(matches.filter((item) => matchesFilter(item, snapshot.filter)));
   const items = grouped.flatMap(([, entries]) => entries);
   // Preserve explicit selection through transient result changes, but only
@@ -226,9 +238,11 @@ function resolvePaletteResults(snapshot: CommandPaletteProps) {
 
 function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
   return (
-    <span class="cmd-palette__hint">
-      {props.shortcut} <span>{props.label}</span>
-    </span>
+    <Show when={keyboardHintsVisible()}>
+      <span class="cmd-palette__hint">
+        {props.shortcut} <span>{props.label}</span>
+      </span>
+    </Show>
   );
 }
 
@@ -281,11 +295,6 @@ function PaletteSearch(props: {
           : current().sessionSearchPartial
             ? t("palette.searchPartial")
             : null,
-      current().archivedTranscriptsExcluded > 0
-        ? t("sessionsView.transcriptSearchArchivedExcluded", {
-            count: String(current().archivedTranscriptsExcluded),
-          })
-        : null,
     ].filter((notice): notice is string => Boolean(notice));
   const searchSettled = () =>
     Boolean(current().searchQuery.trim()) &&
@@ -429,6 +438,11 @@ function PaletteSearch(props: {
         </div>
       </Show>
       <div id="cmd-palette-keys" class="cmd-palette__footer">
+        <Show when={current().archivedTranscriptsExcluded > 0}>
+          <span class="cmd-palette__archive-note" role="status">
+            {t("palette.archivedSessionsExcluded")}
+          </span>
+        </Show>
         <Show when={results().items.length > 0 && !current().query.includes("\n")}>
           <PaletteHint shortcut={<Kbd keys={["↑", "↓"]} />} label={t("palette.footer.navigate")} />
           <Show when={!isMobileBrowserPlatform()}>
@@ -458,7 +472,8 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
     current().promptMode || current().mentionMenu.open || current().draft.mentions.length > 0;
   // The collapsing search remains mounted with its last presented projection.
   const search = createParkedProjection(current, () => !hideSearch());
-  const results = createMemo(() => resolvePaletteResults(search()));
+  const matches = createCommandPaletteMatches(search);
+  const results = createMemo(() => resolvePaletteResults(search(), matches()));
   const sessionRequest = createMemo(() => search().sessionSearchRead);
   const sessionRead = createMemo(() => sessionRequest()?.promise);
   const catalogRequest = createMemo(() => search().catalogSearchRead);
@@ -477,7 +492,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const mentionListboxId = () => paneDomId(current().mentionHost.paneId, "mention-menu-listbox");
   const mentionAnnouncementId = () =>
     paneDomId(current().mentionHost.paneId, "mention-announcement");
-  const recovery = createMemo(() => current().draft.recoveryAction);
   const reason = () =>
     current().draft.disabledReason ??
     (current().draft.hasPrompt ? undefined : t("palette.promptRequired"));
@@ -495,10 +509,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             if (!snapshot.composing) {
               snapshot.mentionMenu.close();
             }
-            return;
-          }
-          if (snapshot.draft.submitting) {
-            event.preventDefault();
             return;
           }
           snapshot.onToggle();
@@ -658,11 +668,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           <Show when={error()}>
             <div class="cmd-palette__creation-error" role="alert">
               {error()}
-            </div>
-          </Show>
-          <Show when={recovery()}>
-            <div class="cmd-palette__footer">
-              <PaletteSessionRecovery onOpen={() => recovery()?.()} />
             </div>
           </Show>
         </div>

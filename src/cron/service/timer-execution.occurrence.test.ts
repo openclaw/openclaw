@@ -223,7 +223,6 @@ describe("scheduled occurrence admission", () => {
         agentId: "main",
         runId: "run",
         runSessionKey: "agent:main:cron:job",
-        operatorAuthorityRestored: false,
       }).result,
     ).toEqual({ status: "fail", error: "occurrence admission is not configured" });
   });

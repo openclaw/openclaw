@@ -28,6 +28,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
 | `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
+| `api.registerLearnContribution(contribution)`     | `/learn` medium, guidance and subcommands                              |
 | `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
@@ -35,6 +36,30 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
+
+`api.registerLearnContribution(...)` adds a plugin to `/learn` turns. The
+contribution names its `medium` (`"skills"` or `"memory"`), the `toolNames` it
+writes with, and optional `requiredToolNames` that must all be allowed. OpenClaw
+checks the tools against the turn's tool policy; when the contribution can
+learn, it calls `buildGuidance({ availableTools, media })` and adds the returned
+`lines` to the prompt and `appendix` blocks after the closing instruction.
+OpenClaw owns the prompt frame and the routing rule between media, and orders
+contributions by medium and then plugin id. Only the selected memory slot owner
+can register a `"memory"` contribution. Optional `subcommands` handle
+`/learn <name> [args]`: `matchArgs` decides which arguments select the
+subcommand, and `handle` returns `{ text }` for a reply or `{ prompt }` to
+replace the turn's message. A subcommand runs only while its contribution can
+learn, unless it is `direct`: a direct subcommand changes state without a model
+turn, so only owners can run it and gateway clients need `operator.admin`.
+Optional `unavailableText` is the reply when the contribution's subcommand was
+asked for but cannot run, or when `/learn` cannot learn and every registered
+contribution is in one medium with the same reply; otherwise OpenClaw replies
+with a generic remedy.
+
+Gateway handlers can return a payload synchronously or asynchronously, for example
+`api.registerGatewayMethod("example.status", async () => ({ status: "ready" }))`.
+A non-`undefined` return completes the request successfully unless `respond(...)`
+was already called. Returning `undefined` leaves completion to `respond(...)`.
 
 Gateway methods default to `profileAccess: "required"`, so a request is rejected before plugin dispatch if authenticated-profile verification fails. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
@@ -214,7 +239,8 @@ index maintenance. Callers retain filters, limits, chronology, snippets' display
 bounds, and scoring policy. The adapter's existing capability labels remain
 diagnostic metadata. SQLite retains its L2 candidate selection and cosine
 reranking, with the memory owner's exact fallback when native vectors are
-unavailable. PostgreSQL uses native full-text and exact vector retrieval.
+unavailable. PostgreSQL uses native full-text search and can preselect vector
+candidates with binary sketches before exact cosine reranking.
 `fullText.rank(index, query, { postgres: { normalization: 0 } })` selects
 unnormalized cover density; omitting the option retains document-length
 normalization (`2`). SQLite ignores PostgreSQL rank options. Feature owners
@@ -228,7 +254,8 @@ Bundled and official plugins with a bidirectional CLI protocol can use
 from `openclaw/plugin-sdk/process-runtime`. The `OwnedStdioProcessOptions` and
 `OwnedStdioProcess` types describe the launch and its process-tree owner.
 Creation resolves after startup and private-input delivery. A failed launch
-also reports a cleanup failure if resource closure cannot be confirmed.
+rejects with `OwnedStdioCleanupError` if resource closure cannot be confirmed;
+any other launch rejection means no child remains.
 
 Pass the command and arguments together as `argv`, with optional `argv0`, `cwd`,
 `env`, and `abortSignal`. For an already prepared CLI invocation, `exactEnv: true`

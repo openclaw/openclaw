@@ -2,6 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import * as handles from "../state/openclaw-state-db-handle.js";
@@ -9,6 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { retainedCheckpointBinding } from "./update-retained-checkpoint.test-support.js";
 import {
@@ -30,6 +32,7 @@ import {
   inspectUpdateRecovery,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
+import { readRecovery } from "./update-run-recovery-store.js";
 import {
   assertNoPendingUpdateRecovery,
   inspectUpdateRecoveries,
@@ -254,6 +257,38 @@ describe("retained recovery read-only compatibility", () => {
     expect(inspectUpdateRecoveries(options)).toEqual([]);
     expect(() => assertNoPendingUpdateRecovery(options)).not.toThrow();
     expect(fs.readdirSync(root)).toEqual([]);
+  });
+  it("reads only the named recovery payload regardless of unrelated history", () => {
+    const f = setup();
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(f.options).db);
+    const raw = JSON.stringify(f.record);
+    const selectedBytes =
+      Buffer.byteLength(raw) + Buffer.byteLength("update.recovery." + f.run.runId);
+    db.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key=?").run(
+      raw,
+      "update.recovery." + f.run.runId,
+    );
+    const insert = db.prepare(
+      "INSERT INTO config_machine_state (state_key,value_json,updated_at_ms) VALUES (?,?,0)",
+    );
+    for (let i = 0; i < 32; i++) {
+      insert.run(`update.recovery.unrelated-${i}`, "invalid:" + "x".repeat(8192));
+    }
+    const counter = trackSqliteStatementExecutions(db, ["recovery"], (sql) =>
+      /^select .* from "config_machine_state"/i.test(sql) ? "recovery" : null,
+    );
+    try {
+      expect(readRecovery(db, f.run.runId)).toEqual(f.record);
+      expect(counter.counts.recovery).toBe(1);
+      expect(counter.rowCounts.recovery).toBe(1);
+      expect(counter.textBytes.recovery).toBe(selectedBytes);
+      expect(readRecovery(db, "missing-run")).toBeUndefined();
+      expect(counter.counts.recovery).toBe(2);
+      expect(counter.rowCounts.recovery).toBe(1);
+      expect(counter.textBytes.recovery).toBe(selectedBytes);
+    } finally {
+      counter.restore();
+    }
   });
   it.each(["intent", "completed"] as const)("preserves %s package effects", (outcome) => {
     const f = setup();

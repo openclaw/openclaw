@@ -227,9 +227,12 @@ Not all providers support all parameters. When a fallback provider supports a
 nearby geometry option instead of the exact requested one, OpenClaw remaps to
 the closest supported size, aspect ratio, or resolution before submission.
 Unsupported output hints are dropped for providers that do not declare
-support and reported in the tool result. Tool results report the applied
-settings. `details.normalization` captures any requested-to-applied
-translation.
+support and reported in the tool result. Completed results keep request hints in
+`details.requested` and report each saved image in `details.outputs`. Dimensions
+and format come from the image bytes; quality is included only when the provider
+reports a concrete value. Missing output settings remain unknown.
+`details.normalization` describes adjustments before submission, not proof that
+the provider applied them. Completion messages include the observed output settings.
 </Note>
 
 ## Configuration

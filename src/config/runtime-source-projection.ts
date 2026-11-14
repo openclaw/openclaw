@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   captureRuntimeConfigWithSource,
+  getPublishedRuntimeConfigSource,
   getRuntimeConfigCapture,
 } from "./runtime-config-capture-state.js";
 import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
@@ -23,6 +24,10 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   const captured = getRuntimeConfigCapture(config);
   if (captured) {
     return captured.source;
+  }
+  const published = getPublishedRuntimeConfigSource(config);
+  if (published) {
+    return published;
   }
   const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();

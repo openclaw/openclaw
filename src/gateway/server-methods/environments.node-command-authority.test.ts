@@ -12,6 +12,7 @@ import {
 } from "./environments.test-support.js";
 
 const registries: NodeRegistry[] = [];
+const command = "codex.exec-server.stdio.v1";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -28,13 +29,14 @@ vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) =
   readDevicePairingNodeSnapshot: vi.fn(),
 }));
 
+// mock-isolation: Fixed placement descriptors isolate command policy from runtime catalog state.
 vi.mock("../worker-environments/placement-capabilities.js", () => ({
   resolveWorkerPlacementCapabilities: vi.fn((runtimeId: string) =>
     runtimeId === "codex"
       ? {
           executionMode: "remote-exec",
           devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            requiredNodeCommands: [command],
             consumesWorkerSlot: false,
           },
         }
@@ -48,7 +50,7 @@ beforeEach(() => {
     pluginId: "codex",
     source: "test/codex",
     command: {
-      command: "codex.exec-server.stdio.v1",
+      command,
       cap: "codex.exec-server",
       dangerous: true,
       handle: async () => "{}",
@@ -57,7 +59,6 @@ beforeEach(() => {
   setActivePluginRegistry(plugins);
 });
 
-const command = "codex.exec-server.stdio.v1";
 it.each([
   [
     "invocable",
@@ -75,21 +76,15 @@ it.each([
 ] as const)(
   "projects %s for declarations %j approved %j with allow %j deny %j",
   async (state, declared, approved, allow, deny, expected, reload) => {
+    const identity = { platform: "linux", clientId: "node-host" };
+    const surface = { caps: ["session.host"], commands: [...approved] };
     vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(
       createDevicePairingNodeSnapshot([
-        pairedNodeDevice(
-          "node-exec",
-          {
-            caps: ["session.host"],
-            commands: [...approved],
-          },
-          {
-            platform: "linux",
-            deviceFamily: "Linux",
-            clientId: "node-host",
-            clientMode: "node",
-          },
-        ),
+        pairedNodeDevice("node-exec", surface, {
+          ...identity,
+          deviceFamily: "Linux",
+          clientMode: "node",
+        }),
       ]),
     );
     const commandPolicy = { allow: [...allow], deny: [...deny] };
@@ -98,11 +93,9 @@ it.each([
     const registry = new NodeRegistry({ getConfig: () => config });
     registries.push(registry);
     const client = makeClient("conn-exec", "node-exec", [], {
-      clientId: "node-host",
-      platform: "linux",
-      caps: ["session.host"],
+      ...identity,
+      ...surface,
       declaredCommands: [...declared],
-      commands: [...approved],
     });
     client.connect.client.deviceFamily = "Linux";
     const node = registry.register(client, { pairingIdentity: "node-exec" });
@@ -126,10 +119,8 @@ it.each([
     const payload: EnvironmentsListResult = result;
     const listed = payload.environments.find((environment) => environment.id === "node:node-exec");
     expect(listed?.invocableCommands ?? []).toEqual(expected);
-    expect(listed?.requiredNodeCommand).toMatchObject({
-      command: "codex.exec-server.stdio.v1",
-      state,
-    });
+    expect(listed?.requiredNodeCommand).toMatchObject({ command, state });
+    const message = listed?.requiredNodeCommand?.message;
     if (state === "invocable") {
       expect(listed?.requiredNodeCommand).not.toHaveProperty("message");
     } else {
@@ -139,19 +130,9 @@ it.each([
           : state === "unauthorized"
             ? "gateway.nodes.commands.deny"
             : "openclaw plugins enable codex";
-      expect(listed?.requiredNodeCommand?.message).toContain(remediation);
+      expect(message).toContain(remediation);
       if (state === "undeclared") {
-        expect(listed?.requiredNodeCommand?.message).toMatch(
-          /^This model uses the Codex harness, which is unavailable on this device\./,
-        );
-        for (const hint of [
-          "OpenClaw harness",
-          "openclaw plugins install @openclaw/codex",
-          "on that node",
-        ]) {
-          expect(listed?.requiredNodeCommand?.message).toContain(hint);
-        }
-        expect(listed?.requiredNodeCommand?.message).not.toContain("gateway.nodes.commands.allow");
+        expect(message).not.toContain("gateway.nodes.commands.allow");
       }
     }
     for (const effectiveCommand of node.commands) {

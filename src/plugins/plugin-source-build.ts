@@ -9,6 +9,7 @@ import { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coerc
 import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
 import { useNodeModuleHooks } from "./native-module-require.js";
+import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 
 const require = createRequire(import.meta.url);
 
@@ -22,15 +23,8 @@ export type PluginSourceFile = {
   generated?: true;
 };
 
-export type PluginSourceBuild = {
-  directory: string;
-  resolve: (source: string, mode?: PluginSourceLoadMode, nativeFormat?: string | null) => string;
-  sourceForOutput: (file: string) => PluginSourceFile | undefined;
-  dispose: () => void;
-};
-
 /** Compile captured source into a private namespace; native files stay with their capture owner. */
-export function buildPluginTypeScriptSource(root: string): PluginSourceBuild {
+export function buildPluginTypeScriptSource(root: string) {
   if (!useNodeModuleHooks()) {
     throw new Error("Plugin source builds require Node module hooks");
   }
@@ -170,10 +164,12 @@ export const resolve = (specifier, options) => {
             ...transformOptions,
             sourcefile: path.relative(root, input),
           });
-          throw new SyntaxError(
-            (error instanceof Error ? error.message : stringifyNonErrorCause(error)).replaceAll(
-              input,
-              path.relative(root, input),
+          throw markPluginSourceAcquisitionError(
+            new SyntaxError(
+              (error instanceof Error ? error.message : stringifyNonErrorCause(error)).replaceAll(
+                input,
+                path.relative(root, input),
+              ),
             ),
           );
         }
@@ -257,9 +253,11 @@ export { value as "openclaw:async-commonjs" };`
         });
       } catch (error) {
         if (error instanceof SyntaxError) {
-          throw new SyntaxError(`${path.relative(root, input)}: ${error.message}`, {
-            cause: error,
-          });
+          throw markPluginSourceAcquisitionError(
+            new SyntaxError(`${path.relative(root, input)}: ${error.message}`, {
+              cause: error,
+            }),
+          );
         }
         throw error;
       }

@@ -576,7 +576,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     onAdmissionFailure: options.onAdmissionFailure,
     inspect: (raw) => inspect(raw, { phase: "admission" }),
     getQueue,
-    pruneBeforeAdmission: () => pruneIfDue("admission"),
+    // Retention is maintenance: a busy database must not cost the transport its
+    // only delivery of this event. The next admission prunes again.
+    pruneBeforeAdmission: () => pruneIfDue("admission").catch(reportError),
     getIdleDrain: () =>
       // Wrappers own dispatch context; only prepared identities can skip reconciliation.
       // Released deferrals and post-adoption deliveries must finish first.

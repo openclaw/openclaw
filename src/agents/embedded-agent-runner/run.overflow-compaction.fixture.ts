@@ -1,12 +1,55 @@
 /**
  * Test fixtures for embedded-run overflow compaction scenarios.
  */
+import { vi } from "vitest";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLeaseOptions,
+} from "../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./run/attempt-result.js";
 import { buildAttemptReplayMetadata } from "./run/attempt-terminal-evidence.js";
+
+const emptyPluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
+
+export async function acquireOverflowCompactionPreparedModelRuntime(
+  input: PreparedModelRuntimeInput,
+  options?: PreparedModelRuntimeLeaseOptions,
+) {
+  const admitted = options?.pluginGeneration;
+  const pluginRegistry = admitted ? admitted.pluginRegistry : getActivePluginRegistry();
+  const metadataSnapshot = admitted
+    ? admitted.pluginMetadataSnapshot
+    : { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir };
+  const snapshot = {
+    agentId: input.agentId,
+    agentDir: input.agentDir,
+    config: input.config,
+    workspaceDir: input.workspaceDir,
+    pluginRegistry: pluginRegistry
+      ? { ...pluginRegistry, agentHarnesses: [...pluginRegistry.agentHarnesses] }
+      : undefined,
+    metadataSnapshot,
+    createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+  };
+  return {
+    snapshot,
+    pluginGeneration: admitted ?? {
+      remoteCatalog: null,
+      pluginMetadataSnapshot: metadataSnapshot,
+      pluginRegistry: snapshot.pluginRegistry,
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+    },
+    run: <T>(run: () => T): T => run(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
+  };
+}
 
 const DEFAULT_OVERFLOW_ERROR_MESSAGE =
   "request_too_large: Request size exceeds model context window";
@@ -16,6 +59,7 @@ export function makeOverflowError(message: string = DEFAULT_OVERFLOW_ERROR_MESSA
 }
 
 type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
+  transport: Pick<AgentRuntimePlan["transport"], "resolveExtraParams">;
   observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
 };
 
@@ -27,6 +71,9 @@ export function makeMockRuntimePlan(): MockRuntimePlan {
     },
     observability: {
       harnessId: "codex",
+    },
+    transport: {
+      resolveExtraParams: () => ({}),
     },
   };
 }

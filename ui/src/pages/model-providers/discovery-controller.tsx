@@ -1,5 +1,6 @@
 import { createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
@@ -99,15 +100,21 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
                     label={t("modelSetup.discovery.title")}
                     onModal-cancel={() => close()}
                   >
-                    <div class="model-setup-wizard">
-                      <div class="model-setup-wizard__body" role="status">
+                    <div class="oc-dialog model-setup-wizard">
+                      <div class="oc-dialog__header">
+                        <h2 class="oc-dialog__title">{t("modelSetup.discovery.title")}</h2>
+                        <button
+                          type="button"
+                          class="oc-dialog__close"
+                          aria-label={t("common.cancel")}
+                          onClick={() => close()}
+                        >
+                          <Icon name="x" />
+                        </button>
+                      </div>
+                      <div class="oc-dialog__body model-setup-wizard__body" role="status">
                         {t("common.loading")}
                       </div>
-                      <openclaw-modal-actions class="model-setup-wizard__footer">
-                        <button class="btn" onClick={() => close()}>
-                          {t("common.cancel")}
-                        </button>
-                      </openclaw-modal-actions>
                     </div>
                   </openclaw-modal-dialog>
                 }

@@ -84,7 +84,7 @@ function startRecord(id: string, name: string, input: Record<string, unknown>) {
   );
 }
 
-function resultRecord(id: string, content: string, isError = false) {
+function resultRecord(id: string, content: unknown, isError = false) {
   return (
     JSON.stringify({
       type: "user",
@@ -104,6 +104,101 @@ function displayParser(handlers: ReturnType<typeof createCliEventHandlers>) {
 }
 
 describe("cli tool result events", () => {
+  it.each([
+    "host",
+    "host-blocks",
+    "host-record",
+    "node",
+    "ambiguous",
+    "late-ambiguous",
+    "failed",
+    "cli-error",
+    "uncaptured",
+    "no-details",
+    "other-tool",
+  ] as const)(
+    "preserves only trusted, uniquely correlated browser routes in live results: %s",
+    (mode) => {
+      const context = buildContext(`browser-tab-${mode}`);
+      const tracking = createCliToolTracking(context);
+      tracking.beginGatewayCapture(context.params.runId, () => {});
+      const { handlers, events } = eventFixture(context, tracking);
+      const parser = createCliJsonlStreamingParser({
+        providerId: "claude-cli",
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        onAssistantDelta: vi.fn(),
+        onToolUseStart: handlers.emitParsedToolUseStart,
+        onToolResult: handlers.emitParsedToolResult,
+      });
+      const toolName = mode === "other-tool" ? "web_fetch" : "browser";
+      const name = `mcp__openclaw__${toolName}`;
+      const args = { action: "open", profile: "shared", targetUrl: "https://example.org/" };
+      const browserTab = {
+        targetId: "tab-shared",
+        profile: "shared",
+        target: mode === "node" ? "node" : "host",
+        ...(mode === "node" ? { node: "node-1" } : {}),
+        url: "https://example.org/",
+        title: "Shared tab",
+      };
+      const cliText = [{ type: "text", text: "CLI result" }];
+      const cliResult =
+        mode === "host-blocks"
+          ? cliText
+          : mode === "host-record"
+            ? { content: cliText, details: { cli: "kept" } }
+            : "CLI result";
+      try {
+        parser.push(startRecord("tab", name, args));
+        if (mode === "ambiguous") {
+          parser.push(startRecord("peer", name, args));
+        }
+        if (mode !== "uncaptured") {
+          const capture = markMcpLoopbackToolCallStarted({
+            captureKey: context.params.runId,
+            toolName,
+            args,
+          });
+          if (!capture) {
+            throw new Error("Expected loopback capture");
+          }
+          recordMcpLoopbackToolCallResult({
+            captureHandle: capture,
+            toolName,
+            args,
+            outcome: mode === "failed" ? "failed" : "completed",
+            result: {
+              content: "Gateway result",
+              details: { ...(mode === "no-details" ? {} : { browserTab }), unrelated: "omit" },
+            },
+          });
+          markMcpLoopbackToolCallFinished(capture);
+        }
+        if (mode === "late-ambiguous") {
+          parser.push(startRecord("peer", name, args));
+        }
+        parser.push(resultRecord("tab", cliResult, mode === "cli-error"));
+        const toolEvents = events.filter(
+          (event) => event.stream === "tool" && event.data.toolCallId === "tab",
+        );
+        expect.soft(toolEvents.map((event) => [event.data.phase, event.data.name])).toEqual([
+          ["start", toolName],
+          ["result", toolName],
+        ]);
+        // Scalar CLI text becomes a text block so the Control UI still shows it as output.
+        expect(toolEvents[1]?.data.result).toEqual(
+          mode === "host-record"
+            ? { content: cliText, details: { cli: "kept", browserTab } }
+            : mode === "host" || mode === "host-blocks" || mode === "node"
+              ? { content: cliText, details: { browserTab } }
+              : "CLI result",
+        );
+      } finally {
+        tracking.finalizeCapture(() => {});
+      }
+    },
+  );
+
   it.each([undefined, "side-question"] as const)(
     "keeps input progress separate from execution in %s mode",
     (executionMode) => {
@@ -165,7 +260,7 @@ describe("cli tool result events", () => {
     },
   );
 
-  it("projects parsed loopback waits once without changing raw names or display result args", () => {
+  it("projects parsed loopback waits with canonical names without duplicating display result args", () => {
     const runId = "parsed-activity";
     const { handlers, events } = eventFixture(buildContext(runId));
     const parser = displayParser(handlers);
@@ -192,7 +287,11 @@ describe("cli tool result events", () => {
         ["tool", "result"],
         ["item", "end"],
       ]);
-      expect(operation[2]?.data).toMatchObject({ name, result: "raw result", isError });
+      expect(operation[2]?.data).toMatchObject({
+        name: name.replace(/^mcp__openclaw__/, ""),
+        result: "raw result",
+        isError,
+      });
       expect(operation[2]?.data.args).toBeUndefined();
       expect(operation[2]?.data.hideFromChannelProgress).toBeUndefined();
       expect(Boolean(operation[3]?.data.hideFromChannelProgress)).toBe(quiet);

@@ -4,6 +4,7 @@ import { resolveGatewayOwnerOnlyToolDenylist } from "../../security/dangerous-to
 import {
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
+  bindCronRequesterGrant,
 } from "../cron-creator-authority-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
@@ -23,7 +24,6 @@ export function prepareSessionPortalToolAccess(input: {
   sandboxed: boolean;
   runId?: string;
   cronSelfRemoveOnlyJobId?: string;
-  automationReadOnly?: boolean;
 }) {
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(input.runId);
   // A scheduled run gets its self-scoped tool, not sender/administrator authority.
@@ -31,23 +31,20 @@ export function prepareSessionPortalToolAccess(input: {
   const hasAutomationGrant = Boolean(
     input.cronSelfRemoveOnlyJobId ||
     cronCreatorAuthorityResolver ||
+    bindCronRequesterGrant(input.runId) ||
     bindCronManagementGrant(input.runId),
   );
   const sessionPortalTarget =
     input.senderIsOwner === false && !input.sandboxed
       ? prepareSessionPortalToolTarget(input)
       : undefined;
-  // Recovery can inspect caller-scoped records without restoring an owner or
-  // creator grant. An absent caller identity must never become an unscoped read.
-  const scopedAutomationRead =
-    input.automationReadOnly === true && Boolean(input.agentId?.trim() && input.sessionKey?.trim());
   // Sessions owns its assignment/control action gates; portal and automation
   // remain scoped exceptions. Other control-plane tools require owner authority.
   const ownerOnlyCoreToolDenylist = resolveGatewayOwnerOnlyToolDenylist(input.senderIsOwner).filter(
     (name) =>
       (name !== "portal" || !sessionPortalTarget) &&
       name !== "sessions" &&
-      (name !== AUTOMATIONS_TOOL_NAME || (!hasAutomationGrant && !scopedAutomationRead)),
+      (name !== AUTOMATIONS_TOOL_NAME || !hasAutomationGrant),
   );
   return {
     sessionPortalTarget,

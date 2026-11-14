@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [],
   })),
   registerCuaDriverDoctorChecks: vi.fn(),
+  registerOpenAIDoctorChecks: vi.fn(),
   registerMemoryCoreDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),
   registerWorkerProviderDoctorChecks: vi.fn(),
@@ -55,7 +56,9 @@ const mocks = vi.hoisted(() => ({
         ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
         : dirName === "codex"
           ? mocks.registerCodexManagedAppServerDoctorChecks()
-          : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
+          : dirName === "openai"
+            ? { registerOpenAIDoctorChecks: mocks.registerOpenAIDoctorChecks }
+            : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
   ),
   resolveProviderPolicySurface: vi.fn((): ProviderPolicySurface | null => ({
     inspectEmbeddingProviderSetup: mocks.inspectEmbeddingProviderSetup,
@@ -242,6 +245,7 @@ it("registers update readiness without loading unselected runtime health APIs", 
   expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
   expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
   expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
+  expect(mocks.registerOpenAIDoctorChecks).not.toHaveBeenCalled();
   expect(mocks.registerCuaDriverDoctorChecks).not.toHaveBeenCalled();
   expect(mocks.loadBundledPluginManifestRegistry).not.toHaveBeenCalled();
 });

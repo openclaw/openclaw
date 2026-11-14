@@ -161,7 +161,7 @@ counts, event-loop delay samples, provider operation names, child-process exit
 state, and startup error names/messages. Treat timeline files as local
 diagnostics artifacts; review before sharing them outside your machine.
 
-Embedded model requests add a `provider.request.started` mark and one terminal
+Embedded and prepared simple model calls add a `provider.request.started` mark and one terminal
 `provider.request` record, correlated by run and call/span ids. While streaming,
 `provider.request.activity` marks sample observed chunks at most once per 30
 seconds using the existing stream-progress reporter. The terminal
@@ -171,6 +171,13 @@ observed), and a bounded `terminalReason`. Activity includes bookkeeping chunks;
 it does not prove visible output, and delayed result settlement does not refresh
 an already observed terminal chunk. An unknown reason or absent activity is not
 evidence of a provider, timeout, or CPU failure.
+
+These records identify a logical call, not a physical HTTP attempt. Terminal
+records include available normalized usage and its availability state. Explicit
+billed-zero usage is distinct from an unreported or unavailable observation.
+`model.usage` marks retain auxiliary or aggregate usage separately; they can
+mirror call usage and must not be summed with it. No prompt or response bodies
+are added by these accounting fields.
 
 `model.recovery.decision` marks report the existing attempt owner's accepted or
 rejected recovery branch alongside replay-safety and prior tool-settlement
@@ -184,6 +191,15 @@ Timeline writes batch adjacent events with the same destination into a bounded
 process exit. Event timestamps reflect emission time. Writes remain best-effort;
 a forced kill can lose pending output. External harnesses should read the final
 artifact after the process exits and must not truncate it while the process runs.
+
+Each writer capture adds `captureId`, consecutive `sequence`, and sticky
+`failedWrites` attributes. An exclusive Gateway marks `timeline.capture.started`
+before admitting work and `timeline.capture.completed` after canonical shutdown
+and retained cleanup join. Only a terminal `complete: true`, continuous rows,
+zero write failures, and a cleanly joined child can certify the observed logical
+call lifetime. A missing terminal, partial line, retained resource, or write loss
+cannot certify completeness. This does not extend coverage to provider-internal
+requests or external runtime billing.
 
 ## Where logs go
 

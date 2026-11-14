@@ -512,7 +512,7 @@ process.exitCode = (await completion).code ?? 1;`,
     ];
     // Keep each real runner's generation and cleanup independent; reuse only compiled bytes.
     const childEnv =
-      preparedCompiler && (route === "main" || route === "batch")
+      preparedCompiler && (route === "main" || route === "batch" || route === "live")
         ? preparedCompiler.env(env, "node")
         : env;
     try {

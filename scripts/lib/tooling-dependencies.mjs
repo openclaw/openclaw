@@ -237,9 +237,15 @@ if (root) {
           ? root
           : contained(root, join(root, relative(checkout, owner.directory)));
       const directory = qualifiedPackage(owner.manifest, root, specifier, consumer, donor);
-      resolved = nextResolve(specifier, {
+      const donorParent = join(donor, "package.json");
+      // CJS nextResolve retains its original parent. Resolve exports from the
+      // qualified donor before passing its absolute entry through the hook chain.
+      const request = context.conditions.includes("require")
+        ? createRequire(donorParent).resolve(specifier)
+        : specifier;
+      resolved = nextResolve(request, {
         ...context,
-        parentURL: pathToFileURL(join(donor, "package.json")).href,
+        parentURL: pathToFileURL(donorParent).href,
       });
       contained(directory, fileURLToPath(resolved.url));
       return resolved;

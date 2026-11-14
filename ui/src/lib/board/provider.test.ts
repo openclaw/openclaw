@@ -292,6 +292,82 @@ describe("board leases", () => {
   });
 });
 describe("board snapshots and refreshes", () => {
+  it("retains unchanged report data while applying full snapshots and layout changes", async () => {
+    const report = (name: string) =>
+      widget({
+        name,
+        contentKind: "plugin",
+        pluginKind: "session:report",
+        instanceId: `report-${name}`,
+        props: { blocks: [{ type: "text", text: name }] },
+      });
+    const initial = snapshot(1, { widgets: [report("first"), report("second")] });
+    const f = fixture(initial);
+    await loaded(f.p, initial);
+    const changed = {
+      ...initial.widgets[0]!,
+      revision: 2,
+      props: { blocks: [{ type: "text", text: "Updated report" }] },
+    };
+    const refresh = snapshot(2, { widgets: [changed, structuredClone(initial.widgets[1]!)] });
+    f.request.mockResolvedValueOnce(refresh);
+    f.client.emit("board.changed", { sessionKey: KEY, revision: 2, widget: "first" });
+    await loaded(f.p, refresh);
+    expect(f.p.snapshot$.value.widgets[0]).toBe(changed);
+    const retained = f.p.snapshot$.value.widgets[1]!;
+    expect(retained).toBe(initial.widgets[1]);
+
+    const moved = {
+      ...structuredClone(retained),
+      sizeW: 8,
+      position: 0,
+      kindLabel: "Saved report",
+    };
+    const layout = snapshot(3, { widgets: [moved, { ...changed, position: 1 }] });
+    f.request.mockResolvedValueOnce(layout);
+    await f.p.applyOps([{ kind: "widget_resize", name: "second", sizeW: 8, sizeH: 4 }]);
+    expect(f.p.snapshot$.value).toEqual(layout);
+    expect(f.p.snapshot$.value.widgets[0]!.props).toBe(retained.props);
+
+    const withoutLabel = report("second");
+    const cleared = snapshot(4, { widgets: [withoutLabel] });
+    f.request.mockResolvedValueOnce(cleared);
+    await f.p.applyOps([{ kind: "widget_remove", name: "first" }]);
+    expect(f.p.snapshot$.value).toEqual(cleared);
+    expect(f.p.snapshot$.value.widgets[0]!.props).toBe(retained.props);
+    expect(f.p.snapshot$.value.widgets[0]).not.toHaveProperty("kindLabel");
+  });
+  it.each(["revision", "instance", "named refresh", "missing identity", "ticket"] as const)(
+    "does not retain report data across %s changes",
+    async (change) => {
+      const original = widget({
+        contentKind: "plugin",
+        pluginKind: "session:report",
+        instanceId: change === "missing identity" ? undefined : "report-instance",
+        props: { blocks: [{ type: "text", text: "Before" }] },
+      });
+      const f = fixture(snapshot(1, { widgets: [original] }));
+      await loaded(f.p, f.initial);
+      const replacement = {
+        ...original,
+        ...(change === "revision" ? { revision: 2 } : {}),
+        ...(change === "instance" ? { instanceId: "replacement-instance" } : {}),
+        ...(change === "ticket"
+          ? { viewTicket: "new-ticket", viewTicketTtlMs: 60_000, frameUrl: "/new-frame" }
+          : {}),
+        props: { blocks: [{ type: "text", text: "After" }] },
+      };
+      const refreshed = snapshot(2, { widgets: [replacement] });
+      f.request.mockResolvedValueOnce(refreshed);
+      f.client.emit("board.changed", {
+        sessionKey: KEY,
+        revision: 2,
+        ...(change === "named refresh" ? { widget: original.name } : {}),
+      });
+      await loaded(f.p, refreshed);
+      expect(f.p.snapshot$.value.widgets[0]).toBe(replacement);
+    },
+  );
   it.each([null, { widgets: [{}] }, { tabs: [{}] }])(
     "ignores malformed cache %j but permits a valid restore",
     (raw) => {

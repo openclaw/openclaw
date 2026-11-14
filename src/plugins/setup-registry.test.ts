@@ -305,6 +305,30 @@ describe("setup registry", () => {
     expect(healthyRegister).toHaveBeenCalledTimes(1);
   });
 
+  it("shares per-record setup registration across caller-supplied manifest views", () => {
+    const first = fixture({ id: "first-plugin" }) as ManifestRecord;
+    const second = fixture({ id: "second-plugin" }) as ManifestRecord;
+    const register = vi.fn((api: SetupRegistryApi, source: string) =>
+      api.registerProvider({
+        id: source.includes(first.rootDir) ? "first" : "second",
+        label: "Setup",
+        auth: [],
+      }),
+    );
+    registration(register);
+    const view = (...plugins: ManifestRecord[]) =>
+      resolveRegistry({ manifestRegistry: { plugins, diagnostics: [] } }).providers.map(
+        (entry) => entry.provider.id,
+      );
+
+    expect(view(first, second)).toEqual(["first", "second"]);
+    expect(view(second)).toEqual(["second"]);
+    expect(view(first, second)).toEqual(["first", "second"]);
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(view({ ...second })).toEqual(["second"]);
+    expect(register).toHaveBeenCalledTimes(3);
+  });
+
   it("ignores late contributions and handles rejected async registration", async () => {
     setupPlugin({ id: "async-plugin" });
     registration((api) => {

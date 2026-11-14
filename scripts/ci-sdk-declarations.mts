@@ -129,7 +129,8 @@ function pack(root: string) {
     }
     return [file, fs.readFileSync(target, "utf8")];
   });
-  const bytes = Buffer.from(JSON.stringify({ version: 1, key: cacheIdentity(root).key, files }));
+  const key = cacheIdentity(root).key;
+  const bytes = Buffer.from(JSON.stringify({ version: 1, key, files }));
   if (bytes.length > maxExpandedBytes) {
     throw new Error("Prepared SDK exceeds the transport size limit");
   }
@@ -141,6 +142,7 @@ function pack(root: string) {
   fs.mkdirSync(path.dirname(archive), { recursive: true });
   fs.writeFileSync(archive, packed);
   console.log(`Prepared SDK archive: ${files.length} files, ${packed.length} bytes`);
+  return key;
 }
 
 function restore(root: string, required: boolean) {
@@ -203,6 +205,7 @@ function restore(root: string, required: boolean) {
     fs.rmSync(sdk, { recursive: true, force: true });
     throw error;
   }
+  return payload.key;
 }
 
 async function main() {
@@ -210,6 +213,7 @@ async function main() {
   const [operation, ...args] = process.argv.slice(2);
   await withDistArtifactOwnership(root, async () => {
     await ensureKyselyTypes(root);
+    let cacheKey: string | undefined;
     if (operation === "key") {
       const identity = cacheIdentity(root);
       const values = {
@@ -228,11 +232,12 @@ async function main() {
       }
       console.log(JSON.stringify(values));
     } else if (operation === "pack") {
-      pack(root);
+      cacheKey = pack(root);
     } else if (operation === "restore") {
       const required = args.includes("--required");
       try {
-        restore(root, required);
+        const restoredKey = restore(root, required);
+        cacheKey = required ? restoredKey : undefined;
       } catch (error) {
         if (required) {
           throw error;
@@ -248,6 +253,9 @@ async function main() {
       console.log("Prepared SDK receipt is current");
     } else {
       throw new Error(`Unknown SDK declaration operation: ${operation}`);
+    }
+    if (cacheKey && process.env.GITHUB_OUTPUT) {
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, `cache-key=${cacheKey}\n`);
     }
   });
 }

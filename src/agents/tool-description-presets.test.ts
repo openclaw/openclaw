@@ -38,61 +38,42 @@ it("distinguishes secret config references from egress permission without offeri
 const SESSION_LINK_BASE = "http://127.0.0.1:18789/control";
 const SESSION_LINK_LINE =
   "When pointing the user at a session, cite its Control UI URL: main session -> `http://127.0.0.1:18789/control/chat/<agentId>`; any other display session key -> `http://127.0.0.1:18789/control/chat/<agentId>/~key/` + key minus `agent:<agentId>:`, with `:` replaced by `/`.";
-const SESSION_DESCRIPTIONS = [
-  [
-    "sessions_list",
-    describeSessionsListTool,
-    "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner. Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately. Use before history/send target selection.",
-  ],
-  [
-    "sessions_history",
-    describeSessionsHistoryTool,
-    "Read sanitized visible-session history. Before reply/debug/resume. Use messageId for anchored history; sessionId selects its transcript and requires messageId. Omit both for the latest tail. offset pages unanchored history and is ignored with messageId. limit bounds either mode. Include tool messages with includeTools. pendingInputs are accepted inputs outside model history; page with pendingBefore=nextBefore. Cancelled inputs never replay; interrupted means saved without an active retry. Eligible durable peer sends can regain queued custody on startup. Lower limit for richer pending previews.",
-  ],
-  [
-    "sessions_search",
-    describeSessionsSearchTool,
-    "Search visible past sessions for matching user and assistant text.",
-  ],
-] as const;
-
-it.each(SESSION_DESCRIPTIONS)(
-  "keeps %s bytes unchanged without a link base",
-  (_tool, describe, original) => {
-    expect(describe()).toBe(original);
+it.each([describeSessionsListTool, describeSessionsHistoryTool, describeSessionsSearchTool])(
+  "only appends the shared link rule to %s when configured",
+  (describe) => {
+    const original = describe();
+    expect(original).not.toContain("When pointing the user at a session");
+    expect(describe({ sessionLinkBase: SESSION_LINK_BASE })).toBe(
+      `${original} ${SESSION_LINK_LINE}`,
+    );
   },
 );
 
-it.each(SESSION_DESCRIPTIONS)("appends the shared link rule to %s", (_tool, describe, original) => {
-  expect(describe({ sessionLinkBase: SESSION_LINK_BASE })).toBe(`${original} ${SESSION_LINK_LINE}`);
-});
-
 it("distinguishes sessions_send local context selection from exact external addressing", () => {
+  const description = describeSessionsSendTool();
   expect(SESSIONS_SEND_TOOL_DISPLAY_SUMMARY).toContain("same-Gateway");
-  expect(describeSessionsSendTool()).toContain("on this Gateway");
-  expect(describeSessionsSendTool()).toContain("not an external address");
-  expect(describeSessionsSendTool()).not.toContain("conversations_");
-  expect(describeSessionsSendTool()).toContain(
-    "When a new turn starts, its reply reaches you once",
-  );
-  expect(describeSessionsSendTool()).toContain("Continue with another sessions_send");
-  expect(describeSessionsSendTool()).toContain("post to channels with message");
-  expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
-  expect(describeSessionsSendTool()).toContain("neither proves target completion");
-  expect(describeSessionsSendTool()).toContain("Ordinary peer sends start a separate turn.");
-  expect(describeSessionsSendTool()).toContain(
+
+  expect(description).toContain("on this Gateway");
+  expect(description).toContain("not an external address");
+  expect(description).toContain("When a new turn starts, its reply reaches you once");
+  expect(description).toContain("Continue with another sessions_send");
+  expect(description).toContain("post to channels with message");
+  expect(description).toContain('`targetDisposition: "queued"` or `"steered"`');
+  expect(description).toContain("neither proves target completion");
+  expect(description).toContain("Ordinary peer sends start a separate turn.");
+  expect(description).toContain(
     "A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue.",
   );
-  expect(describeSessionsSendTool()).toContain(
-    "An idle recipient or a default self-send starts a new turn",
-  );
-  expect(describeSessionsSendTool()).toContain(
+  expect(description).toContain("An idle recipient or a default self-send starts a new turn");
+  expect(description).toContain(
     "mode:followup always starts a separate turn and preserves its independent reply",
   );
+  expect(description).not.toContain("conversations_");
 });
 
 it("bounds sessions_spawn API investigation handoffs without delegating quick lookups", () => {
   const description = describeSessionsSpawnTool();
+
   expect(description).toContain(
     "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent.",
   );

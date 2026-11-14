@@ -1,4 +1,5 @@
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 // Defaults for agent metadata when upstream does not supply them.
 // Keep this aligned with the product-level latest-model baseline.
@@ -24,4 +25,25 @@ export function createNativeModelOwnedRuntimeModel(params: {
     contextWindow: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
   };
+}
+
+/**
+ * Returns the structural model when the selected plugin harness lists this exact model itself.
+ * Native rows carry no host transport, so host model resolution cannot materialize them.
+ */
+export function resolveNativeOwnedRuntimeModel(params: {
+  catalog: Pick<ModelCatalogSnapshot, "entries" | "routeVariants"> | undefined;
+  provider: string;
+  modelId: string;
+  runtimeId: string | undefined;
+}): ProviderRuntimeModel | undefined {
+  const { catalog, provider, modelId, runtimeId } = params;
+  if (!catalog || !runtimeId || runtimeId === "openclaw") {
+    return undefined;
+  }
+  const owned = (entry: ModelCatalogSnapshot["entries"][number]) =>
+    entry.provider === provider && entry.id === modelId && entry.nativeRuntime === runtimeId;
+  return catalog.entries.some(owned) || catalog.routeVariants.some(owned)
+    ? createNativeModelOwnedRuntimeModel({ provider, modelId })
+    : undefined;
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -185,7 +186,7 @@ describe("update run history reads", () => {
               : reader === "list-async"
                 ? await listUpdateRunsAsync({}, options)
                 : reader === "status"
-                  ? await getUpdateRunStatusAsync(options)
+                  ? await withArtifactPreservingStateReads(() => getUpdateRunStatusAsync(options))
                   : findActiveUpdateRun(options);
       expect(result).toEqual(
         reader === "status"
@@ -252,10 +253,14 @@ describe("update run history reads", () => {
       expect(getUpdateRun(created.runId, options)).toEqual(created);
       expect(listUpdateRuns({}, options)).toEqual([created]);
       expect(findActiveUpdateRun(options)).toEqual(created);
+      expect(await getUpdateRunStatusAsync(options)).toEqual({
+        activeRun: created,
+        lastRun: created,
+      });
       for (const read of [
         () => getUpdateRunAsync(created.runId, options),
         () => listUpdateRunsAsync({}, options),
-        () => getUpdateRunStatusAsync(options),
+        () => withArtifactPreservingStateReads(() => getUpdateRunStatusAsync(options)),
       ]) {
         await expect(read()).rejects.toThrow(
           "Asynchronous shared-state reads cannot run inside a native transaction",

@@ -411,6 +411,7 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   String.raw`(AIza[0-9A-Za-z\-_]{20,})`,
   String.raw`(ya29\.[0-9A-Za-z_\-./+=]{10,})`,
   String.raw`(1//0[0-9A-Za-z_\-./+=]{10,})`,
+  String.raw`(GOCSPX-[A-Za-z0-9_-]{20,})`,
   String.raw`(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})`,
   String.raw`(pplx-[A-Za-z0-9_-]{10,})`,
   String.raw`(fal_[A-Za-z0-9_-]{10,})`,

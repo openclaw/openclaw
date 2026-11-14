@@ -13,8 +13,7 @@ import {
   TEST_MEETING_URL,
   testMeetingObservation,
 } from "./observation-provenance.test-support.js";
-import { createParticipationTestRuntime } from "./session-runtime.test-support.js";
-import type { MeetingTranscriptSnapshot } from "./session-types.js";
+import { captionSnapshot, createParticipationTestRuntime } from "./session-runtime.test-support.js";
 
 type UtteranceHandler = (row: TranscriptUtterance) => void;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -43,19 +42,17 @@ it("retains provenance on existing utterance rows and subscriber replay, not on 
     source: { ...TEST_CAPTION_SOURCE, revision: "1", finalized: false },
     provenance: testMeetingObservation({ observationId: "pending-observation" }),
   };
-  let snapshot: MeetingTranscriptSnapshot = {
-    droppedLines: 0,
-    epoch: "epoch-1",
-    lines: [],
-    pendingLines: [pending],
-  };
+  let snapshot = captionSnapshot([], { epoch: "epoch-1", pendingLines: [pending] });
   const { runtime } = createParticipationTestRuntime({
     durableTranscripts: { stateDir },
     transcribe: true,
     captureTranscript: async () => await readTestMeetingTranscript(snapshot),
   });
   const { session } = await runtime.join({ url: TEST_MEETING_URL, agentId: "operator" });
-  const delivered = vi.fn<UtteranceHandler>();
+  const revisionsAtDelivery: Array<string | undefined> = [];
+  const delivered = vi.fn<UtteranceHandler>(() => {
+    revisionsAtDelivery.push(runtime.participationContext(session.id).sources[0]?.revision);
+  });
   const subscribe = async (sessionId: string, onUtterance: UtteranceHandler = delivered) => {
     const result = await runtime.startTranscriptSource({
       session: {
@@ -75,8 +72,8 @@ it("retains provenance on existing utterance rows and subscriber replay, not on 
   ];
   try {
     const descriptor = await store.readSession(session.id);
-    expect(descriptor).toBeDefined();
     expect(await store.readUtterancesForSession(descriptor!)).toEqual([]);
+    expect(runtime.participationContext(session.id)).toMatchObject({ sourceOrder: 1, sources: [] });
     const editingSubscriber = vi.fn((row: TranscriptUtterance) => {
       const observation = row.metadata?.meetingObservationProvenance;
       if (observation && typeof observation === "object" && "speaker" in observation) {
@@ -95,19 +92,28 @@ it("retains provenance on existing utterance rows and subscriber replay, not on 
       [`${session.id}:2`, legacy.text, expectedMetadata[2]],
     ]);
     expect(delivered.mock.calls.map(([row]) => row.metadata)).toEqual(expectedMetadata);
-    expect(editingSubscriber).toHaveBeenCalledTimes(3);
+    expect(revisionsAtDelivery).toEqual(["2", "2", "2"]);
     expect(editingSubscriber.mock.calls[0]?.[0].metadata).toMatchObject({
       meetingObservationProvenance: { speaker: "Subscriber-local edit" },
     });
     const sourceId = runtime.participationContext(session.id).sources[0]?.sourceId;
     expect(sourceId).toBeTruthy();
 
-    // Observation-only revisions must not create utterances or action sources.
     const later = testMeetingObservation({ observationId: "later" });
     snapshot = { ...snapshot, lines: [{ ...committed, provenance: later }, ineligible, legacy] };
     await runtime.transcript(session.id);
     expect(await store.readUtterancesForSession(descriptor!)).toEqual(stored);
     expect(runtime.participationContext(session.id).sources[0]?.sourceId).toBe(sourceId);
+    expect(delivered).toHaveBeenCalledTimes(3);
+
+    snapshot = {
+      ...snapshot,
+      pendingLines: [{ ...pending, source: { ...pending.source, revision: "3" } }],
+    };
+    const corrected = await runtime.transcript(session.id);
+    expect(corrected.lines).toEqual([committed, ineligible, legacy]);
+    expect(runtime.participationContext(session.id).sources).toEqual([]);
+    expect(await store.readUtterancesForSession(descriptor!)).toEqual(stored);
     expect(delivered).toHaveBeenCalledTimes(3);
 
     const replayed = vi.fn<UtteranceHandler>();
@@ -117,7 +123,6 @@ it("retains provenance on existing utterance rows and subscriber replay, not on 
     await runtime.leave(session.id);
   }
 
-  // Verify retention after reopening the real database.
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();

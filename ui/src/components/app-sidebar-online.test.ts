@@ -454,7 +454,7 @@ describe("sidebar people workload", () => {
     expect(dom.text(".sidebar-online .sidebar-session-empty-hint")).toBe(
       "No people match this filter",
     );
-    expect(sidebar.querySelector(".sidebar-online [aria-haspopup=dialog]")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-online__filter-toggle")).not.toBeNull();
     sidebar.people.resetView();
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);

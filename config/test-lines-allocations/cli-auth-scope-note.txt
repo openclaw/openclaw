@@ -1,0 +1,3 @@
+# Retained CLI scope-note regressions cover solo/shared, configured sharing,
+# unreadable state, local Gateway presentation, and unchanged chat/remote surfaces.
+91

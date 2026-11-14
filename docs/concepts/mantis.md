@@ -484,7 +484,7 @@ slow or unavailable, add it behind the same Crabbox interface rather than
 hardcoding a fallback.
 
 VM baseline: Linux with a desktop-capable Chrome/Chromium, CDP access, VNC/
-noVNC, Node 24.16+ or 26.1+ and pnpm, an OpenClaw checkout, and
+noVNC, Node 24.22.1+ or 26.12.1+ and pnpm, an OpenClaw checkout, and
 outbound access to the target transport, GitHub, model providers, and the
 credential broker.
 

@@ -54,7 +54,7 @@ export function attachRelayOwner(params: {
   const captureFor = (ref: string) => {
     assertCurrent();
     const capture = captures.get(ref);
-    if (!capture || capture.expires <= Date.now()) {
+    if (!capture || capture.expires <= performance.now()) {
       captures.delete(ref);
       return undefined;
     }
@@ -148,7 +148,7 @@ export function attachRelayOwner(params: {
           captures.set(ref, {
             resolve: captured,
             isCurrent: captured.isCurrent,
-            expires: Date.now() + RELAY_OPERATION_TTL_MS,
+            expires: performance.now() + RELAY_OPERATION_TTL_MS,
             timer,
           });
           return ref;

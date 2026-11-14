@@ -15,7 +15,6 @@ import {
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
-import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { renderCodexAppServerFailureCopy } from "../agents/failover/user-copy.js";
@@ -169,7 +168,7 @@ export type AgentEventHandlerOptions = {
   getSessionRowProjection?: () => SessionRowProjection | undefined;
   persistGatewaySessionLifecycleEventForEvent?: typeof persistGatewaySessionLifecycleEvent;
   lifecycleErrorRetryGraceMs?: number;
-  isChatSendRunActive?: (runId: string) => boolean;
+  delegateChatError?: (runId: string) => boolean;
   clearTrackedActiveRun?: (params: {
     runId: string;
     clientRunId: string;
@@ -239,7 +238,7 @@ export function createAgentEventHandler({
   getSessionRowProjection,
   persistGatewaySessionLifecycleEventForEvent = persistGatewaySessionLifecycleEvent,
   lifecycleErrorRetryGraceMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
-  isChatSendRunActive = () => false,
+  delegateChatError = () => false,
   clearTrackedActiveRun,
   settleTrackedTerminal,
   trackTrackedRunTerminalPersistence,
@@ -281,8 +280,6 @@ export function createAgentEventHandler({
   type TerminalLifecycleOptions = {
     publishLifecycle?: boolean;
     skipChatErrorFinal?: boolean;
-    suppressRestartRecoveryProjection?: boolean;
-    restartRecoveryState?: { suppress: boolean };
   };
   type PendingTerminalLifecycleError = {
     timer: NodeJS.Timeout;
@@ -405,27 +402,16 @@ export function createAgentEventHandler({
     const deliverySessionKeys = sessionKey
       ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId)
       : [];
-    const suppressRestartRecoveryProjection =
-      opts?.suppressRestartRecoveryProjection === true ||
-      Boolean(
-        evt.lifecycleGeneration &&
-        activeLifecycleGeneration &&
-        evt.lifecycleGeneration !== activeLifecycleGeneration,
-      ) ||
-      opts?.restartRecoveryState?.suppress === true;
-    const isSupersededRestartRecoveryEvent =
-      suppressRestartRecoveryProjection &&
-      Boolean(
-        evt.lifecycleGeneration &&
-        currentLifecycleGeneration &&
-        evt.lifecycleGeneration !== currentLifecycleGeneration,
-      );
-    if (isSupersededRestartRecoveryEvent) {
+    if (
+      evt.lifecycleGeneration &&
+      currentLifecycleGeneration &&
+      evt.lifecycleGeneration !== currentLifecycleGeneration
+    ) {
       return;
     }
     clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
     const terminalPersistence =
-      sessionKey && !suppressRestartRecoveryProjection && projectSessionLifecycle
+      sessionKey && projectSessionLifecycle
         ? persistGatewaySessionLifecycleEventForEvent({
             sessionKey,
             agentId: sessionAgentId,
@@ -441,7 +427,6 @@ export function createAgentEventHandler({
     if (
       opts?.publishLifecycle !== false &&
       !replyDispatchOwnsCompletion &&
-      !suppressRestartRecoveryProjection &&
       sessionKey &&
       (isControlUiVisible ||
         (projectSessionMessages &&
@@ -471,40 +456,132 @@ export function createAgentEventHandler({
         const terminalClassification = classifyAgentRunTerminalOutcome(terminalOutcome);
         const terminalState = CHAT_STATE_BY_TERMINAL_CLASSIFICATION[terminalClassification];
         if (!(opts?.skipChatErrorFinal && terminalState === "error")) {
-          emitChatTerminal(
-            {
-              sessionKey: terminalSessionKey,
-              clientRunId: terminalRunId,
-              sourceRunId: evt.runId,
-              seq: evt.seq,
-              agentId: terminalAgentId,
-              controlUiVisible: isControlUiVisible,
-              firstAssistantTimingEntry: finished,
-            },
-            terminalState,
-            terminalOutcome.error ?? evt.data?.error,
-            terminalOutcome.stopReason,
-            // Timeout is a recorded classification, not event metadata: the
-            // lifecycle producer emits no errorKind, so without this the UI
-            // shows a generic "failed" while sessions.list says "timeout".
+          const terminalDelivery = {
+            sessionKey: terminalSessionKey,
+            clientRunId: terminalRunId,
+            sourceRunId: evt.runId,
+            seq: evt.seq,
+            agentId: terminalAgentId,
+            controlUiVisible: isControlUiVisible,
+            firstAssistantTimingEntry: finished,
+          };
+          const terminalError = terminalOutcome.error ?? evt.data?.error;
+          const terminalStopReason = terminalOutcome.stopReason;
+          // Timeout is a recorded classification, not event metadata: the
+          // lifecycle producer emits no errorKind, so without this the UI
+          // shows a generic "failed" while sessions.list says "timeout".
+          const terminalErrorKind =
             terminalClassification === "timeout"
               ? "timeout"
               : (readChatErrorKind(evt.data?.errorKind) ??
-                  resolveChatErrorKindFromError(evt.data?.error)),
-            {
-              abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
-              yielded: yieldedWaiting ? true : undefined,
-              errorObservation: evt.data?.errorObservation,
-              suppressErrorNotice: evt.data?.suppressErrorNotice === true,
-              assistantTranscriptIdempotencyKey: readStringValue(
-                evt.data?.assistantTranscriptIdempotencyKey,
-              ),
-              terminalPersistence,
-              terminalReply: normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply),
-              isCurrent: () =>
-                shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration),
-            },
+                resolveChatErrorKindFromError(evt.data?.error));
+          const terminalAbortErrorMessage = readToolValidationErrorSummary(
+            evt.data?.toolErrorSummary,
           );
+          const terminalYielded = yieldedWaiting ? true : undefined;
+          const terminalErrorObservation = evt.data?.errorObservation;
+          const terminalSuppressErrorNotice = evt.data?.suppressErrorNotice === true;
+          const terminalAssistantTranscriptIdempotencyKey = readStringValue(
+            evt.data?.assistantTranscriptIdempotencyKey,
+          );
+          const terminalReply = normalizeAgentRunTerminalReplySnapshot(evt.data?.terminalReply);
+          const terminalIsCurrent = () =>
+            shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration);
+
+          const terminalSequence = terminalDelivery.seq;
+          const readBuffer = chatRunState.captureFinalBuffer(terminalRunId);
+          const run = chatRunState.runs.get(terminalRunId);
+          const canvasBlocks = run?.canvasBlocks ?? [];
+          const canvasOnly =
+            terminalState === "done" &&
+            canvasBlocks.length > 0 &&
+            !(run?.rawBuffer ?? run?.buffer ?? "").trim();
+          const timestamp = Date.now();
+          const spawnedBy = resolveSpawnedBy(terminalSessionKey);
+          flushBufferedChatDeltaIfNeeded(terminalDelivery);
+          const publishTerminal = () => {
+            const terminalBuffer = readBuffer();
+            const text = terminalBuffer.text;
+            const shouldSuppressSilent = terminalReply?.disposition === "silent";
+            const hasDisplayContent = Boolean(text || terminalBuffer.displayText);
+            const terminalPayload = {
+              runId: terminalRunId,
+              sessionKey: terminalSessionKey,
+              ...(terminalAgentId ? { agentId: terminalAgentId } : {}),
+              ...(spawnedBy && { spawnedBy }),
+              seq: terminalSequence,
+            };
+            const message =
+              (hasDisplayContent && !shouldSuppressSilent) || canvasOnly
+                ? projectChatTerminalMessage({
+                    runId: terminalRunId,
+                    text,
+                    displayText: terminalBuffer.displayText,
+                    timestamp,
+                    canvasBlocks,
+                    idempotencyKey: terminalAssistantTranscriptIdempotencyKey,
+                  })
+                : undefined;
+            if (terminalState !== "error") {
+              // Prepared silent output has no model text; tool-owned widgets remain visible.
+              const payload = {
+                ...terminalPayload,
+                state: terminalState === "done" ? ("final" as const) : ("aborted" as const),
+                ...(terminalState === "aborted" && terminalAbortErrorMessage
+                  ? { errorMessage: terminalAbortErrorMessage }
+                  : {}),
+                ...(terminalStopReason && { stopReason: terminalStopReason }),
+                ...(terminalState === "done" && terminalYielded ? { yielded: true as const } : {}),
+                message,
+              };
+              if (payload.message) {
+                emitFirstAssistantChatSendTiming(terminalDelivery.firstAssistantTimingEntry);
+              }
+              sendLivePayload("chat", terminalSessionKey, payload, terminalDelivery);
+              return;
+            }
+            const errorDetail = projectChatErrorDetail(terminalErrorObservation);
+            const errorMessage = terminalError ? formatForLog(terminalError) : undefined;
+            const payload = {
+              ...terminalPayload,
+              state: "error" as const,
+              ...(terminalAssistantTranscriptIdempotencyKey &&
+              hasDisplayContent &&
+              !shouldSuppressSilent
+                ? {
+                    message,
+                  }
+                : {}),
+              errorMessage: errorMessage
+                ? (renderCodexAppServerFailureCopy(errorMessage) ?? errorMessage)
+                : undefined,
+              ...(terminalErrorKind && { errorKind: terminalErrorKind }),
+              ...(terminalSuppressErrorNotice ? { suppressErrorNotice: true } : {}),
+              ...(errorDetail ? { errorDetail } : {}),
+              ...(terminalStopReason && { stopReason: terminalStopReason }),
+            };
+            sendLivePayload("chat", terminalSessionKey, payload, terminalDelivery);
+          };
+          const publish = () => {
+            if (
+              terminalIsCurrent() &&
+              !transcriptPublication.holdTerminal(terminalRunId, publishTerminal)
+            ) {
+              publishTerminal();
+            }
+          };
+          // Admit the error terminal before persistence cleanup retires its claim.
+          // The transcript barrier still checks its captured owner at actual delivery.
+          if (terminalState === "error" && terminalPersistence) {
+            void terminalPersistence.then(publish, publish).catch((publicationError: unknown) => {
+              logError(
+                `gateway: terminal chat publication failed: ${formatErrorMessage(publicationError)}`,
+              );
+            });
+          } else {
+            publish();
+          }
+          chatRunState.clearRun(terminalRunId);
         }
       }
     }
@@ -574,8 +651,7 @@ export function createAgentEventHandler({
       }
       pendingTerminalLifecycleErrors.delete(evt.runId);
       finalizeLifecycleEvent(pending.event, pending.opts);
-    }, lifecycleErrorRetryGraceMs);
-    timer.unref?.();
+    }, lifecycleErrorRetryGraceMs).unref();
     pendingTerminalLifecycleErrors.set(evt.runId, { timer, event: evt, opts });
   };
 
@@ -764,117 +840,6 @@ export function createAgentEventHandler({
         sessionSubscriptionVerified: true,
       });
     }
-  };
-
-  const emitChatTerminal = (
-    delivery: ChatDelivery,
-    jobState: "done" | "error" | "aborted",
-    error?: unknown,
-    stopReason?: string,
-    errorKind?: ChatErrorKind,
-    opts?: {
-      abortErrorMessage?: string;
-      yielded?: true;
-      errorObservation?: unknown;
-      suppressErrorNotice?: boolean;
-      assistantTranscriptIdempotencyKey?: string;
-      terminalPersistence?: Promise<void>;
-      terminalReply?: AgentRunTerminalReplySnapshot;
-      isCurrent?: () => boolean;
-    },
-  ) => {
-    const { sessionKey, clientRunId, seq, agentId } = delivery;
-    const readBuffer = chatRunState.captureFinalBuffer(clientRunId);
-    const run = chatRunState.runs.get(clientRunId);
-    const canvasBlocks = run?.canvasBlocks ?? [];
-    const canvasOnly =
-      jobState === "done" &&
-      canvasBlocks.length > 0 &&
-      !(run?.rawBuffer ?? run?.buffer ?? "").trim();
-    const timestamp = Date.now();
-    const spawnedBy = resolveSpawnedBy(sessionKey);
-    flushBufferedChatDeltaIfNeeded(delivery);
-    const publishTerminal = () => {
-      const terminalBuffer = readBuffer();
-      const text = terminalBuffer.text;
-      const shouldSuppressSilent = opts?.terminalReply?.disposition === "silent";
-      const hasDisplayContent = Boolean(text || terminalBuffer.displayText);
-      const terminalPayload = {
-        runId: clientRunId,
-        sessionKey,
-        ...(agentId ? { agentId } : {}),
-        ...(spawnedBy && { spawnedBy }),
-        seq,
-      };
-      const message =
-        (hasDisplayContent && !shouldSuppressSilent) || canvasOnly
-          ? projectChatTerminalMessage({
-              runId: clientRunId,
-              text,
-              displayText: terminalBuffer.displayText,
-              timestamp,
-              canvasBlocks,
-              idempotencyKey: opts?.assistantTranscriptIdempotencyKey,
-            })
-          : undefined;
-      if (jobState !== "error") {
-        // Prepared silent output has no model text; tool-owned widgets remain visible.
-        const payload = {
-          ...terminalPayload,
-          state: jobState === "done" ? ("final" as const) : ("aborted" as const),
-          ...(jobState === "aborted" && opts?.abortErrorMessage
-            ? { errorMessage: opts.abortErrorMessage }
-            : {}),
-          ...(stopReason && { stopReason }),
-          ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
-          message,
-        };
-        if (payload.message) {
-          emitFirstAssistantChatSendTiming(delivery.firstAssistantTimingEntry);
-        }
-        sendLivePayload("chat", sessionKey, payload, delivery);
-        return;
-      }
-      const errorDetail = projectChatErrorDetail(opts?.errorObservation);
-      const errorMessage = error ? formatForLog(error) : undefined;
-      const payload = {
-        ...terminalPayload,
-        state: "error" as const,
-        ...(opts?.assistantTranscriptIdempotencyKey && hasDisplayContent && !shouldSuppressSilent
-          ? {
-              message,
-            }
-          : {}),
-        errorMessage: errorMessage
-          ? (renderCodexAppServerFailureCopy(errorMessage) ?? errorMessage)
-          : undefined,
-        ...(errorKind && { errorKind }),
-        ...(opts?.suppressErrorNotice ? { suppressErrorNotice: true } : {}),
-        ...(errorDetail ? { errorDetail } : {}),
-        ...(stopReason && { stopReason }),
-      };
-      sendLivePayload("chat", sessionKey, payload, delivery);
-    };
-    const publish = () => {
-      if (
-        opts?.isCurrent?.() !== false &&
-        !transcriptPublication.holdTerminal(clientRunId, publishTerminal)
-      ) {
-        publishTerminal();
-      }
-    };
-    // Admit the error terminal before persistence cleanup retires its claim.
-    // The transcript barrier still checks its captured owner at actual delivery.
-    if (jobState === "error" && opts?.terminalPersistence) {
-      void opts.terminalPersistence.then(publish, publish).catch((publicationError: unknown) => {
-        logError(
-          `gateway: terminal chat publication failed: ${formatErrorMessage(publicationError)}`,
-        );
-      });
-    } else {
-      publish();
-    }
-    chatRunState.clearRun(clientRunId);
   };
 
   const sendAgentPayload = (
@@ -1079,7 +1044,7 @@ export function createAgentEventHandler({
     nodeSendToSession(firstDeliveryKey, "agent", nodePayload, { sessionKeys: deliveryKeys });
   };
 
-  const handleEvent = (event: AgentEventPayload, restartRecoveryState?: { suppress: boolean }) => {
+  const handleEvent = (event: AgentEventPayload) => {
     const evt = event as AgentEventRuntimePayload;
     const isCurrent = shouldProcessOwnedEvent.bind(
       null,
@@ -1121,18 +1086,13 @@ export function createAgentEventHandler({
     const recordsInFlightProgress =
       (Boolean(chatLink) && isControlUiVisible) || recordsEmbeddedProgress;
 
-    const suppressRestartRecoveryLifecycle =
+    if (
       lifecyclePhase !== null &&
-      (Boolean(evt.lifecycleGeneration && generation && evt.lifecycleGeneration !== generation) ||
-        restartRecoveryState?.suppress === true);
-    if (suppressRestartRecoveryLifecycle) {
+      evt.lifecycleGeneration &&
+      generation &&
+      evt.lifecycleGeneration !== generation
+    ) {
       clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
-      if (lifecyclePhase === "end" || lifecyclePhase === "error") {
-        finalizeLifecycleEvent(evt, {
-          suppressRestartRecoveryProjection: true,
-          restartRecoveryState,
-        });
-      }
       return;
     }
     if (lifecyclePhase !== null && lifecyclePhase !== "error") {
@@ -1417,7 +1377,7 @@ export function createAgentEventHandler({
     }
 
     if (lifecyclePhase === "error") {
-      const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
+      const skipChatErrorFinal = !chatLink && delegateChatError(evt.runId);
       const definitiveTerminal = isDefinitiveRunLifecycle({
         phase: lifecyclePhase,
         data: evt.data,
@@ -1425,9 +1385,9 @@ export function createAgentEventHandler({
       // Only retryable failures get grace. Definitive cancellation and timeout
       // must persist before dispatch closes the run and the sidebar reads its status.
       if (isAborted || definitiveTerminal || lifecycleErrorRetryGraceMs <= 0) {
-        // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
+        // finalizeLifecycleEvent clears the buffer itself, after terminal publication
         // has flushed the throttled tail and resolved the terminal message.
-        finalizeLifecycleEvent(evt, { skipChatErrorFinal, publishLifecycle, restartRecoveryState });
+        finalizeLifecycleEvent(evt, { skipChatErrorFinal, publishLifecycle });
       } else {
         if (evt.data.completionSource !== "reply-dispatch") {
           // Runtime retries isolate failed text; reply-dispatch retains its
@@ -1437,14 +1397,13 @@ export function createAgentEventHandler({
         scheduleTerminalLifecycleError(evt, {
           skipChatErrorFinal,
           publishLifecycle,
-          restartRecoveryState,
         });
       }
       return;
     }
 
     if (lifecyclePhase === "end") {
-      finalizeLifecycleEvent(evt, { publishLifecycle, restartRecoveryState });
+      finalizeLifecycleEvent(evt, { publishLifecycle });
       return;
     }
 
@@ -1468,7 +1427,6 @@ export function createAgentEventHandler({
 
   const handler = createAgentEventAdmission({
     handleEvent,
-    resolveEventSession,
     isCurrent: (evt) =>
       shouldProcessOwnedEvent(evt.runId, evt.contextClaimId, evt.lifecycleGeneration),
     dispose: () => {

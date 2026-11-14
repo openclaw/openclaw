@@ -9,11 +9,14 @@ import { expectInstalledCompletionProfile } from "./completion-profile.test-supp
 import {
   COMPLETION_SHELLS,
   formatCompletionReloadCommand,
+  isCompletionInstalled,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   type CompletionShell,
+  usesSlowDynamicCompletion,
 } from "./completion-runtime.js";
+import { formatCliFailureLines, isExpectedCliError } from "./failure-output.js";
 
 type PublishOutput = typeof import("./output-file.runtime.js").publishOutputFileAtomically;
 type SubcliGroups = typeof import("./program/register.subclis.js").getSubCliCompletionGroups;
@@ -157,6 +160,50 @@ describe("completion-cli write-state", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([
+    ["bash", false],
+    ["zsh", false],
+    ["bash", true],
+  ] as const)(
+    "prints recovery and preserves the %s profile (malformed UTF-8=%s)",
+    async (shell, malformed) => {
+      const profilePath = resolveCompletionProfilePath(shell);
+      if (malformed) {
+        await seedCache(shell);
+      }
+      const hook = `[ -f '${resolveCompletionCachePath(shell, "openclaw")}' ] && source '${resolveCompletionCachePath(shell, "openclaw")}'`;
+      const original = Buffer.from(
+        malformed ? `# caf\xe9\n# OpenClaw Completion\n${hook}\n` : "# existing shell settings\n",
+        "latin1",
+      );
+      await fs.writeFile(profilePath, original);
+      await expect(isCompletionInstalled(shell)).resolves.toBe(malformed);
+      await expect(usesSlowDynamicCompletion(shell)).resolves.toBe(false);
+
+      let caught: unknown;
+      try {
+        await runCompletion(["--shell", shell, "--install", "--yes"]);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(isExpectedCliError(caught)).toBe(true);
+      const lines = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: caught,
+        argv: ["node", "openclaw", "completion", "--shell", shell, "--install", "--yes"],
+      });
+      expect(lines.join("\n")).toMatch(
+        malformed
+          ? /left untouched[\s\S]*load the prepared cache/
+          : /openclaw completion --write-state/,
+      );
+      expect(lines.join("\n")).not.toContain("doctor");
+      await expect(fs.readFile(profilePath)).resolves.toEqual(original);
+      expectNoRegistration();
+    },
+  );
+
   it("preserves zsh completion when staged publication fails", async () => {
     const { cachePath, cacheDir } = await seedCache();
     publish.mockImplementationOnce(async (params) => {
@@ -272,9 +319,6 @@ describe("completion-cli write-state", () => {
 
     const { getCompletionScript } = await import("./completion-cli.js");
     await expect(fs.readFile(cachePath, "utf8")).resolves.toBe(getCompletionScript("zsh", program));
-    expect(publish).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: cachePath, tempPrefix: ".openclaw-completion-cache" }),
-    );
     await expectCacheModes(cachePath, cacheDir);
     await expect(fs.readFile(profilePath, "utf8")).resolves.toContain(cachePath);
     if (process.platform !== "win32") {

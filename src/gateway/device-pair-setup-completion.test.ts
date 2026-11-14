@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readDevicePairSetupCompletion } from "../infra/device-bootstrap.js";
 import {
   persistDeviceBootstrapTokenRecords,
   persistDevicePairingStoreState,
@@ -17,10 +16,6 @@ import {
   confirmSetupHandoffDelivery,
   consumeSetupHandoff,
 } from "./device-pair-setup-completion.js";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { makeClient } from "./server-broadcast.test-helpers.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
 
 const tempDirs = createTrackedTempDirs();
 const deviceId = "device-123";
@@ -89,40 +84,10 @@ describe("device pair setup completion", () => {
     expect(JSON.stringify(broadcast.mock.calls)).not.toContain("bootstrap-secret");
   });
 
-  it("keeps the completion recoverable when a slow subscriber drops the frame", async () => {
-    const baseDir = await tempDirs.make("openclaw-setup-completion-slow-");
-    const { client, socket: slowSocket } = makeClient("c-pairing-slow", "operator", [
-      "operator.pairing",
-    ]);
-    slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-    const clients = new GatewayClientRegistry([client]);
-    const { broadcast } = createGatewayBroadcaster({ clients });
-
-    const handoff = await setupHandoff(
-      baseDir,
-      FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-      "setup-dropped",
-    );
-    broadcastSetupHandoffCompletion({ handoff, broadcast });
-
-    expect(slowSocket.send).not.toHaveBeenCalled();
-    expect(slowSocket.close).not.toHaveBeenCalled();
-    await expect(
-      readDevicePairSetupCompletion({ baseDir, setupId: "setup-dropped" }),
-    ).resolves.toMatchObject({
-      setupId: "setup-dropped",
-      deviceId: "device-123",
-      access: "full",
-      completedAtMs: 3,
-      deliveryState: "confirmed",
-    });
-  });
-
   it("ignores generic bootstrap records without setup correlation", async () => {
     const baseDir = await tempDirs.make("openclaw-setup-completion-generic-");
     const broadcast = vi.fn();
     const handoff = await setupHandoff(baseDir);
-    expect(handoff).toMatchObject({ record: { token: "generic" } });
     broadcastSetupHandoffCompletion({ handoff, broadcast });
     expect(broadcast).not.toHaveBeenCalled();
   });

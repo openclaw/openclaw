@@ -19,6 +19,7 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { sleep } from "../../utils/sleep.js";
 import {
   BROWSER_BRIDGES,
@@ -84,12 +85,12 @@ async function waitForSandboxCdp(params: {
   authToken: string;
   timeoutMs: number;
 }): Promise<boolean> {
-  const deadline = Date.now() + Math.max(0, params.timeoutMs);
+  const deadline = monotonicNow() + Math.max(0, params.timeoutMs);
   const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
-  while (Date.now() < deadline) {
+  while (monotonicNow() < deadline) {
     try {
       // Keep a stalled request inside the outer browser startup deadline.
-      const requestTimeoutMs = Math.max(1, Math.min(1000, deadline - Date.now()));
+      const requestTimeoutMs = Math.max(1, Math.min(1000, deadline - monotonicNow()));
       const ctrl = new AbortController();
       const t = setTimeout(ctrl.abort.bind(ctrl), requestTimeoutMs);
       try {
@@ -107,7 +108,7 @@ async function waitForSandboxCdp(params: {
     } catch {
       // ignore
     }
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       break;
     }
@@ -412,12 +413,12 @@ async function ensureSandboxBrowserContainer(
     await withContainerEnvFile(env, async (envFile) => {
       args.push("--env-file", envFile, browserImage);
       params.assertCurrent?.();
-      await execDocker(args);
+      await execDocker(args, { assertCurrent: params.assertCurrent });
     });
   }
   if (!hasContainer || !running) {
     params.assertCurrent?.();
-    await execDocker(["start", containerName]);
+    await execDocker(["start", containerName], { assertCurrent: params.assertCurrent });
   }
 
   const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
@@ -480,7 +481,7 @@ async function ensureSandboxBrowserContainer(
         params.assertCurrent?.();
         if (currentState.exists && !currentState.running) {
           params.assertCurrent?.();
-          await execDocker(["start", containerName]);
+          await execDocker(["start", containerName], { assertCurrent: params.assertCurrent });
         }
         const ok = await waitForSandboxCdp({
           cdpPort: mappedCdp,

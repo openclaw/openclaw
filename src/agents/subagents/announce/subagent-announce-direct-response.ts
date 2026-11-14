@@ -130,15 +130,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       directAnnounceRecord?.status === "ok" &&
       !directAnnounceResult?.meta?.error &&
       !directAnnounceResult?.meta?.aborted;
-    const optionalSettleCompletedWithoutReply =
-      params.sourceTool === "subagent_settle" &&
-      replyExpectation === "optional" &&
-      requesterCompletedSuccessfully &&
-      !hasVisibleNonSilentGatewayPayload &&
-      directAnnounceResult?.meta?.yielded !== true &&
-      directAnnounceResult?.meta?.continuationPending !== true;
-    const requiresSettleReply =
-      params.sourceTool === "subagent_settle" && !optionalSettleCompletedWithoutReply;
+    const requiresSettleReply = params.sourceTool === "subagent_settle";
     const acceptsIntentionalSilentCompletion =
       effectiveReplyExpectation !== "result-required" &&
       !requiresSettleReply &&
@@ -166,6 +158,19 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         error: directDeliveryFailure,
         ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
       };
+    }
+    if (
+      (isSubagentCompletion || params.sourceTool === "subagent_settle") &&
+      requesterCompletedSuccessfully &&
+      !hasVisibleNonSilentGatewayPayload &&
+      directAnnounceResult?.meta?.yielded !== true &&
+      directAnnounceResult?.meta?.continuationPending !== true
+    ) {
+      // Consuming child findings settles delivery; the parent owns any later answer.
+      return buildRequesterCompletionDeliveryResult(
+        hasFinalMessagingToolDelivery,
+        directAnnounceResult?.meta?.finalAssistantVisibleText,
+      );
     }
     const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
       directAnnounceResult?.deliveryStatus,

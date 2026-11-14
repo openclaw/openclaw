@@ -1,0 +1,2 @@
+# Spawn-tool regression verifies policy-scoped guidance before child creation.
+38

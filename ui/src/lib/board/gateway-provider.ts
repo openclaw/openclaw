@@ -547,6 +547,31 @@ export class GatewayBoardProvider implements BoardProvider {
         previous.revision === widget.revision &&
         previous.instanceId === widget.instanceId
       ) {
+        if (
+          widget.contentKind === "plugin" &&
+          widget.pluginKind === "session:report" &&
+          widget.instanceId !== undefined &&
+          previous.contentKind === "plugin" &&
+          previous.pluginKind === widget.pluginKind &&
+          !widget.frameUrl &&
+          !widget.viewTicket &&
+          !previous.frameUrl &&
+          !previous.viewTicket
+        ) {
+          // Report puts advance revision; layout operations do not. Retain the
+          // saved data while applying every change to the surrounding envelope.
+          const fields = Object.keys(widget);
+          if (
+            fields.length === Object.keys(previous).length &&
+            fields.every(
+              (key) =>
+                key === "props" || Object.is(Reflect.get(widget, key), Reflect.get(previous, key)),
+            )
+          ) {
+            return previous;
+          }
+          return { ...widget, props: previous.props };
+        }
         if (preserveMissingViewContracts && widget.viewGeneration === undefined) {
           // Mutation snapshots omit the view contract minted by board.get.
           const preserved = {

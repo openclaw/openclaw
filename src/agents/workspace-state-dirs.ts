@@ -118,6 +118,7 @@ export async function assertConfiguredWorkspaceStateReady(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   operation?: "doctor";
+  blockedByStepId?: string;
 }): Promise<void> {
   const env = params.env ?? process.env;
   const homedir = os.homedir;

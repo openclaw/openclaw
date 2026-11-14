@@ -18,8 +18,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import minimaxPlugin from "./index.js";
 
 const m31Model: Model<"anthropic-messages"> = {
-  id: "MiniMax-M3.1-Flash-Preview",
-  name: "MiniMax M3.1 Flash Preview",
+  id: "MiniMax-M3.1-Flash",
+  name: "MiniMax M3.1 Flash",
   provider: "minimax",
   api: "anthropic-messages",
   baseUrl: "https://api.minimaxi.com/anthropic",
@@ -273,6 +273,7 @@ describe("minimax provider hooks", () => {
     ["minimax", "MiniMax-M3", "adaptive"],
     ["minimax-portal", "MiniMax-M3", "adaptive"],
     ["minimax", "MiniMax-M2.7", "off"],
+    ["minimax", "MiniMax-M3.1-Flash-BOGUS", "adaptive"],
   ])("defaults %s/%s thinking to %s", (providerId, modelId, defaultLevel) => {
     const provider = providerId === "minimax" ? apiProvider : portalProvider;
     expect(provider.resolveThinkingProfile?.({ provider: provider.id, modelId })).toMatchObject({
@@ -280,48 +281,57 @@ describe("minimax provider hooks", () => {
     });
   });
 
-  it("discovers M3.1 with its mandatory five-level thinking profile on both auth routes", async () => {
-    for (const provider of [apiProvider, portalProvider]) {
-      const ref = { provider: provider.id, modelId: m31Model.id };
-      const catalog = await provider.staticCatalog?.run({ env: {}, config: {} } as never);
-      const models =
-        catalog && "providers" in catalog ? catalog.providers[provider.id]?.models : [];
-      expect(models?.find((model) => model.id === "MiniMax-M3.1-Flash-Preview")).toEqual(
-        expect.objectContaining({
-          id: "MiniMax-M3.1-Flash-Preview",
-          input: ["text", "image"],
-          contextWindow: 1_000_000,
-          reasoning: true,
-          compat: { codeMode: "preferred" },
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        }),
-      );
-      expect(provider.resolveThinkingProfile?.(ref)).toEqual({
-        levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
-        defaultLevel: "max",
-      });
-      expect(
-        provider.resolveDynamicModel?.({
-          ...ref,
-          modelId: ref.modelId.toLowerCase(),
-          providerConfig: {},
-        } as never),
-      ).toMatchObject({ id: "MiniMax-M3.1-Flash-Preview", api: "anthropic-messages" });
-    }
-  });
+  it.each([
+    ["MiniMax-M3.1-Flash", { input: 0.15, output: 0.6, cacheRead: 0.015, cacheWrite: 0 }],
+    ["MiniMax-M3.1-Flash-Preview", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+  ] as const)(
+    "discovers %s with its mandatory five-level thinking profile on both auth routes",
+    async (modelId, cost) => {
+      for (const provider of [apiProvider, portalProvider]) {
+        const ref = { provider: provider.id, modelId };
+        const catalog = await provider.staticCatalog?.run({ env: {}, config: {} } as never);
+        const models =
+          catalog && "providers" in catalog ? catalog.providers[provider.id]?.models : [];
+        expect(models?.find((model) => model.id === modelId)).toEqual(
+          expect.objectContaining({
+            id: modelId,
+            input: ["text", "image"],
+            contextWindow: 1_000_000,
+            reasoning: true,
+            compat: { codeMode: "preferred", supportsTemperature: false },
+            cost,
+          }),
+        );
+        expect(provider.resolveThinkingProfile?.(ref)).toEqual({
+          levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
+          defaultLevel: "max",
+        });
+        expect(
+          provider.resolveDynamicModel?.({
+            ...ref,
+            modelId: ref.modelId.toLowerCase(),
+            providerConfig: {},
+          } as never),
+        ).toMatchObject({ id: modelId, api: "anthropic-messages" });
+      }
+    },
+  );
 
   it.each([
-    [undefined, "max", m31Model.maxTokens, 500],
-    ["low", "low", m31Model.maxTokens, 500],
-    ["high", "high", 128, 500],
-    ["adaptive", "max", 128, undefined],
+    [undefined, "max", m31Model.maxTokens, 500, m31Model.id],
+    ["low", "low", m31Model.maxTokens, 500, m31Model.id],
+    ["high", "high", 128, 500, m31Model.id],
+    ["adaptive", "max", 128, undefined, m31Model.id],
+    [undefined, "max", m31Model.maxTokens, 500, "MiniMax-M3.1-Flash-Preview"],
+    ["low", "low", m31Model.maxTokens, 500, "MiniMax-M3.1-Flash-Preview"],
   ] as const)(
     "sends M3.1 effort %s as %s (model cap: %s, request cap: %s)",
-    async (thinkingLevel, effort, modelMaxTokens, requestedMaxTokens) => {
+    async (thinkingLevel, effort, modelMaxTokens, requestedMaxTokens, modelId) => {
       for (const provider of [apiProvider, portalProvider]) {
         for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
           const model = {
             ...m31Model,
+            id: modelId,
             maxTokens: modelMaxTokens,
             provider: provider.id,
             api:
@@ -351,7 +361,7 @@ describe("minimax provider hooks", () => {
                 makeAgentAssistantMessage({
                   api: "anthropic-messages",
                   provider: provider.id,
-                  model: m31Model.id,
+                  model: modelId,
                   content: [
                     {
                       type: "thinking",
@@ -413,6 +423,21 @@ describe("minimax provider hooks", () => {
       });
     }
   });
+
+  it.each(["xhigh", "max"] as const)(
+    "keeps session M3.1 effort %s when the runtime caps reasoning at high",
+    async (thinkingLevel) => {
+      const payload: Record<string, unknown> = {};
+      const wrapped = apiProvider.wrapStreamFn?.({
+        provider: "minimax",
+        modelId: m31Model.id,
+        thinkingLevel,
+        streamFn: payloadStream(payload),
+      });
+      void wrapped?.(m31Model, { messages: [] }, { reasoning: "high" });
+      expect(payload.output_config).toEqual({ effort: thinkingLevel });
+    },
+  );
 
   it("keeps M3.1 request shaping away from openai-completions", async () => {
     const payload = { thinking: { type: "disabled" } };

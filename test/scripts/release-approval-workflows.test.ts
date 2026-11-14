@@ -63,15 +63,15 @@ it("attests and uploads the gated parent receipt before dispatching children", (
   const names = publish.steps.map((step) => step.name);
   const initializeIndex = names.indexOf("Initialize postpublish diagnostics");
   expect(initializeIndex).toBeGreaterThanOrEqual(0);
-  expect(names.slice(initializeIndex + 1, initializeIndex + 5)).toEqual([
+  expect(names.slice(initializeIndex + 1, initializeIndex + 4)).toEqual([
     "Write release approval receipt",
     "Attest release approval receipt",
     "Upload release approval receipt",
-    "Verify all prepared plugin bytes before publication",
   ]);
-  expect(names.indexOf("Upload release approval receipt")).toBeLessThan(
-    names.indexOf("Dispatch publish workflows"),
-  );
+  // Platform approvals may follow the parent receipt before package verification.
+  const verifyIndex = names.indexOf("Verify all prepared plugin bytes before publication");
+  expect(verifyIndex).toBeGreaterThan(names.indexOf("Upload release approval receipt"));
+  expect(verifyIndex).toBeLessThan(names.indexOf("Dispatch publish workflows"));
   const [write, attest, upload] = publish.steps.slice(initializeIndex + 1, initializeIndex + 4);
   expect(write).toMatchObject({ id: "approval_receipt" });
   expect(write?.run).toContain("release-approval-receipt.mjs create");

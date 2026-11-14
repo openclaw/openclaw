@@ -1,13 +1,15 @@
 import fs from "node:fs";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import util from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { readConfiguredLogTail } from "./log-tail.js";
@@ -44,14 +46,6 @@ function consoleLogging(
 }
 
 const consoleLine = (spy: ReturnType<typeof installConsoleMethodSpy>) => String(mockCall(spy)[0]);
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const value of included) {
-    expect(text).toContain(value);
-  }
-  for (const value of excluded) {
-    expect(text).not.toContain(value);
-  }
-}
 
 function installConsoleMethodSpy(method: "log" | "warn" | "error") {
   const spy = vi.fn();
@@ -83,6 +77,7 @@ afterEach(async () => {
 afterAll(() => logPathTracker.cleanup());
 
 it("formats host runtime arguments before routing them to the subsystem logger", () => {
+  setLoggerOverride({ level: "silent", consoleLevel: "info" });
   const logger = createSubsystemLogger("runtime-arguments");
   const info = vi.spyOn(logger, "info").mockImplementation(() => {});
   const error = vi.spyOn(logger, "error").mockImplementation(() => {});
@@ -91,6 +86,28 @@ it("formats host runtime arguments before routing them to the subsystem logger",
   runtime.error("failed", { retryable: false });
   expect(info).toHaveBeenCalledExactlyOnceWith("ready { active: true } 17");
   expect(error).toHaveBeenCalledExactlyOnceWith("failed { retryable: false }");
+});
+
+it("does not inspect or serialize disabled runtime output as sink levels change", () => {
+  const inspect = vi.fn(() => "fixture inspected");
+  const toJSON = vi.fn(() => ({ fixture: true }));
+  const value = { [util.inspect.custom]: inspect, toJSON };
+  const runtime = runtimeForLogger(createSubsystemLogger("runtime-levels"));
+  const sink = vi.fn();
+  loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
+
+  for (const consoleLevel of ["silent", "info", "silent"] as const) {
+    setLoggerOverride({ level: "silent", consoleLevel });
+    inspect.mockClear();
+    toJSON.mockClear();
+    sink.mockClear();
+    runtime.log("ready", value);
+    runtime.error("failed", value);
+    runtime.writeJson(value);
+    expect(inspect).toHaveBeenCalledTimes(consoleLevel === "info" ? 2 : 0);
+    expect(toJSON).toHaveBeenCalledTimes(consoleLevel === "info" ? 1 : 0);
+    expect(sink).toHaveBeenCalledTimes(consoleLevel === "info" ? 3 : 0);
+  }
 });
 
 it.each(["pretty", "compact", "json"] as const)(
@@ -229,12 +246,12 @@ describe("createSubsystemLogger().isEnabled", () => {
     const unsubscribeLogs = onInternalDiagnosticEvent(listener, { include: ["log.record"] });
     log.info("log listener");
     log.warn("warning with listener");
-    await yieldToEventLoop();
+    await waitForDiagnosticEventsDrained();
     setDiagnosticsEnabledForProcess(false);
     log.info("disabled diagnostics");
     setDiagnosticsEnabledForProcess(true);
     log.raw("enabled diagnostics");
-    await yieldToEventLoop();
+    await waitForDiagnosticEventsDrained();
     unsubscribeLogs();
     log.info("removed log listener");
     unsubscribeUnrelated();
@@ -414,6 +431,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       admitted: true,
       phaseDurationsMs: { open: 3, validation: 8 },
       note: "two words",
+      peer: "a\u001b]0;x\u0007\u009b2J\u2028\u2029",
       skipped: undefined,
       error: new Error("boom"),
     });
@@ -422,7 +440,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     const warnLine = consoleLine(warn);
     expect(warnLine).toContain("slow Codex catalog list phases");
     expect(warnLine).toContain(
-      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error={"name":"Error","message":"boom"',
+      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" peer="a\\u001b]0;x\\u0007\\u009b2J\\u2028\\u2029" error={"name":"Error","message":"boom"',
     );
     expect(warnLine).not.toContain("skipped=");
     expect(consoleLine(error)).toContain("catalog failed reason=timeout");

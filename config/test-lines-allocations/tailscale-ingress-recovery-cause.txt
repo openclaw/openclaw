@@ -1,0 +1,2 @@
+32
+# Gateway recovery warning: CLI failure and abrupt route-owner exit, excluding raw output.

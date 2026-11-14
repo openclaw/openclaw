@@ -12,7 +12,6 @@ import { CronEventClaimInvalidatedError } from "../event-source.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
 import { currentPluginCommandHostProcessId } from "../plugin-command-schedule.js";
 import { getCronJobsStoreRevision } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import type {
   CronQueuedRun,
   CronRunQueueOperations,
@@ -42,6 +41,7 @@ import { preparingCronAgentIds } from "./scheduler-config.js";
 import {
   emit,
   isImmediateCronRunMode,
+  prepareCronServiceStore,
   type CronRunMode,
   type CronRunResult,
   type CronServiceState,
@@ -111,9 +111,12 @@ export function adoptCronRunRequests(
   const batch = { notified: false };
   return accepted.map((entry) => {
     const launch: CronLaunchContext = {
+      job: entry.job,
       receipt: entry.runReceipt,
       context,
       options: Object.assign({}, options, {
+        // Event ingress retains its claim until transfer; manual request custody ends here.
+        commitGuard: options.event ? options.commitGuard : undefined,
         scheduleOwnershipAtMs: options.scheduleOwnershipAtMs ?? entry.runReceipt.startedAtMs,
       }),
       generation,
@@ -139,6 +142,10 @@ export async function commitCronRunRequests(
 ): Promise<RequestedCronRun[]> {
   if (state.stopped || jobs.length === 0) {
     return [];
+  }
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
   }
   const source = captureCronServiceMutationSource(state);
   const nowMs = state.deps.nowMs();
@@ -210,17 +217,21 @@ function publishSkipped(state: CronServiceState, skipped: CronSkippedRequest) {
   pending.activation.resolve();
   launchState(state).contexts.delete(skipped.runReceipt.receiptId);
   // The worker writes skipped history with the same receipt; events are best effort.
-  emit(state, {
-    jobId: skipped.runReceipt.jobId,
-    job: skipped.job,
-    action: "finished",
-    status: "skipped",
-    error: skipped.error,
-    runId: pending.options.runId,
-    runAtMs: skipped.runReceipt.startedAtMs,
-    durationMs: 0,
-    nextRunAtMs: skipped.job?.state.nextRunAtMs,
-  });
+  emit(
+    state,
+    {
+      jobId: skipped.runReceipt.jobId,
+      job: skipped.job ?? pending.job,
+      action: "finished",
+      status: "skipped",
+      error: skipped.error,
+      runId: pending.options.runId,
+      runAtMs: skipped.runReceipt.startedAtMs,
+      durationMs: 0,
+      nextRunAtMs: skipped.job?.state.nextRunAtMs,
+    },
+    { runNotStarted: true },
+  );
   if (pending.options.terminalTracker) {
     pending.options.terminalTracker.emitted = true;
   }
@@ -253,12 +264,12 @@ async function cancelCronRunRequests(
   }
   const context =
     launchState(state).contexts.get(receiptIds[0]!)?.context ?? captureOpenClawStateWorkerContext();
-  const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
+  const observedRevision = getCronJobsStoreRevision(state.deps.storeKey);
   const result = await runOpenClawStateWorkerOperation(context, (scope) =>
     scope.execute({
       type: "cron.cancelRequests",
       input: {
-        storeKey: cronStoreKey(state.deps.storePath),
+        storeKey: state.deps.storeKey,
         receiptIds,
         nowMs: state.deps.nowMs(),
         reason,
@@ -311,14 +322,14 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
         }
       }
     };
-    const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
+    const observedRevision = getCronJobsStoreRevision(state.deps.storeKey);
     const result = await runOpenClawStateWorkerOperation(
       context,
       (scope) =>
         scope.execute({
           type: "cron.drainQueue",
           input: {
-            storeKey: cronStoreKey(state.deps.storePath),
+            storeKey: state.deps.storeKey,
             nowMs: state.deps.nowMs(),
             defaultAgentId: resolveCurrentDefaultAgentId(state),
             maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
@@ -401,7 +412,7 @@ export async function launchCronRunQueueResult(
   state: CronServiceState,
   result: CronRunQueueOperations["cron.drainQueue"]["output"],
   context = captureOpenClawStateWorkerContext(),
-  observedRevision = getCronJobsStoreRevision(state.deps.storePath),
+  observedRevision = getCronJobsStoreRevision(state.deps.storeKey),
 ): Promise<void> {
   if (result.launches.length || result.skipped.length) {
     const jobs = [...result.skipped, ...result.launches].flatMap(({ job }) => (job ? [job] : []));
@@ -416,6 +427,7 @@ export async function launchCronRunQueueResult(
     let pending = launchState(state).contexts.get(entry.runReceipt.receiptId);
     if (!pending) {
       pending = {
+        job: entry.job,
         receipt: entry.runReceipt,
         context,
         options: {},

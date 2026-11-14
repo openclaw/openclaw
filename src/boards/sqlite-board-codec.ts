@@ -451,6 +451,7 @@ export function rowToHtmlViewMetadata(
     sha256: row.sha256,
     viewGeneration,
     grantState: effectiveGrantState(row.grant_state, manifest),
-    ...(declared ? { declared } : {}),
+    // View metadata and the mutable widget snapshot have independent consumers.
+    ...(declared ? { declared: structuredClone(declared) } : {}),
   };
 }

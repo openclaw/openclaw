@@ -208,7 +208,10 @@ export async function runDiscordGatewayLifecycle(params: {
   const waitForGatewayReady = async (): Promise<void> => {
     const { abortSignal, runtime } = params;
     const waitUntilReady = async (): Promise<GatewayReadyWaitResult> => {
-      const deadlineAt = Date.now() + gatewayReadyTimeoutMs;
+      // The READY budget is consumed by setTimeout polls on the monotonic clock;
+      // the deadline must live there too, or a wall-clock step (NTP correction,
+      // VM resume) inflates or shrinks the wait past its configured bound.
+      const deadlineAt = performance.now() + gatewayReadyTimeoutMs;
       for (;;) {
         if (abortSignal?.aborted) {
           return "stopped";
@@ -221,7 +224,7 @@ export async function runDiscordGatewayLifecycle(params: {
           pushStatus(createDiscordReadyStatusPatch(at));
           return "ready";
         }
-        if (Date.now() >= deadlineAt) {
+        if (performance.now() >= deadlineAt) {
           return "timeout";
         }
         await new Promise<void>((resolve) => {

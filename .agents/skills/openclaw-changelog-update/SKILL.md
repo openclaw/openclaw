@@ -22,7 +22,7 @@ ordering, grouping, and attribution discipline.
 Rebuild the target `CHANGELOG/<version>.md` release section from a complete, generated
 history manifest, not stale draft notes. Produce grouped user-facing release
 notes sorted by user interest while preserving every relevant issue/PR ref and
-every human `Thanks @...` attribution.
+every verified human `Thanks @...` attribution.
 
 `CHANGELOG.md` is the generated release index. The shared owner
 `scripts/lib/release-changelog.mjs` resolves release sections and contribution
@@ -203,7 +203,17 @@ of this skill; initial generation must never overwrite them.
    - `### Complete contribution record`: generated PR-first record after the
      grouped prose; it is the exhaustive accounting surface, not a second
      release summary
-6. Preserve attribution:
+6. Preserve verified attribution:
+   - PR authorship comes from the canonical GitHub PR, never the release commit
+     author, committer, or backport operator. Resolve coauthors from that PR's
+     original merge commit; release-carrier trailers and contextual mentions
+     do not establish credit on another PR
+   - rebuild generated thanks from PR, original coauthor, and linked-reporter
+     evidence. Seeds retain membership and references, not unverified old
+     thanks. Regeneration replaces stale generated credit in records and grouped
+     prose; verification rejects both missing and unsupported credit
+   - when a vanished PR meets the existing exact-SHA recovery contract, retain
+     its recorded thanks as historical credit without inventing a PR author
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
    - every human-authored merged PR represented by a user-facing entry needs
      its PR ref and `Thanks @author`, even when the PR had no linked issue
@@ -252,10 +262,9 @@ of this skill; initial generation must never overwrite them.
      that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - initial release generation keeps its existing credit policy: never thank
-     bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`.
-     The separately approved post-docs GitHub body uses its complete verified
-     human roster, including `@steipete` when credited
+   - credit verified human authors, including maintainers such as `@steipete`.
+     Never thank bots, known automation accounts such as `@steipete-oai`,
+     `@claude`, `@codex`, `@openclaw`, or `@clawsweeper`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -292,7 +301,8 @@ of this skill; initial generation must never overwrite them.
   as shipped, when a source PR is absent from the contribution record, when
   direct commits are rendered as a public record dump, when non-editorial
   PRs appear in grouped prose, or when an eligible PR author or known
-  co-author is missing from that PR's `Thanks @...` credit. It also fails
+  co-author is missing from that PR's `Thanks @...` credit, or unsupported
+  credit appears in its record or represented editorial bullet. It also fails
   before history collection when `--base` is not an ancestor of `--target`
   (except beta release tags normalized to merge-base plus shipped-record subtraction),
   when `### Highlights` violates the selected stable (5-8) or beta (0-8)

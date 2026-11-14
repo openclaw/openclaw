@@ -1,6 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import type { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
 import {
   modelProviderErrorMessage,
@@ -42,6 +43,20 @@ export function createModelProviderConfigActions(deps: {
     state.keyDraft = "";
   }
 
+  // A save warns about its own provider's listing, not another provider's failure.
+  function providerCatalogWarning(provider: string): string | null {
+    const id = canonicalModelAuthProviderId(provider);
+    const own = (state.data?.providerOutcomes ?? []).filter(
+      (outcome) => canonicalModelAuthProviderId(outcome.provider) === id,
+    );
+    if (own.length === 0) {
+      return state.data?.catalogError ?? null;
+    }
+    return own.some((outcome) => outcome.status !== "ready")
+      ? t("modelProviders.defaults.discoverFailed")
+      : null;
+  }
+
   async function mutateApiKey(
     provider: string,
     configKey: string,
@@ -75,7 +90,7 @@ export function createModelProviderConfigActions(deps: {
                 state.data = previous;
                 return warning;
               }
-              return state.data?.error ?? state.data?.catalogError ?? null;
+              return state.data?.error ?? providerCatalogWarning(provider) ?? null;
             },
             setBusy: (busy) => setBusy(key, busy),
             setMessage: (message) => {

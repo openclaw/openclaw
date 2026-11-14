@@ -28,7 +28,6 @@ import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue.records.js";
-import type { SessionDeliveryAgentRunUpdate } from "./session-delivery-queue.worker-contract.js";
 
 function readSessionDelivery(
   database: OpenClawStateDatabase,
@@ -129,24 +128,6 @@ export const sessionDeliveryOperations = {
       availableAt: Date.now() + Math.max(0, delayMs),
     }));
   },
-  "sessionDelivery.advanceAgentRun": (
-    input: { id: string; updates?: SessionDeliveryAgentRunUpdate },
-    { open },
-  ) => {
-    const database = open();
-    const { id, updates } = input;
-    update(database, id, (entry) =>
-      entry.kind !== "agentTurn"
-        ? entry
-        : {
-            ...entry,
-            agentRunAttempt: (entry.agentRunAttempt ?? 0) + 1,
-            deliveryStartedAt: undefined,
-            ...(updates?.message ? { message: updates.message } : {}),
-            ...(updates?.expectedMediaUrls ? { expectedMediaUrls: updates.expectedMediaUrls } : {}),
-          },
-    );
-  },
   "sessionDelivery.mergePreparedMedia": (
     input: { id: string; mediaUrl: string; blocksJson: string },
     { open },
@@ -211,9 +192,6 @@ export const sessionDeliveryOperations = {
       return {
         ...entry,
         retryCount,
-        ...(entry.kind === "agentTurn"
-          ? { lastChargedAgentRunAttempt: entry.agentRunAttempt ?? 0 }
-          : {}),
         ...(releaseAttemptOwnership === true ? { deliveryStartedAt: undefined } : {}),
         lastAttemptAt: now,
         ...(entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion"

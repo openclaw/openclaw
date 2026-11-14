@@ -12,9 +12,12 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
-import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
+import {
+  TranscriptRowKeyContext,
+  type TranscriptContent,
+  type TranscriptLayoutProps,
+} from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
@@ -43,21 +46,25 @@ function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   );
 }
 
-function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
-  // Equal dependency vectors preserve the accepted row across unrelated stream updates.
-  const current = createMemo(() => props.value, {
-    equals: (before, next) => transcriptArraysEqual(before.dependencies, next.dependencies),
-  });
-  return <Show when={current().native}>{(view) => <NativeRow value={view()} />}</Show>;
-}
-
 function RowContent(props: { value: TranscriptContent }): JSX.Element {
+  // Cut off unchanged rows before the content-kind branch and its child bindings.
+  const current = createMemo(() => props.value, {
+    equals: (before, next) =>
+      before instanceof GuardedTranscriptItem && next instanceof GuardedTranscriptItem
+        ? transcriptArraysEqual(before.dependencies, next.dependencies)
+        : Object.is(before, next),
+  });
+  const native = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? value.native : undefined;
+  };
+  const fallback = () => {
+    const value = current();
+    return value instanceof GuardedTranscriptItem ? null : value;
+  };
   return (
-    <Show
-      when={props.value instanceof GuardedTranscriptItem ? props.value : undefined}
-      fallback={props.value instanceof GuardedTranscriptItem ? null : props.value}
-    >
-      {(item) => <GuardedRow value={item()} />}
+    <Show when={native()} fallback={fallback()}>
+      {(view) => <NativeRow value={view()} />}
     </Show>
   );
 }
@@ -79,13 +86,17 @@ function TranscriptRows(props: {
   };
   return (
     <>
-      <Show when={props.snapshot.header}>{(header) => <ChatHistoryBoundary {...header()} />}</Show>
+      {/* Live controls can retire before a gesture releases the accepted row model. */}
+      <div style={{ height: `${props.snapshot.headerHeight}px`, "transition-property": "none" }}>
+        {props.snapshot.header}
+      </div>
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
           style={{
-            transform: `translateY(${(virtualRows()[0]?.start ?? props.snapshot.virtualizer.options.scrollMargin) - props.snapshot.virtualizer.options.scrollMargin}px)`,
+            // WebKit 26.4 omits ancestor transforms from top-layer CSS anchor coordinates.
+            top: `${(virtualRows()[0]?.start ?? props.snapshot.virtualizer.options.scrollMargin) - props.snapshot.virtualizer.options.scrollMargin}px`,
           }}
         >
           <For each={virtualRows()} keyed={(row) => row.key}>
@@ -110,11 +121,16 @@ function TranscriptRows(props: {
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
-                    style={{ "contain-intrinsic-block-size": `${virtualRow().size}px` }}
+                    style={{
+                      "contain-intrinsic-block-size": `${virtualRow().size}px`,
+                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
+                    }}
                     data-index={String(virtualRow().index)}
                     data-virtual-row-key={row()?.key}
                   >
-                    <RowContent value={content()} />
+                    <TranscriptRowKeyContext value={() => row()?.key}>
+                      <RowContent value={content()} />
+                    </TranscriptRowKeyContext>
                   </div>
                 </>
               );

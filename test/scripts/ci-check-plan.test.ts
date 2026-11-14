@@ -28,7 +28,7 @@ afterEach(() => {
 // mock-isolation: Select type graphs deterministically without inspecting checkout changes.
 vi.mock("../../scripts/run-tsgo-core-test-shards.mts", () => ({
   createChangedCiTypeCheckPlan: vi.fn(async () => ({
-    mode: "targeted",
+    mode: "changed",
     graphs: typeSelection.graphs ?? resolveCiTsgoGraphs(["core-test-agents-root", "scripts"]),
   })),
 }));
@@ -234,6 +234,26 @@ it.each([0, 7])("propagates shared central lint exit %s", (exitCode) => {
   const run = runStep(step, context, cwd);
   expect(run.status, run.stderr).toBe(exitCode);
 });
+it.each(["hybrid", "github"])(
+  "shares setup for two selected compiler graphs on %s",
+  async (runnerProfile) => {
+    const names = ["core-test-agents-root", "core-test-agents-other"];
+    typeSelection.graphs = resolveCiTsgoGraphs([...names, "scripts", "test-root-tooling"]);
+    const plan = await createPlan({ runnerProfile });
+    expect(plan.core_type_matrix.include).toHaveLength(1);
+    expect(JSON.parse(plan.core_type_matrix.include[0]!.type_graph_names_json!)).toEqual(names);
+    expect(JSON.parse(plan.check_matrix.include[0]!.type_graph_names_json!)).toEqual([
+      "scripts",
+      "test-root-tooling",
+    ]);
+  },
+);
+
+it("retains the complete full-check stripe inventory", async () => {
+  const plan = await createPlan({ preserveFullChecks: true });
+  expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
+});
+
 it.each([
   ["hybrid", [1, 2, 4, 5], ["test-root-tooling", "test-root-other"]],
   ["hybrid", [1, 2, 5], ["test-root-e2e"]],

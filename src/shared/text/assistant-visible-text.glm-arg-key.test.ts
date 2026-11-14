@@ -46,23 +46,15 @@ describe("GLM arg_key assistant text", () => {
     ).toBe("Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.");
   });
 
-  it("holds name-only and partial-key prefixes only while streaming", () => {
-    for (const input of [
-      "Visible\n<tool_call>exec",
-      "Visible\n<tool_call>exec ",
-      "Visible\n<tool_call>x",
-    ]) {
-      expect(sanitizeAssistantVisibleTextWithProfile(input, "delivery", true)).toBe("Visible");
-    }
-    for (const suffix of ["\n", "\ncommand", "\ncommand\n", "\ncommand\n</arg_"]) {
-      expect(
-        sanitizeAssistantVisibleTextWithProfile(
-          `Visible\n<tool_call>exec<arg_key>${suffix}`,
-          "delivery",
-          true,
-        ),
-      ).toBe("Visible");
-    }
+  it.each([
+    "Visible\n<tool_call>exec",
+    "Visible\n<tool_call>exec ",
+    "Visible\n<tool_call>x",
+    ...["\n", "\ncommand", "\ncommand\n", "\ncommand\n</arg_"].map(
+      (suffix) => `Visible\n<tool_call>exec<arg_key>${suffix}`,
+    ),
+  ])("holds name-only and partial-key prefixes only while streaming: %j", (input) => {
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "delivery", true)).toBe("Visible");
   });
 });
 

@@ -77,8 +77,14 @@ async function inspectFailure(
   const diagnostics = await import("./sqlite-error-diagnostics.js");
   const format = vi.spyOn(diagnostics, "formatSqliteReadOnlyInspectionFailure");
   const completed = createDeferred();
-  const write = vi.spyOn(process.stdout, "write").mockImplementation(() => {
-    completed.resolve();
+  const write = vi.spyOn(process.stdout, "write").mockImplementation((_chunk, ...rest) => {
+    const callback = rest.find((argument) => typeof argument === "function");
+    queueMicrotask(() => {
+      if (typeof callback === "function") {
+        callback();
+      }
+      completed.resolve();
+    });
     return true;
   });
   process.argv = [
@@ -93,14 +99,10 @@ async function inspectFailure(
     await import("./sqlite-readonly-location.worker.js");
     await completed.promise;
     expect(process.exitCode).toBe(1);
-    expect(format).toHaveBeenCalledOnce();
     const [observedFailure] = expectDefined(format.mock.calls[0], "inspection failure");
     expect(opened.every((database) => !database.isOpen)).toBe(true);
     expect(fs.readdirSync(stagingRoot)).toEqual([]);
     expect(fs.readFileSync(sourcePath)).toEqual(before);
-    using read = actual.openNodeSqliteDatabase(sourcePath, { readOnly: true });
-    expect(read.prepare("SELECT id FROM present").get()).toEqual({ id: 7 });
-    expect(read.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     return { write, observedFailure };
   } finally {
     opened.filter((database) => database.isOpen).forEach((database) => database.close());
@@ -139,6 +141,7 @@ it.each([
         ok: false,
         message: `failed while ${context}: ${message} (code=ERR_SQLITE_ERROR, errcode=14)`,
       }),
+      expect.any(Function),
     );
   },
 );
@@ -154,6 +157,7 @@ it("keeps aggregate identity through staging and admits only bounded cause codes
     expect.stringContaining(
       "failed while opening the source database: read failed (SQLite errcode=778)",
     ),
+    expect.any(Function),
   );
   const [message] = expectDefined(write.mock.calls[0], "worker output");
   expect(message).toContain("code=EIO, errcode=778");

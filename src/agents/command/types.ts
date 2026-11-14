@@ -26,7 +26,6 @@ import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/session-binding.types.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
-import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RequesterOrigin } from "../requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
@@ -185,9 +184,6 @@ export type AgentCommandOpts = {
   swarmCollector?: boolean;
   /** Synthetic structured_output input schema for collector children. */
   swarmOutputSchema?: Record<string, unknown>;
-  /** Restrict this reconstructed run to restart-safe tools. */
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
   codeModeOverride?: boolean | "auto";
   /** Host-owned: deliver only authored output; runtime error payloads stay out of the chat. */
@@ -210,18 +206,10 @@ export type AgentCommandOpts = {
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+  /** Record a root session this run creates as a direct chat with its local operator. */
+  operatorDirectRoot?: boolean;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
-  /** Opaque foreground fence transferred by Gateway after atomic session admission. */
-  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
-  /** Gateway already consumed this automatic recovery run's durable reservation. */
-  mainRestartRecoveryAdmitted?: boolean;
-  /** Exact durable recovery attempt allowed to bind post-admission execution identity. */
-  mainRestartRecoveryAttempt?: number;
-  /** Private recovery correlation; public ingress callers cannot author identity evidence. */
-  executionIdentityAdmission?: ReturnType<
-    (typeof import("../admitted-run-context.js"))["createExecutionIdentityRecoveryAdmission"]
-  >;
   /** Gateway-owned exact operational instance shared with its abort controller. */
   operationalRunInstance?: import("../admitted-run-context.js").OperationalRunInstanceRef;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
@@ -277,11 +265,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   runtimeContextFragments: undefined,
   senderIsOwner: false,
   gitContributorProfileId: undefined,
-  mainRestartRecoveryOwnerLease: undefined,
-  mainRestartRecoveryAdmitted: undefined,
-  mainRestartRecoveryAttempt: undefined,
   pinnedWidgetAuthoring: undefined,
-  executionIdentityAdmission: undefined,
   operationalRunInstance: undefined,
   assertSourceCurrent: undefined,
   operatorAuthority: undefined,
@@ -297,6 +281,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
+  operatorDirectRoot: undefined,
 } as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<
@@ -315,6 +300,6 @@ export type AgentCommandIngressOpts = Omit<
   allowModelOverride: boolean;
 };
 
-/** Gateway-only ingress extends the public Plugin SDK surface with private recovery correlation. */
+/** Gateway-only ingress carries host-issued authority and execution ownership. */
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
   Pick<AgentCommandOpts, AgentCommandGatewayOnlyKey>;

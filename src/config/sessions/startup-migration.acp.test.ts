@@ -29,7 +29,7 @@ import * as legacyMainMigration from "./legacy-main-session-migration.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
-import { runSessionStartupMigration } from "./startup-migration.js";
+import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 
 function acpMeta(agent: string, lastActivityAt = 100) {
   return {
@@ -336,7 +336,7 @@ it.each(["running", "queued", "duplicate"] as const)(
         expect(persisted).toBe(raw);
       } else {
         expect(JSON.parse(String(persisted))).toMatchObject({
-          status: "interrupted",
+          status: "killed",
           abortedLastRun: true,
           acp: acpMeta("main"),
         });

@@ -143,14 +143,20 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
     }
     return {
       ...registration,
-      retain: () => retain(runId, registration.entry),
+      retain: (
+        invocationAuthority?: Parameters<typeof retainGatewayOperatorRun>[0]["invocationAuthority"],
+      ) => retain(runId, registration.entry, invocationAuthority),
       expectCurrent: () => {
         expect(registration.controller.signal.aborted).toBe(false);
         expect(rpcSourceTesting.get(runId)).toBe(registration.entry);
       },
     };
   };
-  const retain = async (runId: string, entry: RpcSourceRef) => {
+  const retain = async (
+    runId: string,
+    entry: RpcSourceRef,
+    invocationAuthority?: Parameters<typeof retainGatewayOperatorRun>[0]["invocationAuthority"],
+  ) => {
     const { signal } = source;
     const retained = await retainGatewayOperatorRun({
       context,
@@ -161,6 +167,7 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
       },
       sourceAuthority: { signal, assertCurrent: () => signal.throwIfAborted() },
+      invocationAuthority,
     });
     if (!retained.authority) {
       throw new Error("fixture operator source was not retained");
@@ -215,6 +222,24 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
 }
 
 describe("operator access cancellation", () => {
+  it("keeps invocation custody until the final retained operator releases it", async () => {
+    await withCancellationFixture(async (f) => {
+      const guest = await f.register("retained-invocation");
+      const release = vi.fn();
+      const retained = await guest.retain({ assertCurrent: () => {}, release });
+      const releaseChild = retained.authority!.retain!();
+      try {
+        retained.release();
+        expect(release).not.toHaveBeenCalled();
+        expect(retained.authority!.assertCurrent).not.toThrow();
+      } finally {
+        releaseChild();
+        retained.release();
+      }
+      expect(release).toHaveBeenCalledOnce();
+    });
+  });
+
   it.each([false, true])(
     "stops only its run and settles persistence (hidden progress refresh: %s)",
     cancellationCase(async (f, hiddenRefresh) => {

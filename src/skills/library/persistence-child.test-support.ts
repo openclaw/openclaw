@@ -107,28 +107,22 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
         skillLibrarySelections: pins,
       });
       const { uploadSkillLibrary } = uploads;
+      const upload = (params: Parameters<typeof uploadSkillLibrary>[1]) =>
+        uploadSkillLibrary(authority, params, options);
       const pendingBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
-      const upload = await uploadSkillLibrary(
-        authority,
-        {
-          action: "begin",
-          slug: "unfinished-import",
-          sizeBytes: pendingBytes.length,
-          sha256: createHash("sha256").update(pendingBytes).digest("hex"),
-        },
-        options,
-      );
-      assert.ok("uploadId" in upload);
-      await uploadSkillLibrary(
-        authority,
-        {
-          action: "chunk",
-          uploadId: upload.uploadId,
-          offset: 0,
-          data: pendingBytes.subarray(0, 2).toString("base64"),
-        },
-        options,
-      );
+      const pending = await upload({
+        action: "begin",
+        slug: "unfinished-import",
+        sizeBytes: pendingBytes.length,
+        sha256: createHash("sha256").update(pendingBytes).digest("hex"),
+      });
+      assert.ok("uploadId" in pending);
+      await upload({
+        action: "chunk",
+        uploadId: pending.uploadId,
+        offset: 0,
+        data: pendingBytes.subarray(0, 2).toString("base64"),
+      });
       return { kind: "seeded" };
     }
     const pins = sessions?.loadSessionEntry(scope)?.skillLibrarySelections;
@@ -177,8 +171,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
           handle.close = async () => {
             handle.close = originalClose;
             await originalClose();
-            // The real rename, file syncs, and final ancestor-directory sync/close
-            // have completed. Holding here keeps the service before its DB commit.
+            // Publication's final ancestor close precedes the DB commit.
             await send({ kind: "published", directory: renamedDestination! });
             await hold();
           };

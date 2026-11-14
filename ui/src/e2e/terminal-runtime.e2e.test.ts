@@ -257,6 +257,8 @@ suite.define(() => {
           data: output,
         });
         await panel.locator(".tabstrip-tab.is-live").waitFor();
+        // Font completion refits the terminal before the drag samples its cell geometry.
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         await pauseVirtualClock(page);
         await drag();
         expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("hello");

@@ -74,6 +74,10 @@ function managerWith(overrides: NativeOAuthProviderFixture) {
   return createOAuthManager();
 }
 
+function account(ownerProfileId: string, credential: OAuthCredential) {
+  return { ownerProfileId, credential, assertCurrent() {} };
+}
+
 async function transientRefresh(
   profileId: string,
   credential: OAuthCredential,
@@ -150,11 +154,7 @@ function fixture() {
     expires: 1,
     accountId: "synthetic-account",
   };
-  const { authProfileId: profileId } = connectUserModelAccount({
-    ownerProfileId: owner.id,
-    credential,
-    assertCurrent() {},
-  });
+  const { authProfileId: profileId } = connectUserModelAccount(account(owner.id, credential));
   const replacement: OAuthCredential = {
     ...credential,
     expires: Date.now() + 600_000,
@@ -285,10 +285,8 @@ it.for(["same-byte reconnect", "owner merge"])(
         await mergeCanonicalUserProfiles(owner.id, target.id);
       } else {
         const connected = await connectUserModelAccountAsync({
-          ownerProfileId: owner.id,
-          credential,
+          ...account(owner.id, credential),
           matchesCredential: () => true,
-          assertCurrent() {},
         });
         expect(connected.authProfileId).toBe(profileId);
       }
@@ -364,10 +362,8 @@ it("rejects a cold read retired by reconnect", async ({ owner, profileId, creden
     if (command.type === "authProfiles.personal" && reconnect) {
       reconnect = false;
       await connectUserModelAccountAsync({
-        ownerProfileId: owner.id,
-        credential,
+        ...account(owner.id, credential),
         matchesCredential: () => true,
-        assertCurrent() {},
       });
     }
     return result;
@@ -665,10 +661,8 @@ it.for(["disconnect", "reassignment", "same-account-reassignment"] as const)(
         clearUserProfileAuthLink({ profileId: owner.id, provider: credential.provider });
       } else {
         connectUserModelAccount({
-          ownerProfileId: owner.id,
-          credential: reconnected,
+          ...account(owner.id, reconnected),
           replacement: readSelectedUserModelAccount(owner.id, credential.provider),
-          assertCurrent() {},
         });
       }
       expect(current()).toBe(false);
@@ -684,11 +678,9 @@ it.for(["disconnect", "link-switch", "merge"] as const)(
   "does not revive a merged owner's grant after transient %s",
   async (change, { owner, profileId, credential, replacement }) => {
     const target = ensureProfileForEmail("personal-refresh-merged@example.test");
-    const other = connectUserModelAccount({
-      ownerProfileId: target.id,
-      credential: { ...replacement, accountId: "other-existing-account" },
-      assertCurrent() {},
-    });
+    const other = connectUserModelAccount(
+      account(target.id, { ...replacement, accountId: "other-existing-account" }),
+    );
     await mergeCanonicalUserProfiles(owner.id, target.id);
     setUserProfileAuthLink({
       profileId: target.id,

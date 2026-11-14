@@ -3,7 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
-import { createColdPluginFixture } from "./cold-plugin-fixtures.js";
+import { createColdPluginConfig, createColdPluginFixture } from "./cold-plugin-fixtures.js";
 
 export function createInstallAccountPolicyFixture(rootDir: string, channelId: string) {
   const pluginRoot = path.join(rootDir, "plugin");
@@ -18,10 +18,7 @@ export function createInstallAccountPolicyFixture(rootDir: string, channelId: st
   };
   createColdPluginFixture({ rootDir: pluginRoot, pluginId: channelId, channelId, manifest });
   const config: OpenClawConfig = {
-    plugins: {
-      load: { paths: [pluginRoot] },
-      entries: { [channelId]: { enabled: true } },
-    },
+    ...createColdPluginConfig(pluginRoot, channelId),
     channels: {
       [channelId]: {
         accounts: { "Work Phone": { account: "+12025550123", name: "Old name" } },

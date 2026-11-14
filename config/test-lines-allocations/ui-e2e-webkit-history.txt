@@ -1,0 +1,2 @@
+1
+# Exercise shard-scoped WebKit installation for the chat history reading suite.

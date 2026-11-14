@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -334,6 +337,7 @@ function installRuntime(
         recordInboundSession,
       },
       inbound: {
+        buildContext: buildChannelInboundEventContext,
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
         run,
       },

@@ -3,11 +3,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
-import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -20,12 +20,17 @@ import {
   runDoctorConfigWithInput,
 } from "./doctor-config-flow.test-utils.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
+import type { DoctorConfigPreflightResult } from "./doctor/shared/config-migration-result.js";
 
 type TerminalNote = (message: string, title?: string) => void;
+type RepairParams = Parameters<
+  typeof import("./doctor/repair-sequencing.js").runDoctorRepairSequence
+>[0];
 
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const preflightFacts = vi.hoisted(() => ({ value: {} as Partial<DoctorConfigPreflightResult> }));
 const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectTailscaleConfigWarningsMock = vi.hoisted(() =>
@@ -203,6 +208,7 @@ vi.mock("./doctor-config-preflight.js", async (importOriginal) => {
           legacyIssues,
         },
         baseConfig: config,
+        ...preflightFacts.value,
       };
     }),
   };
@@ -264,6 +270,7 @@ describe("doctor config flow", () => {
     callGatewayMock.mockReset();
     callGatewayMock.mockResolvedValue({});
     runDoctorRepairSequenceMock.mockReset();
+    preflightFacts.value = {};
     createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
     collectTailscaleConfigWarningsMock.mockClear();
@@ -272,15 +279,15 @@ describe("doctor config flow", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each([false, true])(
-    "preserves explicit collaborative steering %s without a repair",
+  it.each([undefined, false, true])(
+    "does not pin or overwrite collaborative steering %s during repair",
     async (value) => {
       const config: OpenClawConfig = {
         agents: { entries: { main: {} } },
         gateway: { mode: "local" },
         messages: {
           responsePrefix: "keep-prefix",
-          queue: { allowCollaborativeSteering: value, cap: 8 },
+          queue: value === undefined ? { cap: 8 } : { allowCollaborativeSteering: value, cap: 8 },
         },
       };
 
@@ -301,14 +308,11 @@ describe("doctor config flow", () => {
       await withTempHome(async (home) => {
         const pluginDir = path.join(home, "config-reader");
         await fs.mkdir(pluginDir);
-        await fs.writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: "config-reader",
-            kind: "context-engine",
-            configSchema: { type: "object", additionalProperties: false },
-          }),
-        );
+        await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+          id: "config-reader",
+          kind: "context-engine",
+          configSchema: { type: "object", additionalProperties: false },
+        });
         await fs.writeFile(
           path.join(pluginDir, "index.cjs"),
           `module.exports = {
@@ -454,15 +458,13 @@ describe("doctor config flow", () => {
       config: {},
     });
     let acknowledgment: unknown = "not reviewed";
-    runDoctorRepairSequenceMock.mockImplementation(
-      async (params: { state: unknown; onCapabilityConsent?: PluginCapabilityConsentHandler }) => {
-        acknowledgment = await expectDefined(
-          params.onCapabilityConsent,
-          "doctor capability handler",
-        )(review);
-        return repairResult(params.state);
-      },
-    );
+    runDoctorRepairSequenceMock.mockImplementation(async (params: RepairParams) => {
+      acknowledgment = await expectDefined(
+        params.onCapabilityConsent,
+        "doctor capability handler",
+      )(review);
+      return repairResult(params.state);
+    });
     const prompter = createDoctorPrompter({
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { repair: true, yes: true, nonInteractive: true },
@@ -491,19 +493,13 @@ describe("doctor config flow", () => {
   });
 
   it("does not refresh gateway before writing a config-only auth repair", async () => {
-    runDoctorRepairSequenceMock.mockImplementation(
-      async (params: {
-        state: { cfg: Record<string, unknown>; candidate: Record<string, unknown> };
-      }) => {
-        const repaired = { ...params.state.candidate, auth: { order: {} } };
-        return repairResult(
-          { ...params.state, cfg: repaired, candidate: repaired, pendingChanges: true },
-          {
-            changeNotes: ["Removed a stale configured auth order."],
-          },
-        );
-      },
-    );
+    runDoctorRepairSequenceMock.mockImplementation(async ({ state }: RepairParams) => {
+      const repaired = { ...state.candidate, auth: { order: {} } };
+      return repairResult(
+        { ...state, cfg: repaired, candidate: repaired, pendingChanges: true },
+        { changeNotes: ["Removed a stale configured auth order."] },
+      );
+    });
 
     await using result = await runConfig({
       config: { auth: { order: { anthropic: ["anthropic:missing"] } } },
@@ -531,12 +527,10 @@ describe("doctor config flow", () => {
     async (withReporter) => {
       const warning = "Could not verify imported auth profiles; originals retained.";
       const reportFindings = vi.fn();
-      runDoctorRepairSequenceMock.mockImplementation(
-        async (params: { state: unknown; reportFindings?: typeof reportFindings }) => {
-          params.reportFindings?.([], [warning]);
-          return repairResult(params.state, { warningNotes: [warning], displayWarningNotes: [] });
-        },
-      );
+      runDoctorRepairSequenceMock.mockImplementation(async (params: RepairParams) => {
+        params.reportFindings?.([], [warning]);
+        return repairResult(params.state, { warningNotes: [warning], displayWarningNotes: [] });
+      });
       await using result = await runConfig(
         { config: {}, repair: true },
         withReporter ? { reportFindings } : {},
@@ -620,24 +614,17 @@ describe("doctor config flow", () => {
   });
 
   it("warns when internal hook entries include unsupported loader keys", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      hooks: {
-        internal: {
-          entries: {
-            "custom-hook": {
-              enabled: true,
-              handler: "./hooks/custom.ts",
-              extraDirs: ["./hooks"],
-              env: { OPENCLAW_CUSTOM_HOOK: "1" },
-            },
-            "valid-hook": { enabled: true, paths: ["./tracked"] },
-            "null-hook": null,
-          },
-        },
+    const entries = {
+      "custom-hook": {
+        enabled: true,
+        handler: "./hooks/custom.ts",
+        extraDirs: ["./hooks"],
+        env: { OPENCLAW_CUSTOM_HOOK: "1" },
       },
-    });
-
-    const warning = doctorWarnings.join("\n");
+      "valid-hook": { enabled: true, paths: ["./tracked"] },
+      "null-hook": null,
+    };
+    const warning = (await collectDoctorWarnings({ hooks: { internal: { entries } } })).join("\n");
     expect(warning).toContain("hooks.internal.entries.custom-hook:");
     expect(warning).toContain(
       "unsupported loader keys handler, extraDirs will not load hook modules",
@@ -785,4 +772,70 @@ describe("doctor config flow", () => {
       "Doctor warnings",
     );
   });
+
+  type SessionPlan = NonNullable<DoctorConfigPreflightResult["postSessionPluginMigration"]>;
+  const sessionPlan = (
+    step: Partial<SessionPlan["step"]> = {},
+    plannedActions: SessionPlan["plannedActions"] = [],
+  ): SessionPlan => ({
+    step: {
+      id: "plugin-doctor-post-session-state",
+      phase: "final",
+      source: [],
+      target: [],
+      requiredness: "not-required",
+      reversibility: "not-applicable",
+      ...step,
+    },
+    plannedActions,
+  });
+
+  it.each<[string, Partial<DoctorConfigPreflightResult>, boolean, boolean?]>([
+    ["settled retirement", {}, true],
+    ["missing config", {}, false, false],
+    ["another config repair", { configChanged: true }, false],
+    ["unfinished state migration", { stateMigrationUnsettled: true }, false],
+    ["unbound discovery", { postSessionPluginMigrationPlanBound: false }, false],
+    ["bound absent plan", { postSessionPluginMigration: undefined }, true],
+    [
+      "conditional session work",
+      {
+        postSessionPluginMigration: sessionPlan(
+          { requiredness: "conditional", reversibility: "checkpoint-required" },
+          [{ pluginId: "example", id: "session-repair" }],
+        ),
+      },
+      true,
+    ],
+    [
+      "refused session plan",
+      {
+        postSessionPluginMigration: sessionPlan({
+          requiredness: "conditional",
+          reversibility: "checkpoint-required",
+          refusal: { code: "step-refused", message: "Incomplete session discovery" },
+        }),
+      },
+      false,
+    ],
+    ["unsettled preflight", { preflightLegacyStateConfig: undefined }, false],
+    ["repair warning", { warnings: ["Unfinished repair"] }, false],
+  ])(
+    "admits retirement with bound session work: %s",
+    async (_name, facts, expected, exists = true) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        messages: { queue: { allowCollaborativeSteering: false } },
+      };
+      preflightFacts.value = {
+        preflightLegacyStateConfig: config,
+        postSessionPluginMigrationPlanBound: true,
+        postSessionPluginMigration: sessionPlan(),
+        ...facts,
+      };
+      mockRepair({ modelRetirementRepairRan: true, modelRetirementOnly: true });
+      await using result = await runConfig({ config, exists, repair: true });
+      expect(result.retirementOnly).toBe(expected);
+    },
+  );
 });

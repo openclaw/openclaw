@@ -28,10 +28,6 @@ const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
   "maxContains",
 ] as const;
 
-function isXaiBackedVeniceModel(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("grok");
-}
-
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Venice Provider",
@@ -55,7 +51,7 @@ export default defineSingleProviderPluginEntry({
       liveModelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
     },
     normalizeResolvedModel: ({ modelId, model }) => {
-      const normalized = isXaiBackedVeniceModel(modelId)
+      const normalized = normalizeLowercaseStringOrEmpty(modelId).includes("grok")
         ? applyModelCompatPatch(model, {
             toolSchemaProfile: "xai",
             unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],

@@ -347,13 +347,12 @@ export function recoverChannelIngressClaimInDatabase(
     db,
     getQueue(db)
       .updateTable("channel_ingress_events")
-      .set((eb) => ({
+      .set({
         status: "pending",
         ...CLEARED_CLAIM_COLUMNS,
-        attempts: eb("attempts", "+", 1),
-        last_attempt_at: input.now,
+        // Losing a claim owner is not a delivery failure; preserve its retry history.
         updated_at: input.now,
-      }))
+      })
       .where("queue_name", "=", current.queue_name)
       .where("event_id", "=", current.event_id)
       .where("status", "=", "claimed")

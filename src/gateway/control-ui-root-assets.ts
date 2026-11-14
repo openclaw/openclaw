@@ -10,6 +10,7 @@ export const CONTROL_UI_ROOT_PUBLIC_ASSETS = [
   "favicon.svg",
   "manifest.webmanifest",
   "sw.js",
+  "pdf-preview-worker.js",
 ] as const;
 export type ControlUiRootPublicAsset = (typeof CONTROL_UI_ROOT_PUBLIC_ASSETS)[number];
 

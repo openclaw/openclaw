@@ -51,7 +51,7 @@ export async function warmGatewayDatabasePageCache(params: {
         }))),
   ];
   let remaining = MAX_PASS_BYTES;
-  for (const target of targets) {
+  for (const [index, target] of targets.entries()) {
     if (params.signal.aborted || remaining <= 0) {
       return;
     }
@@ -74,7 +74,12 @@ export async function warmGatewayDatabasePageCache(params: {
             target.path,
             {
               type: "pageCache.begin",
-              input: { kind: target.kind, maxBytes: remaining, now: Date.now() },
+              // Reserve a share for later databases; unused bytes stay available to them.
+              input: {
+                kind: target.kind,
+                maxBytes: Math.floor(remaining / (targets.length - index)),
+                now: Date.now(),
+              },
             },
             options,
           );

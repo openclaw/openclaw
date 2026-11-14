@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   loadNpmPackageVersions,
   resolveNpmSpecMetadata,
@@ -196,7 +197,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     });
     if (!metadataResult.ok) {
       params.logger.warn?.(
-        `Could not inspect ${spec} while looking for a compatible plugin version: ${metadataResult.error}`,
+        terminalText`Could not inspect ${spec} while looking for a compatible plugin version: ${metadataResult.error}`,
       );
       continue;
     }
@@ -208,7 +209,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     });
     if (!compatibilityError) {
       params.logger.warn?.(
-        `Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
+        terminalText`Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
       );
       return metadataResult.metadata;
     }

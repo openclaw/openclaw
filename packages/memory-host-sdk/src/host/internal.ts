@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { runWithConcurrency } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
@@ -335,13 +336,15 @@ export async function listMemoryFiles(
   if (result.length <= 1) {
     return result;
   }
+  // Bound filesystem pressure; deduplicate in discovery order, not completion order.
+  const canonicalPaths = await runWithConcurrency(
+    result.map((entry) => () => fs.realpath(entry).catch(() => entry)),
+    4,
+  );
   const seen = new Set<string>();
   const deduped: string[] = [];
-  for (const entry of result) {
-    let key = entry;
-    try {
-      key = await fs.realpath(entry);
-    } catch {}
+  for (const [index, entry] of result.entries()) {
+    const key = canonicalPaths[index]!;
     if (seen.has(key)) {
       continue;
     }
@@ -486,4 +489,4 @@ export {
   stripMemoryAnnotationCarriers,
 } from "./curated-annotations.js";
 
-export { runWithConcurrency } from "./concurrency.js";
+export { runWithConcurrency };

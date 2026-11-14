@@ -47,7 +47,8 @@ export async function listSessionFixture(
   },
 ) {
   await prepareSubagentSessionListReadCache();
-  using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  using cleanup = new DisposableStack();
+  cleanup.defer((await prepareUserProfileCatalog()).release);
   const store = params.entryFilter
     ? Object.fromEntries(
         Object.entries(params.store).filter(([key, entry]) => params.entryFilter!(key, entry)),
@@ -89,9 +90,7 @@ export async function listSessionFixture(
   const profileId = params.ownerFirstActorId ?? params.involvingActorId;
   let client: GatewayClient | undefined;
   if (profileId || params.entryFilter) {
-    client = {
-      connect: gatewayConnect(["operator.admin"]),
-    };
+    client = { connect: gatewayConnect(["operator.admin"]) };
     if (profileId) {
       client.authenticatedUserProfile = gatewayProfile(profileId, profileId);
       client.preparedSessionProfile = {
@@ -101,17 +100,14 @@ export async function listSessionFixture(
       };
     }
   }
-  try {
-    return await listProjectedSessions({
-      projection,
-      client,
-      opts: {
-        ...params.opts,
-        ownerFirst: Boolean(params.ownerFirstActorId),
-        involvingMe: Boolean(params.involvingActorId),
-      },
-    });
-  } finally {
-    projection.dispose();
-  }
+  cleanup.defer(() => projection.dispose());
+  return await listProjectedSessions({
+    projection,
+    client,
+    opts: {
+      ...params.opts,
+      ownerFirst: Boolean(params.ownerFirstActorId),
+      involvingMe: Boolean(params.involvingActorId),
+    },
+  });
 }

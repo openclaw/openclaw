@@ -3,7 +3,7 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateReadCommand } from "../../state/openclaw-state-read.types.js";
 import { readCronScratchSnapshotInDatabase } from "../scratch-read.kernel.js";
 import { readCronJobNamesInDatabase } from "./job-name.kernel.js";
-import { resolveCronJobsStorePath } from "./paths.js";
+import { resolveCronStoreKeyInDatabase } from "./paths.js";
 import { readCronQuarantinedJobsInDatabase } from "./quarantine.kernel.js";
 import { readCronRunReceiptCurrentFactsInDatabase } from "./run-receipt-read.js";
 
@@ -42,7 +42,7 @@ export function readCronStateCommandInDatabase(
     case "cron.jobNames": {
       const storeKey =
         command.storePath ??
-        resolveCronJobsStorePath(undefined, getSqliteWorkerStateContext().environment);
+        resolveCronStoreKeyInDatabase(db, undefined, getSqliteWorkerStateContext().environment);
       return {
         type: command.type,
         storeKey,

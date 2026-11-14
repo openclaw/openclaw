@@ -60,7 +60,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}rosita/chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const image = page.getByAltText("Managed proof image");
         await image.waitFor({ state: "attached", timeout: 10_000 });
         await expect.poll(() => requests.length).toBeGreaterThan(0);

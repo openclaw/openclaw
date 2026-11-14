@@ -20,6 +20,7 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor as withExecutor } from "./update-command-executor.js";
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
@@ -67,13 +68,10 @@ it.each([
   const previous = '{"retained":"original diagnostic"}\n';
   await fs.writeFile(artifact, previous, { mode: 0o600 });
   const priorStat = await fs.stat(artifact);
-  await fs.writeFile(
-    metadata,
-    JSON.stringify({
-      version: 1,
-      meta: { runId: run.runId, handoffId: owner, root, triageContextPath: artifact },
-    }),
-  );
+  await writeFixtureJson(metadata, {
+    version: 1,
+    meta: { runId: run.runId, handoffId: owner, root, triageContextPath: artifact },
+  });
   const databasePath = path.join(temporary, "managed-update-handoffs.sqlite");
   const existingIdentity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
     captureManagedUpdateLeaseDatabaseIdentity(databasePath),

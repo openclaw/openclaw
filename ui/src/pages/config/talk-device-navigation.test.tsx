@@ -63,12 +63,21 @@ it("leaves Talk while an admitted native language edit is held", async () => {
   const view = mountRouterOutlet({ router, retryContext: context });
   const accepted = createNativeDeviceSettingsSnapshot();
   accepted.voice.locale.primary = "de-DE";
+  const language = 'select[aria-label="Primary language"]';
+  const expectAdvanced = () => {
+    expect(view.querySelector(".content-header--settings .page-title")?.textContent).toBe(
+      "Advanced",
+    );
+    expect(view.querySelector<HTMLInputElement>("#config-section-broadcast input")?.value).toBe(
+      "sequential",
+    );
+    expect(view.querySelector("openclaw-talk-settings")).toBeNull();
+    expect(view.querySelector(language)).toBeNull();
+  };
   try {
     await router.navigate("talk", context);
     const select = await waitForSolid(() => {
-      const control = view.querySelector<HTMLSelectElement>(
-        'select[aria-label="Primary language"]',
-      );
+      const control = view.querySelector<HTMLSelectElement>(language);
       expect(control).not.toBeNull();
       return control!;
     });
@@ -82,28 +91,12 @@ it("leaves Talk while an admitted native language edit is held", async () => {
       }),
     );
     const navigation = router.navigate("advanced", context);
-    await waitForSolid(() => {
-      expect(view.querySelector(".content-header--settings .page-title")?.textContent).toBe(
-        "Advanced",
-      );
-      expect(view.querySelector<HTMLInputElement>("#config-section-broadcast input")?.value).toBe(
-        "sequential",
-      );
-      expect(view.querySelector("openclaw-talk-settings")).toBeNull();
-      expect(view.querySelector('select[aria-label="Primary language"]')).toBeNull();
-    });
+    await waitForSolid(expectAdvanced);
     await navigation;
     expect(capability.snapshot?.voice.locale?.primary).toBe("en-US");
     held.resolve(accepted);
     await waitForSolid(() => expect(capability.snapshot?.voice.locale?.primary).toBe("de-DE"));
-    expect(view.querySelector(".content-header--settings .page-title")?.textContent).toBe(
-      "Advanced",
-    );
-    expect(view.querySelector<HTMLInputElement>("#config-section-broadcast input")?.value).toBe(
-      "sequential",
-    );
-    expect(view.querySelector("openclaw-talk-settings")).toBeNull();
-    expect(view.querySelector('select[aria-label="Primary language"]')).toBeNull();
+    expectAdvanced();
   } finally {
     held.resolve(accepted);
     view.dispose();

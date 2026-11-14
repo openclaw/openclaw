@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../agents/stream-message-shared.js";
@@ -16,20 +17,28 @@ const message = buildAssistantMessage({
   timestamp: 123,
 });
 const initialAssistantMessage = { message, idempotencyKey: "opening" };
+type CreateParams = Parameters<typeof createGatewaySession>[0];
+const create = (
+  params: Omit<CreateParams, "cfg" | "commandSource" | "operatorRoleActor"> & {
+    cfg?: CreateParams["cfg"];
+  },
+) =>
+  createGatewaySession({
+    cfg: {},
+    commandSource: "test",
+    operatorRoleActor: { kind: "system" },
+    ...params,
+  });
 
 it("commits the initial assistant with the new session before publication and preserves an existing transcript", async () => {
   await withOpenClawTestState({ label: "session-initial-assistant" }, async () => {
     const key = "agent:main:initial-assistant";
     let publishedTranscript: ReturnType<typeof loadTranscriptEvents> | undefined;
-    const published = vi.fn();
-    const created = await createGatewaySession({
-      cfg: {},
+    const created = await create({
       key,
-      commandSource: "test",
-      operatorRoleActor: { kind: "system" },
       initialAssistantMessage,
       onCreatedSessionCommitted(session) {
-        published(session.entry);
+        expect(session.entry.initializationPending).toBeUndefined();
         publishedTranscript = loadTranscriptEvents({
           agentId: session.agentId,
           sessionKey: session.key,
@@ -39,11 +48,7 @@ it("commits the initial assistant with the new session before publication and pr
       },
     });
     expect(created).toMatchObject({ ok: true, postCommit: { status: "completed" } });
-    if (!created.ok) {
-      throw new Error(created.error.message);
-    }
-    expect(published).toHaveBeenCalledOnce();
-    expect(published.mock.calls[0]?.[0].initializationPending).toBeUndefined();
+    assert(created.ok);
     const events = await publishedTranscript;
     expect(events).toEqual([
       expect.objectContaining({ type: "session", id: created.entry.sessionId }),
@@ -53,11 +58,8 @@ it("commits the initial assistant with the new session before publication and pr
         message: { ...message, idempotencyKey: "opening" },
       }),
     ]);
-    const collision = await createGatewaySession({
-      cfg: {},
+    const collision = await create({
       key,
-      commandSource: "test",
-      operatorRoleActor: { kind: "system" },
       initialAssistantMessage: {
         message: {
           ...message,
@@ -81,11 +83,8 @@ it("rechecks current authority after preparing the initial transcript and commit
     let current = true;
     const published = vi.fn();
     await expect(
-      createGatewaySession({
-        cfg: {},
+      create({
         key,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
         initialAssistantMessage,
         onPhase(phase) {
           if (phase === "writerAdmission" || phase === "commit") {
@@ -107,26 +106,18 @@ it("rechecks current authority after preparing the initial transcript and commit
 
 it("creates a seeded child instead of taking the legacy main-session reset shortcut", async () => {
   await withOpenClawTestState({ label: "session-initial-assistant-no-reset" }, async () => {
-    const common = {
-      cfg: { session: { dmScope: "main" as const } },
-      commandSource: "test",
-      operatorRoleActor: { kind: "system" as const },
-    };
-    const parent = await createGatewaySession({ ...common, key: "agent:main:main" });
-    if (!parent.ok) {
-      throw new Error(parent.error.message);
-    }
-    const child = await createGatewaySession({
-      ...common,
+    const cfg = { session: { dmScope: "main" as const } };
+    const parent = await create({ cfg, key: "agent:main:main" });
+    assert(parent.ok);
+    const child = await create({
+      cfg,
       parentSessionKey: parent.key,
       emitCommandHooks: true,
       resetMainWhenUnspecified: true,
       initialAssistantMessage,
     });
     expect(child).toMatchObject({ ok: true, resetExisting: false });
-    if (!child.ok) {
-      throw new Error(child.error.message);
-    }
+    assert(child.ok);
     expect(child.key).not.toBe(parent.key);
     expect(loadSessionEntryReadOnly({ sessionKey: parent.key })?.sessionId).toBe(
       parent.entry.sessionId,

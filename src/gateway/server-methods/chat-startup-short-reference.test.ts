@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import * as protocol from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -52,6 +53,44 @@ async function startup(
 }
 
 describe("chat.startup short references", () => {
+  it("rejects malformed direct history before reading the session", async () => {
+    const context = createDirectChatContext();
+    const respond = await requestHistory("chat.history", { sessionKey: key, limit: 0 }, context);
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
+  it.each(["sessionKey", "shortId"] as const)(
+    "validates %s input once before reading history",
+    async (selector) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        await seed("validated-startup", {}, "Validated history");
+        const context = createDirectChatContext();
+        await initializeSessionReadContext(context);
+        const params =
+          selector === "sessionKey"
+            ? { sessionKey: key }
+            : { shortId: "12345678", agentId: "main" };
+        const validation = vi.spyOn(protocol, "validateChatHistoryParams");
+        try {
+          const invalid = await requestHistory("chat.startup", { ...params, limit: 0 }, context);
+          expect(invalid.mock.calls[0]?.[0]).toBe(false);
+          const valid = await requestHistory("chat.startup", params, context);
+          expect(valid.mock.calls[0]?.[1]).toMatchObject({
+            messages: [expect.objectContaining({ content: "Validated history" })],
+          });
+          expect(validation).not.toHaveBeenCalled();
+        } finally {
+          validation.mockRestore();
+        }
+      });
+    },
+  );
+
   it.each([true, false])(
     "establishes observation before reading only for a live connection (%s)",
     async (live) => {

@@ -522,7 +522,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript({
       includeToolFailureInstruction: Boolean(attempt.lastToolError),
-      messages: attempt.messagesSnapshot,
+      // Native snapshots contain only this attempt; embedded retries reload their full transcript.
+      // Accumulating embedded snapshots retains another history on every provider rejection.
+      messages: runtime.pluginHarnessOwnsTransport ? attempt.messagesSnapshot : undefined,
       ...(rejectedWithoutOutput ? { replayCurrentUserTurn: true } : {}),
     });
     recordRecoveryDecision("accepted", "transient_retry");

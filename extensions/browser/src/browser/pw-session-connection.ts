@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -38,6 +39,7 @@ import {
   type ContextState,
   type PlaywrightConnectionRetirement,
 } from "./pw-session-contracts.js";
+import { prepareMeetPlaybackObservation } from "./pw-session-meet-playback.js";
 import {
   isConnectionScopedTargetId,
   markConnectionScopedBrowser,
@@ -188,7 +190,12 @@ async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): P
   }
   const closing = connection.browser.close();
   closeConnectionPromises.set(connection, closing);
-  return await closing;
+  try {
+    return await closing;
+  } catch (error) {
+    materializeErrorStack(error);
+    throw error;
+  }
 }
 
 async function withPlaywrightCloseTimeout(task: Promise<void>): Promise<void> {
@@ -553,7 +560,7 @@ async function getPageForTargetIdOnce(opts: {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser, headless } = await connectBrowser(
+  const { browser, headless, engine } = await connectBrowser(
     opts.cdpUrl,
     opts.ssrfPolicy,
     opts.relayReference,
@@ -575,6 +582,9 @@ async function getPageForTargetIdOnce(opts: {
     : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    if (!engine || engine === "chromium") {
+      await prepareMeetPlaybackObservation(found.page);
+    }
     if (headless) {
       // Settled guards are cached; this only re-registers one that failed.
       void refuseHeadlessPasskeyDialogs(found.page.context());

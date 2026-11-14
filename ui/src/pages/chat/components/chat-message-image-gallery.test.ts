@@ -356,37 +356,61 @@ function renderMessage(
 }
 
 describe("message attachment image gallery projection", () => {
-  it.each([
-    {
-      format: "MEDIA directives",
-      content:
-        "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
-    },
-    {
-      format: "mixed image blocks and document-shaped images",
-      content: [
-        { type: "text", text: "Introduction\n\n**Before**" },
-        { type: "image", url: "https://example.com/before.png" },
-        { type: "text", text: "**After**" },
-        createAttachmentBlock(
-          "https://example.com/after.png",
-          "document",
-          "after.png",
-          "application/octet-stream; charset=binary",
-        ),
-        { type: "text", text: "Closing paragraph" },
-      ],
-    },
-  ])(
-    "keeps assistant $format in order and in one image gallery without persisted mirrors",
-    async ({ content }) => {
+  it.each(
+    [
+      {
+        format: "MEDIA directives",
+        content:
+          "Introduction\n\n**Before**\nMEDIA:https://example.com/before.png\n\n**After**\nMEDIA:https://example.com/after.png\n\nClosing paragraph",
+      },
+      {
+        format: "mixed image blocks and document-shaped images",
+        content: [
+          { type: "text", text: "Introduction\n\n**Before**" },
+          { type: "image", url: "https://example.com/before.png" },
+          { type: "text", text: "**After**" },
+          createAttachmentBlock(
+            "https://example.com/after.png",
+            "document",
+            "after.png",
+            "application/octet-stream; charset=binary",
+          ),
+          { type: "text", text: "Closing paragraph" },
+        ],
+      },
+    ].flatMap((fixture) =>
+      [false, true].map((cachedDimensions) => Object.assign({}, fixture, { cachedDimensions })),
+    ),
+  )(
+    "keeps assistant $format in one gallery with cached dimensions=$cachedDimensions",
+    async ({ content, cachedDimensions }) => {
       const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      const images = Object.fromEntries(
+        ["before", "after"].map((name) => [
+          JSON.stringify([null, `https://example.com/${name}.png`, 480]),
+          { width: 480, height: 240, rendition: 480 as const },
+        ]),
+      );
       renderMessage(
         createAssistantMessage(content, {
           timestamp: 1000,
+          __openclaw: { id: "cached-gallery" },
         }),
         "assistant",
-        { onOpenImage },
+        {
+          onOpenImage,
+          displayFacts: cachedDimensions
+            ? {
+                forRow: (id) =>
+                  id === "cached-gallery"
+                    ? {
+                        read: () => ({ scope: "cached-gallery", facts: { images } }),
+                        write: vi.fn(),
+                      }
+                    : undefined,
+              }
+            : undefined,
+        },
       );
 
       await waitForSolid(() =>
@@ -468,5 +492,64 @@ describe("message attachment image gallery projection", () => {
       index,
       items: [expect.any(Function), expect.any(Function)],
     });
+  });
+  it("follows transcript tile order across the opened turn", async () => {
+    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+    const first = createAssistantMessage(
+      [
+        { type: "text", text: "Introduction" },
+        { type: "image", url: "https://example.com/inline.png" },
+      ],
+      {
+        __openclaw: {
+          id: "turn-first",
+          media: [{ path: "https://example.com/supplemental.png", contentType: "image/png" }],
+        },
+      },
+    );
+    const last = createAssistantMessage([{ type: "image", url: "https://example.com/last.png" }], {
+      __openclaw: { id: "turn-last" },
+    });
+    const turn = [
+      { key: "first", message: first },
+      { key: "last", message: last },
+    ];
+    mountSolid(
+      MessageGroup,
+      {
+        group: createMessageGroup(first, "assistant", {
+          messages: [{ key: "first", message: first }],
+        }),
+        options: {
+          showReasoning: false,
+          showToolCalls: false,
+          assistantName: "OpenClaw",
+          assistantAvatar: null,
+          getTurnMediaMessages: (key) => (key === "first" ? turn : undefined),
+          onOpenImage,
+        },
+      },
+      container,
+    );
+    const rendered = () =>
+      Array.from(
+        container.querySelectorAll<HTMLImageElement>(".chat-message-image"),
+        (image) => new URL(image.src).pathname,
+      );
+    // In-order replies place unpositioned media above their text.
+    await waitForSolid(() => expect(rendered()).toEqual(["/supplemental.png", "/inline.png"]));
+    const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
+    for (const [index, tile] of tiles.entries()) {
+      tile.click();
+      const gallery = expectDefined(onOpenImage.mock.calls.at(-1)?.[0].gallery, "turn gallery");
+      expect(gallery.index).toBe(index);
+      const items = await Promise.all(gallery.items.map((load) => load()));
+      expect(items.map((item) => item && new URL(item.src).pathname)).toEqual([
+        "/supplemental.png",
+        "/inline.png",
+        "/last.png",
+      ]);
+      items.forEach((item) => item?.release?.());
+    }
   });
 });

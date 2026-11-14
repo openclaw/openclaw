@@ -116,10 +116,10 @@ function renderGatewayHealth(health: NativeGatewaysSnapshot["gateways"][number][
 function renderIdentityGateways(
   snapshot: NativeGatewaysSnapshot | null,
   onClose: SidebarIdentityMenuParams["onClose"],
-): MenuEntry[] {
+): MenuItem | undefined {
   const capability = nativeGatewaysCapability();
   if (!capability) {
-    return [];
+    return undefined;
   }
   const current = snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId);
   const gateways: MenuEntry[] = [
@@ -170,32 +170,39 @@ function renderIdentityGateways(
       : []),
     renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "settings"),
   ];
-  return [
-    {
-      kind: "content",
-      id: "gateway-title",
-      content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
-    },
-    {
-      id: "command:gateways",
-      label: current?.name ?? t("nav.gateway.sectionLabel"),
-      class: "sidebar-customize-menu__item",
-      icon: current ? renderGatewayHealth(current.health) : undefined,
-      details: current?.isPrimary ? (
-        <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
-      ) : undefined,
-      children: gateways,
-    },
-    {
-      kind: "content",
-      id: "gateway-separator",
-      content: <div class="sidebar-customize-menu__separator" role="separator" />,
-    },
-  ];
+  return {
+    id: "command:gateways",
+    label: current?.name ?? t("nav.gateway.sectionLabel"),
+    class: "sidebar-customize-menu__item",
+    icon: current ? renderGatewayHealth(current.health) : undefined,
+    details: current?.isPrimary ? (
+      <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
+    ) : undefined,
+    children: gateways,
+  };
 }
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): SolidJSX.Element {
   const controls = createMenuControls();
+  // Rebuilt entries reuse these nodes. Replacing the content on both sides of an
+  // open submenu makes the keyed list re-insert it, which closes its popover, and
+  // replacing the avatar would reload its image on every Gateway update.
+  const separator = (id: string): MenuEntry => ({
+    kind: "content",
+    id,
+    content: <div class="sidebar-customize-menu__separator" role="separator" />,
+  });
+  const gatewayTitle: MenuEntry = {
+    kind: "content",
+    id: "gateway-title",
+    content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
+  };
+  const profileSeparator = separator("profile-separator");
+  const gatewaySeparator = separator("gateway-separator");
+  const usageSeparator = separator("usage-separator");
+  const helpSeparator = separator("help-separator");
+  const retrySeparator = separator("retry-separator");
+  const footerSeparator = separator("footer-separator");
   const profileName = () =>
     params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
@@ -204,22 +211,24 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
     ...params.profileViewer,
     name: profileName(),
   }));
+  const profileAvatar = (
+    <span class="sidebar-identity-menu__avatar" aria-hidden="true">
+      <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+    </span>
+  );
   const profileEmail = () =>
     params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
       : null;
   const items = createMemo<MenuEntry[]>(() => {
     const help = renderSidebarHelpMenu();
+    const gateways = renderIdentityGateways(params.nativeGatewaySnapshot, params.onClose);
     return [
       {
         id: "command:profile",
         label: profileName(),
         class: "sidebar-customize-menu__item sidebar-identity-menu__header",
-        icon: (
-          <span class="sidebar-identity-menu__avatar" aria-hidden="true">
-            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
-          </span>
-        ),
+        icon: profileAvatar,
         content: (
           <span class="sidebar-identity-menu__identity">
             <span class="sidebar-identity-menu__name" title={profileName()}>
@@ -233,12 +242,8 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           </span>
         ),
       },
-      {
-        kind: "content",
-        id: "profile-separator",
-        content: <div class="sidebar-customize-menu__separator" role="separator" />,
-      },
-      ...renderIdentityGateways(params.nativeGatewaySnapshot, params.onClose),
+      profileSeparator,
+      ...(gateways ? [gatewayTitle, gateways, gatewaySeparator] : []),
       renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
         details: (
           <KeyboardShortcut
@@ -264,11 +269,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           : titleForRoute("updates"),
       },
       renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins"),
-      {
-        kind: "content",
-        id: "usage-separator",
-        content: <div class="sidebar-customize-menu__separator" role="separator" />,
-      },
+      usageSeparator,
       renderSidebarMenuAction("command:pair-mobile", t("devices.pairing.button"), "smartphone", {
         className: "sidebar-pair-mobile",
         disabled: !params.canPairDevice,
@@ -286,19 +287,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           />
         ),
       }),
-      {
-        kind: "content",
-        id: "help-separator",
-        content: <div class="sidebar-customize-menu__separator" role="separator" />,
-      },
+      helpSeparator,
       ...(help ? [help] : []),
       ...(params.canRetryConnection
         ? [
-            {
-              kind: "content" as const,
-              id: "retry-separator",
-              content: <div class="sidebar-customize-menu__separator" role="separator" />,
-            },
+            retrySeparator,
             {
               id: "command:retry-connect",
               label: t("connection.retryNow"),
@@ -307,11 +300,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
             },
           ]
         : []),
-      {
-        kind: "content",
-        id: "footer-separator",
-        content: <div class="sidebar-customize-menu__separator" role="separator" />,
-      },
+      footerSeparator,
       {
         kind: "group",
         id: "footer",

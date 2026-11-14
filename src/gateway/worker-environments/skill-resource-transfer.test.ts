@@ -117,16 +117,10 @@ const prependScript = (command: Command, script: string): Command => ({
 });
 const directoryLink = process.platform === "win32" ? "junction" : "dir";
 function placementClaim(error = new Error("placement retired")) {
-  let current = true;
+  const controller = new AbortController();
   return {
-    retire: () => {
-      current = false;
-    },
-    assertCurrent: () => {
-      if (!current) {
-        throw error;
-      }
-    },
+    retire: () => controller.abort(error),
+    assertCurrent: () => controller.signal.throwIfAborted(),
   };
 }
 

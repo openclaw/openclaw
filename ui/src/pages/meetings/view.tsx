@@ -3,9 +3,12 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, latest, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Menu } from "../../components/solid/menu.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { registerMeetingsEnglish } from "../../i18n/locales/en-meetings.ts";
 import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -14,19 +17,31 @@ import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import { MeetingSummary } from "./meeting-summary.tsx";
 import {
   transcriptRouteSearch,
   transcriptListParams,
   TRANSCRIPT_QUERY_LIMIT,
-  TRANSCRIPT_ADVANCED_FILTER_KEYS,
   TRANSCRIPT_FILTER_KEYS,
 } from "./route-state.ts";
+import { Filters } from "./view-filters.tsx";
 import type { TranscriptsViewProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerTranscriptsEnglish);
 registerEnglishCatalog(registerMeetingsEnglish);
+
+// Matches the phone breakpoint of the shared page header and meetings.css.
+const PHONE_LAYOUT_QUERY =
+  "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+
+function createPhoneLayout() {
+  return createMediaQuery(
+    PHONE_LAYOUT_QUERY,
+    globalThis.matchMedia?.(PHONE_LAYOUT_QUERY).matches ?? false,
+  );
+}
 
 function transcriptTime(value: string | null | undefined) {
   return value ? new Date(value).toLocaleString() : t("transcripts.unknown");
@@ -122,86 +137,6 @@ function ReadBoundary(props: {
   );
 }
 
-function FilterField(props: TranscriptsViewProps & { name: string; label: string; type?: string }) {
-  let input!: HTMLInputElement;
-  onSettled(() => (props.name === "query" ? props.onFocusTarget?.("search", input) : undefined));
-  return (
-    <label class="field">
-      <span>{props.label}</span>
-      <input
-        name={props.name}
-        type={props.type ?? "search"}
-        aria-label={props.label}
-        maxlength={TRANSCRIPT_QUERY_LIMIT}
-        ref={[liveValue(() => props.drafts[props.name] ?? ""), (element) => (input = element)]}
-        onInput={(event) => props.onDraft(props.name, event.currentTarget.value)}
-      />
-    </label>
-  );
-}
-
-function Filters(props: TranscriptsViewProps) {
-  return (
-    <form
-      class="transcripts-filters"
-      aria-label={t("transcripts.filters")}
-      onSubmit={(event) => {
-        event.preventDefault();
-        const data = new FormData(event.currentTarget);
-        const patch: Record<string, string | null> = { cursor: null };
-        for (const key of TRANSCRIPT_FILTER_KEYS) {
-          patch[key] = normalizeNullableString(data.get(key));
-        }
-        props.onNavigate(patch);
-      }}
-    >
-      <FilterField {...props} name="query" label={t("transcripts.titleFilter")} />
-      <details
-        open={TRANSCRIPT_ADVANCED_FILTER_KEYS.some((key) =>
-          new URLSearchParams(props.search).get(key),
-        )}
-      >
-        <summary>{t("transcripts.advancedFilters")}</summary>
-        <div class="transcripts-filters__advanced">
-          <FilterField {...props} name="providerId" label={t("transcripts.sourceFilter")} />
-          <FilterField {...props} name="accountId" label={t("transcripts.accountFilter")} />
-          <FilterField {...props} name="agentId" label={t("transcripts.agentFilter")} />
-          <FilterField
-            {...props}
-            name="startedAfter"
-            label={t("transcripts.afterFilter")}
-            type="date"
-          />
-          <FilterField
-            {...props}
-            name="startedBefore"
-            label={t("transcripts.beforeFilter")}
-            type="date"
-          />
-        </div>
-        <p class="transcripts-caption">{t("transcripts.filterHint")}</p>
-      </details>
-      <div class="transcripts-actions">
-        <button type="submit" class="btn">
-          <Icon name="search" />
-          {t("transcripts.filter")}
-        </button>
-        <button
-          type="button"
-          class="btn"
-          onClick={() =>
-            props.onNavigate(
-              Object.fromEntries([...TRANSCRIPT_FILTER_KEYS, "cursor"].map((key) => [key, null])),
-            )
-          }
-        >
-          {t("transcripts.clearFilters")}
-        </button>
-      </div>
-    </form>
-  );
-}
-
 function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSummary }) {
   const selection = () => ({ selector: props.entry.selector, find: null, tab: null });
   const participants = () => props.entry.participants.slice(0, 3).join(", ");
@@ -233,28 +168,33 @@ function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSumm
         <span class="meetings-row__title">
           {props.entry.title || props.entry.providerName || props.entry.providerId}
         </span>
-        <span class="meetings-row__meta">
-          {props.entry.providerName || props.entry.providerId} ·{" "}
-          <time datetime={props.entry.startedAt}>
-            {new Date(props.entry.startedAt).toLocaleTimeString(undefined, {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </time>{" "}
+        <span class="meetings-row__meta meetings-row__status">
+          <span class="meetings-row__when">
+            {props.entry.providerName || props.entry.providerId} ·{" "}
+            <time datetime={props.entry.startedAt}>
+              {new Date(props.entry.startedAt).toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </time>
+            {!props.entry.active && duration() ? ` · ${duration()}` : null}
+          </span>{" "}
           {props.entry.active ? (
             <span class="meetings-live">{t("meetings.inProgress")}</span>
-          ) : duration() ? (
-            ` · ${duration()}`
           ) : null}
         </span>
-        {participants() ? (
-          <span class="meetings-row__meta meetings-row__participants">
-            {participants()}
-            {props.entry.participants.length > 3 ? ` +${props.entry.participants.length - 3}` : ""}
+        <span class="meetings-row__people">
+          {participants() ? (
+            <span class="meetings-row__meta meetings-row__participants">
+              {participants()}
+              {props.entry.participants.length > 3
+                ? ` +${props.entry.participants.length - 3}`
+                : ""}
+            </span>
+          ) : null}
+          <span class="meetings-row__meta">
+            {t("transcripts.savedCount", { count: String(props.entry.utteranceCount) })}
           </span>
-        ) : null}
-        <span class="meetings-row__meta">
-          {t("transcripts.savedCount", { count: String(props.entry.utteranceCount) })}
         </span>
         <span class="meetings-row__overview">
           {props.entry.utteranceCount === 0
@@ -629,34 +569,71 @@ function Reader(props: TranscriptsViewProps) {
 
 export function TranscriptsView(props: TranscriptsViewProps) {
   const captureTarget = SETTINGS_SEARCH_TARGETS.meetingCapture;
+  const phone = createPhoneLayout();
+  const captureHref = () =>
+    pathForRoute(captureTarget.routeId, props.basePath) + captureTarget.search + captureTarget.hash;
+  const refreshDisabled = () => !props.connected || !props.allowed || props.listLoading;
+  const pageMenu = () => (
+    <Menu
+      id="meetings-page-menu"
+      pointerFocus="trigger"
+      label={t("meetings.moreActions")}
+      trigger={<Icon name="moreHorizontal" />}
+      triggerClass="btn transcripts-page-menu__trigger"
+      triggerAttributes={{ title: t("meetings.moreActions") }}
+      placement="bottom-end"
+      items={[
+        {
+          id: "capture",
+          label: t("meetingCapture.title"),
+          icon: <Icon name="settings" />,
+          href: captureHref(),
+          attributes: {
+            onClick: (event) => handleNavigationClick(event, () => props.onOpenCaptureSettings()),
+          },
+        },
+        {
+          id: "refresh",
+          label: t("common.refresh"),
+          icon: <Icon name="refresh" />,
+          disabled: refreshDisabled(),
+        },
+      ]}
+      onSelect={(item) => {
+        if (item.id === "refresh") {
+          props.onRefresh();
+        }
+      }}
+    />
+  );
   return (
     <section class="transcripts-workspace">
       <HubPageHeader
         active="meetings"
         docsUrl="https://docs.openclaw.ai/cli/transcripts"
         actions={
-          <div class="transcripts-actions">
-            <a
-              class="btn"
-              href={
-                pathForRoute(captureTarget.routeId, props.basePath) +
-                captureTarget.search +
-                captureTarget.hash
-              }
-              onClick={(event) => handleNavigationClick(event, () => props.onOpenCaptureSettings())}
-            >
-              <Icon name="settings" />
-              {t("meetingCapture.title")}
-            </a>
-            <button
-              class="btn"
-              disabled={!props.connected || !props.allowed || props.listLoading}
-              onClick={() => props.onRefresh()}
-            >
-              <Icon name="refresh" />
-              {t("common.refresh")}
-            </button>
-          </div>
+          phone() ? (
+            <FloatingHeaderActions fallback={pageMenu()}>{pageMenu()}</FloatingHeaderActions>
+          ) : (
+            <div class="transcripts-actions">
+              <a
+                class="btn"
+                href={captureHref()}
+                onClick={(event) =>
+                  handleNavigationClick(event, () => props.onOpenCaptureSettings())
+                }
+              >
+                <Icon name="settings" />
+                {t("meetingCapture.title")}
+              </a>
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={props.listLoading}
+                disabled={!props.connected || !props.allowed}
+                onClick={() => props.onRefresh()}
+              />
+            </div>
+          )
         }
       />
       {!props.connected ? (
@@ -684,7 +661,7 @@ export function TranscriptsView(props: TranscriptsViewProps) {
             aria-label={t("transcripts.library")}
             aria-busy={props.listLoading ? "true" : "false"}
           >
-            <Filters {...props} />
+            <Filters {...props} phone={phone()} />
             <Library {...props} />
           </section>
           {new URLSearchParams(props.search).get("selector") ? <Reader {...props} /> : null}

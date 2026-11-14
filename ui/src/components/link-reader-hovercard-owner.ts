@@ -13,6 +13,8 @@ import type {
   HovercardProperties,
   LinkReaderHovercardProvider,
 } from "./link-reader-hovercard.types.ts";
+import { requestLinkReaderMetadata, subscribeLinkReaderMetadata } from "./link-reader-metadata.ts";
+import { observeLinkReaderInline } from "./link-reader-mutations.ts";
 import { renderPagePreview, type PageActivation } from "./link-reader-page-preview.tsx";
 import { LinkReaderPreviewCache } from "./link-reader-preview-cache.ts";
 import { disposePreview } from "./link-reader-preview-root.tsx";
@@ -24,11 +26,7 @@ import {
   renderPreviewError,
   type LinkPreview,
 } from "./link-reader-preview.tsx";
-import {
-  LINK_READER_METADATA_REQUEST_EVENT,
-  LINK_READER_METADATA_UPDATED_EVENT,
-  type LinkReaderMetadataUpdate,
-} from "./link-reader-response.ts";
+import type { LinkReaderMetadataUpdate } from "./link-reader-response.ts";
 import {
   LINK_READER_HOVERCARD_OPEN_DELAY_MS,
   resolveLinkReaderTarget,
@@ -40,6 +38,7 @@ import {
   type PageHoverTarget,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
+import { updateLinkReaderDisplay } from "./markdown-link-display.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 registerLinkReaderEnglish();
@@ -53,6 +52,8 @@ export class HovercardOwner {
   private stopGateway?: () => void;
   private stopConfig?: () => void;
   private stopListeners?: () => void;
+  private stopMetadata?: () => void;
+  private stopInline?: () => void;
 
   constructor(
     private readonly host: LinkReaderHovercardProvider,
@@ -97,8 +98,16 @@ export class HovercardOwner {
       this.connected &&
       (key === "client" || key === "agentId" || key === "sessionKey" || key === "readers")
     ) {
-      window.dispatchEvent(new Event(LINK_READER_METADATA_REQUEST_EVENT));
+      if (key !== "readers") {
+        this.bindMetadata();
+      }
+      requestLinkReaderMetadata(window);
     }
+  }
+
+  private bindMetadata(): void {
+    this.stopMetadata?.();
+    this.stopMetadata = subscribeLinkReaderMetadata(window, this.host, this.handleMetadataUpdate);
   }
 
   private watchPageContext(): void {
@@ -200,18 +209,12 @@ export class HovercardOwner {
       }
       const target = resolveLinkReaderTarget(anchor.href, this.host.readers);
       const preview = target ? this.previews.get(target)?.preview : undefined;
-      if (!preview?.badge) {
-        delete anchor.dataset.linkReaderTone;
-        anchor.removeAttribute("aria-description");
-      } else {
-        anchor.setAttribute("aria-description", preview.badge.label);
-        anchor.dataset.linkReaderTone = preview.badge.tone;
-      }
+      updateLinkReaderDisplay(anchor, preview);
     }
   }
 
-  private readonly handleMetadataUpdate = (event: CustomEvent<LinkReaderMetadataUpdate>) => {
-    const { client, agentId, sessionKey, target, preview: detail } = event.detail;
+  private readonly handleMetadataUpdate = (update: LinkReaderMetadataUpdate) => {
+    const { client, agentId, sessionKey, target, preview: detail } = update;
     if (
       client !== this.host.client ||
       agentId !== this.host.agentId ||
@@ -236,7 +239,18 @@ export class HovercardOwner {
     this.update();
   };
 
-  private readonly inlineObserver = new MutationObserver(() => this.syncInlineStates());
+  private readonly handleInlineMutations = () => {
+    this.syncInlineStates();
+    const anchor = this.activeAnchor;
+    // The portaled card must retire when its provider replaces or retargets the link.
+    if (
+      !this.page &&
+      anchor &&
+      (!this.ownsAnchor(anchor) || anchor.href !== this.activeTarget?.href)
+    ) {
+      this.close();
+    }
+  };
 
   private clearPreviews(): void {
     this.previews.clear();
@@ -310,27 +324,12 @@ export class HovercardOwner {
       }
     }
   }
-  private readonly activeAnchorObserver = new MutationObserver(() => {
-    if (this.page) {
-      this.retirePage();
-      return;
-    }
-    const anchor = this.activeAnchor;
-    // The card is portaled outside the routed tree, whose replacement can remove
-    // a hovered link without a pointer event reaching this delegated handler.
-    if (anchor && (!this.ownsAnchor(anchor) || anchor.href !== this.activeTarget?.href)) {
-      this.close();
-    }
-  });
+  private pageObserver?: MutationObserver;
 
   connect(): void {
     this.connected = true;
+    this.bindMetadata();
     const stopListeners = [
-      listen(window, LINK_READER_METADATA_UPDATED_EVENT, (event) => {
-        if (event instanceof CustomEvent) {
-          this.handleMetadataUpdate(event);
-        }
-      }),
       listen(this.host, "pointerover", this.handlePointerOver),
       listen(this.host, "pointerout", this.handlePointerOut),
       listen(this.host, "focusin", this.handleFocusIn),
@@ -340,15 +339,10 @@ export class HovercardOwner {
     ];
     this.stopListeners = () => stopListeners.forEach((stop) => stop());
     this.host.style.display = "contents";
-    this.inlineObserver.observe(this.host, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["href"],
-    });
+    this.stopInline = observeLinkReaderInline(this.host, this.handleInlineMutations);
     this.watchPageContext();
     // Reader details may have settled before this lazy provider was loaded.
-    window.dispatchEvent(new Event(LINK_READER_METADATA_REQUEST_EVENT));
+    requestLinkReaderMetadata(window);
     // Restore focus intent after the bridge finishes adopting its caller's nodes.
     queueMicrotask(() => {
       const root = this.host.getRootNode();
@@ -362,9 +356,12 @@ export class HovercardOwner {
 
   disconnect(): void {
     this.connected = false;
+    this.stopMetadata?.();
+    this.stopMetadata = undefined;
     this.stopListeners?.();
     this.stopListeners = undefined;
-    this.inlineObserver.disconnect();
+    this.stopInline?.();
+    this.stopInline = undefined;
     this.close();
     this.clearPreviews();
     this.stopGateway?.();
@@ -542,12 +539,6 @@ export class HovercardOwner {
     this.allowLoading = Boolean(context?.succeeded && !this.previews.get(target));
     this.activeAnchor = anchor;
     this.activeTarget = target;
-    this.activeAnchorObserver.observe(this.host, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["href"],
-    });
     // Unseeded links stay quiet while this identity's first request is pending.
     this.hovercard.scheduleOpen(
       delay,
@@ -661,7 +652,8 @@ export class HovercardOwner {
       };
       this.page = page;
       this.activeAnchor = anchor;
-      this.activeAnchorObserver.observe(this.host, {
+      const observer = (this.pageObserver ??= new MutationObserver(() => this.retirePage()));
+      observer.observe(this.host, {
         childList: true,
         subtree: true,
         attributes: true,
@@ -677,7 +669,7 @@ export class HovercardOwner {
       });
       const root = anchor.getRootNode();
       if (root instanceof ShadowRoot) {
-        this.activeAnchorObserver.observe(root, {
+        observer.observe(root, {
           childList: true,
           subtree: true,
           attributes: true,
@@ -748,7 +740,7 @@ export class HovercardOwner {
     this.requestStarted = false;
     this.allowLoading = false;
     this.hovercard.reset();
-    this.activeAnchorObserver.disconnect();
+    this.pageObserver?.disconnect();
     this.previewRequest?.controller.abort();
     this.previewRequest = null;
     this.activeAnchor = null;

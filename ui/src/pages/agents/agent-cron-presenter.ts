@@ -42,6 +42,8 @@ export function createAgentCronPresenter(deps: {
 
   function read(task: (scope: CronState) => Promise<string | null | void>, append = false) {
     const scope = deps.currentState();
+    scope.canRefresh = () =>
+      deps.currentState() === scope && deps.canCall("cron.list", "operator.read");
     const completion = Promise.race([
       runTask(scope, task).then((error) => {
         if (error) {
@@ -55,12 +57,12 @@ export function createAgentCronPresenter(deps: {
     return { scope, completion, append };
   }
 
-  async function loadJobs(scope: CronState, append = false) {
-    await loadCronJobsPage(scope, { append, tableFilters: true });
+  async function loadJobs(scope: CronState, append = false, force = false) {
+    await loadCronJobsPage(scope, { append, tableFilters: true, refresh: force });
     return scope.cronJobsError;
   }
 
-  function onRefresh() {
+  function onRefresh(force = true) {
     const scope = deps.currentState();
     if (
       !scope.connected ||
@@ -71,14 +73,17 @@ export function createAgentCronPresenter(deps: {
       return;
     }
     summary = read(async (current) => {
-      const [error] = await Promise.all([loadCronStatus(current), loadCronScopeStats(current)]);
+      const [error] = await Promise.all([
+        loadCronStatus(current),
+        loadCronScopeStats(current, { refresh: force }),
+      ]);
       return error;
     });
     if (scope.cronJobsLoadingMore) {
       // The admitted append also awaits the queued page-zero recovery.
       void runTask(scope, (current) => loadCronJobsPage(current, { tableFilters: true }));
     } else {
-      jobs = read(loadJobs);
+      jobs = read((current) => loadJobs(current, false, force));
     }
     refresh = {
       scope,
@@ -105,6 +110,18 @@ export function createAgentCronPresenter(deps: {
       return;
     }
     jobs = read((current) => loadJobs(current, true), true);
+    deps.publish();
+  }
+
+  function onRuntime(event: unknown) {
+    const scope = deps.currentState();
+    if (!scope.connected || !scope.client || !deps.canCall("cron.list", "operator.read")) {
+      return;
+    }
+    jobs = read(async (current) => {
+      await loadCronJobsPage(current, { tableFilters: true, event });
+      return current.cronJobsError;
+    });
     deps.publish();
   }
 
@@ -138,6 +155,7 @@ export function createAgentCronPresenter(deps: {
   return {
     onRefresh,
     onLoadMore,
+    onRuntime,
     onRunNow,
     read(this: void) {
       const scope = deps.readState();

@@ -22,6 +22,14 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `ESP setup controls and secret prompts use branded typography`() throws {
+        let source = try String(contentsOf: Self.sourceURL("Settings/ESPDeviceSetupScreen.swift"), encoding: .utf8)
+        #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "ESPDeviceSetupScreen.swift").isEmpty)
+        #expect(source.contains("prompt: Text(title).font(OpenClawType.subhead)"))
+        #expect(source.contains(".accessibilityLabel(Text(title))"))
+        #expect(!source.contains("SecureField(\""))
+    }
+
     @Test func `About support links use the branded shared row`() throws {
         let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
         let supportRow = try Self.extract(settings, from: "title: \"Support\"", to: "!)")

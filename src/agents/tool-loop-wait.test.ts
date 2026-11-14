@@ -5,6 +5,7 @@ import {
   model,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
 import { Agent } from "../../packages/agent-core/src/agent.js";
+import { setInternalBeforeToolBatch } from "../../packages/agent-core/src/internal-hooks.js";
 import type { AgentTool } from "../../packages/agent-core/src/types.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
@@ -14,7 +15,6 @@ import {
   createToolLoopBatchAdmission,
   installToolLoopRecoveryCleanup,
 } from "./embedded-agent-runner/run/tool-loop-recovery.js";
-import { setInternalBeforeToolBatch } from "./runtime/internal-hooks.js";
 
 afterEach(() => {
   resetCommandQueueStateForTest();

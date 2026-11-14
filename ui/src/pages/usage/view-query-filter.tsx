@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createMemo } from "solid-js";
+import { createMemo, createProjection } from "solid-js";
 import type { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import type { OverlayPlacement } from "../../components/overlay-anchor.ts";
 import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { setQueryTokensForKey } from "./query.ts";
@@ -12,6 +13,7 @@ export function UsageQueryFilter(props: {
   queryDraft: string;
   queryTerms: ReturnType<typeof extractQueryTerms>;
   onQueryDraftChange: (value: string) => void;
+  placement?: OverlayPlacement;
 }) {
   const selected = createMemo(() => {
     const normalized = normalizeLowercaseStringOrEmpty(props.filterKey);
@@ -26,37 +28,42 @@ export function UsageQueryFilter(props: {
   const allSelected = createMemo(() =>
     props.options.every((value) => selectedSet().has(normalizeLowercaseStringOrEmpty(value))),
   );
-  const items = createMemo<MenuItem[]>(() => [
-    {
-      id: "command:select-all",
-      label: t("usage.filters.selectAll"),
-      disabled: allSelected(),
-      closeOnSelect: false,
-    },
-    {
-      id: "command:clear",
-      label: t("usage.filters.clear"),
-      disabled: selected().length === 0,
-      closeOnSelect: false,
-    },
-    ...props.options.map((value): MenuItem => ({
-      id: `option:${encodeURIComponent(value)}`,
-      label: value,
-      class: "usage-filter-option",
-      type: "checkbox",
-      checked: selectedSet().has(normalizeLowercaseStringOrEmpty(value)),
-      closeOnSelect: false,
-    })),
-  ]);
+  const items = createProjection<MenuItem[]>(
+    () => [
+      {
+        id: "command:select-all",
+        label: t("usage.filters.selectAll"),
+        disabled: allSelected(),
+        closeOnSelect: false,
+      },
+      {
+        id: "command:clear",
+        label: t("usage.filters.clear"),
+        disabled: selected().length === 0,
+        closeOnSelect: false,
+      },
+      ...props.options.map((value): MenuItem => ({
+        id: `option:${encodeURIComponent(value)}`,
+        label: value,
+        class: "usage-filter-option",
+        type: "checkbox",
+        checked: selectedSet().has(normalizeLowercaseStringOrEmpty(value)),
+        closeOnSelect: false,
+      })),
+    ],
+    [],
+    { key: "id" },
+  );
   // The pill renders before its options load so the filter row keeps its height.
   return (
     <Menu
       id={`usage-filter-${props.filterKey}`}
+      lazy
       label={`${props.label} ${selected().length > 0 ? selected().length : t("usage.filters.all")}`}
       class="usage-filter-select"
       triggerClass="usage-filter-trigger"
-      placement="bottom-start"
-      items={items()}
+      placement={props.placement ?? "bottom-start"}
+      items={items}
       onSelect={(item) => {
         const value = item.id;
         if (value === "command:select-all") {

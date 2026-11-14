@@ -1,0 +1,2 @@
+# Distinguish inventory verification failures while keeping public causes private.
+19

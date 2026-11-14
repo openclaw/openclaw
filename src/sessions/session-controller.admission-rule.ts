@@ -1,5 +1,6 @@
 import {
   ReplyRunAlreadyActiveError,
+  ReplyRunLifecycleAdmissionBlockedError,
   ReplyRunFollowupAdmissionBlockedError,
   ReplyRunSuccessorAdmissionBlockedError,
   type SessionControllerInput,
@@ -18,10 +19,6 @@ type TurnAdmissionRefusalReason =
   | "entry-retired"
   | "mailbox-clearing";
 
-export type TurnAdmissionDecision =
-  | { admitted: true }
-  | { admitted: false; reason: TurnAdmissionRefusalReason };
-
 const waitsForFollowupBarrier = {
   visible: false,
   queued_followup: true,
@@ -38,7 +35,7 @@ export function evaluateTurnAdmission(
     claim?: SessionControllerMailboxClaim;
     selectedInput?: SessionControllerInput | null;
   },
-): TurnAdmissionDecision {
+): { admitted: true } | { admitted: false; reason: TurnAdmissionRefusalReason } {
   if (options.registeredEntry !== entry) {
     return { admitted: false, reason: "entry-retired" };
   }
@@ -173,6 +170,9 @@ export function assertTurnAdmission(
   }
   if (admission.reason === "successor-barrier") {
     throw new ReplyRunSuccessorAdmissionBlockedError(options.sessionKey);
+  }
+  if (admission.reason === "lifecycle-blocked") {
+    throw new ReplyRunLifecycleAdmissionBlockedError(options.sessionKey);
   }
   throw new ReplyRunAlreadyActiveError(options.sessionKey);
 }

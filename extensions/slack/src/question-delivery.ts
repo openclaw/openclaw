@@ -10,19 +10,17 @@ import {
 } from "./reply-action-ids.js";
 import type { SlackSendResult } from "./send.js";
 
-type SlackQuestionUpdate = {
-  channelId: string;
-  messageTs: string;
-  text: string;
-  blocks: (Block | KnownBlock)[];
-};
-
 export function registerSlackQuestionDelivery(params: {
   questionId: string;
   accountId?: string;
   result: Pick<SlackSendResult, "channelId" | "messageId" | "meta">;
   text: string;
-  update: (message: SlackQuestionUpdate) => Promise<void>;
+  update: (message: {
+    channelId: string;
+    messageTs: string;
+    text: string;
+    blocks: (Block | KnownBlock)[];
+  }) => Promise<void>;
 }): void {
   const blocks = params.result.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS];
   if (!blocks || resolveSlackQuestionActionIds(blocks, params.questionId).length === 0) {

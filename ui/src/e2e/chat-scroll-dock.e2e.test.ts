@@ -1,7 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   closeChatDetails,
@@ -304,7 +306,14 @@ suite.define(() => {
     });
     const report: Record<string, DockGeometry> = {};
     await page.goto(`${suite.server.baseUrl}chat`);
+    const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+    await thread.locator(".chat-virtual-row").last().waitFor();
+    // Admit history beside the long run before checking its preceding message.
+    await thread.hover();
+    await page.mouse.wheel(0, -120);
     await page.getByText("Stream history 29").waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Scroll to latest", exact: true }).click();
+    await waitForChatScrollIdle(page);
     const watchedKey = await waitForWatchedSessionKey(gateway);
     await publishPr(gateway, watchedKey);
     await openDetailsPullRequests(page);

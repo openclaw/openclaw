@@ -4,6 +4,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { registerControlUiReloadGuard } from "../app/document-reload-guard.ts";
 import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-routing.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
@@ -13,8 +14,8 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update-card.tsx";
 
 let originalWebkit: PropertyDescriptor | undefined;
-const checkFailure = "Could not check the latest update";
-const reconnectFailure = "Could not refresh. Check your connection and try again.";
+const checkFailure = "Couldn’t check for updates. Try again.";
+const reconnectFailure = "Couldn't reach the server";
 async function settle() {
   await Promise.resolve();
   flush();
@@ -266,7 +267,7 @@ describe("SidebarUpdateCard", () => {
           const failedModal = document.querySelector("openclaw-modal-dialog");
           expect(failedModal).not.toBeNull();
           expect(failedModal?.textContent).toContain(
-            "Status could not be refreshed. Check your connection and try again.",
+            "Couldn’t refresh update status. Check your connection and try again.",
           );
           await element.update({
             statusBanner: {
@@ -415,23 +416,21 @@ describe("SidebarUpdateCard", () => {
   });
 
   it("retains refresh retries across shell updates and ignores obsolete recovery results", async () => {
-    const element = await mount(null);
     const first = createDeferred<boolean>();
     const second = createDeferred<boolean>();
     const third = createDeferred<boolean>();
-    const onRefresh = vi
-      .fn<() => Promise<boolean>>()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise)
-      .mockReturnValueOnce(third.promise);
-    await element.update({ refreshRequired: true, onRefresh });
+    const onRefresh = vi.fn<() => Promise<boolean>>();
+    for (const request of [first, second, third]) {
+      onRefresh.mockReturnValueOnce(request.promise);
+    }
+    const element = await mount(null, { refreshRequired: true, onRefresh });
 
-    element.action()?.click();
+    element.find<HTMLButtonElement>(".refresh-notice__surface")?.click();
     await settle();
 
     await element.update({ refreshRequired: false });
     await element.update({ refreshRequired: true });
-    const action = element.action();
+    const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
     action?.click();
     await settle();
     expect(onRefresh).toHaveBeenCalledTimes(2);
@@ -451,18 +450,35 @@ describe("SidebarUpdateCard", () => {
     expect(element.text()).toContain(reconnectFailure);
     await element.update({ connected: true });
     expect(element.text()).toContain(reconnectFailure);
-    expect(action?.textContent).toContain("Retry now");
+    expect(action?.textContent).toContain("Retry");
     action?.click();
     expect(onRefresh).toHaveBeenCalledTimes(3);
     await settle();
-    expect(element.action()).toBe(action);
+    expect(element.find<HTMLButtonElement>(".refresh-notice__surface")).toBe(action);
     expect(element.text()).not.toContain(reconnectFailure);
     third.resolve(true);
     await settle();
     await element.update({ connected: false });
-    expect(element.action()).toBe(action);
+    expect(element.find<HTMLButtonElement>(".refresh-notice__surface")).toBe(action);
     expect(action?.disabled).toBe(true);
-    expect(action?.textContent).toContain("Reloading");
+    expect(action?.textContent).toContain("Refreshing");
+  });
+
+  it("keeps a guard-blocked refresh out of the connection failure state", async () => {
+    const releaseGuard = registerControlUiReloadGuard(
+      () => false,
+      () => undefined,
+    );
+    try {
+      const element = await mount(null, { refreshRequired: true, onRefresh: async () => false });
+      const action = element.find<HTMLButtonElement>(".refresh-notice__surface");
+      action?.click();
+      await vi.waitFor(() => expect(element.text()).toContain("Finish pending work first"));
+      expect(element.text()).not.toContain(reconnectFailure);
+      expect(element.find(".sidebar-update-card__status")).toBeNull();
+    } finally {
+      releaseGuard();
+    }
   });
 
   it.each([false, true])(
@@ -572,7 +588,7 @@ describe("SidebarUpdateCard", () => {
     { state: "running", ageMinutes: 30 },
     { state: "campaign", ageMinutes: 20 },
   ] as const)(
-    "shows the recorded $state age beside the compact row's detail",
+    "shows the recorded $state age beside the compact row's title",
     async ({ state, ageMinutes }) => {
       const now = Date.parse("2026-09-23T12:00:00Z");
       vi.useFakeTimers({ now });
@@ -604,10 +620,9 @@ describe("SidebarUpdateCard", () => {
       )?.updateComplete;
 
       const title = element.find("summary .sidebar-issues-panel__entity");
-      const meta = title?.nextElementSibling;
-      const time = meta?.querySelector("time");
+      const time = title?.parentElement?.querySelector("time");
       const timestamp = now - ageMinutes * 60_000;
-      expect(meta?.querySelector(".sidebar-issues-panel__state")).not.toBeNull();
+      expect(element.find("summary .sidebar-issues-panel__state")).not.toBeNull();
       expect(time?.getAttribute("datetime")).toBe(new Date(timestamp).toISOString());
       expect(time?.getAttribute("title")).toBe(formatDateTimeMs(timestamp));
       expect(time?.textContent?.trim()).toBe(`${ageMinutes}m ago`);
@@ -659,7 +674,9 @@ describe("SidebarUpdateCard", () => {
     expect(action?.getAttribute("aria-disabled")).toBe("true");
     expect(action?.getAttribute("aria-describedby")).not.toBeNull();
     expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
-    expect(tooltip?.content).toContain("Administrator access is required");
+    expect(tooltip?.content).toContain(
+      "You need admin access to change update settings or start an update.",
+    );
     action?.click();
     expect(onUpdate).not.toHaveBeenCalled();
   });

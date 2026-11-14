@@ -5,7 +5,10 @@ import {
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import {
+  createPersonalToolParticipant as participant,
+  withPersonalToolTurn,
+} from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -14,14 +17,6 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import * as support from "../worker-environments/service.test-support.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
 
-function participant(profileId: string, name: string) {
-  return {
-    profileId,
-    name,
-    senderId: `${profileId}-sender`,
-    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
-  };
-}
 const owner = participant("alice", "Alice");
 const steerer = participant("bob", "Bob");
 const identity = {
@@ -44,7 +39,6 @@ afterEach(() => closeOpenClawAgentDatabases());
 function fixture() {
   const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
   const service = support.createService(support.createProvider({ provision }));
-  const create = vi.spyOn(service, "createSessionAttachment");
   const clients = [owner, steerer].map((person) => {
     const client = createOperatorClient({
       profileId: person.profileId,
@@ -92,25 +86,21 @@ function fixture() {
     expect(respond.mock.lastCall).toMatchObject([true, { environment: { status: "available" } }]);
     expect(provision).toHaveBeenCalledOnce();
   };
-  return { call, create, service, context, expectRejected, expectAvailable };
+  return { call, service, context, expectRejected, expectAvailable };
 }
 
-it.each(["desktop", "portal"] as const)(
-  "rejects ambiguous %s presentation before creating an environment, but permits creation without presentation",
-  async (presentation) => {
-    const test = fixture();
-    await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
-      expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
-      await test.call(presentation);
-      expect(test.create).not.toHaveBeenCalled();
-      test.expectRejected(
-        /without presentation.*screen.*desktop_show.*portal_show.*environmentId.*requester_profile.id/s,
-      );
-      await test.call();
-      test.expectAvailable();
-    });
-  },
-);
+it("rejects ambiguous presentation but permits creation without presentation", async () => {
+  const test = fixture();
+  await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
+    expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
+    await test.call("portal");
+    test.expectRejected(
+      /without presentation.*screen.*desktop_show.*portal_show.*environmentId.*requester_profile.id/s,
+    );
+    await test.call();
+    test.expectAvailable();
+  });
+});
 
 it("presents a single-owner environment only in that owner's connection", async () => {
   const test = fixture();
@@ -140,7 +130,6 @@ it.each(["ambiguity", "revocation"])("cancels before allocation: %s", async (cha
       return reservation;
     });
     await test.call("portal");
-    expect(test.create).toHaveBeenCalledOnce();
     test.expectRejected(
       change === "revocation" ? /Profile access revoked/ : /Several people.*Alice.*Bob/s,
     );

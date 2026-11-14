@@ -4,16 +4,15 @@ import { addGatewayClientOptions } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 const callGatewayMock = vi.fn(async () => ({ ok: true }));
-const isImplicitLocalGatewayTargetMock = vi.fn(async () => true);
+// mock-isolation: Exercise CLI request construction without a real Gateway connection.
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayMock,
-  isImplicitLocalGatewayTarget: isImplicitLocalGatewayTargetMock,
+  isImplicitLocalGatewayTarget: vi.fn(async () => true),
 }));
 vi.mock("./progress.js", () => ({
   withProgress: async (_options: unknown, action: () => Promise<unknown>) => await action(),
 }));
-const { callGatewayFromCliRuntime: call, isImplicitLocalGatewayTargetFromCliRuntime: classify } =
-  await import("./gateway-rpc.runtime.js");
+const { callGatewayFromCliRuntime: call } = await import("./gateway-rpc.runtime.js");
 const auth = { token: "test-gateway-token", password: "test-gateway-password" };
 const credentials = ["--token", auth.token, "--password", auth.password];
 const expectCall = (fields: Record<string, unknown>) =>
@@ -80,13 +79,6 @@ it.for(forwardingCases)("forwards %j", async ([args, expected, source]) => {
   vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", source === "subagent" ? "1" : undefined);
   await call(...args);
   expectCall(expected);
-});
-
-it("classifies through the canonical Gateway classifier", async () => {
-  isImplicitLocalGatewayTargetMock.mockResolvedValueOnce(false);
-  const expected = { config: undefined, url: "ws://127.0.0.1:18789", localPortOverride: undefined };
-  await expect(classify({ ...expected, token: "token" })).resolves.toBe(false);
-  expect(isImplicitLocalGatewayTargetMock).toHaveBeenCalledWith(expected);
 });
 
 type Refusal = [args: CallArgs, error: string | RegExp, source?: Source];

@@ -23,13 +23,12 @@ import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
 import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { row } from "./model-catalog-fixtures.test-support.js";
+import { findModelCatalogEntry, modelSupportsVision } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
   buildPreparedModelCatalogSnapshot,
   type BuildPreparedModelCatalogParams,
-  findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsVision,
   overlayConfiguredModelCatalog,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";

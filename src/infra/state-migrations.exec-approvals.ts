@@ -7,8 +7,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { z } from "zod";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { runClientCredentialOperation } from "./client-credential-store.js";
+import {
+  openOpenClawStateDatabaseForDoctor,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { openClientCredentialCustodyAsync } from "./client-credential-store.js";
 import {
   normalizeExecApprovalsInternal,
   parseLegacyExecApprovals,
@@ -22,7 +25,7 @@ import {
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
 import { pathMayExistSync } from "./path-existence.js";
-import type { EngineConnection } from "./sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import {
   hasLegacySqliteExecApprovals,
   repairLegacySqliteExecApprovals,
@@ -44,6 +47,7 @@ import {
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-attribution.js";
 
 export const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 export const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
@@ -51,7 +55,10 @@ const MIGRATION_KIND = "legacy-exec-approvals-json";
 const TARGET_TABLE = "exec_approvals_config";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
-type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & { raw: string | null };
+type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & {
+  raw: string | null;
+  legacy: ReturnType<typeof parseLegacyExecApprovals>;
+};
 
 // Only the observed policy-free stub may omit its version. Unknown fields or
 // nonempty policy are not proof that a legacy file is safe to retire.
@@ -162,7 +169,11 @@ function decodeLegacySourceSnapshot(snapshot: LegacyMigrationSourceSnapshot): Le
   } catch {
     // Invalid UTF-8 is malformed input that must stay available for recovery.
   }
-  return { ...snapshot, raw };
+  const legacy =
+    raw === null
+      ? err<never, string>("invalid UTF-8 encoding")
+      : parseLegacyExecApprovals(normalizeLegacyNullableUsageMetadata(raw));
+  return { ...snapshot, raw, legacy };
 }
 
 function emptyLegacyFile(snapshot: LegacySourceSnapshot): ExecApprovalsFile | undefined {
@@ -182,9 +193,7 @@ function decideLegacyExecApprovals(
 ) {
   const legacy = params.emptyStub
     ? ok<ExecApprovalsFile, string>(params.emptyStub)
-    : params.snapshot.raw === null
-      ? err<never, string>("invalid UTF-8 encoding")
-      : parseLegacyExecApprovals(normalizeLegacyNullableUsageMetadata(params.snapshot.raw));
+    : params.snapshot.legacy;
   const legacyFile = legacy.ok ? legacy.value : null;
   const canonicalPolicy = params.canonical
     ? parseLegacyExecApprovals(params.canonical.raw_json)
@@ -309,89 +318,110 @@ export async function prepareLegacyExecApprovals(params: {
   }
 }
 
-function decideAndRecordMigration(params: {
+async function decideAndRecordMigration(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
   emptyStub?: ArchivedEmptyLegacy;
-}): { message: string; removeSource: boolean; sourceKey: string } {
+}): Promise<{ message: string; removeSource: boolean; sourceKey: string }> {
+  const source = await openOpenClawStateDatabaseForDoctor({ env: params.env });
+  const capturedLegacyFile =
+    params.emptyStub?.file ?? (params.snapshot.legacy.ok ? params.snapshot.legacy.value : null);
+  using credentials =
+    capturedLegacyFile?.socket?.path || capturedLegacyFile?.socket?.token
+      ? await openClientCredentialCustodyAsync(params.env, { createIfMissing: true })
+      : undefined;
   const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const canonical = readExecApprovalsConfigRow(db);
-      const { legacy, legacyFile, decision, removeSource } = decideLegacyExecApprovals({
-        canonical,
-        receipt: readLegacyMigrationReceiptFromDatabase(db, sourceKey),
-        snapshot: params.snapshot,
-        emptyStub: params.emptyStub?.file,
-      });
-      if (
-        legacyFile &&
-        (decision === "legacy-imported" || decision === "invalid-canonical-repaired")
-      ) {
-        // First-writer-wins preserves a socket issued during an interrupted import.
-        if (legacyFile.socket?.path || legacyFile.socket?.token) {
-          runClientCredentialOperation(params.env, {
-            kind: "socket.ensure",
-            fallback: {
-              socket_key: "current",
-              socket_path: legacyFile.socket.path ?? null,
-              socket_token: legacyFile.socket.token ?? null,
-              updated_at_ms: now,
-            },
+  const write = () =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const canonical = readExecApprovalsConfigRow(db);
+        const { legacy, legacyFile, decision, removeSource } = decideLegacyExecApprovals({
+          canonical,
+          receipt: readLegacyMigrationReceiptFromDatabase(db, sourceKey),
+          snapshot: params.snapshot,
+          emptyStub: params.emptyStub?.file,
+        });
+        if (
+          legacyFile &&
+          (decision === "legacy-imported" || decision === "invalid-canonical-repaired")
+        ) {
+          // First-writer-wins preserves a socket issued during an interrupted import.
+          if (legacyFile.socket?.path || legacyFile.socket?.token) {
+            if (!credentials) {
+              throw new Error("Local client credential custody is unavailable.");
+            }
+            credentials.run({
+              kind: "socket.ensure",
+              fallback: {
+                socket_key: "current",
+                socket_path: legacyFile.socket.path ?? null,
+                socket_token: legacyFile.socket.token ?? null,
+                updated_at_ms: now,
+              },
+            });
+          }
+          writeExecApprovalsConfigRow({
+            db,
+            file: legacyFile,
+            raw: serializeExecApprovals(legacyFile),
+            now,
           });
         }
-        writeExecApprovalsConfigRow({
-          db,
-          file: legacyFile,
-          raw: serializeExecApprovals(legacyFile),
-          now,
-        });
-      }
 
-      const reportJson = JSON.stringify({
-        source: MIGRATION_KIND,
-        target: TARGET_TABLE,
-        decision,
-        sourceSha256: params.snapshot.sha256,
-        sourceValid: legacyFile !== null,
-        ...(params.emptyStub ? { archivePath: params.emptyStub.archivePath } : {}),
-        importedRecordCount:
-          decision === "legacy-imported" || decision === "invalid-canonical-repaired" ? 1 : 0,
-        preservedSqliteRecordCount:
-          canonical &&
-          decision !== "legacy-imported" &&
-          decision !== "invalid-canonical-repaired" &&
-          decision !== "malformed-legacy-preserved"
-            ? 1
-            : 0,
-        removesSource: removeSource,
-      });
-      recordLegacyMigrationReceipt(db, {
-        sourceKey,
-        migrationKind: MIGRATION_KIND,
-        sourcePath: params.sourcePath,
-        targetTable: TARGET_TABLE,
-        sourceSha256: params.snapshot.sha256,
-        sourceSizeBytes: params.snapshot.size,
-        sourceRecordCount: legacyFile && decision !== "empty-legacy-retired" ? 1 : 0,
-        runId,
-        now,
-        reportJson,
-        upsert: true,
-      });
-      const message = removeSource
-        ? decisionMessages[decision]
-        : legacy.ok
-          ? "Conflicting legacy exec approvals remain"
-          : `Invalid legacy exec approvals (${legacy.error})`;
-      return { message, removeSource, sourceKey };
-    },
-    { env: params.env },
-    { operationLabel: "state-migration.exec-approvals" },
-  );
+        const reportJson = JSON.stringify({
+          source: MIGRATION_KIND,
+          target: TARGET_TABLE,
+          decision,
+          sourceSha256: params.snapshot.sha256,
+          sourceValid: legacyFile !== null,
+          ...(params.emptyStub ? { archivePath: params.emptyStub.archivePath } : {}),
+          importedRecordCount:
+            decision === "legacy-imported" || decision === "invalid-canonical-repaired" ? 1 : 0,
+          preservedSqliteRecordCount:
+            canonical &&
+            decision !== "legacy-imported" &&
+            decision !== "invalid-canonical-repaired" &&
+            decision !== "malformed-legacy-preserved"
+              ? 1
+              : 0,
+          removesSource: removeSource,
+        });
+        recordLegacyMigrationReceipt(db, {
+          sourceKey,
+          migrationKind: MIGRATION_KIND,
+          sourcePath: params.sourcePath,
+          targetTable: TARGET_TABLE,
+          sourceSha256: params.snapshot.sha256,
+          sourceSizeBytes: params.snapshot.size,
+          sourceRecordCount: legacyFile && decision !== "empty-legacy-retired" ? 1 : 0,
+          runId,
+          now,
+          reportJson,
+          upsert: true,
+        });
+        const message = removeSource
+          ? decisionMessages[decision]
+          : legacy.ok
+            ? "Conflicting legacy exec approvals remain"
+            : `Invalid legacy exec approvals (${legacy.error})`;
+        return { message, removeSource, sourceKey };
+      },
+      { env: params.env },
+      { operationLabel: "state-migration.exec-approvals" },
+    );
+  if (isPostgresSqlConnection(source.db)) {
+    return credentials
+      ? await runUpdateSqliteMigrationAsync(credentials.database, credentials.path, write, {
+          retainExclusive: true,
+        })
+      : write();
+  }
+  return await runUpdateSqliteMigrationAsync(source.db, source.path, write, {
+    companions: credentials ? [credentials] : [],
+  });
 }
 
 const decisionMessages: Record<MigrationDecision, string> = {
@@ -456,7 +486,7 @@ async function migrateWithExclusiveStateOwnership(params: {
     };
   }
 
-  let result: ReturnType<typeof decideAndRecordMigration>;
+  let result: Awaited<ReturnType<typeof decideAndRecordMigration>>;
   let emptyStub: ArchivedEmptyLegacy | undefined;
   try {
     const file = emptyLegacyFile(snapshot);
@@ -483,7 +513,7 @@ async function migrateWithExclusiveStateOwnership(params: {
         file,
       };
     }
-    result = decideAndRecordMigration({
+    result = await decideAndRecordMigration({
       env: params.env,
       sourcePath,
       snapshot,

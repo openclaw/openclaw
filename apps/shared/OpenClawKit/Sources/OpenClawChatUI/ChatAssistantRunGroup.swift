@@ -48,7 +48,8 @@ struct ChatAssistantRunGroup: Identifiable {
 
     var answerID: UUID? {
         self.parts.reversed().compactMap { part -> UUID? in
-            if case let .row(.message(message)) = part, message.isCompletedReply { return message.id }
+            if case let .row(.message(message)) = part, message.presentationOwnsFooter,
+               message.isCompletedReply { return message.presentationID }
             return nil
         }.first
     }

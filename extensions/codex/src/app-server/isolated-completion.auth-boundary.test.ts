@@ -137,30 +137,16 @@ describe("isolated completion account and daemon ownership", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["chatgpt", "apiKey"])(
-    "keeps native %s authoritative over stored profile B",
-    async (accountType) => {
-      await withTempDir("codex-isolated-auth-", async (root) => {
-        const boundary = createNativeBoundary(accountType);
-        const pluginConfig = createPluginConfig(root, "user");
-        const pending = runCodexIsolatedCompletion(createParams(root), { pluginConfig });
-        if (accountType === "apiKey") {
-          await expect(pending).rejects.toThrow("requires ChatGPT auth in the native Codex home");
-        } else {
-          expect((await pending).assistant.content).toEqual([
-            { type: "text", text: `Garden Planning (${nativeAccount})` },
-          ]);
-          expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
-          expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
-          expect(readStart(boundary)).toMatchObject(pluginConfig.appServer);
-        }
-        expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
-        expect(boundary.inferenceAccounts).toEqual(
-          accountType === "chatgpt" ? [nativeAccount] : [],
-        );
-      });
-    },
-  );
+  it("refuses native API-key auth rather than substituting stored profile B", async () => {
+    await withTempDir("codex-isolated-auth-", async (root) => {
+      const boundary = createNativeBoundary("apiKey");
+      const pluginConfig = createPluginConfig(root, "user");
+      const pending = runCodexIsolatedCompletion(createParams(root), { pluginConfig });
+      await expect(pending).rejects.toThrow("requires ChatGPT auth in the native Codex home");
+      expect(boundary.calls.filter((call) => call.method === "account/login/start")).toEqual([]);
+      expect(boundary.inferenceAccounts).toEqual([]);
+    });
+  });
 
   it.each(["user", "agent"] as const)(
     "retains the configured stdio proxy and its %s authentication contract",
@@ -168,7 +154,14 @@ describe("isolated completion account and daemon ownership", () => {
       await withTempDir("codex-isolated-proxy-", async (root) => {
         const boundary = createNativeBoundary();
         const pluginConfig = createPluginConfig(root, homeScope, true);
-        await runCodexIsolatedCompletion(createParams(root), { pluginConfig });
+        const result = await runCodexIsolatedCompletion(createParams(root), { pluginConfig });
+        if (homeScope === "user") {
+          expect(result.assistant.content).toEqual([
+            { type: "text", text: `Garden Planning (${nativeAccount})` },
+          ]);
+          expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
+          expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
+        }
 
         const start = readStart(boundary);
         expect(start).toMatchObject({

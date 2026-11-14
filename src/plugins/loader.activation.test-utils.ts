@@ -1078,33 +1078,17 @@ describe("loadOpenClawPlugins", () => {
     const pluginDir = makePluginLoaderTempDir();
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
 
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "@openclaw/nested-default-channel",
-          openclaw: {
-            extensions: ["./index.cjs"],
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "nested-default-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["nested-default-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(pluginDir, "package.json", {
+      name: "@openclaw/nested-default-channel",
+      openclaw: {
+        extensions: ["./index.cjs"],
+      },
+    });
+    writeFixtureJson(pluginDir, "openclaw.plugin.json", {
+      id: "nested-default-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["nested-default-channel"],
+    });
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
       `module.exports = {
@@ -1334,7 +1318,6 @@ ${channelPluginSource({
     const marker = path.join(makePluginLoaderTempDir(), "untrusted-load-path-channel-imported.txt");
     const plugin = writePlugin({
       id: "untrusted-load-path-channel",
-      filename: "untrusted-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 ${channelPluginSource({
   pluginId: "untrusted-load-path-channel",
@@ -1373,7 +1356,6 @@ ${channelPluginSource({
     );
     const plugin = writePlugin({
       id: "denylisted-load-path-channel",
-      filename: "denylisted-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 ${channelPluginSource({
   pluginId: "denylisted-load-path-channel",

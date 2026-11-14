@@ -1,3 +1,4 @@
+import type { CronStoreSelection } from "./store/selection.types.js";
 import type { CronStoredJob } from "./types.js";
 
 export type DefaultProactiveJobReceipt = {
@@ -10,11 +11,15 @@ export type DefaultProactiveJobReceipt = {
 };
 
 type ProactiveJobReceiptReadInput = {
-  storePath: string | undefined;
+  storeKey: string;
   agentIds: string[];
 };
 
 export type ProactiveJobReceiptReadOperations = {
+  "automationProactive.storeSelection": {
+    input: { storePath?: string; defaultStorePath: string };
+    output: { type: "automationProactive.storeSelection"; selection: CronStoreSelection };
+  };
   "automationProactive.receipts": {
     input: ProactiveJobReceiptReadInput;
     output: {

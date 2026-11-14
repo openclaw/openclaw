@@ -66,20 +66,25 @@ export async function runEmbeddedAttemptExecutionPhase(
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
-  const { onModelRequest, onModelUsage, getPromptCacheObservation, isModelCallActive } =
-    installEmbeddedAttemptStreamGuards(input, {
-      onRejectedProviderReplayRepaired: () => {
-        repairedRejectedProviderReplay = true;
-      },
-      onIdleTimeout: (error) => {
-        // Compaction owns request failures and fallback; the stream watchdog
-        // already aborted that request. Keep its enclosing turn live.
-        if (!activeSession.isCompacting) {
-          idleTimeoutTriggerRef.current?.(error);
-        }
-      },
-      diagnosticOwner,
-    });
+  const {
+    normalizeToolCallIds,
+    onModelRequest,
+    onModelUsage,
+    getPromptCacheObservation,
+    isModelCallActive,
+  } = installEmbeddedAttemptStreamGuards(input, {
+    onRejectedProviderReplayRepaired: () => {
+      repairedRejectedProviderReplay = true;
+    },
+    onIdleTimeout: (error) => {
+      // Compaction owns request failures and fallback; the stream watchdog
+      // already aborted that request. Keep its enclosing turn live.
+      if (!activeSession.isCompacting) {
+        idleTimeoutTriggerRef.current?.(error);
+      }
+    },
+    diagnosticOwner,
+  });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
 
@@ -218,6 +223,7 @@ export async function runEmbeddedAttemptExecutionPhase(
 
   const preparedStreamRuntime = {
     abortable,
+    normalizeToolCallIds,
     cache: {
       onModelRequest,
       getObservation: getPromptCacheObservation,

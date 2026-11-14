@@ -146,10 +146,16 @@ describe("installEmbeddedAttemptContextGuards", () => {
       context: { messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }] },
     };
     input.activeSession[agentSessionDeferThresholdCompaction] = true;
-    expect(() => guards.checkMidTurnPrecheck(request)).not.toThrow();
+    await expect(
+      guards.checkMidTurnPrecheck({
+        context: { messages: [{ role: "user", content: "x".repeat(3_200), timestamp: 1 }] },
+      }),
+    ).resolves.toBeLessThan(1_024);
     expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
+    await expect(guards.checkMidTurnPrecheck(request)).rejects.toThrow(MidTurnPrecheckSignal);
+    expect(guards.takePendingMidTurnPrecheckRequest()?.promptBudgetBeforeReserve).toBe(1_024);
     input.activeSession[agentSessionDeferThresholdCompaction] = false;
-    expect(() => guards.checkMidTurnPrecheck(request)).toThrow(MidTurnPrecheckSignal);
+    await expect(guards.checkMidTurnPrecheck(request)).rejects.toThrow(MidTurnPrecheckSignal);
     expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
       route: "compact_only",
       promptBudgetBeforeReserve: 960,

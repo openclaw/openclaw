@@ -9,6 +9,7 @@ import { SqliteIdentityStore } from "./identity-store.js";
 import type { BatchInput } from "./ingestion-contract.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
+import { draft, edit } from "./structured-write.test-support.js";
 import {
   accessFor,
   apiFor,
@@ -22,19 +23,6 @@ const tempDirs = useTestTempDirs();
 
 // Guard fields that fence an edit, withdrawal or verification to one observed revision.
 const guard = (r: any) => ({ id: r.id, expectedRevision: r.revision, expectedHash: r.hash });
-const draft = () => ({
-  requestId: randomUUID(),
-  title: "Publication test",
-  type: "note",
-  body: "Authored text.\n",
-});
-const edit = (record: any, fields = {}) => ({
-  requestId: randomUUID(),
-  ...guard(record),
-  title: record.title,
-  body: record.body,
-  ...fields,
-});
 
 async function batchFixture() {
   const base = tempDirs.make("knowledge-write-");

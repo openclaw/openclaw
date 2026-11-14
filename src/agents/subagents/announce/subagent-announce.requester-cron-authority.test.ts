@@ -160,7 +160,6 @@ it("keeps bound automation management after the old cohort is explicitly removed
         },
         hasRestoredCronContinuation: false,
         isOneShotModelRun: false,
-        isRestartRecoveryResumeRun: false,
       });
       if (admission) {
         const operationalRunInstance = createTestAdmittedRunContext(runId).operationalRunInstance;

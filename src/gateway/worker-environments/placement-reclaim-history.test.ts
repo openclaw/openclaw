@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
@@ -11,7 +10,7 @@ import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { manifestFor } from "./workspace-recovery.test-support.js";
+import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import {
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
@@ -45,9 +44,7 @@ it.each(["reclaim", "reclaim recovery", "ordinary turn recovery"] as const)(
     await git(["add", "."]);
     await git(["commit", "--quiet", "-m", "base"]);
     const baseCommit = await git(["rev-parse", "HEAD"]);
-    const base = { ...(await manifestFor(workspacePath)), baseCommit };
-    const baseManifestRaw = JSON.stringify(base);
-    const baseManifestRef = `sha256:${createHash("sha256").update(baseManifestRaw).digest("hex")}`;
+    const base = await captureWorkspaceSnapshot({ root: workspacePath, baseCommit });
     await git(["checkout", "--quiet", "-b", "worker"]);
     await fs.writeFile(path.join(workspacePath, "result.txt"), "worker commit\n");
     await git(["commit", "--quiet", "-am", "worker change"]);
@@ -59,8 +56,16 @@ it.each(["reclaim", "reclaim recovery", "ordinary turn recovery"] as const)(
     );
     await git(["checkout", "--quiet", "managed"]);
     await fs.writeFile(path.join(stagingRoot, "result.txt"), "worker commit\nuncommitted edit\n");
-    const currentManifestRaw = JSON.stringify({ ...(await manifestFor(stagingRoot)), baseCommit });
-    const currentManifestRef = `sha256:${createHash("sha256").update(currentManifestRaw).digest("hex")}`;
+    const current = await captureWorkspaceSnapshot({ root: stagingRoot, baseCommit });
+    const staged = {
+      stagingRoot,
+      baseManifestRaw: base.rawManifest,
+      baseManifestRef: base.manifestRef,
+      currentManifestRaw: current.rawManifest,
+      currentManifestRef: current.manifestRef,
+      gitHistory: { baseCommit, headCommit, descendsFromBase: true },
+      gitPackPath: `${packPrefix}-${packHash}.pack`,
+    };
     const harness = await createHarness(database, placementStore, { workspacePath });
     const startTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
     vi.mocked(harness.environments.startTunnel).mockImplementation(async (request) => {
@@ -68,7 +73,7 @@ it.each(["reclaim", "reclaim recovery", "ordinary turn recovery"] as const)(
       tunnel.syncWorkspace = async () => ({
         mode: "git",
         remoteWorkspaceDir: "/worker/workspace",
-        manifestRef: baseManifestRef,
+        manifestRef: base.manifestRef,
       });
       tunnel.reconcileWorkspace = async (reconcile) => {
         if (reconcile.source.kind !== "local") {
@@ -83,17 +88,12 @@ it.each(["reclaim", "reclaim recovery", "ordinary turn recovery"] as const)(
             stagedResult: reconcile.source.stagedResult,
             assertCurrent: reconcile.source.assertCurrent,
           },
-          stagingRoot,
-          baseManifestRaw,
-          currentManifestRaw,
-          currentManifestRef,
-          gitHistory: { baseCommit, headCommit, descendsFromBase: true },
-          gitPackPath: `${packPrefix}-${packHash}.pack`,
+          ...staged,
         });
         return {
           ...prepared,
           changed: true,
-          manifestRef: currentManifestRef,
+          manifestRef: current.manifestRef,
           verifyStable: async () => {},
         };
       };
@@ -136,14 +136,8 @@ it.each(["reclaim", "reclaim recovery", "ordinary turn recovery"] as const)(
       const stagedResultRef = workerWorkspaceResultRef(claimId);
       await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
         root: workspacePath,
-        stagingRoot,
         stagedResultRef,
-        baseManifestRef,
-        currentManifestRef,
-        baseManifestRaw,
-        currentManifestRaw,
-        gitHistory: { baseCommit, headCommit, descendsFromBase: true },
-        gitPackPath: `${packPrefix}-${packHash}.pack`,
+        ...staged,
       });
       await placementStore.recordStagedWorkspaceResult(claim, stagedResultRef);
       await placementStore.handoffWorkspaceResultRecovery(claim);

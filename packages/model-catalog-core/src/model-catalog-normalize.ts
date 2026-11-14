@@ -298,6 +298,8 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsLongCacheRetention",
     "supportsResponsesContinuation",
     "requiresOpenAiAnthropicToolPayload",
+    "adaptiveThinking",
+    "thinkingRequired",
   ] as const;
   for (const field of booleanFields) {
     if (typeof value[field] === "boolean") {
@@ -306,7 +308,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   }
 
   normalizeCatalogFields(
-    ["toolSchemaProfile", "toolCallArgumentsEncoding"],
+    ["toolSchemaProfile", "toolCallArgumentsEncoding", "defaultThinkingLevel"],
     (field) => normalizeOptionalString(value[field]),
     compat,
   );
@@ -315,6 +317,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "visibleReasoningDetailTypes",
     "supportedReasoningEfforts",
     "unsupportedToolSchemaKeywords",
+    "thinkingLevels",
   ] as const;
   for (const field of stringListFields) {
     const normalized = normalizeTrimmedStringList(value[field]);
@@ -336,6 +339,17 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     );
     if (Object.keys(reasoningEffortMap).length > 0) {
       compat.reasoningEffortMap = reasoningEffortMap;
+    }
+  }
+
+  if (isRecord(value.thinkingLevelLabels)) {
+    const labels = Object.fromEntries(
+      Object.entries(value.thinkingLevelLabels).flatMap(([level, label]) =>
+        typeof label === "string" && label.trim() ? [[level.trim(), label.trim()]] : [],
+      ),
+    );
+    if (Object.keys(labels).length > 0) {
+      compat.thinkingLevelLabels = labels;
     }
   }
 
@@ -502,6 +516,15 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const headers = normalizeStringMap(value.headers);
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
+  // Keyed by the vendor prefix of a routed model id; lookups lowercase that prefix.
+  const defaultUtilityModels = normalizeCatalogRecords(
+    value.defaultUtilityModels,
+    (vendor, modelId) => {
+      const id = normalizeOptionalString(modelId) ?? "";
+      return vendor && !isBlockedObjectKey(vendor) && id ? id : undefined;
+    },
+    (vendor) => normalizeOptionalString(vendor)?.toLowerCase() ?? "",
+  );
   const family = normalizeModelFamily(value.family);
   return {
     ...(authScope ? { authScope } : {}),
@@ -511,6 +534,7 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
     ...(family ? { family } : {}),
     ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
+    ...(defaultUtilityModels ? { defaultUtilityModels } : {}),
     models,
   };
 }
@@ -644,12 +668,20 @@ export function normalizeModelCatalog(
       : undefined;
   });
   const runtimeAugment = value.runtimeAugment === true;
+  const configuredEndpointDiscovery = [
+    ...new Set(
+      normalizeTrimmedStringList(value.configuredEndpointDiscovery)
+        .map(normalizeProviderId)
+        .filter((provider) => discovery?.[provider] === "runtime"),
+    ),
+  ];
   const catalog = {
     ...(Object.keys(modelsDev).length > 0 ? { modelsDev } : {}),
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
     ...(suppressions ? { suppressions } : {}),
     ...(discovery ? { discovery } : {}),
+    ...(configuredEndpointDiscovery.length > 0 ? { configuredEndpointDiscovery } : {}),
     ...(runtimeAugment ? { runtimeAugment } : {}),
   } satisfies ModelCatalog;
   return Object.keys(catalog).length > 0 ? catalog : undefined;

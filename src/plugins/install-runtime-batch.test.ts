@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runClawPluginBatch } from "../claws/plugin-runtime.js";
 import * as configIO from "../config/io.factory.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -14,6 +13,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import { runTemplatePluginBatch } from "../templates/plugin-runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
@@ -24,7 +24,9 @@ import {
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
+import * as generationWorker from "./plugin-generation-worker.js";
 import {
   hasPluginLifecycleLease,
   runOutsidePluginLifecycleLease,
@@ -337,7 +339,7 @@ it("refuses publication when authority is revoked during the real index read", a
 it("holds the original batch lease until preparation settles before calling the runtime", async () => {
   const { env, reload } = await preparationFixture();
   const gate = holdIndexRead();
-  const operation = runClawPluginBatch(
+  const operation = runTemplatePluginBatch(
     {
       env,
       reloadPlugins: reload,
@@ -364,6 +366,36 @@ it("holds the original batch lease until preparation settles before calling the 
   });
   await expect(operation).resolves.toBe("installed");
   expect(reload).toHaveBeenCalledOnce();
+});
+
+it("refuses batch publication when source inspection returns after authority is revoked", async () => {
+  const { env, reload, batch } = await preparationFixture();
+  const fixture = createFixture(path.join(env.OPENCLAW_STATE_DIR, "plugin"), false);
+  const index = { ...fixture.index, installRecords: recordsAt(fixture.root) };
+  writeConfigMachineState("plugins.installedIndex", { revision: 2, index }, { env });
+  batch.retain("fixture");
+  const controller = new AbortController();
+  const refusal = new Error("source inspection authority revoked");
+  const inspect = generationWorker.inspectPluginGenerationSourcesAsync;
+  vi.spyOn(generationWorker, "inspectPluginGenerationSourcesAsync").mockImplementation(
+    async (...args) => {
+      const result = await inspect(...args);
+      controller.abort(refusal);
+      return result;
+    },
+  );
+  let preparation: PromiseSettledResult<void> | undefined;
+  await Promise.allSettled([
+    withPluginLifecycleLease(
+      { env, assertCurrent: () => controller.signal.throwIfAborted() },
+      async (lease) => {
+        [preparation] = await Promise.allSettled([batch.prepare(lease)]);
+      },
+    ),
+  ]);
+  expect(preparation).toMatchObject({ status: "rejected", reason: refusal });
+  expect(reload).not.toHaveBeenCalled();
+  batch.close();
 });
 
 it.each(["index", "deferred obligation"] as const)(

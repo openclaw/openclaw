@@ -74,6 +74,9 @@ generation. Use `action: "status"` to check without triggering a new
 generation. Direct chats keep separate tasks even when they share the main
 session transcript; completion returns to the requesting peer.
 
+Status initially names the selected provider. Once generation succeeds, it names
+the provider that produced the video, including after fallback to another provider.
+
 Outside of session-backed agent runs (for example, direct tool invocations),
 the tool falls back to inline generation and returns the final media path
 in the same turn.

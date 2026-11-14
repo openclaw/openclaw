@@ -53,7 +53,10 @@ test("captures only the device key and token actually accepted at handshake", ()
   const device = createPairedOperator();
   const authenticated = { ...authenticate(device), scopes: ["operator.write"] };
   const original = resolveAuthenticatedDeviceTokenIdentity(device, authenticated);
-  expect(original).not.toBeNull();
+  expect(original).toEqual({
+    deviceId: "paired-device",
+    key: "3a3c86bb905c3f65d85c8a38e22526f5e3e2bb0cb72a592f43b48922ea671a1d",
+  });
   expect(Object.isFrozen(original)).toBe(true);
   expect(
     resolveAuthenticatedDeviceTokenIdentity(device, { ...authenticated, publicKey: "foreign-key" }),
@@ -66,10 +69,6 @@ test("keeps original operator scopes without exporting bearer credentials or unr
   const device = createPairedOperator();
   const identity = operatorIdentity(device);
   const node = resolveNodePairingState(device);
-  expect(identity).toEqual({
-    deviceId: "paired-device",
-    key: expect.stringMatching(/^[a-f0-9]{64}$/),
-  });
   expect(isCurrent(device, identity, "operator.write")).toBe(true);
   device.displayName = "Renamed device";
   device.approvedAtMs = 2;
@@ -123,6 +122,7 @@ test.each(["token scopes", "approval baseline", "missing approval baseline"] as 
       delete device.approvedScopes;
     }
     expect(isCurrent(device, identity)).toBe(false);
+    expect(resolveAuthenticatedDeviceTokenIdentity(device, authenticate(device))).toBeNull();
     if (change !== "token scopes") {
       // Live verification rejects an over-scoped token even for a narrower request.
       expect(isCurrent(device, identity, "operator.read")).toBe(false);

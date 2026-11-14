@@ -4,7 +4,7 @@ import type {
   RuntimeSessionFactsSelectionResult,
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import {
@@ -14,7 +14,10 @@ import {
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { ResolvedInProcessGatewayDispatch } from "./server-plugin-in-process-dispatch.types.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
-import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import {
+  toProjectedSessionSharingTarget,
+  type SessionRowReadView,
+} from "./session-row-prepared-read.js";
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import { prepareProjectedSessionSharing, resolveSessionVisibility } from "./session-sharing.js";
 import { projectGatewaySessionRunState } from "./session-utils-display.js";
@@ -100,10 +103,11 @@ export function prepareFactsRead(
       ) {
         return undefined;
       }
-      let visible = authority?.visibility.get(record.entry);
+      const visibilityCache = sharing.sessionCap === "invited" ? undefined : authority?.visibility;
+      let visible = visibilityCache?.get(record.entry);
       if (visible === undefined) {
-        visible = sharing.entryFilter?.(record.key, record.entry) !== false;
-        authority?.visibility.set(record.entry, visible);
+        visible = sharing.canReadTarget(toProjectedSessionSharingTarget(record));
+        visibilityCache?.set(record.entry, visible);
       }
       if (!visible) {
         return undefined;
@@ -180,7 +184,7 @@ export function prepareFactsRead(
       const digest = row.observerDigest ? record.entry.observerDigest : undefined;
       const facts: RuntimeSessionFacts =
         cached?.facts ??
-        freezeJsonSnapshot({
+        freezeTrustedJsonSnapshot({
           key: record.key,
           sessionId: record.entry.sessionId,
           ...(record.entry.lifecycleRevision

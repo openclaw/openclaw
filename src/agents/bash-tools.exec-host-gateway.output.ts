@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import type { ExecAllowlistAnalysis } from "../infra/exec-approvals-allowlist.js";
 import type { ExecAutoReviewDecision } from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
@@ -126,6 +127,21 @@ export function buildGatewayExecApprovalFollowupSummary(params: {
       : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
   }
   return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
+}
+
+export function buildGatewayExecAllowlistDeniedMessage(evaluation: ExecAllowlistAnalysis): string {
+  const unresolved = evaluation.authorizationPlan?.groups
+    .flatMap((group) => group.candidates)
+    .some(
+      ({ trustMode, sourceSegment: { resolution } }, index) =>
+        trustMode === "executable" &&
+        evaluation.segmentSatisfiedBy[index] === null &&
+        resolution !== null &&
+        !resolution.execution.resolvedPath,
+    );
+  return unresolved
+    ? "exec denied: executable could not be resolved; check command spelling and Gateway PATH or use an absolute executable path"
+    : "exec denied: allowlist miss";
 }
 
 export function buildGatewayExecApprovalDeniedToolResult(params: {

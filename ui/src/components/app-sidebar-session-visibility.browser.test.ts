@@ -14,10 +14,65 @@ import {
   mountSidebar,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/load-styles.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import "./app-sidebar.tsx";
+import { getAppSidebarOwner } from "./app-sidebar.tsx";
 
 setupSidebarTest();
+
+it("windows operator-shaped categories without mounting overscan in offscreen sections", async () => {
+  const groups = Array.from({ length: 97 }, (_, index) => `Category ${index}`);
+  const harness = createSessionsHarness("main", []);
+  const state = createSessionState(
+    "main",
+    Array.from({ length: 194 }, (_, index) => `agent:main:category-${index}`),
+  );
+  state.result!.sessions.forEach((row, index) => {
+    Object.assign(row, { category: groups[Math.floor(index / 2)], createdAt: 1000 - index });
+  });
+  harness.publishList({
+    ...state,
+    groups,
+    groupSettings: groups.map((name, position) => ({ name, position })),
+    sectionOrder: groups.map((name) => `category:${name}`),
+  });
+  const { sidebar } = await mountSidebar(
+    createGateway(createTestGatewayClient(async () => ({}))),
+    harness.sessions,
+  );
+  const owner = getAppSidebarOwner(sidebar.hostElement)!;
+  sidebar.sessionsGrouping = "category";
+  sidebar.sessionsShowPreview = false;
+  owner.setSessionsEmptyGroupsMode("always");
+  owner.sessionOrganizer.saveCollapsedSessionSections(
+    new Set(groups.slice(-5).map((name) => `category:${name}`)),
+  );
+  const scroller = sizeSidebar(sidebar, 900);
+  const row = (index: number) =>
+    sidebar.querySelector<HTMLElement>(`[data-session-key="agent:main:category-${index}"]`);
+  const bounded = () =>
+    expect(sidebar.querySelectorAll("[data-session-key]").length).toBeLessThanOrEqual(
+      Math.ceil(scroller.clientHeight / 32) + 5,
+    );
+  await waitForSolid(() => {
+    expect(sidebar.querySelectorAll('[data-session-section^="category:"]')).toHaveLength(97);
+    expect(row(0)).not.toBeNull();
+    bounded();
+  });
+  const height = scroller.scrollHeight;
+  row(0)!
+    .querySelector<HTMLAnchorElement>("a")!
+    .dispatchEvent(new MouseEvent("click", { altKey: true, bubbles: true, cancelable: true }));
+  scroller.scrollTop = height;
+  scroller.dispatchEvent(new Event("scroll"));
+  await waitForSolid(() => {
+    expect(row(183)).not.toBeNull();
+    expect(row(0)?.classList.contains("sidebar-recent-session--selected")).toBe(true);
+    expect(row(184)).toBeNull();
+    bounded();
+  });
+  expect(scroller.scrollHeight).toBe(height);
+});
 
 const agents = {
   defaultId: "main",
@@ -104,98 +159,155 @@ function visibilityProbe() {
   return { activeObservers, observed };
 }
 
-it("unmounts offscreen session content and restores its live indicators when scrolled back", async () => {
-  const probe = visibilityProbe();
+it.each([32, 44])(
+  "restores offscreen session content and live indicators with %i px rows",
+  async (rowFloor) => {
+    const probe = visibilityProbe();
+    const harness = createSessionsHarness("main", []);
+    const rows = runState({ icon: "🦞" });
+    rows.result!.owners = [
+      { type: "human", id: "ada", label: "Ada" },
+      { type: "human", id: "bob", label: "Bob" },
+    ];
+    const { sidebar, provider } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
+    );
+    const scroller = sizeSidebar(sidebar, 240);
+    sidebar
+      .querySelector<HTMLElement>(".sidebar-shell")!
+      .style.setProperty("--sidebar-session-row-floor", `${rowFloor}px`);
+    harness.publishList(rows);
+    await settleRoster(sidebar);
+    await revealPages(sidebar);
+    const row = (index: number) =>
+      sidebar.querySelector<HTMLElement>(`[data-session-key="agent:main:run-${index}"]`);
+    await waitForSolid(() => {
+      expect(row(0)).not.toBeNull();
+      expect(row(0)!.getBoundingClientRect().height).toBe(rowFloor);
+      expect(row(1)!.getBoundingClientRect().top - row(0)!.getBoundingClientRect().top).toBe(
+        rowFloor,
+      );
+      expect(row(29)).toBeNull();
+      expect(sidebar.querySelectorAll("[data-session-key]").length).toBeLessThan(40);
+    });
+    const first = row(0)!;
+    expectIndicator(ring(first), false, "running");
+    expect(probe.activeObservers.size).toBe(1);
+    const totalHeight = scroller.scrollHeight;
+    scroller.scrollTop = 25 * (rowFloor + 2);
+    scroller.dispatchEvent(new Event("scroll"));
+    await waitForSolid(() => {
+      expect(row(0)).toBeNull();
+      expect(row(29)).not.toBeNull();
+    });
+    expect(first.isConnected).toBe(false);
+    const last = row(29)!;
+    await waitForSolid(() => expect(offscreen(ring(last))).toBe(false));
+    expect(scroller.scrollHeight).toBe(totalHeight);
+    const updateRows = async (patch: Partial<GatewaySessionRow>) => {
+      const result = harness.sessions.state.result!;
+      harness.publishList({
+        result: {
+          ...result,
+          sessions: result.sessions.map((session) => Object.assign({}, session, patch)),
+        },
+      });
+      await settleRoster(sidebar);
+    };
+    await updateRows({ status: "queued" });
+    await waitForSolid(() =>
+      expect(ring(row(29)!).classList.contains("session-glyph__ring--queued")).toBe(true),
+    );
+    expectIndicator(ring(row(29)!), false, "paused");
+    await updateRows({ status: "running", icon: "", ...pair });
+    await waitForSolid(() => expect(offscreen(trace(row(29)!))).toBe(false));
+    expectIndicator(trace(row(29)!), false, "running");
+    const viewportTop = scroller.getBoundingClientRect().top;
+    const anchor = [...sidebar.querySelectorAll<HTMLElement>("[data-session-key]")].find(
+      (element) => element.getBoundingClientRect().top >= viewportTop,
+    )!;
+    const anchorKey = anchor.dataset.sessionKey;
+    const anchorOffset = anchor.getBoundingClientRect().top - viewportTop;
+    sidebar.navigationView = "pages";
+    await settleRoster(sidebar);
+    sidebar.navigationView = "sessions";
+    await settleRoster(sidebar);
+    await waitForSolid(() => {
+      const restored = sidebar.querySelector<HTMLElement>(`[data-session-key="${anchorKey}"]`);
+      expect(restored).not.toBeNull();
+      expect(
+        Math.abs(restored!.getBoundingClientRect().top - viewportTop - anchorOffset),
+      ).toBeLessThan(1);
+    });
+    scroller.scrollTop = 0;
+    scroller.dispatchEvent(new Event("scroll"));
+    await waitForSolid(() => expect(row(0)).not.toBeNull());
+    await waitForSolid(() => expect(offscreen(trace(row(0)!))).toBe(false));
+    expectIndicator(trace(row(0)!), false, "running");
+    await updateRows({ hasActiveRun: false, status: "done" });
+    expect(sidebar.querySelector(indicatorSelector)).toBeNull();
+    expect(probe.activeObservers.size).toBe(0);
+    await updateRows({ hasActiveRun: true, status: "running" });
+    expect(probe.activeObservers.size).toBe(1);
+    const disconnect = vi.spyOn([...probe.activeObservers][0]!, "disconnect");
+    sidebar.remove();
+    await sidebar.updateComplete;
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(probe.activeObservers.size).toBe(0);
+    provider.append(sidebar.hostElement);
+    await settleRoster(sidebar);
+    sizeSidebar(sidebar, 240);
+    await waitForSolid(() => expect(row(0)).not.toBeNull());
+    expect(probe.activeObservers.size).toBe(1);
+  },
+);
+
+it("omits offscreen categories while retaining selected rows across scrolling", async () => {
   const harness = createSessionsHarness("main", []);
-  const rows = runState({ icon: "🦞" });
-  rows.result!.owners = [
-    { type: "human", id: "ada", label: "Ada" },
-    { type: "human", id: "bob", label: "Bob" },
-  ];
-  const { sidebar, provider } = await mountSidebar(
+  const state = runState(
+    (index) => ({ category: index < 10 ? "Near" : "Far", hasActiveRun: false, status: "done" }),
+    20,
+  );
+  state.groups = ["Near", "Far"];
+  state.sectionOrder = ["category:Near", "category:Far"];
+  const { sidebar } = await mountSidebar(
     createGateway({} as GatewayBrowserClient),
     harness.sessions,
   );
   const scroller = sizeSidebar(sidebar, 240);
-  harness.publishList(rows);
+  scroller.style.height = "180px";
+  sidebar.sessionsGrouping = "category";
+  harness.publishList(state);
   await settleRoster(sidebar);
-  await revealPages(sidebar);
   const row = (index: number) =>
     sidebar.querySelector<HTMLElement>(`[data-session-key="agent:main:run-${index}"]`);
-  await waitForSolid(() => {
-    expect(row(0)).not.toBeNull();
-    expect(row(29)).toBeNull();
-    expect(sidebar.querySelectorAll("[data-session-key]").length).toBeLessThan(40);
-  });
-  const first = row(0)!;
-  expectIndicator(ring(first), false, "running");
-  expect(probe.activeObservers.size).toBe(1);
-  const totalHeight = scroller.scrollHeight;
-  scroller.scrollTop = 25 * 32;
-  scroller.dispatchEvent(new Event("scroll"));
-  await waitForSolid(() => {
-    expect(row(0)).toBeNull();
-    expect(row(29)).not.toBeNull();
-  });
-  expect(first.isConnected).toBe(false);
-  const last = row(29)!;
-  await waitForSolid(() => expect(offscreen(ring(last))).toBe(false));
-  expect(scroller.scrollHeight).toBe(totalHeight);
-  const updateRows = async (patch: Partial<GatewaySessionRow>) => {
-    const result = harness.sessions.state.result!;
-    harness.publishList({
-      result: {
-        ...result,
-        sessions: result.sessions.map((session) => Object.assign({}, session, patch)),
-      },
-    });
-    await settleRoster(sidebar);
-  };
-  await updateRows({ status: "queued" });
-  await waitForSolid(() =>
-    expect(ring(row(29)!).classList.contains("session-glyph__ring--queued")).toBe(true),
+  await waitForSolid(() => expect(row(0)).not.toBeNull());
+  const far = sidebar.querySelector<HTMLElement>('[data-session-section="category:Far"]')!;
+  expect(far.getBoundingClientRect().top).toBeGreaterThan(
+    scroller.getBoundingClientRect().bottom + 64,
   );
-  expectIndicator(ring(row(29)!), false, "paused");
-  await updateRows({ status: "running", icon: "", ...pair });
-  await waitForSolid(() => expect(offscreen(trace(row(29)!))).toBe(false));
-  expectIndicator(trace(row(29)!), false, "running");
-  const viewportTop = scroller.getBoundingClientRect().top;
-  const anchor = [...sidebar.querySelectorAll<HTMLElement>("[data-session-key]")].find(
-    (element) => element.getBoundingClientRect().top >= viewportTop,
-  )!;
-  const anchorKey = anchor.dataset.sessionKey;
-  const anchorOffset = anchor.getBoundingClientRect().top - viewportTop;
-  sidebar.navigationView = "pages";
-  await settleRoster(sidebar);
-  sidebar.navigationView = "sessions";
-  await settleRoster(sidebar);
-  await waitForSolid(() => {
-    const restored = sidebar.querySelector<HTMLElement>(`[data-session-key="${anchorKey}"]`);
-    expect(restored).not.toBeNull();
-    expect(
-      Math.abs(restored!.getBoundingClientRect().top - viewportTop - anchorOffset),
-    ).toBeLessThan(1);
-  });
+  expect(far.querySelector("[data-session-key]")).toBeNull();
+  const height = scroller.scrollHeight;
+  scroller.scrollTop = height;
+  scroller.dispatchEvent(new Event("scroll"));
+  await waitForSolid(() => expect(row(16)).not.toBeNull());
+  const selected = row(16)!;
+  sidebar.handleSessionRowClick(
+    new MouseEvent("click", { altKey: true }),
+    sidebar.findSidebarMenuSessionByKey("agent:main:run-16")!,
+  );
+  await waitForSolid(() =>
+    expect(selected.classList.contains("sidebar-recent-session--selected")).toBe(true),
+  );
   scroller.scrollTop = 0;
   scroller.dispatchEvent(new Event("scroll"));
-  await waitForSolid(() => expect(row(0)).not.toBeNull());
-  await waitForSolid(() => expect(offscreen(trace(row(0)!))).toBe(false));
-  expectIndicator(trace(row(0)!), false, "running");
-  await updateRows({ hasActiveRun: false, status: "done" });
-  expect(sidebar.querySelector(indicatorSelector)).toBeNull();
-  expect(probe.activeObservers.size).toBe(0);
-  await updateRows({ hasActiveRun: true, status: "running" });
-  expect(probe.activeObservers.size).toBe(1);
-  const disconnect = vi.spyOn([...probe.activeObservers][0]!, "disconnect");
-  sidebar.remove();
-  await sidebar.updateComplete;
-  expect(disconnect).toHaveBeenCalledOnce();
-  expect(probe.activeObservers.size).toBe(0);
-  provider.append(sidebar.hostElement);
-  await settleRoster(sidebar);
-  sizeSidebar(sidebar, 240);
-  await waitForSolid(() => expect(row(0)).not.toBeNull());
-  expect(probe.activeObservers.size).toBe(1);
+  await waitForSolid(() => {
+    expect(row(0)).not.toBeNull();
+    expect(row(16)).toBe(selected);
+    expect(far.querySelectorAll("[data-session-key]")).toHaveLength(1);
+    expect(scroller.scrollHeight).toBe(height);
+  });
 });
 
 it.each(["chip", "roster"] as const)(

@@ -8,7 +8,7 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 
-export type PendingContextEngineTurn = Readonly<{
+type PendingContextEngineTurn = Readonly<{
   advancement_key: string;
   payload_json: string;
   session_id: string;

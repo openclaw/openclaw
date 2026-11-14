@@ -1,15 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { Match, Switch } from "solid-js";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../../packages/gateway-protocol/src/client-info.js";
+import { For, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
+import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
-import { resolveMacFormFactor } from "../../lib/mac-form-factor.ts";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { formatList } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 type NodeTargetOption = {
@@ -73,92 +70,22 @@ export function resolveNodeTargets(
   return list;
 }
 
-type DeviceIconSource = {
-  clientId?: string;
-  clientMode?: string;
-  platform?: string;
-  modelIdentifier?: string;
-};
-
-const WATCH_PLATFORM_PATTERN = /\bwatchos\b/;
-const TABLET_PLATFORM_PATTERN = /\b(ipados|ipad)\b/;
-const PHONE_PLATFORM_PATTERN = /\b(ios|android|iphone)\b/;
-const PHONE_CLIENT_IDS: ReadonlySet<string> = new Set([
-  GATEWAY_CLIENT_IDS.IOS_APP,
-  GATEWAY_CLIENT_IDS.ANDROID_APP,
-]);
-const BROWSER_CLIENT_IDS: ReadonlySet<string> = new Set([
-  GATEWAY_CLIENT_IDS.CONTROL_UI,
-  GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-  GATEWAY_CLIENT_IDS.WEBCHAT,
-]);
-const TERMINAL_CLIENT_MODES: ReadonlySet<string> = new Set([
-  GATEWAY_CLIENT_MODES.CLI,
-  GATEWAY_CLIENT_MODES.BACKEND,
-  GATEWAY_CLIENT_MODES.PROBE,
-  GATEWAY_CLIENT_MODES.TEST,
-]);
-// The TUI connects with mode "ui"; only its client id marks it as a terminal.
-const TERMINAL_CLIENT_IDS: ReadonlySet<string> = new Set([
-  GATEWAY_CLIENT_IDS.CLI,
-  GATEWAY_CLIENT_IDS.TUI,
-]);
-
-/** Prefer client identity for browser/terminal sessions, then the machine's form factor. */
-export function deviceIcon(source: DeviceIconSource): JSX.Element {
-  const platform = source.platform?.trim().toLowerCase() ?? "";
-  const model = source.modelIdentifier?.trim() ?? "";
-  const clientId = source.clientId?.trim().toLowerCase() ?? "";
-  const mode = source.clientMode?.trim().toLowerCase() ?? "";
-  // Watch and tablet checks run before the phone check: watchOS/iPadOS
-  // platforms would otherwise never match once "ios" is tested.
-  if (
-    model.startsWith("Watch") ||
-    WATCH_PLATFORM_PATTERN.test(platform) ||
-    clientId === GATEWAY_CLIENT_IDS.WATCHOS_APP
-  ) {
-    return <DeviceGlyph kind="watch" />;
-  }
-  if (model.startsWith("iPad") || TABLET_PLATFORM_PATTERN.test(platform)) {
-    return <DeviceGlyph kind="tablet" />;
-  }
-  if (
-    model.startsWith("iPhone") ||
-    PHONE_PLATFORM_PATTERN.test(platform) ||
-    PHONE_CLIENT_IDS.has(clientId)
-  ) {
-    return <Icon name="smartphone" />;
-  }
-  if (BROWSER_CLIENT_IDS.has(clientId) || mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
-    return <Icon name="globe" />;
-  }
-  if (TERMINAL_CLIENT_MODES.has(mode) || TERMINAL_CLIENT_IDS.has(clientId)) {
-    return <Icon name="terminal" />;
-  }
-  if (mode === "gateway") {
-    return <Icon name="server" />;
-  }
-  switch (resolveMacFormFactor(model)) {
-    case "laptop":
-      return <DeviceGlyph kind="laptop" />;
-    case "mini":
-      return <DeviceGlyph kind="macMini" />;
-    case "studio":
-    case "pro":
-      return <DeviceGlyph kind="pcCase" />;
-    case "imac":
-      return <Icon name="monitor" />;
-    default:
-      return <Icon name="monitor" />;
-  }
-}
-
-/* Connectivity state lives in the row's SettingsStatus dot + text, so
-   the tile stays a purely decorative form-factor glyph. */
-export function DeviceTile(props: { icon: JSX.Element }) {
+/** One label and value in a device's facts; the wrapper keeps both on the shared grid. */
+export function DeviceFact(props: {
+  label: string;
+  children: JSX.Element;
+  class?: string | string[];
+  title?: string;
+  valueTitle?: string;
+  mono?: boolean;
+}) {
   return (
-    <div class="device-entry__tile" aria-hidden="true">
-      <span class="device-entry__tile-icon">{props.icon}</span>
+    <div
+      class={["device-fact", props.class, { "device-fact--mono": props.mono }]}
+      title={props.title}
+    >
+      <dt>{props.label}</dt>
+      <dd title={props.valueTitle}>{props.children}</dd>
     </div>
   );
 }
@@ -166,47 +93,146 @@ export function DeviceTile(props: { icon: JSX.Element }) {
 export function DeviceIdentityFacts(props: { id: string; remoteIp?: string }) {
   return (
     <>
-      <dt class="settings-row__desc">{t("devices.inventory.deviceIdLabel")}</dt>
-      <dd class="settings-row__value settings-row__value--mono" title={props.id}>
-        {props.id}
-      </dd>
-      {props.remoteIp ? (
-        <>
-          <dt class="settings-row__desc">{t("devices.inventory.remoteIpLabel")}</dt>
-          <dd class="settings-row__value settings-row__value--mono">{props.remoteIp}</dd>
-        </>
-      ) : undefined}
+      <DeviceFact label={t("devices.inventory.deviceIdLabel")} valueTitle={props.id}>
+        <span class="device-fact__id">
+          <span>{props.id}</span>
+          <CopyButton
+            text={props.id}
+            idleLabel={t("devices.inventory.copyDeviceId")}
+            iconFeedback
+          />
+        </span>
+      </DeviceFact>
+      <Show when={props.remoteIp}>
+        <DeviceFact label={t("devices.inventory.remoteIpLabel")} mono>
+          {props.remoteIp}
+        </DeviceFact>
+      </Show>
     </>
   );
 }
 
-function DeviceGlyph(props: { kind: "watch" | "tablet" | "laptop" | "macMini" | "pcCase" }) {
+// Node-controlled lists are unbounded input; cap the rendered items so a
+// hostile or chatty node cannot bloat the inventory render.
+const COMMAND_LINE_LIMIT = 16;
+
+export function CommandFact(props: { values: readonly string[] }) {
+  const visible = () => props.values.slice(0, COMMAND_LINE_LIMIT);
+  const overflow = () => props.values.length - visible().length;
   return (
-    <StrokeIcon>
-      <Switch>
-        <Match when={props.kind === "watch"}>
-          <circle cx="12" cy="12" r="6" />
-          <polyline points="12 10 12 12 13 13" />
-          <path d="m16.13 7.66-.81-4.05a2 2 0 0 0-2-1.61h-2.68a2 2 0 0 0-2 1.61l-.78 4.05" />
-          <path d="m7.88 16.36.8 4a2 2 0 0 0 2 1.61h2.72a2 2 0 0 0 2-1.61l.81-4.05" />
-        </Match>
-        <Match when={props.kind === "tablet"}>
-          <rect width="16" height="20" x="4" y="2" rx="2" ry="2" />
-          <path d="M12 18h.01" />
-        </Match>
-        <Match when={props.kind === "laptop"}>
-          <path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z" />
-          <path d="M20.054 15.987H3.946" />
-        </Match>
-        <Match when={props.kind === "pcCase"}>
-          <rect width="14" height="20" x="5" y="2" rx="2" />
-          <path d="M15 14h.01M9 6h6M9 10h6" />
-        </Match>
-        <Match when={props.kind === "macMini"}>
-          <path d="M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
-          <path d="M21.946 12.013H2.054M6 16h.01M10 16h.01" />
-        </Match>
-      </Switch>
-    </StrokeIcon>
+    <Show when={props.values.length > 0}>
+      <DeviceFact label={t("devices.inventory.commands")} mono>
+        <details>
+          <summary>{t("devices.inventory.showDetails")}</summary>
+          {formatList(visible())}
+          {overflow() > 0 ? ` +${overflow()}` : ""}
+        </details>
+      </DeviceFact>
+    </Show>
   );
+}
+
+/** Parts wrap whole; the stylesheet draws the separators, so none can end a line. */
+export function MetaLine(props: { parts: readonly string[]; plain?: boolean }) {
+  return (
+    <Show when={props.parts.length > 0}>
+      <span class={["device-entry__meta", { "settings-row__desc": !props.plain }]}>
+        <For each={props.parts}>
+          {(part) => (
+            <>
+              <span class="device-entry__part">{part}</span>{" "}
+            </>
+          )}
+        </For>
+      </span>
+    </Show>
+  );
+}
+
+/** One expandable row: what it is at a glance, everything else on demand. */
+export function DeviceDisclosure(props: {
+  deviceId?: string;
+  name: string;
+  meta: readonly string[];
+  alerts?: JSX.Element;
+  status?: JSX.Element;
+  children: JSX.Element;
+}) {
+  return (
+    <details class="device-entry" data-device-id={props.deviceId}>
+      <summary class="settings-row settings-row--nav device-entry__summary">
+        <span class="settings-row__text">
+          <span class="settings-row__title">{props.name}</span>
+          <span class="device-entry__line">
+            <MetaLine parts={props.meta} />
+            {props.alerts}
+          </span>
+        </span>
+        <span class="settings-row__control">
+          <Show when={props.status}>
+            <span class="device-entry__status">{props.status}</span>
+          </Show>
+          <span class="settings-row__chevron">
+            <Icon name="chevronDown" />
+          </span>
+        </span>
+      </summary>
+      <div class="device-entry__body">{props.children}</div>
+    </details>
+  );
+}
+
+/** A note and its action share one line at every width. */
+export function PolicyActionRow(props: {
+  class?: string;
+  title?: JSX.Element;
+  description?: JSX.Element;
+  children?: JSX.Element;
+}) {
+  return (
+    <div class={["settings-row", "device-policy__action", props.class]}>
+      <div class="settings-row__text">
+        <Show when={props.title}>
+          <span class="settings-row__title">{props.title}</span>
+        </Show>
+        <Show when={props.description}>
+          <span class="settings-row__desc">{props.description}</span>
+        </Show>
+      </div>
+      <Show when={props.children}>
+        <div class="settings-row__control">{props.children}</div>
+      </Show>
+    </div>
+  );
+}
+
+export function PolicyFailure(props: {
+  title: string;
+  message: string;
+  busy?: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <PolicyActionRow
+      title={
+        <span role="alert">
+          <SettingsStatus kind="danger" label={props.title} />
+        </span>
+      }
+      description={props.message}
+    >
+      <button class="btn" disabled={props.busy} onClick={() => props.onRetry()}>
+        {t("common.retry")}
+      </button>
+    </PolicyActionRow>
+  );
+}
+
+/** The id only says something when it differs from the name. */
+export function agentDisplayName(agent: { id: string; name?: string }): string {
+  const name = agent.name?.trim();
+  if (!name) {
+    return agent.id;
+  }
+  return name.toLowerCase() === agent.id.toLowerCase() ? name : `${name} (${agent.id})`;
 }

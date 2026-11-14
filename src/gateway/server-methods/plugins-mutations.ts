@@ -25,7 +25,7 @@ import {
   setManagedPluginEnabled,
 } from "../../plugins/management-mutations.js";
 import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
-import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../../plugins/plugin-lifecycle-lease.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { pluginLifecycleError } from "./plugins-lifecycle-error.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
@@ -118,7 +118,7 @@ function lifecycleHandler<T>(
       };
       // A request must not wait on a config reload that is draining that request.
       const { application, plugin, pluginId, pluginIds, removed, warnings } =
-        await withPluginLifecycleLease({ signal, waitMs: 0 }, () => {
+        await withPluginLifecycleLeaseAsync({ signal, waitMs: 0 }, () => {
           entered = true;
           return run(params, lifecycle, client);
         });

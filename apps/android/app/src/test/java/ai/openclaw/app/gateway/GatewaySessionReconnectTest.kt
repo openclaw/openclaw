@@ -23,6 +23,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -1982,6 +1986,75 @@ class GatewaySessionReconnectTest {
         shutdownReconnectHarness(harness, server)
       }
     }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun startupAdmissionWaitRetainsItsInputBeyondFiveMinutesAndStopsWithoutReplay() =
+    runTest {
+      val params = """{"message":"Keep this voice turn","idempotencyKey":"original-send"}"""
+      val startup =
+        GatewaySession.ErrorShape(
+          "UNAVAILABLE",
+          "Synthetic preparation",
+          GatewayErrorDetails(null, false, null, reason = "startup-sidecars", method = "chat.send"),
+          retryable = true,
+        )
+      for (ending in listOf("ready", "cancel", "timeout")) {
+        var preparing = true
+        var attempts = 0
+        val unknown = GatewayRequestOutcomeUnknown("request timeout")
+        val lease =
+          GatewaySession.RequestLease("captured-gateway") { method, payload, timeoutMs, enqueue ->
+            assertEquals("chat.send", method)
+            assertEquals(params, payload)
+            assertEquals(321L, timeoutMs)
+            enqueue { attempts += 1 }
+            if (preparing) throw GatewayRequestRejected(startup)
+            if (ending == "timeout") throw unknown
+            "accepted"
+          }
+        val send = async { runCatching { lease.requestAwaitingStartup("chat.send", params, timeoutMs = 321) } }
+        runCurrent()
+        advanceTimeBy(300_001)
+        runCurrent()
+        assertFalse("Known startup refusals must retain the original caller beyond five minutes", send.isCompleted)
+        val refusedAttempts = attempts
+        assertTrue(refusedAttempts > 1)
+        preparing = false
+        if (ending == "cancel") send.cancel()
+        advanceUntilIdle()
+        when (ending) {
+          "cancel" -> assertTrue(send.isCancelled)
+          "timeout" -> assertEquals(unknown, send.await().exceptionOrNull())
+          else -> assertEquals("accepted", send.await().getOrThrow())
+        }
+        advanceTimeBy(300_001)
+        runCurrent()
+        assertEquals(refusedAttempts + if (ending == "cancel") 0 else 1, attempts)
+      }
+    }
+
+  @Test
+  fun startupAdmissionRetryRequiresTheClosedWireContract() {
+    val details = GatewayErrorDetails(null, false, null, reason = "startup-sidecars", method = "chat.send", retryable = true)
+    val startup = GatewaySession.ErrorShape("UNAVAILABLE", "Any display text", details, retryable = true)
+    assertEquals(500L, startup.startupRetryDelayMs("chat.send"))
+    assertEquals(100L, startup.copy(details = details.copy(retryAfterMs = -1)).startupRetryDelayMs("chat.send"))
+    assertEquals(2_000L, startup.copy(details = details.copy(retryAfterMs = Int.MAX_VALUE)).startupRetryDelayMs("chat.send"))
+    val unrelatedErrors =
+      listOf(
+        startup.copy(code = "FORBIDDEN"),
+        startup.copy(retryable = false),
+        startup.copy(details = null),
+        startup.copy(details = details.copy(reason = "other")),
+        startup.copy(details = details.copy(method = null)),
+        startup.copy(details = details.copy(method = "agent")),
+      )
+    for (error in unrelatedErrors) {
+      assertNull(error.startupRetryDelayMs("chat.send"))
+    }
+    assertNull(startup.startupRetryDelayMs("agent"))
+  }
 
   @OptIn(ExperimentalCoroutinesApi::class)
   @Test

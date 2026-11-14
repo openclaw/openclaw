@@ -11,7 +11,7 @@ import "./chat-header-session-menu.ts";
 
 afterEach(() => document.body.replaceChildren());
 
-async function menuFixture(mobile: boolean | undefined) {
+async function menuFixture(mobile: boolean | undefined, group = "Alpha") {
   const menu = document.createElement("openclaw-chat-header-session-menu");
   const onAction = vi.fn();
   const [currentPage, setCurrentPage] = createSignal<HeaderSessionMenuPage>();
@@ -24,7 +24,7 @@ async function menuFixture(mobile: boolean | undefined) {
   menu.onAction = onAction;
   menu.copyMarkdownAllowed = true;
   menu.archiveAllowed = true;
-  menu.groups = ["Zebra", "Alpha"];
+  menu.groups = ["Zebra", group];
   menu.session = { ...menu.session, sessionId: "session-123", label: "Session", category: "Zebra" };
   document.body.append(menu);
   await menu.updateComplete;
@@ -54,8 +54,12 @@ it("copies through the native action and closes the whole mobile menu", async ()
   expect(open).not.toHaveBeenCalled();
 });
 
-it("opens a controlled group picker without autofocus and dispatches the selected group", async () => {
-  const { menu, open, close, onAction } = await menuFixture(true);
+it.each([
+  ["alp", "Alpha"],
+  ["M\u00fcnchen", "Mu\u0308nchen"],
+  ["Mu\u0308nchen", "M\u00fcnchen"],
+])("opens the controlled group picker and selects %s without autofocus", async (query, group) => {
+  const { menu, open, close, onAction } = await menuFixture(true, group);
   menu.querySelector<HTMLButtonElement>('[value="compact:open-group"]')!.click();
   flush();
   expect(open).toHaveBeenCalledOnce();
@@ -69,23 +73,19 @@ it("opens a controlled group picker without autofocus and dispatches the selecte
   const buttons = () => [
     ...mounted.container.querySelectorAll<HTMLButtonElement>(".session-actions-page__group button"),
   ];
-  expect(
-    buttons()
-      .slice(0, 2)
-      .map((button) => button.textContent),
-  ).toEqual(["Alpha", "Zebra"]);
+  const labels = buttons().map((button) => button.textContent);
+  expect(labels.slice(0, 2)).toEqual([group, "Zebra"]);
   mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-host__circle")!.click();
   flush();
   const search = mounted.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   expect(document.activeElement).not.toBe(search);
-  search.value = "alp";
+  search.value = query;
   search.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   expect(buttons().some((button) => button.textContent === "Zebra")).toBe(false);
-  buttons()
-    .find((button) => button.textContent === "Alpha")!
-    .click();
-  expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "move-to-group", category: "Alpha" });
+  const target = buttons().find((button) => button.textContent === group)!;
+  target.click();
+  expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "move-to-group", category: group });
   expect(close).toHaveBeenCalledOnce();
 
   const retiredPage = mounted.container.querySelector(".session-actions-page")!;
@@ -97,7 +97,7 @@ it("opens a controlled group picker without autofocus and dispatches the selecte
   flush();
   menu.groups = ["Alpine"];
   await menu.updateComplete;
-  expect(retiredPage.textContent).toContain("Alpha");
+  expect(retiredPage.textContent).toContain(group);
   expect(retiredPage.textContent).not.toContain("Alpine");
 });
 
@@ -157,7 +157,7 @@ it("dismisses the controlled Advanced page after a fork action", async () => {
   const mounted = mountSolid(() => page.content);
   flush();
   const fork = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Fork conversation",
+    (button) => button.textContent?.trim() === "Fork session",
   );
   expect(fork?.disabled).toBe(false);
   fork!.click();

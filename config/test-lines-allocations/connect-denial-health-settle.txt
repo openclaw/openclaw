@@ -1,0 +1,2 @@
+# Keep the continuously live health fixture browser-local while preserving retry assertions.
+11

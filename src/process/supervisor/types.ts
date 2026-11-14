@@ -1,4 +1,5 @@
 import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 
 export type ProcessExtinctionResult = void | WindowsJobExtinction;
@@ -62,6 +63,9 @@ export type SpawnSecretInput = {
 };
 
 export type ProcessAdapterConstruction = {
+  executionIntent?: ProcessExecutionIntent;
+  /** Stable session budget identity, independent of command cancellation ownership. */
+  executionScopeKey?: string;
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   /** Synchronous launch admission; never recheck after the target command starts. */
@@ -113,6 +117,8 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";

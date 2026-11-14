@@ -23,6 +23,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
+  getRawExecuteAgentTurnForTest,
   createFollowupRun,
   expectMockCallArgFields,
   runInitialFallbackAttempt,
@@ -116,6 +117,59 @@ function rejectUnexpectedCompactionSuccessor(): never {
   throw new Error("Unexpected compaction successor during CLI admission test");
 }
 
+it.each([true, false])(
+  "retains native context only after provider execution (started=%s)",
+  async (providerStarted) => {
+    const { turn, followupRun } = await sessionFixture("agent:main:scheduled-context", {
+      lifecycleRevision: "current",
+    });
+    followupRun.run.inputProvenance = { kind: "internal_system", sourceTool: "cron_execution" };
+    useCliFallback();
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {
+        providerStarted,
+        agentMeta: {
+          sessionId: "native-id-is-not-the-host-writer",
+          ...(providerStarted
+            ? {
+                usage: { input: 9000, output: 500 },
+                lastCallUsage: {
+                  input: 100,
+                  output: 23,
+                  contextUsage: {
+                    state: "available" as const,
+                    promptTokens: 100,
+                    totalTokens: 123,
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+    });
+    const { outcome } = await (await getRawExecuteAgentTurnForTest())(turn);
+    assert(outcome.kind === "settled");
+    expect(outcome.sessionWriter?.sessionId).toBe("session");
+    expect(outcome.autoCompactionCount).toBe(0);
+    expect(outcome.compaction).toEqual(
+      providerStarted
+        ? {
+            count: 0,
+            durable: [
+              {
+                kind: "durable",
+                count: 0,
+                target: outcome.sessionWriter,
+                currentContextSnapshot: { tokens: 123 },
+              },
+            ],
+          }
+        : undefined,
+    );
+  },
+);
+
 it("reads cold CLI fallback metadata while another connection holds a shared-state write transaction", async () => {
   const sessionKey = "agent:main:cli-read-contention";
   const binding = { sessionId: "existing-native-session" };
@@ -139,7 +193,12 @@ it("reads cold CLI fallback metadata while another connection holds a shared-sta
       holder = new DatabaseSync(resolveOpenClawStateSqlitePath());
       holder.exec("BEGIN IMMEDIATE");
       try {
-        expect(() => loadSessionEntry(scope)).toThrow(/database is locked/iu);
+        {
+          // Keep session readers cold while probing the shared writer lock without waiting.
+          using probe = new DatabaseSync(resolveOpenClawStateSqlitePath());
+          probe.exec("PRAGMA busy_timeout = 0");
+          expect(() => probe.exec("BEGIN IMMEDIATE")).toThrow(/database is locked/iu);
+        }
         return await runLocal();
       } finally {
         if (holder?.isTransaction) {

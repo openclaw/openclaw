@@ -119,10 +119,9 @@ describe("createGatewayRequestContext presence", () => {
       const context = createGatewayRequestContext(params);
       const first = clients[0]!;
       const capturedProfile = first.authenticatedUserProfile;
-      const expectedUser = (email: string | undefined, avatarRevision: string) => ({
+      const expectedUser = (avatarRevision: string) => ({
         id: profileId,
         identity: { type: "profile", id: profileId },
-        ...(identity === "email" ? { email } : {}),
         name: "Augusta Ada",
         avatarUrl: `/api/users/${profileId}/avatar?v=${avatarRevision}`,
       });
@@ -140,9 +139,7 @@ describe("createGatewayRequestContext presence", () => {
           "presence",
           {
             presence: expect.arrayContaining(
-              emails.map((email) =>
-                expect.objectContaining({ user: expectedUser(email, avatarRevision) }),
-              ),
+              emails.map(() => expect.objectContaining({ user: expectedUser(avatarRevision) })),
             ),
           },
           expect.anything(),
@@ -162,9 +159,8 @@ describe("createGatewayRequestContext presence", () => {
       expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
       const rows = listSystemPresence().filter((entry) => entry.user?.id === profileId);
       expect(rows).toHaveLength(clients.length);
-      const newestFirstEmails = emails.toReversed();
-      for (const [index, row] of rows.entries()) {
-        expect(row.user).toEqual(expectedUser(newestFirstEmails[index], revisions.at(-1)!));
+      for (const row of rows) {
+        expect(row.user).toEqual(expectedUser(revisions.at(-1)!));
       }
       if (identity === "email") {
         expect(rows[0]!.ts).toBeGreaterThan(rows[1]!.ts);
@@ -211,8 +207,10 @@ describe("createGatewayRequestContext presence", () => {
         updatedAt: linked.updatedAt,
       });
       expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedId);
-      for (const email of ["merge-source@example.test", "merge-target@example.test"]) {
-        expect(listSystemPresence().find((entry) => entry.user?.email === email)).toMatchObject({
+      for (const client of [sourceClient, targetClient]) {
+        expect(
+          listSystemPresence().find((entry) => entry.connectionId === client.connId),
+        ).toMatchObject({
           user: { id: target.profileId, identity: { type: "profile", id: target.profileId } },
           onlineSince: 1_000,
           lastActivityAt: 3_000,
@@ -221,12 +219,9 @@ describe("createGatewayRequestContext presence", () => {
       const { presence } = vi.mocked(params.runtime.broadcast).mock.calls[0]![1] as {
         presence: ReturnType<typeof listSystemPresence>;
       };
-      expect(
-        presence.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
-      ).toEqual({
+      expect(presence.find((entry) => entry.connectionId === sourceClient.connId)?.user).toEqual({
         id: target.profileId,
         identity: { type: "profile", id: target.profileId },
-        email: "merge-source@example.test",
         name: target.displayName,
         avatarUrl: `/api/users/${target.profileId}/avatar?v=${display.avatarRevision}`,
       });
@@ -394,9 +389,9 @@ describe("createGatewayRequestContext presence", () => {
       await params.presenceClock.advanceBy(200);
       expect(client.authenticatedUserProfile?.displayName).toBe("Before");
       expect(params.runtime.broadcast).not.toHaveBeenCalled();
-      expect(
-        listSystemPresence().some((entry) => entry.user?.email === `${state}@profile.test`),
-      ).toBe(false);
+      expect(listSystemPresence().some((entry) => entry.connectionId === client.connId)).toBe(
+        false,
+      );
     },
   );
 });

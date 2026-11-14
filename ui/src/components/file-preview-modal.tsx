@@ -5,6 +5,7 @@ import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
@@ -16,8 +17,8 @@ import { Kbd } from "./solid/kbd.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 import styles from "./file-preview-modal.styles.css?inline";
-import kbdStyles from "./kbd.css?inline";
 import "./modal-dialog.tsx";
+import kbdStyles from "./kbd.css?inline";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
@@ -464,9 +465,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
           </div>
           <Show when={props.layout === "files"}>
             <footer class="foot">
-              <span class="foot-group">
-                <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
-              </span>
+              <Show when={keyboardHintsVisible()}>
+                <span class="foot-group">
+                  <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
+                </span>
+              </Show>
               <openclaw-modal-actions>
                 <button ref={capture("button")} class="button" onClick={close}>
                   {t("common.close")} <Kbd keys="esc" class="kbd" />

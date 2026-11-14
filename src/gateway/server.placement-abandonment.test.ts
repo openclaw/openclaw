@@ -8,9 +8,9 @@ import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-proc
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../infra/node-commands.js";
@@ -511,7 +511,7 @@ it.for(cases)(
         );
         signal.throwIfAborted();
         expect(deleted).toMatchObject({ deleted: true, archived: [expect.any(String)] });
-        expect(readSessionArchiveContentSync(deleted.archived[0]!)).toContain(reply);
+        expect(readSessionArchiveText(deleted.archived[0]!)).toContain(reply);
         expect((await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry).toBeUndefined();
         expect(placements.get(sessionId)).toBeUndefined();
         expect(await placements.getPlacementMoveAsync(sessionId)).toBeUndefined();

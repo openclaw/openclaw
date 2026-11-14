@@ -24,7 +24,7 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   type ChatSessionSharingProps,
@@ -38,7 +38,7 @@ import {
 } from "./chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 function SharingModeContent(props: { visibility: SessionVisibility }) {
   return (
@@ -111,11 +111,12 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const creator = () => result()?.owner;
   const people = createMemo(() => projectChatSessionSharingRoster(props));
   const matches = createMemo(() => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return people().filter(({ identity }) =>
       terms.every((term) =>
         `${identity.label ?? ""} ${identity.id} ${identity.type}`
           .toLocaleLowerCase()
+          .normalize("NFC")
           .includes(term),
       ),
     );

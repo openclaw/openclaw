@@ -9,6 +9,7 @@ import "../../../styles/chat.ts";
 import { ChatPaneRuntime } from "../chat-pane-render.ts";
 import { createPaneTestHost } from "../chat-pane.test-support.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
@@ -27,23 +28,32 @@ vi.mock("../chat-pane-layout-view.tsx", async (importOriginal) => {
 class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
   fixtureStream: string | null = null;
-  private messages: unknown[] = [];
+  fixtureHistory = false;
+  fixtureMessages: unknown[] = [];
   private rowHeight = 120;
+  private fixtureWidgetLayout?: ChatWidgetLayout;
 
-  initialize(context: ApplicationContext, followEnd = false, rowHeight = followEnd ? 360 : 120) {
-    projectChatFields(this, ["fixtureStream"]);
+  initialize(
+    context: ApplicationContext,
+    followEnd = false,
+    rowHeight = followEnd ? 360 : 120,
+    widgetLayout?: ChatWidgetLayout,
+    scrollTop = 0,
+  ) {
+    projectChatFields(this, ["fixtureStream", "fixtureHistory", "fixtureMessages"]);
     this.context = context;
     this.paneId = "geometry-render";
     this.sessionKey = "agent:main:geometry-render";
     this.rowHeight = rowHeight;
-    this.messages = Array.from({ length: 100 }, (_, index) => ({
+    this.fixtureWidgetLayout = widgetLayout;
+    this.fixtureMessages = Array.from({ length: 100 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
       content: `Row ${index}`,
       timestamp: index + 1,
       __openclaw: { id: `geometry-row-${index}` },
     }));
     saveChatSessionScrollPosition(this.paneId, this.sessionKey, {
-      scrollTop: 0,
+      scrollTop,
       anchorToEnd: followEnd,
     });
   }
@@ -60,9 +70,13 @@ class GeometryPane extends ChatPaneRuntime {
         component: GeometryLayout,
         props: {
           transcript: this.transcript,
-          thread: threadProps(this.paneId, this.sessionKey, this.messages, {
+          thread: threadProps(this.paneId, this.sessionKey, this.fixtureMessages, {
             stream: this.fixtureStream,
             assistantName: "Assistant",
+            historyPagination: this.fixtureHistory
+              ? { hasMore: true, loading: false, onShowEarlier: () => {} }
+              : undefined,
+            widgetLayout: this.fixtureWidgetLayout,
           }),
           rowHeight: this.rowHeight,
         },
@@ -113,7 +127,12 @@ async function settleLayout() {
   }
 }
 
-async function mountPane(followEnd = false, rowHeight?: number) {
+async function mountPane(
+  followEnd = false,
+  rowHeight?: number,
+  widgetLayout?: ChatWidgetLayout,
+  scrollTop = 0,
+) {
   const fixture = createMountedPanes([
     { key: "agent:main:geometry-render", kind: "direct", updatedAt: 1 },
   ]);
@@ -124,7 +143,7 @@ async function mountPane(followEnd = false, rowHeight?: number) {
   });
   pane = createPaneTestHost("test-transcript-geometry-pane", GeometryPane);
   Object.assign(pane, { render: pane.renderGeometry.bind(pane) });
-  pane.initialize(fixture.context, followEnd, rowHeight);
+  pane.initialize(fixture.context, followEnd, rowHeight, widgetLayout, scrollTop);
   pane.style.cssText = "display: block; width: 800px";
   document.body.append(pane.element);
   await pane.updateComplete;
@@ -140,6 +159,101 @@ async function mountPane(followEnd = false, rowHeight?: number) {
     virtualizer: session["virtualizer"],
   };
 }
+
+it("retains the accepted history-header space while a touch holds the older row model", async () => {
+  const { host, viewport } = await mountPane();
+  host.fixtureHistory = true;
+  await settleLayout();
+  const retained = requireElement(host, ".chat-virtual-row");
+  const top = retained.getBoundingClientRect().top;
+  const touch = new Touch({ identifier: 1, target: viewport, clientY: 100 });
+  viewport.dispatchEvent(
+    new TouchEvent("touchstart", { touches: [touch], changedTouches: [touch], bubbles: true }),
+  );
+  host.fixtureMessages = [
+    { role: "assistant", content: "Earlier synthetic message", timestamp: 0 },
+    ...host.fixtureMessages,
+  ];
+  host.fixtureHistory = false;
+  await settleLayout();
+  expect(host.querySelector(".chat-history-boundary")).toBeNull();
+  expect(retained.dataset.index).toBe("0");
+  expect(Math.abs(retained.getBoundingClientRect().top - top)).toBeLessThanOrEqual(2);
+
+  viewport.dispatchEvent(
+    new TouchEvent("touchend", { touches: [], changedTouches: [touch], bubbles: true }),
+  );
+  await settleLayout();
+  expect(retained.dataset.index).toBe("1");
+  expect(Math.abs(retained.getBoundingClientRect().top - top)).toBeLessThanOrEqual(2);
+});
+
+it.each([
+  { offset: null, rowHeight: 120, cachedRows: 100, expected: [94, 95, 96, 97, 98, 99] },
+  { offset: 3600, rowHeight: 120, cachedRows: 100, expected: [27, 28, 29, 30, 31, 32, 33, 34, 35] },
+  { offset: null, rowHeight: 128, cachedRows: 3, expected: [97, 98, 99] },
+])(
+  "commits the cached initial window with $cachedRows footprints and $rowHeight px rows at $offset",
+  async ({ offset, rowHeight, cachedRows, expected }) => {
+    const cachedHeight = (key: string) =>
+      key.startsWith("row:v1:") && Number(/geometry-row-(\d+):/.exec(key)?.[1]) >= 100 - cachedRows
+        ? rowHeight
+        : undefined;
+    const windows: number[][] = [];
+    const observer = new MutationObserver((records) => {
+      if (
+        records.some((record) =>
+          [...record.addedNodes, ...record.removedNodes].some(
+            (node) =>
+              node instanceof Element &&
+              (node.matches(".chat-virtual-row") || node.querySelector(".chat-virtual-row")),
+          ),
+        )
+      ) {
+        windows.push(
+          [...document.querySelectorAll<HTMLElement>(".chat-virtual-row")].map((row) =>
+            Number(row.dataset.index),
+          ),
+        );
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      const { viewport } = await mountPane(
+        offset === null,
+        rowHeight,
+        {
+          read: cachedHeight,
+          readRows: () => {
+            const layout = expectDefined(pane?.session, "mounted transcript session").layout;
+            return Object.fromEntries(
+              layout.rows.flatMap((_, index) => {
+                const key = layout["rowLayoutKey"](index);
+                return key && cachedHeight(key) ? [[key, rowHeight]] : [];
+              }),
+            );
+          },
+          write: () => {},
+          writeRows: () => {},
+          invalidateRow: () => {},
+        },
+        offset ?? 0,
+      );
+      expect(
+        windows.filter((rows) => rows.length > 0).length,
+        JSON.stringify(windows),
+      ).toBeLessThanOrEqual(2);
+      expect(windows.at(-1)).toEqual(expected);
+      if (offset === null) {
+        expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBe(0);
+      } else {
+        expect(viewport.scrollTop).toBe(offset);
+      }
+    } finally {
+      observer.disconnect();
+    }
+  },
+);
 
 it.each([120, 360, 1200])(
   "prepares only the tail window while initial %ipx rows settle",

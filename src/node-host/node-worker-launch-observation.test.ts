@@ -1,7 +1,8 @@
 import { PassThrough } from "node:stream";
 import { finished } from "node:stream/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createAwaitedDecodedOutput, onDecodedOutput } from "../process/decoded-output.js";
 import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
 import type {
@@ -163,9 +164,7 @@ describe("node worker output framing", () => {
     await harness.stopped;
     await expect(harness.drainOutput()).rejects.toBe(failure);
     // Rejection handlers must settle before checking that child exit still owns completion.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     expect(harness.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
     expect(settled).not.toHaveBeenCalled();
     harness.completeExit();
@@ -222,26 +221,22 @@ describe("node worker output framing", () => {
   it.each([false, true])(
     "fences late frames after wait failure (accepted write: %s)",
     async (acceptedWrite) => {
-      const resultStarted = createDeferred();
-      const resultFinished = createDeferred();
+      const resultGate = createEnteredGate();
       const harness = observationHarness({
-        onFinish: () => resultFinished.resolve(),
-        onResult: async () => {
-          resultStarted.resolve();
-          await resultFinished.promise;
-        },
+        onFinish: () => resultGate.release(),
+        onResult: resultGate.wait,
       });
       const settled = vi.fn();
       void harness.outcome.then(settled);
       if (acceptedWrite) {
         await harness.send(Buffer.concat([encodeResult("first"), encodeResult("late")]));
-        await resultStarted.promise;
+        await resultGate.entered;
       }
       harness.failWait(new Error("worker wait failed"));
       if (acceptedWrite) {
         await Promise.resolve();
         expect(settled).not.toHaveBeenCalled();
-        resultFinished.resolve();
+        resultGate.release();
       }
       expect(await harness.outcome).toMatchObject({ state: "failed" });
       if (!acceptedWrite) {

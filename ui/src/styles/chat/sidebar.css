@@ -67,12 +67,20 @@
   inset: 0 var(--chat-thread-gutter) auto;
   height: 24px;
   pointer-events: none;
+  /* Panes that tint their backdrop (Incognito) hand in the tint so the blend
+     matches it; resolved here, where the pane surface is defined. */
+  --chat-header-blend-color: color-mix(
+    in srgb,
+    var(--chat-header-tint, transparent) var(--chat-header-tint-strength, 0%),
+    var(--chat-surface)
+  );
+
   background: linear-gradient(
     to bottom,
-    var(--chat-surface) 2px,
-    color-mix(in srgb, var(--chat-surface) 88%, transparent) 25%,
-    color-mix(in srgb, var(--chat-surface) 50%, transparent) 50%,
-    color-mix(in srgb, var(--chat-surface) 12%, transparent) 75%,
+    var(--chat-header-blend-color) 2px,
+    color-mix(in srgb, var(--chat-header-blend-color) 88%, transparent) 25%,
+    color-mix(in srgb, var(--chat-header-blend-color) 50%, transparent) 50%,
+    color-mix(in srgb, var(--chat-header-blend-color) 12%, transparent) 75%,
     transparent
   );
 }
@@ -411,9 +419,6 @@
   .skeleton {
     color: transparent;
     background: var(--skeleton-base, var(--bg-muted));
-  }
-  .skeleton::after {
-    opacity: 0.35;
   }
 }
 

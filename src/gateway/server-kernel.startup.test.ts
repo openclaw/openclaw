@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { resolveCronStoreKeyAsync } from "../cron/store/paths.js";
 import { getPairedDevice, withPairedDeviceRecords } from "../infra/device-pairing.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -168,26 +169,26 @@ it("refreshes health from the cron partition currently published by the kernel",
     });
     kernel = await fixture.open();
     const previous = kernel.runtimeState.cronState;
+    const firstPartition = await resolveCronStoreKeyAsync(previous.storePath);
     const secondPartition = state.statePath("health-second-partition.json");
     reads.mockClear();
     const partitions = () =>
       reads.mock.calls.flatMap(([, command]) =>
-        command.type === "automationProactive.jobs" ? [command.input.storePath] : [],
+        command.type === "automationProactive.jobs" ? [command.input.storeKey] : [],
       );
-
-    await kernel.gatewayRequestContext.refreshHealthSnapshot({
-      probe: false,
-      includeSensitive: true,
-    });
-    expect(partitions()).toEqual([previous.storePath]);
+    const { gatewayRequestContext } = kernel;
+    const refresh = () =>
+      gatewayRequestContext.refreshHealthSnapshot({
+        probe: false,
+        includeSensitive: true,
+      });
+    await refresh();
+    expect(partitions()).toEqual([firstPartition]);
 
     await previous.cron.start();
     reads.mockClear();
     for (let index = 0; index < 2; index += 1) {
-      await kernel.gatewayRequestContext.refreshHealthSnapshot({
-        probe: false,
-        includeSensitive: true,
-      });
+      await refresh();
     }
     expect(partitions()).toEqual([]);
 
@@ -198,10 +199,7 @@ it("refreshes health from the cron partition currently published by the kernel",
       readHeartbeatSummary: undefined,
     });
     try {
-      await kernel.gatewayRequestContext.refreshHealthSnapshot({
-        probe: false,
-        includeSensitive: true,
-      });
+      await refresh();
       expect(partitions()).toEqual([secondPartition]);
     } finally {
       kernel.kernel.swapCronState(previous);

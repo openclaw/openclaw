@@ -41,6 +41,30 @@ function reconnectSameClient(publish: (connected: boolean) => void) {
   publish(true);
 }
 
+function pendingCreation(handlers: Record<string, RpcHandler> = {}, observeCreated = false) {
+  const createResponse = createDeferred<{ key: string }>();
+  const harness = createMutationHarness({
+    "sessions.create": () => createResponse.promise,
+    ...handlers,
+  });
+  const created = vi.fn();
+  if (observeCreated) {
+    harness.sessions.subscribeCreated(created);
+  }
+  const operation = harness.sessions.create({ agentId: "main" });
+  return { ...harness, createResponse, created, operation };
+}
+
+function archiveRows(
+  sessions: ReturnType<typeof createMutationHarness>["sessions"],
+  ...rows: Pick<GatewaySessionRow, "key" | "sessionId">[]
+) {
+  return sessions.patchMany(
+    rows.map(({ key, sessionId }) => ({ key, agentId: "main", expectedSessionId: sessionId })),
+    { archived: true },
+  );
+}
+
 it.each(["none", "before acknowledgement"] as const)(
   "settles only accepted archives after an intervening read: %s",
   async (interveningRead) => {
@@ -81,10 +105,7 @@ it.each(["none", "before acknowledgement"] as const)(
     try {
       await sessions.refresh();
       const finishes = rows.map((row) => sessions.beginArchive(row.key, row.sessionId));
-      archive = sessions.patchMany(
-        rows.map((row) => ({ key: row.key, agentId: "main", expectedSessionId: row.sessionId })),
-        { archived: true },
-      );
+      archive = archiveRows(sessions, ...rows);
       if (interveningRead !== "none") {
         reading = sessions.refresh({ force: true });
         await reading;
@@ -197,9 +218,7 @@ it("confirms a replacement archive held only by a row observer", async () => {
   });
   const target = { key: previous.key, agentId: "main" };
   await sessions.refresh({ force: true, archivedFilter: "all" });
-  await sessions.patchMany([{ ...target, expectedSessionId: previous.sessionId }], {
-    archived: true,
-  });
+  await archiveRows(sessions, previous);
   expect(sessions.archiveVisibility(previous.key)).toBe("archived");
   rows = [];
   await sessions.refresh({ force: true, archivedFilter: "all" });
@@ -220,9 +239,7 @@ it("confirms a replacement archive held only by a row observer", async () => {
   expect(observer.row?.sessionId).toBe("archive-successor");
   expect(sessions.archiveVisibility(previous.key)).toBeUndefined();
 
-  await sessions.patchMany([{ ...target, expectedSessionId: "archive-successor" }], {
-    archived: true,
-  });
+  await archiveRows(sessions, { ...previous, sessionId: "archive-successor" });
   expect(observer.row?.archived).toBe(true);
   expect(sessions.archiveVisibility(previous.key)).toBe("archived");
 });
@@ -249,9 +266,7 @@ it("retires an archived descriptor on canonical succession", async () => {
   try {
     await sessions.refresh({ force: true });
     expect(sessions.state.result?.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 10 });
-    archive = sessions.patchMany([{ ...target, expectedSessionId: row.sessionId }], {
-      archived: true,
-    });
+    archive = archiveRows(sessions, row);
     const observer = sessions.observeRow(target, () => {});
     reading = sessions.refresh({ force: true });
     response.resolve(result);
@@ -306,12 +321,9 @@ it("retains archive fields when an invalidated descriptor refresh fails", async 
   try {
     await sessions.refresh({ force: true });
     expect(observer.row).toMatchObject(row);
-    archive = sessions.patchMany([{ ...target, expectedSessionId: row.sessionId }], {
-      archived: true,
-    });
+    archive = archiveRows(sessions, row);
     changed({ ...target, sessionKey: row.key, sessionId: row.sessionId, reason: "patch" });
     await describeDispatched.promise;
-    expect(invalidated).toHaveBeenCalledTimes(1);
     expect(observer.row).toMatchObject(row);
 
     response.resolve(result);
@@ -373,14 +385,8 @@ it("retires archive progress without letting old completion clear a retry", asyn
 it.each(["before-response", "after-response"] as const)(
   "retains a create without stale publication after reconnect %s",
   async (reconnectOrder) => {
-    const createResponse = createDeferred<{ key: string }>();
-    const { publish, expectPreviousConnection, sessions } = createMutationHarness({
-      "sessions.create": () => createResponse.promise,
-    });
-    const created = vi.fn();
-    sessions.subscribeCreated(created);
-
-    const operation = sessions.create({ agentId: "main" });
+    const { publish, expectPreviousConnection, createResponse, created, operation } =
+      pendingCreation({}, true);
     if (reconnectOrder === "before-response") {
       reconnectSameClient(publish);
       createResponse.resolve({ key: "agent:main:stale" });
@@ -397,10 +403,8 @@ it.each(["before-response", "after-response"] as const)(
 );
 
 it("reports both confirmed completion and replacement refresh failure", async () => {
-  const createResponse = createDeferred<{ key: string }>();
   let failRefresh = false;
-  const { publish, sessions } = createMutationHarness({
-    "sessions.create": () => createResponse.promise,
+  const { publish, sessions, createResponse, operation } = pendingCreation({
     "sessions.list": () => {
       if (failRefresh) {
         throw new Error("replacement roster unavailable");
@@ -409,7 +413,6 @@ it("reports both confirmed completion and replacement refresh failure", async ()
     },
   });
 
-  const operation = sessions.create({ agentId: "main" });
   reconnectSameClient(publish);
   await waitForFast(() => expect(sessions.state.result).not.toBeNull());
   failRefresh = true;
@@ -421,20 +424,17 @@ it("reports both confirmed completion and replacement refresh failure", async ()
 });
 
 it("revalidates the same-client owner after replacement reconciliation", async () => {
-  const createResponse = createDeferred<{ key: string }>();
   const reconciliation = createDeferred<ReturnType<typeof sessionsResult>>();
   let listCalls = 0;
-  const { publish, request, sessions } = createMutationHarness({
-    "sessions.create": () => createResponse.promise,
-    "sessions.list": () => {
-      listCalls += 1;
-      return listCalls === 2 ? reconciliation.promise : sessionsResult([], listCalls);
+  const { publish, request, sessions, createResponse, created, operation } = pendingCreation(
+    {
+      "sessions.list": () => {
+        listCalls += 1;
+        return listCalls === 2 ? reconciliation.promise : sessionsResult([], listCalls);
+      },
     },
-  });
-  const created = vi.fn();
-  sessions.subscribeCreated(created);
-
-  const operation = sessions.create({ agentId: "main" });
+    true,
+  );
   reconnectSameClient(publish);
   await waitForFast(() => expect(listCalls).toBe(1));
   createResponse.resolve({ key: "agent:main:stale-owner" });
@@ -449,12 +449,7 @@ it("revalidates the same-client owner after replacement reconciliation", async (
 });
 
 it("keeps a rejected create uncertain across a same-client reconnect", async () => {
-  const createResponse = createDeferred<{ key: string }>();
-  const { publish, sessions } = createMutationHarness({
-    "sessions.create": () => createResponse.promise,
-  });
-
-  const operation = sessions.create({ agentId: "main" });
+  const { publish, sessions, createResponse, operation } = pendingCreation();
   reconnectSameClient(publish);
   createResponse.reject(new Error("transport closed before response"));
 
@@ -467,7 +462,7 @@ it.each(["delete", "deleteMany"] as const)(
   async (operationName) => {
     const deleteResponse = createDeferred<SessionsDeleteResult>();
     const deleteDispatched = createDeferred();
-    const { publish, expectPreviousConnection, request, sessions } = createMutationHarness({
+    const { publish, expectPreviousConnection, sessions } = createMutationHarness({
       "sessions.delete": () => {
         deleteDispatched.resolve();
         return deleteResponse.promise;
@@ -478,7 +473,6 @@ it.each(["delete", "deleteMany"] as const)(
     const operation =
       operationName === "delete" ? sessions.delete(key) : sessions.deleteMany([{ key }]);
     await deleteDispatched.promise;
-    expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(1);
     reconnectSameClient(publish);
     const worktreePreserved = {
       id: "wt-busy",

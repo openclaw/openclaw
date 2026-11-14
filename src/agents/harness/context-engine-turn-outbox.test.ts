@@ -454,6 +454,32 @@ describe("context-engine turn outbox", () => {
     });
   });
 
+  it("leaves non-ready session heads queued without spinning or overtaking them", async () => {
+    const commitTurn = createCommitTurn();
+    const { database, enqueue, drain } = outboxFixture(commitTurn, false);
+    for (const sessionId of ["admitted", "accepted"]) {
+      const payload = createPayload(database.path, `${sessionId}:head`, sessionId);
+      enqueueContextEngineTurnIntent({
+        database,
+        engineId: "test",
+        admission: payload.boundary.admission,
+      });
+      if (sessionId === "accepted") {
+        acceptContextEngineTurnIntent({ database, engineId: "test", boundary: payload.boundary });
+      }
+      enqueue(`${sessionId}:tail`, sessionId);
+    }
+    const before = database.db.prepare("SELECT * FROM context_engine_turn_outbox").all();
+    const store = openContextEngineTurnOutboxWorkerStore({ agentId: "main", path: database.path });
+    const read = vi.spyOn(store, "readNextPending");
+
+    expect(await drain({ store })).toEqual({ pending: true });
+
+    expect(read).not.toHaveBeenCalled();
+    expect(commitTurn).not.toHaveBeenCalled();
+    expect(database.db.prepare("SELECT * FROM context_engine_turn_outbox").all()).toEqual(before);
+  });
+
   it("does not let later same-session turns overtake a failed commit", async () => {
     let failFirstTurn = true;
     const commitTurn = vi.fn(async ({ advancementKey }: { advancementKey: string }) => {

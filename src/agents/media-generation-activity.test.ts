@@ -3,12 +3,12 @@ import { rotateAgentRunRegistryLifecycleGeneration } from "../infra/agent-run-re
 import {
   clearGeneratedMediaTaskActivity,
   createMediaGenerationOperation,
-  getActiveMediaGenerationRunCount,
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-  hasPendingGeneratedMediaTaskForSessionKey,
+  getActiveMediaGenerationRunCount as activeCount,
+  getGeneratedMediaTaskIdsForSessionKey as taskIds,
+  hasNewGeneratedMediaTaskForSessionKey as hasNewTask,
+  hasPendingGeneratedMediaTaskForSessionKey as hasPendingTask,
   isMediaGenerationOperationCurrent,
-  listMediaGenerationOperations,
+  listMediaGenerationOperations as listOperations,
   updateMediaGenerationOperation,
 } from "./media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "./media-generation-activity.test-support.js";
@@ -44,40 +44,36 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("native media operation lifetime", () => {
-  it("keeps shared bare session keys agent-scoped and retires stale process ownership", async () => {
-    const before = getGeneratedMediaTaskIdsForSessionKey("shared", "one");
-    for (const agent of ["one", "two"]) {
-      createOperation(agent, "shared", {
-        requesterAgentId: agent,
-        sourceId: "image_generate:synthetic",
-        task: "a synthetic lighthouse",
-      });
-    }
-    expect(listMediaGenerationOperations("shared")).toEqual([]);
-    expect(
-      listMediaGenerationOperations("shared", "one").map((operation) => operation.taskId),
-    ).toEqual(["one"]);
-    expect(getGeneratedMediaTaskIdsForSessionKey("shared", "one")).not.toContain("two");
-    expect(hasNewGeneratedMediaTaskForSessionKey("shared", before, "one")).toBe(true);
-    expect(hasNewGeneratedMediaTaskForSessionKey("shared", before)).toBe(false);
-    const oneAdmissions = getGeneratedMediaTaskIdsForSessionKey("shared", "one");
-    expect(hasNewGeneratedMediaTaskForSessionKey("shared", oneAdmissions, "one")).toBe(false);
-    expect(hasNewGeneratedMediaTaskForSessionKey("shared", oneAdmissions, "two")).toBe(true);
-    expect(getActiveMediaGenerationRunCount()).toBe(2);
-    expect(
-      await findDuplicate("shared", "a synthetic lighthouse", "same-request", "one"),
-    ).toMatchObject({ runId: "one", status: "running" });
-    rotateAgentRunRegistryLifecycleGeneration();
-    expect(isMediaGenerationOperationCurrent("one")).toBe(false);
-    expect(getActiveMediaGenerationRunCount()).toBe(0);
-    expect(listMediaGenerationOperations("shared", "one")).toEqual([]);
-    expect(
-      await findDuplicate("shared", "a synthetic lighthouse", "same-request", "one"),
-    ).toBeUndefined();
-  });
+  it.each(["shared", "agent:one:main"])(
+    "isolates owners and retires stale work for %s",
+    async (key) => {
+      const scoped = key !== "shared";
+      const before = taskIds(key, "one");
+      const one = createOperation("one", key, { requesterAgentId: scoped ? undefined : "one" });
+      const two = createOperation("two", key, { requesterAgentId: "two" });
+      expect(listOperations(key)).toEqual(scoped ? [one] : []);
+      expect(listOperations(key, "one")).toEqual([one]);
+      expect(listOperations(key, "two")).toEqual([two]);
+      expect(Reflect.apply(listOperations, undefined, [key, null])).toEqual(scoped ? [one] : []);
+      expect(taskIds(key, "one")).not.toContain("two");
+      expect(hasNewTask(key, before, "one")).toBe(true);
+      expect(hasNewTask(key, before)).toBe(scoped);
+      const admissions = taskIds(key, "one");
+      expect(hasNewTask(key, admissions, "one")).toBe(false);
+      expect(hasNewTask(key, admissions, "two")).toBe(true);
+      expect(activeCount()).toBe(2);
+      expect(await findDuplicate(key, "draw a tree", "same-request", "one")).toBe(one);
+      rotateAgentRunRegistryLifecycleGeneration();
+      expect(isMediaGenerationOperationCurrent("one")).toBe(false);
+      expect(activeCount()).toBe(0);
+      expect(listOperations(key)).toEqual([]);
+      expect(listOperations(key, "one")).toEqual([]);
+      expect(await findDuplicate(key, "draw a tree", "same-request", "one")).toBeUndefined();
+    },
+  );
   it("blocks duplicate provider work, retains attempt admission after completion, and releases restart custody", async () => {
     const sessionKey = "agent:main:cron:media:run:one";
-    const before = getGeneratedMediaTaskIdsForSessionKey(sessionKey);
+    const before = taskIds(sessionKey);
     const operation = createOperation("image:1", sessionKey);
     expect(
       await findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
@@ -85,13 +81,13 @@ describe("native media operation lifetime", () => {
         agentId: "main",
       }),
     ).toBe(operation);
-    expect(getActiveMediaGenerationRunCount()).toBe(1);
-    expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(true);
+    expect(activeCount()).toBe(1);
+    expect(hasPendingTask(sessionKey)).toBe(true);
     updateMediaGenerationOperation("image:1", { status: "succeeded", endedAt: Date.now() });
     clearGeneratedMediaTaskActivity("image:1");
-    expect(getActiveMediaGenerationRunCount()).toBe(0);
-    expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
-    expect(hasNewGeneratedMediaTaskForSessionKey(sessionKey, before)).toBe(true);
+    expect(activeCount()).toBe(0);
+    expect(hasPendingTask(sessionKey)).toBe(false);
+    expect(hasNewTask(sessionKey, before)).toBe(true);
     expect(await findDuplicate(sessionKey)).toBe(operation);
     expect(
       await findDuplicate(sessionKey, "draw something different", "different-request"),

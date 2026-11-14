@@ -38,7 +38,7 @@ export function prepareDraftSubmission(
   if (!startup && !pendingPlacement) {
     const error = attachmentBatchRejection(attachments, context.gateway.snapshot.hello?.policy);
     if (error !== undefined) {
-      showToast({ message: error });
+      showToast({ severity: "error", message: error });
       return null;
     }
   }
@@ -55,6 +55,9 @@ export function prepareDraftSubmission(
   const client = context.gateway.snapshot.client;
   if (!client || !context.gateway.snapshot.hello) {
     return null;
+  }
+  if (!startup && !pendingPlacement) {
+    place.modelControl.initializeAccessProgram();
   }
   const completeInBackground = prepareBackgroundSessionCompletion({
     enabled: background,

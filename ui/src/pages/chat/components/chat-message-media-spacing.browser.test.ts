@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { en } from "../../../i18n/locales/en.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { managedSource } from "./chat-message-media.test-helpers.ts";
 import { createGroupedMessageHarness } from "./chat-message-native.test-support.tsx";
 import baseCss from "../../../styles/base.css?inline";

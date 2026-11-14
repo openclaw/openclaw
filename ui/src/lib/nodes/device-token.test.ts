@@ -40,21 +40,21 @@ function deferIdentityFingerprint() {
 const tokenParams = { deviceId: "00", gatewayUrl: "wss://gateway.test", role: "operator" };
 
 // Keep all required fields so malformed cases fail at the intended validation boundary.
-const rotationResult = {
+const grant = {
   deviceId: tokenParams.deviceId,
   role: tokenParams.role,
   scopes: [],
   rotatedAtMs: 1_700_000_000_000,
 };
 
-function storedTokenKey(): string {
+function seedTokenStore(tokens: unknown) {
   const key = Array.from({ length: localStorage.length }, (_, index) =>
     localStorage.key(index),
   ).find((candidate) => candidate?.startsWith("openclaw.device.auth.v1:"));
   if (!key) {
     throw new Error("missing device-auth test storage key");
   }
-  return key;
+  localStorage.setItem(key, JSON.stringify({ version: 1, deviceId: "00", tokens }));
 }
 
 function storeToken(overrides: Partial<Parameters<typeof storeDeviceAuthToken>[0]> = {}) {
@@ -64,10 +64,6 @@ function storeToken(overrides: Partial<Parameters<typeof storeDeviceAuthToken>[0
     scopes: ["operator.read"],
     ...overrides,
   });
-}
-
-function seedTokenStore(tokens: unknown) {
-  localStorage.setItem(storedTokenKey(), JSON.stringify({ version: 1, deviceId: "00", tokens }));
 }
 
 beforeEach(() => {
@@ -88,111 +84,94 @@ describe("current browser device token", () => {
     expect(loadCurrentDeviceAuthToken(gatewayUrl)).toBe("first-token");
   });
 
-  it.each([null, "another-device"])(
-    "rejects an old device credential when the current identity is %s",
-    (deviceId) => {
-      if (deviceId) {
-        storeIdentity(deviceId);
-      }
-      storeToken({ token: "old-token" });
-      expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBeNull();
-    },
-  );
-
-  it("rejects a credential that cannot read private content", () => {
-    storeIdentity();
-    storeToken({ token: "approval-only-token", scopes: ["operator.approvals"] });
+  it.each([
+    [null, ["operator.read"]],
+    ["another-device", ["operator.read"]],
+    ["00", ["operator.approvals"]],
+  ] as const)("rejects unreadable credentials for identity %s with scopes %j", (id, scopes) => {
+    if (id) {
+      storeIdentity(id);
+    }
+    storeToken({ scopes: [...scopes] });
     expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBeNull();
   });
 });
 
-describe("peekStoredDeviceIdentityId", () => {
-  it("reads the stored device id without minting or fingerprint-verifying an identity", () => {
-    // A hanging digest catches accidental verification on the synchronous render path.
-    const { digestMock } = deferIdentityFingerprint();
-    storeIdentity();
-    expect(peekStoredDeviceIdentityId()).toBe("00");
-    expect(digestMock).not.toHaveBeenCalled();
-    expect(localStorage.length).toBe(1);
-  });
-
-  it.each([
-    { name: "no stored identity", raw: null },
-    { name: "malformed JSON", raw: "{not-json" },
-    { name: "unsupported version", raw: JSON.stringify({ version: 2, deviceId: "00" }) },
-    { name: "missing device id", raw: JSON.stringify({ version: 1 }) },
-  ])("returns null for $name without creating one", ({ raw }) => {
-    if (raw !== null) {
-      localStorage.setItem("openclaw-device-identity-v1", raw);
-    }
-    const before = localStorage.length;
-    expect(peekStoredDeviceIdentityId()).toBeNull();
-    expect(localStorage.length).toBe(before);
-  });
+it("reads the stored device id without minting or fingerprint-verifying an identity", () => {
+  // A hanging digest catches accidental verification on the synchronous render path.
+  const { digestMock } = deferIdentityFingerprint();
+  storeIdentity();
+  expect(peekStoredDeviceIdentityId()).toBe("00");
+  expect(digestMock).not.toHaveBeenCalled();
+  expect(localStorage.length).toBe(1);
 });
 
+it.each([
+  { name: "no stored identity", raw: null },
+  { name: "malformed JSON", raw: "{not-json" },
+  { name: "unsupported version", raw: JSON.stringify({ version: 2, deviceId: "00" }) },
+  { name: "missing device id", raw: JSON.stringify({ version: 1 }) },
+])("returns no stored identity for $name without creating one", ({ raw }) => {
+  if (raw !== null) {
+    localStorage.setItem("openclaw-device-identity-v1", raw);
+  }
+  const before = localStorage.length;
+  expect(peekStoredDeviceIdentityId()).toBeNull();
+  expect(localStorage.length).toBe(before);
+});
 describe("device token request lifecycle", () => {
   // Rotation kills the previous token, so reconnects must not discard its replacement.
-  it("persists a rotate response after its request epoch retires before success", async () => {
-    storeIdentity();
-    const { digest, digestMock } = deferIdentityFingerprint();
-    const response = deferred<unknown>();
-    const state = createState(() => response.promise);
-    const operation = rotateDeviceToken(state, tokenParams);
-    state.requestGeneration += 1;
-    response.resolve({ token: "rotated-token", tokenDelivery: "in-band", ...rotationResult });
-    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
-    digest.resolve(new Uint8Array([0]).buffer);
-    expect(await operation).toEqual({ delivery: "in-band", token: "rotated-token" });
-    expect(loadDeviceAuthToken(tokenParams)?.token).toBe("rotated-token");
-  });
-  it("reports a cross-device rotation the Gateway withheld the token for", async () => {
-    const state = createState(async () => ({
-      ...rotationResult,
-      deviceId: " 00 ",
-      role: "operator ",
-      tokenDelivery: "withheld-cross-device",
-    }));
-    expect(await rotateDeviceToken(state, tokenParams)).toEqual({
-      delivery: "withheld-cross-device",
-    });
-    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
-  });
-
-  it("classifies a rotate response from a Gateway that omits tokenDelivery", async () => {
-    storeIdentity();
-    const { digest, digestMock } = deferIdentityFingerprint();
-    const state = createState(async () => ({ token: "legacy-token", ...rotationResult }));
-    const operation = rotateDeviceToken(state, tokenParams);
-    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
-    state.requestGeneration += 1;
-    digest.resolve(new Uint8Array([0]).buffer);
-    expect(await operation).toEqual({ delivery: "in-band", token: "legacy-token" });
-  });
-
-  it("classifies a tokenless response from a Gateway that omits tokenDelivery", async () => {
-    const state = createState(async () => ({ ...rotationResult }));
-    expect(await rotateDeviceToken(state, tokenParams)).toEqual({
-      delivery: "withheld-cross-device",
-    });
-  });
+  it.each(["before RPC success", "during fingerprinting"])(
+    "persists rotation retired %s",
+    async (stage) => {
+      storeIdentity();
+      const { digest, digestMock } = deferIdentityFingerprint();
+      const response = deferred<unknown>();
+      const state = createState(() => response.promise);
+      const operation = rotateDeviceToken(state, tokenParams);
+      if (stage === "before RPC success") {
+        state.requestGeneration += 1;
+      }
+      response.resolve({
+        token: "rotated-token",
+        ...(stage === "before RPC success" ? { tokenDelivery: "in-band" } : {}),
+        ...grant,
+      });
+      await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+      if (stage === "during fingerprinting") {
+        state.requestGeneration += 1;
+      }
+      digest.resolve(new Uint8Array([0]).buffer);
+      expect(await operation).toEqual({ delivery: "in-band", token: "rotated-token" });
+      expect(loadDeviceAuthToken(tokenParams)?.token).toBe("rotated-token");
+    },
+  );
+  it.each(["withheld-cross-device", undefined])(
+    "reports a withheld token with delivery %s",
+    async (tokenDelivery) => {
+      const state = createState(async () => ({
+        ...grant,
+        deviceId: " 00 ",
+        role: "operator ",
+        ...(tokenDelivery === undefined ? {} : { tokenDelivery }),
+      }));
+      expect(await rotateDeviceToken(state, tokenParams)).toEqual({
+        delivery: "withheld-cross-device",
+      });
+      expect(loadDeviceAuthToken(tokenParams)).toBeNull();
+    },
+  );
 
   // Reject contradictory delivery and malformed/mismatched grants before reporting success.
   it.each([
-    ["in-band without a token", { ...rotationResult, tokenDelivery: "in-band" }],
+    ["in-band without a token", { ...grant, tokenDelivery: "in-band" }],
     [
       "withheld with a token",
-      { ...rotationResult, tokenDelivery: "withheld-cross-device", token: "unexpected-token" },
+      { ...grant, tokenDelivery: "withheld-cross-device", token: "unexpected" },
     ],
-    [
-      "unknown delivery",
-      { ...rotationResult, tokenDelivery: "out-of-band", token: "rotated-token" },
-    ],
-    [
-      "withheld with a blank token",
-      { ...rotationResult, tokenDelivery: "withheld-cross-device", token: "" },
-    ],
-    ["a blank token with no delivery field", { ...rotationResult, token: "" }],
+    ["unknown delivery", { ...grant, tokenDelivery: "out-of-band", token: "rotated-token" }],
+    ["withheld blank token", { ...grant, tokenDelivery: "withheld-cross-device", token: "" }],
+    ["a blank token with no delivery field", { ...grant, token: "" }],
     ["a null payload", null],
     ["a scalar payload", "rotated"],
     ["an empty object", {}],
@@ -200,10 +179,10 @@ describe("device token request lifecycle", () => {
     ["a payload naming no role", { deviceId: "00" }],
     ["a payload omitting scopes", { deviceId: "00", role: "operator", rotatedAtMs: 1 }],
     ["a payload omitting rotatedAtMs", { deviceId: "00", role: "operator", scopes: [] }],
-    ["a fractional timestamp", { ...rotationResult, rotatedAtMs: 1.5 }],
-    ["a payload carrying a blank scope", { ...rotationResult, scopes: [""] }],
-    ["a payload naming a different device", { ...rotationResult, deviceId: "01" }],
-    ["a payload naming a different role", { ...rotationResult, role: "viewer" }],
+    ["a fractional timestamp", { ...grant, rotatedAtMs: 1.5 }],
+    ["a payload carrying a blank scope", { ...grant, scopes: [""] }],
+    ["a payload naming a different device", { ...grant, deviceId: "01" }],
+    ["a payload naming a different role", { ...grant, role: "viewer" }],
   ])("refuses %s", async (_label, response) => {
     const state = createState(async () => response);
     expect(await rotateDeviceToken(state, tokenParams)).toBeNull();

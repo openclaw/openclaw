@@ -27,7 +27,7 @@ const otherSessionKey = sessionKey.replace("agent:main:", "agent:other:");
 suite.define(() => {
   const sandbox = useCanvasSandboxFixture();
   it.each(["mission-control-1234567890ab4def8234567890abcdef", "mission-control"])(
-    "restores /dashboard/main/%s before hello",
+    "restores /dashboard/main/%s before the socket opens",
     async (reference) => {
       const delayTranscriptValidation =
         reference === "mission-control-1234567890ab4def8234567890abcdef";
@@ -104,6 +104,7 @@ suite.define(() => {
           await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
           await page.locator(".chat-pane__session-title-text", { hasText: title }).waitFor();
           await gateway.waitForRequest("board.get");
+          await page.locator("[data-panel-skeleton=board] .skeleton").first().waitFor();
           await gateway.resolveDeferred("board.get");
           await page
             .frameLocator(".board-widget__frame")
@@ -188,16 +189,39 @@ suite.define(() => {
             expect(isChatHistoryState(record(saved?.snapshot).historyState)).toBe(true);
           }
           await page.addInitScript(() => {
+            // CSS animations use the document timeline, not Playwright's JavaScript clock.
+            let graceTime = 0;
+            const settleGrace = () => {
+              for (const animation of document.getAnimations()) {
+                const effect = animation.effect;
+                if (
+                  effect instanceof KeyframeEffect &&
+                  effect.target instanceof Element &&
+                  effect.target.closest("openclaw-panel-loading-skeleton") &&
+                  effect.getKeyframes().some((frame) => frame.visibility !== undefined)
+                ) {
+                  animation.pause();
+                  animation.currentTime = graceTime;
+                }
+              }
+            };
+            new MutationObserver(settleGrace).observe(document, { childList: true, subtree: true });
+            Reflect.set(window, "setPanelGraceTime", (value: number) => {
+              graceTime = value;
+              settleGrace();
+            });
             const frames: Array<{
               title: string;
-              welcome: boolean;
+              empty: boolean;
               board: boolean;
+              shimmers: number;
               boardRegion: string | null;
               transcript: boolean;
               transcriptRegion: string | null;
             }> = [];
             Reflect.set(window, "dashboardPaints", frames);
             const observe = () => {
+              settleGrace();
               const pane = document.querySelector(".chat-pane-cache__pane--visible");
               const heading = pane?.querySelector(".chat-pane__session-title-text");
               if (heading) {
@@ -206,8 +230,19 @@ suite.define(() => {
                 const transcript = pane?.querySelector(".chat-thread");
                 frames.push({
                   title: heading.textContent?.trim() ?? "",
-                  welcome: Boolean(pane?.querySelector(".agent-chat__welcome")),
+                  empty: Boolean(pane?.querySelector(".agent-chat__empty")),
                   board: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+                  shimmers: [
+                    ...pane!.querySelectorAll("openclaw-panel-loading-skeleton .skeleton"),
+                  ].filter((node) => {
+                    const box = node.getBoundingClientRect();
+                    return (
+                      node.checkVisibility({ visibilityProperty: true, checkOpacity: true }) &&
+                      box.bottom > 0 &&
+                      box.top < innerHeight &&
+                      box.width > 0
+                    );
+                  }).length,
                   boardRegion:
                     boardSkeleton?.closest("[data-region]")?.getAttribute("data-region") ?? null,
                   transcript:
@@ -229,16 +264,17 @@ suite.define(() => {
           const historyValidator = delayTranscriptValidation
             ? await holdModuleResponse(page, /\/assets\/history-state-[^/]+\.js(?:\?.*)?$/u)
             : undefined;
+          const boardRenderer = delayTranscriptValidation
+            ? await holdModuleResponse(page, /\/assets\/board-view-[^/]+\.js(?:\?.*)?$/u)
+            : undefined;
+          await gateway.setOnline(false);
           reloading = true;
           try {
             await page.goto(`${suite.server.baseUrl}dashboard/main/${reference}`, {
               waitUntil: "domcontentloaded",
             });
-            await gateway.waitForRequest("connect");
             if (historyValidator) {
               await historyValidator.request;
-              // A cached dashboard does not depend on transcript receipt validation.
-              await page.locator(".board-widget__frame").waitFor({ state: "attached" });
               historyValidator.release();
               await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
             }
@@ -248,13 +284,15 @@ suite.define(() => {
               await page.getByText("Synthetic mission briefing.", { exact: true }).isVisible(),
             ).toBe(true);
             expect(await page.locator("[data-panel-skeleton=chat]").count()).toBe(0);
+            await page.evaluate(() => Reflect.get(window, "setPanelGraceTime")(199));
+            expect(await skeleton.locator(".skeleton").first().isVisible()).toBe(false);
             const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
             expect(frames.length).toBeGreaterThan(0);
             for (const frame of frames) {
-              const { transcript, ...layout } = frame;
+              const { transcript, shimmers, ...layout } = frame;
               expect(layout).toEqual({
                 title,
-                welcome: false,
+                empty: false,
                 board: true,
                 boardRegion: "main",
                 transcriptRegion: "side",
@@ -262,8 +300,16 @@ suite.define(() => {
               if (!delayTranscriptValidation) {
                 expect(transcript).toBe(true);
               }
+              expect(shimmers).toBe(0);
+            }
+            if (boardRenderer) {
+              await boardRenderer.request;
+              expect(await page.locator(".board-widget__frame").count()).toBe(0);
+              boardRenderer.release();
             }
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
+            expect(await gateway.getRequests("connect")).toHaveLength(0);
+            await page.locator(".chat-pane__connection-state").waitFor({ state: "visible" });
             const frame = page.locator(".board-widget__frame");
             await frame.waitFor({ state: "attached" });
             const warmFrame = await frame.elementHandle();
@@ -271,6 +317,15 @@ suite.define(() => {
             await documentRequested.promise;
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
             expect(await skeleton.count()).toBe(1);
+            expect(
+              await skeleton
+                .locator(".board-grid")
+                .evaluate((grid) => getComputedStyle(grid).gridAutoRows),
+            ).toBe("56px");
+            if (!delayTranscriptValidation) {
+              await page.evaluate(() => Reflect.get(window, "setPanelGraceTime")(200));
+              expect(await skeleton.locator(".skeleton").first().isVisible()).toBe(true);
+            }
             documentRelease.resolve();
             await page
               .frameLocator(".board-widget__frame")
@@ -278,9 +333,21 @@ suite.define(() => {
               .getByText("All systems ready")
               .waitFor();
             await skeleton.waitFor({ state: "detached" });
+            if (delayTranscriptValidation) {
+              expect(
+                await page.evaluate(() =>
+                  Reflect.get(window, "dashboardPaints").every(
+                    (paint: { shimmers: number }) => paint.shimmers === 0,
+                  ),
+                ),
+              ).toBe(true);
+            }
+            await gateway.setOnline(true);
+            await gateway.waitForRequest("connect");
             await gateway.resolveDeferred("connect");
             await gateway.waitForRequest("board.get");
             await gateway.resolveDeferred("board.get");
+            await page.locator(".chat-pane__connection-state").waitFor({ state: "hidden" });
             await page.evaluate(
               () =>
                 new Promise<void>((resolve) => {
@@ -373,6 +440,7 @@ suite.define(() => {
             }
           } finally {
             historyValidator?.release();
+            boardRenderer?.release();
             documentRelease.resolve();
             configRelease.resolve();
           }

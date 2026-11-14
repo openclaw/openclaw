@@ -25,29 +25,25 @@ const profile = (accountId: number, login: string, name?: string) =>
     authenticationAlias: { kind: "email", email: `${login}@example.test` },
   });
 
-it("keeps legacy creator reads lazy and resolves actors outside the prepared cohort", async () => {
+it("projects lazy, merged and refreshed identities through legacy and prepared readers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const known = profile(201, "known");
-    const unknown = profile(202, "unknown");
-    const actor = { type: "human", source: "profile", id: known.id } as const;
-    const reads = vi.spyOn(nativeProfiles, "getUserProfileDisplaysNative");
-    const project = createActorProjector({ ...sourceScope, actors: [actor] });
+    const primary = profile(101, "primary", "One Person");
+    const secondary = profile(102, "secondary");
+    const primaryActor = { type: "human", source: "profile", id: primary.id } as const;
+    const nativeReads = vi.spyOn(nativeProfiles, "getUserProfileDisplaysNative");
+    const project = createActorProjector({ ...sourceScope, actors: [primaryActor] });
     expect(project(undefined)).toBeUndefined();
     expect(project({ type: "system" })).toEqual({ type: "system" });
-    expect(reads).not.toHaveBeenCalled();
-    expect(project(actor)?.identity).toMatchObject({ idKind: "github-account", id: "201" });
-    expect(project(actor)?.identity).toMatchObject({ idKind: "github-account", id: "201" });
-    expect(reads).toHaveBeenCalledTimes(1);
-    expect(project({ ...actor, id: unknown.id })?.identity).toMatchObject({
+    expect(nativeReads).not.toHaveBeenCalled();
+    expect(project(primaryActor)?.identity).toMatchObject({ idKind: "github-account", id: "101" });
+    expect(project(primaryActor)?.identity).toMatchObject({ idKind: "github-account", id: "101" });
+    expect(nativeReads).toHaveBeenCalledTimes(1);
+    expect(project({ ...primaryActor, id: secondary.id })?.identity).toMatchObject({
       idKind: "github-account",
-      id: "202",
+      id: "102",
     });
-    expect(reads).toHaveBeenCalledTimes(2);
-  });
-});
-
-it("links every verified account to one person while exporting only the primary account", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    expect(nativeReads).toHaveBeenCalledTimes(2);
+    nativeReads.mockRestore();
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const remote = remoteParticipant("remote", "profile");
     const unlinked = await prepareLinker({ participants: [remote] });
@@ -55,8 +51,6 @@ it("links every verified account to one person while exporting only the primary 
     expect(unlinked.resolveOwner("profile:missing")).toBeUndefined();
     expect(reads).not.toHaveBeenCalled();
     reads.mockRestore();
-    const primary = profile(101, "primary", "One Person");
-    const secondary = profile(102, "secondary");
     linkEmail("secondary@example.test", primary.id);
     const linkedIdentity = { type: "profile", id: primary.id };
     const linker = createLinker();
@@ -78,8 +72,10 @@ it("links every verified account to one person while exporting only the primary 
     expect(portable(actor)?.identity).toMatchObject({ idKind: "github-account", id: "101" });
     const senderIdentity = { type: "profile", id: secondary.id } as const;
     const sender = await prepareParticipantProjector([senderIdentity]);
-    const projected = sender.project({ ...sourceScope, identity: senderIdentity });
-    expect(projected.identity).toMatchObject({ idKind: "github-account", id: "101" });
+    expect(sender.project({ ...sourceScope, identity: senderIdentity }).identity).toMatchObject({
+      idKind: "github-account",
+      id: "101",
+    });
     const participants = ["101", "102"].map((id) => remoteParticipant(id));
     const prepared = await prepareLinker({
       participants,
@@ -92,8 +88,8 @@ it("links every verified account to one person while exporting only the primary 
     expect(prepared.resolveOwner("profile:missing")).toBeUndefined();
     hostSql.mockRestore();
 
-    const foreign = openNodeSqliteDatabase(database.path);
-    try {
+    {
+      using foreign = openNodeSqliteDatabase(database.path);
       foreign
         .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
         .run("Changed Person", primary.id);
@@ -102,8 +98,6 @@ it("links every verified account to one person while exporting only the primary 
           "UPDATE user_profile_identities SET canonical_login = ? WHERE provider = 'github' AND subject = '102'",
         )
         .run("renamed-secondary");
-    } finally {
-      foreign.close();
     }
     const next = await prepareActorProjector(source);
     expect(next(actor)?.label).toBe("Changed Person");

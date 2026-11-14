@@ -91,7 +91,7 @@ async function runManagedRepair(
     const interactive = outcome.startsWith("interactive-");
     const declined = outcome === "interactive-declined";
     const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");
-    const archiveVerification = outcome === "archive-verification";
+    const archiveVerification = is("archive-verification", "update-parent-stopped");
     const current = clean || archiveVerification;
     const inspectionOnly = outcome === "clean-force-inspect";
     const force = outcome.startsWith("clean-force-");
@@ -249,7 +249,8 @@ async function runManagedRepair(
       }),
       readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
       isLoaded: async () => running,
-      isEnabled: async () => running,
+      // Stopping the process leaves the native autostart policy unchanged.
+      isEnabled: async () => true,
       stop,
       start,
       restart,
@@ -292,7 +293,14 @@ async function runManagedRepair(
             doctorOnlyStateMigrations: true,
           }),
         });
-        expect(approvals.warnings.length > 0).toBe(approvalsBlocked);
+        expect(approvals.warnings.length > 0, JSON.stringify(approvals)).toBe(approvalsBlocked);
+        if (approvalsBlocked) {
+          expect(approvals.warnings.join("\n")).toContain(
+            outcome === "approvals-malformed"
+              ? "Invalid legacy exec approvals"
+              : "Conflicting legacy exec approvals remain",
+          );
+        }
         await collectSecurityWarnings(ctx.cfg, state.env);
       }
       if (is("ready", "interactive-ready", "store-close-failed")) {
@@ -448,6 +456,9 @@ async function runManagedRepair(
       }
       if (modernUpdate) {
         expect(events.filter((event) => event !== "repair")).toEqual([]);
+        if (archiveTransform) {
+          expect(archiveTransform).not.toHaveBeenCalled();
+        }
         expectUnchanged();
         return;
       }

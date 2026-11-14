@@ -17,6 +17,7 @@ import {
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
 import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
+import { createSqliteSnapshotStagingDirectorySync } from "./sqlite-snapshot-staging.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 const MIB = 1024 * 1024;
@@ -209,7 +210,7 @@ it("rejects a changed main image beside an empty WAL", () => {
 
   expect(() =>
     prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot),
-  ).toThrow(/did not stabilize/);
+  ).toThrow(/reason=main-changed-during-copy, attempts=10/);
   expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
 });
 
@@ -426,9 +427,7 @@ it.each(["raw-copy", "online-backup"] as const)(
     expect(error).toBeInstanceOf(AggregateError);
     expect(error).toMatchObject({
       message: expect.stringContaining(
-        mode === "raw-copy"
-          ? "SQLite journal state changed while copying"
-          : "SQLite destination is read-only",
+        mode === "raw-copy" ? "reason=journal-state-changed" : "SQLite destination is read-only",
       ),
     });
     if (!(error instanceof AggregateError)) {
@@ -739,7 +738,7 @@ it.each(["source replacement", "cancel", "io-error"])(
       await expect(result).rejects.toBe(error);
     } else {
       await expect(result).rejects.toThrow(
-        failure === "io-error" ? /EIO/u : "SQLite source changed while copying",
+        failure === "io-error" ? /EIO/u : "reason=source-identity-changed",
       );
     }
     expect(copies).toBe(failure === "source replacement" ? MAX_SNAPSHOT_ATTEMPTS : 1);
@@ -753,6 +752,9 @@ it.each(["overwrite", "transient missing pathname"] as const)(
     const bytes = patternedBytes(change === "overwrite" ? MIB : 4099);
     const fixture = createFixture(bytes);
     if (change === "overwrite") {
+      const directory = createSqliteSnapshotStagingDirectorySync(fixture.stagingRoot);
+      fixture.prepare = () =>
+        prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, { directory });
       const after = Buffer.from(bytes);
       after.writeUInt8(after.readUInt8(after.length - 1) ^ 0xff, after.length - 1);
       const injected = afterFirstCopy(() => fs.writeFileSync(fixture.sourcePath, after));

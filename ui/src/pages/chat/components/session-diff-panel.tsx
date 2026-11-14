@@ -16,7 +16,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../styles/chat/session-diff-mobile.css";
 import "../../../styles/session-panel-rail.css";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import "../../../components/tooltip.ts";
 import {
   expandSessionDiffGap,
@@ -52,7 +52,7 @@ import { createSessionDiffPanelFrame, SessionDiffNativeGaps } from "./session-di
 import { SessionDiffSyncMobile } from "./session-diff-sync-mobile.tsx";
 import type { DiffValue, FileSource, FileView } from "./session-diff-types.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 const shellArgument = (value: string) =>
   /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;

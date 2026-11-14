@@ -49,14 +49,18 @@ vi.mock(
               let started = false;
               return originalRun({
                 ...params,
-                withWriteAdmission: (admit, diagnostics) =>
-                  params.withWriteAdmission(async (refusal) => {
-                    if (params.plan.kind === "entry" && !started) {
-                      started = true;
-                      checkpoint.startForeground?.();
-                    }
-                    return admit(refusal);
-                  }, diagnostics),
+                withWriteAdmission: (admit, diagnostics, operation) =>
+                  params.withWriteAdmission(
+                    async (refusal) => {
+                      if (params.plan.kind === "entry" && !started) {
+                        started = true;
+                        checkpoint.startForeground?.();
+                      }
+                      return admit(refusal);
+                    },
+                    diagnostics,
+                    operation,
+                  ),
               });
             });
             try {

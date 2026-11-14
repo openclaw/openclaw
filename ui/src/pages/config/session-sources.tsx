@@ -64,7 +64,6 @@ export function SessionSources(
           </a>
         ) : null}
       </div>
-      <p class="settings-section__desc">{t("configView.sessionSources.hint")}</p>
       <ConfigReadStatus config={props} />
       {props.configLoaded ? (
         <Errored
@@ -93,54 +92,63 @@ export function SessionSources(
           fallback={<p class="settings-section__desc">{t("common.loading")}</p>}
         >
           {sources().length ? (
-            <div class="settings-group">
-              <For each={sources()} keyed={(source) => source.pluginId}>
-                {(source) => {
-                  const preference = () =>
-                    asNullableRecord(
+            <>
+              <p class="settings-section__desc">{t("configView.sessionSources.hint")}</p>
+              <div class="settings-group">
+                <For each={sources()} keyed={(source) => source.pluginId}>
+                  {(source) => {
+                    const preference = () =>
                       asNullableRecord(
-                        pluginEntryValue(props.formValue, source().pluginId).config,
-                      )?.[source().key],
-                    )?.enabled;
-                  return (
-                    <SettingsToggleRow
-                      icon={
-                        <ProviderBrandIcon provider={source().icon} class="session-source__icon" />
-                      }
-                      title={t(source().labelKey)}
-                      description={
-                        source().enabledSchema
-                          ? t("configView.sessionSources.sourceHint", { plugin: source().plugin })
-                          : t(
-                              props.schemaLoading
-                                ? "common.loading"
-                                : "configView.sessionSources.unavailable",
-                            )
-                      }
-                      checked={
-                        typeof preference() === "boolean"
-                          ? preference() === true
-                          : source().enabledSchema?.default === true
-                      }
-                      disabled={disabled() || !source().enabledSchema}
-                      onChange={(enabled) =>
-                        props.onFormPatch(
-                          [
-                            "plugins",
-                            "entries",
-                            source().pluginId,
-                            "config",
-                            source().key,
-                            "enabled",
-                          ],
-                          enabled,
-                        )
-                      }
-                    />
-                  );
-                }}
-              </For>
-            </div>
+                        asNullableRecord(
+                          pluginEntryValue(props.formValue, source().pluginId).config,
+                        )?.[source().key],
+                      )?.enabled;
+                    return (
+                      <SettingsToggleRow
+                        icon={
+                          <ProviderBrandIcon
+                            provider={source().icon}
+                            class="session-source__icon"
+                          />
+                        }
+                        title={t(source().labelKey)}
+                        description={
+                          source().enabledSchema
+                            ? t("configView.sessionSources.sourceHint", { plugin: source().plugin })
+                            : t(
+                                props.schemaLoading
+                                  ? "common.loading"
+                                  : "configView.sessionSources.unavailable",
+                              )
+                        }
+                        checked={
+                          typeof preference() === "boolean"
+                            ? preference() === true
+                            : source().enabledSchema?.default === true
+                        }
+                        disabled={disabled() || !source().enabledSchema}
+                        onChange={(enabled) =>
+                          props.onFormPatch(
+                            [
+                              "plugins",
+                              "entries",
+                              source().pluginId,
+                              "config",
+                              source().key,
+                              "enabled",
+                            ],
+                            enabled,
+                          )
+                        }
+                      />
+                    );
+                  }}
+                </For>
+              </div>
+              <p class="settings-section__desc settings-section__scope">
+                {t("configView.sessionSources.scope")}
+              </p>
+            </>
           ) : (
             <p class="settings-section__desc">
               {t(
@@ -154,7 +162,6 @@ export function SessionSources(
           )}
         </Loading>
       </Errored>
-      <p class="settings-section__desc">{t("configView.sessionSources.scope")}</p>
     </section>
   );
 }

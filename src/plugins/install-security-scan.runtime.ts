@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -53,10 +53,10 @@ type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install
 
 function formatInstallPolicyFinding(finding: InstallPolicyFinding): string {
   const location = finding.file
-    ? ` (${sanitizeTerminalText(finding.file)}${finding.line ? `:${finding.line}` : ""})`
+    ? ` (${finding.file}${finding.line ? `:${finding.line}` : ""})`
     : "";
-  const evidence = finding.evidence ? ` Evidence: ${sanitizeTerminalText(finding.evidence)}` : "";
-  return `[${finding.severity.toUpperCase()}] ${sanitizeTerminalText(finding.ruleId)}: ${sanitizeTerminalText(finding.message)}${location}${evidence}`;
+  const evidence = finding.evidence ? ` Evidence: ${finding.evidence}` : "";
+  return terminalText`[${finding.severity.toUpperCase()}] ${finding.ruleId}: ${finding.message}${location}${evidence}`;
 }
 
 function formatInstallPolicyNotice(params: {
@@ -71,8 +71,8 @@ function formatInstallPolicyNotice(params: {
   const lines = [
     params.decision === "warn" ? "Install requires approval" : "Install blocked by policy",
     "",
-    `  ${targetLabel}: ${sanitizeTerminalText(params.targetName)}`,
-    `  Reason: ${sanitizeTerminalText(params.reason)}`,
+    terminalText`  ${targetLabel}: ${params.targetName}`,
+    terminalText`  Reason: ${params.reason}`,
   ];
   if (params.findings?.length) {
     lines.push("  Findings:");
@@ -736,7 +736,7 @@ async function warnPluginRuntimeCompatibility(
     }
   } catch (error) {
     logger.warn?.(
-      `Plugin runtime compatibility inspection incomplete: ${sanitizeTerminalText(formatErrorMessage(error))}. Run openclaw plugins lint --root <plugin-directory> for details.`,
+      terminalText`Plugin runtime compatibility inspection incomplete: ${formatErrorMessage(error)}. Run openclaw plugins lint --root <plugin-directory> for details.`,
     );
   }
 }

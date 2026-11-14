@@ -25,6 +25,7 @@ import {
   writePackedTarballInstallManifest as writeInstallManifest,
 } from "../../scripts/release-check.ts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { writeFixtureFiles as writeFiles } from "./z0632-fixtures.test-support.js";
 
 const it = createCommandTest();
 const workerMissing = "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing.";
@@ -51,13 +52,6 @@ function writeTarballs(root: string, names: string[], version: string) {
   return files.map((file) => join(root, file));
 }
 const workerContractPath = "src/shared/worker-bundle-hash.ts";
-function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, contents] of Object.entries(files)) {
-    const destination = join(root, name);
-    mkdirSync(dirname(destination), { recursive: true });
-    writeFileSync(destination, contents);
-  }
-}
 
 const declareWorker = (name: string, value: string) =>
   `export const WORKER_BUNDLE_${name} = ${value};\n`;

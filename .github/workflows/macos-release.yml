@@ -13,9 +13,8 @@ on:
         default: true
         type: boolean
       public_release_branch:
-        description: Public branch that contains the release tag commit, usually main or release/YYYY.M.PATCH
-        required: false
-        default: main
+        description: Public branch that contains the release tag commit (main or release/YYYY.M.PATCH)
+        required: true
         type: string
 
 concurrency:

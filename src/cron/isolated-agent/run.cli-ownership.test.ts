@@ -72,6 +72,7 @@ describe("cron project: runCronIsolatedAgentTurn CLI ownership", () => {
     };
     harness.runCliAgentMock.mockImplementationOnce(async (params) => {
       expect(params.diagnosticOwner).toMatchObject({ sessionId, generation: expect.anything() });
+      expect(params.inputProvenance).toMatchObject({ kind: "internal_system", sourceTool: "cron" });
       expect(params.abortSignal).toBeInstanceOf(AbortSignal);
       expect(params.abortSignal.aborted).toBe(false);
       expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);

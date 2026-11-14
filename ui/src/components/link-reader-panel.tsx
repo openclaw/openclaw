@@ -453,6 +453,7 @@ function PanelView(
                       void copyToClipboard(href, () => host.isConnected).then((copied) => {
                         if (host.isConnected) {
                           showToast({
+                            severity: copied ? "success" : "error",
                             message: t(copied ? "common.copied" : "common.copyFailed"),
                             anchor: host,
                           });

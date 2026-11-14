@@ -164,7 +164,7 @@ describe("runNodeDaemonInstall", () => {
     vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
     mocks.runExec.mockImplementation(async (executable: string) =>
-      runtimeProbe(/(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.3" : null),
+      runtimeProbe(/(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.4" : null),
     );
     mocks.service.readCommand.mockResolvedValue(null);
     mocks.service.install.mockResolvedValue(undefined);

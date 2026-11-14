@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { LocalMemoryFileWatcher } from "./local-file-watcher.js";
@@ -59,6 +60,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
             } else if (error !== subscription.signal.reason) {
               // Cancellation is expected; a distinct transport retirement failure
               // must survive shutdown instead of being mistaken for a joined worker.
+              materializeErrorStack(error);
               this.remoteWatchCloseFailure = { error };
             }
           },

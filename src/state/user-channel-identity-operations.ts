@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
@@ -284,6 +285,21 @@ export async function prepareUserProfileRolePolicyAuthority(
           githubLogin: profile.githubLogin ?? null,
         }
       );
+    }
+    if (isArtifactPreservingStateRead("shared", source.path)) {
+      const catalog = await prepareUserProfileCatalog({ ...options, path: source.path });
+      try {
+        const profile = catalog.readCurrentAuthority(profileId);
+        return (
+          profile && {
+            profileId: profile.profileId,
+            role: profile.role,
+            githubLogin: profile.githubLogin ?? null,
+          }
+        );
+      } finally {
+        catalog.release();
+      }
     }
     return runOpenClawStateWorkerOperation(
       context,

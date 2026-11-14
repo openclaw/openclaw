@@ -51,8 +51,7 @@ export function getCommandLaneDiagnostics(): {
   lanes: CommandLaneSnapshot[];
   dynamic: DynamicCommandLaneSummary | null;
 } {
-  const lanes = [...STATIC_COMMAND_LANES]
-    .toSorted()
+  const lanes = STATIC_COMMAND_LANES.toSorted()
     .map((lane) => {
       if (lane === CommandLane.Background) {
         return getBackgroundWorkSnapshot();

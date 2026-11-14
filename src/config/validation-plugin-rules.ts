@@ -5,7 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { normalizePluginId } from "../plugins/config-state.js";
+import { isExplicitPluginDisableMarker, normalizePluginId } from "../plugins/config-state.js";
 import {
   findUninspectedPluginDiagnostic,
   pluginDiagnosticToConfigWarning,
@@ -27,6 +27,8 @@ import {
 import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { collectMcpTransportIssues } from "./mcp-config-normalize.js";
+import { projectSkillWorkshopPluginPolicy } from "./skill-workshop-plugin-migration.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
   bundledChannelIds,
@@ -56,6 +58,8 @@ export type ValidateConfigWithPluginsParams = {
   pluginValidation?: "full" | "skip" | "core-only";
   /** Runtime preserves inactive-owner startup; strict mode checks all declared targets for explicit validation and writes. */
   semanticValidation?: "runtime" | "strict";
+  /** Captured source, even during legacy repair; the candidate is validated separately. */
+  mcpTransportBaseline?: OpenClawConfig;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
@@ -77,13 +81,16 @@ type RegistryInfo = {
 };
 
 export function validatePreparedConfigWithPlugins(
-  raw: unknown,
-  parsedConfig: OpenClawConfig,
+  authoredRaw: OpenClawConfig,
+  authoredParsedConfig: OpenClawConfig,
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
   },
 ): ValidateConfigWithPluginsResult {
+  const workshopPolicy = projectSkillWorkshopPluginPolicy(authoredRaw);
+  const raw = workshopPolicy.config;
+  const parsedConfig = projectSkillWorkshopPluginPolicy(authoredParsedConfig).config;
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
     : null;
@@ -103,6 +110,17 @@ export function validatePreparedConfigWithPlugins(
   const ensureSchemaValidations = () =>
     (schemaValidations ??= preparePluginSchemaValidations(ensureLoadedRegistryInfo().registry));
 
+  const warnings = collectMcpTransportIssues(raw, opts.mcpTransportBaseline);
+  if (opts.semanticValidation === "strict" && warnings.length > 0) {
+    return { ok: false, issues: warnings, warnings: [] };
+  }
+  if (workshopPolicy.ignored) {
+    warnings.push({
+      path: "plugins",
+      message:
+        'skill-workshop plugin policy written while Skill Workshop was built in is ignored. Run "openclaw doctor --fix" to remove it.',
+    });
+  }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
         env: opts.env,
@@ -119,11 +137,10 @@ export function validatePreparedConfigWithPlugins(
       })
     : parsedConfig;
   if (opts.pluginValidation === "skip" || opts.pluginValidation === "core-only") {
-    return { ok: true, config, warnings: [] };
+    return { ok: true, config, warnings };
   }
 
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
   const preserveUnavailableConfig = (path: string): boolean => {
     const diagnostic = findUninspectedPluginDiagnostic(
       ensureLoadedRegistryInfo().registry.diagnostics,
@@ -510,15 +527,15 @@ export function validatePreparedConfigWithPlugins(
         if (preserveUnavailableConfig(`channels.${trimmed}`)) {
           continue;
         }
-        const issue = { path: `channels.${trimmed}`, message: `unknown channel id: ${trimmed}` };
-        if (hasStalePluginEvidence(trimmed)) {
-          warnings.push({
-            ...issue,
-            message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
-          });
-        } else {
-          issues.push(issue);
-        }
+        const hint = hasStalePluginEvidence(trimmed)
+          ? "stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin"
+          : isExplicitPluginDisableMarker(config.channels[key])
+            ? "disabled channel marker preserved; install the plugin to validate it"
+            : undefined;
+        (hint ? warnings : issues).push({
+          path: `channels.${trimmed}`,
+          message: `unknown channel id: ${trimmed}${hint ? ` (${hint})` : ""}`,
+        });
         continue;
       }
       if (preserveUnavailableConfig(`channels.${trimmed}`)) {

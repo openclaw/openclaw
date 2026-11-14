@@ -3,7 +3,9 @@ import type {
   ModelCatalogStatus,
   ModelInferenceCapabilities,
 } from "@openclaw/model-catalog-core/model-catalog-types";
-import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { ModelDataMediaInputConfig as ModelMediaInputConfig } from "../../packages/llm-core/src/model-data.js";
+import type { ModelApi } from "../config/model-config-vocabulary.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 

@@ -1,5 +1,5 @@
-import { createServer } from "node:http";
-import type { AddressInfo, Server } from "node:net";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { AssistantMessageEventStreamContract, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -20,22 +20,22 @@ vi.mock("openai/resources/responses/ws.js", async (importOriginal) => {
 });
 
 import { WebSocketServer } from "ws";
+import { listenLoopback } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { createApiRegistry, type ApiStreamFunction } from "../api-registry.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 type Runtime = ReturnType<typeof createNodeLlmRuntime>;
 
 function completedFrame(responseId: string): string {
-  return JSON.stringify({
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output: [
+  return JSON.stringify(
+    completedResponse(
+      responseId,
+      [
         {
           id: `msg_${responseId}`,
           type: "message",
@@ -44,9 +44,9 @@ function completedFrame(responseId: string): string {
           role: "assistant",
         },
       ],
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  });
+      { usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } },
+    ),
+  );
 }
 
 function createRegistry() {
@@ -131,11 +131,7 @@ class LoopbackHttpResponsesServer {
         response.end(`data: ${completedFrame(`http_${this.requests.length}`)}\n\n`);
       });
     });
-    await new Promise<void>((resolve) => {
-      this.server?.listen(0, "127.0.0.1", resolve);
-    });
-    const address = this.server.address() as AddressInfo;
-    return `http://127.0.0.1:${address.port}/v1`;
+    return `${await listenLoopback(this.server)}/v1`;
   }
 
   async close(): Promise<void> {

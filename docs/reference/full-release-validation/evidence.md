@@ -85,6 +85,9 @@ manifest writing, and final validation. Candidate workflows still run every
 selected test; a waiver does not omit a test or change its raw conclusion.
 State, manifest, and summary retain each waived failure and its reason.
 
+The `Kova mock provider performance` leaf can be granted only for an exact
+version the operator named, and only for threshold breaches; retain the report.
+
 Waiver support requires a candidate workflow that routes state operations to
 admitted P. Pre-cutover frozen workflows retain strict validation; changing P
 alone does not retrofit waiver support. Readers still accept the historical empty

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -12,7 +12,7 @@ import { normalizeEmptyPayloadForDelivery } from "./deliver-payload.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 
 const metadata = { precedingInputAnswer: true } as const;
-const voice = { mediaUrl: "https://example.test/voice.ogg", audioAsVoice: true };
+const voice = { text: " \n ", mediaUrl: "https://example.test/voice.ogg", audioAsVoice: true };
 
 describe("outbound preparation metadata", () => {
   it.each([
@@ -27,6 +27,11 @@ describe("outbound preparation metadata", () => {
     const payload: ReplyPayload = spoken ? { ...voice, spokenText: before } : { text: before };
     const expectedPayload = spoken ? { ...voice, text: "", spokenText: after } : { text: after };
     const input = setReplyPayloadMetadata({ ...payload }, metadata);
+    const deliveryInput = spoken ? normalizeEmptyPayloadForDelivery(input) : input;
+    assert(deliveryInput);
+    if (spoken) {
+      expect(deliveryInput).toEqual({ ...payload, text: "" });
+    }
     const send = vi.fn(async () => {
       throw new Error("Preparation must not send to the transport");
     });
@@ -37,12 +42,7 @@ describe("outbound preparation metadata", () => {
         sendText: send,
         sendMedia: send,
         ...(name === "flattened details" ? {} : { preserveMarkdownDetails: () => true }),
-        ...(name.includes("sanitized")
-          ? {
-              sanitizeText: ({ text }: { text: string }) =>
-                name === "unchanged sanitized text" ? text : after,
-            }
-          : {}),
+        ...(name.includes("sanitized") ? { sanitizeText: () => after } : {}),
       },
     });
     const registry = createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]);
@@ -56,54 +56,24 @@ describe("outbound preparation metadata", () => {
     }
     const batch = await withPluginRuntimeRegistryScope(registry, () =>
       prepareOutboundPayloadBatch(
-        { cfg: {}, channel: plugin.id, to: "test-recipient", payloads: [input] },
+        { cfg: {}, channel: plugin.id, to: "test-recipient", payloads: [deliveryInput] },
         { hookRunner: createHookRunner(registry) },
       ),
     );
-    expect(batch).toEqual({
-      schemaVersion: 1,
-      sourcePayloadCount: 1,
-      channelNormalized: true,
-      entries: [
-        {
-          sourceIndex: 0,
-          status: "accepted",
-          payload: expectedPayload,
-          replyHookChanged: false,
-          messageHookChanged: hooked,
-          preparedMediaCount: spoken ? 1 : 0,
-        },
-      ],
-    });
+    expect(batch.entries).toHaveLength(1);
     const entry = batch.entries[0];
-    if (!entry || entry.status !== "accepted") {
-      throw new Error("Expected one accepted payload");
-    }
+    assert(entry?.status === "accepted", "Expected one accepted payload");
+    expect(entry.payload).toEqual(expectedPayload);
     expect(getReplyPayloadMetadata(entry.payload)).toEqual(metadata);
     expect(input).toEqual(payload);
     expect(getReplyPayloadMetadata(input)).toEqual(metadata);
     expect(send).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "normalizes whitespace without losing accepted metadata (media=%s)",
-    (media) => {
-      const input = setReplyPayloadMetadata(
-        { text: " \n ", ...(media ? { mediaUrl: "https://example.test/image.png" } : {}) },
-        metadata,
-      );
-      const result = normalizeEmptyPayloadForDelivery(input);
-      if (media) {
-        expect(result).toEqual({ text: "", mediaUrl: "https://example.test/image.png" });
-        if (!result) {
-          throw new Error("Expected accepted media payload");
-        }
-        expect(getReplyPayloadMetadata(result)).toEqual(metadata);
-      } else {
-        expect(result).toBeNull();
-      }
-      expect(input.text).toBe(" \n ");
-      expect(getReplyPayloadMetadata(input)).toEqual(metadata);
-    },
-  );
+  it("suppresses whitespace-only payloads without mutating the source", () => {
+    const input = setReplyPayloadMetadata({ text: " \n " }, metadata);
+    expect(normalizeEmptyPayloadForDelivery(input)).toBeNull();
+    expect(input.text).toBe(" \n ");
+    expect(getReplyPayloadMetadata(input)).toEqual(metadata);
+  });
 });

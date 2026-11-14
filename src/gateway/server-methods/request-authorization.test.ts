@@ -30,6 +30,7 @@ function createSend(agentId: string, pending: boolean, idempotencyKey = "agent-o
   recordAgentDatabaseAdmissions([refusal], { source: "startup" });
   const startup = {
     hasPendingAgents: pending,
+    isAgentInputRecoveryPending: () => false,
     waitForAgentPreparation: () => {
       throw new Error("Send must not wait for startup preparation");
     },

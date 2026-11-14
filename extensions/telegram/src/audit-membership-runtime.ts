@@ -27,7 +27,7 @@ export async function auditTelegramGroupMembershipImpl(
     const base = `${apiBase}/bot${params.token}`;
     const groups: TelegramGroupMembershipAuditEntry[] = [];
     const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-    const deadlineMs = Date.now() + timeoutMs;
+    const deadlineMs = performance.now() + timeoutMs;
 
     for (const chatId of params.groupIds) {
       const entry: TelegramGroupMembershipAuditEntry = {
@@ -39,7 +39,7 @@ export async function auditTelegramGroupMembershipImpl(
         matchSource: "id",
       };
       groups.push(entry);
-      const requestTimeoutMs = Math.max(0, deadlineMs - Date.now());
+      const requestTimeoutMs = Math.max(0, deadlineMs - performance.now());
       if (requestTimeoutMs === 0) {
         entry.error = `Telegram membership audit timed out after ${timeoutMs}ms`;
         continue;
@@ -47,7 +47,7 @@ export async function auditTelegramGroupMembershipImpl(
       try {
         const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
         const res = await fetchWithTimeout(url, {}, requestTimeoutMs, transport.fetch);
-        const bodyTimeoutMs = Math.max(1, deadlineMs - Date.now());
+        const bodyTimeoutMs = Math.max(1, deadlineMs - performance.now());
         const body = await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
           timeoutMs: bodyTimeoutMs,
           chunkTimeoutMs: bodyTimeoutMs / 2,

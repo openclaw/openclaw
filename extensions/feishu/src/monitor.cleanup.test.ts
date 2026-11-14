@@ -42,18 +42,14 @@ async function startMonitor(accountId: string, ...clients: ReturnType<typeof cre
     },
     async reportError(message: string) {
       const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1];
-      expect(callbacks).toMatchObject({ onError: expect.any(Function) });
       (callbacks as { onError?: (error: Error) => void }).onError?.(new Error(message));
       await vi.advanceTimersByTimeAsync(0);
     },
   };
 }
-function errorMessage(runtime: ReturnType<typeof createRuntimeSpies>, ...fragments: string[]) {
+function errorMessage(runtime: ReturnType<typeof createRuntimeSpies>) {
   const message = String(runtime.error.mock.calls[0]?.[0] ?? "");
-  expect(message).not.toMatch(/\n|token_abc/);
-  for (const fragment of fragments) {
-    expect(message).toContain(fragment);
-  }
+  expect(message).not.toMatch(/\n|token_abc|secret_abc/);
   return message;
 }
 
@@ -68,53 +64,43 @@ afterAll(() => {
   vi.resetModules();
 });
 
-it.each(["start rejection", "SDK exhaustion"])("retries after %s", async (failure) => {
-  const failed = createWsClient();
-  const startRejected = failure === "start rejection";
-  if (startRejected) {
-    failed.start.mockRejectedValueOnce(
-      new Error("connect failed\nAuthorization: Bearer token_abc appSecret=secret_abc"),
+it.each(["start rejection", "SDK exhaustion", "recoverable callback"])(
+  "handles %s",
+  async (failure) => {
+    const failed = createWsClient();
+    const startRejected = failure === "start rejection";
+    const recoverable = failure === "recoverable callback";
+    const detail = "\nAuthorization: Bearer token_abc appSecret=secret_abc";
+    if (startRejected) {
+      failed.start.mockRejectedValueOnce(new Error(`connect failed${detail}`));
+    }
+    const recovered = createWsClient();
+    const monitor = await startMonitor("retry", ...(recoverable ? [failed] : [failed, recovered]));
+    if (!startRejected) {
+      await monitor.reportError(
+        (recoverable ? "temporary failure" : "WebSocket reconnect exhausted after 3 attempts") +
+          detail,
+      );
+      expect(botOpenIds.get("retry")).toBe("ou_bot");
+    }
+    expect(failed.close).toHaveBeenCalledTimes(recoverable ? 0 : 1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(recoverable ? 1 : 2);
+    expect(recovered.start).toHaveBeenCalledTimes(recoverable ? 0 : 1);
+    await monitor.stop();
+    expect(monitor.runtime.error).toHaveBeenCalledTimes(1);
+    expect(errorMessage(monitor.runtime)).toContain(
+      "Authorization: Bearer [redacted] appSecret=[redacted]",
     );
-  }
-  const recovered = createWsClient();
-  const monitor = await startMonitor("retry", failed, recovered);
-  if (!startRejected) {
-    await monitor.reportError("WebSocket reconnect exhausted after 3 attempts\nBearer token_abc");
-    expect(botOpenIds.get("retry")).toBe("ou_bot");
-  }
-  expect(failed.close).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(recovered.start).toHaveBeenCalledTimes(1);
-  await monitor.stop();
-  expect(monitor.runtime.error).toHaveBeenCalledTimes(1);
-  const message = errorMessage(
-    monitor.runtime,
-    startRejected
-      ? "WebSocket start failed, retrying in 1000ms"
-      : "WebSocket connection ended, recreating client in 1000ms",
-    "Bearer [redacted]",
-  );
-  if (startRejected) {
-    expect(message).toContain("Authorization: Bearer [redacted]");
-    expect(message).toContain("appSecret=[redacted]");
-    expect(message).not.toContain("secret_abc");
-  }
-});
+  },
+);
 
-it.each([false, true])("handles callback errors with terminal=%s", async (terminal) => {
+it("closes the client when aborted during terminal-error backoff", async () => {
   const client = createWsClient();
   const monitor = await startMonitor("callback", client);
-  await monitor.reportError(
-    terminal
-      ? "WebSocket reconnect exhausted after 3 attempts"
-      : "temporary callback failure\nBearer token_abc",
-  );
-  if (!terminal) {
-    await vi.advanceTimersByTimeAsync(1_000);
-    errorMessage(monitor.runtime, "WebSocket SDK reported recoverable error", "Bearer [redacted]");
-  }
+  await monitor.reportError("WebSocket reconnect exhausted after 3 attempts");
   expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
-  expect(client.close).toHaveBeenCalledTimes(terminal ? 1 : 0);
+  expect(client.close).toHaveBeenCalledTimes(1);
   await monitor.stop();
 });
 

@@ -8,12 +8,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as EmbeddedAgent from "../../agents/embedded-agent.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { prepareSubagentRunsByRunIds } from "../../agents/subagents/registry/subagent-registry.js";
 import {
-  enqueueSwarmRun,
+  closeSwarmScheduler,
   isSwarmRunActive,
   listSwarmRunReservationIds,
   releaseSwarmRun,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -25,12 +27,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
+import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
+import { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -107,8 +115,9 @@ async function withChannelCommandPlugin(
 ) {
   const channelId = options.channelId ?? "discord";
   await withAdminIngress(
-    async ({ cfg, state, admins, context, gateway }) => {
+    async ({ cfg, state, admins, context, gateway, resolveGatewayContext }) => {
       const bridge = Symbol.for(`openclaw.channel-command-native-test.${randomUUID()}`);
+      gateway.resolveGatewayContext = resolveGatewayContext;
       const storePath = path.join(state.sessionsDir("main"), "sessions.json");
       const sessionKey = `agent:main:${channelId}:channel:maintainers`;
       const messages = async (role: "user" | "assistant") => {
@@ -200,7 +209,7 @@ async function withChannelCommandPlugin(
           gateway,
           createDirectChatContext({
             getRuntimeConfig: () => cfg,
-            resolveGatewayContext: () => gateway,
+            resolveGatewayContext,
             validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
             getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
             trackExecution: trackAsyncWork,
@@ -213,8 +222,25 @@ async function withChannelCommandPlugin(
       );
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
+      await using gatewayResources = new AsyncDisposableStack();
+      if (options.nativeChildren) {
+        const runtime = createGatewayInstanceRuntime({
+          getContext: () => gateway,
+          getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+          isDispatchAvailable: () => true,
+        });
+        gateway.lifecycleRuntime = runtime.lifecycle;
+        gatewayResources.defer(() => runtime.close());
+      }
+      const scheduler = new GatewayScheduler();
+      gatewayResources.defer(() => scheduler.stop());
+      const sdkHost = new LegacyPluginSdkResourceHost();
+      gatewayResources.defer(() => sdkHost.close());
+      sdkHost.bindScheduler(scheduler);
+      bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkHost);
       let registry: PluginRegistry | undefined;
       const blockers: string[] = [];
+      const previousSubagentRuns = new Set(subagentRuns.keys());
       try {
         registry = loadOpenClawPlugins({
           config: cfg,
@@ -251,7 +277,7 @@ async function withChannelCommandPlugin(
           });
           // Match startChannel's resolver without inheriting a request-local client.
           await withPluginRuntimeGatewayContextResolver(
-            () => gateway,
+            resolveGatewayContext,
             () =>
               withReplyDispatcher({
                 dispatcher,
@@ -336,6 +362,29 @@ async function withChannelCommandPlugin(
           },
         });
       } finally {
+        const revokedChildren = [...subagentRuns.values()].filter(
+          (entry) =>
+            !previousSubagentRuns.has(entry.runId) &&
+            entry.requesterSessionKey === sessionKey &&
+            entry.collectorLaunchCleanupPending &&
+            entry.execution.outcome?.error ===
+              "Channel operator authority changed; send a new request.",
+        );
+        // Revocation cleanup dispatches through the still-live Gateway lifecycle.
+        await closeSwarmScheduler(resolveGatewayContext);
+        for (const child of revokedChildren) {
+          expect
+            .soft(
+              loadSessionEntry({
+                agentId: child.childAgentId ?? "main",
+                sessionKey: child.childSessionKey,
+                storePath,
+              }),
+              "revoked native child session is physically deleted before fixture retirement",
+            )
+            .toBeUndefined();
+          expect.soft(subagentRuns.get(child.runId)?.collectorLaunchCleanupPending).toBe(false);
+        }
         for (const blocker of blockers.splice(0)) {
           releaseSwarmRun(blocker);
         }
@@ -423,7 +472,7 @@ describe("plugin command native capabilities through channel ingress", () => {
           subagents: true,
           userInputs: ["/review-panel"],
         });
-        return { continueAgent: true };
+        return { continueAgent: true, suppressReply: true };
       });
       let continuation:
         | { runId?: string; receiptSessionId?: string; inputsAtRun: unknown[] }
@@ -530,15 +579,22 @@ describe("channel requester revocation of native children", () => {
 
   async function expectRefused(child: { runId: string; childSessionKey: string }) {
     await vi.waitFor(
-      () => expect(subagentRuns.get(child.runId)?.execution.status).toBe("terminal"),
+      () => {
+        expect(subagentRuns.get(child.runId)?.execution.status).toBe("terminal");
+        expect(listSwarmRunReservationIds()).not.toContain(child.runId);
+      },
       { timeout: 10_000 },
     );
-    expect(listSwarmRunReservationIds()).not.toContain(child.runId);
-    expect(subagentRuns.get(child.runId)).toMatchObject({
-      execution: { outcome: { status: "error", error: revocation.message } },
-      endedReason: "subagent-error",
-      completion: { resultText: revocation.message },
-      collectorCompletion: { status: "failed" },
+    // Completed cleanup can evict resident payloads; the public reader retains the result.
+    const prepared = await prepareSubagentRunsByRunIds([child.runId]);
+    expect(prepared.consume((runs) => runs.get(child.runId))).toMatchObject({
+      ready: true,
+      value: {
+        execution: { outcome: { status: "error", error: revocation.message } },
+        endedReason: "subagent-error",
+        completion: { resultText: revocation.message },
+        collectorCompletion: { status: "failed" },
+      },
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   }

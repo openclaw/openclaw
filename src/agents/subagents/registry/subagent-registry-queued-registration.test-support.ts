@@ -113,13 +113,6 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     retainAttachmentsOnKeep: true,
     collect: true,
     queued: true,
-    queuedLaunch: {
-      requesterRecovery: {},
-      request: { sessionKey: "agent:main:subagent:synthetic" },
-      timeoutMs: 100,
-      schedulerGroupKey: "group",
-      maxConcurrent: 1,
-    },
   };
   let scope: SubagentRegistrationScope | undefined;
   return {

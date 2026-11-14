@@ -91,14 +91,12 @@ export function stripReasoningTagsFromText(
   return trimMode === "start" ? stripped.trimStart() : stripped.trim();
 }
 
-type ReasoningProjectionOptions = {
+/** Final-marker deletion and reasoning reduction own separate Markdown streams. */
+export function reasoningTagTextFilter(options: {
   mode: ReasoningTagMode;
   scope: ReasoningTagScope;
   recoverUnclosed: boolean;
-};
-
-/** Final-marker deletion and reasoning reduction own separate Markdown streams. */
-export function reasoningTagTextFilter(options: ReasoningProjectionOptions): TextFilter {
+}): TextFilter {
   const transform = (text: string) =>
     stripReasoningTagsFromText(text, { ...options, trim: "none" });
   return {

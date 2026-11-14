@@ -11,15 +11,12 @@ import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { withBeforeAgentReplyObserver } from "../plugins/before-agent-reply.js";
-import {
-  readClaimingHookAdmission,
-  type ClaimingHookAdmission,
-} from "../plugins/hook-claim-admission.js";
-import type { PluginHookAgentContext } from "../plugins/hook-types.js";
+import { readClaimingHookAdmission } from "../plugins/hook-claim-admission.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
@@ -36,13 +33,6 @@ import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-prepar
 import { cliBackendLog } from "./cli-runner/log.js";
 import { FailoverError } from "./failover-error.js";
 
-type BeforeAgentReplyResult =
-  | undefined
-  | {
-      handled?: boolean;
-      reply?: { text?: string };
-    };
-
 const {
   hasHooksMock,
   replyMock,
@@ -57,12 +47,7 @@ const {
   authSuccessMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
-  replyMock: vi.fn<
-    (
-      event: unknown,
-      ctx: PluginHookAgentContext & ClaimingHookAdmission,
-    ) => Promise<BeforeAgentReplyResult>
-  >(async () => undefined),
+  replyMock: vi.fn<HookRunner["runBeforeAgentReply"]>(async () => undefined),
   beforeRunMock: vi.fn<HookRunner["runBeforeAgentRun"]>(async () => undefined),
   executeMock: vi.fn<(_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>>(
     async () => ({ text: "" }),
@@ -143,9 +128,7 @@ async function captureRejectedClaudeRun(
   } catch (caught) {
     error = caught;
   } finally {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await waitForDiagnosticEventsDrained();
     unsubscribe();
   }
   return { error, events };
@@ -391,9 +374,7 @@ describe("runCliAgent before_agent_reply seam", () => {
         model: "sonnet-4.6",
         runId,
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await waitForDiagnosticEventsDrained();
     } finally {
       unsubscribe();
     }
@@ -693,10 +674,9 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(replyMock.mock.calls[0]?.[1]).toMatchObject({
       sessionKey: "agent:main:cron:scheduled",
     });
-    expect(result.meta.agentMeta?.sessionId).toBe("");
-    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads).toEqual([]);
     expect(result.meta).toMatchObject({
+      agentMeta: { sessionId: "", clearCliSessionBinding: true },
       finalAssistantRawText: "",
       finalAssistantVisibleText: "",
       terminalReply: { disposition: "silent" },

@@ -7,6 +7,15 @@ import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
 import { mountProjectChip } from "./project-chip.test-support.tsx";
 
+async function openProjectSearch(container: ParentNode) {
+  await waitForSolid(() => expect(container.querySelector(".header-search")).not.toBeNull());
+  if (!container.querySelector('input[type="search"]')) {
+    container.querySelector<HTMLButtonElement>(".header-search__toggle")?.click();
+    flush();
+  }
+  await waitForSolid(() => expect(container.querySelector('input[type="search"]')).not.toBeNull());
+}
+
 function result(name: string): ProjectsSearchRemoteResult {
   return {
     credential: "configured",
@@ -65,9 +74,7 @@ async function mountSearch() {
     recents: [],
     projectQuery: browser.projectQuery,
   }));
-  await waitForSolid(() =>
-    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
-  );
+  await openProjectSearch(view.container);
   const input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const localRow = view.container.querySelector('[data-value="project:sample"]')!;
   const typeQuery = (query: string) => {

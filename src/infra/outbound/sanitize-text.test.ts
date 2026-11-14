@@ -12,7 +12,10 @@ describe("sanitizeForPlainText", () => {
   it.each([
     "Usage: /btw [side question]",
     "Run git checkout <branch-name> then npm install <package>. Generic List<String> and Map<K, V>.",
-  ])("preserves literal syntax in %s", (input) => {
+    `${"\u0000".repeat(40_000)}e\u0000p\n\`\`\`text\nline one\n\n\n<Button>\n\`\`\``,
+    "𝒜<limit and wait>5s",
+    "Set latency<budget. Then check:\n\n```\nif (a<b) { return c>d; }\n```\n\nand confirm concurrency>4 is safe.",
+  ])("preserves literal syntax (%#)", (input) => {
     expect(sanitizeForPlainText(input)).toBe(input);
   });
 
@@ -25,17 +28,6 @@ describe("sanitizeForPlainText", () => {
         '<bold title="b">b</bold><strikeout title="s">s</strikeout><codebase>c</codebase>',
       ),
     ).toBe("bsc");
-  });
-
-  it("keeps stripping tags exposed by malformed tag text", () => {
-    expect(sanitizeForPlainText("before <<script>script>alert(1)</<script>script> after")).toBe(
-      "before alert(1) after",
-    );
-  });
-
-  it("preserves large control-character runs around code", () => {
-    const reply = `${"\u0000".repeat(40_000)}e\u0000p\n\`\`\`text\nline one\n\n\n<Button>\n\`\`\``;
-    expect(sanitizeForPlainText(reply)).toBe(reply);
   });
 
   it("restores only surviving code regions", () => {
@@ -52,13 +44,6 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
-  it.each([
-    "𝒜<limit and wait>5s",
-    "Set latency<budget. Then check:\n\n```\nif (a<b) { return c>d; }\n```\n\nand confirm concurrency>4 is safe.",
-  ])("preserves unspaced comparison prose in %s", (input) => {
-    expect(sanitizeForPlainText(input)).toBe(input);
-  });
-
   it("bounds malformed comparison scanning with 40,000 spaces", () => {
     const input = `x<max${" ".repeat(40_000)}= and wait>5`;
     const started = process.hrtime.bigint();
@@ -68,8 +53,11 @@ describe("sanitizeForPlainText", () => {
     expect(elapsedMs).toBeLessThan(500);
   });
 
-  it("strips markup rather than preserving it as comparison prose", () => {
-    expect(sanitizeForPlainText("attempts<max threshold>5s")).toBe("attempts5s");
+  it.each([
+    ["before <<script>script>alert(1)</<script>script> after", "before alert(1) after"],
+    ["attempts<max threshold>5s", "attempts5s"],
+  ])("strips malformed or non-comparison markup: %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
   });
 });
 

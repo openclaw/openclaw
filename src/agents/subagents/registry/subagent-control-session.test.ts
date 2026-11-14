@@ -89,10 +89,9 @@ it.each<IdentityCase>([
           execution: { status: "terminal", suppressSessionEffects: true },
         });
       } else {
-        expect(result).toHaveProperty(
-          "error",
-          expect.stringContaining("incarnation is unresolved or changed"),
-        );
+        expect(result).toMatchObject({
+          error: expect.stringContaining("incarnation is unresolved or changed"),
+        });
         expect(getSubagentRunByRunId(runId)).toEqual(before);
       }
       expect(loadSessionEntry(scope)).toEqual(sessionBefore);

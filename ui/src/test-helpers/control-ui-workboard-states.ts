@@ -18,9 +18,11 @@ const STATES = [
   ["blocked", "Waiting for operator approval", "blocked", undefined],
 ] as const;
 export const MATRIX_STATES = STATES.map(([state]) => state);
-const MATRIX_ALERTS = ["none", "same", "different"] as const;
-const MATRIX_COUNTS = ["off", "on"] as const;
-const MATRIX_PRIORITIES = ["normal", "high"] as const;
+const VARIANTS = (["none", "same", "different"] as const).flatMap((alert) =>
+  (["off", "on"] as const).flatMap((counts) =>
+    (["normal", "high"] as const).map((priority) => ({ alert, counts, priority })),
+  ),
+);
 
 // SAFETY: every state contributes exactly one label in the table above.
 export const WORKBOARD_STATE_LABELS = Object.fromEntries(
@@ -34,59 +36,41 @@ export function buildWorkboardStateCells(now: number) {
     proof: [{ id: `${id}-proof`, status: "passed", label: "Synthetic proof example", createdAt }],
   });
   return STATES.flatMap(([state, label, status]) =>
-    MATRIX_ALERTS.flatMap((alert) =>
-      MATRIX_COUNTS.flatMap((counts) =>
-        MATRIX_PRIORITIES.map((priority) => {
-          const id = `matrix-${state}-${alert}-${counts}-${priority}`;
-          return {
-            state,
-            alert,
-            counts,
-            priority,
-            id,
-            card: {
-              id,
-              title: `${label} · ${alert} alert · counters ${counts}`,
-              status,
-              priority,
-              labels: [],
-              notes: "Synthetic presentation matrix; not evidence of a real execution.",
-              sessionKey:
-                state === "unlinked" || state === "blocked"
-                  ? undefined
-                  : `agent:main:matrix-${state}`,
-              position:
-                MATRIX_ALERTS.indexOf(alert) * 4 +
-                MATRIX_COUNTS.indexOf(counts) * 2 +
-                MATRIX_PRIORITIES.indexOf(priority),
-              createdAt: now - 86_400_000,
-              updatedAt: now - 120_000,
-              metadata: {
-                automation: { boardId: `matrix-${state}` },
-                ...(counts === "on" ? counters(id) : {}),
-                ...(state === "blocked"
-                  ? {
-                      workerProtocol: {
-                        state: "blocked",
-                        detail: label,
-                        updatedAt: now - 120_000,
-                      },
-                    }
-                  : {}),
-              },
-            },
-          };
-        }),
-      ),
-    ),
+    VARIANTS.map(({ alert, counts, priority }, position) => {
+      const id = `matrix-${state}-${alert}-${counts}-${priority}`;
+      const workerProtocol = { state: "blocked", detail: label, updatedAt: createdAt };
+      return {
+        state,
+        alert,
+        counts,
+        priority,
+        id,
+        card: {
+          id,
+          title: `${label} · ${alert} alert · counters ${counts}`,
+          status,
+          priority,
+          labels: [],
+          notes: "Synthetic presentation matrix; not evidence of a real execution.",
+          sessionKey:
+            state === "unlinked" || state === "blocked" ? undefined : `agent:main:matrix-${state}`,
+          position,
+          createdAt: now - 86_400_000,
+          updatedAt: now - 120_000,
+          metadata: {
+            automation: { boardId: `matrix-${state}` },
+            ...(counts === "on" ? counters(id) : {}),
+            ...(state === "blocked" ? { workerProtocol } : {}),
+          },
+        },
+      };
+    }),
   );
 }
 
 const cellsById = new Map(buildWorkboardStateCells(0).map((cell) => [cell.id, cell]));
 
-export function getWorkboardStateCell(id: string) {
-  return cellsById.get(id);
-}
+export const getWorkboardStateCell = (id: string) => cellsById.get(id);
 
 export function buildWorkboardStateSessions(baseTime: number) {
   return [

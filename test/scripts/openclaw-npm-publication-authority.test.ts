@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
@@ -35,13 +36,18 @@ async function fixture() {
   const version = "2026.8.28-beta.1";
   json("package.json", { name: "openclaw", version });
   mkdirSync(join(root, "preflight-tarball"));
-  const tarballs = packageNames.map((name, i) => {
+  const tarballs: { packageName: string; tarballName: string }[] = [];
+  for (const [i, name] of packageNames.entries()) {
     const tarballName = "package-" + i + ".tgz";
     json("package/package.json", { name, version });
-    const target = join(root, "preflight-tarball", tarballName);
-    execFileSync("tar", ["-czf", target, "-C", root, "package"]);
-    return { packageName: name, tarballName };
-  });
+    // Finish packing before the next identity rewrites the shared package directory.
+    await packToArchive({
+      pkgDir: join(root, "package"),
+      outDir: join(root, "preflight-tarball"),
+      outName: tarballName,
+    });
+    tarballs.push({ packageName: name, tarballName });
+  }
   json("preflight-tarball/preflight-manifest.json", { corePackageTarballs: tarballs.slice(0, 3) });
   json("full-release-validation/full-release-validation-manifest.json", f.manifest);
   // Candidate code must never run, including during historical/manual recovery.
@@ -191,6 +197,9 @@ if (process.argv[1] === root + '/bin/gh') {
     OPENCLAW_GH_BIN: join(bin, "gh"),
     GH_TOKEN: "test-only",
     GITHUB_ACTIONS: "true",
+    // Publication receipts belong to this fixture, including under hosted Actions.
+    GITHUB_OUTPUT: join(root, "github-output"),
+    GITHUB_STEP_SUMMARY: join(root, "github-summary"),
     GITHUB_REPOSITORY: f.repository,
     WORKFLOW_SHA: f.p,
     WORKFLOW_REF: f.admission.producer.workflowHeadBranch,
@@ -259,6 +268,22 @@ describe("npm final publication authority", () => {
         expect(args.slice(2)).toEqual(["--access", "public", "--tag", "beta", "--provenance"]);
       }
       expect(result.stderr).not.toContain("CANDIDATE_");
+      const publications: { package_name: string; source_commit: string }[] = readFileSync(
+        f.env.GITHUB_OUTPUT,
+        "utf8",
+      )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line.slice(line.indexOf("=") + 1)));
+      expect(publications.map((publication) => publication.package_name)).toEqual([
+        "@openclaw/gateway-protocol",
+        "openclaw",
+      ]);
+      expect(
+        publications.every(
+          (publication) => publication.source_commit === f.env.EXPECTED_RELEASE_SHA,
+        ),
+      ).toBe(true);
     },
   );
 

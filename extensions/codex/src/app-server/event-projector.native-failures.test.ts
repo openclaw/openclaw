@@ -4,6 +4,9 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach } from "vitest";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
+import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
+import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
+import { readItem } from "./event-projector-values.js";
 import {
   registerCodexEventProjectorTestLifecycle,
   onInternalDiagnosticEvent,
@@ -49,6 +52,103 @@ afterEach(() => unsubscribeDiagnostics?.());
 function command(id: string, status: string | undefined, durationMs: number | null = 1) {
   return { ...createNativeCommandItem({ id }), status, durationMs, exitCode: null };
 }
+
+it("records patch results without rebuilding their input diffs", async () => {
+  const params = await createParams();
+  const transcript = new CodexToolTranscriptProjection(
+    params,
+    "thread-1",
+    "turn-1",
+    new CodexToolProgressProjection(params),
+    () => 1,
+  );
+  let diffReads = 0;
+  const item = readItem({
+    id: "patch-result",
+    type: "fileChange",
+    status: "completed",
+    changes: [
+      {
+        path: "answer.txt",
+        kind: "add",
+        get diff() {
+          diffReads += 1;
+          return "answer\n";
+        },
+      },
+    ],
+  });
+
+  transcript.recordNativeToolResult(item);
+
+  expect(diffReads).toBe(0);
+  expect(transcript.transcriptMessages).toMatchObject([
+    {
+      role: "toolResult",
+      toolCallId: "patch-result",
+      toolName: "apply_patch",
+      isError: false,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            { status: "completed", changes: [{ path: "answer.txt", kind: "add" }] },
+            null,
+            2,
+          ),
+        },
+      ],
+    },
+  ]);
+});
+
+it("settles native trajectory bookkeeping without serializing unused output", async () => {
+  const params = await createParams();
+  const transcript = new CodexToolTranscriptProjection(
+    params,
+    "thread-1",
+    "turn-1",
+    new CodexToolProgressProjection(params),
+    () => 1,
+  );
+  let outputReads = 0;
+  const item = readItem({
+    id: "mcp-result",
+    type: "mcpToolCall",
+    status: "completed",
+    server: "fixture",
+    tool: "lookup",
+    result: {
+      get content() {
+        outputReads += 1;
+        return [{ type: "text", text: "found" }];
+      },
+    },
+  });
+  if (!item) {
+    throw new Error("Expected native MCP fixture");
+  }
+  transcript.recordTrajectoryEvent({
+    phase: "start",
+    item,
+    name: "fixture.lookup",
+    status: "running",
+  });
+  transcript.recordTrajectoryEvent({
+    phase: "result",
+    item,
+    name: "fixture.lookup",
+    status: "completed",
+  });
+
+  expect(outputReads).toBe(0);
+  expect(
+    transcript.synthesizeMissingToolResults({
+      synthesize: true,
+      terminalDisposition: "prompt_error",
+    }),
+  ).toBeUndefined();
+});
 
 it.each([
   { status: "completed", outcome: { status: "completed", isError: false, success: true } },

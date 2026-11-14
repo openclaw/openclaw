@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { SpawnProcessAdapter } from "./types.js";
 
 type StubOutputSubscriber = {
@@ -28,14 +29,7 @@ export function createStubChildAdapter(options?: {
       subscriber.listener(chunk);
     }
   };
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
-    | null = null;
-  const waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => {
-      resolveWait = resolve;
-    },
-  );
+  const result = createDeferredCore<Awaited<ReturnType<StubChildAdapter["wait"]>>>();
   const killMock = vi.fn();
   const disposeMock = vi.fn();
   const adapter: StubChildAdapter = {
@@ -48,7 +42,7 @@ export function createStubChildAdapter(options?: {
     onStderr: (listener, onRaw) => {
       stderrSubscribers.push({ listener, ...(onRaw ? { onRaw } : {}) });
     },
-    wait: async () => await waitPromise,
+    wait: async () => await result.promise,
     kill: (signal) => {
       killMock(signal);
       options?.onKill?.(signal, adapter);
@@ -68,8 +62,7 @@ export function createStubChildAdapter(options?: {
       emitOutput(stderrSubscribers, chunk);
     },
     settle: (code, signal = null) => {
-      resolveWait?.({ code, signal });
-      resolveWait = null;
+      result.resolve({ code, signal });
     },
     killMock,
     disposeMock,

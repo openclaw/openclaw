@@ -202,11 +202,12 @@ export function WizardLogin(props: {
   controller: WizardLoginState;
   busy?: boolean;
   options?: Parameters<WizardLoginState["viewProps"]>[0];
+  signInIcon?: WizardViewProps["signInIcon"];
 }) {
   const view = createMemo(() => props.controller.viewProps(props.options));
   return (
     <div onModal-cancel={(event: Event) => event.preventDefault()}>
-      <ModelSetupWizard {...view()} busy={props.busy} />
+      <ModelSetupWizard {...view()} busy={props.busy} signInIcon={props.signInIcon} />
     </div>
   );
 }

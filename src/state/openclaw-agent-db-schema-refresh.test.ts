@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionExchange,
+} from "../infra/sqlite-database-admission.js";
+import { getSqlitePinnedReadSnapshot } from "../infra/sqlite-pinned-read-snapshot.js";
+import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { withReceiptFixture } from "./agent-validation.test-support.js";
@@ -17,6 +23,47 @@ import {
 } from "./openclaw-agent-db-validation-cache.js";
 
 describe("agent schema refresh", () => {
+  it.each([false, true])(
+    "settles repaired catalog publication after the pin (refuse=%s)",
+    async (refuse) => {
+      await withReceiptFixture(false, (database) => {
+        if (isPostgresSqlConnection(database.db)) {
+          throw new Error("Expected SQLite fixture");
+        }
+        const db = database.db;
+        db.exec("DROP INDEX idx_agent_cache_expiry");
+        const publicationFailure = new Error("Publication was not acknowledged");
+        let repairedPublication = false;
+        let publicationWasPinned: boolean | undefined;
+        const exchange = vi.fn((admissions: ReturnType<typeof captureSqliteDatabaseAdmissions>) => {
+          for (const record of admissions) {
+            const facts = schemaAdmission.read?.(record.facts.get(schemaAdmission.name)?.value);
+            if (facts?.indexes.has("idx_agent_cache_expiry")) {
+              repairedPublication = true;
+              publicationWasPinned = getSqlitePinnedReadSnapshot(db) !== undefined;
+              if (refuse) {
+                throw publicationFailure;
+              }
+            }
+          }
+          return [];
+        });
+        const refresh = () =>
+          withSqliteDatabaseAdmissionExchange(exchange, () =>
+            refreshOpenClawAgentDatabaseSchema(database, () => {}),
+          );
+        if (refuse) {
+          expect(refresh).toThrow(publicationFailure);
+          expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
+        } else {
+          expect(refresh()?.schema?.facts?.indexes.has("idx_agent_cache_expiry")).toBe(true);
+        }
+        expect(repairedPublication).toBe(true);
+        expect(publicationWasPinned).toBe(false);
+      });
+    },
+  );
+
   it("publishes known derived DDL without repeating agent admission", async () => {
     await withReceiptFixture(false, (database, options) => {
       const reader = openOpenClawAgentDatabaseReadOnly(options);

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import {
@@ -10,10 +11,15 @@ import {
 } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import {
+  afterUserPreferenceOperationSettled,
   beginUserPreferenceMutation,
   captureUserPreferenceRead,
+  waitForUserPreferenceReadPermits,
 } from "./user-preferences-publication.js";
-import { updatesGitCoauthorPreference } from "./user-preferences.store.js";
+import {
+  updatesGitCoauthorPreference,
+  updatesPersonalSessionPins,
+} from "./user-preferences.store.js";
 import type {
   CanonicalUserPreferences,
   UserPreferenceCoauthorMutation,
@@ -70,8 +76,12 @@ export async function setCanonicalUserPreferences(
   }
   const context = captureOpenClawStateWorkerContext(options);
   const finishMutation = beginUserPreferenceMutation(context.admission);
+  let retained: RetainedWorkerTransactionAdmission | undefined;
   let publicationSettled: Promise<void> | undefined;
   try {
+    if (updatesPersonalSessionPins(prepared.value)) {
+      await waitForUserPreferenceReadPermits(context.admission);
+    }
     return await runOpenClawStateWorkerOperation(
       context,
       (scope) =>
@@ -82,6 +92,7 @@ export async function setCanonicalUserPreferences(
       {
         assertCurrent: options.assertCurrent,
         createAdmission: (operation) => {
+          retained = operation;
           let pending:
             | {
                 facts: UserPreferenceCoauthorMutation;
@@ -156,7 +167,11 @@ export async function setCanonicalUserPreferences(
     try {
       await publicationSettled;
     } finally {
-      finishMutation();
+      if (retained && updatesPersonalSessionPins(prepared.value)) {
+        afterUserPreferenceOperationSettled(retained, finishMutation);
+      } else {
+        finishMutation();
+      }
     }
   }
 }

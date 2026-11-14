@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -67,6 +72,84 @@ describe("Codex native configuration lifecycle", () => {
     }
     throw new Error(`unexpected method: ${method}`);
   }
+
+  it.each([
+    "unused",
+    "recorded history",
+    "recorded history after restart",
+    "loaded unowned",
+  ] as const)("continues a managed conversation with a lost inference route: %s", async (state) => {
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: async (method) => {
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
+        if (method === "thread/start") {
+          return threadStartResult("replacement-thread");
+        }
+        return readNativeConfig(method);
+      },
+    });
+    ownCodexInferenceClient(fixture.client);
+    if (state === "loaded unowned") {
+      fixture.seed(threadStartResult("lost-thread"), { loaded: true, subscribed: false });
+    }
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "lost-thread",
+      clientId:
+        state === "recorded history after restart"
+          ? "previous-client"
+          : fixture.client.getInstanceId(),
+      cwd: workspaceDir,
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      webSearchThreadConfigFingerprint: JSON.stringify({
+        "features.standalone_web_search": false,
+        web_search: "disabled",
+      }),
+      ...(state.startsWith("recorded history")
+        ? { historyCoveredThrough: "2026-10-01T00:00:00.000Z" }
+        : {}),
+    });
+    const before = await readCodexAppServerBinding(sessionFile);
+    let recoveryRpcMethod: unknown;
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (
+        event.type === "log.record" &&
+        event.message === "codex app-server thread resume failed; starting a new thread"
+      ) {
+        recoveryRpcMethod = event.attributes?.rpcMethod;
+      }
+    });
+    setLoggerOverride({ level: "warn", file: path.join(tempDir, "recovery.log") });
+    try {
+      const next = startOrResumeThread(lifecycleParams(fixture.client));
+      if (state === "unused") {
+        await expect(next).resolves.toMatchObject({ threadId: "replacement-thread" });
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          threadId: "replacement-thread",
+        });
+        expect(getCodexInferenceThread(fixture.client, "replacement-thread")).toBeDefined();
+        await waitForDiagnosticEventsDrained();
+        expect(recoveryRpcMethod).toBe("thread/read");
+      } else {
+        await expect(next).rejects.toThrow(
+          state.startsWith("recorded history") ? "thread not loaded" : "no owned inference route",
+        );
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+      }
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "thread/start"),
+      ).toHaveLength(state === "unused" ? 1 : 0);
+    } finally {
+      unsubscribe();
+      setLoggerOverride(null);
+      resetLogger();
+      fixture.client.close();
+    }
+  });
 
   it.each([undefined, false, true])(
     "refreshes callable question policy and authored native configuration (%s)",

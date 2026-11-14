@@ -16,7 +16,7 @@ describe("CI changed Node test plan", () => {
     const source = "src/cli/fixture-command.ts";
     const sibling = "src/cli/fixture-command.test.ts";
     const caught = "src/cli/update-cli.test.ts";
-    const deferred = "src/cli/claws-cli-legacy-resume.test.ts";
+    const deferred = "src/cli/templates-cli-legacy-resume.test.ts";
     const unrelated = "src/other/unprotected.test.ts";
     writeFileSync(path.join(cwd, "package.json"), "{}\n");
     for (const file of [source, sibling, caught, deferred, unrelated]) {

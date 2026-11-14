@@ -17,8 +17,8 @@ import {
 import type { TestDispatchResult } from "./event-handler.test-harness.js";
 import type {
   SignalDataMessage,
-  SignalEnvelope,
   SignalEventHandlerDeps,
+  SignalReceivePayload,
 } from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
@@ -275,8 +275,8 @@ function nextTimerTick(): Promise<void> {
 type SignalHandler = ReturnType<typeof createSignalEventHandler>;
 type SignalMessagesConfig = NonNullable<OpenClawConfig["messages"]>;
 type SignalChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>;
-type DirectMessageOverrides = Omit<SignalEnvelope, "dataMessage"> & {
-  dataMessage?: NonNullable<SignalEnvelope["dataMessage"]>;
+type DirectMessageOverrides = NonNullable<SignalReceivePayload["envelope"]> & {
+  dataMessage?: SignalDataMessage;
 };
 
 type TestMessagesConfig = Partial<SignalMessagesConfig>;
@@ -376,7 +376,7 @@ function receiveDirectMessage(
 function receiveMessage(
   handler: SignalHandler,
   dataMessage: SignalDataMessage,
-  envelope: Omit<SignalEnvelope, "dataMessage"> = {},
+  envelope: Omit<DirectMessageOverrides, "dataMessage"> = {},
 ): ReturnType<SignalHandler> {
   return handler(createSignalReceiveEvent({ ...envelope, dataMessage }));
 }
@@ -385,7 +385,7 @@ function receiveGroupMessage(
   handler: SignalHandler,
   message: string,
   dataMessage: Partial<SignalDataMessage> = {},
-  envelope: Omit<SignalEnvelope, "dataMessage"> = {},
+  envelope: Omit<DirectMessageOverrides, "dataMessage"> = {},
 ): ReturnType<SignalHandler> {
   return receiveMessage(
     handler,
@@ -804,7 +804,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     try {
       await receiveMessage(handler, { message: "hi" });
 
-      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
+      const rpcOpts = {
         cfg: {
           messages: { inbound: { debounceMs: 0 } },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
@@ -812,19 +812,18 @@ describe("signal createSignalEventHandler inbound context", () => {
         baseUrl: "http://localhost",
         account: "+15550009999",
         accountId: "default",
-      });
-      expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        baseUrl: "http://localhost",
-        account: "+15550009999",
-        accountId: "default",
-      });
-
+      };
+      expect(sendReadReceiptMock).toHaveBeenCalledWith(
+        "signal:+15550001111",
+        1700000000000,
+        rpcOpts,
+      );
+      // The finished reply turn must clear the indicator it started, without keepalive repeats.
       await vi.advanceTimersByTimeAsync(3_000);
-      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+      expect(sendTypingMock.mock.calls).toEqual([
+        ["+15550001111", rpcOpts],
+        ["+15550001111", { ...rpcOpts, stop: true }],
+      ]);
     } finally {
       vi.useRealTimers();
     }

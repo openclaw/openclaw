@@ -328,6 +328,7 @@ export async function overlayWorkspaceManifest(
 }
 
 export async function parseWorkspaceManifestPair(input: {
+  buildCacheInputs?: string[];
   baseRaw: string;
   baseRef: string;
   currentRaw: string;
@@ -339,6 +340,7 @@ export async function parseWorkspaceManifestPair(input: {
     input: {
       baseRef: input.baseRef,
       currentRef: input.currentRef,
+      buildCacheInputs: input.buildCacheInputs,
       baseRaw: encoder.encode(input.baseRaw),
       currentRaw: encoder.encode(input.currentRaw),
     },
@@ -419,6 +421,7 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
             currentManifestRef: input.currentManifestRef,
             baseManifestRaw: encoder.encode(input.baseManifestRaw),
             currentManifestRaw: encoder.encode(input.currentManifestRaw),
+            existingObjects: input.existingObjects,
           }),
     },
   });

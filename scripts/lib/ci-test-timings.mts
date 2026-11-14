@@ -4,6 +4,7 @@ import {
   ciTestTimingsSchema,
   isRuntimePlacementIncludePatterns,
   type CiTestTimings,
+  type CiTimingProfile,
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
 import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
@@ -74,14 +75,12 @@ function runtimeSeconds(
   return selected;
 }
 
-export function readToolingFileTimings(
-  profile: "blacksmith" | "github",
-): Readonly<Record<string, number>> {
+export function readToolingFileTimings(profile: CiTimingProfile): Readonly<Record<string, number>> {
   return runtimeSeconds(readTestTimings()?.toolingFileSeconds[profile] ?? emptyGroupTimings);
 }
 
 export function readCompactGroupTimings(
-  profile: "blacksmith" | "github",
+  profile: CiTimingProfile,
 ): Readonly<Record<string, number>> {
   return runtimeSeconds(readTestTimings()?.compactGroupSeconds[profile] ?? emptyGroupTimings);
 }
@@ -91,7 +90,7 @@ export function readRepoE2eFileTimings(): Readonly<Record<string, number>> {
 }
 
 export function readRuntimePlacementTimings(
-  profile: "blacksmith" | "github",
+  profile: CiTimingProfile,
 ): readonly RuntimePlacementTiming[] {
   const runtime = selectedTimingPrefix().slice(0, -1);
   const observations = readTestTimings()?.runtimePlacementTimings[profile] ?? emptyRuntimeTimings;
@@ -149,7 +148,11 @@ export function readCompleteSplitGenerationSeconds(
   selectorKey: string,
 ): number | undefined {
   const generations = new Map<string, { expected: number; parts: Map<number, number> }>();
+  const prefix = `${selectorKey}#generation-`;
   for (const [key, seconds] of Object.entries(timings)) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
     const parsed = parseCompactSplitTimingKey(key);
     if (!parsed || parsed.selectorKey !== selectorKey) {
       continue;

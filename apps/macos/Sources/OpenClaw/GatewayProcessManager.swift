@@ -383,16 +383,18 @@ final class GatewayProcessManager {
         if let restoration = request.serviceForRestoration {
             let cli = restoration.retained
             do { try await request.mutationCheck?() } catch { return .failed(error.localizedDescription) }
-            guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first else { return .skipped }
-            let runtime = BundledRuntime(root: URL(fileURLWithPath: bun)
-                .deletingLastPathComponent().deletingLastPathComponent())
+            guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first,
+                  let runtime = cli.prefix.last.flatMap(BundledRuntime.init(serviceEntrypoint:))
+            else { return .skipped }
+            // Restoration keeps the retained executable; only the stable path needs this build's Bun.
             error = await GatewayLaunchAgentManager.runDaemonCommand(
                 GatewayLaunchAgentManager.installArguments(
                     port: request.port,
                     allowUnconfigured: request.allowUnconfigured,
-                    runtime: runtime,
-                    launchAgentExists: false),
+                    runtime: nil,
+                    launchAgentExists: false) + ["--runtime", "bun", "--runtime-path", bun],
                 runtime: restoration.installer,
+                serviceRuntime: bun == runtime.serviceBun.path ? runtime : nil,
                 restoring: cli,
                 expectedServiceAuthority: request.expectedServiceAuthority,
                 checkCurrent: request.mutationCheck)
@@ -491,29 +493,31 @@ final class GatewayProcessManager {
     private func resolveLaunchAgentReadinessFailure(
         port: Int,
         startingPID: Int32?,
-        freshInstall: Bool = false) async -> LaunchAgentReadinessFailure?
+        freshInstall: Bool = false) async -> GatewayReadinessFailure?
     {
-        guard let pid = await self.reusableLaunchdPIDOwningPort(port: port),
-              pid == startingPID || (startingPID == nil && freshInstall)
-        else {
-            return nil
-        }
-        return LaunchAgentReadinessFailure(port: port, pid: pid)
-    }
-
-    private func reusableLaunchdPIDOwningPort(port: Int) async -> Int32? {
-        guard let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(
+        guard let state = try? await GatewayLaunchAgentManager.loadedGatewayState(
             port: port,
             allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary)
         else {
             return nil
         }
+        if state.runningPID == nil,
+           let lastError = state.lastError,
+           lastError.hasPrefix("Gateway ownership could not be verified."),
+           await PortGuardian.shared.describe(port: port) == nil
+        {
+            // Recent logs explain a refused start; they never authorize service repair.
+            return .serviceInspection("Recent Gateway log error (may be from an earlier run): \(lastError)")
+        }
+        guard let pid = state.reusablePID,
+              pid == startingPID || (startingPID == nil && freshInstall)
+        else { return nil }
         // A stable launchd PID that owns the port can still have a wedged health RPC. A listener
         // owned by anyone else is protected and surfaced through the attach path instead.
         if let listener = await PortGuardian.shared.describe(port: port), listener.pid != pid {
             return nil
         }
-        return pid
+        return .timeoutWithRepairEvidence(LaunchAgentReadinessFailure(port: port, pid: pid))
     }
 
     func setLaunchAgentReadinessState(
@@ -1080,19 +1084,19 @@ extension GatewayProcessManager {
         guard latestDisposition == .retryWithRepair else {
             return migration ? .failed(fallbackFailure) : .superseded
         }
-        let failure: LaunchAgentReadinessFailure? = if migration || context.readinessCandidate != nil {
+        let failure: GatewayReadinessFailure? = if migration || context.readinessCandidate != nil {
             await self.resolveLaunchAgentReadinessFailure(
                 port: context.port,
                 startingPID: context.readinessPID,
                 freshInstall: self.launchAgentFreshInstallGeneration == context.generation)
         } else {
-            context.readinessFailure
+            context.readinessFailure.map(GatewayReadinessFailure.timeoutWithRepairEvidence)
         }
         guard self.isCurrentGatewayReadiness(context) else { return .superseded }
         guard let failure else {
             return migration ? .failed(fallbackFailure) : .superseded
         }
-        return .failed(.timeoutWithRepairEvidence(failure))
+        return .failed(failure)
     }
 
     private func gatewayProbeFailureTerminal(
@@ -1490,9 +1494,14 @@ extension GatewayProcessManager {
     }
 
     func _testRecordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
-        let failure = await self.resolveLaunchAgentReadinessFailure(
+        let result = await self.resolveLaunchAgentReadinessFailure(
             port: port,
             startingPID: startingPID)
+        let failure: LaunchAgentReadinessFailure? = if case let .timeoutWithRepairEvidence(failure)? = result {
+            failure
+        } else {
+            nil
+        }
         self.setLaunchAgentReadinessState(
             candidate: self.launchAgentReadinessCandidate,
             failure: failure)
@@ -1507,13 +1516,8 @@ extension GatewayProcessManager {
         let failure = await self.resolveLaunchAgentReadinessFailure(
             port: port,
             startingPID: startingPID)
-        let terminalFailure: GatewayReadinessFailure = if let failure {
-            .timeoutWithRepairEvidence(failure)
-        } else {
-            .deadlineWithoutRepairEvidence
-        }
         _ = await self.publishGatewayReadinessTerminal(
-            .failed(terminalFailure),
+            .failed(failure ?? .deadlineWithoutRepairEvidence),
             context: context)
     }
 

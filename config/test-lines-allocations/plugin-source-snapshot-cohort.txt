@@ -1,0 +1,2 @@
+# Real cohort rollback restores original snapshot/revision, rejects successors, and gates collection while recovery is pending.
+195

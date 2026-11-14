@@ -5,7 +5,7 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests((h) => {
   const { expect, it, vi } = h;
-  const recording = (voice: { captureSilenceGraceMs?: number } = {}) => {
+  const recording = async (voice: { captureSilenceGraceMs?: number } = {}) => {
     h.decodeOpusStreamChunksMock.mockImplementation(async (input, callbacks) => {
       for await (const packet of input) {
         await callbacks.onChunk(packet, packet);
@@ -14,14 +14,12 @@ defineDiscordVoiceTests((h) => {
     const decode = h.decodeOpusStreamChunksMock.getMockImplementation()!;
     const connection = h.useConnection();
     const manager = h.createManager(h.makeVoiceConfig(voice));
-    const start = async () => {
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      const sink = vi.fn();
-      await h.startTranscripts(manager, sink);
-      const entry = h.getSessionEntry(manager);
-      return { entry, sink, begin: () => h.handleSpeakingStart(manager, entry, "u1") };
-    };
-    return { connection, start, decode };
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const sink = vi.fn();
+    await h.startTranscripts(manager, sink);
+    const entry = h.getSessionEntry(manager);
+    const begin = () => h.handleSpeakingStart(manager, entry, "u1");
+    return { connection, entry, sink, begin, decode };
   };
   it("retains the reservation until the SDK source closes after decoded EOF", async () => {
     const releaseClose = createDeferred<void>();
@@ -35,11 +33,10 @@ defineDiscordVoiceTests((h) => {
       first.once("close", resolve);
     });
     const second = new PassThrough({ objectMode: true });
-    const { connection, start } = recording();
+    const { connection, entry, begin } = await recording();
     connection.receiver.subscribe.mockReturnValueOnce(first).mockReturnValueOnce(second);
     let receiving: Promise<void> | undefined;
     try {
-      const { entry, begin } = await start();
       receiving = begin();
       const reservation = entry.capture.get("u1");
       expect(reservation).toBeDefined();
@@ -73,7 +70,9 @@ defineDiscordVoiceTests((h) => {
     async ({ graceMs, held }) => {
       const { DiscordVoiceRecording } = await import("./voice-recording.js");
       vi.useFakeTimers();
-      const { connection, start, decode } = recording({ captureSilenceGraceMs: graceMs });
+      const { connection, entry, sink, begin, decode } = await recording({
+        captureSilenceGraceMs: graceMs,
+      });
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       h.decodeOpusStreamChunksMock.mockImplementationOnce(async (input, callbacks) => {
@@ -102,7 +101,6 @@ defineDiscordVoiceTests((h) => {
       const second = new PassThrough({ objectMode: true });
       let receiving: Promise<void> | undefined;
       try {
-        const { entry, sink, begin } = await start();
         connection.receiver.subscribe.mockReturnValueOnce(first).mockReturnValueOnce(second);
         let firstDone = false;
         receiving = begin().then(() => {

@@ -1,9 +1,8 @@
 import { expect, it, vi } from "vitest";
 import {
   extractAssistantTextForPhase as extract,
-  extractAssistantPhaseText,
+  extractAssistantPhaseText as phaseText,
   extractFirstTextBlock as firstText,
-  readAssistantTextBlocksForPhase as blocks,
   parseAssistantTextSignature as signature,
   resolveAssistantMessagePhase as messagePhase,
 } from "./chat-message-content.js";
@@ -15,7 +14,7 @@ const assistant = (content: unknown) => ({ role: "assistant", content });
 const commentary = phasedText("thinking like caveman", "commentary", "msg_commentary");
 const finalAnswer = phasedText("Actual final answer", "final_answer", "msg_final");
 function expectPhaseText(content: unknown, expected: string | undefined) {
-  expect(extractAssistantPhaseText(assistant(content))).toBe(expected);
+  expect(phaseText(assistant(content))).toBe(expected);
 }
 
 it("lets explicit blocks override top-level final_answer without reviving unphased siblings", () => {
@@ -23,8 +22,6 @@ it("lets explicit blocks override top-level final_answer without reviving unphas
   const opposite = "commentary";
   const explicit = phasedText("Selected", opposite, "selected");
   const message = { phase, content: [{ type: "text", text: "Unphased sibling" }, explicit] };
-  expect(blocks(message, phase)).toEqual([]);
-  expect(blocks(message, opposite)).toEqual([explicit]);
   expect(extract(message, { phase })).toBeUndefined();
   expect(extract(message, { phase: opposite })).toBe("Selected");
 });
@@ -41,15 +38,8 @@ it("returns undefined for missing, empty, or non-text content", () => {
   expect(firstText({ content: [{ text: 1 }, { text: "later" }] })).toBeUndefined();
 });
 it("preserves boundary spacing when newline-joining adjacent final_answer text blocks", () => {
-  expect(
-    extract(
-      assistant([
-        phasedText("Hi ", "final_answer", "msg_final_1"),
-        phasedText("there", "final_answer", "msg_final_2"),
-      ]),
-      { phase: "final_answer" },
-    ),
-  ).toBe("Hi \nthere");
+  const content = ["Hi ", "there"].map((text, i) => phasedText(text, "final_answer", `msg_${i}`));
+  expect(extract(assistant(content), { phase: "final_answer" })).toBe("Hi \nthere");
 });
 
 it.each<[string, unknown, string | undefined]>([
@@ -68,8 +58,12 @@ it.each<[string, unknown, string | undefined]>([
 ])("%s", (_name, content, expected) => {
   expectPhaseText(content, expected);
 });
-it("prefers the top-level assistant phase when present", () => {
-  expect(messagePhase({ role: "assistant", phase: "commentary" })).toBe("commentary");
+it.each([
+  [{ role: "assistant", phase: "commentary" }, "commentary"],
+  [assistant([finalAnswer]), "final_answer"],
+  [assistant([commentary, finalAnswer]), undefined],
+])("resolves top-level or unanimous block phase: %j", (message, expected) => {
+  expect(messagePhase(message)).toBe(expected);
 });
 
 it("reuses a block signature parse until the live block signature changes", () => {
@@ -88,21 +82,8 @@ it("reuses a block signature parse until the live block signature changes", () =
   parseSpy.mockRestore();
 });
 
-it("resolves a single explicit phase from textSignature metadata", () => {
-  expect(messagePhase(assistant([finalAnswer]))).toBe("final_answer");
-});
-
-it("returns undefined when text blocks contain mixed explicit phases", () => {
-  expect(messagePhase(assistant([commentary, finalAnswer]))).toBeUndefined();
-});
 it("retains selected phase source", () => {
   const text = "\n\n    code";
   expectPhaseText(text, text);
-  expect(
-    extractAssistantPhaseText({
-      role: "assistant",
-      phase: "final_answer",
-      content: [{ type: "text", text }],
-    }),
-  ).toBe(text);
+  expect(phaseText({ ...assistant([{ type: "text", text }]), phase: "final_answer" })).toBe(text);
 });

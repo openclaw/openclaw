@@ -1,4 +1,5 @@
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import assert from "node:assert/strict";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OpenClawConfig, SecretInput } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -8,7 +9,9 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import plugin from "../index.js";
+import { listedModel, messagesTextResponse, streamModel } from "./stream.test-support.js";
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
@@ -21,116 +24,87 @@ it.each(["store", "runtime", "header"] as const)(
     vi.stubEnv("NO_PROXY", "127.0.0.1");
     vi.stubEnv("no_proxy", "127.0.0.1");
     await withTempHome(async () => {
-      const requests: Array<{ path: string; authorization?: string; body: unknown }> = [];
+      const requests: Array<[string | undefined, string | undefined, unknown]> = [];
       const expectedKey = kind === "runtime" ? "synthetic-runtime-key" : "synthetic-store-key";
+      const authorization = `Bearer ${expectedKey}`;
+      const headers = kind === "header" ? { Authorization: authorization } : undefined;
       await withServer(
         (request, response) => {
           let body = "";
-          request.setEncoding("utf8").on("data", (chunk: string) => (body += chunk));
+          request.setEncoding("utf8").on("data", (chunk: string) => {
+            body += chunk;
+          });
           request.once("end", () => {
-            requests.push({
-              path: request.url ?? "",
-              authorization: request.headers.authorization,
-              body: body ? JSON.parse(body) : undefined,
-            });
-            if (request.headers.authorization !== `Bearer ${expectedKey}`) {
-              response.writeHead(401).end();
-            } else if (request.url === "/api/v1/models") {
-              response.writeHead(200, { "content-type": "application/json" }).end(
-                JSON.stringify({
-                  models: [
-                    {
-                      type: "llm",
-                      key: "test-model",
-                      max_context_length: 64000,
-                      loaded_instances: [{ id: "jit-small", config: { context_length: 8192 } }],
-                    },
-                  ],
-                }),
-              );
-            } else if (request.url === "/api/v1/models/load") {
+            const suppliedAuth = request.headers.authorization ?? request.headers["x-api-key"];
+            requests.push([
+              request.url,
+              typeof suppliedAuth === "string" ? suppliedAuth : undefined,
+              body ? JSON.parse(body) : undefined,
+            ]);
+            const json = (value: unknown) =>
               response
                 .writeHead(200, { "content-type": "application/json" })
-                .end(JSON.stringify({ status: "loaded", instance_id: "prepared-large" }));
+                .end(JSON.stringify(value));
+            if (
+              request.headers.authorization !== authorization &&
+              !(request.url === "/v1/messages" && request.headers["x-api-key"] === expectedKey)
+            ) {
+              response.writeHead(401).end();
+            } else if (request.url === "/api/v1/models") {
+              json(listedModel("qwen3.5-0.8b", 262144));
+            } else if (request.url === "/api/v1/models/load") {
+              json({ status: "loaded", instance_id: "prepared-large" });
             } else {
-              response.writeHead(200, { "content-type": "text/event-stream" }).end(
-                `data: ${JSON.stringify({
-                  id: "test-completion",
-                  object: "chat.completion.chunk",
-                  created: 1,
-                  model: "prepared-large",
-                  choices: [
-                    { index: 0, delta: { content: "Authenticated." }, finish_reason: "stop" },
-                  ],
-                })}\n\ndata: [DONE]\n\n`,
-              );
+              response
+                .writeHead(200, { "content-type": "text/event-stream" })
+                .end(messagesTextResponse("Authenticated."));
             }
           });
         },
         async (origin) => {
-          const configFor = (apiKey: SecretInput | undefined): OpenClawConfig => ({
-            models: {
-              providers: {
-                lmstudio: {
-                  baseUrl: `${origin}/v1`,
-                  api: "openai-completions",
-                  apiKey,
-                  models: [],
-                  ...(kind === "header"
-                    ? { headers: { Authorization: `Bearer ${expectedKey}` } }
-                    : {}),
-                },
+          const configFor = (apiKey: SecretInput | undefined): OpenClawConfig =>
+            createModelProviderConfig({
+              lmstudio: {
+                baseUrl: `${origin}/v1`,
+                api: "openai-completions",
+                apiKey,
+                models: [],
+                headers,
               },
-            },
-          });
-          const source = configFor({
-            source: "store",
-            provider: "default",
-            id: "LMSTUDIO_API_KEY",
-          });
+            });
           const runtime = configFor("synthetic-store-key");
           const config = kind === "header" ? configFor("lmstudio-local") : runtime;
           if (kind !== "header") {
-            setRuntimeConfigSnapshot(runtime, source);
+            setRuntimeConfigSnapshot(
+              runtime,
+              configFor({ source: "store", provider: "default", id: "LMSTUDIO_API_KEY" }),
+            );
           }
-          const apiKey =
-            kind === "header"
-              ? "lmstudio-local"
-              : kind === "runtime"
-                ? expectedKey
-                : (
-                    await resolveApiKeyForProvider({
-                      provider: "lmstudio",
-                      cfg: config,
-                      secretSentinels: true,
-                    })
-                  ).apiKey;
+          let apiKey: string | undefined = kind === "header" ? "lmstudio-local" : expectedKey;
+          if (kind === "store") {
+            const resolved = await resolveApiKeyForProvider({
+              provider: "lmstudio",
+              cfg: config,
+              secretSentinels: true,
+            });
+            apiKey = resolved.apiKey;
+          }
           const provider = capturePluginRegistration(plugin).providers[0];
-          if (!provider?.wrapStreamFn) {
-            throw new Error("LM Studio stream wrapper was not registered");
-          }
-          const model: Parameters<StreamFn>[0] = {
-            id: "test-model",
-            name: "Test model",
-            provider: "lmstudio",
-            api: "openai-completions",
-            baseUrl: `${origin}/v1`,
-            contextWindow: 64000,
-            contextTokens: 64000,
-            maxTokens: 128,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            ...(kind === "header" ? { headers: { Authorization: `Bearer ${expectedKey}` } } : {}),
-          };
+          assert(provider?.wrapStreamFn, "LM Studio stream wrapper was not registered");
+          const model = streamModel(`${origin}/v1`, { headers });
           const wrapped = provider.wrapStreamFn({
             provider: "lmstudio",
             modelId: model.id,
             config,
+            streamFn:
+              provider.createStreamFn?.({
+                provider: "lmstudio",
+                modelId: model.id,
+                model,
+                config,
+              }) ?? streamSimple,
           });
-          if (!wrapped) {
-            throw new Error("LM Studio stream wrapper was not created");
-          }
+          assert(wrapped, "LM Studio stream wrapper was not created");
           const events = [];
           for await (const event of await wrapped(
             model,
@@ -140,17 +114,17 @@ it.each(["store", "runtime", "header"] as const)(
             events.push(event);
           }
           expect(requests).toEqual([
-            { path: "/api/v1/models", authorization: `Bearer ${expectedKey}`, body: undefined },
-            {
-              path: "/api/v1/models/load",
-              authorization: `Bearer ${expectedKey}`,
-              body: { model: "test-model", context_length: 64000 },
-            },
-            expect.objectContaining({
-              path: "/v1/chat/completions",
-              authorization: `Bearer ${expectedKey}`,
-              body: expect.objectContaining({ model: "prepared-large" }),
-            }),
+            ["/api/v1/models", authorization, undefined],
+            [
+              "/api/v1/models/load",
+              authorization,
+              { model: "qwen3.5-0.8b", context_length: 16384 },
+            ],
+            [
+              "/v1/messages",
+              kind === "header" ? authorization : expectedKey,
+              expect.objectContaining({ model: "prepared-large" }),
+            ],
           ]);
           expect(events.at(-1)).toMatchObject({
             type: "done",

@@ -5,6 +5,8 @@ import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
+import { promptReport } from "../config/sessions/system-prompt-report.test-support.js";
 import { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 import type {
   SessionCatalogProvider,
@@ -187,23 +189,38 @@ describe("session upstream monitor", () => {
     expect(await events()).toEqual([]);
   });
 
-  it("records watched activity once and advances its marker without host SQL", async () => {
+  it("records watched activity without loading session snapshots or issuing host SQL", async () => {
     await createLink();
     await createLink(otherKey, "claude", false);
     await upsertSessionEntryCore(
       { sessionKey, agentId: "main", env: database.env },
-      { sessionId: "session", updatedAt: 100 },
+      {
+        sessionId: "session",
+        updatedAt: 100,
+        skillsSnapshot: { prompt: "saved prompt".repeat(2048), skills: [] },
+        sessionDiffBaseline: { version: 1, sessionId: "session", root: "/synthetic", files: [] },
+        systemPromptReport: promptReport(1, 1, 0),
+      },
     );
     mockOwnTexts();
     check.mockImplementation(async (probes) =>
       probes.map((probe) => activity({ sessionKey: probe.sessionKey })),
     );
     const hostSql = observeMainThreadSql();
+    const reads = vi.spyOn(sessionReads, "readSessionEntryReadOnlyInWorker");
     try {
       await run(2, { now: () => 3_000 });
       hostSql.expectIdle();
     } finally {
       hostSql.restore();
+    }
+    expect(reads.mock.results).toHaveLength(4);
+    for (const result of reads.mock.results) {
+      const entry = await result.value;
+      expect(entry).toMatchObject({ sessionId: "session" });
+      expect(entry).not.toHaveProperty("skillsSnapshot");
+      expect(entry).not.toHaveProperty("sessionDiffBaseline");
+      expect(entry).not.toHaveProperty("systemPromptReport");
     }
     expect(await events()).toEqual([
       expect.objectContaining({ kind: "human_direct_message", occurredAt: 2_000 }),

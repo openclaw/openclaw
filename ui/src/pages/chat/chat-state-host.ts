@@ -13,6 +13,7 @@ import type {
   ChatGuardianNotice,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
+import type { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { ChatErrorState } from "./chat-error-state.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
@@ -45,6 +46,8 @@ export type ChatPageHost = ChatHost &
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
+    accessPreferences?: DraftPreferenceState;
+    accessPreferenceRevision?: number;
     assistantName: string;
     assistantAvatar: string | null;
     assistantAvatarStatus: "none" | "local" | "remote" | "data" | null;
@@ -63,6 +66,7 @@ export type ChatPageHost = ChatHost &
     resourceBasePath: string;
     chatAvatarUrl: string | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
+    cacheChatAvatarSource?: (agentId: string, source: string | null) => void;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
     chatAvatarReason: string | null;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;

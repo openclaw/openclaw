@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -251,6 +252,33 @@ describe("profile avatar HTTP endpoint", () => {
     await handle(unauthorized, pathname);
     expect(unauthorized.end).not.toHaveBeenCalled();
     expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
+  });
+
+  it("serves the verified GitHub photo before Gravatar and keeps an uploaded photo authoritative", async () => {
+    const { writes, options, createReader } = await realProfiles("github-avatar-");
+    const person = writes.syncGitHubIdentity(
+      {
+        identity: { accountId: 424242, login: "octocat" },
+        authenticationAlias: { kind: "email", email: "private@example.test" },
+      },
+      options,
+    );
+    createProfileAvatarReader.mockImplementation((id: string) => createReader(id, options));
+    const bytes = new Uint8Array([1, 2, 3]);
+    const fetchImage = vi.fn(async () => image(bytes));
+    const res = response();
+    await serveProfile(person.id, res, fetchImage);
+    expectHead(res, 200, { "Content-Type": "image/png" });
+    expect(res.end).toHaveBeenCalledWith(bytes);
+    expect(fetchImage).toHaveBeenCalledExactlyOnceWith(
+      "https://avatars.githubusercontent.com/u/424242?v=4",
+      expect.objectContaining({ redirect: "error" }),
+    );
+    writes.setAvatar(person.id, new Uint8Array([9]), "image/png", options);
+    const uploaded = response();
+    await serveProfile(person.id, uploaded, fetchImage);
+    expect(uploaded.end).toHaveBeenCalledWith(new Uint8Array([9]));
+    expect(fetchImage).toHaveBeenCalledTimes(1);
   });
 
   it("does not inherit the host photo through a merged owner before Doctor repair", async () => {
@@ -551,13 +579,7 @@ describe("profile avatar HTTP endpoint", () => {
         cancellationStarted.resolve();
         return cancellation.promise;
       });
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(600_000));
-          controller.enqueue(new Uint8Array(600_000));
-        },
-        cancel,
-      });
+      const body = makeStallingStream([new Uint8Array(600_000), new Uint8Array(600_000)], cancel);
       const fetchImpl = vi.fn().mockResolvedValue(image(body));
       const res = response();
       const handling = serveProfile(profileId, res, fetchImpl);

@@ -84,24 +84,30 @@ it("reports a host-owned install before Git discovery", async () => {
   );
 });
 
-it("defers self-update to external service policy", async () => {
-  vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
-  await expectSkipped();
-  expect(mocks.note).toHaveBeenCalledWith(
-    expect.stringContaining("external supervisor's stop/update/finalize/restart workflow"),
-    "Update",
-  );
-  expect(mocks.outro).not.toHaveBeenCalled();
-});
-
-it.each(["nonInteractive", "non-TTY"] as const)(
-  "requires interactive authority: %s",
+it.each(["external", "nonInteractive", "non-TTY", "declined"] as const)(
+  "leaves updating to the owner when %s",
   async (gate) => {
-    if (gate === "non-TTY") {
-      tty.set(false);
+    vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", gate === "external" ? "external" : undefined);
+    tty.set(gate !== "non-TTY");
+    mocks.confirm.mockResolvedValue(gate !== "declined");
+    await expect(
+      offer({ options: gate === "nonInteractive" ? { nonInteractive: true } : {} }),
+    ).resolves.toBe(false);
+    expect(mocks.updateCommand).not.toHaveBeenCalled();
+    expect(mocks.outro).not.toHaveBeenCalled();
+    if (gate === "declined") {
+      expect(mocks.confirm).toHaveBeenCalledOnce();
+    } else {
+      expect(mocks.confirm).not.toHaveBeenCalled();
     }
-    await expectSkipped({ options: gate === "nonInteractive" ? { nonInteractive: true } : {} });
-    expect(mocks.git).not.toHaveBeenCalled();
+    if (gate === "external") {
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("external supervisor's stop/update/finalize/restart workflow"),
+        "Update",
+      );
+    } else if (gate !== "declined") {
+      expect(mocks.git).not.toHaveBeenCalled();
+    }
   },
 );
 
@@ -130,17 +136,6 @@ it.each([undefined, "still-starting"] as const)(
     }
   },
 );
-
-it("leaves a declined update with Doctor", async () => {
-  mocks.confirm.mockResolvedValue(false);
-  await expect(offer()).resolves.toBe(false);
-  expect(mocks.confirm).toHaveBeenCalledWith({
-    message: "Update OpenClaw from git before running doctor?",
-    initialValue: true,
-  });
-  expect(mocks.updateCommand).not.toHaveBeenCalled();
-  expect(mocks.outro).not.toHaveBeenCalled();
-});
 
 it.each([
   ["another checkout", gitResult(0, "/repo/other\n"), true],

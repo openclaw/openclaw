@@ -1,0 +1,3 @@
+# Own the existing build-recovery fixture Git root; reject hidden recovery failures.
+# Assert the expected startup disconnect and no additional failure after reconnect.
+12

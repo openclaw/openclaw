@@ -232,7 +232,7 @@ model descriptor.
 
 - `profiles`: built-in tool profiles that expose the plugin tool by default. Valid values are `minimal`, `coding`, `messaging`, and `full`. These contributions merge into the corresponding profile allowlist; explicit operator allowlists and deny rules remain authoritative.
 - `optional`: marks the tool as non-required for plugin activation.
-- `replaySafe`: marks tool execution as safe to repeat after an incomplete model turn.
+- `replaySafe`: marks tool execution as safe to repeat during live model retry or overflow handling in the same process. It does not enable execution replay after a Gateway restart.
 - `sideEffecting`: marks execution as potentially changing durable or external state.
 
 These fields supplement the shared `configSignals` and `authSignals` fields above.

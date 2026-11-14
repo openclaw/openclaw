@@ -26,6 +26,7 @@ import type {
   AgentToolCall,
   AgentToolResult,
   ToolLoopWarning,
+  ToolLoopIntervention,
   ToolResultContentSource,
 } from "./types.js";
 
@@ -59,7 +60,11 @@ export function hidesToolCallFromChannelProgress(
 }
 
 export type FinalizedToolCallOutcome = {
-  loopOutcome?: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">;
+  intervention?: ToolLoopIntervention;
+  loopOutcome?: Pick<
+    AfterToolOutcomeContext,
+    "toolCall" | "args" | "result" | "isError" | "errorKind"
+  >;
   toolCall: AgentToolCall;
   result: AgentToolResult<unknown>;
   isError: boolean;
@@ -116,6 +121,7 @@ export async function finalizeExecutedToolCall(
       result,
       isError,
       executionStarted: executed.executionStarted,
+      ...(executed.intervention ? { intervention: executed.intervention } : {}),
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
       ...(executed.executionStarted && !executed.callerCancelled
         ? resolveToolResultContentSource(prepared.tool, executed.result)
@@ -199,6 +205,7 @@ export async function finalizeToolCallOutcome(
       args,
       result: outcome.result,
       isError: outcome.isError,
+      ...(outcome.errorKind ? { errorKind: outcome.errorKind } : {}),
     };
   }
   const warning = batch.warnings?.find((entry) => entry.toolCallId === outcome.toolCall.id);
@@ -260,6 +267,9 @@ export function createErrorToolResult(
   };
 }
 
+export const TOOL_LOOP_BLOCKED_MESSAGE =
+  "This tool was not executed because tool-loop recovery blocked further execution. Reassess the task before choosing the next action.";
+
 const STEERING_TOOL_SKIP_MESSAGE = "Skipped to process an incoming message.";
 const TOOL_ADMISSION_FAILURE_MESSAGE = "Tool execution was blocked before launch.";
 const TOOL_ADMISSION_FAILURE_DETAILS = {
@@ -273,6 +283,7 @@ export async function completeUnstartedToolCall(
   options: {
     args?: unknown;
     reason?: "admission" | "steering";
+    intervention?: ToolLoopIntervention;
     startEmitted?: boolean;
     hideFromChannelProgress?: boolean;
   } = {},
@@ -286,16 +297,20 @@ export async function completeUnstartedToolCall(
     {
       toolCall,
       result: createErrorToolResult(
-        options.reason === "admission"
-          ? TOOL_ADMISSION_FAILURE_MESSAGE
-          : options.reason === "steering"
-            ? STEERING_TOOL_SKIP_MESSAGE
-            : "Operation aborted",
-        options.reason === "admission"
-          ? TOOL_ADMISSION_FAILURE_DETAILS
-          : options.reason === "steering"
-            ? { status: "skipped", deniedReason: "steering" }
-            : undefined,
+        options.intervention
+          ? TOOL_LOOP_BLOCKED_MESSAGE
+          : options.reason === "admission"
+            ? TOOL_ADMISSION_FAILURE_MESSAGE
+            : options.reason === "steering"
+              ? STEERING_TOOL_SKIP_MESSAGE
+              : "Operation aborted",
+        options.intervention
+          ? { status: "blocked", deniedReason: "tool-loop", intervention: options.intervention }
+          : options.reason === "admission"
+            ? TOOL_ADMISSION_FAILURE_DETAILS
+            : options.reason === "steering"
+              ? { status: "skipped", deniedReason: "steering" }
+              : undefined,
       ),
       isError: true,
       executionStarted: false,

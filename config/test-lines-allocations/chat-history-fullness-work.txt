@@ -1,0 +1,2 @@
+# Prove bounded history scans do not compose discarded wire responses before final paging.
+9

@@ -1,7 +1,7 @@
-// Browser tests cover interaction policy cancellation and dialog interruption.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
+import { withFakeTimers } from "./pw-tools-core.guard-test-support.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -19,67 +19,67 @@ type NavigationGuardCall = {
   signal?: AbortSignal;
 };
 
-function policyCheckWithSignal(
+async function policyCheckWithSignal(
   policy: Promise<void>,
   signal: AbortSignal | undefined,
 ): Promise<void> {
   if (!signal) {
     return policy;
   }
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    const onAbort = () => {
-      cleanup();
-      reject(
-        signal.reason instanceof Error
-          ? signal.reason
-          : new Error(String(signal.reason ?? "aborted")),
-      );
-    };
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-    policy.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        cleanup();
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
+  signal.throwIfAborted();
+  const aborted = createDeferred<void>();
+  const onAbort = () => aborted.reject(signal.reason);
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await Promise.race([policy, aborted.promise]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
-const strictNavigationOptions = () =>
-  ({
-    cdpUrl: "http://127.0.0.1:18792",
-    targetId: "tab-1",
-    ssrfPolicy: { allowPrivateNetwork: false },
-  }) as const;
-
-function installInteractionPage(
-  page: Record<string, unknown>,
-  locator: Record<string, unknown>,
-): void {
-  setPwToolsCoreCurrentPage(page);
-  setPwToolsCoreCurrentRefLocator(locator);
-}
-
-function mockNavigationGuardOnce(
-  implementation: (args: NavigationGuardCall) => Promise<unknown>,
-): void {
+function interactionFixture({ hover = async () => {}, actionFirst = false, dialog = false } = {}) {
+  const ctrl = new AbortController();
+  const started = createDeferred<void>();
+  const policy = createDeferred<void>();
+  let policySignal: AbortSignal | undefined;
+  let guardSettled = false;
+  setPwToolsCoreCurrentPage({ url: vi.fn(() => "about:blank") });
+  setPwToolsCoreCurrentRefLocator({ hover: vi.fn(hover) });
   getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mockImplementationOnce(
-    implementation,
+    async ({ action, onPolicyCheckStarted, page, signal }: NavigationGuardCall) => {
+      policySignal = signal;
+      const actionTask = action(page.url());
+      const check = dialog ? policy.promise : policyCheckWithSignal(policy.promise, signal);
+      onPolicyCheckStarted?.(check);
+      started.resolve();
+      try {
+        if (actionFirst) {
+          await actionTask;
+        }
+        await check;
+        if (!actionFirst) {
+          await actionTask;
+        }
+      } finally {
+        guardSettled = true;
+      }
+    },
   );
-}
-
-async function withFakeTimers(run: () => Promise<void>): Promise<void> {
-  vi.useFakeTimers();
-  await run().finally(() => vi.useRealTimers());
+  return {
+    ctrl,
+    started,
+    policy,
+    signal: () => policySignal,
+    settled: () => guardSettled,
+    run: () =>
+      interactions.hoverViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "tab-1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+        signal: ctrl.signal,
+      }),
+  };
 }
 
 installPwToolsCoreTestHooks();
@@ -91,140 +91,61 @@ describe("pw-tools-core interaction policy cancellation", () => {
     );
   });
 
-  it("does not leave caller cancellation pending behind a never-settling policy check", async () => {
+  it.each([true, false])("cancels pending policy work (action finished=%s)", async (finished) => {
     await withFakeTimers(async () => {
-      const ctrl = new AbortController();
-      const policyStarted = createDeferred<void>();
-      const policy = createDeferred<void>();
-      let policySignal: AbortSignal | undefined;
-      installInteractionPage({ url: vi.fn(() => "about:blank") }, { hover: vi.fn(async () => {}) });
-      mockNavigationGuardOnce(async ({ action, onPolicyCheckStarted, page, signal }) => {
-        policySignal = signal;
-        const actionTask = action(page.url());
-        const policyCheck = policyCheckWithSignal(policy.promise, signal);
-        onPolicyCheckStarted?.(policyCheck);
-        policyStarted.resolve();
-        await actionTask;
-        await policyCheck;
+      const hover = createDeferred<void>();
+      const fixture = interactionFixture({
+        actionFirst: finished,
+        hover: finished ? async () => {} : () => hover.promise,
       });
-
-      const task = interactions.hoverViaPlaywright({
-        ...strictNavigationOptions(),
-        ref: "1",
-        signal: ctrl.signal,
-      });
-      const settled = task.then(
-        () => true,
-        () => true,
+      const { ctrl, started, policy } = fixture;
+      const outcomes: unknown[] = [];
+      const completion = fixture.run().then(
+        (value) => {
+          outcomes.push(value);
+        },
+        (error: unknown) => {
+          outcomes.push(error);
+        },
       );
-      await policyStarted.promise;
-      await vi.advanceTimersByTimeAsync(250);
-
+      const abortError = new Error("aborted while policy pending");
       try {
-        const observeSettlement = async (): Promise<boolean> => {
-          const observed = Promise.race([
-            settled,
-            new Promise<boolean>((resolve) => {
-              setTimeout(() => resolve(false), 1);
-            }),
-          ]);
-          await vi.advanceTimersByTimeAsync(1);
-          return await observed;
-        };
-
-        expect(await observeSettlement()).toBe(false);
-        ctrl.abort(new Error("aborted while policy remained pending"));
-        expect(policySignal?.aborted).toBe(true);
-        expect(await observeSettlement()).toBe(true);
+        await started.promise;
+        await vi.advanceTimersByTimeAsync(250);
+        expect(outcomes).toEqual([]);
+        ctrl.abort(abortError);
+        expect(fixture.signal()?.aborted).toBe(true);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(outcomes).toEqual([abortError]);
       } finally {
         policy.resolve();
-        await settled;
+        hover.resolve();
+        await completion;
       }
     });
   });
 
-  it("returns caller abort after an in-flight policy check observes cancellation", async () => {
-    const ctrl = new AbortController();
-    const hover = createDeferred<void>();
-    const policy = createDeferred<void>();
-    const started = createDeferred<void>();
-    const abortError = new Error("aborted while policy pending");
-    let policySignal: AbortSignal | undefined;
-    installInteractionPage(
-      { url: vi.fn(() => "about:blank") },
-      {
-        hover: vi.fn(() => hover.promise),
-      },
-    );
-    mockNavigationGuardOnce(async ({ action, onPolicyCheckStarted, page, signal }) => {
-      policySignal = signal;
-      const actionTask = action(page.url());
-      onPolicyCheckStarted?.(policyCheckWithSignal(policy.promise, signal));
-      started.resolve();
-      await policyCheckWithSignal(policy.promise, signal);
-      return await actionTask;
-    });
-
-    const task = interactions.hoverViaPlaywright({
-      ...strictNavigationOptions(),
-      ref: "1",
-      signal: ctrl.signal,
-    });
-    await started.promise;
-    ctrl.abort(abortError);
-
-    await expect(task).rejects.toBe(abortError);
-    expect(policySignal?.aborted).toBe(true);
-    hover.resolve();
-  });
-
   it("keeps policy work live when an observed dialog interrupts the interaction", async () => {
     await withFakeTimers(async () => {
-      const ctrl = new AbortController();
       const dialogError = new BrowserObservedDialogBlockedError({
         dialogs: { pending: [], recent: [] },
       });
-      const policyStarted = createDeferred<void>();
-      const policy = createDeferred<void>();
       const hover = createDeferred<void>();
-      let policySignal: AbortSignal | undefined;
-      let guardSettled = false;
-      installInteractionPage(
-        { url: vi.fn(() => "about:blank") },
-        { hover: vi.fn(() => hover.promise) },
-      );
+      const fixture = interactionFixture({ hover: () => hover.promise, dialog: true });
+      const { ctrl, started, policy } = fixture;
       getPwToolsCoreSessionMocks().isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
       getPwToolsCoreSessionMocks().isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
-      mockNavigationGuardOnce(async ({ action, onPolicyCheckStarted, page, signal }) => {
-        policySignal = signal;
-        const actionTask = action(page.url());
-        onPolicyCheckStarted?.(policy.promise);
-        policyStarted.resolve();
-        try {
-          await policy.promise;
-          await actionTask;
-        } finally {
-          guardSettled = true;
-        }
-      });
-
-      const task = interactions.hoverViaPlaywright({
-        ...strictNavigationOptions(),
-        ref: "1",
-        signal: ctrl.signal,
-      });
-      await policyStarted.promise;
+      const task = fixture.run();
+      await started.promise;
       ctrl.abort(dialogError);
       policy.resolve();
-
       await expect(task).rejects.toBe(dialogError);
-      expect(policySignal?.aborted).toBe(false);
-      expect(guardSettled).toBe(false);
-
+      expect(fixture.signal()?.aborted).toBe(false);
+      expect(fixture.settled()).toBe(false);
       hover.resolve();
       await vi.advanceTimersByTimeAsync(250);
       await Promise.resolve();
-      expect(guardSettled).toBe(true);
+      expect(fixture.settled()).toBe(true);
     });
   });
 });

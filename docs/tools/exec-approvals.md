@@ -621,6 +621,10 @@ operation without prompting while the grant is valid. The approval card says
 so up front: automation approvals carry a scope line describing exactly what
 Always allow will mint.
 
+Card and ledger previews truncate sanitized text without splitting UTF-16 surrogate pairs.
+Those display limits do not shorten the command, working directory, or
+environment used to bind and match a grant.
+
 ### What a grant covers, and when it stops
 
 A grant is rejected and a normal prompt is required when the job is deleted or its
@@ -704,7 +708,7 @@ native approval clients), see
 
 ## Control UI editing
 
-Use the **Control UI -> Nodes -> Exec approvals** card to edit defaults,
+Use the **Control UI → Devices → Command approvals** card to edit defaults,
 per-agent overrides, and allowlists. Pick a scope (Defaults or an agent),
 tweak the policy, add/remove allowlist patterns, then **Save**. The UI
 shows last-used metadata per pattern so you can keep the list tidy.

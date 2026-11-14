@@ -1,0 +1,3 @@
+# Shared plugin message lookup/fallback/interpolation and catalog-ownership regressions.
+# Preserves 57 added test lines; 10 cases took 163 ms Vitest wall time locally.
+57

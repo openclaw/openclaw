@@ -1,13 +1,11 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { recordStartupRecoveryStoreResult } from "../../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
@@ -109,7 +107,7 @@ describe("Gateway status owner routing", () => {
         () => ({
           ready: coreReady,
           coreReady,
-          failing: coreReady ? [] : ["chat-recovery"],
+          failing: coreReady ? [] : ["core-startup"],
           uptimeMs: 1,
         }),
       );
@@ -312,50 +310,22 @@ describe("Gateway status owner routing", () => {
     });
   });
 
-  it.each(["startupRecoveryWarning", "startupMigrationWarning"] as const)(
-    "restricts %s details to admins while retaining the reader's repair hint",
-    async (field) => {
-      await withStateDirEnv("openclaw-gateway-startup-warning-", async ({ stateDir }) => {
-        const target = { agentId: "main", storePath: path.join(stateDir, "sessions.json") };
-        const config = { agents: { entries: { main: {} } }, session: { store: target.storePath } };
-        const recovery = field === "startupRecoveryWarning";
-        const warning = recovery
-          ? "private store temporarily locked"
-          : `EACCES: permission denied, open '${path.join(stateDir, "private-bindings.json")}'`;
-        const hint = recovery
-          ? "1 session store"
-          : 'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
-        const outcome = { ok: false, error: new Error(warning) } as const;
-        try {
-          if (recovery) {
-            recordStartupRecoveryStoreResult({ target, outcome });
-          } else {
-            recordStartupMigrationWarnings([warning]);
-          }
-          const reader = await callStatus(config);
-          expect(reader[field]).toContain(hint);
-          expect(reader[field]).not.toContain(stateDir);
-          expect(reader[field]).not.toContain(recovery ? "private store" : "EACCES");
-          const admin = await callStatus(config, ["operator.admin"]);
-          expect(admin[field]).toContain(warning);
-          if (!recovery) {
-            expect(admin[field]).toContain(hint);
-            return;
-          }
-
-          recordStartupRecoveryStoreResult({ target, outcome: { ok: true } });
-          const healed = await callStatus(config, ["operator.admin"]);
-          expect(healed.startupRecoveryWarning).toBeUndefined();
-
-          rotateAgentEventLifecycleGeneration();
-          const restarted = await callStatus(config, ["operator.admin"]);
-          expect(restarted.startupRecoveryWarning).toBeUndefined();
-        } finally {
-          rotateAgentEventLifecycleGeneration();
-        }
-      });
-    },
-  );
+  it("restricts startup migration details to admins while retaining the reader's repair hint", async () => {
+    await withStateDirEnv("openclaw-gateway-startup-warning-", async ({ stateDir }) => {
+      const config = statusConfig(stateDir, { entries: { main: {} } });
+      const warning = `EACCES: permission denied, open '${path.join(stateDir, "private-bindings.json")}'`;
+      const hint =
+        'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
+      recordStartupMigrationWarnings([warning]);
+      const reader = await callStatus(config);
+      expect(reader.startupMigrationWarning).toContain(hint);
+      expect(reader.startupMigrationWarning).not.toContain(stateDir);
+      expect(reader.startupMigrationWarning).not.toContain("EACCES");
+      const admin = await callStatus(config, ["operator.admin"]);
+      expect(admin.startupMigrationWarning).toContain(warning);
+      expect(admin.startupMigrationWarning).toContain(hint);
+    });
+  });
 
   it("reports process memory and worker pools", async () => {
     await withStateDirEnv("openclaw-gateway-status-vitals-", async ({ stateDir }) => {

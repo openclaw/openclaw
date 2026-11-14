@@ -1,0 +1,2 @@
+# Isolate ambient DNS ordering in network-decision fixtures.
+1

@@ -155,19 +155,16 @@ it("does not load optional review or delivery runtimes for full/off execution", 
 });
 
 it("records elevated execution without logging the command payload", async () => {
-  const logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
-  try {
-    const result = await run(
-      { host: "gateway", mode: "full", elevated },
-      "echo private-elevated-payload",
-      { elevated: true },
-    );
-    expectOutput(result, "private-elevated-payload");
-    expect(logInfo).toHaveBeenCalledWith("exec: elevated command");
-    expect(JSON.stringify(logInfo.mock.calls)).not.toContain("private-elevated-payload");
-  } finally {
-    logInfo.mockRestore();
-  }
+  using logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
+
+  const result = await run(
+    { host: "gateway", mode: "full", elevated },
+    "echo private-elevated-payload",
+    { elevated: true },
+  );
+  expectOutput(result, "private-elevated-payload");
+  expect(logInfo).toHaveBeenCalledWith("exec: elevated command");
+  expect(JSON.stringify(logInfo.mock.calls)).not.toContain("private-elevated-payload");
 });
 
 it.each([false, true])("honors ask overrides only for trusted callers (%s)", async (trusted) => {

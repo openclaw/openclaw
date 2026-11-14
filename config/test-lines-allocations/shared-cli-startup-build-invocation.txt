@@ -1,0 +1,2 @@
+18
+# Preserve separate CLI/plugin readiness, timeout namespaces/overrides, and signal failures.

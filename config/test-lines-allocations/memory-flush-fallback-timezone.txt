@@ -1,0 +1,2 @@
+# Pin the fixed memory flush fallback clock to its expected UTC day.
+1

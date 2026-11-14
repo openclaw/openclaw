@@ -137,11 +137,11 @@ fun ShellScreen(
     FoldAwareContent(
       features = features,
       modifier = modifier.background(ClawTheme.colors.canvas),
-      bookPanesEnabled = !commandOpen && pendingTrust == null,
+      sidebarPanesEnabled = !commandOpen && pendingTrust == null,
       tabletopEnabled = nav.activeTab == Tab.Chat && !commandOpen && pendingTrust == null,
     ) { foldBounds ->
-      val bookPanes = foldBounds.book
-      val permanentSidebar = bookPanes != null
+      val sidebarPanes = foldBounds.sidebar
+      val permanentSidebar = sidebarPanes != null
       // Mode changes discard modal operations and their drag state, not the two content slots.
       val sidebarDrawerState = key(permanentSidebar) { rememberDrawerState(initialValue = DrawerValue.Closed) }
       var sidebarRowDragging by remember(sidebarDrawerState) { mutableStateOf(false) }
@@ -233,7 +233,7 @@ fun ShellScreen(
       Box(modifier = Modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
         SidebarNavigationShell(
           drawerState = sidebarDrawerState,
-          bookPanes = bookPanes,
+          sidebarPanes = sidebarPanes,
           sidebarBand = foldBounds.sidebarBand,
           gesturesEnabled = !sidebarRowDragging,
           drawerContent = {
@@ -521,6 +521,10 @@ private fun OverviewScreen(
             sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
+            onNewChat = {
+              viewModel.startNewChat(worktree = false)
+              onSelectTab(Tab.Chat)
+            },
             onOpenAgent = { onOpenSettingsRoute(SettingsRoute.Agents) },
             onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
           )
@@ -650,6 +654,7 @@ private fun OverviewPrimaryPanel(
   sessionCount: Int,
   cronJobCount: Int,
   onOpenChat: () -> Unit,
+  onNewChat: () -> Unit,
   onOpenAgent: () -> Unit,
   onOpenGateway: () -> Unit,
 ) {
@@ -659,9 +664,7 @@ private fun OverviewPrimaryPanel(
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         OverviewAgentBadge(text = agentBadge, active = isConnected, avatarSource = agentAvatarSource)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(text = if (pendingRunCount > 0) nativeString("\$agentName is working", agentName) else agentName, style = ClawTheme.type.title, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-          }
+          Text(text = if (pendingRunCount > 0) nativeString("\$agentName is working", agentName) else agentName, style = ClawTheme.type.title, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
           Text(text = overviewAgentActivityText(isConnected = isConnected, pendingRunCount = pendingRunCount, sessionCount = sessionCount, cronJobCount = cronJobCount, statusText = statusText), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         ClawSecondaryButton(text = nativeString("View"), onClick = onOpenAgent)
@@ -674,6 +677,7 @@ private fun OverviewPrimaryPanel(
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         ClawPrimaryButton(text = nativeString("Chat"), icon = Icons.Outlined.ChatBubbleOutline, onClick = onOpenChat, modifier = Modifier.weight(1f))
         ClawSecondaryButton(text = nativeString("Talk"), icon = Icons.Outlined.MicNone, onClick = onOpenChat, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = nativeString("New chat"), onClick = onNewChat, modifier = Modifier.weight(1f))
       }
       if (!isConnected) {
         ClawSecondaryButton(text = nativeString("Reconnect gateway"), icon = SettingsRoute.Gateway.icon, onClick = onOpenGateway, modifier = Modifier.fillMaxWidth())

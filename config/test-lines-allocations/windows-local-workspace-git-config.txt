@@ -1,0 +1,2 @@
+# Win32/POSIX checkout isolation regression plus portable projection fixture.
+88

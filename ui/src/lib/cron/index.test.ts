@@ -17,13 +17,12 @@ import {
   startCronClone,
 } from "../../lib/cron/index.ts";
 import type { CronState } from "../../lib/cron/types.ts";
-import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import {
+  DEFAULT_CRON_FORM,
   createCronJob,
-  createMethodRequest,
-  createStateWithRequest as createState,
   cronJobsListResponse as jobsPage,
-} from "./cron.test-support.ts";
+} from "../../test-helpers/cron.ts";
+import { createMethodRequest, createStateWithRequest as createState } from "./cron.test-support.ts";
 
 function requestFor(jobId: string, options: { existing?: boolean } = {}) {
   const existingJob = createCronJob(jobId, "Existing job");
@@ -293,19 +292,23 @@ it("commits authoritative toggle state and advances an open editor revision", as
   state.cronForm.name = "Unsaved rename";
 
   const toggle = toggleCronJob(state, loadedJob, false);
-  await vi.waitFor(() => expect(request).toHaveBeenCalledWith("cron.list", expect.anything()));
-  expect(sent(request, "cron.update")).toMatchObject({
-    id: loadedJob.id,
-    expectedConfigRevision: "revision-loaded",
-    patch: { enabled: false },
-  });
-  expect(state).toMatchObject({
-    cronJobs: [updatedJob],
-    cronEditingJob: updatedJob,
-    cronForm: { name: "Unsaved rename" },
-  });
-
-  listResponse.resolve(jobsPage([updatedJob]));
+  try {
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("cron.list", expect.anything()));
+    expect(request).toHaveBeenCalledWith("cron.status", {});
+    expect(sent(request, "cron.update")).toMatchObject({
+      id: loadedJob.id,
+      expectedConfigRevision: "revision-loaded",
+      patch: { enabled: false },
+    });
+    expect(state).toMatchObject({
+      cronJobs: [updatedJob],
+      cronEditingJob: updatedJob,
+      cronForm: { name: "Unsaved rename" },
+    });
+  } finally {
+    listResponse.resolve(jobsPage([updatedJob]));
+    await toggle;
+  }
   await expect(toggle).resolves.toBe(true);
   await addCronJob(state);
   const updateCalls = request.mock.calls.filter(([method]) => method === "cron.update");
@@ -401,6 +404,8 @@ it("clears stored alert routing without losing skipped-run policy", async () => 
 
 it.each`
   form                                                                                                            | field                            | error
+  ${{ scheduleKind: "cron", cronExpr: "bad", cronTz: "" }}                                                        | ${"cronExpr"}                    | ${"cron.errors.cronExprInvalid"}
+  ${{ scheduleKind: "cron", cronExpr: "0 7 * * *", cronTz: "Mars/Phobos" }}                                       | ${"cronTz"}                      | ${"cron.errors.cronTzInvalid"}
   ${{ scheduleKind: "cron", staggerAmount: "8640000000000.001", staggerUnit: "seconds" }}                         | ${"staggerAmount"}               | ${"cron.errors.staggerAmountInvalid"}
   ${{ scheduleKind: "cron", staggerAmount: "0.0001" }}                                                            | ${"staggerAmount"}               | ${"cron.errors.staggerAmountInvalid"}
   ${{ timeoutSeconds: "Infinity" }}                                                                               | ${"timeoutSeconds"}              | ${"cron.errors.timeoutInvalid"}

@@ -1,0 +1,2 @@
+37
+# Real Gateway null reset before the first row, with canonical/title cleanup.

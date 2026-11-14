@@ -175,21 +175,17 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   return Object.hasOwn(MIME_SYNONYMS, cleaned) ? MIME_SYNONYMS[cleaned] : cleaned;
 }
 
-/** Returns the bounded buffer prefix used for dependency MIME sniffing. */
-export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
-  if (buffer.byteLength <= FILE_TYPE_SNIFF_MAX_BYTES) {
-    return buffer;
-  }
-  return buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES);
-}
-
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   if (!buffer) {
     return undefined;
   }
   try {
     const { fileTypeFromBuffer } = await import("file-type");
-    const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
+    const type = await fileTypeFromBuffer(
+      buffer.byteLength <= FILE_TYPE_SNIFF_MAX_BYTES
+        ? buffer
+        : buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES),
+    );
     if (type?.mime) {
       return normalizeMimeType(type.mime);
     }

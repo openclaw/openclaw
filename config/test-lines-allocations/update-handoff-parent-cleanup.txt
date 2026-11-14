@@ -1,0 +1,2 @@
+# Reap the real boundary-fixture parent when asynchronous setup rejects.
+35

@@ -1,3 +1,4 @@
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
@@ -12,7 +13,6 @@ import {
   includeContributionOwnsBindings,
 } from "./agent-roster-provenance.js";
 import { captureConfigReadEnvMutation, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
-import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
 import { ConfigIncludeError, ConfigIncludeReadError } from "./includes.js";
 import { createConfigIoContext, type ConfigIoContext } from "./io.context.js";
@@ -54,10 +54,14 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
+import { captureConfigFileWritePathProof } from "./io.write-safety.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
-import { createConfigWriteAuthorityGuard } from "./write-authority.js";
+import {
+  composeConfigWriteAssertions,
+  createConfigWriteAuthorityGuard,
+} from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 let legacyIssuesModule: Promise<typeof import("./io.legacy-issues.runtime.js")> | undefined;
@@ -480,6 +484,7 @@ export async function prepareConfigRecoveryFromContext(
     );
     const plan = await prepareSuspiciousConfigRead({
       deps: previewContext.deps,
+      measure: previewContext.deps.measure,
       configPath: context.configPath,
       raw: current.raw,
       parsed: current.parsed,
@@ -567,13 +572,24 @@ export async function readConfigFileSnapshotForWriteFromContext(
   context: ConfigIoContext,
   options: Pick<ConfigSnapshotReadOptions, "observe"> = {},
 ): Promise<ReadConfigFileSnapshotForWriteResult> {
-  const assertConfigPathForWrite = () => {
+  const assertConfigSelection = () => {
     if (resolveConfigPathForDeps(context.deps) !== context.configPath) {
       throw new ConfigMutationConflictError("config path changed since last load", {
         retryable: false,
       });
     }
   };
+  assertConfigSelection();
+  // Reads may follow file aliases; the writer separately pins its publication target.
+  const pathProof = captureConfigFileWritePathProof(
+    context.configPath,
+    resolvePathViaExistingAncestorSync(context.configPath),
+    context.deps.fs,
+  );
+  const assertConfigPathForWrite = composeConfigWriteAssertions(
+    assertConfigSelection,
+    pathProof.assertCurrent,
+  );
   assertConfigPathForWrite();
   // Per-call observation policy must not recapture the factory's path or environment.
   const readContext =
@@ -591,7 +607,6 @@ export async function readConfigFileSnapshotForWriteFromContext(
       ownedConfigPathForWrite: context.configPath,
       includeFileHashesForWrite: result.includeFileHashesForWrite,
       includeFileTargetsForWrite: result.includeFileTargetsForWrite,
-      unsetPaths: resolveManagedUnsetPathsForWrite(undefined),
     },
   };
 }

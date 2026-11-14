@@ -11,10 +11,12 @@ export function buildReleaseValidationManifest(input: {
   plan: ReleaseRecord;
   drain?: ReleaseRecord;
   context: ReleaseRecord;
+  reusedManifest?: ReleaseRecord;
 }): ReleaseRecord;
 export function assertReleasePublicationKnownBudget(
   plan: ReleaseRecord,
   context: ReleaseRecord,
+  reusedManifest?: ReleaseRecord,
 ): void;
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
@@ -85,8 +87,8 @@ export function planReleaseChildRerun(input: {
   childKey: string;
   jobs: ReleaseRecord[];
 }):
-  | { failed: string[]; mode: "all-jobs" | "failed-jobs" }
-  | { failed: string[]; mode: "producer" | "receipt"; producer: string };
+  | { failed: string[]; jobName: string; mode: "single-job" }
+  | { failed: string[]; mode: "receipt"; producer: string };
 export const INSTALL_SMOKE_JOB_NEEDS: Readonly<Record<string, readonly string[]>>;
 export const INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS: ReadonlySet<string>;
 export const INSTALL_SMOKE_CALLER_DEPENDENTS: ReadonlySet<string>;

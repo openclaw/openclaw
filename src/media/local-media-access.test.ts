@@ -43,6 +43,66 @@ describe("assertLocalMediaAllowed", () => {
     hoistedRoots.length = 0;
   });
 
+  it("joins excluded-root preparation before reporting an allowed-root failure", async () => {
+    const directory = tempDirs.make("ocl-local-media-drain-");
+    const file = path.join(directory, "image.png");
+    const excluded = path.join(directory, "excluded");
+    await write(file);
+    const roots = Promise.withResolvers<readonly string[]>();
+    const excludedRoot = Promise.withResolvers<string>();
+    const originalRealpath = fs.realpath.bind(fs);
+    let pendingRealpaths = 0;
+    const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (value, options) => {
+      if (String(value) === excluded) {
+        return excludedRoot.promise;
+      }
+      pendingRealpaths++;
+      try {
+        return await originalRealpath(value, options);
+      } finally {
+        pendingRealpaths--;
+      }
+    });
+    const opened = vi.spyOn(fs, "open");
+    const resolveRoots = vi.fn(() => roots.promise);
+    let settled = false;
+    const reading = readLocalMediaFile(file, [directory], {
+      maxBytes: 1024,
+      resolveRoots,
+      excludedRoots: [excluded],
+    }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    const failure = new Error("allowed roots retired");
+    try {
+      await vi.waitFor(() => expect(realpath).toHaveBeenCalledWith(excluded));
+      await vi.waitFor(() => expect(resolveRoots).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(pendingRealpaths).toBe(0));
+      roots.reject(failure);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      expect(opened).not.toHaveBeenCalled();
+      excludedRoot.resolve(excluded);
+      expect(await reading).toBe(failure);
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
+      roots.resolve([directory]);
+      excludedRoot.resolve(excluded);
+      await reading;
+      realpath.mockRestore();
+      opened.mockRestore();
+    }
+  });
+
   it("allows managed inbound media paths before explicit root checks", async () => {
     const stateDir = resolveStateDir();
     const id = `managed-local-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;

@@ -164,7 +164,7 @@ it("preserves source and reports copy failure", async () => {
   await expectCopyableSource(element, original, false);
   expect(mountMermaidBlocks(container)).toBe(false);
   expect(container.querySelector("openclaw-mermaid")).toBe(element);
-  await waitForSolid(() => expect(action(element, "Copy failed")).toBeDefined());
+  await waitForSolid(() => expect(action(element, "Couldn’t copy. Try again.")).toBeDefined());
 
   await selectAction(element!, "Show diagram");
   expect(imageSource(element!)).toBe(imageUrl);

@@ -212,15 +212,12 @@ async function imageFixture(
       fileName: `image-${index}.png`,
     };
   });
-  const props = {
-    ...threadProps(
-      `pane-${crypto.randomUUID()}`,
-      owner.sessionKey,
-      origin === "canonical" ? [cached] : owner.chatMessages,
-    ),
-    assistantAttachmentAuthToken: "test-auth-token",
-    connectionEpoch: 1,
-  };
+  const props = threadProps(
+    `pane-${crypto.randomUUID()}`,
+    owner.sessionKey,
+    origin === "canonical" ? [cached] : owner.chatMessages,
+    { assistantAttachmentAuthToken: "test-auth-token", connectionEpoch: 1 },
+  );
   if (origin === "queued") {
     props.queue = [
       { ...input, id: input.runId, sendRunId: input.runId, sendState: "sending", sendAttempts: 1 },
@@ -600,7 +597,7 @@ it.each(["native load error", "display load deadline"] as const)(
         view.container.querySelector(".chat-assistant-attachment-card--recoverable"),
         "recoverable image failure",
       );
-      expect(card.textContent).toContain("Could not load this image. Try again.");
+      expect(card.textContent).toContain("Couldn’t load this image. Try again.");
       const retry = expectDefined(
         card.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__retry"),
         "explicit Retry button",

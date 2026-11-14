@@ -1,4 +1,14 @@
+import { extractErrorCode, toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { formatStateLeaseLoss, type StateLeaseLoss } from "../shared/state-lease-loss.js";
+
+/** Renewal diagnostics omit error prose, stacks, and database paths. */
+export function formatLeaseRenewalError(error: unknown): string {
+  const name = toErrorObject(error, "State lease renewal failed").name;
+  const code = extractErrorCode(error);
+  const safeCode = code && /^[A-Za-z0-9_-]{1,64}$/u.test(code) ? code : "unknown";
+  return `errorName=${/^[A-Za-z][A-Za-z0-9_.]{0,63}$/u.test(name) ? name : "unknown"}, errorCode=${safeCode}${formatSqliteErrorCodeSuffix(error)}`;
+}
 
 export type OpenClawStateLeaseErrorCode =
   | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
@@ -105,4 +115,20 @@ export function createOpenClawStateLeaseAbortError(
     `${leaseLabel} ${label} was aborted`,
     signal.reason,
   );
+}
+
+export function resolveOpenClawStateLeaseOperationError(
+  operationError: unknown,
+  settledError: unknown,
+  authorityError: unknown,
+): unknown {
+  if (!(authorityError instanceof Error)) {
+    return settledError;
+  }
+  if (settledError !== operationError && authorityError instanceof OpenClawStateLeaseError) {
+    // Nested owners retain the caller's authority code and all operation/drainage causes.
+    const { code, message, loss } = authorityError;
+    return createOpenClawStateLeaseError(code, message, settledError, loss);
+  }
+  return authorityError;
 }

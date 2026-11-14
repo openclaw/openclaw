@@ -23,6 +23,7 @@ import {
 } from "./gateway-provider-fixture.test-support.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayArtifactTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -79,19 +80,7 @@ it(
     const media = path.join(workspace, "proof.txt");
     await fs.writeFile(media, attachment);
     const configPath = path.join(state, "openclaw.json");
-    const environment = {
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("dist/extensions"),
-    };
+    const environment = createGatewayArtifactTestEnv(root, state, configPath);
     const snapshot = captureEnv(Object.keys(environment));
     for (const [key, value] of Object.entries(environment)) {
       setTestEnvValue(key, value);

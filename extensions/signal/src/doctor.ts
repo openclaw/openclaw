@@ -28,25 +28,19 @@ function usesManagedSignalDaemon(cfg: OpenClawConfig): boolean {
   });
 }
 
-/** Warn when the managed daemon will not see proxy or trust-store variables set for OpenClaw. */
-function collectSignalDaemonEnvNotes(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): ChannelDoctorSequenceResult {
-  const result: ChannelDoctorSequenceResult = { changeNotes: [], warningNotes: [] };
-  if (!usesManagedSignalDaemon(params.cfg)) {
-    return result;
-  }
-  const names = listSignalDaemonDroppedEnvHints(params.env ?? process.env);
-  if (names.length > 0) {
-    result.warningNotes.push(`- channels.signal: ${formatSignalDaemonDroppedEnvNotice(names)}`);
-  }
-  return result;
-}
-
 export const signalDoctor: ChannelDoctorAdapter = {
   normalizeCompatibilityConfig,
-  runConfigSequence: ({ cfg, env }) => collectSignalDaemonEnvNotes({ cfg, env }),
+  runConfigSequence: ({ cfg, env }) => {
+    const result: ChannelDoctorSequenceResult = { changeNotes: [], warningNotes: [] };
+    if (!usesManagedSignalDaemon(cfg)) {
+      return result;
+    }
+    const names = listSignalDaemonDroppedEnvHints(env ?? process.env);
+    if (names.length > 0) {
+      result.warningNotes.push(`- channels.signal: ${formatSignalDaemonDroppedEnvNotice(names)}`);
+    }
+    return result;
+  },
   cleanStaleConfig: async ({ cfg }) => {
     const { detectSignalTransport } = await import("./transport-detection.js");
     const transport = await migrateLegacySignalTransportConfig({

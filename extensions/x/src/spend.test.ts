@@ -36,7 +36,8 @@ function fixture(config: Partial<XCostLimits> = {}) {
     };
     return openXSpend({ ...runtime, state: replacement }, "default", () => limits);
   }
-  return { limits, logger, spend, store, replaceStore };
+  const reopen = () => openXSpend(runtime, "default", () => limits);
+  return { limits, logger, spend, store, replaceStore, reopen };
 }
 
 function blockWrites(test: ReturnType<typeof fixture>) {
@@ -124,6 +125,25 @@ describe("X spend", () => {
       expect(await test.store.lookup("default:overlap:2026-10-19:2026-10-20")).toBe(overlap);
     },
   );
+
+  it("recovers a failed owner on reopen while its existing handles stay refused", async () => {
+    const test = fixture({ dailyUsd: 1 });
+    const reservation = await test.spend.reserve(800_000);
+    test.replaceStore((operation) => {
+      if (operation === "register") {
+        throw new Error("database is locked");
+      }
+    });
+    await expect(reservation.settle(100_000)).rejects.toThrow("database is locked");
+
+    const reopened = test.reopen();
+    expect(await reopened.status()).toMatchObject({ dayUsd: 0.8, cycleUsd: 0.8 });
+    await expect(reopened.reserve(300_000)).rejects.toBeInstanceOf(XBudgetExceededError);
+    await (await reopened.reserve(100_000)).settle(100_000);
+    await expect(test.spend.reserve(1)).rejects.toThrow("accounting unavailable");
+    await expect(reservation.settle(100_000)).rejects.toThrow("accounting unavailable");
+    expect(await reopened.status()).toMatchObject({ dayUsd: 0.9, cycleUsd: 0.9 });
+  });
 
   it("recovers an interrupted dispatched reservation at full cost", async () => {
     const test = fixture({ dailyUsd: 1 });

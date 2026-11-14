@@ -2,6 +2,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
   renderTerminalSafeTable,
@@ -171,10 +172,14 @@ export function registerDnsCli(program: Command) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
       defaultRuntime.log(
-        theme.muted(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`),
+        theme.muted(
+          terminalText`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`,
+        ),
       );
       defaultRuntime.log(
-        theme.muted(`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`),
+        theme.muted(
+          terminalText`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`,
+        ),
       );
 
       if (!opts.apply) {

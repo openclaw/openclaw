@@ -94,19 +94,6 @@ export function listPotentialConfiguredChannelPresenceSignals(
       signals.set(key, { channelId, source });
     }
   };
-  const scopedChannelIds = options.channelIds
-    ? new Set(
-        options.channelIds
-          .map((channelId) => normalizeOptionalLowercaseString(channelId))
-          .filter((channelId): channelId is string => Boolean(channelId)),
-      )
-    : undefined;
-  const channelEnvPrefixes = listChannelEnvPrefixes(
-    options.channelIds ?? listBundledChannelIds(env, options.discovery),
-  );
-  const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars().filter(
-    ({ channelId }) => !scopedChannelIds || scopedChannelIds.has(channelId),
-  );
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
     for (const [key, value] of Object.entries(channels)) {
@@ -122,6 +109,19 @@ export function listPotentialConfiguredChannelPresenceSignals(
   }
 
   if (options.ambientEnvTriggers !== "suppress") {
+    const scopedChannelIds = options.channelIds
+      ? new Set(
+          options.channelIds
+            .map((channelId) => normalizeOptionalLowercaseString(channelId))
+            .filter((channelId): channelId is string => Boolean(channelId)),
+        )
+      : undefined;
+    const channelEnvPrefixes = listChannelEnvPrefixes(
+      options.channelIds ?? listBundledChannelIds(env, options.discovery),
+    );
+    const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars().filter(
+      ({ channelId }) => !scopedChannelIds || scopedChannelIds.has(channelId),
+    );
     for (const [key, value] of Object.entries(env)) {
       if (!hasNonEmptyString(value)) {
         continue;
@@ -185,6 +185,7 @@ export async function listPotentialConfiguredChannelPresenceSignalsAsync(
   const persistedChannelIds = new Set<string>();
   if (
     options.includePersistedAuthState === false ||
+    options.persistedAuthChannelIds?.size === 0 ||
     !fs.existsSync(resolveStateDir(env, os.homedir))
   ) {
     return signals;

@@ -1,0 +1,2 @@
+27
+# Canonical allocation-path controls and compiler-consumer/guard preservation for test-budget PRs.

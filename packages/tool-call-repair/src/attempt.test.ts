@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { isPlainTextToolCallAttempt } from "./attempt.js";
+import { detectToolCallShapedText, isPlainTextToolCallAttempt } from "./attempt.js";
 
 const hasToolName = (name: string) => name === "write" || name === "read";
 const call = '{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}';
@@ -75,4 +75,46 @@ it("uses only the current offered tool names", () => {
 it("keeps explanatory prefixes literal even with permissive name matching", () => {
   const matches = (name: string) => name === "write" || name.endsWith(".write");
   expect(isPlainTextToolCallAttempt(`Example of functions.write\n${fenced}`, matches)).toBe(false);
+});
+
+it.each([
+  [`<TOOL_CALL>\n  ${call}  \n</tool_call>`, true],
+  [`<tool_calls> ${call} </tool_calls>`, true],
+  [`<tool_call>${call}</tool_calls>`, false],
+  [`write\r\n\`\`\`json\r\n${call}\r\n\`\`\``, true],
+  [`write\n~~~\n${call}\n\`\`\``, false],
+])("keeps wrapper and fence boundaries: %j", (text, expected) =>
+  expect(detects(text)).toBe(expected),
+);
+
+it("names the tool in a legacy bracketed call", () => {
+  expect(detectToolCallShapedText(`note ${legacy}`)).toEqual({
+    kind: "bracketed_tool_call",
+    toolName: "read",
+  });
+  expect(detectToolCallShapedText('[TOOL_CALL]{tool => "read"}')).toBeNull();
+});
+
+// Each reply shape below took seconds on the former single-regex checks.
+it.each([
+  [
+    "a wrapper tag followed by blank characters",
+    () => detects(`<tool_call>${" \n".repeat(1_000)}x`),
+    false,
+  ],
+  ["a fence-like line run", () => detects(`M${"\n~~~\n\u0000".repeat(12_000)}`), false],
+  [
+    "repeated legacy openers",
+    () => detectToolCallShapedText(`{${'[TOOL_CALL]{TOOL=>"G"'.repeat(950)}a`),
+    null,
+  ],
+  [
+    "an Action line before blank lines",
+    () => detectToolCallShapedText(`Action: x${"\n".repeat(2_000)}y`),
+    null,
+  ],
+] as const)("returns promptly for %s", (_label, run, expected) => {
+  const started = performance.now();
+  expect(run()).toBe(expected);
+  expect(performance.now() - started).toBeLessThan(500);
 });

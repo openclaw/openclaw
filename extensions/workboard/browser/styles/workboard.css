@@ -326,6 +326,8 @@
 }
 
 .workboard-agent-filter {
+  inline-size: 200px;
+  flex: none;
   max-width: 200px;
   min-width: 0;
 }
@@ -1613,6 +1615,13 @@
   --workboard-column-width: 280px;
 }
 
+/* Leave the next column in view on phones so the board reads as scrollable. */
+@media (max-width: 560px) {
+  .workboard-board--page:not(.workboard-board--compact) {
+    --workboard-column-width: min(340px, calc(100vw - 72px));
+  }
+}
+
 .workboard-board--page .workboard-column {
   flex: 0 0 var(--workboard-column-width);
   width: var(--workboard-column-width);
@@ -1830,6 +1839,24 @@
   align-content: start;
   overflow-y: auto;
   scroll-padding-block: 24px;
+}
+
+.workboard-column__window {
+  /* Keep an aggregate content box for the scroll viewport's resize observer. */
+  display: grid;
+  grid-auto-rows: max-content;
+  gap: inherit;
+  align-content: start;
+}
+
+.workboard-column__slot {
+  display: contents;
+}
+
+.workboard-column__window--active {
+  display: block;
+  position: relative;
+  overflow-anchor: none;
 }
 
 .workboard-column__cards[data-scrollable],
@@ -2324,27 +2351,13 @@
 }
 
 .workboard-card__action-menu {
-  opacity: 0;
-  pointer-events: none;
   position: relative;
   z-index: 3;
 }
 
-.workboard-card:hover .workboard-card__action-menu,
-.workboard-card:focus-within .workboard-card__action-menu,
-.workboard-card__action-menu:has(:popover-open) {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-@media (hover: none) {
-  .workboard-card__action-menu {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 .workboard-card__menu-trigger {
+  opacity: 0;
+  pointer-events: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2355,6 +2368,20 @@
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+.workboard-card:hover .workboard-card__menu-trigger,
+.workboard-card:focus-within .workboard-card__menu-trigger,
+.workboard-card__menu-trigger[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .workboard-card__menu-trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .workboard-card__menu-trigger:hover,
@@ -3903,7 +3930,7 @@ workboard-inline-text {
   top: -6px;
 }
 
-.workboard-column__item--drop-before:first-child::before {
+.workboard-column__slot:first-child > .workboard-column__item--drop-before::before {
   top: 0;
 }
 
@@ -4376,7 +4403,10 @@ workboard-inline-text {
   box-shadow: none;
 }
 
-.workboard-board.workboard-board--list .workboard-column__item:last-child > .workboard-card--list {
+.workboard-board.workboard-board--list
+  .workboard-column__slot:last-child
+  > .workboard-column__item
+  > .workboard-card--list {
   border-bottom: 0;
 }
 
@@ -4415,6 +4445,7 @@ workboard-inline-text {
 }
 .workboard-list-row__actions {
   grid-column: 5;
+  justify-content: center;
 }
 
 .workboard-list-row__title,
@@ -4424,10 +4455,6 @@ workboard-inline-text {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.workboard-list-row__actions {
-  justify-content: center;
 }
 
 .workboard-list-row__title h3 {
@@ -4657,4 +4684,185 @@ workboard-inline-text {
   gap: 12px;
   padding: 12px;
   color: var(--muted);
+}
+
+/* At phone width the filters take the shell's filter sheet shape: same dim, header and rhythm. */
+@media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Anchoring writes left and top inline while the popover is open. */
+  .workboard-filter-popover {
+    inset: auto var(--safe-area-right, 0px) 0 var(--safe-area-left, 0px) !important;
+    width: auto;
+    max-width: none;
+  }
+
+  .workboard-filter-popover::backdrop {
+    background: var(--overlay-modal-backdrop);
+  }
+
+  .workboard-filter-popover__panel {
+    --settings-control-height: 40px;
+
+    width: 100%;
+    max-height: calc(100dvh - var(--safe-area-top, 0px) - var(--space-7));
+    padding: 14px var(--space-4) calc(var(--space-4) + var(--shell-safe-area-bottom, 0px));
+    border: 0;
+    border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
+    overscroll-behavior: contain;
+  }
+
+  /* The panel scrolls as one here, so close stays reachable on short phones. */
+  .workboard-filter-heading {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) 32px;
+    background: var(--popover);
+    gap: 0;
+    min-height: 44px;
+    margin-inline: -4px;
+    padding: 0;
+    font-size: var(--control-ui-text-md);
+    font-weight: var(--control-ui-font-weight-semibold);
+  }
+
+  .workboard-filter-heading strong {
+    grid-area: 1 / 2;
+    font-weight: inherit;
+    text-align: center;
+  }
+
+  .workboard-filter-clear {
+    grid-area: 1 / 1;
+    justify-self: start;
+    margin-inline-start: 4px;
+    font-size: var(--control-ui-text-sm);
+    white-space: nowrap;
+  }
+
+  .workboard-filter-heading .btn.btn--icon {
+    grid-area: 1 / 3;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    border-radius: var(--radius-sm);
+    corner-shape: inherit;
+    color: var(--muted);
+  }
+
+  .workboard-filter-heading .btn.btn--icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .workboard-filter-agent {
+    margin-block: var(--space-2) var(--space-3);
+    padding: 0;
+    border: 0;
+  }
+
+  /* The agent reads like the other fields: its label above, its value in the field. */
+  .workboard-filter-agent openclaw-agent-select,
+  .workboard-filter-agent .agent-select,
+  .workboard-filter-agent .agent-select > div {
+    flex: 1;
+    width: 100%;
+    max-width: none;
+  }
+
+  .workboard-filter-agent .agent-select.agent-select--compact .agent-select__trigger {
+    justify-content: flex-start;
+    gap: var(--space-2);
+    width: 100%;
+    max-width: none;
+    height: var(--settings-control-height);
+    min-height: var(--settings-control-height);
+    padding-inline: var(--field-padding-inline);
+    border: 1px solid var(--field-border);
+    border-radius: var(--field-radius);
+    background: var(--field-bg);
+    color: var(--text);
+    font-size: 16px;
+  }
+
+  .workboard-filter-agent .agent-select__trigger > :last-child {
+    margin-inline-start: auto;
+  }
+
+  .workboard-filter-section__label,
+  .workboard-filter-choice .workboard-filter-section__label {
+    padding: 0;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .workboard-filter-display {
+    gap: var(--space-3);
+    margin-block: 0 var(--space-3);
+    padding: 0;
+    border: 0;
+  }
+
+  .workboard-filter-display .workboard-view-toggle {
+    border-radius: var(--field-radius);
+  }
+
+  .workboard-filter-display .workboard-view-toggle .btn {
+    min-height: calc(var(--settings-control-height) - 6px);
+    border-radius: var(--radius-sm);
+    font-size: var(--control-ui-text-sm);
+  }
+
+  .workboard-filter-section {
+    padding-bottom: var(--space-3);
+  }
+
+  .workboard-filter-section__options {
+    column-gap: var(--space-4);
+  }
+
+  .workboard-filter-option {
+    min-height: var(--settings-control-height);
+    padding-inline: 0;
+    font-size: var(--control-ui-text-md);
+  }
+
+  .workboard-filter-fields,
+  .workboard-filter-fields:last-child {
+    gap: var(--space-3);
+    padding: 0;
+    border: 0;
+  }
+
+  .workboard-filter-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .workboard-filter-archived {
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: var(--settings-control-height);
+    color: var(--text);
+    font-size: var(--control-ui-text-md);
+    font-weight: var(--control-ui-font-weight-normal);
+  }
+
+  .workboard-filter-row .picker-select__trigger {
+    height: var(--settings-control-height);
+    min-height: var(--settings-control-height);
+    padding-inline: var(--field-padding-inline);
+    border-radius: var(--field-radius);
+    font-size: 16px;
+    font-weight: var(--control-ui-font-weight-normal);
+  }
+
+  /* Safari collapses an unsized svg in the picker's inline-flex chevron rail. */
+  .workboard-filter-row .picker-select__chevron svg {
+    width: 16px;
+    height: 16px;
+  }
 }

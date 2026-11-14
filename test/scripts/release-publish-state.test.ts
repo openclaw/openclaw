@@ -68,6 +68,33 @@ const pluginOptions = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("release publication state", () => {
+  it("revalidates a version omitted from stale abbreviated registry metadata", async () => {
+    const requested: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        requested.push(input);
+        return input.endsWith(`/${version}`)
+          ? Response.json({ name: "openclaw", version, dist: { integrity: "sha512-fixture" } })
+          : registry("openclaw", ["2026.9.4"]);
+      }),
+    );
+
+    const result = await observeReleaseNpmState(npmOptions);
+
+    expect(requested).toEqual([
+      "https://registry.npmjs.org/openclaw",
+      `https://registry.npmjs.org/openclaw/${version}`,
+    ]);
+    expect(result.corePublished).toBe(true);
+    expect(result.publishedPackages).toEqual([pkg("openclaw")]);
+    expectGate(result.gates, {
+      id: "npm.package.openclaw",
+      status: "WARN",
+      message: expect.stringContaining("already published (npm-readback)"),
+    });
+  });
+
   it.each<[string, string, string[], string | undefined, number | undefined]>([
     ["2026.9.4", version, [version], undefined, undefined],
     [
@@ -83,7 +110,11 @@ describe("release publication state", () => {
     async (latest, beta, versions, message, published) => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => registry("@openclaw/example", versions, distTags(latest, beta))),
+        vi.fn(async (input: string) =>
+          input.endsWith(`/${version}`)
+            ? new Response("{}", { status: 404 })
+            : registry("@openclaw/example", versions, distTags(latest, beta)),
+        ),
       );
       const result = await observeReleaseNpmState(pluginOptions);
       expectGate(result.gates, {

@@ -9,9 +9,6 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   cancelProviderLoginFlow,
-  answerProviderLoginModelAccess,
-  offerProviderLoginModelAccess,
-  type PreparedProviderModelAccess,
   decideProviderLoginSessionAdoption,
   createProviderLoginFlowRegistry,
   formatProviderLoginCommand,
@@ -251,7 +248,6 @@ async function runChannelProviderLogin(
   const assertCurrent = (config = readConfig()) => {
     assertProviderLoginAuthority(commandParams, config);
   };
-  let modelAccess: PreparedProviderModelAccess | undefined;
   try {
     const loginResult = await runProviderChannelLoginFlow({
       choice,
@@ -263,9 +259,6 @@ async function runChannelProviderLogin(
       assertCurrent,
       sendMessage: (text) => emitLoginMessage(commandParams, text),
       sendReply,
-      onModelAccessRequested: (request) => {
-        modelAccess = request;
-      },
       unsupportedPromptMessage:
         "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
     });
@@ -288,14 +281,9 @@ async function runChannelProviderLogin(
       switchResult === "failed",
       nextProfileId ? { model: commandParams.model, profileId: nextProfileId } : undefined,
     );
-    return modelAccess
-      ? offerProviderLoginModelAccess({
-          flows: activeProviderLoginFlows,
-          flowKey,
-          prepared: modelAccess,
-          terminalMessage,
-        })
-      : { text: terminalMessage };
+    return {
+      text: [terminalMessage, loginResult.modelAccess?.message].filter(Boolean).join(" "),
+    };
   } catch (error) {
     return {
       text: formatProviderLoginFailure(choice, error),
@@ -334,25 +322,6 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
       cancelProviderLoginFlow({
         flows: activeProviderLoginFlows,
         flowKey: buildProviderLoginFlowKey(params),
-      }),
-    answerChoice: (command) =>
-      answerProviderLoginModelAccess({
-        flows: activeProviderLoginFlows,
-        flowKey: buildProviderLoginFlowKey(params),
-        command,
-        agentId: params.agentId,
-        readConfig:
-          params.opts?.getProviderLoginConfig ?? (() => getRuntimeConfigSnapshot() ?? params.cfg),
-        runtime: defaultRuntime,
-        signal: params.opts?.abortSignal,
-        assertCurrent: (config) =>
-          assertProviderLoginAuthority(
-            params,
-            config ??
-              params.opts?.getProviderLoginConfig?.() ??
-              getRuntimeConfigSnapshot() ??
-              params.cfg,
-          ),
       }),
   });
   if (!prepared) {

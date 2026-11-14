@@ -1,14 +1,15 @@
 import { setImmediate } from "node:timers/promises";
 import OpenAI from "openai";
 import { expect, it, vi } from "vitest";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CompactionReplayRejection } from "../provider-options.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
-import { createModel, sseResponse } from "./openai-responses-prompt-observer.test-support.js";
+import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "./openai-transport-shared.js";
 import { withProviderResponseHook } from "./transport-stream-shared.js";
-const model = createModel({
+const model = fixtures.createModel({
   id: "gpt-5.6-luna",
   baseUrl: "https://responses.example.test/v1",
 });
@@ -16,10 +17,11 @@ it.each(["streamed", "HTTP"])(
   "Responses recovery closes prior streams before retry (%s)",
   async (secondFailure) => {
     const order: string[] = [];
+    const requests: Record<string, unknown>[] = [];
     let firstResponse: Response | undefined;
     const controller = new AbortController();
     const [cleanupStarted, releaseCleanup] = [createDeferred(), createDeferred()];
-    let consuming: Promise<void> | undefined;
+    let consuming: Promise<unknown[]> | undefined;
     let attempt = 0;
     const client = new OpenAI({
       apiKey: "fixture-key",
@@ -27,7 +29,9 @@ it.each(["streamed", "HTTP"])(
       organization: null,
       project: null,
       maxRetries: 0,
-      fetch: async () => {
+      fetch: async (_input, init) => {
+        requests.push(await fixtures.requestBody(init));
+        order.push(`create:${++attempt}`);
         const error = {
           code: "invalid_encrypted_content",
           message: "could not decrypt the provided encrypted_content",
@@ -43,15 +47,10 @@ it.each(["streamed", "HTTP"])(
             ? { type: "response.completed", response: { ...response, status: "completed" } }
             : { type: "response.failed", response: { ...response, status: "failed", error } },
         ];
-        const httpResponse = sseResponse(events, { "x-request-id": `req_${attempt}` });
+        const httpResponse = fixtures.sseResponse(events, { "x-request-id": `req_${attempt}` });
         firstResponse ??= httpResponse;
         return httpResponse;
       },
-    });
-    const send = client.responses.create.bind(client.responses);
-    const create = vi.spyOn(client.responses, "create").mockImplementation((body, options) => {
-      order.push(`create:${++attempt}`);
-      return send(body, options);
     });
     const reasoning = { type: "reasoning" as const, id: "rs_prior", summary: [] };
     const encrypted = { ...reasoning, encrypted_content: "reasoning-data" };
@@ -107,17 +106,12 @@ it.each(["streamed", "HTTP"])(
         },
       });
       expect(order).toEqual(["create:1"]);
-      const events: unknown[] = [];
-      consuming = (async () => {
-        for await (const event of result.stream) {
-          events.push(event);
-        }
-      })();
+      consuming = collect(result.stream);
       await Promise.race([cleanupStarted.promise, consuming]);
       await setImmediate();
       expect(order).toEqual(["create:1", "hook:req_1", "cleanup:req_1"]);
       releaseCleanup.resolve();
-      await consuming;
+      const events = await consuming;
       expect(events).toMatchObject([
         { type: "response.created", response: { id: "resp_1" } },
         ...(secondFailure === "streamed"
@@ -138,8 +132,8 @@ it.each(["streamed", "HTTP"])(
         "hook:req_3",
         "close:req_3",
       ]);
-      expect(create.mock.calls[0]?.[0]).toBe(request);
-      expect(create.mock.calls.slice(1).map(([body]) => body.input)).toEqual([
+      expect(requests.map((body) => body.input)).toEqual([
+        [encrypted, checkpoint, after],
         [reasoning, checkpoint, after],
         [before, reasoning, after],
       ]);
@@ -152,7 +146,6 @@ it.each(["streamed", "HTTP"])(
       releaseCleanup.resolve();
       controller.abort();
       await Promise.allSettled([consuming]);
-      create.mockRestore();
     }
   },
 );

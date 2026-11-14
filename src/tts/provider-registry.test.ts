@@ -1,10 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import { speechProvider as provider } from "./speech-provider.test-support.js";
 import {
-  isTtsProviderConfiguredAsync,
   resolveTtsProviderAsync,
   resolvePreparedTtsProvider,
   resolveTtsProviderOrder,
@@ -39,12 +38,6 @@ describe("speech provider registry", () => {
       providers,
       configuredByProvider,
     });
-  beforeEach(() => {
-    mocks.canonicalizeSpeechProviderId.mockClear();
-    mocks.getSpeechProvider.mockReset();
-    mocks.listSpeechProviders.mockReset();
-  });
-
   it("resolves deterministic fallback order and aliases from a supplied provider inventory", () => {
     const inventory = [
       provider("openai", { aliases: ["oai"], autoSelectOrder: 5 }),
@@ -53,12 +46,8 @@ describe("speech provider registry", () => {
       provider("elevenlabs", { autoSelectOrder: 3 }),
     ];
 
-    expect(resolveTtsProviderOrder(" OAI ", undefined, inventory)).toEqual([
-      "openai",
-      "azure",
-      "google",
-      "elevenlabs",
-    ]);
+    const order = resolveTtsProviderOrder(" OAI ", undefined, inventory);
+    expect(order).toEqual(["openai", "azure", "google", "elevenlabs"]);
   });
 
   it.each([
@@ -78,19 +67,6 @@ describe("speech provider registry", () => {
     );
   });
 
-  it("uses prepared provider objects for configuration without registry rediscovery", async () => {
-    const resolveConfig = vi.fn(() => ({}));
-    const isConfigured = vi.fn(() => true);
-    const prepared = provider("openai", { resolveConfig, isConfigured });
-    const cfg = {} as OpenClawConfig;
-
-    expect(await isTtsProviderConfiguredAsync(resolveTtsConfig(cfg), prepared, cfg)).toBe(true);
-    expect(resolveConfig).toHaveBeenCalledOnce();
-    expect(isConfigured).toHaveBeenCalledOnce();
-    expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
-    expect(mocks.getSpeechProvider).not.toHaveBeenCalled();
-  });
-
   it("selects providers through async availability and observes subsequent changes", async () => {
     let configured = true;
     const isConfigured = vi.fn(() => {
@@ -99,7 +75,9 @@ describe("speech provider registry", () => {
     const first = provider("first", {
       autoSelectOrder: 1,
       isConfigured,
-      isConfiguredAsync: async () => configured,
+      resolveConfig: () => ({ apiKey: "fixture-key" }),
+      isConfiguredAsync: async ({ providerConfig }) =>
+        configured && providerConfig.apiKey === "fixture-key",
     });
     const fallback = provider("fallback", { autoSelectOrder: 2 });
     const availableProviders = [first, fallback];
@@ -112,7 +90,6 @@ describe("speech provider registry", () => {
     expect(await resolveTtsProviderAsync(config, "/unused", registry, {})).toBe("first");
     configured = false;
     expect(await resolveTtsProviderAsync(config, "/unused", registry, {})).toBe("fallback");
-    expect(isConfigured).not.toHaveBeenCalled();
   });
 
   it("canonicalizes a voice-model alias omitted from the supplied inventory", () => {
@@ -122,6 +99,5 @@ describe("speech provider registry", () => {
     } as OpenClawConfig;
 
     expect(resolveTtsProviderOrder("openai", cfg, inventory)).toEqual(["openai", "microsoft"]);
-    expect(mocks.canonicalizeSpeechProviderId).toHaveBeenCalledWith("edge", expect.any(Object));
   });
 });

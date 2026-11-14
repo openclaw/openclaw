@@ -7,28 +7,18 @@ import {
 } from "../agents/prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { model } from "./server-chat-metadata-lifecycle.auth.test-support.js";
+import { createMetadataConfig, model } from "./server-chat-metadata-lifecycle.auth.test-support.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 const mocks = getPreparedModelRuntimeMocks();
-const config = {
-  agents: {
-    defaults: {
-      model: { primary: "openai/gpt-5.4" },
-      models: { "openai/gpt-5.4": {} },
-      modelPolicy: { allow: ["openai/gpt-5.4"] },
-    },
-    entries: { main: {} },
-  },
-} as OpenClawConfig;
+const config = createMetadataConfig();
 const signedIn = {
   version: 1,
   profiles: { "openai:default": { type: "api_key", provider: "openai", key: "sk-test" } },

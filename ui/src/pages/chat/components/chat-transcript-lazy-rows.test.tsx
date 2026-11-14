@@ -19,19 +19,50 @@ function row(key: string, view: NativeTranscriptView): TestContentRow {
   return { kind: "content", key, content: new GuardedTranscriptItem([view], view) };
 }
 
-it("loads stream and run rows without losing the adjacent message or the latest snapshot", async () => {
-  const message = createMessageGroup(
-    { role: "user", content: "Keep this message", timestamp: 1 },
-    "user",
+const group = (role: "user" | "assistant", content: string, timestamp: number) =>
+  createMessageGroup({ role, content, timestamp }, role);
+
+it("commits a cached run's message body with its row shell", async () => {
+  const answer = createMessageGroup(
+    { role: "assistant", content: "The cached run answer", timestamp: 3 },
+    "assistant",
   );
+  const mounting = mountTestTranscript("cached-run-first-frame", [
+    row("run:cached", {
+      kind: "frame",
+      frame: {
+        kind: "agent-run-frame",
+        key: "run:cached",
+        runId: "cached",
+        boundaryId: "boundary",
+        outcome: { kind: "completed", actionOwner: answer.messages[0]! },
+        parts: [answer],
+      },
+      options: {
+        streamOptions: {},
+        renderGroupOptions: () => ({ showReasoning: false }),
+        isWorkExpanded: () => false,
+        onToggleWork: () => {},
+      },
+    }),
+  ]);
+  // The helper renders synchronously before waiting for deferred row cleanup.
+  const firstCommit = document.querySelector(".chat-virtual-row")?.textContent;
+  const view = await mounting;
+  try {
+    expect(firstCommit).toContain("The cached run answer");
+  } finally {
+    view.transcript.dispose();
+  }
+});
+
+it("loads stream and run rows without losing the adjacent message or the latest snapshot", async () => {
+  const message = group("user", "Keep this message", 1);
   const groupOptions = { showReasoning: false, onReply: () => {} };
   const stable = row("message", { kind: "group", group: message, options: groupOptions });
   const initial = row("tail", {
     kind: "group",
-    group: createMessageGroup(
-      { role: "assistant", content: "Before the run", timestamp: 2 },
-      "assistant",
-    ),
+    group: group("assistant", "Before the run", 2),
     options: { showReasoning: false },
   });
   const view = await mountTestTranscript("lazy-transcript", [stable, initial]);
@@ -68,29 +99,18 @@ it("loads stream and run rows without losing the adjacent message or the latest 
     await waitForSolid(() => expect(view.container.textContent).toContain("Latest run snapshot"));
     expect(view.container.querySelector(".chat-group.user")).toBe(messageGroup);
     expect(document.activeElement).toBe(reply);
-    const answer = createMessageGroup(
-      { role: "assistant", content: "Completed run answer", timestamp: 3 },
-      "assistant",
-    );
+    const answer = group("assistant", "Completed run answer", 3);
     const staleToggle = vi.fn();
     const currentToggle = vi.fn();
     const work = { key: "work", groups: [answer], durationMs: null };
-    view.renderRows([
-      stable,
-      row("tail", {
-        kind: "work",
-        item: work,
-        options: { expanded: false, onToggle: staleToggle },
-      }),
-    ]);
-    view.renderRows([
-      stable,
-      row("tail", {
-        kind: "work",
-        item: work,
-        options: { expanded: false, onToggle: currentToggle },
-      }),
-    ]);
+    const renderTail = (tail: NativeTranscriptView) => view.renderRows([stable, row("tail", tail)]);
+    const workRow = (onToggle: () => void): NativeTranscriptView => ({
+      kind: "work",
+      item: work,
+      options: { expanded: false, onToggle },
+    });
+    renderTail(workRow(staleToggle));
+    renderTail(workRow(currentToggle));
     await waitForSolid(() =>
       expect(view.container.querySelector(".chat-work-group button")).not.toBeNull(),
     );
@@ -99,26 +119,23 @@ it("loads stream and run rows without losing the adjacent message or the latest 
     expect(currentToggle).toHaveBeenCalledOnce();
     expect(view.container.querySelector(".chat-group.user")).toBe(messageGroup);
     expect(document.activeElement).toBe(reply);
-    view.renderRows([
-      stable,
-      row("tail", {
-        kind: "frame",
-        frame: {
-          kind: "agent-run-frame",
-          key: "run:answer",
-          runId: "run",
-          boundaryId: "boundary",
-          outcome: { kind: "completed", actionOwner: answer.messages[0]! },
-          parts: [answer],
-        },
-        options: {
-          streamOptions: {},
-          renderGroupOptions: () => ({ showReasoning: false }),
-          isWorkExpanded: () => false,
-          onToggleWork: () => {},
-        },
-      }),
-    ]);
+    renderTail({
+      kind: "frame",
+      frame: {
+        kind: "agent-run-frame",
+        key: "run:answer",
+        runId: "run",
+        boundaryId: "boundary",
+        outcome: { kind: "completed", actionOwner: answer.messages[0]! },
+        parts: [answer],
+      },
+      options: {
+        streamOptions: {},
+        renderGroupOptions: () => ({ showReasoning: false }),
+        isWorkExpanded: () => false,
+        onToggleWork: () => {},
+      },
+    });
     await waitForSolid(() => expect(view.container.textContent).toContain("Completed run answer"));
     flush();
     expect(view.container.querySelector(".chat-group.user")).toBe(messageGroup);

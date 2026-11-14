@@ -47,12 +47,16 @@ export async function respondSessionFileDownload(params: {
   };
   const read = (offset?: number, identity?: string) =>
     repository?.kind === "active"
-      ? repository.inspect("download", {
-          files: params.loaded.files,
-          path: params.path,
-          offset,
-          identity,
-        })
+      ? repository.inspect(
+          "download",
+          {
+            files: params.loaded.files,
+            path: params.path,
+            offset,
+            identity,
+          },
+          assertCurrent,
+        )
       : readSessionFileDownloadWindow({
           ...params.loaded,
           path: params.path,

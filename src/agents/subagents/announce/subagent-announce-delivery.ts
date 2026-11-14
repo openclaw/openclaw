@@ -26,7 +26,7 @@ import { hasGeneratedMediaCompletionEvent } from "../../internal-event-contract.
 import {
   buildAgentInternalEventContext,
   collectAgentInternalEventMedia,
-  resolveAcpPromptBody,
+  formatGeneratedMediaDeliveredForPrompt,
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
@@ -98,7 +98,10 @@ async function deliverSubagentAnnouncementBound(
   if (sourceOwnerChanged()) {
     return sourceOwnerChangedResult();
   }
+  const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
+  let internalEvents = params.internalEvents;
   const durableGeneratedMediaHandoff =
+    expectedMedia.expectedMediaUrls.length > 0 &&
     params.expectsCompletionMessage &&
     isAgentMediatedCompletionSourceTool(params.sourceTool) &&
     hasGeneratedMediaCompletionEvent(params.internalEvents);
@@ -136,11 +139,9 @@ async function deliverSubagentAnnouncementBound(
               })
             ? "message_tool_only"
             : "automatic";
-      const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
       const queuePayload = {
         kind: "agentTurn",
         sessionKey: canonicalSessionKey,
-        message: resolveAcpPromptBody("", params.internalEvents) || params.triggerMessage,
         messageId: `${params.directIdempotencyKey}:agent-loop`,
         route: queuedRoute.route,
         ...(queuedRoute.deliveryContext ? { deliveryContext: queuedRoute.deliveryContext } : {}),
@@ -184,10 +185,22 @@ async function deliverSubagentAnnouncementBound(
           "generated media session handoff was already dead-lettered",
         );
       }
-      if (queued.status === "completed") {
-        return { delivered: true, path: "queued", disposition: "delivered" };
+      // The queue owns produced files only. After its receipt, this live caller
+      // admits the ordinary completion input; startup delivery never starts inference.
+      if (queued.status !== "completed") {
+        durableQueue = { id: queued.id, claimed: queued.claimed, context: queueContext };
+      } else {
+        const deliveredMediaContext = formatGeneratedMediaDeliveredForPrompt(
+          expectedMedia.expectedMediaUrls,
+        );
+        internalEvents = params.internalEvents?.map((event) => ({
+          ...event,
+          // Delivered files must not seed the completion run's pending tool media.
+          mediaUrls: undefined,
+          attachments: undefined,
+          replyInstruction: `${event.replyInstruction}\n\n${deliveredMediaContext}`,
+        }));
       }
-      durableQueue = { id: queued.id, claimed: queued.claimed, context: queueContext };
     } catch (error) {
       if (error instanceof SessionDeliveryDeadLetteredError) {
         return {
@@ -229,7 +242,7 @@ async function deliverSubagentAnnouncementBound(
     return { delivered: false, path: "queued", disposition: "session_queued" };
   }
 
-  const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
+  const runtimeContextFragments = buildAgentInternalEventContext(internalEvents);
   let createCompletionUserTurnTranscriptRecorder:
     | ((sessionId: string) => UserTurnTranscriptRecorder)
     | undefined;
@@ -286,6 +299,7 @@ async function deliverSubagentAnnouncementBound(
   let directError: unknown;
   const delivery = await sendSubagentAnnounceDirectly({
     ...params,
+    internalEvents,
     createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
     onDeliveryError: (error) => {
       directError = error;

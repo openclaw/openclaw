@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import type { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   advancePendingFinalDeliveryCompletion,
   persistPendingFinalDeliveryMarker,
 } from "./pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "./pending-final-recovery-source.js";
 
 const state = vi.hoisted(() => ({ applySessionEntryReplacements: vi.fn() }));
 
@@ -14,90 +14,66 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   applySessionEntryReplacements: state.applySessionEntryReplacements,
 }));
 
-it("owns a multi-payload command delivery as one durable batch", async () => {
-  const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-  state.applySessionEntryReplacements.mockImplementationOnce(
-    async (
-      params: Parameters<
-        typeof import("../config/sessions/session-accessor.js").applySessionEntryReplacements
-      >[0],
-    ) => (await params.update([{ sessionKey: "agent:main:main", entry }])).result,
-  );
-  const payloads = [
-    { text: "first" },
-    { text: "reasoning", isReasoning: true },
-    { text: "second" },
-  ];
-
-  const result = await persistPendingFinalDeliveryMarker({
-    admittedRecoverySource: capturePendingFinalRecoverySource(entry),
-    agentId: "main",
-    deliver: true,
-    sessionStore: { main: entry },
-    sessionKey: "main",
-    sessionEntry: entry,
-    storePath: "/tmp/sessions.json",
-    suppressVisibleSessionEffects: false,
-    sessionReboundDuringRun: false,
-    payloads,
-    deliveryContext: { channel: "discord", to: "channel:c1" },
-    runOwnedSessionId: "session-1",
-  });
-
-  const marker = result.sessionEntry?.pendingFinalDelivery;
-  expect(marker).toEqual(
-    expect.objectContaining({
-      kind: "replayable",
-      text: "first\n\nsecond",
-      deliveries: [{ id: expect.any(String), state: "prepared" }],
-    }),
-  );
-  const deliveryId = marker?.deliveries?.[0]?.id;
-  expect(
-    payloads.map(
-      (payload) => getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion?.deliveryId,
-    ),
-  ).toEqual([deliveryId, undefined, deliveryId]);
-});
-
 it.each(["matching", "wrong-intent", "wrong-delivery", "wrong-predecessor"])(
-  "advances only the original captured locator after compaction (%s)",
-  (mode) => {
-    const payload = { text: "original final" };
-    const completion = {
+  "captures a durable batch and fences its compaction locator (%s)",
+  async (mode) => {
+    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+    state.applySessionEntryReplacements.mockImplementationOnce(
+      async (params: Parameters<typeof applySessionEntryReplacements>[0]) =>
+        (await params.update([{ sessionKey: "agent:main:main", entry }])).result,
+    );
+    const payloads = [
+      { text: "first" },
+      { text: "reasoning", isReasoning: true },
+      { text: "second" },
+    ];
+
+    const result = await persistPendingFinalDeliveryMarker({
       agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "A",
-      storePath: "/private/sessions.json",
-      intentId: "intent",
-      deliveryId: "delivery",
-    };
-    setReplyPayloadMetadata(payload, { pendingFinalDeliveryCompletion: completion });
+      deliver: true,
+      sessionStore: { main: entry },
+      sessionKey: "main",
+      storePath: "/tmp/sessions.json",
+      suppressVisibleSessionEffects: false,
+      sessionReboundDuringRun: false,
+      payloads,
+      deliveryContext: { channel: "discord", to: "channel:c1" },
+      runOwnedSessionId: "session-1",
+    });
+
+    const marker = result.sessionEntry?.pendingFinalDelivery;
+    expect(marker).toMatchObject({ kind: "transport-only" });
+    expect(marker).not.toHaveProperty("text");
+    expect(marker?.deliveries).toEqual([{ id: expect.any(String), state: "prepared" }]);
+    const deliveryId = marker?.deliveries?.[0]?.id;
+    expect(
+      payloads.map(
+        (payload) => getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion?.deliveryId,
+      ),
+    ).toEqual([deliveryId, undefined, deliveryId]);
+    const completion = getReplyPayloadMetadata(payloads[0]!)?.pendingFinalDeliveryCompletion;
+    const current = { sessionId: "compacted", lifecycleRevision: "next" };
     advancePendingFinalDeliveryCompletion({
-      payloads: [payload],
-      intentId: mode === "wrong-intent" ? "other" : "intent",
+      payloads,
+      intentId: mode === "wrong-intent" ? "other" : marker!.intentId,
       transition: {
-        previous: {
-          sessionId: mode === "wrong-predecessor" ? "other" : "A",
-          lifecycleRevision: "la",
-        },
-        current: { sessionId: "B", lifecycleRevision: "lb" },
+        previous: { sessionId: mode === "wrong-predecessor" ? "other" : entry.sessionId },
+        current,
       },
       entry: {
-        sessionId: "B",
-        lifecycleRevision: "lb",
-        updatedAt: 1,
+        ...result.sessionEntry!,
+        ...current,
         pendingFinalDelivery: {
-          kind: "transport-only",
-          intentId: "intent",
-          createdAt: 1,
-          deliveries: [{ id: mode === "wrong-delivery" ? "other" : "delivery", state: "prepared" }],
+          ...marker!,
+          deliveries: [
+            { id: mode === "wrong-delivery" ? "other" : deliveryId!, state: "prepared" },
+          ],
         },
       },
     });
-    expect(getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion).toEqual({
+    expect(getReplyPayloadMetadata(payloads[0]!)?.pendingFinalDeliveryCompletion).toEqual({
       ...completion,
-      sessionId: mode === "matching" ? "B" : "A",
+      sessionId: mode === "matching" ? current.sessionId : entry.sessionId,
     });
   },
 );

@@ -148,10 +148,7 @@ export async function captureAnthropicExchange(
   const info: string[] = [];
   const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
   const fetchMock: typeof fetch = async (_input, init) => {
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected a JSON Anthropic request body");
-    }
-    const payload: unknown = JSON.parse(init.body);
+    const payload: unknown = JSON.parse(await new Request(_input, init).text());
     if (!isRecord(payload)) {
       throw new Error("Expected an Anthropic request object");
     }

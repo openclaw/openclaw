@@ -19,13 +19,6 @@ registerEnglishCatalog(registerFilePreviewEnglish);
 const SkillRead = lazy(() => import("./skill-file-hovercard-content.tsx"), { export: "SkillRead" });
 let nextId = 0;
 
-type SkillFileHovercardProps = {
-  client: GatewayBrowserClient | null;
-  agentId?: string;
-  sessionKey: string;
-  onOpenFile: (file: SkillsFileGetResult, line: number | null) => void;
-};
-
 function skillAnchor(event: Event): HTMLAnchorElement | null {
   const anchor =
     event.target instanceof Element
@@ -83,7 +76,12 @@ function SkillReadStatus(props: {
 }
 
 /** Delegates transcript intent while the shared hovercard owns its portal and focus. */
-export function createSkillFileHovercard(props: SkillFileHovercardProps) {
+export function createSkillFileHovercard(props: {
+  client: GatewayBrowserClient | null;
+  agentId?: string;
+  sessionKey: string;
+  onOpenFile: (file: SkillsFileGetResult, line: number | null) => void;
+}) {
   let host: HTMLElement | undefined;
   let anchor: HTMLAnchorElement | null = null;
   let request: AbortController | null = null;

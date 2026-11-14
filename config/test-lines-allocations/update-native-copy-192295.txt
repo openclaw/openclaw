@@ -1,0 +1,2 @@
+# Preserve complete update/native-device copy assertions while wrapping the revised text.
+2

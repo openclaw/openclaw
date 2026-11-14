@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -657,9 +658,7 @@ describe("managed service update handoff single-flight", () => {
         cancellationSettled = true;
         return result;
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
 
       expect(cancellationSettled).toBe(false);
       expect(helper.exitCode).toBeNull();

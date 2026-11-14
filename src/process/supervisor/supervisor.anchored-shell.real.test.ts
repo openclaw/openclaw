@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -50,12 +50,14 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const pid of activePids) {
     killPidIfAlive(pid);
   }
-  await Promise.all([...activeSupervisors].map((supervisor) => supervisor.shutdown()));
+  const supervisors = [...activeSupervisors];
   activePids.clear();
   activeSupervisors.clear();
+  await Promise.all(supervisors.map((supervisor) => supervisor.shutdown()));
 });
 
 async function createDescendantScope(
@@ -167,6 +169,32 @@ async function expectPending<T>(promise: Promise<T>) {
 }
 
 describe("supervisor anchored shell real process ownership", () => {
+  it.skipIf(process.platform !== "linux")(
+    "reaps descendants with an inherited instrumentation import without stripping command hooks",
+    async () => {
+      const root = tempDirs.make("openclaw-instrumented-exec-");
+      const preload = path.join(root, "empty instrumentation.mjs");
+      await writeFile(preload, "");
+      const nodeOptions = `--import=${JSON.stringify(preload)} --max-old-space-size=256`;
+      vi.stubEnv("NODE_OPTIONS", nodeOptions);
+      const result = await runAnchoredScript(`
+        const child = require("node:child_process").spawn(process.execPath, ["-e",
+          'process.send("ready"); setInterval(() => {}, 1000);'
+        ], { detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+        child.once("message", () => {
+          process.stdout.write(JSON.stringify({ pid: child.pid, nodeOptions: process.env.NODE_OPTIONS }));
+          child.disconnect();
+          child.unref();
+        });
+      `);
+      expect(result).toMatchObject({ exitCode: 0, exitSignal: null });
+      const receipt = JSON.parse(result.stdout);
+      activePids.add(receipt.pid);
+      expect(receipt.nodeOptions).toBe(nodeOptions);
+      expect(isProcessAlive(receipt.pid)).toBe(false);
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "keeps the root command alive when it closes its inherited lineage descriptor",
     async () => {

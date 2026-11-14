@@ -259,6 +259,25 @@ it.each([
     expect(queueFollowUp).toHaveBeenCalledOnce();
   },
 );
+it("acknowledges a CLI-routed config.patch accepted for restart like the offline write", async () => {
+  const queueFollowUp = vi.fn();
+  configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+    path: "/tmp/openclaw.json",
+    config: { hooks: { enabled: true } },
+    hash: "restart-hash",
+    application: Promise.resolve("restart-pending"),
+    queueFollowUp,
+  });
+  // `openclaw config set` connects as the CLI; Control UI and RPC callers keep the error above.
+  const { harness, operation } = startConfigWrite(
+    "config.patch",
+    { raw: { hooks: { enabled: true } }, baseHash: "base-hash" },
+    { client: { connect: { client: { id: "cli", mode: "cli" } } } as never },
+  );
+  await operation;
+  expectSuccess(harness.respond, expect.objectContaining({ ok: true, restartPending: true }));
+  expect(queueFollowUp).toHaveBeenCalledOnce();
+});
 describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config $(touch pwned).json" }, async () => {

@@ -16,6 +16,28 @@ function makeError(overrides: Partial<p.ValidationError>): p.ValidationError {
 }
 
 describe("precompiled protocol validators", () => {
+  it("validates every self-service channel identity action through the public export", () => {
+    const target = { channelId: "discord", accountId: "default" };
+    const start = {
+      action: "start",
+      ...target,
+      browserNonce: "11111111-1111-4111-8111-111111111111",
+    };
+    const identity = validation(p.validateUsersChannelIdentityParams);
+    identity.accepts(
+      { action: "status", channelId: "discord" },
+      start,
+      { action: "poll", ...target, requestId: "pending-proof" },
+      { action: "cancel", ...target, requestId: "pending-proof" },
+      { action: "disconnect", ...target },
+    );
+    identity.rejects(
+      { ...start, profileId: "another-profile" },
+      { ...start, browserNonce: "not-a-uuid" },
+      { action: "poll", ...target },
+      { action: "link", ...target, senderId: "claimed-identity" },
+    );
+  });
   it("validates through exported checks and reports invalid types", () => {
     expect(p.validateCommandsListParams({})).toBe(true);
     expect(p.validateCommandsListParams({ includeArgs: true })).toBe(true);
@@ -62,8 +84,11 @@ describe("precompiled protocol validators", () => {
     const undo = validation(p.validateSkillsWorkshopUndoParams);
     changes.accepts({}, { agentId: "main", limit: 500, beforeMs: 1_700_000_000_000 });
     changes.rejects({ limit: 0 }, { limit: 501 });
-    read.accepts({ name: "deploy-notes", filePath: "references/api.md", versionId: "v1" });
-    read.rejects({}, { name: "" });
+    read.accepts(
+      { name: "deploy-notes", filePath: "references/api.md", versionId: "v1" },
+      { name: "deploy-notes", draftId: "deploy-notes-1a2b3c4d" },
+    );
+    read.rejects({}, { name: "" }, { name: "deploy-notes", draftId: "" });
     archive.accepts({ name: "deploy-notes", reason: "superseded" });
     archive.rejects(
       { name: "deploy-notes", reason: "" },

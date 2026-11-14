@@ -4,6 +4,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -443,18 +444,15 @@ it("uses prepared model context before quarantining runtime-normalized tools", a
     ],
     normalizeToolsMock,
   });
-  const runtimeModel: ProviderRuntimeModel = {
+  const runtimeModel: ProviderRuntimeModel = makeProviderModelFixture({
     id: "chat-latest",
     name: "chat-latest",
     provider: "openai",
     api: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 1024,
-  };
+  });
 
   const result = await resolveEffectiveToolInventory({
     cfg: {},

@@ -41,10 +41,10 @@ export function createResponsesV2CompactionCollector(replayBudget?: OpenAIRespon
     },
     sanitizeImages(request: OpenAIResponsesRequestParams) {
       const sanitized = sanitizeResponsesImagePayload(request);
-      // Image normalization preserves order but copies only JSON fields.
+      // Reused frozen items retain provenance; detached JSON copies need it restored.
       sanitized.input?.forEach((inputItem, index) => {
         const source = request.input?.[index];
-        if (source && Reflect.get(source, RESPONSES_RETAINED_USER)) {
+        if (source && source !== inputItem && Reflect.get(source, RESPONSES_RETAINED_USER)) {
           Object.assign(inputItem, { [RESPONSES_RETAINED_USER]: true });
         }
       });

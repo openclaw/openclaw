@@ -22,6 +22,7 @@ import { channelHasConfiguredState, resolveChannelAccount } from "../account-res
 import { buildChannelUiCatalog } from "./catalog.js";
 import {
   listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync,
   resolveReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
 import {
@@ -152,6 +153,55 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
+  it.each(["registered", "ineligible"])(
+    "skips saved-auth I/O for %s channels until discovery needs it",
+    async (state) => {
+      const stateDir = makePluginLoaderTempDir();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const persistedAuthPath = path.join(stateDir, "linked-auth");
+      const { channelId, pluginDir, setupMarker, fullMarker } = writeBundledSetupChannelPlugin({
+        persistedAuthPath,
+      });
+      const readsPath = path.join(stateDir, "auth-reads");
+      fs.writeFileSync(
+        path.join(pluginDir, "auth-state.cjs"),
+        `exports.hasAuth = () => {
+        const fs = require("node:fs");
+        fs.appendFileSync(${JSON.stringify(readsPath)}, "read\\n");
+        return fs.existsSync(${JSON.stringify(persistedAuthPath)});
+      };`,
+      );
+      fs.writeFileSync(persistedAuthPath, "linked");
+      const cfg = {
+        plugins: {
+          allow: [state === "ineligible" ? "other-plugin" : channelId],
+          entries: { [channelId]: { enabled: true } },
+        },
+      };
+      const metadataSnapshot = resolvePluginMetadataSnapshot({ config: cfg });
+      const loaded = createChannelTestPluginBase({ id: channelId });
+      setActivePluginRegistry(
+        createTestRegistry(
+          state === "registered"
+            ? [{ pluginId: channelId, plugin: loaded, source: pluginDir }]
+            : [],
+        ),
+      );
+      const read = () => listReadOnlyChannelPluginsForConfigAsync(cfg, { metadataSnapshot });
+
+      expect(pluginIds(await read())).toEqual(state === "registered" ? [channelId] : []);
+      expect(fs.existsSync(readsPath)).toBe(false);
+
+      setActivePluginRegistry(createTestRegistry([]));
+      cfg.plugins.allow = [channelId];
+      expect(pluginIds(await read())).toContain(channelId);
+      expect(fs.readFileSync(readsPath, "utf8")).toBe("read\n");
+      fs.unlinkSync(persistedAuthPath);
+      expect(pluginIds(await read())).not.toContain(channelId);
+      expectMarkers(setupMarker, fullMarker);
+    },
+  );
+
   it("keeps explicitly supplied metadata inventories separate for the same config", () => {
     const { cfg, list } = externalFixture({ setupEntry: false, manifestChannelConfig: true });
     const original = resolvePluginMetadataSnapshot({ config: cfg });

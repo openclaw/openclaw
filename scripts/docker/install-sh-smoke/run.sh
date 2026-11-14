@@ -519,7 +519,10 @@ if (noOp && !legacySameVersionApply) {
       !payload.before.buildId || payload.after?.buildId !== payload.before.buildId) {
     throw new Error("already-current update changed or omitted installed build identity");
   }
-  if (steps.length !== 1) {
+  const allowedNoOpSteps = new Set(["package-install", "global update", "recovery-artifact-cleanup"]);
+  const cleanupSteps = steps.filter((step) => step?.name === "recovery-artifact-cleanup");
+  if (cleanupSteps.length > 1 || cleanupSteps.some((step) => Number(step.exitCode ?? 1) !== 0) ||
+      steps.some((step) => !allowedNoOpSteps.has(step?.name))) {
     throw new Error("already-current update performed unexpected activation or maintenance steps");
   }
   console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");

@@ -1,0 +1,2 @@
+# Scheduled registry failure and restart recovery coverage.
+55

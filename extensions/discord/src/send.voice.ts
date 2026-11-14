@@ -266,6 +266,7 @@ type VoiceMessageOpts = Pick<
   | "reply"
   | "retry"
   | "silent"
+  | "signal"
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"

@@ -9,10 +9,8 @@ import type {
   ChatHistoryMessageParams,
 } from "../../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  projectForwardedMessages,
-} from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
+import { projectForwardedMessages } from "../chat-display-projection.history.js";
 import { readChatHistoryPageKernel } from "../chat-history-page-kernel.js";
 import { projectChatHistoryWithReplies } from "../chat-history-reply-messages.js";
 import { encodeChatHistoryResponsePage } from "../chat-history-response-page.js";

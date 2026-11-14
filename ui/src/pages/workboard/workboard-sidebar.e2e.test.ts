@@ -75,7 +75,7 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toMatch(/^\/chat(?:\/|$)/u);
         await workboard.hover();
         const newConversation = sidebar.getByRole("link", {
-          name: "New conversation",
+          name: "New session",
           exact: true,
         });
         if (!(await sidebar.locator(".sidebar-session-toolbar").isVisible())) {
@@ -103,7 +103,7 @@ suite.define(() => {
           }),
         );
         const centerY = expect.closeTo(indicators[0]!.centerY, 1);
-        expect(indicators).toMatchObject([{ centerY }, { centerY }, { centerY }]);
+        expect(indicators).toMatchObject([{ centerY }, { centerY }]);
         const ordered = indicators.toSorted((left, right) => left.left - right.left);
         for (let index = 1; index < ordered.length; index++) {
           expect(ordered[index]!.left).toBeGreaterThanOrEqual(ordered[index - 1]!.right);

@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionRowEventListener,
@@ -16,7 +17,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import type { TestChatPane } from "./chat-pane.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -52,16 +53,10 @@ function globalSession(
 }
 
 function composerControls(state: ChatPageHost, agentDefaultModel?: string) {
-  return renderChatPaneComposerControls({
-    state,
+  return renderControls(state, {
     selectedSession: selectedChatSessionRow(state),
     agentDefaultModel,
-    modelAccess: { allowed: true, requiredScope: "operator.write" },
-    effortAccess: { allowed: true, requiredScope: "operator.write" },
     contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-    permissionAccess: { allowed: true, requiredScope: "operator.write" },
-    canSelectFull: true,
-    onModelSetup: vi.fn(),
   });
 }
 
@@ -120,7 +115,7 @@ describe("mounted pane session event ownership", () => {
     transcript.start();
     await flushDeferredRowPrune();
     expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Worked for 3 minutes",
+      "Worked for 3m",
     );
   });
 
@@ -787,7 +782,8 @@ describe("mounted pane session event ownership", () => {
       expect(
         list.mock.calls.some(([, params]) => asOptionalRecord(params)?.agentId === "research"),
       ).toBe(true);
-      expect(state.chatError).toContain("Permission application unavailable");
+      expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+      expect(state.lastErrorDetail).toEqual(new Error("Permission application unavailable"));
       const failedChoice = draw();
       expect(failedChoice?.dataset.chatSelectValue).toBe("full");
       expect(failedChoice?.disabled).toBe(false);

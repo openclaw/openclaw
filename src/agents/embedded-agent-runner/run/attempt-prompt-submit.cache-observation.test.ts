@@ -59,7 +59,7 @@ it("observes canonical request prefixes before managed cache consumption and ski
   const cases = [
     [10_000, false, null],
     [0, true, null],
-    [10_000, false, [{ code: "tools", detail: '1 -> 1 tools; description: "read"' }]],
+    [10_000, false, [{ code: "tools", detail: "1 -> 1 tools; description: tool[1]" }]],
   ] as const;
 
   await submitEmbeddedAttemptPrompt({

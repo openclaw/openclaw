@@ -35,6 +35,7 @@ import {
 } from "./plugin-cache.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createOwnedInstance } from "./plugin-instance.test-support.js";
 import { createEmptyPluginMetadataSnapshot } from "./plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -42,6 +43,11 @@ import {
   withPluginRegistryPreparationScope,
 } from "./registry-lifecycle.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
+import {
+  createPluginRegistryOwner,
+  setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
+} from "./runtime.js";
 import {
   bindGatewayContextResolver,
   getInProcessGatewayRequestContext,
@@ -56,6 +62,122 @@ import { getPluginServiceCleanupSettlement, startPluginServices } from "./servic
 import { createServiceRegistration } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
+function fixture(id: string) {
+  const clock = createGatewaySchedulerClock();
+  return {
+    ...createOwnedInstance(id, "bundled"),
+    clock,
+    scheduler: createTestGatewayScheduler(clock.clock),
+  };
+}
+
+it("keeps predecessor service ticks callable while an admitted turn still holds it", async ({
+  signal,
+}) => {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({ id: "overlapping-scheduler", generationOverlap: true });
+  registry.plugins.push(record);
+  const instance = new PluginInstance(record.id, { record, registry });
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const events: string[] = [];
+  registry.services.push({
+    id: record.id,
+    pluginId: record.id,
+    source: record.source,
+    origin: record.origin,
+    service: {
+      apiVersion: 2,
+      id: record.id,
+      start({ scheduler: serviceScheduler }) {
+        serviceScheduler.schedule({
+          id: "complete-old-work",
+          delayMs: 1,
+          run: () => {
+            expect(instance.hasActiveCall).toBe(true);
+            events.push("tick");
+          },
+        });
+      },
+      stop() {
+        events.push("stop");
+      },
+    },
+  });
+  setActivePluginRegistry(registry);
+  const owner = createPluginRegistryOwner(registry);
+  const services = await startPluginServices({ registry, config: {}, scheduler });
+  // Both serialized pre-stop observations must ignore service-lifetime authority.
+  await instance.waitForRetainedWork(signal, { includeCalls: true });
+  await instance.waitForIdle(signal);
+  const turn = instance.retainConsumer(undefined, registry);
+  const next = createEmptyPluginRegistry();
+  setActivePluginRegistry(next);
+  owner.publish(next, async () => {
+    await services.stop();
+  });
+  try {
+    expect(instance.acceptingCalls).toBe(false);
+    await clock.advanceBy(1);
+    expect(events).toEqual(["tick"]);
+    turn.release();
+    await waitForPluginRegistryRetirement(registry);
+    expect(events).toEqual(["tick", "stop"]);
+  } finally {
+    turn.release();
+    await services.stop();
+    await scheduler.stop();
+    await owner.close();
+  }
+});
+
+it.each([undefined, false])(
+  "refuses quiesced service tick bodies without generation overlap (%s)",
+  async (generationOverlap) => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "serialized-scheduler",
+      ...(generationOverlap === undefined ? {} : { generationOverlap }),
+    });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    let ticks = 0;
+    registry.services.push(
+      createServiceRegistration(
+        {
+          apiVersion: 2,
+          id: record.id,
+          start({ scheduler: serviceScheduler }) {
+            serviceScheduler.schedule({
+              id: "ordinary-tick",
+              delayMs: 1,
+              everyMs: 1,
+              run: () => {
+                ticks += 1;
+              },
+            });
+          },
+        },
+        { pluginId: record.id },
+      ),
+    );
+    const services = await startPluginServices({ registry, config: {}, scheduler });
+    try {
+      await clock.advanceBy(1);
+      expect(ticks).toBe(1);
+      instance.quiesce();
+      await clock.advanceBy(1);
+      expect(ticks).toBe(1);
+    } finally {
+      await services.stop();
+      await scheduler.stop();
+      await instance.dispose();
+    }
+  },
+);
+
 it("owns service callbacks after startup and reload callers finish", async () => {
   class CallerFacts {
     readonly owner = "service-start-caller";
@@ -63,41 +185,31 @@ it("owns service callbacks after startup and reload callers finish", async () =>
   const context = createGatewayRequestContext(makeContextParams());
   const runtime = createPluginRuntime();
   bindGatewayContextResolver(runtime, () => context);
-  const registry = createEmptyPluginRegistry();
+  const { registry, record, instance, clock, scheduler } = fixture("scheduled-context");
   bindPluginRegistryRuntime(registry, runtime);
-  const record = createPluginRecord({ id: "scheduled-context", origin: "bundled" });
-  registry.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry });
-  const clock = createGatewaySchedulerClock();
-  const gatewayScheduler = createTestGatewayScheduler(clock.clock);
   const scopes: PluginServiceSchedulerV1[] = [];
   const resources: AsyncResource[] = [];
   const firstConfig = { browser: { enabled: false } };
   const nextConfig = { browser: { enabled: true } };
   const configs: unknown[] = [];
-  const observations: Array<{
-    liveInstance: boolean;
-    gateway: boolean;
-    request: boolean;
-    operator: boolean;
-  }> = [];
-  const observe = async () => {
-    await Promise.resolve();
-    expect(readOnlyWorkerScope.getStore()?.active).toBe(true);
-    observations.push({
-      liveInstance:
-        pluginInstanceInvocation.getStore()?.instance === instance && instance.hasActiveCall,
-      gateway: getInProcessGatewayRequestContext() === context,
-      request: getPluginRuntimeGatewayRequestScope()?.client !== undefined,
-      operator: readOperatorToolGatewayAuthority() !== undefined,
-    });
+  let observations = 0;
+  const registerRoute = (path: string) =>
     registerPluginHttpRoute({
-      path: `/scheduled-context/${observations.length}`,
+      path,
       auth: "plugin",
       handler: async () => true,
       pluginId: record.id,
       throwOnFailure: true,
     });
+  const observe = async () => {
+    await Promise.resolve();
+    expect(readOnlyWorkerScope.getStore()?.active).toBe(true);
+    expect(pluginInstanceInvocation.getStore()?.instance).toBe(instance);
+    expect(instance.hasActiveCall).toBe(true);
+    expect(getInProcessGatewayRequestContext()).toBe(context);
+    expect(getPluginRuntimeGatewayRequestScope()?.client).toBeUndefined();
+    expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+    registerRoute(`/scheduled-context/${++observations}`);
   };
   registry.services.push({
     id: "scheduled-context",
@@ -107,18 +219,12 @@ it("owns service callbacks after startup and reload callers finish", async () =>
     service: {
       apiVersion: 2,
       id: "scheduled-context",
-      start({ scheduler, config }) {
-        scopes.push(scheduler);
+      start({ scheduler: serviceScheduler, config }) {
+        scopes.push(serviceScheduler);
         configs.push(config);
         resources.push(new AsyncResource("service-start", { requireManualDestroy: true }));
         expect(isPluginRegistryPreparing(registry)).toBe(true);
-        registerPluginHttpRoute({
-          path: `/scheduled-start/${scopes.length}`,
-          auth: "plugin",
-          handler: async () => true,
-          pluginId: record.id,
-          throwOnFailure: true,
-        });
+        registerRoute(`/scheduled-start/${scopes.length}`);
         resolvePluginServiceScheduler().schedule({ id: "startup", delayMs: 1, run: observe });
       },
       stop() {
@@ -168,7 +274,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
   };
   const services = await runFromRequest(() =>
     withPluginRegistryPreparationScope(registry, () =>
-      startPluginServices({ registry, config: firstConfig, scheduler: gatewayScheduler }),
+      startPluginServices({ registry, config: firstConfig, scheduler }),
     ),
   );
   try {
@@ -198,11 +304,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
       expect(resolvePluginServiceScheduler()).toBe(scopes[1]);
       expect(readOperatorToolGatewayAuthority()).toBeUndefined();
     });
-    expect(observations).toEqual([
-      { liveInstance: true, gateway: true, request: false, operator: false },
-      { liveInstance: true, gateway: true, request: false, operator: false },
-      { liveInstance: true, gateway: true, request: false, operator: false },
-    ]);
+    expect(observations).toBe(3);
     expect(scopes[0]!.signal.aborted).toBe(true);
     expect(scopes[1]!.signal.aborted).toBe(false);
     expect(() => scopes[0]!.schedule({ id: "retired", delayMs: 0, run: observe })).toThrow(
@@ -219,7 +321,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
       resource.emitDestroy();
     }
     await services.stop();
-    await gatewayScheduler.stop();
+    await scheduler.stop();
     await instance.dispose();
   }
 });
@@ -227,9 +329,9 @@ it("owns service callbacks after startup and reload callers finish", async () =>
 it("keeps standalone scheduled services free of an unbound Gateway resolver", async () => {
   const registry = createEmptyPluginRegistry();
   const clock = createGatewaySchedulerClock();
-  const gatewayScheduler = createTestGatewayScheduler(clock.clock);
+  const scheduler = createTestGatewayScheduler(clock.clock);
   const resourceHost = new LegacyPluginSdkResourceHost();
-  resourceHost.bindScheduler(gatewayScheduler);
+  resourceHost.bindScheduler(scheduler);
   let opened = false;
   registry.services.push({
     id: "standalone",
@@ -239,8 +341,8 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
     service: {
       apiVersion: 2,
       id: "standalone",
-      start({ scheduler }) {
-        scheduler.schedule({
+      start({ scheduler: serviceScheduler }) {
+        serviceScheduler.schedule({
           id: "legacy-resource",
           delayMs: 1,
           run: () => {
@@ -255,7 +357,7 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
   });
   const readers = createSqliteReadOnlyWorkerScope();
   const services = await resourceHost.run(() =>
-    readers.run(() => startPluginServices({ registry, config: {}, scheduler: gatewayScheduler })),
+    readers.run(() => startPluginServices({ registry, config: {}, scheduler })),
   );
   await readers.close();
   try {
@@ -263,18 +365,13 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
     expect(opened).toBe(true);
   } finally {
     await services.stop();
-    await gatewayScheduler.stop();
+    await scheduler.stop();
     await resourceHost.close();
   }
 });
 
 it("settles scheduled callbacks before the disposal that stops their service", async () => {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "scheduled-disposal", origin: "bundled" });
-  registry.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry });
-  const clock = createGatewaySchedulerClock();
-  const gatewayScheduler = createTestGatewayScheduler(clock.clock);
+  const { registry, record, instance, clock, scheduler } = fixture("scheduled-disposal");
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const events: string[] = [];
@@ -289,8 +386,8 @@ it("settles scheduled callbacks before the disposal that stops their service", a
     service: {
       apiVersion: 2,
       id: record.id,
-      start({ scheduler }) {
-        scheduler.schedule({
+      start({ scheduler: serviceScheduler }) {
+        serviceScheduler.schedule({
           id: "held",
           delayMs: 1,
           run: async () => {
@@ -305,7 +402,7 @@ it("settles scheduled callbacks before the disposal that stops their service", a
       },
     },
   });
-  const services = await startPluginServices({ registry, config: {}, scheduler: gatewayScheduler });
+  const services = await startPluginServices({ registry, config: {}, scheduler });
   const tick = clock.advanceBy(1);
   await entered.promise;
   const disposal = instance.dispose(async () => {
@@ -319,7 +416,7 @@ it("settles scheduled callbacks before the disposal that stops their service", a
     expect(events).toEqual(["callback", "stopped", "disposed"]);
   } finally {
     release.resolve();
-    await Promise.allSettled([tick, disposal, services.stop(), gatewayScheduler.stop()]);
+    await Promise.allSettled([tick, disposal, services.stop(), scheduler.stop()]);
   }
 });
 

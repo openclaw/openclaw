@@ -632,7 +632,9 @@ export class ExtensionRelayBridge {
               error instanceof Error &&
               (error.message === "The extensions gallery cannot be scripted." ||
                 error.message === "Cannot access a chrome:// URL" ||
-                error.message === "Cannot access a chrome-extension:// URL of different extension")
+                error.message ===
+                  "Cannot access a chrome-extension:// URL of different extension" ||
+                error.message === "Cannot attach to this target.")
             ) {
               skipped.set(tab, { url, reason: error.message });
             }

@@ -3,6 +3,7 @@ import {
   createBoundedResponseTooLargeError,
   readBoundedResponseBytes,
 } from "./bounded-response.mjs";
+import { isRecord } from "./record-shared.mjs";
 import {
   classifyReleaseTrain,
   compareReleaseVersions,
@@ -244,7 +245,7 @@ async function fetchNpmRegistryWithRetry(params, reader) {
 }
 
 /**
- * @param {NpmRegistryReadOptions & { maxBytes?: number; redirect?: RequestRedirect }} params
+ * @param {NpmRegistryReadOptions & { maxBytes?: number; redirect?: RequestRedirect; exactVersion?: string }} params
  * @returns {Promise<NpmRegistryPackumentResult>}
  */
 export async function fetchNpmRegistryPackumentWithRetry(params) {
@@ -283,7 +284,76 @@ export async function fetchNpmRegistryPackumentWithRetry(params) {
       }
     },
   });
-  return { status: result.status, ok: result.ok, packument: result.body };
+  if (
+    !params.exactVersion ||
+    !result.ok ||
+    !isRecord(result.body) ||
+    !isRecord(result.body.versions) ||
+    Object.hasOwn(result.body.versions, params.exactVersion)
+  ) {
+    return { status: result.status, ok: result.ok, packument: result.body };
+  }
+
+  if (
+    !/^[0-9A-Za-z][0-9A-Za-z.+-]{0,127}$/u.test(params.exactVersion) ||
+    params.exactVersion === ".."
+  ) {
+    throw new Error(`${params.packageName}: invalid exact npm version selector.`);
+  }
+  const exactUrl = new URL(params.packageUrl);
+  exactUrl.pathname = `${exactUrl.pathname.replace(/\/$/u, "")}/${params.exactVersion}`;
+  exactUrl.search = "";
+  exactUrl.hash = "";
+  const exact = await fetchNpmRegistryWithRetry(
+    { ...params, packageUrl: exactUrl.href },
+    {
+      label: `${params.packageName}@${params.exactVersion}: exact npm version probe`,
+      headers: { accept: "application/json" },
+      redirect: params.redirect,
+      read: async (response, signal) => {
+        const body = (
+          await readBoundedResponseBytes(
+            response,
+            `${params.packageName}@${params.exactVersion}: exact npm version`,
+            maxBytes ?? 1024 * 1024,
+            {
+              signal,
+              createTooLargeError: createBoundedResponseTooLargeError,
+            },
+          )
+        ).toString("utf8");
+        try {
+          return JSON.parse(body);
+        } catch (error) {
+          throw new Error(
+            `${params.packageName}@${params.exactVersion}: exact npm version probe returned invalid JSON.`,
+            { cause: error },
+          );
+        }
+      },
+    },
+  );
+  if (exact.status === 404) {
+    return { status: result.status, ok: result.ok, packument: result.body };
+  }
+  if (
+    !exact.ok ||
+    !isRecord(exact.body) ||
+    exact.body.name !== params.packageName ||
+    exact.body.version !== params.exactVersion
+  ) {
+    throw new Error(
+      `${params.packageName}@${params.exactVersion}: exact npm version probe returned HTTP ${exact.status} or mismatched package metadata.`,
+    );
+  }
+  return {
+    status: result.status,
+    ok: result.ok,
+    packument: {
+      ...result.body,
+      versions: { ...result.body.versions, [params.exactVersion]: exact.body },
+    },
+  };
 }
 
 /** @param {NpmRegistryReadOptions & { maxBytes: number }} params */

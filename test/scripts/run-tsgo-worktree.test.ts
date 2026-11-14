@@ -344,12 +344,12 @@ child.once("message", () => process.exit(0));
       }
     });
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(124);
     expect(result.stderr).toContain("killed the tsgo process tree");
     expect(result.stdout).not.toContain("[ci-static:tsgo:");
     expect(observedBeforeReap.pid).toBeDefined();
     expect(observedBeforeReap.error).toMatchObject({ code: "ESRCH" });
-    expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 124)");
   }, 30_000);
 
   it.for(["wrapper", "spawn"])(

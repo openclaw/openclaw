@@ -5,9 +5,10 @@
  * @module @openclaw/oc-path/jsonl/edit
  */
 
-import { findNodeAtLocation, parseTree } from "jsonc-parser/lib/esm/main.js";
+import { parseTree } from "jsonc-parser/lib/esm/main.js";
 import { OcPathEditError } from "../edit-error.js";
 import type { JsoncValue } from "../jsonc/ast.js";
+import { findEffectiveJsoncNode } from "../jsonc/parse.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
@@ -68,7 +69,7 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
   const editPath = match.path;
   const bomLength = target.raw.startsWith("\uFEFF") ? 1 : 0;
   const tree = parseTree(target.raw.slice(bomLength), [], { allowTrailingComma: true });
-  const node = tree && findNodeAtLocation(tree, editPath);
+  const node = tree && findEffectiveJsoncNode(tree, editPath);
   if (!node) {
     throw new OcPathEditError("unresolved");
   }

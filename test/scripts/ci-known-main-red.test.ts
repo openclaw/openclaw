@@ -455,20 +455,23 @@ describe("main failure attribution", () => {
 });
 
 describe("known hourly main failures", () => {
-  it("keeps one complete failure signature when the shard runner replays diagnostics", () => {
-    const log = `${report()}\n${[
-      "[shard-failure:gateway] FAILED (exit 1)",
-      `[shard-failure:gateway:tail] FAIL gateway ${file} > ${title}`,
-      "[shard-failure:gateway:tail] AssertionError: expected true to be false",
-      "[shard-failure:gateway:tail] Test Files 1 failed (1)",
-      "[shard-failure:gateway:tail] Tests 1 failed | 2 passed (3)",
-      "[shard-failure:gateway:tail] [test] FAILED (exit 1)",
-    ].join("\n")}`;
-    expect(parseNodeFailureReport(log, true)).toEqual([
-      { kind: "vitest", file, test: `${title} :: AssertionError: expected true to be false` },
-    ]);
-    expect(extractNodeFailedTests(log)).toEqual([{ file, tests: [title] }]);
-  });
+  it.each(["", ":42", ":42:3"])(
+    "keeps replayed failure attribution with location %j",
+    (location) => {
+      const log = `${report().replace(`${file} >`, `${file}${location} >`)}\n${[
+        "[shard-failure:gateway] FAILED (exit 1)",
+        `[shard-failure:gateway:tail] FAIL gateway ${file} > ${title}`,
+        "[shard-failure:gateway:tail] AssertionError: expected true to be false",
+        "[shard-failure:gateway:tail] Test Files 1 failed (1)",
+        "[shard-failure:gateway:tail] Tests 1 failed | 2 passed (3)",
+        "[shard-failure:gateway:tail] [test] FAILED (exit 1)",
+      ].join("\n")}`;
+      expect(parseNodeFailureReport(log, true)).toEqual([
+        { kind: "vitest", file, test: `${title} :: AssertionError: expected true to be false` },
+      ]);
+      expect(extractNodeFailedTests(log)).toEqual([{ file, tests: [title] }]);
+    },
+  );
 
   it.each([false, true])(
     "keeps report attribution separate from gate eligibility (changed=%s)",

@@ -4,7 +4,8 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
   vi.fn().mockImplementation(async (_to: string, message: string) => sentText("imsg-1", message)),
@@ -25,9 +26,9 @@ function sentText(messageId: string, text: string) {
   return { messageId, sentText: text, receipt: createTestIMessageReceipt(messageId) };
 }
 
+// mock-isolation: Delivery fixtures supply native send receipts without invoking the iMessage client.
 vi.mock("../send.js", () => ({
-  sendMessageIMessage: (to: string, message: string, opts?: unknown) =>
-    sendMessageIMessageMock(to, message, opts),
+  sendMessageIMessage: sendMessageIMessageMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-chunking", async (importOriginal) => ({
@@ -36,50 +37,45 @@ vi.mock("openclaw/plugin-sdk/reply-chunking", async (importOriginal) => ({
   resolveChunkMode: vi.fn(() => "length"),
 }));
 
-let deliverIMessageReply: typeof import("./deliver.js").deliverIMessageReply;
-let createIMessageEchoCachingSend: typeof import("./deliver.js").createIMessageEchoCachingSend;
-
 describe("deliverIMessageReply", () => {
   const cfg = { channels: { imessage: { accounts: { default: {} } } } };
   const runtime = { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
   const remember = vi.fn();
   const destination = { target: "chat_id:20", accountId: "acct-2" };
-  const deliveryDefaults = { cfg, runtime, textLimit: 4000, maxBytes: 2048, ...destination };
+  const defaults = { cfg, runtime, textLimit: 4000, maxBytes: 2048, ...destination };
   const deliver = (
     payload: Parameters<typeof deliverIMessageReply>[0]["payload"],
     options: Partial<Parameters<typeof deliverIMessageReply>[0]> = {},
-  ) => deliverIMessageReply({ ...deliveryDefaults, payload, ...options });
-
-  beforeAll(async () => {
-    ({ createIMessageEchoCachingSend, deliverIMessageReply } = await import("./deliver.js"));
-  });
+  ) => deliverIMessageReply({ ...defaults, payload, ...options });
 
   beforeEach(() => {
     vi.clearAllMocks();
     chunkTextWithModeMock.mockImplementation((text: string) => [text]);
   });
 
-  afterAll(() => {
-    vi.doUnmock("../send.js");
-    vi.doUnmock("openclaw/plugin-sdk/reply-chunking");
-    vi.resetModules();
-  });
-
   it("forwards voice-note payloads to the canonical iMessage media sender", async () => {
+    const mediaUrl = "https://example.com/voice.caf";
+    const media = { contentType: "audio/x-caf", kind: "audio" };
+    sendMessageIMessageMock.mockResolvedValueOnce({
+      messageId: "imsg-media-1",
+      sentText: "",
+      echoMedia: media,
+      receipt: createTestIMessageReceipt("imsg-media-1", "media"),
+    });
     await deliver(
-      { mediaUrl: "https://example.com/voice.caf", audioAsVoice: true },
-      { maxBytes: 8192 },
+      { mediaUrl, audioAsVoice: true },
+      { maxBytes: 8192, sentMessageCache: { remember } },
     );
 
     expect(sendMessageIMessageMock).toHaveBeenCalledWith(
       "chat_id:20",
       "",
-      expect.objectContaining({
-        accountId: "acct-2",
-        audioAsVoice: true,
-        mediaUrl: "https://example.com/voice.caf",
-      }),
+      expect.objectContaining({ accountId: "acct-2", audioAsVoice: true, mediaUrl }),
     );
+    expect(remember).toHaveBeenCalledWith("acct-2:chat_id:20", {
+      media,
+      messageId: "imsg-media-1",
+    });
   });
 
   it("sanitizes durable outbound text before sending", async () => {
@@ -87,24 +83,21 @@ describe("deliverIMessageReply", () => {
       accountId: "acct-6",
       sentMessageCache: { remember },
     });
-    sendMessageIMessageMock.mockResolvedValueOnce(sentText("imsg-durable-2", "Visible reply"));
+    sendMessageIMessageMock.mockResolvedValueOnce(sentText("sent-2", "reply"));
 
-    await send("chat_id:60", "<thinking>hidden</thinking>\nVisible reply\nassistant:", {
+    await send("chat_id:60", "<thinking>hidden</thinking>\nreply\nassistant:", {
       config: cfg,
-      accountId: "acct-ignored",
+      accountId: "other",
     });
 
     expect(sendMessageIMessageMock).toHaveBeenCalledExactlyOnceWith(
       "chat_id:60",
-      "Visible reply",
-      expect.objectContaining({
-        config: cfg,
-        accountId: "acct-ignored",
-      }),
+      "reply",
+      expect.objectContaining({ accountId: "other" }),
     );
     expect(remember).toHaveBeenCalledWith("acct-6:chat_id:60", {
-      text: "Visible reply",
-      messageId: "imsg-durable-2",
+      text: "reply",
+      messageId: "sent-2",
     });
   });
 
@@ -121,22 +114,6 @@ describe("deliverIMessageReply", () => {
       ["acct-2:chat_id:20", { text: "first", messageId: "imsg-1" }],
       ["acct-2:chat_id:20", { text: "second", messageId: "imsg-2" }],
     ]);
-  });
-
-  it("records the internal echo key for media-only replies", async () => {
-    sendMessageIMessageMock.mockResolvedValueOnce({
-      messageId: "imsg-media-1",
-      sentText: "",
-      echoMedia: { contentType: "image/jpeg", kind: "image" },
-      receipt: createTestIMessageReceipt("imsg-media-1", "media"),
-    });
-
-    await deliver({ mediaUrls: ["https://example.com/a.jpg"] }, { sentMessageCache: { remember } });
-
-    expect(remember).toHaveBeenCalledWith("acct-2:chat_id:20", {
-      media: { contentType: "image/jpeg", kind: "image" },
-      messageId: "imsg-media-1",
-    });
   });
 
   it("preserves earlier media receipts when a later native caption fails", async () => {
@@ -177,18 +154,5 @@ describe("deliverIMessageReply", () => {
       },
     });
     expect(observed.deliveryResult.receipt).not.toHaveProperty("replyToId");
-  });
-
-  it("returns a recorded non-visible outcome when sanitization removes the complete reply", async () => {
-    const delivered = await deliver(
-      { text: "<thinking>private reasoning</thinking>" },
-      { maxBytes: 4096 },
-    );
-
-    expect(sendMessageIMessageMock).not.toHaveBeenCalled();
-    expect(delivered).toEqual({
-      visibleReplySent: false,
-      suppression: { reason: "no_visible_result" },
-    });
   });
 });

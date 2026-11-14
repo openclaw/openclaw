@@ -1,14 +1,14 @@
 import { request } from "node:http";
 import { setImmediate } from "node:timers/promises";
 
+type WebhookResponse = { statusCode: number; body: string };
+type WebhookRequest = { port: number; path: string; secret?: string; declaredLength: number };
+
 export async function yieldWebhookTask(): Promise<void> {
   await setImmediate();
 }
 
-function webhookRequest(
-  params: { port: number; path: string; secret?: string; declaredLength: number },
-  onDone: (payload: { statusCode: number; body: string }) => void,
-) {
+function webhookRequest(params: WebhookRequest, onDone: (payload: WebhookResponse) => void) {
   return request(
     {
       hostname: "127.0.0.1",
@@ -35,25 +35,6 @@ function webhookRequest(
   );
 }
 
-function createSingleSettlement<T>(params: {
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
-  clear: () => void;
-}) {
-  let settled = false;
-  const once =
-    <A>(callback: (value: A) => void) =>
-    (value: A) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      params.clear();
-      callback(value);
-    };
-  return { resolve: once(params.resolve), reject: once(params.reject) };
-}
-
 export async function postWebhookJson(params: {
   url: string;
   payload: string;
@@ -77,48 +58,30 @@ export async function postWebhookJson(params: {
   }
 }
 
-export async function postWebhookHeadersOnly(params: {
-  port: number;
-  path: string;
-  declaredLength: number;
-  secret?: string;
-  timeoutMs?: number;
-}): Promise<{ statusCode: number; body: string }> {
-  return await new Promise((resolve, reject) => {
-    const settle = createSingleSettlement({
-      resolve,
-      reject,
-      clear: () => clearTimeout(timeout),
-    });
-
+export async function postWebhookHeadersOnly(
+  params: WebhookRequest & { timeoutMs?: number },
+): Promise<WebhookResponse> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return await new Promise<WebhookResponse>((resolve, reject) => {
     const req = webhookRequest({ ...params, secret: params.secret || undefined }, (payload) => {
-      settle.resolve(payload);
+      resolve(payload);
       req.destroy();
     });
-
-    const timeout = setTimeout(() => {
+    timeout = setTimeout(() => {
       req.destroy(
         new Error(`webhook header-only post timed out after ${params.timeoutMs ?? 5_000}ms`),
       );
-      settle.reject(new Error("timed out waiting for webhook response"));
+      reject(new Error("timed out waiting for webhook response"));
     }, params.timeoutMs ?? 5_000);
 
-    req.on("error", settle.reject);
-
+    req.on("error", reject);
     req.flushHeaders();
-  });
+  }).finally(() => clearTimeout(timeout));
 }
 
-export async function postWebhookWithDeclaredLength(params: {
-  port: number;
-  path: string;
-  secret: string;
-  declaredLength: number;
-  body: string;
-}): Promise<
-  | { kind: "response"; statusCode: number; body: string }
-  | { kind: "error"; code: string | undefined }
-> {
+export async function postWebhookWithDeclaredLength(
+  params: WebhookRequest & { secret: string; body: string },
+): Promise<({ kind: "response" } & WebhookResponse) | { kind: "error"; code: string | undefined }> {
   return await new Promise((resolve) => {
     const req = webhookRequest(params, (payload) => resolve({ kind: "response", ...payload }));
     req.on("error", (error: NodeJS.ErrnoException) => {
@@ -135,22 +98,16 @@ export async function postWebhookPayloadWithChunkPlan(params: {
   secret: string;
   mode: "single" | "random-chunked";
   timeoutMs?: number;
-}): Promise<{ statusCode: number; body: string }> {
+}): Promise<WebhookResponse> {
   const payloadBuffer = Buffer.from(params.payload, "utf-8");
-  return await new Promise((resolve, reject) => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return await new Promise<WebhookResponse>((resolve, reject) => {
     let bytesQueued = 0;
     let chunksQueued = 0;
     let phase: "writing" | "awaiting-response" = "writing";
-    const settle = createSingleSettlement({
-      resolve,
-      reject,
-      clear: () => clearTimeout(timeout),
-    });
-
-    const req = webhookRequest({ ...params, declaredLength: payloadBuffer.length }, settle.resolve);
-
-    const timeout = setTimeout(() => {
-      settle.reject(
+    const req = webhookRequest({ ...params, declaredLength: payloadBuffer.length }, resolve);
+    timeout = setTimeout(() => {
+      reject(
         new Error(
           `webhook post timed out after ${params.timeoutMs ?? 15_000}ms (phase=${phase}, bytesQueued=${bytesQueued}, chunksQueued=${chunksQueued}, totalBytes=${payloadBuffer.length})`,
         ),
@@ -158,7 +115,7 @@ export async function postWebhookPayloadWithChunkPlan(params: {
       req.destroy();
     }, params.timeoutMs ?? 15_000);
 
-    req.on("error", settle.reject);
+    req.on("error", reject);
 
     const writeAll = async () => {
       if (params.mode === "single") {
@@ -171,19 +128,10 @@ export async function postWebhookPayloadWithChunkPlan(params: {
       while (offset < payloadBuffer.length) {
         const remaining = payloadBuffer.length - offset;
         rngState = (rngState * 1_664_525 + 1_013_904_223) >>> 0;
-        const nextSize = Math.max(
-          1,
-          Math.min(remaining, 1 + Math.floor((rngState / 4_294_967_296) * 8_192)),
-        );
+        const nextSize = Math.min(remaining, 1 + Math.floor((rngState / 4_294_967_296) * 8_192));
         const chunk = payloadBuffer.subarray(offset, offset + nextSize);
         const written = new Promise<void>((resolveWrite, rejectWrite) => {
-          req.write(chunk, (error) => {
-            if (error) {
-              rejectWrite(error);
-            } else {
-              resolveWrite();
-            }
-          });
+          req.write(chunk, (error) => (error ? rejectWrite(error) : resolveWrite()));
         });
         offset += nextSize;
         bytesQueued = offset;
@@ -197,6 +145,6 @@ export async function postWebhookPayloadWithChunkPlan(params: {
       req.end();
     };
 
-    void writeAll().catch(settle.reject);
-  });
+    void writeAll().catch(reject);
+  }).finally(() => clearTimeout(timeout));
 }

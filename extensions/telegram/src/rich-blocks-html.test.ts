@@ -38,7 +38,7 @@ describe("block HTML islands", () => {
 
   it("preserves styled HTML links and entity data (skip detection: true)", () => {
     const { blocks, plainText } = markdownToTelegramRichBlocks(
-      '<details><summary>More</summary><div><a href="https://example.com/**path**?q&#61;&quot;hi&quot;">**A &amp; &#38; &amp;amp; \\&amp; A   B\nC&nbsp;D**</a></div></details>',
+      '<details><summary>More</summary><h3><a href="https://example.com/**path**?q&#61;&quot;hi&quot;">**A &amp; &#38; &amp;amp; \\&amp; A   B\nC&nbsp;D**</a></h3></details>',
       { skipEntityDetection: true },
     );
     const text = {
@@ -47,14 +47,14 @@ describe("block HTML islands", () => {
       text: { type: "bold", text: "A & & &amp; &amp; A   B\nC\u00a0D" },
     };
     expect(blocks).toEqual([
-      { type: "details", summary: "More", blocks: [{ type: "paragraph", text }] },
+      { type: "details", summary: "More", blocks: [{ type: "heading", size: 3, text }] },
     ]);
     expect(plainText).toBe("More\nA & & &amp; &amp; A   B\nC\u00a0D");
   });
 
   it("preserves nested <details> containers around Markdown blocks", () => {
     const block = single(
-      "<details><summary>Outer</summary>\n\n# Outer heading\n\n<details><summary>Inner</summary>\n\n# Inner heading\n\n```bash\nopenclaw doctor\n```\n\n> inner quote\n\n| item | done |\n| --- | --- |\n| **bold** | [link](https://openclaw.ai) |\n| `code` | *italic* |\n\n</details>\n\n> outer quote\n\n</details>",
+      "<details><summary>Outer</summary>\n\n<h1>Outer heading</h1>\n\n<details><summary>Inner</summary>\n\n# Inner heading\n\n```bash\nopenclaw doctor\n```\n\n> inner quote\n\n| item | done |\n| --- | --- |\n| **bold** | [link](https://openclaw.ai) |\n| `code` | *italic* |\n\n</details>\n\n> outer quote\n\n</details>",
     );
     assert(block.type === "details");
     expect(block.blocks.map(({ type }) => type)).toEqual(["heading", "details", "blockquote"]);

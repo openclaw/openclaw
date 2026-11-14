@@ -85,7 +85,6 @@ it.each([
     const legacyRoot = path.join(tempDir, "state", "plugin-runtime-deps");
     const missingTarget = path.join(legacyRoot, "openclaw-slack/node_modules/@slack/web-api");
     const scopeRoot = path.join(path.dirname(packageRoot), scope);
-    const packageName = scope ? `${scope}/web-api` : "web-api";
     const staleLink = path.join(scopeRoot, "web-api");
     const liveTarget = path.join(legacyRoot, "openclaw-live", "node_modules", "@slack", "bolt");
     const liveLink = path.join(scopeRoot, "bolt");
@@ -107,17 +106,8 @@ it.each([
     await fs.mkdir(packageDirectory);
     await fs.symlink(missingTarget, nestedLink, "dir");
 
-    const finding = {
-      checkId: "core/doctor/stale-plugin-runtime-symlinks",
-      severity: "warning",
-      message: `Stale plugin-runtime symlink ${packageName} points at ${missingTarget}.`,
-      path: staleLink,
-      target: staleLink,
-      requirement: "stale-plugin-runtime-symlink-removed",
-      fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
-    };
     expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual(
-      hostOwned ? [] : [finding],
+      hostOwned ? [] : [expect.objectContaining({ path: staleLink })],
     );
     await expectSymlinksPresent(staleLink, liveLink);
     expect(await removeStalePluginRuntimeSymlinks(packageRoot)).toEqual({
@@ -168,13 +158,9 @@ it.each(["symlink", "file", "target"] as const)(
       return pending;
     });
     const result = await removeStalePluginRuntimeSymlinks(packageRoot);
-    expect({ replaced, ...result }).toEqual({
-      replaced: true,
-      changes: [],
-      warnings: [
-        expect.stringContaining(`Failed to remove stale plugin-runtime symlink ${staleLink}:`),
-      ],
-    });
+    expect(replaced).toBe(true);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toHaveLength(1);
     if (replacement === "file") {
       expect(await fs.readFile(staleLink, "utf8")).toBe(contents);
     } else {

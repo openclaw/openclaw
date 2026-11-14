@@ -2,18 +2,64 @@ import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/share
 import { isConfigReadFailure } from "../../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { GatewayLockNamespaceError } from "../../infra/gateway-lock-payload.js";
+import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner-errors.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
+import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import {
   normalizeSupportDiagnosticErrorCode,
   publicConfigIssueMessage,
 } from "../../logging/diagnostic-support-redaction.js";
 import { formatConcreteConfigPath } from "../../shared/dot-path.js";
-import { UpdatePreMutationError } from "./shared.js";
+
+/** Display facts do not replace the typed cause used by cleanup and recovery. */
+export function resolveUpdateOwnershipFailure(
+  cause: unknown,
+): { message: string; nextAction: string; failureFacts: UpdateFailureFact[] } | undefined {
+  const causes = collectNestedErrorCandidates(cause);
+  const ownershipUnverified = causes.some((error) => error instanceof GatewayLockNamespaceError);
+  const maintenanceBusy = causes.some(
+    (error) =>
+      error instanceof GatewayStateOwnerContentionError ||
+      (error instanceof DoctorMaintenanceRefusalError &&
+        error.refusal.kind === "deferred" &&
+        (error.refusal.reason === "coordinator-contention" ||
+          error.refusal.reason === "agent-database-in-use")),
+  );
+  if (!ownershipUnverified && !maintenanceBusy) {
+    return undefined;
+  }
+  const message = ownershipUnverified
+    ? "Gateway ownership could not be verified."
+    : "Gateway maintenance is busy.";
+  const nextAction = ownershipUnverified
+    ? "If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it before retrying."
+    : "Wait for the active Gateway or maintenance operation to finish, or stop the Gateway through its service manager before retrying.";
+  return {
+    message: `Update refused: ${message} ${nextAction}`,
+    nextAction,
+    failureFacts: [
+      {
+        check: "config",
+        code: ownershipUnverified ? "gateway-ownership-unverified" : "gateway-maintenance-busy",
+        message,
+      },
+    ],
+  };
+}
 
 /** Keep validation fields separate from diagnostics that can contain rejected secret values. */
 export function createUpdateConfigFailure(
   snapshot: ConfigFileSnapshot,
+  cause?: unknown,
 ): UpdatePreMutationError<"invalid-config" | "config-read-failed"> {
   if (isConfigReadFailure(snapshot)) {
+    const ownership = resolveUpdateOwnershipFailure(cause);
+    if (ownership) {
+      return new UpdatePreMutationError("config-read-failed", ownership.message, ownership);
+    }
     const code = normalizeSupportDiagnosticErrorCode(snapshot.readError?.code ?? undefined);
     const nextAction = snapshot.readError
       ? "Check configuration file access before retrying."

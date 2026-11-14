@@ -19,7 +19,7 @@ const BYTE_SIZE_STYLES = {
 
 export type RelativeTimeUnit = "second" | "minute" | "hour" | "day";
 
-/** Buckets an absolute duration while preserving nested display rounding at unit boundaries. */
+/** Buckets an absolute duration, rounding each display unit from the original milliseconds. */
 export function bucketRelativeTimeMs(durationMs: number): {
   value: number;
   unit: RelativeTimeUnit;
@@ -28,14 +28,14 @@ export function bucketRelativeTimeMs(durationMs: number): {
   if (seconds < 60) {
     return { value: seconds, unit: "second" };
   }
-  const minutes = Math.round(seconds / 60);
+  const minutes = Math.round(durationMs / 60_000);
   if (minutes < 60) {
     return { value: minutes, unit: "minute" };
   }
-  const hours = Math.round(minutes / 60);
+  const hours = Math.round(durationMs / 3_600_000);
   return hours < 48
     ? { value: hours, unit: "hour" }
-    : { value: Math.round(hours / 24), unit: "day" };
+    : { value: Math.round(durationMs / 86_400_000), unit: "day" };
 }
 
 /** Formats a byte count with caller-explicit scale, labels, precision, and unit cap. */

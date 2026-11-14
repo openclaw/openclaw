@@ -14,14 +14,33 @@ const checked = (op: keyof typeof contract.operations, result: any) => {
   return result;
 };
 
-it("claim cards use one scan per page, preserve pagination and omit evidence/full metadata", async () => {
+async function listFixture() {
   const vault = new SampleVault(),
     data = await vault.scan();
+  let count = 0;
+  vault.scan = async () => {
+    count++;
+    return data;
+  };
+  vault.detail = () => {
+    throw new Error("List projections must not call detail");
+  };
+  return {
+    vault,
+    data,
+    scans: () => count,
+    list: async (input: Parameters<SampleVault["list"]>[0]) =>
+      checked("records", await vault.list(input)),
+  };
+}
+
+it.each([false, true])("caps and batches claim cards (emoji=%s)", async (emoji) => {
+  const { data, list, scans } = await listFixture();
   const claim = data.records.find((r) => r.id === "sample_claim_pilot");
   const records = Array.from({ length: 55 }, (_, i) => ({
     ...claim!,
     id: i === 0 ? claim!.id : `sample_claim_${i}`,
-    body: "x".repeat(5000),
+    body: emoji ? `${"x".repeat(3999)}😀tail` : "x".repeat(5000),
     metadata: {
       ...claim!.metadata,
       id: i === 0 ? claim!.id : `sample_claim_${i}`,
@@ -29,24 +48,14 @@ it("claim cards use one scan per page, preserve pagination and omit evidence/ful
     },
   }));
   data.records = [...data.records.filter((r) => r.kind !== "claim"), ...records];
-  let scans = 0;
-  vault.scan = async () => {
-    scans++;
-    return data;
-  };
-  vault.detail = () => {
-    throw new Error("Card lists must not call detail");
-  };
-  const first = checked(
-    "records",
-    await vault.list({ kind: "claim", includeCards: true, limit: 50 }),
-  );
-  expect(scans).toBe(1);
+  const selection = { kind: "claim", includeCards: true, limit: 50 };
+  const first = await list(selection);
+  expect(scans()).toBe(1);
   expect(first.records.length > 0 && first.records.length <= 50).toBeTruthy();
   expect(first.total).toBe(55);
   expect(first.nextOffset).toBe(first.records.length);
   for (const row of first.records) {
-    expect(row.card.body.length).toBe(4000);
+    expect(row.card.body).toBe("x".repeat(emoji ? 3999 : 4000));
     expect(row.card.truncated).toBe(true);
     expect(row.card.hash).toBe(claim!.hash);
     expect(row.card.evidenceTotal).toBe(claim!.metadata.evidence!.length);
@@ -55,21 +64,17 @@ it("claim cards use one scan per page, preserve pagination and omit evidence/ful
     expect(row.card.metadata.evidence).toBe(undefined);
     expect(row.card.metadata.custom_note).toBe(undefined);
   }
-  const last = checked(
-    "records",
-    await vault.list({ kind: "claim", includeCards: true, offset: first.nextOffset, limit: 50 }),
-  );
-  expect(scans).toBe(2);
+  const last = await list({ ...selection, offset: first.nextOffset });
+  expect(scans()).toBe(2);
   expect(last.records.length).toBe(55 - first.records.length);
   expect(last.nextOffset).toBe(null);
   expect(new Set([...first.records, ...last.records].map((r) => r.id)).size).toBe(55);
-  const concise = checked("records", await vault.list({ kind: "claim" }));
+  const concise = await list({ kind: "claim" });
   expect(concise.records.every((r: any) => !r.card)).toBeTruthy();
 });
 
 it("relationship browse batches deduplicated eligible endpoints in one scan per page", async () => {
-  const vault = new SampleVault(),
-    data = await vault.scan();
+  const { vault, data, list, scans } = await listFixture();
   const edge = data.records.find((r) => r.kind === "relationship");
   expect(edge).toBeTruthy();
   const edges = Array.from({ length: 55 }, (_, i) => ({
@@ -78,19 +83,8 @@ it("relationship browse batches deduplicated eligible endpoints in one scan per 
     metadata: { ...edge!.metadata, id: `edge_${i}` },
   }));
   data.records = [...data.records.filter((r) => r.kind !== "relationship"), ...edges];
-  let scans = 0;
-  vault.scan = async () => {
-    scans++;
-    return data;
-  };
-  vault.detail = () => {
-    throw new Error("Endpoint lists must not call detail");
-  };
-  const first = checked(
-    "records",
-    await vault.list({ kind: "relationship", includeEndpoints: true, limit: 50 }),
-  );
-  expect(scans).toBe(1);
+  const first = await list({ kind: "relationship", includeEndpoints: true, limit: 50 });
+  expect(scans()).toBe(1);
   expect(first.records.length).toBe(50);
   expect(first.nextOffset).toBe(50);
   expect(new Set(ids(first.endpoints))).toStrictEqual(
@@ -100,11 +94,8 @@ it("relationship browse batches deduplicated eligible endpoints in one scan per 
     expect(endpoint.body).toBe(undefined);
     expect(endpoint.evidence).toBe(undefined);
   }
-  const last = checked(
-    "records",
-    await vault.list({ kind: "relationship", includeEndpoints: true, offset: 50, limit: 50 }),
-  );
-  expect(scans).toBe(2);
+  const last = await list({ kind: "relationship", includeEndpoints: true, offset: 50, limit: 50 });
+  expect(scans()).toBe(2);
   expect(last.records.length).toBe(5);
   expect(last.nextOffset).toBe(null);
   expect((await vault.list({ kind: "relationship" })).endpoints, "Projection remains opt-in").toBe(
@@ -113,10 +104,7 @@ it("relationship browse batches deduplicated eligible endpoints in one scan per 
   const target = data.records.find((r) => r.id === edge!.metadata.from);
   target!.lifecycle = "withdrawn";
   target!.metadata.lifecycle = "withdrawn";
-  const historical = checked(
-    "records",
-    await vault.list({ kind: "relationship", lifecycle: "all", includeEndpoints: true }),
-  );
+  const historical = await list({ kind: "relationship", lifecycle: "all", includeEndpoints: true });
   expect(historical.records.length).toBe(50);
   // History must not leak unavailable endpoint content.
   expect(ids(historical.endpoints)).not.toContain(target!.id);
@@ -130,7 +118,7 @@ it("relationship browse batches deduplicated eligible endpoints in one scan per 
     includeEndpoints: true,
   });
   expect(ids(ambiguous.endpoints!)).not.toContain(target!.id);
-  const pages = checked("records", await vault.list({ kind: "page", includeEndpoints: true }));
+  const pages = await list({ kind: "page", includeEndpoints: true });
   expect(pages.endpoints, "Only relationships on this page contribute endpoints").toStrictEqual([]);
 });
 

@@ -102,8 +102,10 @@ export function mockPrCheckout(options: {
     switch (operation.type) {
       case "pull-request.branch-comparison":
         return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
-      case "checkout.revision":
-        return options.revision();
+      case "checkout.revision": {
+        const key = options.revision();
+        return key === null ? null : { key };
+      }
       case "checkout.context":
         if (options.resolve) {
           return options.resolve(operation.input.root);
@@ -206,10 +208,10 @@ export function createSessionPullRequestsFixture() {
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     seeded.clear();
-    // Prepare the canonical store before tests install fake clocks or concurrent reads.
+    // Prepare fresh rows before fake clocks or concurrent reads; maintenance must not age them out.
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:main" },
-      { sessionId: randomUUID(), updatedAt: 1 },
+      { sessionId: randomUUID(), updatedAt: Date.now() },
     );
     seeded.add("agent:main:main");
   });
@@ -229,7 +231,10 @@ export function createSessionPullRequestsFixture() {
       storeAgentId: agentId,
     });
     if (!seeded.has(sessionKey)) {
-      replaceSessionEntrySync({ agentId, sessionKey }, { sessionId: randomUUID(), updatedAt: 1 });
+      replaceSessionEntrySync(
+        { agentId, sessionKey },
+        { sessionId: randomUUID(), updatedAt: Date.now() },
+      );
       seeded.add(sessionKey);
     }
     return { sessionKey, agentId };

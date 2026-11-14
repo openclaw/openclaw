@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createDedupeCache } from "../infra/dedupe.js";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { firstHeaderValue } from "./http-header-value.js";
 import {
   hasForwardedRequestHeaders,
@@ -270,7 +270,12 @@ function resolveGatewayIngressAttribution(params: {
       req,
       mode: transport.mode,
       remoteAddress,
-      tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
+      tailscaleWhois:
+        params.tailscaleWhois ??
+        (async (ip) => {
+          const { readTailscaleWhoisIdentity } = await import("../infra/tailscale.js");
+          return readTailscaleWhoisIdentity(ip);
+        }),
     });
   }
 

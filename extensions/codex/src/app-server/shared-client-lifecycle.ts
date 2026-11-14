@@ -146,6 +146,14 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
   }),
 );
 
+export function trackIsolatedCodexAppServerClient(client: CodexAppServerClient): void {
+  const state = getSharedCodexAppServerClientState();
+  state.isolatedClients.add(client);
+  client.addTransportExitHandler((exitedClient) => {
+    state.isolatedClients.delete(exitedClient);
+  });
+}
+
 export function hasActiveSharedCodexAppServerWork(): boolean {
   const state = getSharedCodexAppServerClientState();
   if (state.startup.pending.size > 0 || state.startup.controller.signal.aborted) {

@@ -17,6 +17,7 @@ import {
   createWorkboardRenderProps,
   renderInto,
   createWorkboardView,
+  openCardMenu,
   buttonByLabel,
   buttonByText,
   requireButton,
@@ -595,9 +596,7 @@ describe("WorkboardView", () => {
     });
     const container = document.createElement("div");
     renderInto(container, props);
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireButton(openCardMenu(container.querySelector(".workboard-card")!), "Edit card").click();
     renderInto(container, props);
     expect(container.querySelector("[data-test-dialog]")?.textContent).toContain("Edit card");
     expect(container.querySelector("[data-test-dialog]")?.textContent).toContain(
@@ -649,9 +648,7 @@ describe("WorkboardView", () => {
     expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 3 });
     renderInto(container, props);
     expect(container.querySelector("[data-test-dialog]")).toBeNull();
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Edit card"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireButton(openCardMenu(container.querySelector(".workboard-card")!), "Edit card").click();
     renderInto(container, props);
     expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
       "Renamed",
@@ -685,6 +682,9 @@ describe("WorkboardView", () => {
       const { state, container, renderView } = createWorkboardView({ client });
       state.cards = operation === "create" ? [] : [card];
       renderView();
+      if (operation === "conflict") {
+        openCardMenu(container.querySelector(".workboard-card")!);
+      }
       expectDefined(
         operation === "create"
           ? buttonByText(container, "New card")
@@ -770,7 +770,10 @@ describe("WorkboardView", () => {
       const { state, container, renderView } = createWorkboardView({ client });
       state.cards = [card];
       renderView();
-      requireButton(container, "View details").click();
+      requireButton(
+        openCardMenu(container.querySelector(".workboard-card")!),
+        "View details",
+      ).click();
       if (interruption === "drawer close") {
         renderView();
       }
@@ -803,7 +806,10 @@ describe("WorkboardView", () => {
         expect(note.disabled).toBe(true);
         requireButton(container.querySelector(".workboard-detail")!, "Close").click();
         renderView();
-        requireButton(container, "View details").click();
+        requireButton(
+          openCardMenu(container.querySelector(".workboard-card")!),
+          "View details",
+        ).click();
         renderView();
         expect(state.detailCommentBody).toBe(` ${comment.body} `);
         pending.resolve(saved);
@@ -846,7 +852,7 @@ describe("WorkboardView", () => {
         ),
         "card to edit",
       );
-      requireButton(card, "Edit card").click();
+      requireButton(openCardMenu(card), "Edit card").click();
       renderView();
     };
     const typeNote = () => {

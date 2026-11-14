@@ -2,11 +2,13 @@ import { expect, it } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   loadExactSessionEntryCandidates,
+  resolveSessionEntry,
+} from "./session-accessor.sqlite-entry-admitted-read.js";
+import {
   loadExactSessionEntryFromStoreReadOnly,
   loadSessionEntryByIdReadOnly,
   loadSessionEntryReadOnlyInScope,
   loadSessionEntryReadOnlyResultInScope,
-  resolveSessionEntry,
 } from "./session-accessor.sqlite-exact-read.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";

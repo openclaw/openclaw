@@ -156,15 +156,19 @@ async function resolveAuthenticatedProfile(
   profileId: string,
   updatedAt: number,
   assertCurrent?: () => void,
+  recordTiming?: GatewayConnectPhaseContext["recordAttachTiming"],
 ) {
   assertCurrent?.();
+  const authorityStartedAt = performance.now();
   const authority = await prepareUserProfileRoleAuthority(profileId);
+  recordTiming?.("profileAuthorityMs", authorityStartedAt);
   assertCurrent?.();
   if (!authority?.isCurrent()) {
     throw new Error("Gateway profile changed during acquisition");
   }
+  const projectionStartedAt = performance.now();
   const { id, displayName, avatarRevision, hasAvatar } = authority.display;
-  return {
+  const prepared = {
     profile: { profileId: id, displayName, avatarRevision, hasAvatar, updatedAt },
     authority,
     recipient: {
@@ -174,6 +178,8 @@ async function resolveAuthenticatedProfile(
       aliases: new Set(authority.aliases),
     },
   };
+  recordTiming?.("profileProjectionMs", projectionStartedAt);
+  return prepared;
 }
 
 /** Role and access policies need verified identity before admission; attribution alone may defer it. */
@@ -218,15 +224,14 @@ export async function resolveGatewayConnectProfileAdmission(params: {
           : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
     params.assertCurrent?.();
     params.context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
-    const authorityStartedAt = performance.now();
     context.setConnectPhase?.("profile-authority");
     const prepared = await resolveAuthenticatedProfile(
       "profileId" in profile ? profile.profileId : profile.id,
       profile.updatedAt,
       params.assertCurrent,
+      context.recordAttachTiming,
     );
     params.assertCurrent?.();
-    params.context.recordAttachTiming?.("profileAuthorityMs", authorityStartedAt);
     if (!prepared.authority.isCurrent()) {
       throw new Error("Gateway profile changed during acquisition");
     }

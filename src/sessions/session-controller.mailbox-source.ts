@@ -3,6 +3,7 @@ import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue/types
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -109,27 +110,32 @@ export function beginSessionControllerSourceInjection(
       return;
     }
     finished = true;
-    const mustConsume = consumed || pending.accepted === true;
+    if (!consumed && (input.retirementRequested || input.abortSignal.aborted)) {
+      diagnosticLogger.warn(
+        "steering followup unavailable: source cancelled or retired",
+        diagnosticIdentity,
+      );
+    }
     logSessionControllerPhase({
       ...diagnosticIdentity,
       phase: "injection-outcome",
       status: "settled",
-      reason: mustConsume ? "consumed" : "declined",
+      reason: consumed ? "consumed" : "declined",
     });
     input.injection = undefined;
     input.phase = phase;
-    pending.settle(mustConsume);
+    pending.settle(consumed);
     if (
-      mustConsume ||
+      consumed ||
       !options.keepOrderOnDecline ||
       input.retirementRequested ||
       input.abortSignal.aborted
     ) {
-      settleSessionControllerSourceInjectionOrder(input, mustConsume);
+      settleSessionControllerSourceInjectionOrder(input, consumed);
     } else {
       input.injectionAttempted = undefined;
     }
-    if (mustConsume || input.retirementRequested || input.abortSignal.aborted) {
+    if (consumed || input.retirementRequested || input.abortSignal.aborted) {
       retireSessionControllerInput(input);
     } else {
       input.mailbox.wake();
@@ -190,12 +196,8 @@ export function beginSessionControllerSourceInjection(
       if (!started || finished || input.injection !== pending) {
         return;
       }
-      // A later rejection cannot undo observed ownership. False alone does not
-      // prove safe replay: an indeterminate final outcome still consumes input.
-      pending.accepted = pending.accepted === true || accepted;
       if (accepted) {
-        // The native owner now holds this input ahead of any later steer and it can
-        // never be replayed, so successors need not wait for its transcript commit.
+        // Native acceptance releases successors; final settlement alone decides replay custody.
         // Native commits can depend on later input, e.g. an answer to a pending question.
         settleSessionControllerSourceInjectionOrder(input, true);
       }

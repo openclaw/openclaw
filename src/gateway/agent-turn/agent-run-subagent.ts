@@ -63,6 +63,8 @@ export async function prepareGatewaySubagentRun(params: {
   client: AgentTurnPrincipal | null;
   resolvedSessionKey?: string;
   activeSessionAgentId: string;
+  agentDir: string;
+  workspaceDir: string;
   inputProvenance?: InputProvenance;
   request: Pick<AgentRunRequest, "message">;
   isOneShotModelRun: boolean;
@@ -155,6 +157,8 @@ export async function prepareGatewaySubagentRun(params: {
               runId: params.runId,
               childSessionKey: sessionKey,
               childAgentId: params.activeSessionAgentId,
+              agentDir: params.agentDir,
+              workspaceDir: params.workspaceDir,
               task: params.request.message.trim(),
               requester: params.client?.internal?.pluginSubagentRequester,
               pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
@@ -208,11 +212,16 @@ export function settleUnstartedGatewayParentResume(
     if (!ownsAdoption()) {
       return;
     }
-    const settled = await runtime.finalizeInterruptedSubagentRun({
+    const settled = await runtime.markSubagentRunTerminated({
       runId: adopted.runId,
-      expectedEntry: adopted,
-      error: failure ?? "Parent resume admission ended before acceptance.",
+      reason: failure ?? "Parent resume admission ended before acceptance.",
+      suppressTaskDelivery: true,
       suppressSessionEffects: true,
+      assertCurrent: () => {
+        if (!ownsAdoption()) {
+          throw new Error("Adopted parent resume changed before admission rejection settled");
+        }
+      },
     });
     if (!settled && ownsAdoption()) {
       throw new Error(

@@ -15,13 +15,12 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
-  acquireAgentRunPreparedModelRuntime,
-  getPreparedModelRuntimeSnapshot,
-  refreshPreparedModelRuntimeSnapshots,
+  acquireAgentRunPreparedModelRuntime as acquire,
+  refreshPreparedModelRuntimeSnapshots as publish,
 } from "../prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeLeaseOptions } from "../prepared-model-runtime.types.js";
-import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
+import { resolveCompactionRuntimeSelection as selectCompaction } from "./compaction-runtime-preparation.js";
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -89,7 +88,7 @@ it.each([
     cache: false,
   });
   const publication = { gatewayLifecycle: true, catalogMode: "static" as const };
-  await refreshPreparedModelRuntimeSnapshots(previousConfig, publication);
+  await publish(previousConfig, publication);
   const requested = { provider: "caller-provider", modelId: "model", runtime: "openclaw" };
   const extra = { ...requested, provider: "requested-extra" };
   const input = {
@@ -99,18 +98,18 @@ it.each([
     workspaceDir: requestWorkspace,
     runtimePluginSelections: [requested, extra],
   };
-  const previous = await acquireAgentRunPreparedModelRuntime({
+  await using previous = await acquire({
     ...input,
     runtimePluginSelections: [requested, extra, { ...requested, provider: "summary-old" }],
   });
   const resumePublication = createDeferred();
-  const publishing = refreshPreparedModelRuntimeSnapshots(async () => {
+  const publishing = publish(async () => {
     await resumePublication.promise;
     return committedConfig;
   }, publication);
   const admissionOptions = {
     deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
-      const selection = resolveCompactionRuntimeSelection({
+      const selection = selectCompaction({
         ...requested,
         config: admittedConfig,
         modelSelectionLocked: locked,
@@ -120,8 +119,7 @@ it.each([
       return [{ provider: selection.provider, modelId: selection.modelId, runtime: "openclaw" }];
     },
   } satisfies PreparedModelRuntimeLeaseOptions;
-  const pending = acquireAgentRunPreparedModelRuntime(input, admissionOptions);
-  const derive = admissionOptions.deriveRuntimePluginSelections;
+  const pending = acquire(input, admissionOptions);
   if (mutate === "recipe") {
     admissionOptions.deriveRuntimePluginSelections = () => [
       { ...requested, provider: "summary-old" },
@@ -131,25 +129,14 @@ it.each([
     resumePublication.resolve();
     await publishing;
     await using lease = await pending;
-    admissionOptions.deriveRuntimePluginSelections = derive;
     const providers = lease.snapshot.pluginRegistry?.providers.map(({ provider }) => provider.id);
     expect(lease.snapshot.config).toBe(committedConfig);
     expect(lease.snapshot.workspaceDir).toBe(requestWorkspace);
-    const expectedSelections = [requested, extra];
-    if (!locked && nextProvider) {
-      expectedSelections.push({ ...requested, provider: nextProvider });
-    }
-    expect(providers).toEqual(expectedSelections.map(({ provider }) => provider));
-    expect(
-      getPreparedModelRuntimeSnapshot({
-        ...input,
-        config: committedConfig,
-        runtimePluginSelections: expectedSelections,
-      }),
-    ).toBe(lease.snapshot);
-    const repeated = await acquireAgentRunPreparedModelRuntime(input, admissionOptions);
-    expect(repeated.snapshot).toBe(lease.snapshot);
-    await repeated[Symbol.asyncDispose]();
+    expect(providers).toEqual([
+      "caller-provider",
+      "requested-extra",
+      ...(!locked && nextProvider ? [nextProvider] : []),
+    ]);
     expect(previous.snapshot.pluginRegistry?.providers.map(({ provider }) => provider.id)).toEqual([
       "caller-provider",
       "requested-extra",
@@ -162,6 +149,5 @@ it.each([
       (lease) => lease[Symbol.asyncDispose](),
       () => {},
     );
-    await previous[Symbol.asyncDispose]();
   }
 });

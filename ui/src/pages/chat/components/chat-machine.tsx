@@ -9,10 +9,8 @@ import {
 } from "./chat-pane-placement.tsx";
 import "./chat-machine.css";
 
-export type ChatMachineProps = ChatPanePlacementProps;
-
 /** Mobile body only. Its native host owns Back, expansion, navigation and effects. */
-export function ChatMachine(props: ChatMachineProps) {
+export function ChatMachine(props: ChatPanePlacementProps) {
   const state = createChatMachinePresentation(props);
   const actions = (recovery: boolean) => (
     <div class="chat-machine__actions">

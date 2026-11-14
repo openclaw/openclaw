@@ -13,6 +13,7 @@ export const autoReplyTopLevelReplyTestInclude = ["src/auto-reply/reply*.test.ts
 export const autoReplyReplySubtreeTestInclude = ["src/auto-reply/reply/**/*.test.ts"];
 
 export const tuiPtyTestFiles = [
+  "src/tui/tui-console-pty.e2e.test.ts",
   "src/tui/tui-auth-child-pty.e2e.test.ts",
   "src/tui/tui-pty-harness.e2e.test.ts",
   "src/tui/tui-session-identity-pty.e2e.test.ts",

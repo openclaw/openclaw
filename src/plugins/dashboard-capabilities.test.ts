@@ -15,16 +15,14 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 beforeEach(useNoBundledPlugins);
 
 function loadFixture(...plugins: [TempPlugin, ...TempPlugin[]]) {
+  const ids = plugins.map((plugin) => plugin.id);
   return loadOpenClawPlugins({
     cache: false,
     workspaceDir: plugins[0].dir,
     config: {
-      plugins: {
-        load: { paths: plugins.map((plugin) => plugin.file) },
-        allow: plugins.map((plugin) => plugin.id),
-      },
+      plugins: { load: { paths: plugins.map((plugin) => plugin.file) }, allow: ids },
     },
-    onlyPluginIds: plugins.map((plugin) => plugin.id),
+    onlyPluginIds: ids,
   });
 }
 
@@ -38,47 +36,19 @@ type Capability = readonly [
   },
 ];
 
-function writeDashboardPlugin(id: string, ...capabilities: Capability[]): TempPlugin {
-  const dashboard: Record<string, object[]> = {};
-  const registrations = capabilities.map(([kind, capabilityId, method, options = {}]) => {
-    (dashboard[kind] ??= []).push({
-      id: capabilityId,
-      method,
-      description: "Fixture capability",
-    });
-    const scope = options.scope ?? (kind === "dataBindings" ? "operator.read" : "operator.write");
-    return `api.registerGatewayMethod(${JSON.stringify(options.registeredMethod ?? method)},
-      ({ respond }) => respond(true, { ok: true }), { scope: ${JSON.stringify(scope)} });`;
-  });
+function writeDashboardPlugin(id: string, [kind, capabilityId, method, options = {}]: Capability) {
+  const dashboard = { [kind]: [{ id: capabilityId, method, description: "Fixture capability" }] };
+  const scope = options.scope ?? (kind === "dataBindings" ? "operator.read" : "operator.write");
   const plugin = writePlugin({
     id,
     filename: "dashboard.cjs",
-    registration: registrations.join("\n"),
+    registration: `api.registerGatewayMethod(${JSON.stringify(options.registeredMethod ?? method)},
+      ({ respond }) => respond(true, { ok: true }), { scope: ${JSON.stringify(scope)} });`,
   });
   const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
   fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, dashboard }), "utf8");
   return plugin;
-}
-
-function expectRejected(
-  plugin: TempPlugin,
-  message: string,
-  surface: "dashboardDataBindings" | "dashboardActionVerbs",
-  diagnostic = true,
-) {
-  const registry = loadFixture(plugin);
-  expect(registry.plugins.find((entry) => entry.id === plugin.id)).toMatchObject({
-    status: "error",
-    failurePhase: "register",
-    error: expect.stringContaining(message),
-  });
-  expect(registry[surface].size).toBe(0);
-  if (diagnostic) {
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({ pluginId: plugin.id, code: "dashboard-declaration-invalid" }),
-    );
-  }
 }
 
 it.each([
@@ -100,20 +70,27 @@ it.each([
 ] satisfies Array<[string, Capability, string]>)(
   "rejects invalid %s declarations",
   (id, capability, message) => {
-    expectRejected(
-      writeDashboardPlugin(id, capability),
-      message,
-      capability[0] === "dataBindings" ? "dashboardDataBindings" : "dashboardActionVerbs",
+    const registry = loadFixture(writeDashboardPlugin(id, capability));
+    expect(registry.plugins.find((entry) => entry.id === id)).toMatchObject({
+      status: "error",
+      failurePhase: "register",
+      error: expect.stringContaining(message),
+    });
+    const surface =
+      capability[0] === "dataBindings" ? "dashboardDataBindings" : "dashboardActionVerbs";
+    expect(registry[surface].size).toBe(0);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({ pluginId: id, code: "dashboard-declaration-invalid" }),
     );
   },
 );
 
 it("keeps dotted plugin owners and literal escape markers distinct", () => {
-  const dataPlugin = writeDashboardPlugin("a", ["dataBindings", "b.c", "a.read"]);
-  const actionPlugin = writeDashboardPlugin("a.b", ["actionVerbs", "c", "b.write"]);
-  const literalEscapePlugin = writeDashboardPlugin("a%2Eb", ["dataBindings", "c", "literal.read"]);
-
-  const registry = loadFixture(dataPlugin, actionPlugin, literalEscapePlugin);
+  const registry = loadFixture(
+    writeDashboardPlugin("a", ["dataBindings", "b.c", "a.read"]),
+    writeDashboardPlugin("a.b", ["actionVerbs", "c", "b.write"]),
+    writeDashboardPlugin("a%2Eb", ["dataBindings", "c", "literal.read"]),
+  );
 
   expect(registry.plugins.filter((entry) => entry.status === "loaded")).toHaveLength(3);
   expect(registry.dashboardDataBindings.get("a.b.c")).toMatchObject({

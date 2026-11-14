@@ -1,0 +1,2 @@
+# Isolate existing Stop recovery Git fixture and assert that recovery reports no failure.
+4

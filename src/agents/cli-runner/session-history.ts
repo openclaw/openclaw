@@ -13,6 +13,7 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { captureSessionActorTranscriptRead } from "../../config/sessions/session-actor-transcript-read.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
@@ -299,15 +300,17 @@ async function loadCliSessionEntries({
   // Normalize bounded cuts with opaque ancestry before rebuilding CLI context.
   try {
     return (
-      await SessionManager.openBoundedAsync(sessionTarget, {
-        signal: abortSignal,
-        maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
-        maxEvents: MAX_CLI_SESSION_HISTORY_EVENTS,
-        onTruncated: () =>
-          cliBackendLog.warn(
-            `cli session history truncated to bounded active context: ${sessionTarget.sessionId}`,
-          ),
-      })
+      await withSessionTranscriptHydrationCaller("cli-context", () =>
+        SessionManager.openBoundedAsync(sessionTarget, {
+          signal: abortSignal,
+          maxBytes: MAX_CLI_SESSION_HISTORY_BYTES,
+          maxEvents: MAX_CLI_SESSION_HISTORY_EVENTS,
+          onTruncated: () =>
+            cliBackendLog.warn(
+              `cli session history truncated to bounded active context: ${sessionTarget.sessionId}`,
+            ),
+        }),
+      )
     ).getBranch();
   } catch (error) {
     if (
@@ -502,11 +505,7 @@ function classifyCliReplies(entries: SessionEntry[], provider: string | undefine
 function renderCliPreservedTurns(
   entries: SessionEntry[],
   replies: CliReply[],
-  params: {
-    sessionId?: string;
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-    cliSessionBinding?: CliSessionBinding;
-  },
+  params: Parameters<typeof loadCliSessionPromptContext>[0],
 ): string | undefined {
   const cursor = params.cliSessionBinding?.transcriptCursor;
   const currentUserEntryId = params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId;

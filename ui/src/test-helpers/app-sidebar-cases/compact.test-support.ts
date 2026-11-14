@@ -10,6 +10,7 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { waitForFast } from "../wait-for.ts";
 
 const catalogHello = {
@@ -102,13 +103,8 @@ export function attentionLabel(root: ParentNode | null | undefined, kind?: strin
     ?.getAttribute("aria-label");
 }
 
-export const sessionList = (sessions: GatewaySessionRow[], ts = 2): SessionsListResult => ({
-  ts,
-  path: "",
-  count: sessions.length,
-  defaults: { modelProvider: null, model: null, contextTokens: null },
-  sessions,
-});
+export const sessionList = (sessions: GatewaySessionRow[], ts = 2): SessionsListResult =>
+  sessionListResult(ts, sessions);
 
 export function expectAttention(
   root: () => ParentNode | null | undefined,

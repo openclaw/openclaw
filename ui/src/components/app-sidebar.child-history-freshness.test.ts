@@ -35,7 +35,7 @@ const page = (rows: GatewaySessionRow[], offset = 0): SessionsListResult => ({
   nextOffset: offset === 0 ? 100 : null,
 });
 
-it("keeps folded child failures in the parent hovercard and own failures in child cards", async () => {
+it("keeps failures on the owning child hovercard, not its parent", async () => {
   const parent: GatewaySessionRow = { key: "agent:main:parent", kind: "direct", label: "Parent" };
   const child: GatewaySessionRow = {
     key: "agent:main:child",
@@ -50,10 +50,7 @@ it("keeps folded child failures in the parent hovercard and own failures in chil
     method === "sessions.list" ? sessionsResult([parent, child], 100) : {},
   );
   const attention = { kind: "error", reason: child.lastRunError, sourceSessionKey: child.key };
-  expect(sidebar.findSidebarHovercardRowByKey(parent.key)?.attention).toEqual({
-    ...attention,
-    childLabel: child.label,
-  });
+  expect(sidebar.findSidebarHovercardRowByKey(parent.key)?.attention).toEqual({ kind: "none" });
   expect(sidebar.findSidebarHovercardRowByKey(child.key)?.attention).toEqual(attention);
 });
 
@@ -344,8 +341,8 @@ it.each([
       expect.soft(rowElement(sidebar, child.key)?.textContent).toContain(fresh.label);
       expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject(fresh);
       expect(
-        childToggle(sidebar)?.classList.contains("sidebar-child-session-toggle--running"),
-      ).toBe(true);
+        rowElement(sidebar, child.key)?.querySelector(".session-glyph--running"),
+      ).not.toBeNull();
       expect(sessions.state.result).toBe(primary);
     } finally {
       unsubscribe();

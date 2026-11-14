@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
-import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  type ControlUiSessionPullRequest,
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   chatSessionListResponse,

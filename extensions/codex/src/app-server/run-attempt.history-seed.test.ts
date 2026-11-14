@@ -21,6 +21,7 @@ import {
   writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
 
 setupRunAttemptTestHooks();
 
@@ -57,11 +58,20 @@ function seedParams(mode: "thread_bootstrap" | "per_turn" = "per_turn") {
 
 function selectedItems(requests: RecordedRequest[]): JsonValue[] {
   return requests
-    .filter(({ method }) => method === "thread/inject_items")
+    .filter(
+      ({ method, params }) =>
+        method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+    )
     .flatMap(({ params }) =>
       isJsonObject(params) && Array.isArray(params.items) ? params.items : [],
     )
     .filter((item) => isJsonObject(item) && item.role === "user");
+}
+
+function selectedHistoryRequests(requests: RecordedRequest[]): RecordedRequest[] {
+  return requests.filter(
+    ({ method, params }) => method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+  );
 }
 
 const partText = (part: JsonValue): string =>
@@ -114,12 +124,27 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
     expect(tokenBudget).toBeGreaterThan(0);
     expect(tokenBudget).toBeLessThan(500_000);
     expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(true);
-    return [userMessage("BOUNDED_SELECTED_HISTORY", 1)];
+    return [
+      userMessage("BOUNDED_SELECTED_HISTORY", 1),
+      {
+        ...assistantMessage("Local delivery bookkeeping.", 2),
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+      {
+        ...assistantMessage("Scheduled report ready.", 3),
+        provider: "openclaw",
+        model: "automation-result",
+        openclawAutomation: { kind: "cron", jobId: "job", runId: "run" },
+      },
+    ];
   });
   params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed };
   const first = await runTurn(params, harness, "lazy-seed");
   expect(prepareBoundedSeed).toHaveBeenCalledOnce();
   expect(JSON.stringify(selectedItems(first))).toContain("BOUNDED_SELECTED_HISTORY");
+  expect(JSON.stringify(selectedItems(first)).split("Scheduled report ready.")).toHaveLength(2);
+  expect(JSON.stringify(first)).not.toContain("Local delivery bookkeeping.");
   assemble.mockResolvedValue({
     messages: [userMessage(original.repeat(1_000), 1)],
     estimatedTokens: 20_000,
@@ -232,7 +257,7 @@ it.each(["thread_bootstrap", "per_turn"] as const)(
     });
     const replacement = await runTurn(params, harness, "rewrite", "thread-selected-2");
     expect(replacement.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-    expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(replacement)).toHaveLength(1);
     const text = JSON.stringify(selectedItems(replacement));
     expect(text).toContain("REWRITTEN_SELECTED_HISTORY");
     expect(text).toContain(appended);
@@ -240,6 +265,44 @@ it.each(["thread_bootstrap", "per_turn"] as const)(
     expect(
       selectedItems(await runTurn(params, harness, "repeat-rewrite", "thread-selected-2")),
     ).toEqual([]);
+  },
+);
+
+it.each(["thread_bootstrap", "per_turn"] as const)(
+  "keeps the acknowledged %s prefix when only a local mirror changes",
+  async (mode) => {
+    const { params, assemble } = seedParams(mode);
+    const initial = await assemble();
+    const resultText = "Scheduled report ready.";
+    const confirmed = {
+      ...assistantMessage(resultText, 2),
+      provider: "openclaw",
+      model: "automation-result",
+      openclawAutomation: { kind: "cron", jobId: "job", runId: "run" },
+    };
+    const local = {
+      ...assistantMessage("Local delivery bookkeeping.", 3),
+      provider: "openclaw",
+      model: "delivery-mirror",
+    };
+    assemble.mockResolvedValue({ ...initial, messages: [...initial.messages, confirmed] });
+    const harness = selectedHarness();
+    const first = await runTurn(params, harness, "confirmed");
+    expect(JSON.stringify(selectedItems(first)).split(resultText)).toHaveLength(2);
+    const before = await readCodexAppServerBinding(params.sessionFile);
+    expect(before?.contextEngine?.projection?.fingerprint).toBeDefined();
+
+    assemble.mockResolvedValue({
+      ...initial,
+      messages: [...initial.messages, confirmed, local],
+    });
+    const next = await runTurn(params, harness, "local-mirror");
+    expect(selectedHistoryRequests(next)).toEqual([]);
+    expect(next.some(({ method }) => method === "thread/start")).toBe(false);
+    expect(JSON.stringify(next)).not.toContain("Local delivery bookkeeping.");
+    expect(
+      (await readCodexAppServerBinding(params.sessionFile))?.contextEngine?.projection,
+    ).toEqual(before?.contextEngine?.projection);
   },
 );
 
@@ -299,7 +362,7 @@ it.each(["fresh", "reused"] as const)(
     }
     const retry = selectedHarness("thread-retry");
     const requests = await runTurn(params, retry, "retry", "thread-retry");
-    expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(requests)).toHaveLength(1);
     const restored = JSON.stringify(selectedItems(requests));
     expect(restored.split(original)).toHaveLength(2);
     if (ownership === "reused") {
@@ -330,7 +393,7 @@ it.each(["legacy-engine-fingerprint", "pending:selection-v1:interrupted"])(
     });
     const replacement = await runTurn(params, harness, "upgrade", "thread-selected-2");
     expect(replacement.filter(({ method }) => method === "thread/start")).toHaveLength(1);
-    expect(replacement.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(selectedHistoryRequests(replacement)).toHaveLength(1);
     expect(JSON.stringify(selectedItems(replacement))).toContain(original);
     const unchanged = await runTurn(params, harness, "after-upgrade", "thread-selected-2");
     expect(unchanged.some(({ method }) => method === "thread/start")).toBe(false);

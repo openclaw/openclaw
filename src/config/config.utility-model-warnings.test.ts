@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -187,4 +187,35 @@ it("respects a mapped runtime pin on a standalone CLI provider", () => {
     ],
   );
   expect(result.warnings).toEqual([]);
+});
+
+it("resolves each utility backend once per validation and refreshes misses on the next config", () => {
+  const config = withDefaults(
+    { utilityModel: { primary: "fixture-cli/small", fallbacks: ["local/capable"] } },
+    { first: {}, second: {}, third: {} },
+  );
+  const roster = { agents: { ...config.agents, ownership: "explicit" as const } };
+  const lookup = vi.fn();
+  let available = false;
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [],
+    resolvePluginSetupCliBackend: ({ backend }) => {
+      lookup(backend);
+      return available && backend === "fixture-cli"
+        ? { pluginId: "fixture", backend: unsupportedBackend }
+        : undefined;
+    },
+  });
+  for (const enabled of [false, true, false]) {
+    available = enabled;
+    lookup.mockClear();
+    const result = validateConfigObjectRawWithPlugins(structuredClone(roster), {
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    });
+    if (!result.ok) {
+      throw new Error(JSON.stringify(result.issues));
+    }
+    expect(result.warnings).toEqual(enabled ? [warning("fixture-cli/small")] : []);
+    expect(lookup.mock.calls.map(([id]) => id)).toEqual(["fixture-cli", "local"]);
+  }
 });

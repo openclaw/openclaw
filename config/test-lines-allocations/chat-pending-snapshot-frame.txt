@@ -1,0 +1,2 @@
+33
+# Extend pending-snapshot cases to protect the loading frame and one route-owned boot composer through admission.

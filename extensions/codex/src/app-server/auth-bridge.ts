@@ -58,6 +58,10 @@ import type {
 } from "./auth-types.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerHomeScope, CodexAppServerStartOptions } from "./config-contracts.js";
+import {
+  assertNativeCodexAccountMatchesRoute,
+  createCodexAppServerAuthError,
+} from "./native-auth-validation.js";
 import type {
   CodexChatgptAuthTokensRefreshResponse,
   CodexGetAccountResponse,
@@ -102,7 +106,7 @@ export async function bridgeCodexAppServerStartOptions(
       params.agentDir,
     );
 
-  if (params.preparedAuth) {
+  if (params.preparedAuth || params.authRequirement === "native-command") {
     const scopedStartOptions = await scopeStartOptions();
     return withClearedEnvironmentVariables(
       scopedStartOptions,
@@ -258,6 +262,12 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   // api-key logins into CODEX_HOME/auth.json and swaps the live account for external
   // token logins, so a prepared OpenClaw handoff here would rewrite the account that
   // Codex CLI and Desktop share. Native homes are verified, never logged into.
+  if (params.authRequirement === "native-command") {
+    if (params.authProfileId || params.resolvedApiKey || params.requirePreparedAuth) {
+      throw new Error("Native command auth cannot use host credentials or remote-exec placement.");
+    }
+    return { nativeAuthProfile: true };
+  }
   const usesNativeHome = params.homeScope === "user";
   const selectedCredential = params.authProfileId
     ? params.authProfileStore.profiles[params.authProfileId]
@@ -492,47 +502,6 @@ export async function applyCodexAppServerAuthProfile(params: {
     }
   }
   return undefined;
-}
-
-/**
- * Native-home connections are verified, never logged into. Both directions of the
- * check protect the same billing boundary: a subscription route cannot run without
- * ChatGPT tokens, and a Platform route must not silently spend the operator's
- * ChatGPT plan. An absent account is left alone because the native home may serve a
- * custom model provider that reports no OpenAI account at all.
- */
-async function assertNativeCodexAccountMatchesRoute(
-  client: CodexAppServerClient,
-  authRequirement: CodexAppServerAuthRequirement | undefined,
-  assertCurrent?: () => void,
-  withCurrent?: (write: () => void) => Promise<void>,
-): Promise<void> {
-  if (!authRequirement) {
-    return;
-  }
-  const response = await client.request<CodexGetAccountResponse>(
-    "account/read",
-    { refreshToken: false },
-    { assertCurrent, withCurrent },
-  );
-  const accountType = response.account?.type;
-  if (authRequirement === "subscription") {
-    if (accountType !== "chatgpt") {
-      throw createCodexAppServerAuthError(
-        'Codex subscription route requires ChatGPT auth in the native Codex home. Run `codex login` for that home, or use appServer.homeScope="agent" with an OpenClaw OAuth profile, then retry.',
-      );
-    }
-    return;
-  }
-  if (accountType === "chatgpt") {
-    throw createCodexAppServerAuthError(
-      'Codex Platform route requires an API-key account, but the native Codex home is signed in with a ChatGPT subscription. Sign that home in with `codex login --with-api-key`, or set appServer.homeScope="agent" so OpenClaw can inject its own key.',
-    );
-  }
-}
-
-function createCodexAppServerAuthError(message: string): Error & { status: 401 } {
-  return Object.assign(new Error(message), { status: 401 as const });
 }
 
 export async function refreshCodexAppServerAuthTokens(

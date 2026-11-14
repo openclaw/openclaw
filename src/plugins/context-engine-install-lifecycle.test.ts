@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -35,15 +36,12 @@ function enginePlugin(id: string, engineId?: string, dir?: string, body?: string
     body: body ?? 'throw new Error("slot selection must not import runtime");',
   });
   if (engineId) {
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id,
-        kind: "context-engine",
-        contextEngineIds: [engineId],
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      }),
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id,
+      kind: "context-engine",
+      contextEngineIds: [engineId],
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+    });
   }
   return plugin;
 }

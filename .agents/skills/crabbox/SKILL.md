@@ -8,7 +8,8 @@ description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-pl
 - Deliberate remote proof: follow [proof policy](../openclaw-testing/SKILL.md#proof-policy).
   Prefer bounded local proof on a qualified, available host. Expensive or
   platform-specific work can use remote capacity. Queued: stop owned allocation;
-  use PR CI or a safe local scope and report uncovered requirements.
+  use PR CI or a safe local scope and report uncovered requirements. Required build
+  unavailable before publication: use the testing skill's draft/CI proof policy.
 - Never wait on queues or chain provider fallbacks.
 
 Backends:
@@ -70,6 +71,14 @@ test -n "$CRABBOX"
 ```
 
 - Use consumer's trusted wrapper/install instructions.
+- Native Linux/WSL command-lifecycle and cancellation proof requires a complete
+  matching Crabbox distribution, or a verified runtime manifest selected with
+  `CRABBOX_RUNTIME_ARTIFACTS`. Match the companions to the frozen source and verify
+  that the manifest binds the exact selected controller. A development CLI without
+  a runtime pack uses legacy SSH supervision; `--version` alone does not establish
+  native supervision. Verify the selected pack before allocation; do not count
+  CLI-only proof as native lifecycle proof. Follow the upstream
+  [runtime artifact instructions](https://github.com/openclaw/crabbox/blob/main/scripts/runtime-artifacts/README.md).
 - Repairs: verify upstream; use clean task-owned checkout; preserve installed
   binary + unrelated source. Never trust sibling checkout merely by name.
 
@@ -126,7 +135,10 @@ Rules:
   `--no-sync` for remote baseline: Blacksmith has no native bypass; released
   Crabbox versions can silently ignore flag. Unchanged intentional rerun ≠ exception.
 - `--reclaim` only for deliberate checkout-path ownership transfer.
-- Base/head change: stop; rewarm. No stale-lease override.
+- Follow the consumer's allocation receipt for reuse. Compatible source commits
+  may reuse a lease when task, physical checkout, base, dependencies, preparation,
+  and workflow/job/ref remain unchanged. Keep the original allocation provenance.
+  Incompatible receipt: stop; rewarm. No stale-lease override.
 - Raw SHA unreliable for `warmup --ref`; use branch/tag.
 - `blacksmith testbox list` hides states. Use `list --all` or `status --id <tbx_id>`.
 - Testbox status/stop: `--id`. No status `--json`.

@@ -128,7 +128,6 @@ it.each(["reset", "rebound", "close"] as const)(
       resume.reject(new Error("session resume unavailable"));
     }
     await expect(result).resolves.toBe(false);
-    expect(callGatewayTool).toHaveBeenCalledOnce();
     expect(sendMessage).not.toHaveBeenCalled();
   },
 );

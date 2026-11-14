@@ -164,7 +164,7 @@ describe("session startup catch-up", () => {
     });
     const harness = await Harness.create([], true);
     const parse = vi.spyOn(memorySessions, "buildSessionEntries");
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     try {
       await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([]);
       expect(harness.isSessionsDirty()).toBe(false);
@@ -196,7 +196,7 @@ describe("session startup catch-up", () => {
       true,
     );
 
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     await expect(harness.catchUp()).resolves.toEqual([]);
     expect(harness.syncCalls).toEqual([]);
     await flushSessionSync(harness);
@@ -233,7 +233,7 @@ describe("session startup catch-up", () => {
         expect(restored.hash).toBe(originalEntry.hash);
       }
       const harness = await Harness.create([sourceRow(originalEntry, original.mtimeMs)], true);
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       await expect(harness.catchUp()).resolves.toEqual([replacement.filePath]);
       await flushSessionSync(harness);
       if (changed) {
@@ -266,7 +266,7 @@ describe("session startup catch-up", () => {
     });
     const harness = await Harness.create([sourceRow(entry, 20)], true);
 
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const observed = observeHostDataSql();
     try {
       await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
@@ -387,7 +387,7 @@ describe("session startup catch-up", () => {
     await writeSessionFile(`${recallRun.sessionId}${suffix}`, "Recall prompt that must stay out.");
     const harness = await Harness.create([], true);
 
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     await harness.catchUp();
     await flushSessionSync(harness);
 
@@ -404,7 +404,7 @@ describe("session startup catch-up", () => {
       true,
     );
 
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     await harness.catchUp();
     await flushSessionSync(harness);
 

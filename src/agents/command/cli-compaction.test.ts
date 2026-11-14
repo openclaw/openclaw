@@ -21,6 +21,7 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { withEnv } from "../../test-utils/env.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import {
   clearPreparedEmbeddedAgentSettings,
   createPreparedEmbeddedAgentSettingsManager,
@@ -49,11 +50,6 @@ type CompactResult = NonNullable<Awaited<ReturnType<ContextEngine["compact"]>>["
 const successfulCompaction = (result: CompactResult) => ({ ok: true, compacted: true, result });
 const expectCallContaining = (mock: unknown, expected: unknown) =>
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(expected));
-const expectNoCalls = (...mocks: unknown[]) => {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-};
 const staleBinding = { ok: false, compacted: false, reason: "thread not found: thread-1" };
 const resumeState = (ids: Record<string, string>, claudeCliSessionId?: string) => ({
   cliSessionIds: ids,

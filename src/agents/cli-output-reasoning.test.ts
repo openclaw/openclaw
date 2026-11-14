@@ -29,7 +29,12 @@ function claudeAssistantSnapshot(id: string, content: unknown[]) {
   return { type: "assistant", message: { id, content } };
 }
 
-const reasoning = (text: string, delta = text) => ({ text, delta, isReasoningSnapshot: true });
+const reasoning = (text: string, delta = text) => ({
+  text,
+  delta,
+  isReasoningSnapshot: true,
+  modelProgress: true,
+});
 const thought = (thinking: string, signature?: string) => ({
   type: "thinking",
   thinking,
@@ -169,8 +174,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
   ])("preserves $name on the visible path", ({ text }) => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
-    parser.push(joinJsonlFrames(claudeTextDelta(text), ""));
-    parser.finish();
+    finishCliFrames(parser, claudeTextDelta(text));
 
     expect(thinking).toEqual([]);
     expect(assistant.map((entry) => entry.delta).join("")).toBe(text);
@@ -230,6 +234,30 @@ describe("createCliJsonlStreamingParser reasoning", () => {
         reasoning("Snapshot-only reasoning. Next block.", " Next block."),
         reasoning("Snapshot-only reasoning. Revised. Next block.", " Revised."),
         reasoning("Snapshot-only reasoning. Revised. Next block. Done.", " Done."),
+      ],
+    },
+    {
+      name: "keeps fuller reasoning across prefix and full replays before a later delta",
+      frames: [
+        claudeMessageStart("msg-1"),
+        claudeThinkingDelta("Known analysis", 0),
+        claudeAssistantSnapshot("msg-1", [thought("Known")]),
+        claudeAssistantSnapshot("msg-1", [thought("Known analysis")]),
+        claudeThinkingDelta(" more", 0),
+      ],
+      expected: [
+        {
+          text: "Known analysis",
+          delta: "Known analysis",
+          isReasoningSnapshot: true,
+          modelProgress: true,
+        },
+        {
+          text: "Known analysis more",
+          delta: " more",
+          isReasoningSnapshot: true,
+          modelProgress: true,
+        },
       ],
     },
     {
@@ -376,9 +404,9 @@ describe("createCliJsonlStreamingParser reasoning", () => {
 
     expect(thinking).toEqual([]);
     expect(progress).toEqual([
-      { progressTokens: 50 },
-      { progressTokens: 200 },
-      { progressTokens: 300 },
+      { progressTokens: 50, modelProgress: true },
+      { progressTokens: 200, modelProgress: true },
+      { progressTokens: 300, modelProgress: true },
     ]);
   });
 });

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { installSkillFromSource } from "../lifecycle/source-install.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import {
   writeSkillFixture,
   useLoadingFixture,
@@ -13,8 +13,10 @@ import {
 } from "./loading.test-support.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
-vi.mock("./plugin-skills.js", () => ({
+vi.mock("./plugin-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-skills.js")>()),
   resolvePluginSkillRoots: () => [],
+  resolvePluginAgentSkillsDirs: () => ["workshop-skills"],
 }));
 
 const skill = (dir: string, name = path.basename(dir), description = name, body?: string) =>

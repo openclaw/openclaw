@@ -82,7 +82,7 @@ function mount(request: GatewayRequestHandler) {
 }
 function button(container: HTMLElement, label: string) {
   const result = [...container.querySelectorAll("button")].find(
-    (entry) => entry.textContent?.trim() === label,
+    (entry) => entry.textContent?.trim() === label || entry.getAttribute("aria-label") === label,
   );
   if (!result) {
     throw new Error(`Missing button: ${label}`);
@@ -115,7 +115,7 @@ describe("Agent Cron native reads and actions", () => {
     });
     await waitForSolid(() => expect(container.textContent).toContain("Job ready"));
     const row = jobRow(container, "Job ready");
-    expect(button(container, "Refreshing…").disabled).toBe(true);
+    expect(button(container, "Refresh").disabled).toBe(true);
     status.reject(new Error("Synthetic status unavailable"));
     await waitForSolid(() =>
       expect(container.textContent).toContain("Synthetic status unavailable"),
@@ -153,11 +153,11 @@ describe("Agent Cron native reads and actions", () => {
       }
       return pageOf([]);
     });
-    await waitForSolid(() => expect(button(container, "Refreshing…").disabled).toBe(true));
+    await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(true));
     status.reject(new Error("Synthetic status unavailable"));
     await waitForSolid(() => {
       expect(container.textContent).toContain("Synthetic status unavailable");
-      expect(button(container, "Refreshing…").disabled).toBe(true);
+      expect(button(container, "Refresh").disabled).toBe(true);
     });
     jobs.resolve(pageOf([]));
     await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(false));
@@ -204,18 +204,18 @@ describe("Agent Cron native reads and actions", () => {
       return pageOf([job(agentId, agentId)]);
     });
     await waitForSolid(() => expect(container.textContent).toContain("Job main"));
-    button(container, "Run Now").click();
-    await waitForSolid(() => expect(button(container, "Run Now").disabled).toBe(true));
+    button(container, "Run now").click();
+    await waitForSolid(() => expect(button(container, "Run now").disabled).toBe(true));
     firstRun.reject(new Error("Synthetic run unavailable"));
     await waitForSolid(() => expect(container.textContent).toContain("Synthetic run unavailable"));
-    expect(button(container, "Run Now").disabled).toBe(false);
-    button(container, "Run Now").click();
-    await waitForSolid(() => expect(button(container, "Run Now").disabled).toBe(true));
+    expect(button(container, "Run now").disabled).toBe(false);
+    button(container, "Run now").click();
+    await waitForSolid(() => expect(button(container, "Run now").disabled).toBe(true));
     const previous = page.read().readData().cron;
     context.settingsAgentSelection.set("other");
     flush();
     await waitForSolid(() => expect(container.textContent).toContain("Job other"));
-    expect(button(container, "Run Now").disabled).toBe(false);
+    expect(button(container, "Run now").disabled).toBe(false);
     secondRun.reject(new Error("Retired run failure"));
     await waitForSolid(() => expect(previous.cronBusy).toBe(false));
     expect(container.textContent).not.toContain("Retired run failure");

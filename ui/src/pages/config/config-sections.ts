@@ -19,6 +19,8 @@ const CONFIG_PAGES = [
 ] as const;
 
 export type ConfigPageId = (typeof CONFIG_PAGES)[number][0];
+
+export const MEMORY_SETTINGS_KEYS = ["citations", "search"] as const;
 export const CONFIG_PAGE_IDS = CONFIG_PAGES.map(([pageId]) => pageId);
 const CONFIG_SECTION_KEYS_BY_PAGE = Object.fromEntries<readonly string[] | undefined>(CONFIG_PAGES);
 

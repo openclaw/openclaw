@@ -198,8 +198,7 @@ export function finishProjectedLifecycleRemovalPlans(
   archiveDirectory: string,
   store: Record<string, SessionEntry>,
   selected: ReturnType<typeof selectProjectedLifecycleRemovals>,
-  upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"],
-): ProjectedLifecycleMutation {
+): Pick<ProjectedLifecycleMutation, "deletePlans" | "removals"> {
   const { removedKeysToArchive, changedSessionKeys, projectedRemovals } = selected;
   const removedGenerationIds = readSessionGenerationIdsForKeys(database, removedKeysToArchive);
   const referencedSessionIds = collectProjectedReferencedSessionIds({
@@ -255,7 +254,7 @@ export function finishProjectedLifecycleRemovalPlans(
       plannedIds.add(sessionId);
     }
   }
-  return { deletePlans, removals: projectedRemovals, upsertedEntries };
+  return { deletePlans, removals: projectedRemovals };
 }
 
 /** Removal-only planning shares selection and reference policy with the async upsert owner. */
@@ -273,13 +272,10 @@ export function projectSessionEntryLifecycleRemovalsInDatabase(
   if (selected.projectedRemovals.length === 0) {
     return { deletePlans: [], removals: [], upsertedEntries: [] };
   }
-  return finishProjectedLifecycleRemovalPlans(
-    database,
-    params.archiveDirectory,
-    store,
-    selected,
-    [],
-  );
+  return {
+    ...finishProjectedLifecycleRemovalPlans(database, params.archiveDirectory, store, selected),
+    upsertedEntries: [],
+  };
 }
 
 export function readProjectedLifecycleStore(
@@ -340,13 +336,10 @@ export async function projectSessionEntryLifecycleMutation(
     }
     // Builders can close the original handle; admit the reference snapshot again.
     return withSqliteSessionDatabase(databaseOptions, (database) => {
-      return finishProjectedLifecycleRemovalPlans(
-        database,
-        params.archiveDirectory,
-        store,
-        selected,
+      return {
+        ...finishProjectedLifecycleRemovalPlans(database, params.archiveDirectory, store, selected),
         upsertedEntries,
-      );
+      };
     });
   });
 }

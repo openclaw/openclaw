@@ -466,13 +466,5 @@ it("keeps main-session activity on its agent header without duplicate main or su
   expect(findAll(header)).toHaveLength(1);
   expect(find(`[data-session-key="${key}"]`)).toBeNull();
   expect(find(`${header} .session-glyph__ring`)).toBeNull();
-  const attention = find(`${header} [data-session-attention="error"]`)!;
-  expect(attention).not.toBeNull();
-  await attention.closest<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip")!
-    .updateComplete;
-  const description = (attention.getAttribute("aria-describedby") ?? "")
-    .split(/\s+/u)
-    .map((id) => attention.ownerDocument.getElementById(id)?.textContent ?? "")
-    .join(" ");
-  expect(description).toContain("Child session Spawned thread failed: Review failed");
+  expect(find(`${header} [data-session-attention="error"]`)).toBeNull();
 });

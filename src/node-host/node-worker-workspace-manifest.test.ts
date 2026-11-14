@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { commandResult } from "../agents/github-identity.test-support.js";
 import { parseRemoteWorkspaceManifestEnvelope } from "../gateway/worker-environments/workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "../gateway/worker-environments/workspace-hash-memo.test-support.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import * as gitExec from "../infra/git-exec.js";
 import * as exec from "../process/exec.js";
@@ -27,6 +28,7 @@ import {
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
 const command = ["node", "-e", REMOTE_WORKSPACE_MANIFEST_JS];
 afterEach(() => vi.restoreAllMocks());
 

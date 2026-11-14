@@ -12,13 +12,16 @@ import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import {
+  getPluginInstance,
+  pluginInvocationContext,
+  runPluginCleanup,
+} from "./plugin-instance-scope.js";
 import { withPluginRetentionOwner } from "./plugin-retention-diagnostics.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
-import type { PluginServiceRegistration } from "./registry-types.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry, PluginServiceRegistration } from "./registry-types.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
@@ -30,6 +33,7 @@ import type {
   OwnedPluginService,
   PluginServicesHandle,
   PluginServicesOwner,
+  PreparedPluginServicesParams,
   StartPluginServicesParams,
 } from "./service-lifecycle.types.js";
 import { createPluginServiceNodeInvoker } from "./service-nodes.js";
@@ -144,10 +148,7 @@ async function startPreparedPluginServices({
   throwOnStartError,
   owner,
   publication,
-}: Omit<StartPluginServicesParams, "previous" | "onHandle"> & {
-  owner: PluginServicesOwner;
-  publication: { callback: ((handle: PluginServicesHandle) => void) | undefined };
-}): Promise<PluginServicesHandle> {
+}: PreparedPluginServicesParams): Promise<PluginServicesHandle> {
   const { services: ownedServices } = owner;
   for (const entry of ownedServices) {
     if (entry.pendingReload) {
@@ -259,14 +260,13 @@ async function startPreparedPluginServices({
             const ready = beforeStop ? beforeStop.then(() => entry.startup) : entry.startup;
             const stop = () => (ready ? ready.then(invokeStop) : Promise.resolve(invokeStop()));
             // A timed-out start loses execution authority now, but still owns its final stop.
-            const stopping = entry.startupConsumer
+            entry.stopping = entry.startupConsumer
               ? entry.startupConsumer.close(async () => {
                   await stop();
                 })
               : stop();
-            entry.stopping = stopping;
             // Completion follows the attempt across handoff, independently of an observer's deadline.
-            void stopping.then(
+            void entry.stopping.then(
               () => {
                 entry.cleaned = entry.cleanupErrors.length === 0;
                 if (entry.cleaned && entry.pendingReload) {
@@ -498,12 +498,13 @@ async function startPreparedPluginServices({
       instance?.lifecycle.runInBackgroundContext ??
       (<T>(run: () => T) => readOnlyWorkerScope.exit(run));
     // Native service receivers retain their brands; registration owns their invocation scope.
-    const runServiceCleanup = <T>(run: () => T): T => {
-      const cleanup = () => withPluginRetentionOwner({ serviceId: id }, run);
-      return instance
-        ? instance.runCleanup(() => runInServiceContext(cleanup))
-        : runPluginCleanup(service, cleanup);
-    };
+    const runServiceCleanup = <T>(run: () => T): T =>
+      pluginInvocationContext.exit(() => {
+        const cleanup = () => withPluginRetentionOwner({ serviceId: id }, run);
+        return instance
+          ? instance.runCleanup(() => runInServiceContext(cleanup))
+          : runPluginCleanup(service, cleanup);
+      });
     const traceName = `sidecars.plugin-services.${encodeStartupTraceSegment(entry.pluginId)}.${encodeStartupTraceSegment(entry.id)}`;
     const lease = createPluginRuntimeCapabilityLease("plugin service");
     const gatewayEvents = createPluginServiceGatewayEvents({

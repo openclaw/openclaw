@@ -108,11 +108,12 @@ if (!isMainThread) {
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: tempDir, ...sqliteWorkerPreloadEnv(preload) },
       async () => {
+        // A sub-quarter end needs transcript replay; aligned ranges read committed quarters only.
         const query = {
           config: {},
           agentId: "main",
           startMs: Date.UTC(2026, 6, 6),
-          endMs: Date.UTC(2026, 6, 7),
+          endMs: Date.UTC(2026, 6, 6, 12, 5),
         };
         await loadCostUsageSummary(query);
         const rollupsBefore = readSessionCostUsageRollupRows();

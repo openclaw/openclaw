@@ -9,6 +9,7 @@ import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.j
 import type {
   RegisterTelegramHandlerParams,
   TelegramNativeCommandCallbackDispatcher,
+  TelegramPluginCommandContinuation,
 } from "./bot-handlers.types.js";
 
 export const createTelegramHandlers = (
@@ -18,7 +19,23 @@ export const createTelegramHandlers = (
   const authorization = createTelegramHandlerAuthorization(params);
   const pipelineContext = { params, message, authorization };
   const inboundPipeline = createTelegramInboundPipeline(pipelineContext);
+  // Same synthetic native-command turn the callback router uses for command buttons.
+  const continuePluginCommandTurn: TelegramPluginCommandContinuation = async (turn) => {
+    await message.processMessageWithReplyChain({
+      ctx: turn.ctx,
+      msg: turn.ctx.message,
+      allMedia: [],
+      storeAllowFrom: turn.storeAllowFrom,
+      options: {
+        threadSpec: turn.threadSpec,
+        commandSource: "native",
+        forceWasMentioned: true,
+        pluginCommandDispatch: turn.pluginCommandDispatch,
+      },
+    });
+  };
   return {
+    continuePluginCommandTurn,
     register(nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher) {
       const callbackRouter = createTelegramCallbackRouter({
         params: { ...params, nativeCommandCallbackDispatcher },

@@ -39,7 +39,11 @@ type AgentHarnessToolSurfaceOptions = Omit<
 >;
 
 type AgentHarnessModelExecutionBinder = (
-  model: import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef | undefined,
+  model:
+    | (import("@openclaw/model-catalog-core/model-catalog-refs").ProviderModelRef & {
+        cyberAccessProgram?: import("../../../packages/gateway-protocol/src/schema/sessions-row.js").CyberAccessProgram;
+      })
+    | undefined,
 ) => Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined;
 
 type AgentHarnessToolSurfaceBindingOptions = Readonly<{
@@ -80,14 +84,14 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }>;
   /** Native delegation retains the incumbent execution and requires its current authority. */
   assertNativeSubagentSpawnAllowed?: () => void;
-  /** Binds the actual native model; returns undefined only for runs without an operator source. */
+  /** Binds the actual native model and Access selection; returns undefined only for runs without an operator source. */
   bindModelExecution?: AgentHarnessModelExecutionBinder;
   /** Retains the original source for already-admitted work beyond foreground completion. */
   retainSourceAuthority?: () =>
     | Readonly<{
         assertCurrent: () => void;
         signal?: AbortSignal;
-        /** Live preflight fact; absence means unknown, not an unrestricted source. */
+        /** Model or Access dispatch enforcement; absence means unknown, not unrestricted. */
         modelPolicyRequired?: boolean;
         /** Opaque equality for compatible active input; never authority by itself. */
         sourceIdentity?: object;

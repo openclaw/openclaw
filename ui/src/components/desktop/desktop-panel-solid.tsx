@@ -8,8 +8,8 @@ import { createDesktopFullscreen, type DesktopFullscreen } from "../desktop-full
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { Icon } from "../solid/icon.tsx";
-import "../tooltip.ts";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
+import "../tooltip.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
@@ -35,6 +35,7 @@ import {
   type DesktopPictureInPicture,
 } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import sessionPanelRailStyles from "../../styles/session-panel-rail.css?inline";
 import desktopStyles from "./desktop-panel.css?inline";
 
 type Methods = { handleToggleRequest(event: Event): void };
@@ -73,7 +74,7 @@ export const DesktopPanel = defineSolidBridge<DesktopPanelInputs, Methods>(
     const state = projectOwner(panel, (owner) => owner);
     return (
       <>
-        <style>{`${dockStyles}\n${desktopStyles}`}</style>
+        <style>{`${dockStyles}\n${sessionPanelRailStyles}\n${desktopStyles}`}</style>
         {inputs.available &&
           (inputs.documentMode || inputs.embedded || state.read().dockLayout.open) && (
             <DesktopPresentation view={state.read().view} presentation={inputs.presentation} />

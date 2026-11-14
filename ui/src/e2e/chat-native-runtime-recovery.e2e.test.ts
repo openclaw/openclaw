@@ -120,7 +120,7 @@ suite.define(() => {
           expect(await page.locator(".chat-group.user").textContent()).toContain(message);
           return;
         }
-        await exactButton(modal, "Continue for this chat").click();
+        await exactButton(modal, "Continue for this session").click();
         await expectRequest(gateway, "sessions.patch", {
           key,
           expectedSessionId: sessionId,
@@ -140,7 +140,7 @@ suite.define(() => {
 
   it.each(
     (["selection", "send"] as const).flatMap((entrypoint) =>
-      (["confirm", "cancel", "mandatory", "non-admin"] as const).map((action) => ({
+      (["confirm", "cancel", "mandatory"] as const).map((action) => ({
         entrypoint,
         action,
       })),
@@ -173,8 +173,7 @@ suite.define(() => {
           sessionInfo: row,
           sessions: [row],
           models: [model],
-          operatorScopes:
-            action === "non-admin" ? ["operator.read", "operator.write"] : ["operator.admin"],
+          operatorScopes: ["operator.admin"],
           deferredMethods: [refusalMethod],
           methodResponses: { "sessions.list": result },
         });
@@ -212,7 +211,7 @@ suite.define(() => {
           expectedSandboxMode: null,
           expectedNativeRuntimeConsent: null,
         };
-        const blocked = action === "mandatory" || action === "non-admin";
+        const blocked = action === "mandatory";
         const reason =
           action === "mandatory"
             ? "sandbox-required"
@@ -233,15 +232,15 @@ suite.define(() => {
         await page.locator("openclaw-modal-dialog, .chat-error").first().waitFor();
         if (blocked) {
           await polledText(error).toContain("Choose another model");
-          expect(await exactButton(page, "Continue for this chat").count()).toBe(0);
+          expect(await exactButton(page, "Continue for this session").count()).toBe(0);
         } else {
           const modal = page.locator("openclaw-modal-dialog");
           await modal.waitFor();
           expect(await modal.textContent()).toContain("own permissions");
-          expect(await modal.textContent()).toContain("Gateway host");
-          expect(await modal.textContent()).toContain("Only this chat");
+          expect(await modal.textContent()).toContain("Gateway device");
+          expect(await modal.textContent()).toContain("Only this session");
           expect(await modal.textContent()).toContain(
-            "other chats and global configuration stay unchanged",
+            "other sessions and global configuration stay unchanged",
           );
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(initialPatchCount);
           if (action === "confirm") {
@@ -249,7 +248,7 @@ suite.define(() => {
           }
           await exactButton(
             modal,
-            action === "confirm" ? "Continue for this chat" : "Cancel",
+            action === "confirm" ? "Continue for this session" : "Cancel",
           ).click();
           if (action === "confirm") {
             const retry = await gateway.waitForRequest("sessions.patch", {

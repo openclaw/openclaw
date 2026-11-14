@@ -20,3 +20,17 @@ export function snapshotUpdateFixtureTree(root: string, readStat = fs.statSync) 
       ];
     });
 }
+
+export function snapshotUpdateFixtureFiles(root: string) {
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.dirent)
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
+      const filename = path.join(entry.parentPath, entry.name);
+      return [
+        path.relative(root, filename),
+        fs.readFileSync(filename).toString("hex"),
+        fs.statSync(filename).mode,
+      ];
+    });
+}

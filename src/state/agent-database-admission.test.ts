@@ -8,7 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AgentDatabaseAdmissionRefusalSchema } from "../../packages/gateway-protocol/src/schema/agent-database-admission.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import {
   findStartupMaintenanceRequiredError,
@@ -25,7 +25,6 @@ import {
   recordAgentDatabaseAdmissions as recordAdmissions,
 } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission as withStartupAdmission } from "./agent-database-startup.js";
-import { readAgentDeletionJournalStatusInDatabase as journalStatus } from "./agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import {
@@ -34,18 +33,40 @@ import {
   openOpenClawAgentDatabase as openAgentDb,
 } from "./openclaw-agent-db.js";
 import {
+  createNativeIntegrityGeneration as nativeGeneration,
+  createNativeIntegritySource as sourceFor,
+} from "./openclaw-agent-execution-native.test-support.js";
+import { captureOpenClawAgentDatabaseExecution as capture } from "./openclaw-agent-execution.js";
+import {
   assertOpenClawDatabasesReady as assertDatabasesReady,
   preflightOpenClawDatabaseSchemas as preflightSchemas,
 } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import {
-  withExistingOpenClawStateDatabaseReadOnly as withStateReadOnly,
-  withOpenClawStateDatabaseReadSnapshot as withStateSnapshot,
-} from "./openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest as closeStateDbForTest } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext as workerContext } from "./openclaw-state-worker-context.js";
 
 const tempDirs = createTempDirTracker();
 const makeEnv = () => ({ OPENCLAW_STATE_DIR: tempDirs.make("agent-admission-") });
+
+it.each(["settled", "pending"] as const)(
+  "prepares missing storage after an existing-only miss (%s)",
+  async (timing) => {
+    const env = makeEnv();
+    const execution = capture({ agentId: "main", env });
+    await using _ = { [Symbol.asyncDispose]: () => execution.release() };
+    const source = sourceFor(() => execution.assertCurrent());
+    const missing = execution.runExisting(source, async () => "unexpected");
+    if (timing === "settled") {
+      expect(await missing).toBeUndefined();
+    }
+    const preparing = execution.prepare(source);
+    expect(await missing).toBeUndefined();
+    await preparing;
+    expect(fs.existsSync(execution.path)).toBe(true);
+    expect(await execution.runExisting(source, async () => "opened")).toBe("opened");
+  },
+);
 
 it("reports exhausted lock admission without recommending database repair", () => {
   const refusal = inspectionRefusal({
@@ -286,62 +307,6 @@ it("uses the current preparation scope and refuses an escaped scope after prepar
   expect(inPreparation).toThrow("Agent database preparation has ended: main");
 });
 
-it("settles deferred startup admission after its discovery snapshot closes", async () => {
-  const env = makeEnv();
-  const agentId = "main";
-  const pathname = openAgentDb({ agentId, env }).path;
-  closeDatabases();
-  await withStartupAdmission(async (admission) => {
-    const tracked = vi.spyOn(admission, "track");
-    const owner = admission.adopt();
-    try {
-      await withStateSnapshot(
-        async () => {
-          const refusals = admission.defer({
-            env,
-            inspections: [
-              {
-                target: { agentId, path: pathname },
-                result: Promise.resolve({ incompatible: [], indeterminate: [] }),
-              },
-            ],
-            reason: "Awaiting Gateway activation",
-          });
-          recordAdmissions(refusals, { env, source: "startup" });
-        },
-        { env },
-      );
-      expect(readRefusal(agentId, { env })?.code).toBe("agent-database-inspection-pending");
-      const phases: string[] = [];
-      admission.activate({
-        isCurrent: () => true,
-        preparationReady: Promise.resolve(),
-        openAgent: async ({ assertCurrent }) => {
-          assertCurrent();
-          phases.push("open");
-        },
-        migrateAgent: async ({ assertCurrent }) => {
-          assertCurrent();
-          expect(withStateReadOnly(({ db }) => journalStatus(db, agentId), { env })).toBe("absent");
-          phases.push("migration");
-        },
-        publishAgent: async ({ assertCurrent }) => {
-          assertCurrent();
-          phases.push("publication");
-        },
-      });
-      // Join the owner's work on success or refusal, never a success-only callback.
-      await Promise.all(tracked.mock.calls.map(([work]) => work));
-      const refusal = readRefusal(agentId, { env });
-      expect(refusal, refusal?.reason).toBeUndefined();
-      expect(phases).toEqual(["open", "migration", "publication"]);
-    } finally {
-      await owner.stop();
-      tracked.mockRestore();
-    }
-  });
-});
-
 it.each([
   { role: "secondary", agentId: "cleaner", isolate: true },
   { role: "sole", agentId: "cleaner", isolate: false },
@@ -455,3 +420,26 @@ it.each([
     deepStrictEqual(fs.readFileSync(`${target}.operator-backup`), copyBytes);
   },
 );
+
+it("opens an unconfigured external store without reconstructing unknown deletion history", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-worker-missing-history-") };
+  const external = tempDirs.make("agent-worker-external-history-");
+  const pathname = path.join(external, "retained.sqlite");
+  const retained = openAgentDb({
+    agentId: "main",
+    path: pathname,
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-worker-fixture-owner-") },
+  });
+  retained.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
+  closeDatabases();
+  const bytes = fs.readFileSync(pathname);
+  await using generation = nativeGeneration(retained, workerContext({ env }));
+  expect(await generation.run(generation.source, async () => "opened")).toBe("opened");
+  await generation.close();
+  expect(fs.readFileSync(pathname)).toEqual(bytes);
+  expect(fs.readdirSync(external).toSorted()).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
+  using shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+  expect(
+    shared.prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'").get(),
+  ).toBeUndefined();
+});

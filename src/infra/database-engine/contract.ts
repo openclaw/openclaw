@@ -45,6 +45,8 @@ type PostgresSchemaDefinition = {
   postgresVectorDecoderVersion?: 1 | 2;
   /** Version 2 adds the stored binary candidate projection; historical schemas stay exact. */
   postgresVectorSearchVersion?: 1 | 2;
+  /** Version 2 splits punctuation-joined tokens like SQLite FTS5; historical schemas stay exact. */
+  postgresTextSearchVersion?: 1 | 2;
 };
 export type StoreSchema = {
   id: string;
@@ -65,6 +67,8 @@ export type StoreSchema = {
   postgresVectorDecoderVersion?: 1 | 2;
   /** Version 2 adds the stored binary candidate projection; historical schemas stay exact. */
   postgresVectorSearchVersion?: 1 | 2;
+  /** Version 2 splits punctuation-joined tokens like SQLite FTS5; historical schemas stay exact. */
+  postgresTextSearchVersion?: 1 | 2;
   search?: SearchSchema;
   /** Persisted, owner-registered derived search definitions. */
   searchExtensions?: Record<string, SearchSchema>;
@@ -77,8 +81,12 @@ export type AdmittedStore = {
   openSqlite: () => void;
   storeId?: string;
   namespace?: string;
-  /** Owner-specific data extraction inside the validated source migration transaction. */
-  beforeMigrate?: (database: EngineConnection, fromVersion: number) => void;
+  /** Source tables are verified inside this transaction, before runtime admission exists. */
+  beforeMigrate?: (
+    database: EngineConnection,
+    fromVersion: number,
+    sourceTables: ReadonlySet<string>,
+  ) => void;
 };
 type TransactionRecipes<Connection extends SqlConnection> = {
   write<T>(connection: Connection, operation: () => T): T;

@@ -1,8 +1,8 @@
 import { createServer, type RequestListener } from "node:http";
-import type { AddressInfo } from "node:net";
 import Anthropic from "@anthropic-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
+import { listenLoopback } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { configureAiTransportHost } from "../host.js";
 import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
@@ -64,12 +64,9 @@ async function withLoopback<T>(
   run: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
   const server = createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address() as AddressInfo;
+  const baseUrl = await listenLoopback(server);
   try {
-    return await run(`http://127.0.0.1:${address.port}`);
+    return await run(baseUrl);
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -224,6 +221,20 @@ type CapturedRequest = {
 };
 afterEach(() => configureAiTransportHost({}));
 describe("Anthropic SDK host fetch wiring", () => {
+  it("does not send a request when aborted while client preparation is pending", async () => {
+    const hostFetch = vi.fn<typeof fetch>();
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+    const controller = new AbortController();
+    const stream = streamAnthropic(makeModel("https://example.invalid"), context, {
+      apiKey: "synthetic",
+      signal: controller.signal,
+    });
+    controller.abort();
+    expect(await collectEventTypes(stream)).toEqual(["error"]);
+    expect((await stream.result()).stopReason).toBe("aborted");
+    expect(hostFetch).not.toHaveBeenCalled();
+  });
+
   it("routes every non-Cloudflare client branch through the host fetch", async () => {
     const requests: CapturedRequest[] = [];
     await withLoopback(

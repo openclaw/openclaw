@@ -15,7 +15,7 @@ export interface PopoverHandle {
   hide(): boolean;
 }
 
-export interface PopoverProps {
+export function Popover(props: {
   /** Preserve drafts by default; transient bodies are released after the exit. */
   lazy?: boolean | "while-open";
   /** The caller keeps anchor and surface in one DOM root for this mount. */
@@ -41,9 +41,7 @@ export interface PopoverProps {
   onBeforeHide?(event: Event): void;
   onOpenChange?(open: boolean): void;
   ref?(handle: PopoverHandle): void;
-}
-
-export function Popover(props: PopoverProps): JSX.Element {
+}): JSX.Element {
   let trigger!: HTMLButtonElement;
   let surface!: HTMLDivElement;
   // Identity, lazy mounting, and root placement are fixed for this native overlay lifetime.

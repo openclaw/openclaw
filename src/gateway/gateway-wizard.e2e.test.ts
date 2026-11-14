@@ -1,14 +1,26 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WizardNextResult,
   WizardStartResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { bindLlmOperatorAuthority } from "../plugins/runtime/runtime-llm-operator-authority.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { DevicePairingList } from "./device-pairing-list.types.js";
 import { startWizardGateway } from "./gateway-wizard.test-support.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
+import { disconnectGatewayClient } from "./test-helpers.e2e.js";
 
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
+
+const setup = vi.hoisted(() => ({ activate: vi.fn() }));
+// mock-isolation: Pause setup work, not authenticated dispatch, admission or operator capture.
+vi.mock("../system-agent/setup-inference.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../system-agent/setup-inference.js")>()),
+  activateSetupInference: setup.activate,
+}));
 
 describe("gateway wizard e2e", () => {
   beforeEach(resetGatewayTestState);
@@ -142,6 +154,84 @@ describe("gateway wizard e2e", () => {
         ]);
       }
       expect(channelRuns).toEqual([undefined, "telegram", "imsg"]);
+    },
+  );
+
+  it(
+    "keeps the starting operator's revocable grant after the start reply",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      let gate = { entered: createDeferredCore(), resume: createDeferredCore() };
+      // Model completion after the start reply, through the real runtime LLM owner.
+      const probe = async (prompter: WizardPrompter) => {
+        const progress = prompter.progress("Testing the selected connection");
+        gate.entered.resolve();
+        await gate.resume.promise;
+        try {
+          await bindLlmOperatorAuthority({ kind: "plugin", id: "setup-fixture" }, async () => ({
+            text: "OK",
+            provider: "fixture",
+            model: "verified",
+            agentId: "main",
+            usage: {},
+            execution: { mode: "direct-provider", owner: { kind: "provider", id: "fixture" } },
+            audit: { caller: { kind: "plugin", id: "setup-fixture" } },
+          }))({ model: "fixture/verified", messages: [{ role: "user", content: "Reply OK" }] });
+        } finally {
+          progress.stop();
+        }
+      };
+      setup.activate.mockImplementation(async ({ prompter }) => {
+        await probe(prompter);
+        return { ok: true, modelRef: "fixture/verified", lines: [] };
+      });
+      await using gateway = await startWizardGateway(
+        { wizardRunner: (_opts, _runtime, prompter) => probe(prompter) },
+        () => gate.resume.resolve(),
+      );
+      let client = await gateway.connect("setup-authority");
+      const { paired } = await client.request<DevicePairingList>("device.pair.list", {});
+      const deviceId = expectDefined(paired[0], "setup device").deviceId;
+      for (const scenario of [
+        { method: "openclaw.setup.activate.start", reconnect: false, revoke: false },
+        { method: "openclaw.setup.auth.start", reconnect: false, revoke: false },
+        { method: "wizard.start", reconnect: false, revoke: false },
+        { method: "openclaw.setup.activate.start", reconnect: true, revoke: false },
+        { method: "openclaw.setup.activate.start", reconnect: true, revoke: true },
+      ] as const) {
+        const label = JSON.stringify(scenario);
+        gate = { entered: createDeferredCore(), resume: createDeferredCore() };
+        const start = await client.request<WizardStartResult>(
+          scenario.method,
+          scenario.method === "wizard.start"
+            ? { mode: "local" }
+            : scenario.method === "openclaw.setup.auth.start"
+              ? { sessionId: label, authChoice: "fixture" }
+              : { sessionId: label, kind: "codex-cli" },
+        );
+        expect(start, label).toMatchObject({ done: false, status: "running" });
+        await gate.entered.promise;
+        if (scenario.revoke) {
+          await client.request("device.token.revoke", { deviceId, role: "operator" });
+        }
+        if (scenario.reconnect) {
+          await disconnectGatewayClient(client);
+          client = await gateway.connect("setup-authority-reconnected");
+        }
+        gate.resume.resolve();
+        let result: WizardNextResult;
+        do {
+          result = await client.request<WizardNextResult>("wizard.next", {
+            sessionId: start.sessionId,
+          });
+        } while (!result.done);
+        // A fresh login collects the outcome but never revives the revoked grant.
+        expect(result, label).toMatchObject(
+          scenario.revoke
+            ? { status: "error", error: expect.stringContaining("authority") }
+            : { status: "done" },
+        );
+      }
     },
   );
 });

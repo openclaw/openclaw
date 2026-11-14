@@ -189,3 +189,15 @@ export function compareReleaseVersions(left, right) {
 
   return Math.sign((parsedLeft.correctionNumber ?? 0) - (parsedRight.correctionNumber ?? 0));
 }
+
+/**
+ * @param {string} version
+ * @param {string} minimum
+ * @returns {boolean}
+ */
+export function isStableReleaseVersionAtLeast(version, minimum) {
+  return (
+    parseReleaseVersion(version)?.channel === "stable" &&
+    (compareReleaseVersions(version, minimum) ?? -1) >= 0
+  );
+}

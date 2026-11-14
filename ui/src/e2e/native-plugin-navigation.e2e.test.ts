@@ -5,7 +5,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { catalog, pluginModule } from "./native-plugin-ui.test-support.ts";
+import { catalog, pluginModule, type NativePluginWindow } from "./native-plugin-ui.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native plugin navigation" });
 
@@ -41,6 +41,11 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
   const customize = heading("Customize UI");
   await page.goto(`${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`);
   await revisionOne.waitFor();
+  // Navigating its own params updates the mounted page instead of mounting it again.
+  await page.evaluate(() => (window as NativePluginWindow).nativePluginProof?.open?.("second"));
+  await expect
+    .poll(() => page.evaluate(() => (window as NativePluginWindow).nativePluginProof))
+    .toMatchObject({ mounts: 1, view: "second" });
   const sidebar = page.locator("openclaw-app-sidebar");
   const pagesButton = sidebar
     .locator(".sidebar-rail")

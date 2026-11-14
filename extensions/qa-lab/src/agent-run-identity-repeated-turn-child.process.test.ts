@@ -1,22 +1,14 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { zstdDecompressSync } from "node:zlib";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
-import { createFixtureLifetime, stopChildProcess } from "openclaw/plugin-sdk/test-env";
+import { createFixtureLifetime, runCliProcessChild } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { identityRepeatedTurnEntrypoint } from "./agent-run-identity-runtime.test-support.js";
 import * as bundledPluginStaging from "./bundled-plugin-staging.js";
-import {
-  appendQaChildOutputTail,
-  createQaChildOutputTail,
-  readQaChildOutputTail,
-} from "./child-output.js";
 import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
 import type { MockOpenAiRequestSnapshot } from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
@@ -73,30 +65,17 @@ it(
       const childUrl = resolveRuntimeWorkerUrl(identityRepeatedTurnEntrypoint);
       // Runtime transpilation must not consume the cold ingress execution deadline.
       expect(childUrl.pathname.endsWith(".js")).toBe(true);
-      const { child } = await lifetime.acquire(async () => {
-        const processChild = spawn(
-          process.execPath,
-          [...resolveRuntimeWorkerArgv(childUrl), sessionId],
-          {
-            cwd: repoRoot,
-            env,
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
-        return { child: processChild, cleanup: () => stopChildProcess(processChild, 5_000) };
-      });
-      const output = createQaChildOutputTail(128 * 1024);
-      child.stdout?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
-      child.stderr?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
-      const exit = await withTimeout(once(child, "close"), 180_000).catch((error: unknown) => {
-        throw new Error(`Repeated ingress child did not close: ${readQaChildOutputTail(output)}`, {
-          cause: error,
-        });
+      const exit = await runCliProcessChild({
+        nodeArgs: [...resolveRuntimeWorkerArgv(childUrl), sessionId],
+        nodeArgsPolicy: "caller",
+        cwd: repoRoot,
+        env,
+        timeoutMs: 180_000,
       });
       const response = await fetch(`${mock.baseUrl}/debug/requests?after=0`);
       expect(response.ok).toBe(true);
       const requests: MockOpenAiRequestSnapshot[] = await response.json();
-      expect(exit, readQaChildOutputTail(output)).toEqual([0, null]);
+      expect(exit, exit.stderr).toMatchObject({ code: 0, signal: null });
       expect(requests).toMatchObject(
         turns.map((prompt) => ({
           outcome: "success",

@@ -18,7 +18,7 @@ import {
 import {
   cancelUserGitHubAuthorizationInDatabase,
   disconnectUserGitHubConnectionInDatabase,
-  parseUserGitHubConnection,
+  registerUserGitHubConnectionSecrets,
 } from "./user-github-connections.kernel.js";
 import {
   isUserGitHubConnectionCommit,
@@ -151,7 +151,7 @@ export async function prepareUserGitHubConnection(
     );
     const connection = result?.connection;
     const profileIsCurrent = authority.bind(owner);
-    const parsed = connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined;
+    const parsed = connection ? registerUserGitHubConnectionSecrets(connection) : undefined;
     const read = () => {
       context.admission.assertCurrent();
       if (!entry.valid || !profileIsCurrent?.()) {
@@ -180,7 +180,7 @@ export async function listUserGitHubConnectionsAsync(): Promise<UserGitHubConnec
   );
   return (result?.connections ?? []).map(({ owner, connection }) => ({
     owner,
-    connection: parseUserGitHubConnection(JSON.stringify(connection)),
+    connection: registerUserGitHubConnectionSecrets(connection),
   }));
 }
 
@@ -239,7 +239,7 @@ export async function mutateUserGitHubConnection(
     { owner, mutation },
     assertCurrent,
   );
-  return connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined;
+  return connection ? registerUserGitHubConnectionSecrets(connection) : undefined;
 }
 
 /** An exact remote rotation follows profile transfer; its receipt grants no external authority. */

@@ -4,6 +4,7 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readTransportDiagnosticLabel } from "../../packages/ai/src/utils/provider-error.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   readResponseTextPrefix,
@@ -16,7 +17,7 @@ import type { ModelProviderRequestTransportOverrides } from "./provider-request-
 import {
   collectRequestHeaderSecretValues,
   createExactSecretValueMatcher,
-  redactExactSecretValues,
+  createExactSecretValueRedactor,
   redactProviderResponseErrorText,
 } from "./provider-request-header-redaction.js";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
@@ -50,7 +51,7 @@ function collectProviderRequestCredentialValues(
   params: ProviderRequestCredentialContext,
 ): string[] {
   const auth = params.request?.auth;
-  const headers = new Headers();
+  const headers: [string, string][] = [];
   const names = new Set(
     [
       params.defaultAuthHeader,
@@ -64,7 +65,7 @@ function collectProviderRequestCredentialValues(
   for (const name of names) {
     const value = params.headers.get(name);
     if (value) {
-      headers.set(name, value);
+      headers.push([name, value]);
     }
   }
   return [
@@ -73,9 +74,7 @@ function collectProviderRequestCredentialValues(
     auth?.mode === "header"
       ? extractHeaderCredential(params.headers, auth.headerName, auth.prefix ?? "")
       : "",
-  ]
-    .filter(Boolean)
-    .toSorted((left, right) => right.length - left.length);
+  ];
 }
 
 /** Successful provider results must match actual credentials, not diagnostic redaction patterns. */
@@ -90,12 +89,11 @@ export function createProviderErrorTextRedactor(
   params: ProviderRequestCredentialContext,
 ): (text: string, context?: ProviderErrorTextRedactionContext) => string {
   const credentials = collectProviderRequestCredentialValues(params);
+  // Unused redactors must not prepare patterns on successful request paths.
+  let redactCredentials: ReturnType<typeof createExactSecretValueRedactor> | undefined;
   return (text, context) => {
-    const withoutActiveCredential = redactExactSecretValues(
-      text,
-      credentials,
-      context?.truncated === true,
-    );
+    const withoutActiveCredential = (redactCredentials ??=
+      createExactSecretValueRedactor(credentials))(text, context?.truncated === true);
     return redactToolPayloadText(withoutActiveCredential).replace(
       SHORT_BEARER_TOKEN_PATTERN,
       "$1 ***",
@@ -160,14 +158,14 @@ export function summarizeProviderTransportError(error: unknown): string {
     return `type=${typeof error}`;
   }
   const cause = asOptionalObjectRecord(record.cause);
-  const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
-  return [
-    `name=${read(record.name)}`,
-    `code=${read(record.code)}`,
-    `causeName=${read(cause?.name)}`,
-    `causeCode=${read(cause?.code)}`,
-    `message=${error instanceof Error ? error.message : read(record.message)}`,
-  ].join(" ");
+  return Object.entries({
+    name: readTransportDiagnosticLabel(record.name),
+    code: readTransportDiagnosticLabel(record.code),
+    causeName: readTransportDiagnosticLabel(cause?.name),
+    causeCode: readTransportDiagnosticLabel(cause?.code),
+  })
+    .flatMap(([key, value]) => (value === undefined ? [] : [`${key}=${value}`]))
+    .join(" ");
 }
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
@@ -191,6 +189,7 @@ export async function readResponseTextLimited(
   }
   return (
     await readResponseTextPrefix(response, limitBytes, {
+      signal: options?.signal,
       chunkTimeoutMs: options?.chunkTimeoutMs ?? 10_000,
       onIdleTimeout:
         options?.onIdleTimeout ??

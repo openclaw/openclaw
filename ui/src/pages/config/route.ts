@@ -30,50 +30,6 @@ const MOVED_SECTION_ROUTES: Record<
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
 };
 
-function loadConfigRoute(
-  context: ApplicationContext,
-  location: RouteLocation,
-  pageId: ConfigPageId,
-) {
-  const route = configRouteData(location);
-  const movedRoute = route.section ? MOVED_SECTION_ROUTES[`${pageId}:${route.section}`] : undefined;
-  if (route.section && movedRoute) {
-    return redirect({
-      pathname: pathForRoute(movedRoute.routeId, context.basePath),
-      search:
-        movedRoute.search ??
-        (movedRoute.keepSection
-          ? `?section=${encodeURIComponent(route.section)}${movedRoute.advanced ? "&advanced=1" : ""}`
-          : ""),
-      hash: route.hash,
-    });
-  }
-  const agentSelectionIntent =
-    pageId === "memory"
-      ? {
-          owner: context.settingsAgentSelection,
-          revision: context.settingsAgentSelection.intentRevision,
-        }
-      : undefined;
-  const appearanceDisplay =
-    hasConfigPageDisplay(
-      context.runtimeConfig,
-      pageId,
-      normalizeConfigSelection(pageId, route.section, null).activeSection,
-    ) && !isAppearanceDataTarget(route.targetBlockId);
-  if (!appearanceDisplay) {
-    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
-    if (pageId !== "updates") {
-      void context.runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
-    }
-  }
-  return {
-    ...route,
-    pageId,
-    ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
-  };
-}
-
 function configPage(id: ConfigPageId) {
   return definePage({
     ...routePageSpec(id),
@@ -84,7 +40,48 @@ function configPage(id: ConfigPageId) {
         ? `${locationKey}\u0000${context.settingsAgentSelection.intentRevision}`
         : locationKey;
     },
-    loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
+    loader: (context: ApplicationContext, { location }) => {
+      const pageId = id;
+      const route = configRouteData(location);
+      const movedRoute = route.section
+        ? MOVED_SECTION_ROUTES[`${pageId}:${route.section}`]
+        : undefined;
+      if (route.section && movedRoute) {
+        return redirect({
+          pathname: pathForRoute(movedRoute.routeId, context.basePath),
+          search:
+            movedRoute.search ??
+            (movedRoute.keepSection
+              ? `?section=${encodeURIComponent(route.section)}${movedRoute.advanced ? "&advanced=1" : ""}`
+              : ""),
+          hash: route.hash,
+        });
+      }
+      const agentSelectionIntent =
+        pageId === "memory"
+          ? {
+              owner: context.settingsAgentSelection,
+              revision: context.settingsAgentSelection.intentRevision,
+            }
+          : undefined;
+      const appearanceDisplay =
+        hasConfigPageDisplay(
+          context.runtimeConfig,
+          pageId,
+          normalizeConfigSelection(pageId, route.section, null).activeSection,
+        ) && !isAppearanceDataTarget(route.targetBlockId);
+      if (!appearanceDisplay) {
+        void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+        if (pageId !== "updates") {
+          void context.runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
+        }
+      }
+      return {
+        ...route,
+        pageId,
+        ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
+      };
+    },
     component: async () => {
       // The sidebar is an independent lazy sibling; start it alongside the page.
       void import("../../components/settings-sidebar-shell.tsx").catch(() => undefined);

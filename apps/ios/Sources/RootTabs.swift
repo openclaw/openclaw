@@ -31,6 +31,8 @@ struct RootTabs: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
     @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
@@ -181,13 +183,10 @@ struct RootTabs: View {
 
     private var sidebarSplitContent: some View {
         GeometryReader { proxy in
-            // Use the window width so keyboard avoidance cannot change navigation mode.
-            let layoutContainerSize = Self.sidebarLayoutContainerSize(
-                contentSize: proxy.size,
-                windowSize: self.foregroundKeyWindowSize())
-            let isDrawerLayout = self.sidebarLayoutMode(containerSize: layoutContainerSize) == .drawer
+            let layoutMode = self.sidebarLayoutMode(containerSize: proxy.size)
+            let isDrawerLayout = layoutMode == .drawer
             let sidebarWidth = Self.sidebarWidth(
-                containerWidth: layoutContainerSize.width,
+                containerWidth: proxy.size.width,
                 isDrawerLayout: isDrawerLayout)
             RootSidebarShell(
                 sidebarWidth: sidebarWidth,
@@ -199,18 +198,10 @@ struct RootTabs: View {
                 onShow: self.showSidebar,
                 onHide: self.hideSidebar,
                 sidebar: self.sidebarColumn(drawerSafeAreaInsets: isDrawerLayout ? proxy.safeAreaInsets : nil),
-                detail: self.sidebarDetailNavigationShell)
-                .onAppear {
-                    self.updateSidebarLayout(containerSize: layoutContainerSize)
-                }
-                .onChange(of: proxy.size) { _, size in
-                    let layoutContainerSize = Self.sidebarLayoutContainerSize(
-                        contentSize: size,
-                        windowSize: self.foregroundKeyWindowSize())
-                    self.updateSidebarLayout(containerSize: layoutContainerSize)
-                }
-                .onChange(of: self.dynamicTypeSize) { _, _ in
-                    self.updateSidebarLayout(containerSize: layoutContainerSize)
+                detail: self.sidebarDetailNavigationShell,
+                contentSafeAreaInsets: proxy.safeAreaInsets)
+                .onChange(of: layoutMode, initial: true) { _, mode in
+                    self.updateSidebarLayout(mode)
                 }
                 // Single refresh owner: identity/session changes, scene activation,
                 // and the periodic attention refresh all land here.
@@ -416,20 +407,11 @@ struct RootTabs: View {
 
     private func sidebarLayoutMode(containerSize: CGSize) -> SidebarLayoutMode {
         // RootTabs owns navigation; descendant chat views may override size classes.
-        // Actual window width plus idiom avoids treating landscape phones as tablets.
         Self.sidebarLayoutMode(
             containerSize: containerSize,
-            isPad: UIDevice.current.userInterfaceIdiom == .pad,
+            horizontalSizeClass: self.horizontalSizeClass,
+            verticalSizeClass: self.verticalSizeClass,
             usesAccessibilityText: self.dynamicTypeSize.isAccessibilitySize)
-    }
-
-    private func foregroundKeyWindowSize() -> CGSize? {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first(where: { $0.activationState == .foregroundActive })?
-            .windows
-            .first(where: \.isKeyWindow)?
-            .bounds.size
     }
 
     private func rootOverlays(_ content: some View) -> some View {
@@ -830,8 +812,7 @@ extension RootTabs {
         }
     }
 
-    private func updateSidebarLayout(containerSize: CGSize) {
-        let layoutMode = self.sidebarLayoutMode(containerSize: containerSize)
+    private func updateSidebarLayout(_ layoutMode: SidebarLayoutMode) {
         let previousLayoutMode: SidebarLayoutMode = self.isSidebarDrawerLayout ? .drawer : .split
         guard !self.didResolveSidebarLayout || layoutMode != previousLayoutMode else { return }
         let initialVisibility = self.didResolveSidebarLayout ? nil : self.initialSidebarVisibilityOverride

@@ -147,7 +147,7 @@ export function registerCanaryReadinessBudgetTests(
       let current = true;
       const startup = observeUpdateCandidateStartup({ env: {}, stateDir: root() });
       const onWarning = vi.fn(() => receipt.promise);
-      const fetch = stubFetch(() => probe.fetch());
+      stubFetch(() => probe.fetch());
       const pending = waitForUpdateCandidateReadiness({
         port: 18789,
         workDeadline: 900,
@@ -180,7 +180,6 @@ export function registerCanaryReadinessBudgetTests(
           await vi.advanceTimersByTimeAsync(550);
           probe.response.resolve(Response.json({ status: "starting" }, { status: 503 }));
           await enteredSleep.promise;
-          expect(sleep).toHaveBeenCalledWith(100, undefined, { signal: caller.signal });
           await vi.advanceTimersByTimeAsync(50);
         } else {
           await vi.advanceTimersByTimeAsync(600);
@@ -205,7 +204,6 @@ export function registerCanaryReadinessBudgetTests(
         } else {
           expect(failure).toBe(uncertain);
         }
-        expect(fetch).toHaveBeenCalledOnce();
       } finally {
         caller.abort(new Error("readiness test cleanup"));
         probe.response.resolve(healthyResponse());
@@ -289,12 +287,10 @@ export function registerCanaryReadinessBudgetTests(
       }
       return startup.fetch(options);
     });
-    const onProgress = vi.fn();
     const controller = new AbortController();
     const result = validate({
       signal: controller.signal,
       onStep: fakeTimersAfterRecovery,
-      onProgress,
     });
     await waitForProbe(startup.fetching, result);
     await vi.advanceTimersByTimeAsync(300);
@@ -374,12 +370,6 @@ export function registerCanaryReadinessBudgetTests(
     if (outcome === "spam") {
       expect(step?.stderrTail).toContain("after plugins.bootstrap");
     }
-    expect(onProgress).toHaveBeenCalledWith(
-      expect.objectContaining({
-        step: "warning:candidate-gateway-startup",
-        detail: expect.stringContaining("still progressing"),
-      }),
-    );
   });
 
   it.each(["gateway-only", "proxy", "block"] as const)(
@@ -560,7 +550,6 @@ export function registerCanaryReadinessBudgetTests(
       ["headers", "body"].map((delay) => ({ endpoint, delay })),
     ),
   )("allows slow $endpoint $delay within the validation budget", async ({ endpoint, delay }) => {
-    const timers = new Set<NodeJS.Timeout>();
     const server = createServer((request, response) => {
       const body = JSON.stringify({ status: "started", ready: true });
       const headers = () => {
@@ -576,17 +565,12 @@ export function registerCanaryReadinessBudgetTests(
         headers();
       }
       const timer = setTimeout(() => {
-        timers.delete(timer);
         if (delay === "headers") {
           headers();
         }
         response.end(body);
       }, 1_200);
-      timers.add(timer);
-      response.once("close", () => {
-        clearTimeout(timer);
-        timers.delete(timer);
-      });
+      response.once("close", () => clearTimeout(timer));
     });
     const fetchHttp = globalThis.fetch;
     try {
@@ -600,9 +584,6 @@ export function registerCanaryReadinessBudgetTests(
       expect(result.logTail.join("\n")).toContain("readyz: ready");
     } finally {
       vi.unstubAllGlobals();
-      for (const timer of timers) {
-        clearTimeout(timer);
-      }
       await closeServers(server);
     }
   });

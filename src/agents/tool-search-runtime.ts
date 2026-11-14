@@ -1,4 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  attachInternalToolResultContentSource,
+  copyInternalToolResultState,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
@@ -13,10 +17,6 @@ import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import {
-  attachInternalToolResultContentSource,
-  copyInternalToolResultState,
-} from "./runtime/internal-hooks.js";
-import {
   captureToolOutputSelection,
   readToolOutputSchemaVariants,
   type ToolOutputSelection,
@@ -25,12 +25,12 @@ import {
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { markToolContractFailure } from "./tool-contract-error.js";
 import { readToolExecutionRefusal } from "./tool-effect-receipt.js";
-import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
-  isToolResultError,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-} from "./tool-result-error.js";
+} from "./tool-execution-error.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { isToolResultError } from "./tool-result-error.js";
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,

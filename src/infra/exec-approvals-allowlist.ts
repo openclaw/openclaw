@@ -1100,7 +1100,11 @@ function collectAllowAlwaysPatterns(
     }
     return;
   }
-  if (!isWindowsPlatform(params.platform)) {
+  // POSIX inline payloads cannot use the Windows parser to mint reusable grants.
+  if (
+    !isWindowsPlatform(params.platform) ||
+    POSIX_SHELL_WRAPPERS.has(normalizeExecutableToken(segment.argv[0] ?? ""))
+  ) {
     return;
   }
   const nested = analyzeWindowsShellCommand({
@@ -1117,11 +1121,7 @@ function collectAllowAlwaysPatterns(
   }
 }
 
-/**
- * Derive persisted allowlist patterns for an "allow always" decision.
- * When a command is wrapped in a shell (for example `zsh -lc "<cmd>"`),
- * persist the inner executable(s) rather than the shell binary.
- */
+/** Derive persisted allowlist patterns for an "allow always" decision. */
 export function resolveAllowAlwaysPatternEntries(params: {
   segments: ExecCommandSegment[];
   cwd?: string;

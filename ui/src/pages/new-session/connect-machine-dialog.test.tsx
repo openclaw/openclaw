@@ -65,17 +65,18 @@ describe("machine connection presentation", () => {
     await waitForSolid(() =>
       expect(view.getByRole("status").textContent).toBe("Creating a secure connection link…"),
     );
-    expect(view.getByRole<HTMLButtonElement>("button", { name: "Dismiss" }).disabled).toBe(false);
+    expect(view.getByRole<HTMLButtonElement>("button", { name: "Close" }).disabled).toBe(false);
     await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
     initial.resolve(code("first"));
     await waitForSolid(() => expect(view.getByText(code("first").command)).toBeDefined());
     const dialog = view.container.querySelector("openclaw-modal-dialog");
-
     const refresh = createDeferred<DevicePairJoinSetup>();
     request.mockReturnValueOnce(refresh.promise);
-    view.getByRole<HTMLButtonElement>("button", { name: "Mint fresh code" }).click();
+    view.getByRole<HTMLButtonElement>("button", { name: "Create new code" }).click();
     await waitForSolid(() =>
-      expect(view.getByRole<HTMLButtonElement>("button", { name: "Minting…" }).disabled).toBe(true),
+      expect(view.getByRole<HTMLButtonElement>("button", { name: "Creating code…" }).disabled).toBe(
+        true,
+      ),
     );
     expect(view.getByText(code("first").command)).toBeDefined();
     expect(view.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
@@ -86,7 +87,7 @@ describe("machine connection presentation", () => {
     expect(view.getByText(code("first").command)).toBeDefined();
 
     request.mockResolvedValueOnce(code("replacement"));
-    view.getByRole<HTMLButtonElement>("button", { name: "Mint fresh code" }).click();
+    view.getByRole<HTMLButtonElement>("button", { name: "Create new code" }).click();
     await waitForSolid(() => expect(view.getByText(code("replacement").command)).toBeDefined());
     expect(view.queryByRole("alert")).toBeNull();
     expect(view.queryByText(code("first").command)).toBeNull();
@@ -103,7 +104,7 @@ describe("machine connection presentation", () => {
         .mockReturnValueOnce(retired.promise);
       view.getByRole<HTMLButtonElement>("button", { name: "Connect" }).click();
       await waitForSolid(() => expect(originalRequest).toHaveBeenCalledOnce());
-      view.getByRole<HTMLButtonElement>("button", { name: "Dismiss" }).click();
+      view.getByRole<HTMLButtonElement>("button", { name: "Close" }).click();
       await waitForSolid(() =>
         expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull(),
       );
@@ -127,7 +128,7 @@ describe("machine connection presentation", () => {
       expect(view.queryByText(code("retired-secret").command)).toBeNull();
       expect(view.queryByRole("alert")).toBeNull();
       expect(
-        view.getByRole<HTMLButtonElement>("button", { name: "Mint fresh code" }).disabled,
+        view.getByRole<HTMLButtonElement>("button", { name: "Create new code" }).disabled,
       ).toBe(false);
     },
   );

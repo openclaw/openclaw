@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   closeStub,
   mockWritableRelay,
@@ -31,9 +31,9 @@ afterEach(async () => {
 const mockLinuxRelay = () =>
   mockWritableRelay((child) => mocks.spawn.mockReturnValue(child), "linux");
 
-it.each([false, true])(
+it.for([false, true])(
   "joins accepted stdout after identity loss while preserving an observed root (root observed=%s)",
-  async (rootObserved) => {
+  async (rootObserved, { signal }) => {
     const stub = mockLinuxRelay();
     const starting = startServiceChildRelayAdapter({
       ...relayDefaults,
@@ -93,9 +93,7 @@ it.each([false, true])(
         expect(chunks.join("")).toBe("accepted late tail final tail");
       } else {
         const identityLost = expect.stringContaining("cleanup identity lost");
-        expect(
-          await withTestTimeout(results, 1_000, "identity loss still waits for unowned stdout EOF"),
-        ).toMatchObject([
+        expect(await withinTest(results, signal)).toMatchObject([
           {
             status: "rejected",
             reason: {

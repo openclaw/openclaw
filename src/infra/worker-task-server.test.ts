@@ -32,6 +32,10 @@ vi.mock("../logging/state.js", () => ({ loggingState: {} }));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ error: vi.fn() }),
 }));
+// mock-isolation: Task servers inherit PostgreSQL state without loading service construction.
+vi.mock("./postgres-sync/pool.js", () => {
+  throw new Error("task servers must not load PostgreSQL service construction");
+});
 // mock-isolation: Observe diagnostic cleanup without allocating a memory transport.
 vi.mock("./worker-memory.js", () => ({
   serveWorkerMemorySamples: () => ({
@@ -259,7 +263,8 @@ it.each([undefined, "openclaw doctor --fix"])(
   "settles encoded service failures through the owning lifecycle (next step: %s)",
   async (nextStep) => {
     const { port, task, closed, serveOwnedWorkerTasks } = await workerFixture();
-    const { bindPostgresPool, recordPostgresPoolFailure } = await import("./postgres-sync/pool.js");
+    const { bindPostgresPool, recordPostgresPoolFailure } =
+      await import("./postgres-sync/pool-state.js");
     const { port1, port2 } = new MessageChannel();
     onTestFinished(() => {
       port1.close();

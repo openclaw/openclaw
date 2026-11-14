@@ -1,0 +1,2 @@
+# Preserve real audio exports when retargeting the TTS conversion fixture mock.
+1

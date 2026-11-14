@@ -5,11 +5,9 @@ import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 export type AsyncRequest = (...args: Parameters<GatewayRequestHandler>) => Promise<unknown>;
 export function deviceFixture(

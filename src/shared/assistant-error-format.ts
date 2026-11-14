@@ -1,6 +1,7 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { inspectTlsCertificateError } from "../infra/tls-certificate-errors.js";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error)(?:\s+\d{3})?[:\s-]+/i;
@@ -40,6 +41,16 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
 
 type ErrorPayload = Record<string, unknown>;
 
+const PROVIDER_PRECAUTION_NOTICE =
+  "Chat stopped as a precaution. Review the findings in chat before continuing.";
+const PROVIDER_REFUSAL_NOTICE_RE =
+  /^The provider refused this request(?: \(category: [a-zA-Z0-9_-]{1,64}\))?\. Revise the request and try again\.$/u;
+
+/** Recognize canonical display copy, not refusal or retry authority. */
+export function isProviderRefusalNoticeText(text: string): boolean {
+  return text === PROVIDER_PRECAUTION_NOTICE || PROVIDER_REFUSAL_NOTICE_RE.test(text);
+}
+
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
   errorCode?: unknown;
@@ -59,7 +70,7 @@ export function formatProviderRefusalText(message: {
   const safeCategory =
     typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
   if (safeCategory === "misalignment") {
-    return "Chat stopped as a precaution. Review the findings in chat before continuing.";
+    return PROVIDER_PRECAUTION_NOTICE;
   }
   return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
 }
@@ -276,7 +287,10 @@ const TRANSPORT_ERRORS = [
 ];
 
 export function isKnownTransportErrorCode(value: string): boolean {
-  return TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value);
+  return (
+    TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value) ||
+    inspectTlsCertificateError({ code: value })?.code === value
+  );
 }
 
 export function formatTransportErrorCopy(raw: string): string | undefined {

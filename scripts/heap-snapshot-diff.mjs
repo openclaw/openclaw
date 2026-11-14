@@ -1093,6 +1093,48 @@ function summarizeCode(snapshot, top) {
   const ranked = rows
     .slice(2)
     .toSorted((a, b) => b.retainedBytes - a.retainedBytes || b.shallowBytes - a.shallowBytes);
+  const sourceGroups = new Map();
+  const sourceNodes = new Set();
+  let sourceBytes = 0;
+  for (const script of scripts) {
+    const owner = owners[script];
+    let group = sourceGroups.get(owner);
+    if (!group) {
+      const { name, identityHash, instanceCount } = rows[owner];
+      group = { name, identityHash, instanceCount, nodes: new Set(), shallowBytes: 0 };
+      sourceGroups.set(owner, group);
+    }
+    const pending = [];
+    for (let edge = starts[script]; edge < starts[script + 1]; edge++) {
+      if (internalTag(edge) === "source") {
+        pending.push(targets[edge]);
+      }
+    }
+    // Source ropes can share backing strings within and across script identities.
+    while (pending.length) {
+      const source = pending.pop();
+      if (!reachable(source) || group.nodes.has(source)) {
+        continue;
+      }
+      const kind = nodeKinds[types[source]];
+      if (!["string", "concatenated string", "sliced string"].includes(kind)) {
+        continue;
+      }
+      group.nodes.add(source);
+      group.shallowBytes += sizes[source];
+      if (!sourceNodes.has(source)) {
+        sourceNodes.add(source);
+        sourceBytes += sizes[source];
+      }
+      if (kind !== "string") {
+        for (let edge = starts[source]; edge < starts[source + 1]; edge++) {
+          if (kinds[edgeKinds[edge]] === "internal") {
+            pending.push(targets[edge]);
+          }
+        }
+      }
+    }
+  }
   return {
     total,
     scriptCount: scripts.size,
@@ -1101,10 +1143,26 @@ function summarizeCode(snapshot, top) {
     sharedOrRuntime: rows[1],
     topScripts: ranked.slice(0, top),
     duplicateScripts: ranked.filter((row) => row.instanceCount > 1),
+    sourceStrings: {
+      stringNodes: sourceNodes.size,
+      shallowBytes: sourceBytes,
+      topScripts: [...sourceGroups.values()]
+        .filter((group) => group.nodes.size)
+        .map((group) => ({
+          name: group.name,
+          identityHash: group.identityHash,
+          instanceCount: group.instanceCount,
+          shallowBytes: group.shallowBytes,
+          stringNodes: group.nodes.size,
+        }))
+        .toSorted((a, b) => b.shallowBytes - a.shallowBytes)
+        .slice(0, top),
+    },
     notes: [
       "Only exact reviewed script names after stripping query/hash are emitted; other names are redacted. SHA-256 identities compare normalized names, not source contents. Anonymous/truncated names have null hashes and remain separate.",
       "Instances count reachable V8 Script objects, not functions, module evaluations or reclaimable duplicates. Attribution seeds Script/SFI and closure code/feedback edges, then follows only strong internal/hidden code-to-code edges. Script/SFI seeds stay fixed; conflicting associations and tagged builtins are shared/runtime. Unassociated code stays unattributed.",
       "Shallow bytes partition reachable code nodes once. Retained bytes union each group's dominated subtrees, including source strings and other non-code data; different rows may overlap and must not be summed. Top scripts are bounded by --top; duplicateScripts includes every repeated complete identity. Attribution is inferred from V8 snapshot structure, not a loader or security-boundary verdict.",
+      "Source strings follow Script.source and strong internal string edges through concatenated/sliced backing strings. Counts and shallow bytes union nodes within each script identity and across the total. Per-script source rows may overlap: this is source association, not exclusive dominator retention or RSS. Source contents are never emitted.",
     ],
   };
 }

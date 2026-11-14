@@ -17,10 +17,6 @@ export type RequesterWakeMutation =
   | { kind: "transition"; state: RequesterSettleWakeBatchState }
   | { kind: "complete" };
 
-export type SubagentCompletionQueueReceipt =
-  | { id: string; status: "pending"; enqueuedAt: number; payloadJson: string }
-  | { id: string; status: "completed" | "failed" };
-
 export type RequesterWakeCommittedWrite = {
   entries: readonly { subagent: SubagentRunRecord }[];
   result: SubagentCompletionMutationResult;
@@ -53,6 +49,4 @@ export type SubagentCompletionMutationResult = {
   applied: boolean | null;
   records: SubagentCompletionRecord[];
   retiredRunIds: string[];
-  queueIds: string[];
-  queueReceipts?: SubagentCompletionQueueReceipt[];
 };

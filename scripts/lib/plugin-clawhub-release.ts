@@ -44,7 +44,7 @@ type PluginReleasePlanItem = PublishablePluginPackage & {
   publication: ClawHubPublicationState;
   alreadyPublished: boolean;
   artifactName: string;
-  family: "" | "bundle-plugin";
+  family: "" | "code-plugin";
 };
 
 type PluginReleasePlan = {
@@ -235,7 +235,7 @@ async function buildClawHubQueryError(
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ");
-  return new Error(`${message}: ${response.status} ${detail}`);
+  return new Error(`${message}: HTTP ${response.status} ${detail}`);
 }
 
 function formatClawHubPackageArtifactName(
@@ -247,8 +247,6 @@ function formatClawHubPackageArtifactName(
     .replace(/^-+|-+$/gu, "");
   return `clawhub-package-${safeName}-${plugin.version}`;
 }
-
-export { resolveOpenClawClawHubPackageFamily };
 
 export function collectClawHubPublishablePluginPackages(
   rootDir = resolve("."),

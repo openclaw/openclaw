@@ -176,7 +176,30 @@ it("submits the channel ID from a single-choice picker", async () => {
     container.querySelector<HTMLElement>("openclaw-select-picker")!,
     "discord",
   );
+  // Choosing only moves the selection, so keeping the preselected choice is an equal path.
+  expect(answer).not.toHaveBeenCalled();
+  container.querySelector<HTMLButtonElement>(".channels-wizard__footer button")!.click();
   expect(answer).toHaveBeenCalledExactlyOnceWith("discord");
+});
+
+it("continues with a preselected choice without opening the picker", () => {
+  const { container, answer } = mountStep(
+    step("select", [option("Telegram", "telegram"), option("Discord", "discord")]),
+    () => ({ value: "telegram", presentation: "channels" }),
+  );
+  container.querySelector<HTMLButtonElement>(".channels-wizard__footer button")!.click();
+  expect(answer).toHaveBeenCalledExactlyOnceWith("telegram");
+});
+
+it("holds Continue until a choice exists", () => {
+  const { container, answer } = mountStep(
+    step("select", [option("Telegram", "telegram"), option("Discord", "discord")]),
+    () => ({ value: undefined, presentation: "channels" }),
+  );
+  const button = container.querySelector<HTMLButtonElement>(".channels-wizard__footer button")!;
+  expect(button.disabled).toBe(true);
+  button.click();
+  expect(answer).not.toHaveBeenCalled();
 });
 
 it("delegates channel multiselect toggles and submits the caller-owned selection", () => {

@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withSessionCleanupStore } from "./cleanup-service-read.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,

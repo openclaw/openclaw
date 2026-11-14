@@ -3,7 +3,17 @@ import { compareAscii } from "./canonical-json.mjs";
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {{ targetVersion: string, childRole: string, jobName: string, reason: string }[]} */
-export const RELEASE_VALIDATION_WAIVERS = [];
+export const RELEASE_VALIDATION_WAIVERS = [
+  {
+    targetVersion: "2026.11.1",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Operator-authorized 2026.11.1-only leniency: Kova CPU and RSS thresholds exceeded " +
+      "(FRV 41800680256 run kova-261104-084310-8bd049); crash, correctness, isolation, " +
+      "data-integrity, and install/update failures stay blocking and are checked in the report.",
+  },
+];
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 const RELEASE_CHECK_ROLES = new Set([
@@ -58,8 +68,13 @@ export function releaseChildAdvisories(child) {
     .toSorted((left, right) => compareAscii(left.job, right.job));
 }
 
+const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
+
 function aggregateCauses(waiver) {
   if (waiver.childRole === "npmTelegram" && waiver.jobName === "Run package Telegram E2E") {
+    return [];
+  }
+  if (waiver.childRole === "productPerformance" && waiver.jobName === KOVA_PERFORMANCE_JOB) {
     return [];
   }
   if (RELEASE_CHECK_ROLES.has(waiver.childRole)) {

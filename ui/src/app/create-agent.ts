@@ -3,7 +3,7 @@ import { t } from "../i18n/index.ts";
 import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
 import { AgentCreationUncertainError } from "../lib/agents/creation-recovery.runtime.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
@@ -16,15 +16,20 @@ import { patchSettings } from "./settings.ts";
 
 registerAgentCreationEnglish();
 
-export type ApplicationAgentIdentity = { name: string; avatar: string | null };
-
 /** Creation belongs to the application, so closing the selector cannot cancel it. */
 export async function createApplicationAgent(
   context: ApplicationContext,
-  identity?: ApplicationAgentIdentity,
+  identity?: { name: string; avatar: string | null },
 ): Promise<void> {
-  if (!canCallGatewayMethod(context.gateway.snapshot, "agents.create", "operator.admin")) {
-    showToast({ message: t("agentChip.creationUnavailable"), durationMs: 12_000 });
+  const snapshot = context.gateway.snapshot;
+  if (!canCallGatewayMethod(snapshot, "agents.create", "operator.admin")) {
+    const reason =
+      !snapshot.client || snapshot.phase !== "connected" || !snapshot.hello
+        ? "agentChip.creationRequiresConnection"
+        : isGatewayMethodAdvertised(snapshot, "agents.create") !== true
+          ? "agentChip.creationUnsupported"
+          : "agentChip.creationUnavailable";
+    showToast({ severity: "error", message: t(reason), durationMs: 12_000 });
     return;
   }
   const client = context.gateway.snapshot.client;
@@ -117,6 +122,7 @@ export async function createApplicationAgent(
       restoreUncreatedChat();
     }
     showToast({
+      severity: created ? "warning" : "error",
       message:
         error instanceof AgentCreationUncertainError
           ? error.message

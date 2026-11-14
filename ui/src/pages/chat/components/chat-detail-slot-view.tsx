@@ -1,5 +1,4 @@
 import { createMemo, lazy } from "solid-js";
-import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
@@ -13,6 +12,7 @@ import {
   openSessionWorkspaceFileView,
   revealSessionWorkspaceFile,
 } from "./chat-session-workspace.ts";
+import type { WorkspaceFileLinkTarget } from "./chat-sidebar-content-types.ts";
 
 // The output formatter belongs to the selected detail, not ordinary chat boot.
 const ChatToolOutput = lazy(() => import("./chat-tool-output-view.tsx"), {
@@ -80,8 +80,11 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
       {props.content.kind === "loading" ? (
         <PanelLoadingSkeleton variant="review" label={t("common.loading")} />
       ) : props.content.kind === "unavailable" ? (
-        <div class="callout danger review-unavailable" role="alert">
-          <strong>{t("chat.detailPanel.unavailable")}</strong>
+        <div
+          class={["callout review-unavailable", { danger: !props.content.permission }]}
+          role={props.content.permission ? "status" : "alert"}
+        >
+          {!props.content.permission && <strong>{t("chat.detailPanel.unavailable")}</strong>}
           <span>{props.content.message}</span>
         </div>
       ) : props.content.kind === "tool-output" ? (
@@ -121,7 +124,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
             canvasPluginSurfaceUrl={props.host.canvasPluginSurfaceUrl}
             embedSandboxMode={props.host.embedSandboxMode}
             allowExternalEmbedUrls={props.host.allowExternalEmbedUrls}
-            onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) => {
+            onOpenWorkspaceFile={(target: WorkspaceFileLinkTarget) => {
               void openSessionWorkspaceFile(
                 props.host,
                 target,
@@ -134,6 +137,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
               }
             }}
             onOpenSessionLink={props.chat.onOpenSessionLink}
+            onBrowseFiles={props.onBrowseFiles}
             onRevealInWorkspace={(path: string) => {
               revealSessionWorkspaceFile(props.host, path);
               props.host.updateSidebarLayout(openSlot(props.host.sidebarLayout, "workspace"));

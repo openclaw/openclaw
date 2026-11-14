@@ -1,16 +1,12 @@
 import { validateCronListParams } from "../../../packages/gateway-protocol/src/index.js";
-import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
-import { resolveCronJobBoundSessionKeys } from "../../cron/job-session-bindings.js";
+import { resolveCronJobSessionBindings } from "../../cron/job-session-bindings.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import {
-  cronJobMatchesCallerScope,
-  readCronCallerScope,
-  resolveCronJobOwnerAgentId,
-} from "./cron-caller-scope.js";
+import { cronJobMatchesCallerScope, readCronCallerScope } from "./cron-caller-scope.js";
+import { isHumanCronJobOwner } from "./cron-human-owner.js";
 import { assertCronReadCurrent, respondInvalidCronParams } from "./cron-job-access.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
 import { projectCronListJobs } from "./cron-list-projection.js";
@@ -71,23 +67,28 @@ export const cronListHandler = createPreparedReadHandler((options) => {
           const scope = readCronCallerScope(client);
           const currentScope = scope?.manageAll ? undefined : scope;
           const currentDefault = context.cron.getDefaultAgentId();
-          return (
-            cronJobMatchesCallerScope({
+          if (
+            !cronJobMatchesCallerScope({
               job,
               callerScope: currentScope,
               defaultAgentId: currentDefault,
               allowCurrentJob: true,
-            }) &&
-            (!p.sessionKey ||
-              (resolveCronJobBoundSessionKeys(job, {
-                cfg: context.getRuntimeConfig(),
-                defaultAgentId: currentDefault,
-              }).has(p.sessionKey) &&
-                (parseAgentSessionKey(p.sessionKey) !== null ||
-                  !p.sessionAgentId ||
-                  (resolveCronJobOwnerAgentId(job) ??
-                    tryResolveCronJobEffectiveAgentId(job, currentDefault)) ===
-                    normalizeAgentId(p.sessionAgentId))))
+            })
+          ) {
+            return false;
+          }
+          if (!p.sessionKey) {
+            return true;
+          }
+          const bindingAgentId = resolveCronJobSessionBindings(job, {
+            cfg: context.getRuntimeConfig(),
+            defaultAgentId: currentDefault,
+          }).get(p.sessionKey);
+          return (
+            bindingAgentId !== undefined &&
+            (parseAgentSessionKey(p.sessionKey) !== null ||
+              !p.sessionAgentId ||
+              bindingAgentId === normalizeAgentId(p.sessionAgentId))
           );
         };
         await visibilityRead.prepare();
@@ -96,7 +97,8 @@ export const cronListHandler = createPreparedReadHandler((options) => {
         const selectedJobIds = new Set<string>();
         const matchesCurrentJob = (job: CronJob) =>
           matchesRequestScope(job) &&
-          cronJobIsVisible(job, visibilityRead.resolve(), context.cron.getDefaultAgentId());
+          (isHumanCronJobOwner(client, job) ||
+            cronJobIsVisible(job, visibilityRead.resolve(), context.cron.getDefaultAgentId()));
         const assertPageCurrent = () => {
           assertCronReadCurrent(options);
           const currentScope = readCronCallerScope(client);
@@ -107,12 +109,28 @@ export const cronListHandler = createPreparedReadHandler((options) => {
           ) {
             throw new Error("Cron list visibility changed; refresh the page");
           }
-          for (const id of selectedJobIds) {
-            const current = context.cron.getJob(id);
-            if (!current || !matchesCurrentJob(current)) {
+          if (selectedJobIds.size <= 1) {
+            for (const id of selectedJobIds) {
+              const current = context.cron.getJob(id);
+              if (!current || !matchesCurrentJob(current)) {
+                throw new Error("Cron list visibility changed; refresh the page");
+              }
+            }
+            return;
+          }
+          // This is the final publication check; consume this request's matched IDs.
+          for (const current of context.cron.getLoadedJobs() ?? []) {
+            if (!selectedJobIds.delete(current.id)) {
+              continue;
+            }
+            if (!matchesCurrentJob(current)) {
               throw new Error("Cron list visibility changed; refresh the page");
             }
+            if (selectedJobIds.size === 0) {
+              return;
+            }
           }
+          throw new Error("Cron list visibility changed; refresh the page");
         };
         let matchesJob: ((job: CronJob) => boolean) | undefined;
         if (callerScope || cronVisibility || p.sessionKey) {

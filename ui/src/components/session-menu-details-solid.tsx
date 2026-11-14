@@ -1,6 +1,7 @@
 import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
+import { registerSessionPeopleEnglish } from "../i18n/locales/en-session-people.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
@@ -9,11 +10,13 @@ import type {
   SessionManagementActionKind,
   SessionMenuActionsState as MenuState,
 } from "./session-menu-actions.ts";
+import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon } from "./solid/icon.tsx";
 import type { MenuControls, MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
+registerSessionPeopleEnglish();
 
 export function useSessionMenuDetails(
   actions: SessionMenuActions,
@@ -55,6 +58,10 @@ export function useSessionMenuDetails(
     searchGeneration();
     return "";
   });
+  const [searching, setSearching] = createSignal(() => {
+    searchGeneration();
+    return false;
+  });
   const owners = createMemo(() => {
     const state = ownerSnapshot();
     const options = [...state.owners];
@@ -90,16 +97,15 @@ export function useSessionMenuDetails(
         class="people-menu__search"
         ref={nativeListener("click", (event) => event.stopPropagation())}
       >
-        <input
-          ref={controls?.ref()}
-          type="search"
-          data-search
-          data-form-control
-          autocomplete="off"
-          aria-label={t("sessionsView.searchPeople")}
-          placeholder={t("sessionsView.searchPeople")}
-          value={query()}
-          onInput={(event) => setQuery(event.currentTarget.value)}
+        <HeaderSearch
+          title={t("sessionsView.assignTo")}
+          label={t("sessionsView.searchPeople")}
+          query={query()}
+          open={searching()}
+          controlRef={() => controls?.ref()}
+          inputProps={{ "data-search": "", "data-form-control": "" }}
+          onOpenChange={setSearching}
+          onQueryChange={setQuery}
         />
       </div>
     ),
@@ -215,18 +221,7 @@ export function useSessionMenuDetails(
       </For>
     </div>
   );
-  const communicationStart: MenuEntry = {
-    kind: "content",
-    id: "communication-start",
-    content: <div class="session-menu__separator" role="separator" />,
-  };
-  const communicationEnd: MenuEntry = {
-    kind: "content",
-    id: "communication-end",
-    content: <div class="session-menu__separator" role="separator" />,
-  };
   const communication = (): MenuEntry[] => [
-    communicationStart,
     { kind: "content", id: "communication-controls", content: communicationControls },
     ...(policy()?.send !== undefined || policy()?.receive !== undefined
       ? [
@@ -240,7 +235,6 @@ export function useSessionMenuDetails(
           },
         ]
       : []),
-    communicationEnd,
   ];
   const ReadStatus = () => {
     return <>{(latest(actions.advanced.read), null)}</>;

@@ -1,0 +1,2 @@
+16
+# Preserve Host and gzip handling in the real canonical chat-entry HTTP fixture.

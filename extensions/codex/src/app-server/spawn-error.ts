@@ -1,4 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 
 // Keep failed launch facts across plugin module replacement and config reload.
@@ -84,6 +85,7 @@ export function recordCodexAppServerSpawnFailure(
   const described = describeCodexSpawnError(error, command);
   const failure = findCodexAppServerSpawnError(described);
   if (failure) {
+    materializeErrorStack(failure);
     failures.commands.set(launchKey, failure);
   }
   return described;

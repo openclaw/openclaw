@@ -75,7 +75,11 @@ export function resolveChatHistoryPageCursors(
   if (!anchor) {
     return {};
   }
-  const oldest = readChatHistoryMessageId(capped[0]) ?? anchor.oldestMessageId;
+  const firstCapped = readChatHistoryMessageId(capped[0]);
+  const cappedOlder = capped.length > 0 && firstCapped !== readChatHistoryMessageId(original[0]);
+  // Hidden rows already consumed by the reader are part of the page boundary.
+  // Only response truncation moves that boundary to the first retained message.
+  const oldest = cappedOlder ? firstCapped : (anchor.oldestMessageId ?? firstCapped);
   const newest = readChatHistoryMessageId(capped.at(-1)) ?? anchor.newestMessageId;
   const cursor = (messageId: string, direction: ChatHistoryPageCursor["direction"]) =>
     encodeChatHistoryPageCursor({
@@ -85,10 +89,7 @@ export function resolveChatHistoryPageCursors(
       direction,
     });
   return {
-    ...(oldest &&
-    (anchor.hasOlder || (capped.length > 0 && oldest !== readChatHistoryMessageId(original[0])))
-      ? { olderCursor: cursor(oldest, "older") }
-      : {}),
+    ...(oldest && (anchor.hasOlder || cappedOlder) ? { olderCursor: cursor(oldest, "older") } : {}),
     ...(newest &&
     (anchor.hasNewer || (capped.length > 0 && newest !== readChatHistoryMessageId(original.at(-1))))
       ? { newerCursor: cursor(newest, "newer") }

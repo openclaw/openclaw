@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
 import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
 import type { buildChannelsTable } from "./status-all/channels.js";
@@ -13,8 +14,8 @@ import {
   createStatusScanSharedMocks,
   createStatusSummary,
   loadStatusScanModuleForTest,
-  withTemporaryEnv,
 } from "./status.scan.test-helpers.js";
+import { createTestConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 const mocks = {
   ...createStatusScanSharedMocks("status-scan"),
@@ -205,10 +206,15 @@ describe("status scans", () => {
       path: "/tmp/openclaw.json",
       issues: [{ path: "gateway.port", message: "invalid port" }],
     };
-    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
-      config: sourceConfig,
-      sourceConfig,
-      configDiagnostics,
+    mocks.readConfigFileSnapshotWithPluginMetadata.mockResolvedValue({
+      snapshot: {
+        ...createTestConfigSnapshot(sourceConfig, sourceConfig, configDiagnostics.path),
+        exists: false,
+        raw: null,
+        parsed: sourceConfig,
+        valid: false,
+        issues: configDiagnostics.issues,
+      },
     });
 
     const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(1234), {} as never);
@@ -257,7 +263,7 @@ describe("status scans", () => {
   });
 
   it("uses manifest environment credentials for cold-start JSON", async () => {
-    await withTemporaryEnv(coldStartEnv("token"), async () => {
+    await withEnvAsync(coldStartEnv("token"), async () => {
       await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
     });
     expect(mocks.probeGateway).toHaveBeenCalledOnce();
@@ -282,10 +288,14 @@ describe("status scans", () => {
       gatewayCallOverrides: { url, token: "tok" },
     };
 
-    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
-      config: { session: {} },
-      sourceConfig: { session: { dmScope: "per-peer" } },
-      configDiagnostics: null,
+    const sourceConfig: OpenClawConfig = { session: { dmScope: "per-peer" } };
+    mocks.readConfigFileSnapshotWithPluginMetadata.mockResolvedValue({
+      snapshot: {
+        ...createTestConfigSnapshot(sourceConfig, { session: {} }, mocks.resolveConfigPath()),
+        exists: false,
+        raw: null,
+        parsed: sourceConfig,
+      },
     });
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig: { session: {} },

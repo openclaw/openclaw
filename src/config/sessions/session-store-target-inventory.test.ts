@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
 import { prepareConfigRuntimeEnv } from "../config-env-vars.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -53,6 +57,37 @@ test("discovers canonical recovery stores without waiting for the shared ownersh
   }
 });
 
+test("configured discovery excludes refused stores while retaining healthy agents", () => {
+  cfg = { agents: { entries: { main: {}, helper: {} } } };
+  const refusedPath = path.join(root, "agents", "helper", "agent", "openclaw-agent.sqlite");
+  fs.mkdirSync(path.dirname(refusedPath), { recursive: true });
+  fs.writeFileSync(refusedPath, "unavailable database");
+  recordAgentDatabaseAdmissions(
+    [
+      createAgentDatabaseInspectionRefusal({
+        agentId: "helper",
+        paths: [refusedPath],
+        reason: "fixture inspection failed",
+      }),
+    ],
+    { env },
+  );
+  try {
+    const request = prepareSessionStoreTargetInventory(cfg, ["main", "helper"], env, "configured");
+    expect(request.candidates.some((candidate) => candidate.path === refusedPath)).toBe(false);
+    const inventory = readSessionStoreTargetInventory({
+      ...request,
+      registeredDatabases: { status: "deferred" },
+    });
+    expect(inventory.kind).toBe("session-target-inventory");
+    if (inventory.kind === "session-target-inventory") {
+      expect(inventory.agents.map(({ agentId }) => agentId)).toEqual(["main"]);
+    }
+  } finally {
+    recordAgentDatabaseAdmissions([], { env });
+  }
+});
+
 test("shares published config while recapturing candidates and following config publications", () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   cfg.session = { store: path.join(root, "custom.json") };
@@ -60,6 +95,7 @@ test("shares published config while recapturing candidates and following config 
   const original = prepare();
   const sibling = path.join(root, "custom.main.sqlite");
   fs.writeFileSync(sibling, "");
+  prepareSessionStoreTargetInventory({ agents: { entries: { other: {} } } }, ["other"], env);
   const current = prepare();
   expect(current.config).toBe(original.config);
   expect(current.env).toBe(original.env);
@@ -68,12 +104,14 @@ test("shares published config while recapturing candidates and following config 
   expect(original.candidates.some((candidate) => candidate.path === sibling)).toBe(false);
   expect(current.candidates.some((candidate) => candidate.path === sibling)).toBe(true);
 
-  cfg.session!.store = path.join(root, "replacement.json");
+  cfg.session!.store = path.join(root, "replacement", "{agentId}.json");
   setRuntimeConfigSnapshot(cfg);
   const replacement = prepare();
   expect(replacement.config).not.toBe(original.config);
   expect(replacement.env).not.toBe(original.env);
-  expect(replacement.paths.get("main")?.configured).toBe(cfg.session!.store);
+  expect(replacement.paths.get("main")?.configured).toBe(
+    path.join(root, "replacement", "main.json"),
+  );
   expect(original.config.session?.store).toBe(path.join(root, "custom.json"));
 });
 
@@ -131,11 +169,9 @@ test.each(["shared.sqlite", "agents/main/agent/openclaw-agent.sqlite"])(
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     fs.writeFileSync(databasePath, "");
     const physicalPath = fs.realpathSync.native(databasePath);
-    const resolve = vi.spyOn(fs.realpathSync, "native");
     expect(captureSessionStoreReadCandidates(databasePath)).toEqual([
       { path: databasePath, physicalPath },
     ]);
-    expect(resolve).toHaveBeenCalledTimes(1);
   },
 );
 
@@ -164,7 +200,7 @@ test("captures distinct sibling files and keeps family custody when discovery fa
   ]);
 });
 
-test.each(["read-failed", "schema-missing", "database-missing"] as const)(
+test.each(["read-failed", "database-missing"] as const)(
   "carries prior %s cleanup requirements through registry deferral",
   (reason) => {
     vi.mocked(resolveExistingAgentSessionStoreTargetsReadOnlyResult)

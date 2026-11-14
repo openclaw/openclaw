@@ -115,7 +115,9 @@ export function AgentCrumb(
 function SessionTitle(props: ChatPaneHeaderProps) {
   return (
     <>
-      <SessionColorDot value={props.catalog ? props.catalogColor : props.session?.color} />
+      <SessionColorDot
+        value={props.catalog ? props.catalogColor : (props.sessionColor ?? props.session?.color)}
+      />
       <span class="chat-pane__session-title-text">
         <Show
           when={

@@ -61,19 +61,10 @@ it("contains rejected tool-result handlers before the fatal rejection handler", 
          source: "sync-only-regression",
          handler: () => Promise.reject(new Error("sync-hook-rejection")),
        });
-       const warnings = [];
-       const errors = [];
-       const runner = createHookRunner(registry, {
-         logger: { warn: (message) => warnings.push(message), error: (message) => errors.push(message) },
-       });
+       const runner = createHookRunner(registry);
        const message = { role: "toolResult", toolCallId: "call_1", content: [], isError: false };
        runner.runToolResultPersist({ message }, {});
        await new Promise((resolve) => setImmediate(resolve));
-       const expectedWarning = "[hooks] ${hookName} handler from rejected-sync-hook returned a Promise; this hook is synchronous and the result was ignored.";
-       if (warnings.length !== 1 || warnings[0] !== expectedWarning || errors.length !== 0) {
-         console.error(JSON.stringify({ warnings, errors }));
-         process.exit(2);
-       }
        console.log("sync hook rejection contained");`,
     ],
     { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
@@ -84,7 +75,7 @@ it("contains rejected tool-result handlers before the fatal rejection handler", 
   expect(result.stderr).not.toContain("Unhandled promise rejection");
 });
 
-it("preserves synchronous secret redaction and subsequent handler composition", () => {
+it("redacts secrets before subsequent synchronous handlers", () => {
   const secret = ["fixture", "secret"].join("-");
   const originalMessage = createToolResultMessage(secret, { value: secret });
   const observedMessages: AgentMessage[] = [];
@@ -112,18 +103,14 @@ it("preserves synchronous secret redaction and subsequent handler composition", 
 
 it("preserves synchronous message blocking and priority order", () => {
   const calls: string[] = [];
+  const record = (name: string, block?: boolean) => {
+    calls.push(name);
+    return block === undefined ? undefined : { block };
+  };
   const runner = createRunner("before_message_write", [
-    hook("ignored-async-handler", 30, async () => {
-      calls.push("async");
-      return { block: false };
-    }),
-    hook("message-blocker", 20, () => {
-      calls.push("blocker");
-      return { block: true };
-    }),
-    hook("unreached-handler", 10, () => {
-      calls.push("unreached");
-    }),
+    hook("ignored-async-handler", 30, async () => record("async", false)),
+    hook("message-blocker", 20, () => record("blocker", true)),
+    hook("unreached-handler", 10, () => record("unreached")),
   ]);
 
   expect(
@@ -140,11 +127,7 @@ it("preserves fail-closed behavior for async handlers", () => {
 
   expect(() =>
     runner.runToolResultPersist({ message: createToolResultMessage("original") }, {}),
-  ).toThrow(
-    `[hooks] ${hookName} handler from fail-closed-hook failed: Error: ` +
-      `[hooks] ${hookName} handler from fail-closed-hook returned a Promise; ` +
-      "this hook is synchronous and the result was ignored.",
-  );
+  ).toThrow(/fail-closed-hook.*returned a Promise/);
   expect(logger.warn).not.toHaveBeenCalled();
   expect(logger.error).not.toHaveBeenCalled();
 });

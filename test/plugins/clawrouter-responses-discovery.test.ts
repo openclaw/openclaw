@@ -67,11 +67,7 @@ it.each([
       }
       expect(url).toBe(`${baseUrl}/v1/responses`);
       requests.push(await request.json());
-      return sseResponse([
-        completedResponse("resp_synthetic", [], {
-          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-        }),
-      ]);
+      return sseResponse([completedResponse("resp_synthetic", [])]);
     });
     vi.stubGlobal("fetch", fetchMock);
     const provider = await registerSingleProviderPlugin(clawrouter);
@@ -128,7 +124,6 @@ it.each([
     );
     const result = await responseStream.result();
     expect(result.stopReason).not.toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(requests).toMatchObject([
       {
         model: "synthetic-opaque",

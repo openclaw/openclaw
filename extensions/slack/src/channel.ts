@@ -54,13 +54,13 @@ import { slackApprovalCapability } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { getSlackWriteClient } from "./client.js";
+import { slackConversationBindings } from "./conversation-binding-route.js";
 import { slackConversationRouteOwners } from "./conversation-route-owner.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { resolveSlackEnterpriseUserTeamId } from "./enterprise-user-route.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
-import { isSlackWorkspaceInstallation } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
@@ -330,10 +330,7 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
         return null;
       },
     },
-    conversationBindings: {
-      isCurrentConversationBindingSupported: ({ accountId }) =>
-        isSlackWorkspaceInstallation(accountId),
-    },
+    conversationBindings: slackConversationBindings,
     messaging: {
       ...slackConversationRouteOwners,
       targetPrefixes: ["slack"],

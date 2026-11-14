@@ -26,6 +26,7 @@ import {
   canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
+  SUPPORTED_NODE_VERSION_RANGE,
 } from "./node-version.mjs";
 
 watchCliRespawnParent();
@@ -37,7 +38,7 @@ const isSourceCheckoutLauncher = () =>
 const { detectCurrentSqliteCapabilities, nodeRuntimeFailure } = await import("./node-sqlite.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
-const SUPPORTED_NODE_RANGE = ">=24.22.1 <25, or >=26.12.1";
+const SUPPORTED_NODE_RANGE = SUPPORTED_NODE_VERSION_RANGE.replace(" || ", ", or ");
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const ensureSupportedRuntimeVersion = async () => {

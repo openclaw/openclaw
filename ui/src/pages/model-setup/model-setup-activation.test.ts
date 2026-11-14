@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   persistFirstRunActivationReceipt,
@@ -131,13 +131,13 @@ describe("ModelSetupPage first-run activation ownership", () => {
       publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
       await page.updateComplete;
       if (entry === "provider sign-in") {
-        expect(page.textContent).toContain("Waiting for it to reconnect");
+        expect(page.textContent).toContain("Waiting to reconnect");
       }
       publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
       if (entry === "provider sign-in") {
         // A restarted Gateway lost the wizard: recovery replaces the reconnect notice.
-        await waitForText(page, "Gateway no longer has this setup session");
-        expect(page.textContent).not.toContain("Waiting for it to reconnect");
+        await waitForText(page, "This setup may have finished");
+        expect(page.textContent).not.toContain("Waiting to reconnect");
         modalButton(page, "Close")!.click();
         await page.updateComplete;
       }
@@ -207,7 +207,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       signIn().click();
       expect(callsFor(request, startMethod)).toHaveLength(1);
       expect(request.mock.calls.some(([method]) => method === "openclaw.setup.verify")).toBe(false);
-      expect(page.textContent).not.toContain("Connection verified");
+      expect(page.textContent).not.toContain("Model verified");
       expect(context.navigate).not.toHaveBeenCalled();
     },
   );
@@ -387,7 +387,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         ),
       );
       await page.updateComplete;
-      expect(page.textContent).not.toContain("Connection verified");
+      expect(page.textContent).not.toContain("Model verified");
       expect(page.textContent).not.toContain("Cannot read properties");
       expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(context.navigate).not.toHaveBeenCalled();
@@ -428,7 +428,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
     await page.updateComplete;
     expect(page.textContent).not.toContain("Provider rejected this test key");
     expect(page.textContent).not.toContain("Cannot read properties");
-    expect(page.textContent).not.toContain("Connection verified");
+    expect(page.textContent).not.toContain("Model verified");
     expect(pendingReceipt()).toBe(JSON.stringify(replacement));
     expect(context.navigate).not.toHaveBeenCalled();
   });
@@ -548,7 +548,7 @@ describe("ModelSetupPage utility roles", () => {
     await waitForText(page, "Setup & utility model ready");
     const success = page.querySelector(".model-setup-success")!;
     expect(success.textContent).not.toMatch(/start chatting|Active model/u);
-    modalButton(page, "Open setup assistant")!.click();
+    modalButton(page, "Open setup agent")!.click();
     await expectAssistant(context);
     expect(request.mock.calls[0]?.[1]).toMatchObject(utilitySelection);
     expect(context.navigate).not.toHaveBeenCalledWith("chat");
@@ -568,11 +568,11 @@ describe("ModelSetupPage utility roles", () => {
       expect(page.querySelector(`[data-candidate-kind="${utility.kind}"]`)).toBeNull();
       expect(page.textContent).toContain(
         primary
-          ? "Regular chats use your primary model"
-          : "Choose a primary model below for regular chats",
+          ? "Other sessions use your primary model"
+          : "Choose a primary model below for other sessions",
       );
       const buttons = [...page.querySelectorAll<HTMLButtonElement>(".model-setup__utility button")];
-      buttons.find((button) => button.textContent?.includes("Open setup assistant"))!.click();
+      buttons.find((button) => button.textContent?.includes("Open setup agent"))!.click();
       expect(context.navigate).toHaveBeenCalledWith("custodian", primary ? {} : onboarding);
       expect(request).not.toHaveBeenCalled();
       buttons.find((button) => button.textContent?.includes("Recheck & repair"))!.click();
@@ -664,7 +664,7 @@ describe("ModelSetupPage utility roles", () => {
           page,
           usable
             ? "Setup & utility model ready"
-            : "Local utility did not expose a usable local model",
+            : "Couldn’t find a usable local model from Local utility",
         );
         expect(page.querySelector(".model-setup__current")?.textContent).toContain("primary");
         expect(page.querySelector(".model-setup__utility")).toBeNull();

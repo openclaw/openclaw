@@ -49,13 +49,16 @@ suite.define(() => {
       await waitForControlUiRoute(page, { routeId: "memory" });
       const overview = page.locator(".memory-overview");
       await expect(overview.getByRole("heading", { name: "Memory is awake" })).toBeVisible();
+      const overviewStyles = await page
+        .locator('link[rel="stylesheet"][href*="/assets/plugins/memory-core/"]')
+        .elementHandles();
+      expect(overviewStyles.length).toBeGreaterThan(0);
       await expect(overview).toContainText("custom-memory");
       await expect(overview.locator(".lob-reading-book")).toBeVisible();
-      for (const title of ["Embeddings", "Read the dream diary", "Configure memory"]) {
-        await expect(overview.locator(".settings-row", { hasText: title })).toHaveCSS(
-          "border-top-width",
-          "1px",
-        );
+      for (const title of ["Embeddings", "Provider"]) {
+        const row = overview.locator(".settings-row", { hasText: title });
+        await expect(row).toHaveCSS("min-height", "48px");
+        await expect(row).toHaveCSS("padding", "12px 16px");
       }
       for (const ext of [".js", ".css"]) {
         expect(assets.some((asset) => asset.url.endsWith(ext) && asset.status === 200)).toBe(true);
@@ -79,7 +82,11 @@ suite.define(() => {
         pathname: "/settings/memory/settings",
       });
       await expect(overview).toHaveCount(0);
-      await expect(page.locator('link[href*="/assets/plugins/memory-core/"]')).toHaveCount(0);
+      await expect
+        .poll(() =>
+          Promise.all(overviewStyles.map((style) => style.evaluate((link) => link.isConnected))),
+        )
+        .toEqual(overviewStyles.map(() => false));
       await page.locator("#memory-tab-overview").click();
       await waitForControlUiRoute(page, { routeId: "memory", pathname: "/settings/memory" });
       await expect(overview).toContainText("embedding probe failed");

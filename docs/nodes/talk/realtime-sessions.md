@@ -86,6 +86,14 @@ Unsupported combinations, including GA with OAuth only, fail visibly instead
 of falling back to client-owned control. Existing browser clients omit this
 capability and keep their data channel and client transcript reporting.
 
+A ready Gateway-controlled client can call `talk.client.say` with its
+`sessionKey`, `voiceSessionId`, and nonblank `text` of at most 1,024 UTF-8 bytes.
+This requires `operator.talk` and the connection that owns that exact call.
+It submits the text for playback through the current voice provider without
+starting an agent task. `{ accepted: true }` confirms submission, not audible
+playback. Closed, replaced, or not-yet-ready calls reject the request; the
+Gateway does not retain speech for a later connection.
+
 In Gateway-controlled native calls and native Gateway relays, the provider's
 delegation starts each host action. Final speech transcripts are saved to history;
 they neither trigger actions nor repeat a delegation's action. Status keeps the

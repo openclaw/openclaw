@@ -97,7 +97,8 @@ export function bindNativePluginInstanceModuleLoader(
         }
         // Resolved URLs and built relative imports retain the selected host SDK's identity.
         const original = artifact.sourceForCaptured(parent);
-        const sdkTarget = hostSdkTarget(request, original);
+        const sdkTarget =
+          artifact.sharedModule?.(parent, request) ?? hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget === request ? undefined : sdkTarget;
         }
@@ -199,7 +200,8 @@ export function bindNativePluginInstanceModuleLoader(
           recordPluginSdkDeprecatedImport(params.instance.pluginId, request);
           return target;
         }
-        const sdkTarget = hostSdkTarget(request, original);
+        const sdkTarget =
+          artifact.sharedModule?.(parent, request) ?? hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget;
         }

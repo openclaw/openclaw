@@ -5,6 +5,11 @@ import {
   type BuiltChannelInboundEventContext,
   type ChannelInboundSupplementalResolutionOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  consumeChannelAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+  withRegisteredChannelIngress,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   isControlCommandMessage,
@@ -19,6 +24,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAgentRoute, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./bot.cleanup.test-support.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -39,6 +45,7 @@ import {
   sentMessage,
   withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
+import { feishuPlugin } from "./channel.js";
 import { parseMergeForwardContent } from "./message-content.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -550,6 +557,46 @@ describe("handleFeishuMessage command authorization", () => {
     setFeishuRuntime(botRuntime);
   });
 
+  it("retains host admission for a DM with distinct sender and chat IDs", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = createFeishuTestConfig(
+        { dmPolicy: "allowlist", allowFrom: ["ou_sender"] },
+        { session: { dmScope: "per-channel-peer" } },
+      );
+      await withRegisteredChannelIngress(
+        { plugin: feishuPlugin, config: cfg, setRuntime: setFeishuRuntime },
+        async (runtime) => {
+          botRuntime.channel.inbound.ingress = runtime.channel.inbound.ingress;
+          botRuntime.channel.inbound.buildContext = runtime.channel.inbound.buildContext;
+          botRuntime.channel.routing.resolveAgentRoute = runtime.channel.routing.resolveAgentRoute;
+          setFeishuRuntime(botRuntime);
+          await receiveConfigured(
+            { messageId: "msg-dm-admission", senderOpenId: "ou_sender", chatId: "oc_chat" },
+            cfg,
+          );
+          const context = dispatchReply.mock.calls[0]?.[0].ctx;
+          expect(context).toMatchObject({
+            SessionKey: "agent:main:feishu:direct:ou_sender",
+            SenderId: "ou_sender",
+            MessageSid: "msg-dm-admission",
+            NativeChannelId: "oc_chat",
+          });
+          expect(
+            consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context)),
+          ).toMatchObject({
+            ingressState: "present",
+            invoker: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: JSON.stringify(["feishu", "default", "ou_sender"]),
+            },
+            decisionCoverage: "enforced",
+          });
+        },
+      );
+    });
+  });
+
   it.each([
     {
       name: "send policy denied delivery",
@@ -837,30 +884,6 @@ describe("handleFeishuMessage command authorization", () => {
         key: "feishu:group:oc-group",
       });
       expect(dispatchReply).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(["/status", "/btw progress?"])(
-    "keeps DM %s separate from agent mention context",
-    async (command) => {
-      computeCommandAccess.mockReturnValue(true);
-      await receiveConfigured(
-        {
-          messageId: `msg-dm-mention-${command}`,
-          text: `@_bot ${command}`,
-          message: { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] },
-        },
-        createFeishuTestConfig({ dmPolicy: "open", allowFrom: ["*"] }),
-        { botOpenId: "ou-bot" },
-      );
-      const context = inboundContext();
-      expect(context).toMatchObject({
-        RawBody: `<at user_id="ou-bot">Bot</at> ${command}`,
-        CommandBody: command,
-        BodyForCommands: command,
-      });
-      expect(context.BodyForAgent).toContain(`<at user_id="ou-bot">Bot</at> ${command}`);
-      expect(dispatchReply).toHaveBeenCalledOnce();
     },
   );
 

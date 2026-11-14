@@ -9,8 +9,8 @@ const { registerVoiceClientSpy, waitForRegistration, stopPresenceListener, gatew
     registerVoiceClientSpy: vi.fn(),
     stopPresenceListener: vi.fn(async () => {}),
     waitForRegistration: vi.fn(),
-    gateway: { id: "gateway", registerClient: vi.fn() },
-    supervisor: { shutdown: vi.fn(), handleError: vi.fn() },
+    gateway: { id: "gateway", registerClient: vi.fn(), disconnect: vi.fn() },
+    supervisor: { shutdown: vi.fn(), handleError: vi.fn(), dispose: vi.fn() },
   }));
 vi.mock("../internal/voice.js", () => ({
   VoicePlugin: class VoicePlugin {
@@ -41,40 +41,32 @@ vi.mock("./gateway-plugin.js", () => ({
 vi.mock("./gateway-supervisor.js", () => ({
   createDiscordGatewaySupervisor: vi.fn(() => supervisor),
 }));
-vi.mock("./listeners.js", () => {
-  const listener = (type: string) =>
-    function () {
-      return { type };
-    };
-  return {
-    DiscordMessageListener: listener("message"),
-    DiscordInteractionListener: listener("interaction"),
-    DiscordPresenceListener: function DiscordPresenceListener() {
-      return { type: "presence", stop: stopPresenceListener };
-    },
-    DiscordPresenceGuildCreateListener: listener("presence-guild-create"),
-    DiscordPresenceGuildDeleteListener: listener("presence-guild-delete"),
-    DiscordPresenceReadyListener: listener("presence-ready"),
-    DiscordReactionListener: listener("reaction-add"),
-    DiscordReactionRemoveListener: listener("reaction-remove"),
-    DiscordThreadDeleteListener: listener("thread-delete"),
-    DiscordThreadReadyListener: listener("thread-ready"),
-    DiscordThreadUpdateListener: listener("thread-update"),
-    registerDiscordListener: vi.fn(),
-  };
-});
+vi.mock("./listeners.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./listeners.js")>()),
+  DiscordPresenceListener: class {
+    stop = stopPresenceListener;
+  },
+}));
 
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_REST_TIMEOUT_MS } from "../internal/rest.js";
+import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
-import { registerDiscordListener } from "./listeners.js";
+import {
+  DiscordPresenceListener,
+  DiscordReactionListener,
+  DiscordReactionRemoveListener,
+} from "./listeners.js";
 import {
   createDiscordMonitorClient,
   fetchDiscordBotIdentity,
   registerDiscordMonitorListeners,
 } from "./provider.startup.js";
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  gateway.disconnect.mockReset();
+});
 
 function createMonitorClient(
   overrides: Partial<Parameters<typeof createDiscordMonitorClient>[0]> = {},
@@ -105,8 +97,38 @@ it("registers voice after gateway setup and awaits registration before supervisi
   registration.resolve();
   const result = await pending;
   expect(registerVoiceClientSpy).toHaveBeenCalledExactlyOnceWith(result.client);
-  expect(createDiscordGatewaySupervisor).toHaveBeenCalledOnce();
   expect(result.gatewaySupervisor).toBe(supervisor);
+});
+
+it("releases the gateway and supervisor when restart closes the scheduler during registration", async () => {
+  const { createDiscordAutoPresenceController: createPresence } =
+    await vi.importActual<typeof import("./auto-presence.js")>("./auto-presence.js");
+  const registration = createDeferred<void>();
+  const scheduler = createTestPluginServiceScheduler();
+  waitForRegistration.mockReturnValueOnce(registration.promise);
+  vi.mocked(createDiscordAutoPresenceController).mockImplementationOnce(createPresence);
+  const pending = createMonitorClient({ scheduler });
+  await scheduler.stop();
+  registration.resolve();
+
+  await expect(pending).rejects.toThrow("Plugin service scheduler is closed");
+  expect(gateway.disconnect).toHaveBeenCalledOnce();
+  expect(supervisor.dispose).toHaveBeenCalledOnce();
+});
+
+it("keeps the startup failure when disconnect fails", async () => {
+  const failure = new Error("registration failed");
+  const runtime = createRuntimeSpies();
+  waitForRegistration.mockRejectedValueOnce(failure);
+  gateway.disconnect.mockImplementationOnce(() => {
+    throw new Error("disconnect failed");
+  });
+
+  await expect(createMonitorClient({ runtime })).rejects.toBe(failure);
+  expect(gateway.disconnect).toHaveBeenCalledOnce();
+  expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("failed to disconnect gateway during startup cleanup"),
+  );
 });
 
 it("passes REST timeout options and fetch to internal Discord REST", async () => {
@@ -119,9 +141,10 @@ it("passes REST timeout options and fetch to internal Discord REST", async () =>
 });
 
 it("registers and stops presence lifecycle listeners with reactions initially disabled", async () => {
+  const listeners: Client["listeners"] = [];
   const stop = registerDiscordMonitorListeners({
     cfg: {},
-    client: { listeners: [] },
+    client: { listeners },
     accountId: "default",
     discordConfig: { intents: { presence: true } },
     runtime: createRuntimeSpies(),
@@ -134,19 +157,13 @@ it("registers and stops presence lifecycle listeners with reactions initially di
     logger: createSubsystemLogger("discord-test"),
     messageHandler: vi.fn(async () => {}),
   });
-  expect(
-    vi
-      .mocked(registerDiscordListener)
-      .mock.calls.map(([, listener]) => (listener as { type?: string }).type),
-  ).toEqual([
-    "interaction",
-    "message",
-    "GUILD_CREATE",
-    ...["add", "remove"].map((event) => `reaction-${event}`),
-    ...["update", "ready", "delete"].map((event) => `thread-${event}`),
-    "presence",
-    ...["guild-create", "guild-delete", "ready"].map((event) => `presence-${event}`),
-  ]);
+  expect(listeners).toEqual(
+    expect.arrayContaining([
+      expect.any(DiscordPresenceListener),
+      expect.any(DiscordReactionListener),
+      expect.any(DiscordReactionRemoveListener),
+    ]),
+  );
   await stop();
   expect(stopPresenceListener).toHaveBeenCalledOnce();
 });

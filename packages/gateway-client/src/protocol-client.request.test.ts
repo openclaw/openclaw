@@ -11,6 +11,7 @@ import {
   lastFrame as latestFrame,
   respond,
   receive,
+  challenge,
   stopProtocolClients,
 } from "./protocol-client.test-support.js";
 import { isGatewayProtocolResponseError } from "./protocol-request.js";
@@ -24,11 +25,46 @@ let connections: Harness["connections"];
 
 type HarnessOptions = NonNullable<Parameters<typeof startProtocolHarness>[0]> &
   NonNullable<Parameters<typeof startProtocolHarness>[1]>;
-function createRequestHarness(options: HarnessOptions = {}) {
+async function completeHandshake(
+  current: Harness["connection"],
+  hello: unknown = { type: "hello-ok" },
+) {
+  challenge(current);
+  respond(current, latestFrame(current).id, hello);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(current.frames[0]?.method).toBe("connect");
+  current.frames.splice(0, 1);
+}
+
+async function createRequestHarness(
+  options: HarnessOptions = {},
+  hello: unknown = { type: "hello-ok" },
+) {
+  let initializing = true;
+  const createRequestId = options.createRequestId;
   ({ client, connection, connections } = startProtocolHarness(
-    { ...options, resolveClose: () => ({ retry: false, notify: false }) },
-    { send: options.send },
+    {
+      ...options,
+      ...(createRequestId
+        ? { createRequestId: () => (initializing ? "handshake" : createRequestId()) }
+        : {}),
+      onRequestTiming: (timing) => {
+        if (timing.method !== "connect") {
+          options.onRequestTiming?.(timing);
+        }
+      },
+      resolveClose: () => ({ retry: false, notify: false }),
+    },
+    {
+      send: (frame) => {
+        if (frame.method !== "connect") {
+          options.send?.(frame);
+        }
+      },
+    },
   ));
+  await completeHandshake(connection, hello);
+  initializing = false;
 }
 
 function retainedWrite(options: GatewayProtocolRequestOptions = {}) {
@@ -90,9 +126,9 @@ function expectMethods(...methods: string[]) {
   expect(connection.frames.map((frame) => frame.method)).toEqual(methods);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useFakeTimers();
-  createRequestHarness();
+  await createRequestHarness();
 });
 
 afterEach(() => {
@@ -136,7 +172,7 @@ describe("GatewayProtocolClient requests", () => {
   it.each(["before", "waiting", "sync"] as const)("aborts before retry: %s", async (abortAt) => {
     const refuseWrite = (id: string) =>
       refuse(id, { reason: "startup-sidecars", method: "sessions.create" });
-    createRequestHarness({
+    await createRequestHarness({
       send: (frame) => {
         if (abortAt === "sync") {
           refuseWrite(frame.id);
@@ -208,7 +244,7 @@ describe("GatewayProtocolClient requests", () => {
   });
 
   it("does not renew an expired empty pause before the next bootstrap probe", async () => {
-    createRequestHarness({ requestTimeoutMs: 30_000 });
+    await createRequestHarness({ requestTimeoutMs: 30_000 });
     const expired = sendRequest(identityMethod).catch((error: unknown) => error);
     refuseBootstrapRead();
     await vi.advanceTimersByTimeAsync(61_000);
@@ -258,7 +294,7 @@ describe("GatewayProtocolClient requests", () => {
 
   it.each(["abort", "timeout"])("does not send queued probes retired by %s", async (retirement) => {
     vi.spyOn(Math, "random").mockReturnValue(0);
-    createRequestHarness({ requestTimeoutMs: 70_000 });
+    await createRequestHarness({ requestTimeoutMs: 70_000 });
     const controller = new AbortController();
     const queuedRequest = (method: string) =>
       sendRequest(method, { signal: controller.signal }).catch((error: unknown) => error);
@@ -303,19 +339,20 @@ describe("GatewayProtocolClient requests", () => {
   });
 
   it("seeds the identity wait from hello and keeps writes synchronous", async () => {
-    receive(connection, { type: "event", event: "connect.challenge", payload: { nonce: "test" } });
-    reply({ snapshot: { suspension: { phase: "prepared" } } });
-    await vi.advanceTimersByTimeAsync(0);
+    await createRequestHarness(
+      {},
+      { type: "hello-ok", snapshot: { suspension: { phase: "prepared" } } },
+    );
     const identity = sendRequest(identityMethod, undefined, { agentId: "main" });
     const write = sendRequest("users.prefs.set", undefined, { theme: "dark" });
     const control = sendRequest("gateway.suspend.resume", undefined, { suspensionId: "owned" });
-    expectMethods("connect", "users.prefs.set", "gateway.suspend.resume");
-    const writeFrame = last(1);
+    expectMethods("users.prefs.set", "gateway.suspend.resume");
+    const writeFrame = last(0);
     refuseBootstrapRead(writeFrame.id);
     await expect(write).rejects.toThrow("suspended");
     reply({ resumed: true });
     await control;
-    await advance(600_000, 3);
+    await advance(600_000, 2);
     notify("accepting");
     expect(last().method).toBe(identityMethod);
     reply({ agentId: "main" });
@@ -362,6 +399,9 @@ describe("GatewayProtocolClient requests", () => {
       connection.close(1012, "restart");
       expect(await outcome).toMatchObject({ message: "gateway closed (1012): restart" });
       client.start();
+      const replacement = connections.at(-1);
+      assert(replacement);
+      await completeHandshake(replacement);
     }
     notify("accepting");
     await advance(60_000, 0);
@@ -377,7 +417,7 @@ describe("GatewayProtocolClient requests", () => {
   it("retains correlated negative payloads from a custom error factory", async () => {
     const created: GatewayProtocolRequestError[] = [];
     const generatedIds = ["same-id:1", "same-id"];
-    createRequestHarness({
+    await createRequestHarness({
       createRequestId: () => generatedIds.shift() ?? "same-id",
       createRequestError: (fields) => {
         const error = new GatewayProtocolRequestError(fields);
@@ -418,7 +458,7 @@ describe("GatewayProtocolClient requests", () => {
   it("retires aborted and send-failed IDs before a replacement request", async () => {
     const controller = new AbortController();
     let sendCalls = 0;
-    createRequestHarness({
+    await createRequestHarness({
       createRequestId: () => "same-id",
       send: (frame) => {
         sendCalls += 1;
@@ -435,16 +475,16 @@ describe("GatewayProtocolClient requests", () => {
     await expect(aborted).rejects.toThrow("gateway request aborted for aborted");
 
     const replacement = sendRequest("replacement", { timeoutMs: null });
-    expect(last()).toMatchObject({ id: "2:same-id", method: "replacement" });
-    reply({ stale: true }, "1:same-id");
+    expect(last()).toMatchObject({ id: "3:same-id", method: "replacement" });
+    reply({ stale: true }, "2:same-id");
     expect(client.hasPendingRequests).toBe(true);
-    reply({ current: true }, "2:same-id");
+    reply({ current: true }, "3:same-id");
     await expect(replacement).resolves.toEqual({ current: true });
 
     await expect(sendRequest("send.failure", { timeoutMs: null })).rejects.toThrow(
       "synthetic send failure",
     );
-    expect(last()).toMatchObject({ id: "3:same-id", method: "send.failure" });
+    expect(last()).toMatchObject({ id: "4:same-id", method: "send.failure" });
     expect(client.hasPendingRequests).toBe(false);
     const onSent = vi.fn();
     await expect(sendRequest("next", { onSent })).resolves.toEqual({ current: true });
@@ -453,7 +493,7 @@ describe("GatewayProtocolClient requests", () => {
 
   it("ignores late accepted and final replies after a timeout collision", async () => {
     const onAccepted = vi.fn();
-    createRequestHarness({ createRequestId: () => "same-id" });
+    await createRequestHarness({ createRequestId: () => "same-id" });
     const retired = sendRequest("agent", { timeoutMs: 5, expectFinal: true, onAccepted });
     const retiredOutcome = retired.catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(5);
@@ -467,14 +507,14 @@ describe("GatewayProtocolClient requests", () => {
     expect(client.hasPendingRequests).toBe(false);
 
     const replacement = sendRequest("agent", { timeoutMs: null, expectFinal: true, onAccepted });
-    expect(last()).toMatchObject({ id: "2:same-id", method: "agent" });
-    reply({ status: "accepted", runId: "old" }, "1:same-id");
-    reply({ status: "ok", runId: "old" }, "1:same-id");
+    expect(last()).toMatchObject({ id: "3:same-id", method: "agent" });
+    reply({ status: "accepted", runId: "old" }, "2:same-id");
+    reply({ status: "ok", runId: "old" }, "2:same-id");
     expect(onAccepted).not.toHaveBeenCalled();
     expect(client.hasPendingRequests).toBe(true);
 
-    reply({ status: "accepted", runId: "new" }, "2:same-id");
-    reply({ status: "ok", runId: "new" }, "2:same-id");
+    reply({ status: "accepted", runId: "new" }, "3:same-id");
+    reply({ status: "ok", runId: "new" }, "3:same-id");
     await expect(replacement).resolves.toEqual({ status: "ok", runId: "new" });
     expect(onAccepted).toHaveBeenCalledExactlyOnceWith({ status: "accepted", runId: "new" });
   });
@@ -499,7 +539,7 @@ describe("GatewayProtocolClient requests", () => {
     const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label) => {
       trace.push(`error:${label}`);
     });
-    createRequestHarness({ nowMs: () => nowMs, onRequestTiming, onCallbackError });
+    await createRequestHarness({ nowMs: () => nowMs, onRequestTiming, onCallbackError });
     const request = sendRequest("agent", {
       timeoutMs: null,
       expectFinal: true,
@@ -525,7 +565,7 @@ describe("GatewayProtocolClient requests", () => {
 
   it("preserves requests started on a replacement socket by a close timing observer", async () => {
     let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
-    createRequestHarness({
+    await createRequestHarness({
       createRequestId: () => "same-id",
       onRequestTiming: ({ method }) => {
         if (method === "retired") {
@@ -543,6 +583,8 @@ describe("GatewayProtocolClient requests", () => {
     connection.close(1012, "service restart");
     const replacementConnection = connections[1];
     assert(replacementConnection);
+    expect(replacementConnection.frames).toEqual([]);
+    await completeHandshake(replacementConnection);
     expect(latestFrame(replacementConnection)).toMatchObject({
       id: "1:same-id",
       method: "replacement",

@@ -10,7 +10,6 @@ import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "../../../plugins/installed-plugin-index-store.js";
-import type { InstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
 import {
   isTrustedOfficialPluginInstallRecord,
   resolveTrustedOfficialClawHubPackageName,
@@ -47,25 +46,11 @@ export function migrateOfficialPluginInstallProvenance(
   return migrated;
 }
 
-type PluginRegistryDoctorMigrationPreflight =
-  | {
-      /** Migration action selected before reading or writing registry state. */
-      action: "skip-existing";
-      /** Persisted plugin index path that migration will inspect or write. */
-      filePath: string;
-      /** Authoritative pre-repair generation used to detect a real inventory change. */
-      current: InstalledPluginIndex;
-    }
-  | {
-      action: "initialize" | "migrate";
-      filePath: string;
-    };
-
 export class InvalidPluginInstallRecordStateError extends Error {}
 
 export function preflightPluginRegistryDoctorMigration(
   params: InstalledPluginIndexStoreOptions = {},
-): PluginRegistryDoctorMigrationPreflight {
+) {
   const filePath = resolveInstalledPluginIndexStorePath(params);
   const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
   if (persistedState.status === "invalid") {
@@ -77,16 +62,19 @@ export function preflightPluginRegistryDoctorMigration(
     const currentRegistry = readPersistedInstalledPluginIndexSync(params);
     if (currentRegistry) {
       return {
-        action: "skip-existing",
+        /** Migration action selected before reading or writing registry state. */
+        action: "skip-existing" as const,
+        /** Persisted plugin index path that migration will inspect or write. */
         filePath,
+        /** Authoritative pre-repair generation used to detect a real inventory change. */
         current: currentRegistry,
       };
     }
     // Install records without a readable index is a half-written registry, not a fresh root:
     // report it as a migration so doctor keeps warning and rebuilds from what survived.
     if (persistedState.status !== "missing") {
-      return { action: "migrate", filePath };
+      return { action: "migrate" as const, filePath };
     }
   }
-  return { action: "initialize", filePath };
+  return { action: "initialize" as const, filePath };
 }

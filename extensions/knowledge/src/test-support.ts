@@ -232,7 +232,13 @@ export const operatorContext = (
 /** Pinned access for direct storage calls, from a feature context. */
 export function accessFor(context: unknown, write = false, operatorAgent = "main"): VaultAccess {
   const pinned = pinPrincipal(
-    featurePrincipal(context as Parameters<typeof featurePrincipal>[0], true, write, operatorAgent),
+    featurePrincipal(
+      context as Parameters<typeof featurePrincipal>[0],
+      true,
+      write,
+      operatorAgent,
+      () => undefined,
+    ),
   );
   return { ...pinned.principal, assertCurrent: () => pinned.assertSame() };
 }

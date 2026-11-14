@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { vi } from "vitest";
 import type { ChromeMcpProcessSnapshot } from "./chrome-mcp-contracts.js";
 
@@ -37,9 +38,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     const match = typeof args[0] === "string" ? /^\/proc\/(\d+)\/stat$/.exec(args[0]) : null;
     if (match && fixture.mocks?.listProcesses) {
       const row = fixture.linuxRows.get(Number(match[1]));
-      if (!row) {
-        throw new Error("fixture process exited");
-      }
+      assert(row, "fixture process exited");
       return `${row.pid} (fixture) S ${row.ppid} ${Array(17).fill("0").join(" ")} ${row.identity}`;
     }
     return actual.readFile(...args);
@@ -68,9 +67,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
         args[0] === "taskkill" &&
         (mocks?.platform || mocks?.listProcesses || mocks?.taskkillProcessTree)
       ) {
-        if (!mocks.taskkillProcessTree) {
-          throw new Error("synthetic process census has no taskkill handler");
-        }
+        assert(mocks.taskkillProcessTree, "synthetic process census has no taskkill handler");
         await mocks.taskkillProcessTree(Number(args[1][1]));
         return { stdout: "", stderr: "" };
       }
@@ -106,9 +103,7 @@ export function mockChromeMcpProcesses(mocks: ProcessMocks): void {
   const killProcess = mocks.killProcess;
   if (killProcess || mocks.listProcesses || mocks.platform) {
     const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-      if (!killProcess) {
-        throw new Error("synthetic process census has no signal handler");
-      }
+      assert(killProcess, "synthetic process census has no signal handler");
       if (signal !== "SIGTERM" && signal !== "SIGKILL") {
         throw new Error("expected a Chrome MCP cleanup signal");
       }

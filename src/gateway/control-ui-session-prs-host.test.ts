@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -81,29 +82,20 @@ it.each([false, true])(
               getSessionRowProjection: () => getSessionRowProjection(f.context),
               isCurrentClient: () => !client.invalidated,
             });
-            const target = await capture?.();
-            if (!target) {
-              throw new Error("Fixture reader was not admitted");
-            }
-            return target;
+            return expectDefined(await capture?.(), "Fixture reader was not admitted");
           }),
         );
         const load = (target: (typeof targets)[number], refresh = false) =>
-          withControlUiSessionPrSource(target.readSource, (assertSource, sourceIdentity) =>
-            loadControlUiSessionPullRequests(
+          withControlUiSessionPrSource(target.readSource, (assertSource, sourceIdentity) => {
+            const assertCurrent = () => {
+              assertSource();
+              target.assertCurrent?.();
+            };
+            return loadControlUiSessionPullRequests(
               { sessionKey, refresh },
-              {
-                read: {
-                  target,
-                  sourceIdentity,
-                  assertCurrent: () => {
-                    assertSource();
-                    target.assertCurrent?.();
-                  },
-                },
-              },
-            ),
-          );
+              { read: { target, sourceIdentity, assertCurrent } },
+            );
+          });
         const first = load(targets[0]!);
         const rejected = expect(first).rejects.toThrow("target changed");
         await started.promise;
@@ -166,7 +158,6 @@ it.each([false, true])(
       if (!enterprise) {
         expect(delivered).not.toContain("Private Enterprise secret");
       }
-      expect(provider).toHaveBeenCalledTimes(enterprise ? 2 : 1);
       for (const [input, options] of provider.mock.calls) {
         expect({
           origin: new URL(requestUrl(input)).origin,

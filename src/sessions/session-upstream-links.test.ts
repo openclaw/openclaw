@@ -18,7 +18,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  observeMainThreadSql,
+  expectNoMainThreadSql as withoutHostSql,
+} from "../test-utils/main-thread-sql-spies.test-support.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSessionInitialization } from "./session-initialization.js";
 import { recordSessionStateEventAsync, registerSessionStateWatch } from "./session-state-events.js";
@@ -73,15 +76,6 @@ function readLink(sessionKey = key) {
 }
 function watch(targetSessionKey = key, watcherSessionKey = "agent:main:main") {
   return registerSessionStateWatch({ watcherSessionKey, targetSessionKey }, database);
-}
-async function withoutHostSql(run: () => Promise<void>) {
-  const sql = observeMainThreadSql();
-  try {
-    await run();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
 }
 
 function upsertLink(sessionKey = key, catalogId = "codex") {

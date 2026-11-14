@@ -1,0 +1,2 @@
+# Native relay startup failure coverage: unowned release, owned exactly-once claim, and pre-registration control.
+72

@@ -1,0 +1,2 @@
+# Prove retained backup fixture inputs survive enclosing teardown and successful cleanup still removes owned scratch.
+122

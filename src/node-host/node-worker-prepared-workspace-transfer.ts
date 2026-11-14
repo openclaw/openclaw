@@ -3,7 +3,7 @@ import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { changedPaths } from "../gateway/worker-environments/workspace-manifest-comparison.js";
+import { prepareWorkspaceReconciliation } from "../gateway/worker-environments/workspace-manifest-comparison.js";
 import { overlayWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
@@ -69,8 +69,10 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
     target = overlay.manifest;
   }
   const sourceEntries = new Map(source.entries.map((entry) => [entry.path, entry]));
+  params.signal?.throwIfAborted();
+  const reconciliation = prepareWorkspaceReconciliation(base, target);
   return {
-    changed: changedPaths(base, target, params.signal),
+    changed: new Set(reconciliation.preflight.changedPaths),
     readSourceFile: async (
       entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
     ): Promise<Buffer> => {
@@ -141,7 +143,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
               stagingRoot,
               baseManifestRef,
               currentManifestRef: targetRef,
-              base,
+              reconciliation,
               current: target,
               journal: {
                 load: async () => undefined,

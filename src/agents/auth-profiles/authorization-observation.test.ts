@@ -34,10 +34,12 @@ function enrollLocal(agentDir: string, expected?: ReturnType<typeof inspectStore
     }),
   );
 }
+const replaceLocal = (key: string) =>
+  upsert({ agentDir: root.agentDir, profileId: "local", credential: apiKey(key) });
 
 it("refuses stale worker enrollment without changing a newer credential", async () => {
   const expected = inspectStore(root.agentDir);
-  await upsert({ agentDir: root.agentDir, profileId: "local", credential: apiKey("after") });
+  await replaceLocal("after");
   const before = readStore(root.agentDir);
   expect(() => enrollLocal(root.agentDir, expected)).toThrow(
     "changed before authorization enrollment",
@@ -97,18 +99,16 @@ it.each(["commit", "rollback", "unknown", "autocommit"] as const)(
         expect(readStore(root.agentDir)).toEqual(before);
         expect(authority.assertCurrent).not.toThrow();
         await authority.revalidate();
-      } else {
-        if (outcome === "unknown") {
-          expect(database.db.isOpen).toBe(false);
-        }
-        const code =
-          outcome === "unknown" ? "MCP_AUTHORIZATION_UNAVAILABLE" : "MCP_AUTHORIZATION_RETIRED";
-        expect(authority.assertCurrent).toThrow(expect.objectContaining({ code }));
-        expect(readStore(root.agentDir)).toMatchObject(payload);
-        if (outcome === "unknown") {
-          // Committed rows cannot certify a lost settlement acknowledgment.
-          await expect(authority.revalidate()).rejects.toMatchObject({ code });
-        }
+        return;
+      }
+      const code =
+        outcome === "unknown" ? "MCP_AUTHORIZATION_UNAVAILABLE" : "MCP_AUTHORIZATION_RETIRED";
+      expect(authority.assertCurrent).toThrow(expect.objectContaining({ code }));
+      expect(readStore(root.agentDir)).toMatchObject(payload);
+      if (outcome === "unknown") {
+        expect(database.db.isOpen).toBe(false);
+        // Committed rows cannot certify a lost settlement acknowledgment.
+        await expect(authority.revalidate()).rejects.toMatchObject({ code });
       }
     } finally {
       disposeAuthority?.();
@@ -133,11 +133,7 @@ it("retains enrollment tombstones through canonical removal and ignores replayed
   const removed = lifetime();
   expect(removed).toBeTruthy();
   expect(removed).not.toBe(before);
-  await upsert({
-    agentDir: root.agentDir,
-    profileId: "local",
-    credential: apiKey("before-local"),
-  });
+  await replaceLocal("before-local");
   const restored = lifetime();
   expect([before, removed]).not.toContain(restored);
   writeStore(raw, root.agentDir);

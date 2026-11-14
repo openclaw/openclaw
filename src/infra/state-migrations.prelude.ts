@@ -31,7 +31,12 @@ export function buildUnresolvedBlockedPreludeSteps(
 ): LegacyStateMigrationStep[] {
   const ids = [
     ...(mode === "doctor"
-      ? ["session-entry-state-preparation", "media-persistence", "session-entry-state"]
+      ? [
+          "session-entry-state-preparation",
+          "media-persistence",
+          "session-entry-state",
+          "cold-navigation",
+        ]
       : []),
     ...(invocationPurpose === "doctor" ? ["transcript-directives"] : []),
     ...(mode === "doctor"
@@ -164,6 +169,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   agentDatabaseTargets: readonly { agentId: string; path: string }[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   integrityCheck?: "quick" | "full";
+  inspectedSessionEntryPaths?: readonly string[];
   orphanSessionStores?: ReturnType<typeof inspectOrphanSessionStoreEndpoints>;
   pluginSessionStoreAgentIds: readonly string[];
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
@@ -214,10 +220,15 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   };
   let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
     params.mode === "doctor" ? [] : undefined;
+  let admittedNavigationTargets: readonly AgentDatabaseMigrationTarget[] = [];
   let inspectedEntryStatePaths = new Set<string>();
   let mediaEntryStatePreparationError: Error | undefined;
   const versionMigrationPaths = new Set(
     params.agentDatabaseMigrationDiscovery?.versionMigrations?.map((migration) => migration.path),
+  );
+  // Preflight already inspected these targets; version-migrated targets keep their repair path.
+  inspectedEntryStatePaths = new Set(
+    params.inspectedSessionEntryPaths?.filter((pathname) => !versionMigrationPaths.has(pathname)),
   );
   const steps: LegacyStateMigrationStep[] = [];
   if (params.mode === "doctor") {
@@ -234,7 +245,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             cfg: params.config,
             env: stateEnv,
             deferToMediaPreparation: true,
-            excludedDatabasePaths: versionMigrationPaths,
+            excludedDatabasePaths: new Set([...versionMigrationPaths, ...inspectedEntryStatePaths]),
             integrityCheck: params.integrityCheck,
             ...(params.agentDatabaseMigrationDiscovery
               ? {
@@ -243,7 +254,9 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
                 }
               : {}),
             onInspectedTargets: (targets) => {
-              inspectedEntryStatePaths = new Set(targets.map((target) => target.canonicalPath));
+              for (const target of targets) {
+                inspectedEntryStatePaths.add(target.canonicalPath);
+              }
             },
           });
           return {
@@ -287,6 +300,9 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
               return { completed: false, changes: [] };
             }
           },
+          onAdmittedTargets: (targets) => {
+            admittedNavigationTargets = targets;
+          },
           onPreparedRepairTargets: (targets) => {
             preparedRepairTargets = targets;
           },
@@ -325,6 +341,14 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
         undefined,
         "required",
       ),
+      sharedStep("cold-navigation", agentPersistence, agentPersistence, async () => {
+        const { migrateSessionColdNavigation } =
+          await import("./state-migrations.cold-navigation.js");
+        return await migrateSessionColdNavigation({
+          ...agentMigrationOptions,
+          preparedTargets: admittedNavigationTargets,
+        });
+      }),
     );
   }
   if (params.invocationPurpose === "doctor") {

@@ -174,7 +174,7 @@ export async function captureImmutableProtection(
     }
     const proof =
       file.pathSnapshot ??
-      captureConfigFileWritePathProof(file.path, fs.realpathSync(file.path), fs).snapshot;
+      captureConfigFileWritePathProof(file.path, fs.realpathSync.native(file.path), fs).snapshot;
     const value = fingerprint(file.raw, env);
     return {
       path: file.path,

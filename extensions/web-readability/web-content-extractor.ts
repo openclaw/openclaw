@@ -1,7 +1,6 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   htmlToMarkdown,
-  normalizeWhitespace,
   sanitizeHtml,
   stripInvisibleUnicode,
   type WebContentExtractorPlugin,
@@ -107,6 +106,20 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
   return false;
 }
 
+// linkedom uses the first <base>'s raw href (null for `<base target>`) as baseURI, so
+// Readability cannot absolutize links; browsers resolve the first <base href> against the page.
+function resolveDocumentBase(document: Document, pageUrl: string): void {
+  const base = document.querySelector("base[href]");
+  const href = base ? URL.parse(base.getAttribute("href") ?? "", pageUrl)?.href : undefined;
+  for (const element of document.querySelectorAll("base")) {
+    if (element === base && href) {
+      element.setAttribute("href", href);
+    } else {
+      element.remove();
+    }
+  }
+}
+
 export function createReadabilityWebContentExtractor(): WebContentExtractorPlugin {
   return {
     id: "readability",
@@ -123,17 +136,15 @@ export function createReadabilityWebContentExtractor(): WebContentExtractorPlugi
       try {
         const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
         const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
-        const textMode = request.extractMode === "text";
-        // Text mode consumes textContent; skip serializing the HTML it would discard.
-        const reader = new Readability(document, textMode ? { serializer: () => "" } : undefined);
+        resolveDocumentBase(document, request.url);
+        const reader = new Readability(document);
         const parsed = reader.parse();
         if (!parsed) {
           return null;
         }
         const title = parsed.title || undefined;
-        const rendered = textMode
-          ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
-          : htmlToMarkdown(parsed.content ?? "");
+        // Render the selected HTML because textContent joins adjacent block elements.
+        const rendered = htmlToMarkdown(parsed.content ?? "", { extractMode: request.extractMode });
         const text = stripInvisibleUnicode(rendered.text);
         return text ? { text, title: title ?? rendered.title } : null;
       } catch {

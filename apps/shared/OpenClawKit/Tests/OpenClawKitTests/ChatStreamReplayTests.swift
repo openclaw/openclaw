@@ -475,7 +475,7 @@ struct ChatStreamReplayTests {
             window.close()
         }
 
-        /// Native math labels expose rendered content without global accessibility or focus state.
+        // Native math labels expose rendered content without global accessibility or focus state.
         func expectRendered(_ expected: [String]) {
             host.layoutSubtreeIfNeeded()
             // Subview order is stacking order, not the vertical order seen by the reader.
@@ -801,17 +801,15 @@ struct ChatStreamReplayTests {
         let settled = ChatTranscriptRow.collapseCompletedWork(
             ChatTranscriptRow.build(from: harness.vm.transcriptMessages),
             runWorking: harness.vm.hasBlockingRunActivity)
-        #expect(settled.count == 3)
-        guard settled.count == 3, case let .completedWork(work) = settled[1],
-              case let .message(answer) = settled[2]
-        else {
-            Issue.record("Expected settled narration and tools above one visible final answer")
+        guard settled.count == 5, case let .completedWork(work) = settled[2] else {
+            Issue.record("Expected inline narration around completed tool work and one final answer")
             return
         }
-        #expect(work.messages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
-            canonicalFirstText, "Read complete", secondText,
-        ])
-        #expect(ChatMessageVisibleText.visibleText(in: answer) == finalText)
+        #expect(settled.compactMap { row -> String? in
+            if case let .message(message) = row { return ChatMessageVisibleText.visibleText(in: message) }
+            return nil
+        } == ["Review the layout", canonicalFirstText, secondText, finalText])
+        #expect(work.messages.map { ChatMessageVisibleText.visibleText(in: $0) } == ["Read complete"])
 
         let generation = harness.vm.historyMutationGeneration
         harness.transport.emit(replayNarrationEvent(

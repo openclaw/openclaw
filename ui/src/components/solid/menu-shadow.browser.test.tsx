@@ -3,6 +3,7 @@ import { flush } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
 import { phase } from "../../test-helpers/solid-menu.tsx";
+import { Kbd } from "./kbd.tsx";
 import { Menu } from "./menu.tsx";
 import "../../styles/base.css";
 
@@ -22,7 +23,11 @@ it.each(["open", "closed"] as const)("navigates menus inside a %s shadow root", 
         id="shadow-menu"
         label="Actions"
         items={[
-          { id: "group", label: "Group", children: [{ id: "child", label: "Child" }] },
+          {
+            id: "group",
+            label: "Group",
+            children: [{ id: "child", label: "Child", details: <Kbd keys="C" /> }],
+          },
           { id: "archive", label: "Archive" },
         ]}
       />
@@ -48,6 +53,7 @@ it.each(["open", "closed"] as const)("navigates menus inside a %s shadow root", 
     await userEvent.keyboard("{Home}{ArrowRight}");
     await phase(root.getElementById("shadow-menu-group:content")!, "open");
     await expect.poll(() => root.activeElement).toBe(child);
+    expect(getComputedStyle(child.querySelector("kbd")!).borderRadius).toBe("4px");
     await userEvent.keyboard("{ArrowLeft}");
     await expect.poll(() => root.activeElement).toBe(group);
     await userEvent.keyboard("{ArrowDown}");
@@ -55,7 +61,9 @@ it.each(["open", "closed"] as const)("navigates menus inside a %s shadow root", 
     replacementRoot.append(container);
     await Promise.resolve();
     expect(root.querySelector("[data-openclaw-overlay-style]")).toBeNull();
-    expect(replacementRoot.querySelectorAll("[data-openclaw-overlay-style]")).toHaveLength(1);
+    // Overlay and keycap styles are each shared by the root menu and its submenu.
+    expect(replacementRoot.querySelectorAll("[data-openclaw-overlay-style]")).toHaveLength(2);
+    expect(getComputedStyle(child.querySelector("kbd")!).borderRadius).toBe("4px");
     trigger.focus();
     await userEvent.keyboard("{ArrowDown}");
     await phase(surface, "open");

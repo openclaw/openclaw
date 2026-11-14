@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { setupCommand } from "./setup.js";
@@ -76,12 +78,18 @@ describe("setupCommand", () => {
       const workspace = path.join(home, ".openclaw", "workspace");
 
       await setupCommand({ workspace, json }, runtime);
-      const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
+      const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
 
       expect(raw).toMatchObject({
         agents: { defaults: { workspace }, entries: { main: {} } },
         gateway: { mode: "local" },
-        messages: { queue: { allowCollaborativeSteering: false } },
+      });
+      expect(raw.messages?.queue).toBeUndefined();
+      const snapshot = await readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.sourceConfig.messages?.queue).toBeUndefined();
+      expect(snapshot.runtimeConfig.messages?.queue).toMatchObject({
+        allowCollaborativeSteering: true,
       });
       if (json) {
         expect(runtime.log).toHaveBeenCalledOnce();
@@ -248,11 +256,7 @@ describe("setupCommand", () => {
 
         await fs.mkdir(configDir, { recursive: true });
         if (!fresh) {
-          await fs.writeFile(
-            configPath,
-            JSON.stringify({ agents: { defaults: { workspace } } }),
-            "utf-8",
-          );
+          await writeFixtureJson(configPath, { agents: { defaults: { workspace } } });
         }
         const sessionsDir = path.join(home, ".openclaw", "agents", "main", "sessions");
         const sessionMkdirCalls = () =>

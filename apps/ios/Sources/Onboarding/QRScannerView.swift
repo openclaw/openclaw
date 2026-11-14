@@ -5,6 +5,22 @@ import VisionKit
 enum QRScannerResult: Equatable {
     case gatewayLink(GatewayConnectDeepLink)
     case setupCode(String)
+    case espDevice(ESPSetupDiscovery)
+}
+
+enum QRScannerPurpose {
+    case gateway, espDevice
+
+    func parse(_ payload: String) -> QRScannerResult? {
+        switch self {
+        case .gateway:
+            if let link = GatewayConnectDeepLink.fromSetupInput(payload) { return .gatewayLink(link) }
+            if AppleReviewDemoMode.isSetupCode(payload) { return .setupCode(payload) }
+        case .espDevice:
+            if let discovery = ESPSetupDiscovery.parse(payload) { return .espDevice(discovery) }
+        }
+        return nil
+    }
 }
 
 @MainActor
@@ -107,6 +123,7 @@ final class QRScannerResultHandoff {
 }
 
 struct QRScannerView: UIViewControllerRepresentable {
+    var purpose: QRScannerPurpose = .gateway
     let onResult: (QRScannerResult) -> Void
     let onError: (String) -> Void
     let onDismiss: () -> Void
@@ -226,12 +243,8 @@ struct QRScannerView: UIViewControllerRepresentable {
                       let payload = barcode.payloadStringValue
                 else { continue }
 
-                if let link = GatewayConnectDeepLink.fromSetupInput(payload) {
-                    self.deliver(.gatewayLink(link), scanner: scanner)
-                    return
-                }
-                if AppleReviewDemoMode.isSetupCode(payload) {
-                    self.deliver(.setupCode(payload), scanner: scanner)
+                if let result = self.parent.purpose.parse(payload) {
+                    self.deliver(result, scanner: scanner)
                     return
                 }
             }

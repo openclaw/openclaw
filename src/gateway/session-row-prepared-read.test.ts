@@ -121,12 +121,7 @@ async function withPendingStartupInspection(
       migrateAgent: async () => {},
       publishAgent: async () => {},
     });
-    fixture.context.agentDatabaseStartup = {
-      get hasPendingAgents() {
-        return admission.hasPendingAgents;
-      },
-      waitForAgentPreparation: admission.waitForAgentPreparation.bind(admission),
-    };
+    fixture.context.agentDatabaseStartup = admission.observation;
     try {
       await runInDetachedAsyncContext(() => {
         expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
@@ -492,10 +487,12 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-it("captures metadata refreshed during preparation without rereading it during consumption", () => {
+it("shares captured metadata during consumption while reading current policy", () => {
   const owner = createSessionRowProjectionFixture({ cfg, store: {} });
   const initial = owner.state;
   let current = initial;
+  let policy: OpenClawConfig = cfg;
+  vi.spyOn(owner, "getPolicyConfig").mockImplementation(() => policy);
   const state = vi.fn(() => current);
   Object.defineProperty(owner, "state", { get: state });
   vi.spyOn(owner, "describe").mockImplementation(() => {
@@ -510,6 +507,12 @@ it("captures metadata refreshed during preparation without rereading it during c
   });
   const consume = vi.fn((read: SessionRowReadView) => {
     state.mockClear();
+    const captured = read.state;
+    expect(read.state).toBe(captured);
+    expect(captured.policyConfig).toBe(cfg);
+    policy = { ...cfg, session: { scope: "global" } };
+    expect(read.state.policyConfig).toBe(policy);
+    expect(captured.policyConfig).toBe(cfg);
     expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
       provider: "fixture",
       model: "fresh",
@@ -574,7 +577,11 @@ it.each(["child", "parent"] as const)(
       dirtyKey = undefined;
     });
     const exact = createSessionRowAncestorReads({
-      state: () => ({ cfg, context: projection.state.rowContext }),
+      state: () => ({
+        cfg,
+        context: projection.state.rowContext,
+        catalog: { prepareCurrent: async () => {} },
+      }),
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,
@@ -598,8 +605,9 @@ it.each(["child", "parent"] as const)(
       const row = expectDefined(read.describe(child), "prepared child row");
       return exact.ancestorRows(row)?.map(({ key }) => key);
     });
+    const select = vi.fn(() => [child]);
     try {
-      const prepared = exact.withPreparedExactRows(() => [child], consume, {
+      const prepared = exact.withPreparedExactRows(select, consume, {
         includeAncestors: true,
       });
       await Promise.race([placementStarted.promise, prepared]);
@@ -616,6 +624,8 @@ it.each(["child", "parent"] as const)(
       await expect(prepared).resolves.toEqual([parent.key]);
       expect(prepareMembership).toHaveBeenCalledOnce();
       expect(consume).toHaveBeenCalledOnce();
+      // One initial selection, one after placement yields, one after membership yields.
+      expect(select).toHaveBeenCalledTimes(3);
     } finally {
       placementReply.resolve(snapshot);
       membershipReady.resolve();

@@ -24,8 +24,8 @@ import * as transcriptReconcile from "../config/sessions/session-transcript-reco
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { hasPersistedOpenClawAgentCanonicalValidation } from "../state/openclaw-agent-canonical-validation-receipt.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -111,7 +111,9 @@ describe("runStartupSessionMaintenanceForTest", () => {
     const { env, cfg } = fleetFixture(agentIds);
     await closeAgentDatabases();
     for (const agentId of agentIds) {
-      revokeSqliteDatabaseAdmissionsForPath(resolveOpenClawAgentSqlitePath({ agentId, env }));
+      invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(
+        resolveOpenClawAgentSqlitePath({ agentId, env }),
+      );
     }
     const coldLog = makeLog();
     await runStartupSessionMaintenanceForTest({ cfg, env, log: coldLog });

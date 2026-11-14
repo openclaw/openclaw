@@ -2,6 +2,8 @@ import {
   runOutsideRemoteModelCatalogSnapshot,
   withRemoteModelCatalogSnapshot,
 } from "../model-catalog/remote-overlay.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { AsyncContext } from "../shared/async-context.js";
 import type {
   PreparedModelRuntimeLease,
@@ -33,8 +35,10 @@ export function scopePreparedModelRuntimeLease(lease: PreparedModelRuntimeLease)
       if (!open) {
         throw new Error("Captured reply runtime lease is closed");
       }
-      return withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, () =>
-        open ? lease.snapshot : undefined,
+      return lease.run(() =>
+        withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, () =>
+          open ? lease.snapshot : undefined,
+        ),
       );
     },
   };
@@ -60,7 +64,9 @@ export function withPreparedModelRuntimePluginGenerationScope<T>(
 /** Detached queue drains re-admit on the current generation, never a predecessor's scope. */
 export function runOutsidePreparedModelRuntimePluginGenerationScope<T>(run: () => T): T {
   return runOutsideRemoteModelCatalogSnapshot(() =>
-    preparedModelRuntimePluginGenerationScope.exit(run),
+    preparedModelRuntimePluginGenerationScope.exit(() =>
+      pluginInvocationContext.exit(() => pluginInstanceInvocation.exit(run)),
+    ),
   );
 }
 

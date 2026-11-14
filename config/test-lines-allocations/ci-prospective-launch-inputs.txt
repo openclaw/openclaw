@@ -1,0 +1,2 @@
+# Prove pre-launch ordering, actual source and NUL-delimited diffs, frozen hash binding, and optional workflow evidence.
+106

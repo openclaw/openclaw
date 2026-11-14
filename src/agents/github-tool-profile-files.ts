@@ -31,3 +31,25 @@ export async function writeManagedGitHubProfileFiles(
   });
   notifyManagedGitHubProfileChanged({ profileDir, kind: "updated" });
 }
+
+export async function isPrivateManagedGitHubProfile(profileDir: string): Promise<boolean> {
+  try {
+    const [profile, hosts] = await Promise.all([
+      fs.lstat(profileDir),
+      fs.lstat(path.join(profileDir, "hosts.yml")),
+    ]);
+    if (
+      !profile.isDirectory() ||
+      profile.isSymbolicLink() ||
+      !hosts.isFile() ||
+      hosts.isSymbolicLink()
+    ) {
+      return false;
+    }
+    return (
+      process.platform === "win32" || ((profile.mode & 0o077) === 0 && (hosts.mode & 0o077) === 0)
+    );
+  } catch {
+    return false;
+  }
+}

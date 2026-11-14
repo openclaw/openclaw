@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import * as stateLease from "../../state/openclaw-state-lease.js";
 import {
   createWorktreeCapacityStatfs,
   useInProcessWorktreeCapacityTransport,
@@ -105,6 +106,23 @@ describe("ManagedWorktreeService garbage collection", () => {
     closeOpenClawStateDatabaseForTest();
     clearRuntimeConfigSnapshot();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("skips allocation leases for registered artifacts and discovers a later orphan", async () => {
+    const registered = await materializeDownstreamFixture("retained");
+    const acquire = vi.spyOn(stateLease, "withOpenClawStateLeaseAsync");
+    try {
+      expect((await service.gc()).orphansDeleted).toBe(0);
+      expect((await service.gc()).orphansDeleted).toBe(0);
+      expect(acquire.mock.calls.length).toBe(0);
+      const orphan = await fs.mkdtemp(path.join(path.dirname(registered.path), "orphan-"));
+      expect((await service.gc()).orphansDeleted).toBe(1);
+      expect(acquire.mock.calls.length).toBe(1);
+      await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(registered.path, "README.md"), "utf8")).toBe("base\n");
+    } finally {
+      acquire.mockRestore();
+    }
   });
 
   it("exempts manual worktrees and garbage collects idle run-owned worktrees", async () => {
@@ -541,56 +559,38 @@ describe("ManagedWorktreeService garbage collection", () => {
     });
   });
 
-  it("preserves an ignored unregistered nested linked worktree without cleanup warnings", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".claude/\n");
+  it.each(["linked", "foreign"])("preserves an ignored nested %s repository", async (kind) => {
+    const relative = kind === "linked" ? ".claude/worktrees/nested-agent" : "vendor/dependency";
+    await fs.writeFile(path.join(repo, ".gitignore"), `${relative.split("/")[0]}/\n`);
     await git(repo, "add", ".gitignore");
-    await git(repo, "commit", "-m", "ignore agent checkout state");
-
-    const created = await materializeRunOwnedFixture("ignored-nested", "workboard");
-    const nested = path.join(created.path, ".claude", "worktrees", "nested-agent");
-    await fs.mkdir(path.dirname(nested), { recursive: true });
-    await git(repo, "worktree", "add", "--detach", nested, "HEAD");
-    expect((await fs.stat(path.join(nested, ".git"))).isFile()).toBe(true);
-    await fs.writeFile(path.join(nested, "local.txt"), "ignored agent state\n");
+    await git(repo, "commit", "-m", "ignore nested repository");
+    const created = await materializeRunOwnedFixture(`ignored-${kind}`, "workboard");
+    const nested = path.join(created.path, relative);
+    if (kind === "linked") {
+      await fs.mkdir(path.dirname(nested), { recursive: true });
+      await git(repo, "worktree", "add", "--detach", nested, "HEAD");
+      await fs.writeFile(path.join(nested, "local.txt"), "local\n");
+    } else {
+      await initializeNestedRepository(created.path, relative);
+      expect(await fs.readdir(nested)).toEqual([".git"]);
+      expect(
+        await git(created.path, "ls-files", "--others", "--ignored", "--exclude-standard"),
+      ).toContain(`${relative}/`);
+    }
     expect(findLiveRegistryWorktreeByPath(env, nested)).toBeUndefined();
     expect(await git(created.path, "ls-files", "--others", "--exclude-standard")).toBe("");
     await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
-
-    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-nested-linked");
+    const warnLogs = createWarnLogCapture(`openclaw-worktree-gc-nested-${kind}`);
     try {
       expect((await service.gc()).removed).toEqual([]);
       expect((await service.gc()).removed).toEqual([]);
       expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
-      expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe(
-        "ignored agent state\n",
-      );
-      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
-      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-    } finally {
-      warnLogs.cleanup();
-    }
-  });
-
-  it("preserves an empty ignored nested foreign repository", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "vendor/\n");
-    await git(repo, "add", ".gitignore");
-    await git(repo, "commit", "-m", "ignore vendored repositories");
-
-    const created = await materializeRunOwnedFixture("ignored-foreign", "workboard");
-    const nested = await initializeNestedRepository(created.path, "vendor/dependency");
-    expect(await fs.readdir(nested)).toEqual([".git"]);
-    expect(
-      await git(created.path, "ls-files", "--others", "--ignored", "--exclude-standard"),
-    ).toContain("vendor/dependency/");
-    expect(await git(created.path, "ls-files", "--others", "--exclude-standard")).toBe("");
-    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
-
-    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-nested-foreign");
-    try {
-      expect((await service.gc()).removed).toEqual([]);
-      expect((await service.gc()).removed).toEqual([]);
-      expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
-      expect((await fs.stat(path.join(nested, ".git"))).isDirectory()).toBe(true);
+      const marker = await fs.stat(path.join(nested, ".git"));
+      expect(kind === "linked" ? marker.isFile() : marker.isDirectory()).toBe(true);
+      if (kind === "linked") {
+        expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe("local\n");
+        expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
+      }
       expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     } finally {
       warnLogs.cleanup();

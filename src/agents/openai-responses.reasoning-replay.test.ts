@@ -5,8 +5,8 @@ import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { expect, it } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const model = makeProviderModelFixture<"openai-responses">({
   id: "gpt-5.4",
@@ -34,16 +34,13 @@ const assistantItems = (input: Record<string, unknown>[]) =>
 
 async function replay(content: AssistantMessage["content"], storeless = false) {
   const calls = content.filter((part) => part.type === "toolCall");
-  const assistant: AssistantMessage = {
-    role: "assistant",
+  const assistant: AssistantMessage = makeAgentAssistantMessage({
     api: model.api,
     provider: model.provider,
     model: model.id,
     content,
-    usage: createZeroUsageFixture(),
-    timestamp: 0,
     stopReason: calls.length ? "toolUse" : "stop",
-  };
+  });
   let payload: Record<string, unknown> | undefined;
   const result = await stream(
     storeless

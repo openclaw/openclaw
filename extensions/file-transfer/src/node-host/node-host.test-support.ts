@@ -1,14 +1,11 @@
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import { afterEach, beforeEach, vi } from "vitest";
 
 export function observeFileOpen(
-  observe: (
-    handle: Awaited<ReturnType<typeof fs.open>>,
-    ...args: Parameters<typeof fs.open>
-  ) => void | Promise<void>,
+  observe: (handle: FileHandle, ...args: Parameters<typeof fs.open>) => void | Promise<void>,
 ) {
   const open = fs.open.bind(fs);
   return vi.spyOn(fs, "open").mockImplementation(async (...args) => {

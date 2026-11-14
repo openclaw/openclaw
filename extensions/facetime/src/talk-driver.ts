@@ -13,7 +13,6 @@ import {
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceResponseOutcome,
   type RealtimeVoiceTranscriptEntry,
-  type TalkEvent,
   type TalkEventInput,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -39,16 +38,6 @@ const FACETIME_INITIAL_GREETING =
   "Greet the caller briefly, introduce yourself using your configured identity, and ask how you can help.";
 const FACETIME_GREETING_MEDIA_SETTLE_MS = 100;
 
-export type FaceTimeTalkDriver = {
-  readonly recentTalkEvents: readonly TalkEvent[];
-  readyForAudio(): Promise<void>;
-  processOutputSuppressed(): boolean;
-  realtimeActive(): boolean;
-  activate(): void;
-  suspendMedia(reason?: string): Promise<void>;
-  close(reason?: string): Promise<void>;
-};
-
 export async function startFaceTimeTalkDriver(params: {
   config: FaceTimeConfig;
   fullConfig: OpenClawConfig;
@@ -60,7 +49,7 @@ export async function startFaceTimeTalkDriver(params: {
   signal?: AbortSignal;
   onHangupRequested: () => Promise<void>;
   onFailure?: (error: Error) => boolean | Promise<boolean>;
-}): Promise<FaceTimeTalkDriver> {
+}) {
   if (params.signal?.aborted) {
     throw new Error("FaceTime talk startup aborted");
   }

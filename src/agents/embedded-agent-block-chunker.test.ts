@@ -111,7 +111,7 @@ describe("EmbeddedBlockChunker", () => {
   });
 
   it("preserves paragraph selection and source cursors across a forced tail", () => {
-    const tail = "Cccc";
+    const tail = "\n\nCccc";
     for (const force of [false, true]) {
       const prefix = force ? `${"x".repeat(20)}\n` : "";
       const source = `${prefix}Aaaa\n\nBbbb\n\nCccc`;
@@ -122,12 +122,12 @@ describe("EmbeddedBlockChunker", () => {
       expect(emitted).toEqual(
         force
           ? [
-              ["x".repeat(20), prefix],
-              ["Aaaa", "Aaaa\n\n"],
-              ["Bbbb", "Bbbb\n\n"],
-              ["Cccc", "Cccc"],
+              ["x".repeat(20), "x".repeat(20)],
+              ["\nAaaa", "\nAaaa"],
+              ["\n\nBbbb", "\n\nBbbb"],
+              [tail, tail],
             ]
-          : [["Aaaa\n\nBbbb", "Aaaa\n\nBbbb\n\n"]],
+          : [["Aaaa\n\nBbbb", "Aaaa\n\nBbbb"]],
       );
       expect(chunker.bufferedText).toBe(force ? "" : tail);
       expect(chunker.hasBuffered()).toBe(!force);
@@ -388,7 +388,7 @@ describe("EmbeddedBlockChunker", () => {
     const chunker = paragraphChunker(30, 200, { flushOnParagraph: true });
     chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
     expect(drainChunks(chunker)).toEqual(["First paragraph.\n\nSecond paragraph."]);
-    expect(chunker.bufferedText).toBe("Third paragraph.");
+    expect(chunker.bufferedText).toBe("\n\nThird paragraph.");
   });
 
   it.each([
@@ -503,7 +503,7 @@ describe("EmbeddedBlockChunker", () => {
     it("keeps a streamed table whole when it fills maxChars and a heading follows directly", () => {
       const text = `${intro}\n\n${tableAtCap}\n# Next steps`;
       for (const delta of [1, 17, 43, text.length]) {
-        expect(tableChunks(text, delta)).toEqual([intro, tableAtCap, "# Next steps"]);
+        expect(tableChunks(text, delta)).toEqual([`${intro}\n\n`, tableAtCap, "\n# Next steps"]);
       }
     });
 

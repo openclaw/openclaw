@@ -150,7 +150,6 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
     wake && {
       status: wake.status,
       attemptCount: wake.attemptCount,
-      replayCount: wake.replayCount ?? 0,
       nextAttemptAt: wake.nextAttemptAt,
       privateInput: wake.privateInput,
       lastError: wake.lastError,

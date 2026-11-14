@@ -92,7 +92,7 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Node 24.16+ or Node 26.1+ is required for orchestration and build preparation.
+Node 24.22.1+ or Node 26.12.1+ is required for orchestration and build preparation.
 Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
 ### OpenClaw Bun fork

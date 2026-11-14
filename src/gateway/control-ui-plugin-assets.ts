@@ -158,7 +158,7 @@ async function snapshotBrowserBuild(
   if (!declaration || !record.rootDir || !isControlUiPluginAllowed(record)) {
     throw new Error("plugin is no longer active");
   }
-  const { entryName, styles, assets, bytes } = await readPluginControlUiAssets(
+  const { entryName, styles, assets, bytes, panelIcon } = await readPluginControlUiAssets(
     record.rootDir,
     declaration,
     {
@@ -168,7 +168,7 @@ async function snapshotBrowserBuild(
       }),
     },
   );
-  const revision = pluginControlUiRevision(declaration, uiCapabilities, assets);
+  const revision = pluginControlUiRevision(declaration, uiCapabilities, assets, panelIcon?.dataUrl);
   const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
   const prefix = `${controlUiPluginAssetPrefix(record.id, basePath)}${revision}/`;
   const assetUrl = (name: string) =>
@@ -184,6 +184,7 @@ async function snapshotBrowserBuild(
       entryUrl: assetUrl(entryName),
       imports,
       styles: styles.map(assetUrl),
+      ...(panelIcon ? { panelIcon: panelIcon.dataUrl } : {}),
       ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
       ...(hasCanonicalPluginDistribution(record) && record.packageName && record.packageVersion
         ? {

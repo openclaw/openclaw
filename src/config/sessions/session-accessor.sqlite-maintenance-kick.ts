@@ -1,5 +1,7 @@
+import { addAbortListener } from "node:events";
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { captureRuntimeWorkerGenerationContext } from "../../infra/runtime-worker-generation.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -38,6 +40,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
+  canDeferMaintenance,
   capturePendingSessionMaintenanceAgeChanges,
   observeSessionEntryMaintenanceAgeChanges,
   restartSessionMaintenanceAgeScan,
@@ -81,6 +84,7 @@ type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
   ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
   assertCurrent: () => void;
   captureExecution: () => OpenClawAgentDatabaseExecution | undefined;
+  runInRuntimeGeneration: ReturnType<typeof captureRuntimeWorkerGenerationContext>;
   maintenanceResource?: ReturnType<typeof captureOpenClawDatabaseMaintenanceResource>;
   execution?: OpenClawAgentDatabaseExecution;
   active?: Promise<void>;
@@ -125,14 +129,9 @@ export function kickSessionEntryMaintenanceAfterWrite(
     const fact = owner.ageFact;
     if (
       !owner.running &&
-      fact?.entryCount !== undefined &&
-      isDeepStrictEqual(fact.maintenance, maintenance) &&
-      Date.now() < Math.min(fact.next.at, fact.recheckAt) &&
-      (owner.noCandidates ||
-        !shouldRunSessionEntryMaintenance({
-          entryCount: fact.entryCount,
-          maxEntries: maintenance.maxEntries,
-        }))
+      fact &&
+      canDeferMaintenance(fact, maintenance, owner.noCandidates) &&
+      Date.now() < Math.min(fact.next.at, fact.recheckAt)
     ) {
       // Acknowledged activity cannot require a scan before this conservative deadline.
       owner.activeSessionKeys.clear();
@@ -165,24 +164,23 @@ export function kickSessionEntryMaintenanceAfterWrite(
   if (identity && !identity.key.startsWith("file:")) {
     return;
   }
-  const captureExecution = () =>
-    supportsOpenClawAgentDatabaseExecution(options) && identity
-      ? captureOpenClawAgentDatabaseExecution(options, {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: identity.key.slice(5),
-            birthtime: identity.birthtime,
-            nativeLocation: identity.canonicalPath,
-          },
-        })
-      : undefined;
   const created: SessionEntryMaintenanceOwner = {
     ...params,
     scope,
     activeSessionKeys: new Set([params.activeSessionKey]),
     ageChanges: new Map(),
-    captureExecution,
-    execution: captureExecution(),
+    captureExecution: () =>
+      supportsOpenClawAgentDatabaseExecution(options) && identity
+        ? captureOpenClawAgentDatabaseExecution(options, {
+            expectedIdentity: {
+              kind: "file",
+              physicalIdentity: identity.key.slice(5),
+              birthtime: identity.birthtime,
+              nativeLocation: identity.canonicalPath,
+            },
+          })
+        : undefined,
+    runInRuntimeGeneration: captureRuntimeWorkerGenerationContext(),
     assertCurrent: () => {
       assertAdmitted();
       created.execution?.assertCurrent();
@@ -199,6 +197,10 @@ export function kickSessionEntryMaintenanceAfterWrite(
   const unregister: Array<() => void> = [];
   created.unregisterClose = () => unregister.forEach((release) => release());
   try {
+    const drainListener = addAbortListener(getGatewayRestartDrainSignal(), () =>
+      retireMaintenanceOwner(databasePath, created),
+    );
+    unregister.push(() => drainListener[Symbol.dispose]());
     unregister.push(
       observeSessionControllerProtectionReleases(created.storePath, () => {
         if (
@@ -408,10 +410,7 @@ function scheduleMaintenanceAt(
   owner.running = false;
   owner.timerDeadlineMonotonicMs = performance.now() + delayMs;
   owner.timer = runInDetachedAsyncContext(() =>
-    setTimeout(() => {
-      owner.running = true;
-      startPendingMaintenance(databasePath, owner);
-    }, delayMs),
+    setTimeout(() => startPendingMaintenance(databasePath, owner), delayMs),
   );
   owner.timer.unref();
 }
@@ -428,18 +427,15 @@ function scheduleMaintenanceAfterWriteQuiet(
   owner.retryDelayMs = MAINTENANCE_WRITE_QUIET_MS * 2 ** Math.max(0, owner.rejections - 1);
   owner.timerDeadlineMonotonicMs = performance.now() + owner.retryDelayMs;
   owner.timer = runInDetachedAsyncContext(() =>
-    setTimeout(() => {
-      owner.timer = undefined;
-      owner.retryDelayMs = undefined;
-      owner.running = true;
-      startPendingMaintenance(databasePath, owner);
-    }, owner.retryDelayMs),
+    setTimeout(() => startPendingMaintenance(databasePath, owner), owner.retryDelayMs),
   );
   owner.timer.unref();
 }
 
 function startPendingMaintenance(databasePath: string, owner: SessionEntryMaintenanceOwner): void {
   owner.timer = undefined;
+  owner.retryDelayMs = undefined;
+  owner.running = true;
   owner.timerDeadlineMonotonicMs = undefined;
   // Publish the join before a pass can synchronously retire itself.
   owner.active = Promise.resolve().then(async () => {
@@ -447,7 +443,8 @@ function startPendingMaintenance(databasePath: string, owner: SessionEntryMainte
       return retireMaintenanceOwner(databasePath, owner);
     }
     // Keep command cleanup custody while automatic work uses the runtime worker path.
-    const run = () => runPendingMaintenance(databasePath, owner);
+    const run = () =>
+      owner.runInRuntimeGeneration(() => runPendingMaintenance(databasePath, owner));
     await (owner.maintenanceResource ? owner.maintenanceResource.runWorker(run) : run());
   });
 }
@@ -476,6 +473,7 @@ async function runPendingMaintenance(
   let nextMaintenanceAt: number | undefined = Infinity;
   let planningChanged = false;
   let finalized = false;
+  let failed = false;
   let preservation: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>> | undefined;
   try {
     owner.execution ??= owner.captureExecution();
@@ -492,12 +490,12 @@ async function runPendingMaintenance(
         throw new SqliteReclamationInputsChangedError("SQLite automatic maintenance owner retired");
       }
     };
-    const preparedPreservation = await prepareSessionMaintenancePreservation(owner.storePath);
-    preservation = preparedPreservation;
+    const prepared = await prepareSessionMaintenancePreservation(owner.storePath, owner.scope);
+    preservation = prepared;
     assertInputsCurrent();
-    const capturePreservation = () => {
+    const capturePreservation: typeof prepared.capture = (operation) => {
       try {
-        return preparedPreservation.capture();
+        return prepared.capture(operation);
       } catch (error) {
         planningChanged = true;
         throw error;
@@ -557,7 +555,7 @@ async function runPendingMaintenance(
         assertCommitAllowed: assertInputsCurrent,
         // Consume the committed worker proof under FIFO; later observers retain invalidation ownership.
         onWorkerResult: consumePlanning,
-        assertMaintenanceCommitAllowed(plans) {
+        assertMaintenanceCommitAllowed(plans, retained) {
           assertInputsCurrent();
           try {
             // A late kick can protect an ancestor; the next writer refresh resolves that ancestry.
@@ -568,7 +566,7 @@ async function runPendingMaintenance(
             }
             assertMaintenancePreservationCompatible(
               operation.input.preservation,
-              capturePreservation(),
+              capturePreservation(retained),
               plans,
             );
           } catch (error) {
@@ -675,6 +673,7 @@ async function runPendingMaintenance(
       return;
     }
   } catch (error) {
+    failed = true;
     const log = getChildLogger({ subsystem: "session-sqlite" });
     const details = { error: formatErrorMessage(error, { includeCode: true }), path: databasePath };
     owner.noCandidates = false;
@@ -716,11 +715,10 @@ async function runPendingMaintenance(
   }
   // Writes during finalization also coalesce behind the next quiet window.
   if (!isCurrent()) {
-    retireMaintenanceOwner(databasePath, owner);
-    return;
+    return retireMaintenanceOwner(databasePath, owner);
   }
-  const fact = owner.ageFact;
-  if (fact && hasCurrentNoCandidates()) {
+  const fact = failed ? undefined : owner.ageFact;
+  if (fact && canDeferMaintenance(fact, resolveOwnerMaintenance(owner), owner.noCandidates)) {
     owner.activeSessionKeys.clear();
     nextMaintenanceAt = Math.min(fact.next.at, fact.recheckAt);
   } else if (owner.generation !== generation || owner.ageChanges.size > 0) {

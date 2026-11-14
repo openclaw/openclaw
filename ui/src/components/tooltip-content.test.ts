@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { collectTooltipNameText, isTooltipTextRedundant } from "./tooltip-content.ts";
 
 describe("tooltip text redundancy", () => {
+  it("skips style reads for an icon-only trigger", () => {
+    const trigger = document.createElement("button");
+    trigger.append(document.createElementNS("http://www.w3.org/2000/svg", "svg"), " \n\t ");
+    const style = vi.spyOn(window, "getComputedStyle");
+    try {
+      expect(isTooltipTextRedundant("Stop voice input", trigger)).toBe(false);
+      expect(style).not.toHaveBeenCalled();
+    } finally {
+      style.mockRestore();
+    }
+  });
+
   it.each(["hidden", "display", "opacity", "content-visibility"])(
     "retains a tooltip for overflow below a %s text subtree",
     (hiddenBy) => {

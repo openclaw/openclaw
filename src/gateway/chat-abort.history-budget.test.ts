@@ -169,14 +169,17 @@ describe("resolveInFlightRunSnapshot", async () => {
     expect(resolve()).toBeUndefined();
   });
 
-  it("omits execution timing until a queued source actually starts", async () => {
+  it.each([-600_000, 0, 600_000])("starts timing after wall step %i", async (step) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const source = createRpcSourceForTest(
       { projectSessionActive: true },
       { runId: "queued-clock", sessionKey: "agent:main:queued-clock" },
     );
     rpcSourceTesting.reset(new Map([["queued-clock", source]]));
-    initializeRpcSourceTiming(source, { timeoutMs: 60_000 });
+    initializeRpcSourceTiming(source, { timeoutMs: 60_000, onQueueTimeout: () => {} });
     await claimRpcSourceForTest(source);
+    await vi.advanceTimersByTimeAsync(1_000);
+    vi.setSystemTime(Date.now() + step);
     const params = {
       sources: new Map([["queued-clock", source]]),
       chatRunBuffers: new Map<string, string>(),

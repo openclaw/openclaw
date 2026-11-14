@@ -86,6 +86,7 @@ export function createGatewayMethodRegistry(
   }
   return {
     ...(pluginRegistry ? { pluginRegistry } : {}),
+    getDescriptor: (name) => byName.get(name),
     getHandler: (name) => byName.get(name)?.handler,
     listMethods: () => descriptors.map((descriptor) => descriptor.name),
     listAdvertisedMethods: () =>

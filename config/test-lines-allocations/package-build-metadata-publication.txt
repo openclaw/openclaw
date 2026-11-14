@@ -1,0 +1,3 @@
+181
+# Real npm/pnpm root and bundled-AI publication, preserved build metadata,
+# runtime exports, and canonical filename/content inventory coverage.

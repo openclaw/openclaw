@@ -1,5 +1,6 @@
 import { action, createOptimistic, onSettled, Show } from "solid-js";
 import { ConnectCommand } from "../../components/solid/connect-command.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import { formatTimeMs } from "../../lib/format.ts";
@@ -36,31 +37,23 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
         description={t("newSession.connectMachineDescription")}
         onModal-cancel={() => props.onClose()}
       >
-        <section class="exec-approval-card connect-machine-dialog__card">
-          <header class="exec-approval-header">
-            <div>
-              <h2 class="exec-approval-title">{t("newSession.connectMachineTitle")}</h2>
-              <p class="exec-approval-sub">{t("newSession.connectMachineDescription")}</p>
-            </div>
-            <button
-              class="btn btn--icon btn--ghost"
-              type="button"
-              aria-label={t("common.dismiss")}
-              onClick={() => props.onClose()}
-            >
-              <Icon name="x" />
-            </button>
-          </header>
-          <div class="connect-machine-dialog__body">
+        <section class="oc-dialog">
+          <DialogHeader
+            title={t("newSession.connectMachineTitle")}
+            description={<p>{t("newSession.connectMachineDescription")}</p>}
+            onClose={() => props.onClose()}
+          />
+          <div class="oc-dialog__body connect-machine-dialog__body">
             {busy() && !props.setup?.command ? (
               <p class="connect-machine-dialog__status" role="status">
                 {t("newSession.connectMachineGenerating")}
               </p>
             ) : undefined}
             {props.error ? (
-              <p class="exec-approval-error" role="alert">
-                {t("newSession.connectMachineFailed")} {props.error}
-              </p>
+              <div class="callout danger" role="alert">
+                <p>{t("newSession.connectMachineFailed")}</p>
+                <p>{props.error}</p>
+              </div>
             ) : undefined}
             <Show when={props.setup}>
               {(setup) => (
@@ -91,7 +84,7 @@ export function ConnectMachineDialog(props: ReturnType<ConnectMachineSetupState[
               )}
             </Show>
           </div>
-          <openclaw-modal-actions class="exec-approval-actions connect-machine-dialog__actions">
+          <openclaw-modal-actions class="oc-dialog__footer connect-machine-dialog__actions">
             {props.setup?.command || props.error ? (
               <button class="btn" type="button" disabled={busy()} onClick={() => props.onRefresh()}>
                 <Icon name="refresh" />

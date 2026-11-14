@@ -1,0 +1,2 @@
+# Cover repeated stdin notifications while preserving cancellation and terminal settlement.
+31

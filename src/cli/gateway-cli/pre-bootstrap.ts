@@ -16,7 +16,10 @@ import {
 } from "../../infra/fs-safe-env.js";
 import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
-import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../../state/artifact-preserving-state-reads.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep, recordGatewayBootstrapStep } from "../startup-trace.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
@@ -186,37 +189,47 @@ async function readGuardedGatewayRunConfig(
     "cli.environment.config-import",
     () => import("../../config/io.factory.js"),
   );
-  return await withArtifactPreservingStateReads(async () => {
-    const current = await createConfigIO({
-      env: cloneEnvWithPlatformSemantics(process.env),
-      observe: false,
-      pluginValidation: "core-only",
-      measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
-    }).readConfigFileSnapshot();
-    const guard = (snapshot: ConfigFileSnapshot) =>
-      enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
-    if (!guard(current)) {
-      return null;
-    }
-    const recovery = await measureGatewayBootstrapStep("cli.environment.config-recovery", () =>
-      createConfigIO({
-        configPath: current.path,
-        env: cloneEnvWithPlatformSemantics(process.env),
-        observe: false,
-        pluginValidation: "core-only",
-        measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
-      }).prepareConfigRecovery(current),
-    );
-    return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
-  });
+  return await withLiveStateReads(() =>
+    withArtifactPreservingStateReads(async () => {
+      const current = await measureGatewayBootstrapStep("cli.environment.config-read", () =>
+        createConfigIO({
+          env: cloneEnvWithPlatformSemantics(process.env),
+          observe: false,
+          pluginValidation: "core-only",
+          measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+        }).readConfigFileSnapshot(),
+      );
+      const guard = (snapshot: ConfigFileSnapshot) =>
+        enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
+      if (!guard(current)) {
+        return null;
+      }
+      const recovery = await measureGatewayBootstrapStep("cli.environment.config-recovery", () =>
+        createConfigIO({
+          configPath: current.path,
+          env: cloneEnvWithPlatformSemantics(process.env),
+          observe: false,
+          pluginValidation: "core-only",
+          measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+        }).prepareConfigRecovery(current),
+      );
+      return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
+    }),
+  );
 }
 
 function describeGatewayRunConfigChange(
   expected: ConfigFileSnapshot,
   current: ConfigFileSnapshot,
-  options: { allowPathChange?: boolean } = {},
+  {
+    currentValidatesPlugins,
+    ...options
+  }: { allowPathChange?: boolean; currentValidatesPlugins?: boolean } = {},
 ): string | undefined {
-  return current.valid !== expected.valid
+  // Selection checks only the core schema. When `current` also checked plugin schemas, the same
+  // authored config can fail them without changing; the config guard then names each issue.
+  const failsPluginSchemas = currentValidatesPlugins === true && expected.valid && !current.valid;
+  return current.valid !== expected.valid && !failsPluginSchemas
     ? "config validity changed"
     : describeConfigSnapshotInputChange(expected, current, {
         ...options,
@@ -571,7 +584,9 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
   selectedGatewayRunEnvironment = undefined;
   let guarded: boolean;
   try {
-    guarded = await guardGatewayRunSelectedConfig(params);
+    guarded = await measureGatewayBootstrapStep("cli.environment.config-guard", () =>
+      guardGatewayRunSelectedConfig(params),
+    );
   } finally {
     if (params.opts.reset) {
       restoreAppliedGatewayRunConfigEnvironment(false);
@@ -586,7 +601,7 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
     before: envBeforeGuard,
     after: { ...fsSafeEnvInput(process.env) },
   };
-  await pinGatewayRunRuntimePaths();
+  await measureGatewayBootstrapStep("cli.environment.pin-runtime-paths", pinGatewayRunRuntimePaths);
   return guarded;
 }
 
@@ -666,6 +681,8 @@ export async function recheckGatewayRunBootstrap(
   // must be validated by a new startup attempt.
   const change = describeGatewayRunConfigChange(prepared.snapshot, current, {
     allowPathChange: params.snapshot !== undefined,
+    // Startup preflight passes its plugin-validated read; rereads here stay core-only.
+    currentValidatesPlugins: params.snapshot !== undefined,
   });
   if (!change) {
     return true;

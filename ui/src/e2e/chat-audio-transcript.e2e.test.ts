@@ -5,6 +5,7 @@ import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "audio transcript visibility" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it("shows persisted audio transcripts with and without spaces", async () => {
@@ -24,7 +25,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const messages = page.locator(".chat-group.user .chat-text");
         await messages.filter({ hasText: "Hello world" }).waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "audio-transcripts.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "audio-transcripts.png") });
+        }
         for (const transcript of transcripts) {
           expect((await messages.allTextContents()).map((text) => text.trim())).toContain(
             `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`,

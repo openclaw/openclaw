@@ -12,14 +12,12 @@ import {
 } from "../delivery-queue-sqlite.js";
 import { resolveDeliveryQueueAttemptCount } from "../delivery-queue-sqlite.types.js";
 import {
-  createDeliveryRecoveryCoordinator,
   createEmptyDeliveryRecoverySummary,
   getErrnoCode,
   isAmbiguousDeliveryTransportError,
   isDeliveryRecoveryRetryEligible,
   isProvenDeliveryNotSentError,
   resolveDeliveryRecoveryDeadlineMs,
-  type ActiveDeliveryRecoveryClaimResult,
   type DeliveryRecoveryDrainDecision,
   type DeliveryRecoverySummary,
 } from "../delivery-recovery.shared.js";
@@ -67,10 +65,12 @@ import {
   needsUnknownSendReconciliation,
   reconcileUnknownQueuedDelivery,
 } from "./delivery-queue-reconciliation.js";
+import { recoveryCoordinator, recoveryLaneKey } from "./delivery-queue-recovery-coordinator.js";
 import { buildRecoveryDeliverParams } from "./delivery-queue-recovery-params.js";
 import {
   canReplayAmbiguousFinalText,
   isPermanentDeliveryError,
+  recoveryPlatformAttemptId,
   resolveMaxRetries,
   shouldInspectQueuedDelivery,
 } from "./delivery-queue-recovery-policy.js";
@@ -87,6 +87,7 @@ import {
   restoreDeliveryAttemptBeforeDispatch,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
+import { commitRecoveredVisibleMessages } from "./delivery-queue-transcript.js";
 import type { DeliveryFailureSettlement } from "./delivery-queue-types.js";
 import { createOutboundMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
@@ -96,6 +97,8 @@ import {
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries, preparedOutboundPayloads } from "./prepared-batch.js";
+
+export const withActiveDeliveryClaim = recoveryCoordinator.withClaim;
 
 export type DeliverFn = (params: DeliverOutboundPayloadsParams) => Promise<unknown>;
 
@@ -129,8 +132,6 @@ type EntryRecoveryOptions = RecoveryOptions & {
   ) => void;
   onAttemptFailed?: (error: OutboundDeliveryError) => void;
 };
-
-const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedDelivery>();
 
 function emitRecoveredMessageSentEvents(
   entry: QueuedDelivery,
@@ -235,13 +236,6 @@ function emitQueuedDeliveryResults(
       ? completedOutboundAuditTerminals(batch)
       : failedOutboundAuditTerminals({ ...batch, failureStage: failureStage() });
   });
-}
-
-export async function withActiveDeliveryClaim<T>(
-  entryId: string,
-  fn: () => Promise<T>,
-): Promise<ActiveDeliveryRecoveryClaimResult<T>> {
-  return recoveryCoordinator.withClaim(entryId, fn);
 }
 
 async function recordRecoveryFailure(
@@ -441,18 +435,6 @@ async function runReconciledSentCommitHooks(params: {
   }
 }
 
-function recoveryPlatformAttemptId(entry: QueuedDelivery, claimedAttemptId?: string) {
-  return claimedAttemptId !== undefined
-    ? claimedAttemptId
-    : typeof entry.platformSendAttemptId === "string"
-      ? entry.platformSendAttemptId
-      : entry.recoveryState === "producer_claimed" && typeof entry.producerClaimId === "string"
-        ? entry.producerClaimId
-        : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
-          ? null
-          : undefined;
-}
-
 async function resolveCompletedOwnerBeforeRecovery(
   opts: EntryRecoveryOptions & { owner: QueuedDeliveryOwner },
   stateContext: DeliveryQueueStateContext,
@@ -501,6 +483,7 @@ async function resolveCompletedOwnerBeforeRecovery(
     return "failed";
   }
   if (operation.state === "delivered") {
+    await commitRecoveredVisibleMessages(opts, stateContext);
     const messageId = operation.platformMessageId;
     if (messageId) {
       const result: OutboundDeliveryResult = { channel: opts.entry.channel, messageId };
@@ -587,6 +570,7 @@ async function drainQueuedEntry(
           );
         }
         await owner.ack();
+        await commitRecoveredVisibleMessages(opts, stateContext);
         emitRecoveredTerminalEvents(entry, { result });
         await runReconciledSentCommitHooks({
           entry,
@@ -1252,13 +1236,15 @@ export async function drainPendingDeliveriesCore(
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
     const matchingEntries = (await loadUnfinishedDeliveries(opts.stateDir, stateContext)).filter(
-      (entry) => shouldInspectQueuedDelivery(entry, now, opts.selectEntry),
+      (entry) => Boolean(entry.settlement) || opts.selectEntry(entry, now).match,
     );
+    // Leased matches still need a later scan, but cannot acquire an inspection claim yet.
     if (matchingEntries.length > 0) {
       opts.onPending?.();
     }
     await recoveryCoordinator.scan({
-      entries: matchingEntries,
+      entries: matchingEntries.filter((entry) => shouldInspectQueuedDelivery(entry, now)),
+      laneKey: (entry) => recoveryLaneKey(entry, opts.cfg, stateContext.stateDir),
       loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
       onMissingEntry: (entry) => {
         opts.log.info(`${opts.logLabel}: entry ${entry.id} already gone, skipping`);
@@ -1313,6 +1299,7 @@ export async function recoverPendingDeliveries(
   };
   await recoveryCoordinator.scan({
     entries: pending.filter((entry) => shouldInspectQueuedDelivery(entry, Date.now())),
+    laneKey: (entry) => recoveryLaneKey(entry, opts.cfg, stateContext.stateDir),
     loadEntry: (id) => loadUnfinishedDelivery(id, opts.stateDir, stateContext),
     deadlineMs: deadline,
     onDeadlineExceeded,

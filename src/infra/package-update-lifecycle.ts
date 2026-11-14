@@ -1,23 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ignoreMissingPath } from "./errno.js";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
-import { isPathInside } from "./fs-safe.js";
+import { formatErrorMessage } from "./errors.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import {
   completePendingPackageLifecycle,
-  discardPendingPackageLifecycle,
   PackageLifecycleOwnershipError,
   type PackageLifecycleScript,
 } from "./package-lifecycle.js";
-import { removePackageUpdatePath } from "./package-update-filesystem.js";
 import { classifyPackageUpdatePermissionFailure } from "./package-update-manager-preflight.js";
 import type { StagedPackageInstall } from "./package-update-swap-contract.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { verifyPackageUpdateRecovery, type ResolvedGlobalInstallTarget } from "./update-global.js";
+import { recordManagedUpdatePackageStage } from "./update-handoff-recovery.js";
 import { prepareNativePackageStage } from "./update-native-package-stage.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
@@ -114,6 +111,7 @@ export async function prepareStagedPackageInstall(
   installTarget: ResolvedGlobalInstallTarget,
   packageName: string,
   nativeOptions?: { env: NodeJS.ProcessEnv; globalBinDir?: string; installSpec: string },
+  env?: NodeJS.ProcessEnv,
 ): Promise<
   | { stagedInstall: StagedPackageInstall; failedStep: null }
   | { stagedInstall: null; failedStep: UpdateStepResult }
@@ -151,6 +149,15 @@ export async function prepareStagedPackageInstall(
     }
     // Isolated pnpm resolves its newly created owner after installation.
     const packageRoot = path.join(layout.globalRoot, packageName);
+    if (!native) {
+      await recordManagedUpdatePackageStage({ prefix, packageRoot }, env).catch(
+        (error: unknown) => {
+          console.warn(
+            `[update] Package stage cleanup custody could not be recorded: ${formatErrorMessage(error)}. The update will continue; inspect retained stages if it is interrupted.`,
+          );
+        },
+      );
+    }
     return {
       stagedInstall: {
         prefix,
@@ -188,98 +195,6 @@ export async function prepareStagedPackageInstall(
         nativeOptions?.env,
         err,
       ),
-    };
-  }
-}
-
-class PackageStageRemovalError extends Error {}
-
-async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise<void> {
-  const discard = async () => {
-    if (!(await removePackageUpdatePath(stage.prefix))) {
-      throw new PackageStageRemovalError(
-        `Unable to remove discarded package stage ${stage.prefix}`,
-      );
-    }
-    if (stage.native) {
-      await removePackageUpdatePath(stage.native.binDir);
-    }
-  };
-  const prefix = (await fs.realpath(stage.prefix).catch(ignoreMissingPath)) ?? null;
-  const candidates = [stage.packageRoot];
-  if (prefix && stage.native && stage.installTarget.pnpmIsolated) {
-    // Activation follows active hash links only. Disposal also removes unlinked
-    // install directories left by a failed pnpm 11+ invocation, without requiring
-    // a completed manifest or lockfile. Discovery errors must preserve the stage.
-    const entries = await fs
-      .readdir(stage.native.globalRoot, { withFileTypes: true })
-      .catch((error: unknown) => ignoreMissingPath(error) ?? []);
-    for (const entry of entries) {
-      if (entry.isDirectory() || entry.isSymbolicLink()) {
-        candidates.push(
-          path.join(
-            stage.native.globalRoot,
-            entry.name,
-            "node_modules",
-            path.basename(stage.packageRoot),
-          ),
-        );
-      }
-    }
-  }
-  const packageRoots = new Set<string>();
-  if (prefix) {
-    for (const candidate of candidates) {
-      const packageRoot = await fs.realpath(candidate).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
-          return null;
-        }
-        throw error;
-      });
-      if (
-        packageRoot &&
-        isPathInside(prefix, packageRoot) &&
-        (await fs.stat(packageRoot)).isDirectory()
-      ) {
-        packageRoots.add(packageRoot);
-      }
-    }
-  }
-  // Missing/activated roots need no admission. Removing an external source link
-  // does not remove its payload or authorize changing its lifecycle markers.
-  await discardPendingPackageLifecycle({ packageRoots: [...packageRoots], discard });
-}
-
-/** Dispose only after pending work is retired under its lifecycle generation. */
-export async function discardPackageUpdateStage(params: {
-  stage: StagedPackageInstall;
-  committed: boolean;
-}): Promise<UpdateStepResult | null> {
-  try {
-    await cleanupStagedPackageInstall(params.stage);
-    return null;
-  } catch (error) {
-    // Only a refused disposable-prefix removal after a verified swap is harmless.
-    // Discovery, lifecycle ownership and release failures remain strict.
-    if (params.committed && error instanceof PackageStageRemovalError) {
-      const message = `${error.message}. Installation verification succeeded; inspect the retained stage before removing it manually.`;
-      return {
-        name: "package-stage-cleanup",
-        command: `discard ${params.stage.prefix}`,
-        cwd: params.stage.prefix,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: message,
-        advisory: { kind: "recoverable-maintenance", message },
-      };
-    }
-    return {
-      name: `${params.stage.installTarget.manager}-package-lifecycle`,
-      command: `discard ${params.stage.packageRoot}`,
-      cwd: params.stage.packageRoot,
-      durationMs: 0,
-      exitCode: 1,
-      stderrTail: formatErrorMessage(error),
     };
   }
 }

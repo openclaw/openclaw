@@ -57,8 +57,10 @@ import { readTranscriptStorageRows as transcriptRows } from "./session-accessor.
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import type { SessionEntryCreateWithTranscriptContext } from "./session-accessor.types.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const it = baseIt.extend<{ state: OpenClawTestState }>({
   state: [
@@ -112,6 +114,20 @@ function seedAlias(
     cwd,
   );
 }
+
+function creationFixture(sessionKey: string) {
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  return {
+    database,
+    sessionKey,
+    alias: sessionKey.toLowerCase(),
+    scope: { agentId: "main", storePath: database.path, sessionKey },
+  };
+}
+
+const accepted = (entry: SessionEntry) => ({ ok: true as const, entry });
+const keepExisting = ({ existingEntry }: SessionEntryCreateWithTranscriptContext) =>
+  accepted(existingEntry!);
 
 it.for([false, true])(
   "prepares a new custom-store suffix only while absent (appeared=%s)",
@@ -217,10 +233,12 @@ it("creates through an admitted store alias with prepared facts and atomic owner
         await Promise.resolve();
         assertCreation();
         expect(snapshot.labelInUse).toBe(false);
-        return {
-          ok: true,
-          entry: { sessionId: "created", updatedAt: 2, category: "Created", label: "available" },
-        };
+        return accepted({
+          sessionId: "created",
+          updatedAt: 2,
+          category: "Created",
+          label: "available",
+        });
       },
       {
         label: "available",
@@ -281,7 +299,7 @@ it("creates through an admitted store alias with prepared facts and atomic owner
         storePath: state.statePath("first-use.sqlite"),
         sessionKey: "agent:main:first-use",
       },
-      () => ({ ok: true, entry: { sessionId: "first-use", updatedAt: 1 } }),
+      () => accepted({ sessionId: "first-use", updatedAt: 1 }),
     );
     expect(firstUse.ok).toBe(true);
     expect(sql.queries).toEqual([]);
@@ -332,7 +350,7 @@ it.for(["replaced", "closed"] as const)(
               await fs.symlink(replacement, alias, "junction");
             }
             expect(assertCreation).toThrow(message);
-            return { ok: true, entry: { sessionId: "must-not-publish", updatedAt: 1 } };
+            return accepted({ sessionId: "must-not-publish", updatedAt: 1 });
           },
           {
             bindCreation: (operation) => {
@@ -355,23 +373,19 @@ it.for(["replaced", "closed"] as const)(
 );
 
 it("does not initialize a transcript or invoke follow-up when creation rejects", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  const { database, scope, sessionKey } = creationFixture("agent:main:rejected");
   const followup = vi.fn();
-  const result = await createEntry(
-    { agentId: "main", storePath: database.path, sessionKey: "agent:main:rejected" },
-    () => ({ ok: false, error: "rejected" }),
-    { afterCommitted: followup },
-  );
+  const result = await createEntry(scope, () => ({ ok: false, error: "rejected" }), {
+    afterCommitted: followup,
+  });
   expect(result).toEqual({ ok: false, phase: "entry", error: "rejected" });
-  const invalid = await createEntry(
-    { agentId: "main", storePath: database.path, sessionKey: "agent:main:rejected" },
-    () => ({ ok: true, entry: { sessionId: "", updatedAt: 1 } }),
-    { afterCommitted: followup },
-  );
+  const invalid = await createEntry(scope, () => accepted({ sessionId: "", updatedAt: 1 }), {
+    afterCommitted: followup,
+  });
   expect(invalid).toMatchObject({ ok: false, phase: "transcript" });
   expect(transcriptRows(database, "")).toEqual([]);
   expect(followup).not.toHaveBeenCalled();
-  expect(readEntry(database, "agent:main:rejected")).toBeUndefined();
+  expect(readEntry(database, sessionKey)).toBeUndefined();
 });
 
 it.each(["maintenance", "alias replacement"] as const)(
@@ -399,19 +413,15 @@ it.each(["maintenance", "alias replacement"] as const)(
     });
     let followed = false;
     const create = () =>
-      createEntry(
-        scope,
-        () => ({ ok: true, entry: { sessionId: "native-created", updatedAt: 1 } }),
-        {
-          afterCommitted: async (_entry, source) => {
-            source.assertCurrent();
-            expect(readEntry(database, scope.sessionKey)?.entry.sessionId).toBe("native-created");
-            await Promise.resolve();
-            source.assertCurrent();
-            followed = true;
-          },
+      createEntry(scope, () => accepted({ sessionId: "native-created", updatedAt: 1 }), {
+        afterCommitted: async (_entry, source) => {
+          source.assertCurrent();
+          expect(readEntry(database, scope.sessionKey)?.entry.sessionId).toBe("native-created");
+          await Promise.resolve();
+          source.assertCurrent();
+          followed = true;
         },
-      );
+      });
     try {
       const created = await maintenance.run(create);
       expect(created.ok).toBe(true);
@@ -486,7 +496,7 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
       ({ existingEntry, targetEntry }) => {
         expect(existingEntry).toMatchObject(original);
         expect(targetEntry).toBeUndefined();
-        return { ok: true, entry: { ...existingEntry!, label: "adopted" } };
+        return accepted({ ...existingEntry!, label: "adopted" });
       },
       {
         resolveOwnerAssignment: () => owner,
@@ -541,21 +551,14 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
   const sibling = matrixKey.toLowerCase();
   writeSessionEntry(database, matrixKey, { sessionId: "matrix-target", updatedAt: 1 });
   writeSessionEntry(database, sibling, { sessionId: "matrix-sibling", updatedAt: 2 });
-  expect(
-    (
-      await createEntry({ ...scope, sessionKey: matrixKey }, ({ existingEntry }) => ({
-        ok: true,
-        entry: existingEntry!,
-      }))
-    ).ok,
-  ).toBe(true);
+  expect((await createEntry({ ...scope, sessionKey: matrixKey }, keepExisting)).ok).toBe(true);
   expect(readEntry(database, sibling)?.entry.sessionId).toBe("matrix-sibling");
 });
 
 it("creates with prepared native finalizers in the worker and settles them after commit", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const sessionKey = "agent:main:signal:group:TypedNative";
-  const alias = sessionKey.toLowerCase();
+  const { database, sessionKey, alias, scope } = creationFixture(
+    "agent:main:signal:group:TypedNative",
+  );
   const original = {
     sessionId: "typed-native-alias",
     updatedAt: 1,
@@ -576,15 +579,11 @@ it("creates with prepared native finalizers in the worker and settles them after
         resolveSqliteScope({ agentId: "main", storePath: database.path, sessionKey: alias }),
         [{ sessionKey: alias, entry: original }],
         () =>
-          createEntry(
-            { agentId: "main", storePath: database.path, sessionKey },
-            ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
-            {
-              afterCommitted: async () => {
-                expect(finalized).toHaveBeenCalledTimes(1);
-              },
+          createEntry(scope, keepExisting, {
+            afterCommitted: async () => {
+              expect(finalized).toHaveBeenCalledTimes(1);
             },
-          ),
+          }),
       ),
     );
     expect(result.ok).toBe(true);
@@ -603,9 +602,9 @@ it("creates with prepared native finalizers in the worker and settles them after
 it.each([false, true])(
   "keeps alias creation committed when legacy cleanup fails (%s)",
   async (reject) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const sessionKey = "agent:main:signal:group:Native";
-    const alias = sessionKey.toLowerCase();
+    const { database, sessionKey, alias, scope } = creationFixture(
+      "agent:main:signal:group:Native",
+    );
     const original = { sessionId: "native-alias", updatedAt: 1, agentHarnessId: "alias-owner" };
     const repositories = createSessionRepositoryWorkspaceStore();
     const workspaceFor = (agentId: string, name: string) =>
@@ -646,22 +645,18 @@ it.each([false, true])(
     });
     const create = () =>
       withPluginRuntimeRegistryScope(registry, () =>
-        createEntry(
-          { agentId: "main", storePath: database.path, sessionKey },
-          ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
-          {
-            onLifecycleCommitted: () => {
-              order.push("committed");
-            },
-            afterCommitted: async (_entry, source) => {
-              source.assertCurrent();
-              await Promise.resolve();
-              source.assertCurrent();
-              expect(order).toEqual(["prepare", "native", "committed", "published"]);
-              order.push("followup");
-            },
+        createEntry(scope, keepExisting, {
+          onLifecycleCommitted: () => {
+            order.push("committed");
           },
-        ),
+          afterCommitted: async (_entry, source) => {
+            source.assertCurrent();
+            await Promise.resolve();
+            source.assertCurrent();
+            expect(order).toEqual(["prepare", "native", "committed", "published"]);
+            order.push("followup");
+          },
+        }),
       );
     try {
       expect((await create()).ok).toBe(true);
@@ -678,33 +673,27 @@ it.each([false, true])(
 );
 
 it("checks both alias and canonical target after source custody is acquired", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const sessionKey = "agent:main:signal:group:Race";
-  const alias = sessionKey.toLowerCase();
+  const { database, sessionKey, alias, scope } = creationFixture("agent:main:signal:group:Race");
   const original = { sessionId: "alias-race", updatedAt: 1 };
   seedAlias(database, sessionKey, original);
   const notified = vi.fn();
   let sourceAcquisitions = 0;
   let racedKey = alias;
   const create = () =>
-    createEntry(
-      { agentId: "main", storePath: database.path, sessionKey },
-      ({ existingEntry }) => ({ ok: true, entry: existingEntry! }),
-      {
-        withCommit: async (run) => {
-          // Header initialization precedes replacement planning; mutate only at
-          // final source acquisition, after the replacement snapshot exists.
-          if (++sourceAcquisitions === 2) {
-            writeSessionEntry(database, racedKey, { ...original, label: "concurrent" });
-          }
-          return run(() => {});
-        },
-        onLifecycleCommitted: notified,
-        afterCommitted: async () => {
-          notified();
-        },
+    createEntry(scope, keepExisting, {
+      withCommit: async (run) => {
+        // Header initialization precedes replacement planning; mutate only at
+        // final source acquisition, after the replacement snapshot exists.
+        if (++sourceAcquisitions === 2) {
+          writeSessionEntry(database, racedKey, { ...original, label: "concurrent" });
+        }
+        return run(() => {});
       },
-    );
+      onLifecycleCommitted: notified,
+      afterCommitted: async () => {
+        notified();
+      },
+    });
   await expect(create()).rejects.toThrow("changed before replacement for " + alias);
   expect(readEntry(database, alias)?.entry.label).toBe("concurrent");
   expect(readEntry(database, sessionKey)).toBeUndefined();
@@ -719,8 +708,7 @@ it("checks both alias and canonical target after source custody is acquired", as
 it.each([false, true])(
   "preserves initialized header facts when cleanup fails (unknown=%s)",
   async (unknown) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const key = "agent:main:signal:group:Cleanup";
+    const { database, sessionKey: key, scope } = creationFixture("agent:main:signal:group:Cleanup");
     writeSessionEntry(database, key.toLowerCase(), {
       sessionId: "alias-cleanup-header",
       updatedAt: 1,
@@ -740,17 +728,10 @@ it.each([false, true])(
         await initialize(...args);
         throw failure;
       });
-    const create = vi.fn(() => ({
-      ok: true as const,
-      entry: { sessionId: "cleanup-header", updatedAt: 1 },
-    }));
+    const create = vi.fn(() => accepted({ sessionId: "cleanup-header", updatedAt: 1 }));
     const committed = vi.fn();
     try {
-      const work = createEntry(
-        { agentId: "main", storePath: database.path, sessionKey: key },
-        create,
-        { onLifecycleCommitted: committed },
-      );
+      const work = createEntry(scope, create, { onLifecycleCommitted: committed });
       if (unknown) {
         await expect(work).rejects.toBe(failure);
       } else {
@@ -766,23 +747,20 @@ it.each([false, true])(
 );
 
 it("rolls back a failed fresh entry and recovers a previously committed standalone header", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const sessionKey = "agent:main:failed-create";
+  const { database, sessionKey, scope } = creationFixture("agent:main:failed-create");
   const committed = vi.fn();
   const published = vi.fn();
   const stop = sessionChanges.subscribe(published);
   try {
     await expect(
       createEntry(
-        { agentId: "main", storePath: database.path, sessionKey },
-        () => ({
-          ok: true,
-          entry: {
+        scope,
+        () =>
+          accepted({
             sessionId: "failed-create",
             updatedAt: 1,
             parentSessionKey: "AGENT:main:parent",
-          },
-        }),
+          }),
         {
           onLifecycleCommitted: committed,
           afterCommitted: async () => {
@@ -802,21 +780,12 @@ it("rolls back a failed fresh entry and recovers a previously committed standalo
   } finally {
     stop();
   }
-  ensureTranscriptHeader(
-    database,
-    { agentId: "main", sessionKey, sessionId: "failed-create" },
-    "/old-process",
-  );
+  ensureTranscriptHeader(database, { ...scope, sessionId: "failed-create" }, "/old-process");
   const header = transcriptRows(database, "failed-create");
   expect(header).toHaveLength(1);
   await closeOpenClawAgentDatabaseByPathAsync(database.path);
   expect(
-    (
-      await createEntry({ agentId: "main", storePath: database.path, sessionKey }, () => ({
-        ok: true,
-        entry: { sessionId: "failed-create", updatedAt: 2 },
-      }))
-    ).ok,
+    (await createEntry(scope, () => accepted({ sessionId: "failed-create", updatedAt: 2 }))).ok,
   ).toBe(true);
   const reopened = openOpenClawAgentDatabase({ agentId: "main", path: database.path });
   expect(transcriptRows(reopened, "failed-create")).toEqual(header);

@@ -412,6 +412,10 @@ export type OpenClawPluginServiceContext = {
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
   };
   internalDiagnostics?: {
+    /** Synchronous WebSocket counters; arrays and attribution are borrowed until return. */
+    onGatewayWsMetrics?: (
+      listener: import("../infra/gateway-ws-metrics.js").GatewayWsMetricsListener,
+    ) => () => void;
     /** Synchronous worker measurements; timing fields are borrowed and must not be mutated. */
     onWorkerRequestMetrics?: (
       listener: import("../infra/worker-request-diagnostics.js").WorkerRequestMetricsListener,

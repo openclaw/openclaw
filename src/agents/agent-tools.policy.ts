@@ -10,10 +10,6 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
-import {
-  markFrozenClawToolAllowPolicy,
-  resolveClawToolPolicyConsent,
-} from "../claws/tool-policy-runtime.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
@@ -25,6 +21,10 @@ import {
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
+import {
+  markFrozenTemplateToolAllowPolicy,
+  resolveTemplateToolPolicyConsent,
+} from "../templates/tool-policy-runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import {
@@ -55,8 +55,8 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export { resolveProviderToolPolicy };
 
 /**
- * Default hard denies for sub-agents regardless of depth. Visible spawned
- * sessions retain message delivery; all other hard denies still apply.
+ * Default hard denies for hidden sub-agents regardless of depth. Visible spawned
+ * sessions are interactive and skip these defaults.
  */
 const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
@@ -75,7 +75,10 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "conversations_turn",
 ];
 
-/** Tools that only make sense for orchestrator sub-agents that can spawn children. */
+/**
+ * Tools that only make sense for orchestrator sub-agents that can spawn children.
+ * Visible spawned sessions keep them; spawn admission still enforces depth and child caps.
+ */
 const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
   "sessions_list",
@@ -96,17 +99,16 @@ export function resolveSubagentToolPolicyForSession(
     cfg,
     store: opts?.store,
   });
-  const capabilities = resolveStoredSubagentCapabilities(sessionKey, {
-    cfg,
-    store,
-  });
   const allow = configured?.allow;
   const alsoAllow = configured?.alsoAllow;
+  // Operator-configured sub-agent policy applies to every spawned session; the
+  // built-in defaults only constrain hidden delegated workers.
+  const visibleSpawn = isVisibleSpawnedSession(sessionKey, { cfg, store });
+  const leaf =
+    !visibleSpawn && resolveStoredSubagentCapabilities(sessionKey, { cfg, store }).role === "leaf";
   const deny = [
-    ...SUBAGENT_TOOL_DENY_ALWAYS.filter(
-      (tool) => tool !== "message" || !isVisibleSpawnedSession(sessionKey, { cfg, store }),
-    ),
-    ...(capabilities.role === "leaf" ? SUBAGENT_TOOL_DENY_LEAF : []),
+    ...(visibleSpawn ? [] : SUBAGENT_TOOL_DENY_ALWAYS),
+    ...(leaf ? SUBAGENT_TOOL_DENY_LEAF : []),
     ...(configured?.deny ?? []),
   ];
   const mergedAllow = allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
@@ -409,15 +411,15 @@ export function resolveEffectiveToolPolicy(params: {
   );
   const explicitProfileAlsoAllow = agentTools?.alsoAllow ?? globalTools?.alsoAllow;
   const agentPolicy = pickSandboxToolPolicy(agentTools);
-  const clawToolPolicyConsent = resolveClawToolPolicyConsent({
+  const templateToolPolicyConsent = resolveTemplateToolPolicyConsent({
     agentTools,
     agentId,
     profile,
     ownsProfile: profileSource === "agent",
     hasAgentAllowlist: (agentPolicy?.allow?.length ?? 0) > 0,
   });
-  if (clawToolPolicyConsent.frozen) {
-    markFrozenClawToolAllowPolicy(agentPolicy);
+  if (templateToolPolicyConsent.frozen) {
+    markFrozenTemplateToolAllowPolicy(agentPolicy);
   }
 
   const effectivePolicy = {

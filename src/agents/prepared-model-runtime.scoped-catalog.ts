@@ -67,7 +67,10 @@ export async function prepareScopedReadOnlyModelCatalog(
 
 export async function prepareAgentCatalogSource(
   agentFacts: Pick<PreparedModelRuntimeAgentFacts, "input" | "env" | "providerIds">,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  pluginGeneration: Pick<
+    PreparedModelRuntimePluginGeneration,
+    "pluginMetadataSnapshot" | "pluginRegistry" | "preparedStaticProviderCatalog"
+  >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
   sourceOptions: {

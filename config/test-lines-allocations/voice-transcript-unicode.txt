@@ -1,0 +1,2 @@
+13
+# Extend the existing host-consult partial-settle table with Unicode case-expansion coverage.

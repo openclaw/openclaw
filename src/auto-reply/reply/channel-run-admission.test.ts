@@ -1,4 +1,4 @@
-import { assert, expect, it, onTestFinished } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -64,6 +64,42 @@ function captureAdmission() {
   };
   return { identityWork, decisions, audit, evidence, envelope };
 }
+
+it.each(["channel", "gateway"] as const)(
+  "freezes published %s admission owners without freezing private adapter objects",
+  async (source) => {
+    const { evidence, envelope } = captureAdmission();
+    const prepared = prepare({
+      evidence: source === "channel" ? evidence() : undefined,
+      gatewayLocalUserIngress:
+        source === "gateway"
+          ? prepareGatewayLocalUserIngress({
+              authMethod: "token",
+              authenticatedUserExpected: true,
+              isLocalClient: false,
+            })
+          : undefined,
+    });
+    const freeze = vi.spyOn(Object, "freeze");
+    onTestFinished(() => freeze.mockRestore());
+    const admitted = await prepared.admit("embedded");
+    expect(Object.isFrozen(prepared)).toBe(true);
+    expect(Object.isFrozen(admitted)).toBe(true);
+    expect(envelope().ingress.state).toBe("present");
+    expect(
+      freeze.mock.calls.filter(([value]) => {
+        if (!value || typeof value !== "object") {
+          return false;
+        }
+        return (
+          ("facts" in value && "onAdmitted" in value) ||
+          ("invoker" in value &&
+            Object.keys(value).every((key) => key === "invoker" || key === "assurance"))
+        );
+      }),
+    ).toHaveLength(0);
+  },
+);
 
 it.each(["unresolved", "forged"] as const)(
   "records only owner-prepared Gateway facts for a %s carrier",
@@ -141,11 +177,13 @@ it("consumes once across fallback admission and closes the exact prepared owner"
   });
 
   expect(() => prepared.assertSourceCurrent()).not.toThrow();
+  expect(prepared.assertCurrent).not.toThrow();
   expect(identityWork).toHaveLength(0);
   const first = await prepared.admit("embedded");
   const fallback = await prepared.admit("embedded");
 
   expect(fallback).toBe(first);
+  expect(prepared.assertCurrent).not.toThrow();
   expect(envelope()).toMatchObject({
     invoker: { state: "present", kind: "person" },
     assurance: [
@@ -167,6 +205,7 @@ it("consumes once across fallback admission and closes the exact prepared owner"
 
   prepared.close();
   expect(() => prepared.assertSourceCurrent()).not.toThrow();
+  expect(prepared.assertCurrent).toThrow("already closed");
   await expect(prepared.admit("embedded")).rejects.toThrow(
     "prepared execution context is already closed",
   );
@@ -207,6 +246,7 @@ it("does not consume a cancelled pre-admission carrier", async () => {
   const evidence = createEvidence();
   const cancelled = prepare({ runId: "cancelled-run", evidence });
   cancelled.close();
+  expect(cancelled.assertCurrent).toThrow("already closed");
   await expect(cancelled.admit("embedded")).rejects.toThrow(
     "prepared execution context is already closed",
   );

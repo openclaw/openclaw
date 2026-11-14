@@ -7,7 +7,10 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  acknowledgeMockSubagentRegistryWrite,
+  createSubagentRunRecord,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveRequesterStoreKey } from "../announce/subagent-requester-store-key.js";
 import {
   SubagentLifecycleController,
@@ -175,7 +178,7 @@ function installPolicyWorkerStub(fallbackOwner?: FixtureOwner) {
                 ),
                 [...postimages.keys()],
               );
-              return { writeId: write.writeId, notices: [] };
+              acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
             },
           ),
       });

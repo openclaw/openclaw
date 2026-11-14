@@ -189,7 +189,8 @@ export async function runCliProcessChild(params: {
 }): Promise<CliProcessChildResult> {
   const timeoutMs = params.timeoutMs ?? CLI_PROCESS_DEADLOCK_GUARD_MS;
   const executable = params.nodeExecutable ?? process.execPath;
-  const reports = shouldEnableNodeDiagnosticReports() ? createFixtureLifetime() : undefined;
+  const runtime = process.versions.bun && params.nodeExecutable === undefined ? "bun" : "node";
+  const reports = shouldEnableNodeDiagnosticReports(runtime) ? createFixtureLifetime() : undefined;
   let unjoinedWork = false;
   if (reports) {
     (params.onTestFinished ?? onTestFinished)(async () => {
@@ -201,7 +202,7 @@ export async function runCliProcessChild(params: {
   const reportDir = reports?.createTempDir("openclaw-cli-report-");
   // CLI children use the test runner's V8 policy without inheriting its preloads.
   const nodeArgs =
-    process.versions.bun && params.nodeExecutable === undefined
+    runtime === "bun"
       ? params.nodeArgs
       : [
           ...(params.nodeArgsPolicy === "caller" ? [] : resolveVitestNodeArgs(params.env)),

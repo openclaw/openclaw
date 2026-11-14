@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -13,10 +13,16 @@ import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import * as sqliteRuntime from "./bun-sqlite-library.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import type { SqliteReadOnlyOperationCommand } from "./sqlite-readonly-operation-types.js";
 import { createSqliteReadOnlyWorkerPool } from "./sqlite-readonly-worker-pool.js";
@@ -492,3 +498,55 @@ it.skipIf(process.platform !== "linux")(
     }
   },
 );
+
+it("releases startup metadata maintenance before admitting a Gateway", async () => {
+  const root = tempDirs.make("openclaw-startup-metadata-owner-");
+  const stateEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+  };
+  writeFileSync(stateEnv.OPENCLAW_CONFIG_PATH, "{}", "utf8");
+  const databasePath = path.join(root, "state", "openclaw.sqlite");
+  openOpenClawStateDatabase({ env: stateEnv });
+  closeOpenClawStateDatabaseForTest();
+  const broker = createSpawnBrokerHost();
+  const brokerSpawn = vi.spyOn(broker, "spawn");
+  try {
+    await broker.ready();
+    await expect(
+      runWithSpawnBroker(broker, () =>
+        runSqliteReadOnlyOperation(
+          databasePath,
+          {
+            type: "startupMetadata.readCurrent",
+            input: { type: "config.health.read", input: undefined },
+          },
+          {
+            source: "canonical",
+            expectedIdentity: readDatabasePathIdentitySync(databasePath).key,
+            env: stateEnv,
+          },
+        ),
+      ),
+    ).resolves.toMatchObject({ value: { ok: true } });
+
+    expect(brokerSpawn).toHaveBeenCalledTimes(1);
+    const reader = brokerSpawn.mock.results[0]?.value;
+    expect(reader?.pid).toBeTypeOf("number");
+    expect(isPidDefinitelyDead(reader!.pid!)).toBe(true);
+
+    const gateway = await acquireGatewayLock({
+      env: stateEnv,
+      allowInTests: true,
+      timeoutMs: 0,
+      lockDir: path.join(root, "__locks"),
+    });
+    expect(gateway).not.toBeNull();
+    await gateway?.release();
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    await closeSqliteReadOnlyWorkersForBroker(broker);
+    await broker.close();
+  }
+});

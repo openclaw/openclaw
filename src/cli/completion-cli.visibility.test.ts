@@ -63,7 +63,7 @@ for (const engine of engines) {
     ])("offers only visible $name options and commands", async ({ prefix, visible, hidden }) => {
       const program = createVisibilityProgram();
       const flags = await engine.complete(program, [...prefix, "--"]);
-      expect(flags).toContain(visible);
+      expect(flags).toEqual(expect.arrayContaining([visible, "--help"]));
       expect(flags).not.toContain(hidden);
       const commands = await engine.complete(program, [...prefix, ""]);
       expect(commands).toEqual(expect.arrayContaining(["visible", "public"]));

@@ -419,8 +419,9 @@ two; at most 4 GiB caps them at one. Committed timing weights are unchanged.
 
 Docker seed runs one published-upgrade survivor on every admitted upstream main
 run; QA Smoke retains owner-path selection. Ordinary manual CI and Full Release
-Validation select all six Docker seed lanes. Main builds the complete runtime
-and public SDK declarations through `ciArtifacts` before standard packaging;
+Validation select all six Docker seed lanes. Main builds the complete runtime,
+workspace package declarations, and public SDK declarations through
+`ciArtifacts` before standard packaging;
 manual/release runs retain full package generation. Pull requests and their
 exact-head fallback dispatches omit these jobs,
 real-Gateway UI, and named built-process verifiers. Unit/boundary and mocked
@@ -697,9 +698,15 @@ resources and cleanup before claiming improvement.
 PR tooling files, and compact Node groups. UI and compact packers prefer active weights over their in-source cold-start
 tables. UI E2E keys are repo-relative paths, including tests under `ui/src/pages/`,
 and every file estimate includes the measured fork, import, and setup overhead.
-Compact groups have separate Blacksmith and GitHub-hosted measurements, selected
-from jobs API runner labels (`blacksmith-*` versus hosted `ubuntu-24.04`); hybrid
-and large-group stripe adjustments continue to use their existing policies.
+Compact groups have separate Blacksmith, GitHub-hosted and Boat measurements,
+selected from jobs API runner labels; hybrid and large-group stripe adjustments
+continue to use their existing policies. The Boat profile starts empty and accepts
+only plain `boat-xlarge` jobs with 16 observed CPUs, 28–32 GiB RAM, one admitted
+plan and an explicit worker ceiling. Other sizes, label variants, mixed-provider
+labels and unqualified resource records do not contribute. The build-only Boat
+pilot supplies no test-duration measurements.
+Runs with rejected compact-runner provenance retain historical weights for
+unobserved groups, while accepted jobs can still refresh their measurements.
 Compact weights use the complete `[shard:x] begin` to `end` span, preserving
 process startup and any contention in the measured run. Ordinary Blacksmith compact jobs may execute two groups concurrently; serial
 jobs retain `planConcurrency: 1`. The refit preserves each complete child span,
@@ -792,7 +799,8 @@ when every observed run used the same fallback.
 Current tooling file measurements are active in the planner. The refreshed
 September 26 cohort, bounded serial packing, and ordinary capacity reuse fit
 the existing row caps without activating the older over-cap plan from run `35506602947`.
-The map keeps separate Blacksmith and GitHub measurements. Numbered tooling
+The map keeps separate Blacksmith, GitHub and Boat measurements; Boat uses the
+resource and worker qualification above. Numbered tooling
 parents and their child timing keys change when files move, so per-file costs
 survive repacking. Direct profile measurements are not scaled; hosted fallbacks
 use measured Blacksmith files with the existing hosted factor. Unmeasured files use

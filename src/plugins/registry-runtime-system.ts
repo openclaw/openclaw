@@ -75,6 +75,8 @@ export function createPluginSystemRuntime(params: {
     captureSessionEventTarget: (...args) => route(() => system.captureSessionEventTarget(...args)),
     enqueueSessionEvent: (...args) => route(() => system.enqueueSessionEvent(...args)),
     enqueueSystemEvent: (...args) => route(() => system.enqueueSystemEvent(...args)),
+    captureSessionGeneration: (...args) => route(() => system.captureSessionGeneration(...args)),
+    postSessionNotice: (...args) => route(() => system.postSessionNotice(...args)),
     runCommandWithTimeout: (...args) =>
       runWithPluginScope(() => system.runCommandWithTimeout(...args)),
   } satisfies PluginRuntime["system"];

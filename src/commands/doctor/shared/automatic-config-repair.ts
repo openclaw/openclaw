@@ -4,7 +4,6 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "../../../config/config-path-mutation.js";
 import { resolveConfigSnapshotHash, transformConfigFile } from "../../../config/config.js";
-import { applyMessageQueueDefaults } from "../../../config/defaults.js";
 import {
   getDeferredPluginMigrationConfigFacts,
   omitDeferredPluginMigrationConfig,
@@ -24,6 +23,7 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
 import { withDeferredPluginDoctorMigrations } from "../../../plugins/doctor-contract-registry.js";
+import { tryProjectRetiredHeartbeatConfig } from "../../doctor-heartbeat-legacy.js";
 import {
   prepareDoctorConfigReferenceSource,
   restoreDoctorConfigEnvRefs,
@@ -84,7 +84,7 @@ async function prepareAutomaticConfigRepairWrite(
 
 async function planConfigRepair(
   snapshot: ConfigFileSnapshot,
-  pluginContracts: boolean,
+  { pluginContracts, backupDiscovery }: { pluginContracts: boolean; backupDiscovery?: true },
   additionalMigration?: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
 ): Promise<AutomaticConfigRepairPlan | null> {
   if (!canPlanAutomaticConfigRepair(snapshot, additionalMigration?.pendingStateMigration)) {
@@ -111,12 +111,13 @@ async function planConfigRepair(
     nextConfig: migration.next ?? migrationSource,
     pending: deferredPluginMigrations ?? [],
   });
-  // Include the Doctor default in this write so a later write does not rotate
-  // the original backup. Read-only backup projection keeps its existing shape.
-  const config = inheritLegacyDefaultAgentId(
-    migration.next ?? migrationSource,
-    pluginContracts ? applyMessageQueueDefaults(migrated) : migrated,
-  );
+  const normalized = inheritLegacyDefaultAgentId(migration.next ?? migrationSource, migrated);
+  // Backup discovers owners before durable heartbeat retirement; its view must
+  // never become the writable repair or replace the captured original bytes.
+  const config = backupDiscovery ? tryProjectRetiredHeartbeatConfig(normalized) : normalized;
+  if (!config) {
+    return null;
+  }
   if (
     !additionalMigration?.pendingStateMigration &&
     isDeepStrictEqual(config, snapshot.sourceConfig)
@@ -160,9 +161,6 @@ async function planConfigRepair(
       ...(additionalMigration?.changes ?? []),
       ...migration.changes,
       ...(migration.warnings ?? []),
-      ...(config === migrated
-        ? []
-        : ["Set messages.queue.allowCollaborativeSteering to false (default)."]),
     ],
     snapshot: {
       ...snapshot,
@@ -183,16 +181,16 @@ export async function planAutomaticConfigRepair(
   snapshot: ConfigFileSnapshot,
   additionalMigration?: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
 ): Promise<AutomaticConfigRepairPlan | null> {
-  return planConfigRepair(snapshot, true, additionalMigration);
+  return planConfigRepair(snapshot, { pluginContracts: true }, additionalMigration);
 }
 
 /** Core-only admission can inspect a candidate without obtaining a writable repair plan. */
 export async function projectAutomaticConfigRepair(
   snapshot: ConfigFileSnapshot,
   additionalMigration: { config: OpenClawConfig; changes: string[]; pendingStateMigration?: true },
-  options: { pluginContracts: boolean },
+  { pluginContracts }: { pluginContracts: boolean },
 ): Promise<OpenClawConfig | undefined> {
-  return (await planConfigRepair(snapshot, options.pluginContracts, additionalMigration))?.config;
+  return (await planConfigRepair(snapshot, { pluginContracts }, additionalMigration))?.config;
 }
 
 /**
@@ -200,7 +198,10 @@ export async function projectAutomaticConfigRepair(
  * Full plugin-contract validation belongs to Doctor's repair plan.
  */
 export async function resolveLegacyConfigSnapshotForBackup(snapshot: ConfigFileSnapshot) {
-  return snapshot.valid ? snapshot : (await planConfigRepair(snapshot, false))?.snapshot;
+  return snapshot.valid
+    ? snapshot
+    : (await planConfigRepair(snapshot, { pluginContracts: false, backupDiscovery: true }))
+        ?.snapshot;
 }
 
 /** Commits a planned repair against the exact snapshot admitted by its caller. */

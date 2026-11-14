@@ -33,7 +33,7 @@ import {
   inspect,
   resolveIngressForRuntime,
 } from "./registry-runtime.channel-ingress.test-support.js";
-import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { createTestPluginRegistry as createRegistry } from "./registry-runtime.test-helpers.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -100,10 +100,6 @@ function recordInput(context: Parameters<typeof recordAcceptedSessionParticipant
     storePath: "/unused",
   });
 }
-function createRegistry(runtime: PluginRuntime = createPluginRuntime()) {
-  return createTestPluginRegistry(runtime);
-}
-
 function createGateway(audit: ChannelAdmissionAudit) {
   return { channelAdmissionAudit: audit, getRuntimeConfig: () => ({}) } as GatewayRequestContext;
 }
@@ -153,7 +149,7 @@ it("keeps adopted channel operations usable after their captured registry is col
     id = "retired-channel-scope";
     start() {}
   }
-  const registryBuilder = createRegistry();
+  const registryBuilder = createRegistry(createPluginRuntime());
   const record = createPluginRecord({ id: "adopted-channel", origin: "bundled" });
   const api = registryBuilder.createApi(record, { config: {} });
   const instance = getPluginInstance(record)!;

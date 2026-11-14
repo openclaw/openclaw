@@ -14,13 +14,24 @@ type Flow = {
   closed: boolean;
   stop: () => void;
   transmit: (chunk: Buffer, deliveredAtMs: number, receivedAtMs: number) => void;
+  delivered?: (chunk: Buffer, atMs: number) => void;
 };
 
-/** A shared 10 Mbps direction; propagation overlaps later packet transmission. */
-export function createControlUiWireLink() {
+/** One shared direction; propagation overlaps later packet transmission. */
+export function createControlUiWireLink({
+  megabitsPerSecond = 10,
+  latencyMs = 50,
+}: { megabitsPerSecond?: number; latencyMs?: number } = {}) {
+  if (
+    !Number.isFinite(megabitsPerSecond) ||
+    megabitsPerSecond <= 0 ||
+    !Number.isFinite(latencyMs) ||
+    latencyMs < 0
+  ) {
+    throw new Error("Wire link requires positive bandwidth and nonnegative latency");
+  }
   const quantumBytes = 16 * 1024;
-  const bytesPerMs = 1250;
-  const latencyMs = 50;
+  const bytesPerMs = (megabitsPerSecond * 1_000_000) / 8 / 1000;
   const flows = new Set<Flow>();
   const ready: Flow[] = [];
   const deliveries = new Set<ReturnType<typeof setTimeout>>();
@@ -69,6 +80,7 @@ export function createControlUiWireLink() {
             selected.blocked = true;
             selected.source.pause();
           }
+          selected.delivered?.(packet, performance.now());
           finish(selected);
         }
       },
@@ -98,7 +110,12 @@ export function createControlUiWireLink() {
   };
 
   return {
-    connect(source: Readable, target: Writable, onTransmit: Flow["transmit"]): () => void {
+    connect(
+      source: Readable,
+      target: Writable,
+      onTransmit: Flow["transmit"],
+      onDelivered?: Flow["delivered"],
+    ): () => void {
       if (closed) {
         throw new Error("Control UI wire link is closed");
       }
@@ -114,6 +131,7 @@ export function createControlUiWireLink() {
         closed: false,
         stop,
         transmit: onTransmit,
+        delivered: onDelivered,
       };
       function dispose(destroySource: boolean) {
         if (flow.closed) {

@@ -56,6 +56,8 @@ commands shown below instead.
   <Step title="Optional: build the common image">
     For a more functional sandbox image with common tooling (for example `curl`, `jq`, Node 24, pnpm, `python3`, and `git`):
 
+    With `INSTALL_NODE=1` (the default), the image also provisions Chromium's Linux system libraries and fonts through the Playwright version pinned in `package.json`. Projects install their own matching browser executables in a writable workspace or cache. `INSTALL_NODE=0` skips this browser dependency step.
+
     From a source checkout:
 
     ```bash
@@ -68,7 +70,7 @@ commands shown below instead.
     docker build -t openclaw-sandbox-common:trixie-slim -f Dockerfile.common .
     ```
 
-    `package.json` supplies the pinned pnpm version and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
+    `package.json` supplies the pinned pnpm and Playwright versions and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:trixie-slim`.
 
@@ -86,6 +88,13 @@ commands shown below instead.
 </Steps>
 
 By default, local container sandboxes run with **no network**. Override with `agents.defaults.sandbox.docker.network`.
+
+Dependency-template builders keep `HOME` and XDG configuration, data, state, and
+cache directories in a private writable tmpfs outside the workspace. Package-manager
+state is discarded with the builder and is not staged as workspace content. This
+does not supply registry metadata or packages for offline installs. Runtime tool
+containers retain the image and `sandbox.docker.env` settings; custom images with a
+missing or read-only home need writable HOME/XDG paths for tools that write there.
 
 The default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy) is Gateway-loopback only. Sandbox exec receives neither its proxy/CA environment nor protected sentinels. Sandbox/container proxy reachability is not implemented; do not enable sandbox networking expecting secret substitution to work in this release.
 

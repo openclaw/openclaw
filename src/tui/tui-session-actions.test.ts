@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
@@ -102,10 +102,6 @@ function createHarness({
   };
 }
 const renderChat = (chatLog: ChatLog) => chatLog.render(120).join("\n");
-const flushImmediate = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 const mainSession = { key: "agent:main:main", sessionId: "session-main" };
 const description = (
   session: TuiSessionDescription["session"],
@@ -542,7 +538,7 @@ describe("tui session actions", () => {
     const second = refreshSessionInfo();
     const third = refreshSessionInfo();
 
-    await flushImmediate();
+    await nextEventLoopTurn();
     expect(describeSession).toHaveBeenCalledTimes(1);
     expect(describeSession).toHaveBeenNthCalledWith(1, {
       sessionKey: "agent:main:main",
@@ -557,7 +553,7 @@ describe("tui session actions", () => {
       }),
     );
 
-    await flushImmediate();
+    await nextEventLoopTurn();
 
     expect(describeSession).toHaveBeenCalledTimes(2);
 
@@ -778,7 +774,7 @@ describe("tui session actions", () => {
       for (let toolCall = 1; toolCall <= 10; toolCall += 1) {
         message(100 + toolCall, { totalTokens: toolCall * 100, contextTokens: 120000 });
       }
-      await flushImmediate();
+      await nextEventLoopTurn();
       expect(describeSession).not.toHaveBeenCalled();
       expect(state.sessionInfo).toMatchObject({ totalTokens: 1000, contextTokens: 120000 });
     } finally {
@@ -794,7 +790,7 @@ describe("tui session actions", () => {
     try {
       message(200, row);
       await vi.waitFor(() => expect(describeSession).toHaveBeenCalledOnce());
-      await flushImmediate();
+      await nextEventLoopTurn();
       expect(describeSession).toHaveBeenCalledOnce();
     } finally {
       events.dispose();
@@ -1759,7 +1755,7 @@ describe("tui session actions", () => {
           assistantMessage("Delivered reply"),
         ],
       });
-      await flushImmediate();
+      await nextEventLoopTurn();
 
       expect(state.activeChatRunId).toBe(phase === "concurrent" ? "run-other" : null);
       expect(getPendingSubmitAcceptedRunId(state)).toBe(phase === "superseded" ? "run-new" : null);

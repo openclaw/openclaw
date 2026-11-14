@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { expect, test, vi } from "vitest";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { sampleTrackedWorkerMemory } from "../../infra/worker-cpu.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -180,7 +181,7 @@ test("refuses changed reclamation inputs at admission without deleting the entry
     expect(loadSessionEntry(scope)).toEqual(entry);
   }));
 
-test("retires a retained Worker by the symlinked root its requester used", () =>
+test("samples retained Worker buffers and retires it by the requester's symlinked root", () =>
   withState(async (state) => {
     const link = path.join(state.root, "state-link");
     const stateDir = expectDefined(state.env.OPENCLAW_STATE_DIR, "test state directory");
@@ -192,8 +193,19 @@ test("retires a retained Worker by the symlinked root its requester used", () =>
     const spawned = observeWorkers();
     await runSqliteSessionReclamation({ plan });
     expect(spawned).toHaveLength(1);
+    const threadId = spawned[0]!.threadId;
+    const sample = sampleTrackedWorkerMemory({ refresh: false }).workerHeaps.find(
+      (worker) => worker.threadId === threadId,
+    );
+    expect(sample?.external).toBeGreaterThan(0);
+    expect(sample?.arrayBuffers).toBeGreaterThan(0);
     await closeOpenClawAgentDatabasesAsync(link);
     expect(spawned[0]?.threadId).toBe(-1);
+    expect(
+      sampleTrackedWorkerMemory({ refresh: false }).workerHeaps.some(
+        (worker) => worker.threadId === threadId,
+      ),
+    ).toBe(false);
   }));
 
 test.each(["established", "first-created"] as const)(

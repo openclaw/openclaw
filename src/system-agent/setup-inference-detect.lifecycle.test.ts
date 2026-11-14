@@ -20,7 +20,6 @@ it.each([false, true])(
   (failed) =>
     withOpenClawTestState({ label: "setup-discovery-lifetime" }, async (state) => {
       const id = "discovery-lifetime-fixture";
-      const pluginDir = state.statePath("extensions", id);
       const nativeEvent = `${id}-${path.basename(state.root)}`;
       const observationEvent = `${nativeEvent}-observation`;
       const releaseEvent = `${nativeEvent}-release`;
@@ -71,7 +70,7 @@ it.each([false, true])(
         gateway: { mode: "local" },
         plugins: {
           allow: [id],
-          load: { paths: [pluginDir] },
+          load: { paths: [state.statePath("extensions", id)] },
           entries: { [id]: { enabled: true } },
           slots: { memory: "none" },
         },

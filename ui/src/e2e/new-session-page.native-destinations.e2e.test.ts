@@ -202,7 +202,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "builder" });
       await destination.waitFor();
       await destination.selectOption(node.hostId);
-      const folder = page.getByRole("textbox", { name: "Existing absolute folder on this node" });
+      const folder = page.getByRole("textbox", { name: "Existing absolute folder on this device" });
       await folder.fill("/workspace/native-project");
       expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
 
@@ -250,7 +250,7 @@ suite.define(() => {
     await nativeGateway(page, catalog);
 
     await page.goto(`${suite.server.baseUrl}new?agent=main&catalog=claude`);
-    const folder = page.getByRole("textbox", { name: "Existing absolute folder on this node" });
+    const folder = page.getByRole("textbox", { name: "Existing absolute folder on this device" });
     await folder.waitFor();
     expect(await folder.inputValue()).toBe("");
     await page.setViewportSize({ width: 320, height: 700 });

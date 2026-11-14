@@ -89,7 +89,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(contentCard.contains(".background(OpenClawProBackground())"))
         #expect(contentCard.contains(".ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])"))
         #expect(contentCard.contains(".allowsHitTesting(!self.isDrawerLayout || !self.isPresented)"))
-        #expect(contentCard.contains(".clipShape(shape)"))
         #expect(contentCard.contains("shape.strokeBorder("))
         #expect(contentCard.contains(".offset(x: offset)"))
         #expect(!contentCard.contains("Color(uiColor: .systemGroupedBackground)"))

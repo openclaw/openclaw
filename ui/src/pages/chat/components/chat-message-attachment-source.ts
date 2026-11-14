@@ -312,26 +312,6 @@ function resolveManagedAttachmentAvailability(
   return current ?? { status: "checking" };
 }
 
-function retryManagedAttachmentAvailability(
-  attachment: AttachmentItem["attachment"],
-  onMediaChange: (() => void) | undefined,
-  connectionEpoch: number | undefined,
-): void {
-  if (!attachment.artifactId || !isManagedOutgoingMediaSource(attachment.url)) {
-    return;
-  }
-  const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
-    "managed-media",
-    `${connectionEpoch ?? 0}::${resolveManagedOutgoingMediaSessionKey(attachment.url)}::${attachment.artifactId}`,
-    onMediaChange,
-    attachment.url,
-  );
-  resource.value = undefined;
-  resource.retryAttempted = false;
-  notifyChatMediaResourceSubscribers(resource);
-  onMediaChange?.();
-}
-
 export function resolveAttachmentSource(
   attachment: AttachmentItem["attachment"],
   options: ImageRenderOptions,
@@ -370,7 +350,21 @@ export function resolveAttachmentSource(
         managedAvailability.status === "unavailable" &&
         attachment.artifactId &&
         resolveArtifactDownload
-          ? () => retryManagedAttachmentAvailability(attachment, onMediaChange, connectionEpoch)
+          ? (): void => {
+              if (!attachment.artifactId || !isManagedOutgoingMediaSource(attachment.url)) {
+                return;
+              }
+              const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
+                "managed-media",
+                `${connectionEpoch ?? 0}::${resolveManagedOutgoingMediaSessionKey(attachment.url)}::${attachment.artifactId}`,
+                onMediaChange,
+                attachment.url,
+              );
+              resource.value = undefined;
+              resource.retryAttempted = false;
+              notifyChatMediaResourceSubscribers(resource);
+              onMediaChange?.();
+            }
           : undefined,
     };
   }

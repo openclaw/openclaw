@@ -3,6 +3,7 @@ import {
   ErrorCodes,
   GatewayErrorDetailCodes,
   errorShape,
+  type ProjectRecord,
   validateProjectsAddParams,
   validateProjectsListParams,
   validateProjectsCheckoutOptionsParams,
@@ -30,6 +31,7 @@ import {
   materializeProjectClone,
   removeClonedProjectCheckout,
 } from "../../projects/project-clone.js";
+import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import {
   listProjectRegistry,
   listWorkspaceProjects,
@@ -39,7 +41,10 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
-import { prepareCurrentUserProfileAliases } from "../../state/user-profile-reads.js";
+import {
+  prepareCurrentUserProfileAliases,
+  UserProfileDisclosureChangedError,
+} from "../../state/user-profile-reads.js";
 import { configuredDefaultRepository } from "../configured-default-repository.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -66,11 +71,14 @@ import {
   assertMemoryProjectStoresCurrent,
   loadProjectRecentCandidates,
   loadProjectSessionStore,
+  ProjectListingChangedError,
   readMemoryProjectStores,
-  type MemoryProjectStores,
 } from "./projects-session-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+
+// Config republications are rare; repeated races mean the caller should try again later.
+const PROJECTS_LIST_ATTEMPTS = 3;
 
 function projectCheckoutError(error: unknown) {
   return errorShape(
@@ -138,26 +146,39 @@ export const projectsHandlers: GatewayRequestHandlers = {
       return;
     }
     const diagnostics = startProjectsListDiagnostics(context);
-    const cfg = context.getRuntimeConfig();
-    const defaultRepository = configuredDefaultRepository(cfg);
-    const requesterProfileId = client?.authenticatedUserProfile?.profileId;
-    const requesterUserId = client?.authenticatedUserId;
-    const assertCurrent = () => {
-      if (
-        client?.authenticatedUserProfile?.profileId !== requesterProfileId ||
-        client?.authenticatedUserId !== requesterUserId ||
-        context.getRuntimeConfig() !== cfg
-      ) {
-        throw new Error("Project access changed while preparing the listing. Retry the request.");
-      }
-    };
-    const list = async (
-      memoryStores: MemoryProjectStores,
-      assertMemoryCurrent: (keys: ReadonlySet<string>) => void,
-    ) => {
+    // Each attempt binds one config publication; a race restarts the read instead of failing it.
+    const list = async () => {
+      const cfg = context.getRuntimeConfig();
+      const defaultRepository = configuredDefaultRepository(cfg);
+      const requesterProfileId = client?.authenticatedUserProfile?.profileId;
+      const requesterUserId = client?.authenticatedUserId;
+      const assertCurrent = () => {
+        if (
+          client?.authenticatedUserProfile?.profileId !== requesterProfileId ||
+          client?.authenticatedUserId !== requesterUserId ||
+          context.getRuntimeConfig() !== cfg
+        ) {
+          throw new ProjectListingChangedError();
+        }
+      };
+      const memoryStores = readMemoryProjectStores(assertCurrent);
+      const assertMemoryCurrent = (keys: ReadonlySet<string>) =>
+        assertMemoryProjectStoresCurrent(memoryStores, keys, assertCurrent);
       const registryProjects = await listProjectRegistry(cfg);
       diagnostics?.mark("sessions");
-      const projects = registryProjects.map(sanitizeProjectRecord);
+      const githubHost = resolveConfiguredGitHubHost(cfg);
+      const projects = registryProjects.map((project) => {
+        // The registry already owns discovery. Project identity never grants repository access.
+        const repository = project.originUrl
+          ? parseProjectGitUrl(project.originUrl, githubHost)
+          : null;
+        return {
+          ...sanitizeProjectRecord(project),
+          ...(repository
+            ? { repositoryIdentity: new URL(repository.url).pathname.slice(1, -4) }
+            : {}),
+        };
+      });
       const canWrite = () =>
         authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, client?.connect.scopes ?? []).allowed;
       let store: Record<string, SessionEntry> = {};
@@ -171,16 +192,21 @@ export const projectsHandlers: GatewayRequestHandlers = {
         do {
           await projection.prepareSelection({ metadataOnly: true });
         } while (projection.needsSelectionPreparation({ metadataOnly: true }));
+        await projection.prepareMembership();
         if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
-          throw new Error(
-            "Session projection changed while preparing the listing. Retry the request.",
-          );
+          throw new ProjectListingChangedError();
         }
         sessions = loadProjectSessionStore(projection, memoryStores);
         store = sessions.store;
       }
       if (params.includeObserved && canWrite()) {
-        observedProjects = await listObservedProjects(context, client, store, diagnostics);
+        observedProjects = await listObservedProjects(
+          context,
+          client,
+          store,
+          diagnostics,
+          sessions?.readMembership,
+        );
       }
       diagnostics?.mark("recents");
       const profileId = client?.authenticatedUserProfile?.profileId;
@@ -206,9 +232,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
         projection &&
         (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg)
       ) {
-        throw new Error(
-          "Session projection changed while preparing the listing. Retry the request.",
-        );
+        throw new ProjectListingChangedError();
       }
       recentCandidates?.assertCurrent(recentSessions);
       if (writable && observedProjects) {
@@ -221,16 +245,23 @@ export const projectsHandlers: GatewayRequestHandlers = {
           ...(writable && observedProjects ? observedProjects.usedSessions : []),
         ]),
       );
-      // Project identity is read-safe; host paths, origins, folders, and observed checkouts are
-      // placement details reserved for clients that can create sessions.
+      // Read-safe identity describes only already discoverable projects. Host paths, origins,
+      // folders, and observed checkouts remain write-scoped placement details.
       respond(
         true,
         {
           projects: writable
             ? projects
-            : projects.map(({ id, displayName, source, agentId }) =>
-                agentId ? { id, displayName, source, agentId } : { id, displayName, source },
-              ),
+            : projects.map(({ id, displayName, source, agentId, repositoryIdentity }) => {
+                const record: ProjectRecord = { id, displayName, source };
+                if (agentId) {
+                  record.agentId = agentId;
+                }
+                if (repositoryIdentity) {
+                  record.repositoryIdentity = repositoryIdentity;
+                }
+                return record;
+              }),
           ...(canCreate ? { githubHost: resolveConfiguredGitHubHost(cfg) } : {}),
           ...(defaultRepository && (writable || canCreate) ? { defaultRepository } : {}),
           ...(recents
@@ -244,10 +275,31 @@ export const projectsHandlers: GatewayRequestHandlers = {
       );
     };
     try {
-      const stores = readMemoryProjectStores(assertCurrent);
-      await list(stores, (keys) => assertMemoryProjectStoresCurrent(stores, keys, assertCurrent));
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await list();
+          return;
+        } catch (error) {
+          // Profile merges fence recents the same way listing guards fence sessions.
+          const changed =
+            error instanceof ProjectListingChangedError ||
+            error instanceof UserProfileDisclosureChangedError;
+          if (!changed) {
+            throw error;
+          }
+          if (attempt >= PROJECTS_LIST_ATTEMPTS) {
+            throw new ProjectListingChangedError();
+          }
+        }
+      }
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+      respond(
+        false,
+        undefined,
+        error instanceof ProjectListingChangedError
+          ? errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true })
+          : errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)),
+      );
     } finally {
       diagnostics?.finish();
     }
@@ -279,8 +331,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
         return;
       }
       assertCurrent();
-      const { resolveSessionProjectCheckoutOptions } =
-        await import("../session-worktree-preparation.js");
+      const { resolveSessionProjectCheckoutOptions } = await import("../session-project-source.js");
       const options = await resolveSessionProjectCheckoutOptions({
         cfg,
         projectId: params.projectId,
@@ -289,6 +340,20 @@ export const projectsHandlers: GatewayRequestHandlers = {
           resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
         assertCurrent,
         signal,
+        onRefresh: () => {
+          if (
+            client?.connId &&
+            hasCurrentClientAuthority?.() !== false &&
+            context.getRuntimeConfig() === cfg &&
+            client.authenticatedUserProfile?.profileId === profileId
+          ) {
+            context.broadcastToConnIds(
+              "projects.checkoutOptions.changed",
+              { projectId: params.projectId, agentId: params.agentId },
+              new Set([client.connId]),
+            );
+          }
+        },
       });
       assertCurrent();
       const currentDenial = authorizeGatewaySessionCreation({
@@ -306,7 +371,11 @@ export const projectsHandlers: GatewayRequestHandlers = {
       ).allowed;
       respond(
         true,
-        { current: canCreate && options.current, worktree: canCreate && options.worktree },
+        {
+          current: canCreate && options.current,
+          worktree: canCreate && options.worktree,
+          ...(canCreate && options.refreshing ? { refreshing: true } : {}),
+        },
         undefined,
       );
     },

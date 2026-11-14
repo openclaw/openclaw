@@ -90,7 +90,7 @@ it.each(["peer fence", "owner commit"] as const)(
         };
         const fence = candidates.fenceCandidateAuthProfileStore;
         const settle = oauthStore.settleOAuthRefreshClaim;
-        const spy =
+        using _ =
           stage === "peer fence"
             ? vi
                 .spyOn(candidates, "fenceCandidateAuthProfileStore")
@@ -103,29 +103,24 @@ it.each(["peer fence", "owner commit"] as const)(
             : vi
                 .spyOn(oauthStore, "settleOAuthRefreshClaim")
                 .mockImplementation((params) => loseReply(() => settle(params)));
-        try {
-          await expect(resolveFrom(peerDir)).rejects.toThrow(
-            stage === "peer fence"
-              ? "Failed to fence every historical OAuth refresh peer"
-              : lostReply.message,
-          );
-          expect(attempts).toBe(1);
-          expect(refresh).toHaveBeenCalledOnce();
-          if (stage === "peer fence") {
-            for (const dir of [mainAgentDir, peerDir, lateDir]) {
-              const terminal = read(dir);
-              expect(terminal?.type === "oauth" && isOAuthRefreshFence(terminal)).toBe(true);
-              expect(terminal?.type === "oauth" && isPendingOAuthRefreshFence(terminal)).toBe(
-                false,
-              );
-            }
-          } else {
-            expect(read(mainAgentDir)).toMatchObject(replacement);
-            const peer = read(peerDir);
-            expect(peer?.type === "oauth" && isPendingOAuthRefreshFence(peer)).toBe(true);
+
+        await expect(resolveFrom(peerDir)).rejects.toThrow(
+          stage === "peer fence"
+            ? "Failed to fence every historical OAuth refresh peer"
+            : lostReply.message,
+        );
+        expect(attempts).toBe(1);
+        expect(refresh).toHaveBeenCalledOnce();
+        if (stage === "peer fence") {
+          for (const dir of [mainAgentDir, peerDir, lateDir]) {
+            const terminal = read(dir);
+            expect(terminal?.type === "oauth" && isOAuthRefreshFence(terminal)).toBe(true);
+            expect(terminal?.type === "oauth" && isPendingOAuthRefreshFence(terminal)).toBe(false);
           }
-        } finally {
-          spy.mockRestore();
+        } else {
+          expect(read(mainAgentDir)).toMatchObject(replacement);
+          const peer = read(peerDir);
+          expect(peer?.type === "oauth" && isPendingOAuthRefreshFence(peer)).toBe(true);
         }
       },
     ),

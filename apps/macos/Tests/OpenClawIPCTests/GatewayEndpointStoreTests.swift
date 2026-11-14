@@ -393,6 +393,27 @@ struct GatewayEndpointStoreTests {
             authToken: authToken)
     }
 
+    @Test(arguments: ["token", "password"], [false, true])
+    func `local credentials prefer config while remote credentials retain env overrides`(
+        credential: String,
+        isRemote: Bool) throws
+    {
+        let kind = try #require(GatewayEndpointStore.Credential(rawValue: credential))
+        let root: [String: Any] = [
+            "gateway": [isRemote ? "remote" : "auth": [credential: "  configured-secret  "]],
+        ]
+        let resolved = GatewayEndpointStore.resolveGatewayCredential(
+            kind,
+            isRemote: isRemote,
+            root: root,
+            env: ["OPENCLAW_GATEWAY_\(credential.uppercased())": "stale-environment-secret"],
+            launchdSnapshot: self.makeLaunchAgentSnapshot(
+                token: "service-token",
+                password: "service-password"))
+
+        #expect(resolved == (isRemote ? "stale-environment-secret" : "configured-secret"))
+    }
+
     @Test func `resolve gateway token prefers env and falls back to launchd`() {
         let snapshot = self.makeLaunchAgentTokenSnapshot("launchd-token")
 

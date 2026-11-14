@@ -121,6 +121,7 @@ export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
   sideEffectOwnerKeyForTool: (toolName: string) => string | undefined;
+  hideFromChannelProgressForTool: (toolName: string) => boolean | undefined;
   handleToolCall: (
     params: CodexDynamicToolCallParams,
     options?: {
@@ -300,6 +301,8 @@ export function createCodexDynamicToolBridge(params: {
       const tool = toolMap.get(toolName)?.tool;
       return tool ? getPluginToolSideEffectOwnerKey(tool) : undefined;
     },
+    hideFromChannelProgressForTool: (toolName) =>
+      toolMap.get(toolName)?.tool.hideFromChannelProgress,
     telemetry,
     setRemoteWorkspaceFileReader: (reader) => {
       readRemoteWorkspaceFile = reader;

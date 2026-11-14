@@ -23,7 +23,7 @@ export const wsInstances: MockGoogleLiveWebSocket[] = [];
 export const audioContexts: MockAudioContext[] = [];
 export const createdSources: MockAudioBufferSource[] = [];
 export const inputProcessors: MockAudioProcessor[] = [];
-export const inputSinks: MockAudioSink[] = [];
+const inputSinks: MockAudioSink[] = [];
 
 export const googleLiveTestFixture = {
   getUserMedia: vi.fn(),
@@ -226,4 +226,10 @@ export function installGoogleLiveTestFixture(): void {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+}
+
+export async function beginFakeTimedTransport(transport: GoogleLiveRealtimeTalkTransport) {
+  const start = transport.start();
+  await vi.advanceTimersByTimeAsync(0);
+  return { start, ws: latestWebSocket() };
 }

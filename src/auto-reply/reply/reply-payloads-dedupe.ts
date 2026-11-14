@@ -235,9 +235,17 @@ export function resolveMessagingToolPayloadDedupe(params: MessagingToolDedupeRou
   };
 }
 
-function isMessagingToolReplyDuplicate(payload: ReplyPayload, sentTexts: string[]): boolean {
+function isMessagingToolReplyDuplicate(
+  payload: ReplyPayload,
+  sentTexts: string[],
+  matchingRoute: boolean,
+): boolean {
   if (!payload.btw?.question.trim()) {
-    return isMessagingToolDuplicate(payload.text ?? "", sentTexts);
+    const text = payload.text?.trim();
+    return (
+      Boolean(matchingRoute && text && sentTexts.some((sentText) => sentText.trim() === text)) ||
+      isMessagingToolDuplicate(payload.text ?? "", sentTexts)
+    );
   }
   // A repeated answer alone cannot prove that a different side question was delivered.
   const rendered = normalizeTextForComparison(formatBtwTextForExternalDelivery(payload) ?? "");
@@ -302,7 +310,7 @@ export function filterMessagingToolReplyPayload(
         ? payloads
         : payloads.filter(
             (payload) =>
-              !isMessagingToolReplyDuplicate(payload, sentTexts) ||
+              !isMessagingToolReplyDuplicate(payload, sentTexts, decision.matchingRoute) ||
               hasReplyPayloadContent(
                 { ...payload, text: undefined },
                 { extraContent: hasEnabledDeliveryOperation(payload) || payload.location != null },

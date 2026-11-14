@@ -21,7 +21,7 @@ suite.define(() => {
       await page.screenshot({ path: path.join(artifactDir, "unavailable.png") });
 
       const content = page.locator("openclaw-terminal-page");
-      await content.getByText("The terminal is not available on this gateway.").waitFor();
+      await content.getByText("The terminal is unavailable.").waitFor();
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
       await content.getByRole("button", { name: "New session", exact: true }).click();
       await page.waitForURL(`${suite.server.baseUrl}new`);

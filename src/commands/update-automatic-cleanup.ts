@@ -4,6 +4,7 @@ import {
   canAutomaticallyCleanUpdateRecovery,
   automaticRecoveryCleanupWarning,
 } from "../infra/update-automatic-cleanup-result.js";
+import { isNeverActivatedFailedUpdate } from "../infra/update-run-activation.js";
 import { getUpdateRun } from "../infra/update-run-reader.js";
 import type { UpdateStepResult } from "../infra/update-step-result.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
@@ -43,9 +44,11 @@ export async function cleanupCompletedUpdateRecovery(
         ...(detail ? { diagnostics: [detail] } : {}),
       };
     }
+    // A failure that never activated releases its own capture along with superseded recovery.
+    const ownCaptureReleased = isNeverActivatedFailedUpdate(run);
     const io = createConfigIO({ env, observe: false, pluginValidation: "core-only" });
     const readConfig = () => io.readSourceConfigBestEffort();
-    const preview = inspectSessionSqliteRecovery({ cfg: await readConfig(), env });
+    const preview = await inspectSessionSqliteRecovery({ cfg: await readConfig(), env });
     assertCurrent();
     const report = await retireOwnedSessionSqliteRecovery(
       {
@@ -55,6 +58,7 @@ export async function cleanupCompletedUpdateRecovery(
         confirm: async (verified) => {
           // Backward clock adjustments must not make this run its own successor.
           if (
+            !ownCaptureReleased &&
             verified.artifacts.some(
               (item) =>
                 item.kind === "update-capture" &&
@@ -69,6 +73,7 @@ export async function cleanupCompletedUpdateRecovery(
           return true;
         },
         verifyHistorical: false,
+        allowOwnedDestinationMutation: true,
       },
       { assertCurrent },
     );

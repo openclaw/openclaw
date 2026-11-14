@@ -481,7 +481,7 @@ export function workerProbe(
           const [archiveUrl] = Worker.mock.calls.at(-1);
           expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
-          expect(tuiUrls).toHaveLength(5);
+          expect(tuiUrls).toHaveLength(6);
           expect(setupUrls).toHaveLength(2);
           expect(scriptUrl.endsWith(sourceMode ? '.mts' : '.js')).toBe(true);
           for (const url of [...tuiUrls,...setupUrls,retentionUrl]) {

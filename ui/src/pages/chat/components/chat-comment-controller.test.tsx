@@ -116,7 +116,7 @@ async function mountComments(additional: ChatAttachment[] = []) {
     "openclaw-chat-comment-controller",
   )!;
   document.body.append(card);
-  flush();
+  await waitForSolid(() => expect(composer.querySelector(".chat-comment-preview")).not.toBeNull());
   const edit = async () => {
     button(composer, 'button[aria-label="Edit comment 1"]').click();
     await waitForSolid(() => expect(input()).not.toBeNull());
@@ -248,7 +248,7 @@ describe("comment actions outside the transcript", () => {
     expect(fixture.attachments()).toEqual([fixture.attachment, retainedFile]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBe(originalPayload);
     await waitForSolid(() =>
-      expect(fixture.toast.querySelector(".app-toast__message")?.textContent).toBe(
+      expect(fixture.toast.querySelector(".app-toast__body")?.textContent).toBe(
         "File too large. Try a smaller file.",
       ),
     );

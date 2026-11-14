@@ -1,0 +1,2 @@
+# Preserve terminal-hook closure/admission assertions with diagnostics explicitly enabled and restored; complete shared logger fixture adds no lines.
+7

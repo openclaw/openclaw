@@ -388,7 +388,7 @@ export function createTerminalPanel(
         let confirmed: boolean;
         try {
           confirmed = await showConfirmDialog({
-            title: i18n.t("terminal.closeSession"),
+            title: i18n.t("terminal.closeSessionTitle"),
             message: i18n.t("terminal.closeSessionMessage"),
             confirmLabel: i18n.t("common.close"),
             danger: true,

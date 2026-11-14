@@ -66,6 +66,21 @@ function expectNoChat(f: Fixture) {
     vi.mocked(f.context.broadcast).mock.calls.filter(([event]) => event === "chat"),
   ).toHaveLength(0);
 }
+function acceptedRunId(respond: Awaited<ReturnType<typeof refreshCard>>) {
+  const payload = respond.mock.calls[0]?.[1];
+  if (!isRecord(payload) || typeof payload.runId !== "string") {
+    throw new Error("Missing refresh run");
+  }
+  return payload.runId;
+}
+function prepareSession(dispatch: Dispatch, f: Fixture) {
+  const prepare = dispatch.replyOptions?.onSessionPrepared;
+  if (!prepare) {
+    throw new Error("Missing real admission preparation callback");
+  }
+  prepare(f.scope);
+  return prepare;
+}
 
 async function claimRefreshOperation(f: Fixture, runId: string) {
   const source = rpcSourceTesting.get(runId);
@@ -266,9 +281,7 @@ describe("registered progress refresh admission", () => {
       const runIds = new Set<unknown>();
       for (const response of responses) {
         expect(response).toHaveBeenCalledExactlyOnceWith(...acceptedResponse());
-        const payload = response.mock.calls[0]?.[1];
-        expect(payload).toHaveProperty("runId", expect.any(String));
-        runIds.add(isRecord(payload) ? payload.runId : undefined);
+        runIds.add(acceptedRunId(response));
       }
       expect(runIds.size).toBe(intentCount);
     };
@@ -277,8 +290,6 @@ describe("registered progress refresh admission", () => {
     await dispatched.promise;
     for (const [params] of dispatchInboundMessageMock.mock.calls) {
       const admitted = params as Dispatch;
-      expect(admitted.toolsAllow).toContain("progress_card");
-      expect(admitted.toolsAllow).not.toContain("exec");
       await admitted.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
     }
     await f.finishDispatch();
@@ -307,34 +318,27 @@ describe("registered progress refresh admission", () => {
         await putCard(f, "Previous status");
         const respond = await refreshCard(f, "refresh-click");
         expect(respond).toHaveBeenCalledWith(...acceptedResponse());
-        const payload = respond.mock.calls[0]?.[1];
-        if (!isRecord(payload) || typeof payload.runId !== "string") {
-          throw new Error("Missing refresh run");
-        }
+        const runId = acceptedRunId(respond);
         const recorder = await f.dispatchedRecorder;
         expect(await recorder.resolveMessage()).toMatchObject({
           display: false,
           provenance: { kind: "internal_system", sourceTool: "progress_card_refresh" },
         });
-        expect(getAgentRunContext(payload.runId)).toMatchObject({
+        expect(getAgentRunContext(runId)).toMatchObject({
           isControlUiVisible: false,
           projectSessionMessages: false,
           projectSessionActive: false,
           projectSessionLifecycle: false,
         });
-        const source = rpcSourceTesting.get(payload.runId);
+        const source = rpcSourceTesting.get(runId);
         expect(source?.adapter).toMatchObject({ controlUiVisible: false });
         const dispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Dispatch;
         expect(dispatch.ctx.InternalTurnSource).toBe("progress-card-refresh");
         expect(dispatch.ctx.InputProvenance).toMatchObject({ sourceTool: "progress_card_refresh" });
         expect(dispatch.toolsAllow).toContain("progress_card");
         expect(dispatch.toolsAllow).not.toContain("exec");
-        const prepared = dispatch.replyOptions?.onSessionPrepared;
-        if (!prepared) {
-          throw new Error("Missing real admission preparation callback");
-        }
-        prepared(f.scope);
-        const claimed = await claimRefreshOperation(f, payload.runId);
+        const prepared = prepareSession(dispatch, f);
+        const claimed = await claimRefreshOperation(f, runId);
         releaseRefresh = claimed.release;
         expect(getRpcSourceProjectSessionActive(claimed.source)).toBe(false);
         expect(getRpcSourceIdentity(claimed.source).sessionId).toBe(f.scope.sessionId);
@@ -441,12 +445,9 @@ describe("registered progress refresh admission", () => {
         for (const response of responses) {
           expect(response).toHaveBeenCalledExactlyOnceWith(...acceptedResponse());
         }
-        const accepted = responses[0]?.mock.calls[0]?.[1];
-        if (!isRecord(accepted) || typeof accepted.runId !== "string") {
-          throw new Error("Missing active refresh acceptance");
-        }
+        const runId = acceptedRunId(responses[0]!);
         // The ACK precedes native steering; keep its incumbent alive until source settlement.
-        await rpcSourceTesting.get(accepted.runId)?.input.settlement.promise;
+        await rpcSourceTesting.get(runId)?.input.settlement.promise;
         expect(claim).not.toHaveBeenCalled();
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         expect(getAgentRunContext("original-work")).toMatchObject(visibleProjection);
@@ -471,18 +472,11 @@ describe("registered progress refresh admission", () => {
     try {
       await putCard(f, "Previous status");
       const respond = await refreshCard(f, "hidden-start", undefined, { id: "hidden-start" });
-      const accepted = respond.mock.calls[0]?.[1];
-      if (!isRecord(accepted) || typeof accepted.runId !== "string") {
-        throw new Error("Missing hidden refresh acceptance");
-      }
+      const runId = acceptedRunId(respond);
       await f.dispatchedRecorder;
       const hiddenDispatch = dispatchInboundMessageMock.mock.calls[0]?.[0] as Dispatch;
-      const prepareHidden = hiddenDispatch.replyOptions?.onSessionPrepared;
-      if (!prepareHidden) {
-        throw new Error("Missing hidden refresh preparation callback");
-      }
-      prepareHidden(f.scope);
-      const hidden = await claimRefreshOperation(f, accepted.runId);
+      prepareSession(hiddenDispatch, f);
+      const hidden = await claimRefreshOperation(f, runId);
       releaseHidden = hidden.release;
       const hiddenOperation = hidden.operation;
       hiddenOperation.bindToolAuthoritySnapshot({
@@ -495,7 +489,7 @@ describe("registered progress refresh admission", () => {
       hiddenOperation.attachBackend({
         kind: "embedded",
         supportsTranscriptCommitWait: true,
-        runId: accepted.runId,
+        runId,
         toolAuthorityFingerprint: "same-authority",
         cancel: vi.fn(),
         messageInjectionV2: {
@@ -524,7 +518,7 @@ describe("registered progress refresh admission", () => {
         await human.replyOptions?.userTurnTranscriptRecorder?.resolveMessage(),
       ).not.toHaveProperty("display", false);
       expect(getAgentRunContext(f.params.idempotencyKey)?.projectSessionMessages).not.toBe(false);
-      expect(getAgentRunContext(accepted.runId)?.projectSessionMessages).toBe(false);
+      expect(getAgentRunContext(runId)?.projectSessionMessages).toBe(false);
     } finally {
       releaseHidden?.();
       await f.cleanup();

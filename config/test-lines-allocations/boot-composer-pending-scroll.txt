@@ -1,0 +1,2 @@
+# Preserve the textarea viewport across loading-frame moves and final handoff before scroll delivery.
+29

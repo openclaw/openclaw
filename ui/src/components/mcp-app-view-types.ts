@@ -54,7 +54,7 @@ export type McpAppViewProps = {
   title: string;
   deepLink: string | undefined;
   onRelaunch: (() => void) | undefined;
-  onHeightChange: ((height: number) => void) | undefined;
+  onHeightChange: ((height: number | null, settled?: boolean) => number | undefined) | undefined;
   relaunching: boolean;
   displayMode: "inline" | "fullscreen";
 };

@@ -114,9 +114,7 @@ export function workspaceTransferHandler(
 
 export async function closeServer(server: Server | HttpsServer) {
   server.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
+  await server[Symbol.asyncDispose]();
 }
 
 export async function serveTransfer(server: Server | HttpsServer) {

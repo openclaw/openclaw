@@ -11,7 +11,7 @@ import {
   type SessionSqliteMigrationTargetInput,
 } from "../infra/session-sqlite-migration-manifest.js";
 
-/** Replace retired duplicate references without removing any run's rollback coverage. */
+/** Publish settlement-verified replacements without removing any run's rollback coverage. */
 export function coalesceSessionSqliteArchiveReferences(
   replacements: ReadonlyMap<string, SessionSqliteMigrationMove>,
   runs: readonly ActiveSessionSqliteMigrationRun[],
@@ -57,7 +57,7 @@ export function coalesceSessionSqliteArchiveReferences(
         const moves = new Map<string, SessionSqliteMigrationMove>();
         for (const move of target[list]) {
           const survivor = replacements.get(move.archivePath);
-          if (survivor && move.artifact?.disposal.state === "disposed") {
+          if (survivor && move.artifact) {
             move.archivePath = survivor.archivePath;
             move.artifact = {
               ...move.artifact,

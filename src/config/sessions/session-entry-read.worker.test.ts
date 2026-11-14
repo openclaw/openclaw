@@ -602,7 +602,7 @@ it.each(["sharing", "list"] as const)(
     }),
 );
 
-it.each(["selected", "orphans"] as const)(
+it.each(["selected", "listing"] as const)(
   "preserves listing validation of dirty siblings in %s worker reads",
   (mode) =>
     withDatabase(async (database, env) => {
@@ -612,12 +612,11 @@ it.each(["selected", "orphans"] as const)(
         writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
       }
       const read = async () =>
-        mode === "orphans"
+        mode === "listing"
           ? readSessionEntrySummariesInWorker({
               agentId: "main",
               storePath: database.path,
               env,
-              mainSessionRecovery: "orphans",
             })
           : (
               await readSessionEntriesFromStoreInWorker({
@@ -628,7 +627,7 @@ it.each(["selected", "orphans"] as const)(
                 projection: "list",
               })
             ).entries;
-      expect(await read()).toHaveLength(mode === "orphans" ? 0 : 1);
+      expect(await read()).toHaveLength(mode === "listing" ? 2 : 1);
       markCanonicalSessionValidationPending(database, [sibling]);
       database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
         JSON.stringify({

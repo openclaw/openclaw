@@ -15,8 +15,13 @@ import {
   type SenderIdentity,
 } from "../../lib/chat/sender-label.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
-import { assistantMessageIsInterrupted, assistantMessageKind } from "./chat-assistant-reply.ts";
+import {
+  assistantMessageCanOwnTurnActions,
+  assistantMessageIsInterrupted,
+  assistantMessageKind,
+} from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
+import { persistedMessageEntryId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsIndependentBoundary,
@@ -36,137 +41,6 @@ type ReplyState = {
   turnSource?: MessageGroup["replyTurnSource"];
 };
 
-/**
- * Reply context comes from the full transcript, not the rendered rows: search
- * renders a subset that can drop the other speaker or the prompt a reply answers.
- */
-function stampReplyAttribution(
-  items: Array<ChatItem | MessageGroup>,
-  context: Array<ChatItem | MessageGroup>,
-  { people: sessionPeople, localPerson }: ReplyAttributionContext,
-): Array<ChatItem | MessageGroup> {
-  const people = new Set(sessionPeople);
-  const untypedSenders: SenderIdentity[] = [];
-  // reply_to_current names the prompt that started the run. Only the persisted
-  // user-turn run identity resolves it; an ambiguous owner stays unresolved.
-  const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
-  const stateBefore = new Map<string, ReplyState>();
-  let state: ReplyState = {};
-  for (const item of context) {
-    // System notices and projected/forwarded inputs own turns too. Clear the
-    // previous prompt before recording reply state for their output.
-    if (chatItemStartsUserTurn(item) && !(item.kind === "group" && item.role === "user")) {
-      state = {};
-    }
-    if (item.kind === "stream") {
-      stateBefore.set(item.key, state);
-    }
-    if (item.kind !== "group") {
-      continue;
-    }
-    for (const source of item.messages) {
-      stateBefore.set(source.key, state);
-    }
-    if (item.role === "user") {
-      for (const source of item.messages) {
-        const runId = userTurnRunId(source.message);
-        if (runId) {
-          runPrompts.set(runId, runPrompts.has(runId) ? null : source);
-        }
-      }
-      // A local message carries no sender metadata: its author is the signed-in
-      // viewer, one person for counting, never a name for this message.
-      if (item.sender?.identity) {
-        people.add(sessionParticipantIdentityKey(item.sender.identity));
-      } else if (item.sender) {
-        untypedSenders.push(item.sender);
-      } else if (!item.senderSession && localPerson) {
-        people.add(localPerson);
-      }
-      // A sender-less user group clears attribution: no chip is safer than
-      // mislabeling the reply as addressed to the previous participant.
-      const last = item.messages.at(-1);
-      state = { sender: item.sender, message: item.sender ? last : undefined, turnSource: last };
-    } else if (
-      item.role === "assistant" &&
-      (hasForwardedSource(item) || assistantGroupIsIndependentBoundary(item))
-    ) {
-      // Forwarded input starts a turn without a local human reply recipient.
-      state = {};
-    }
-  }
-  // Untyped senders resolve after every typed person is known, so order never splits one.
-  /**
-   * Keys a sender without a typed identity by its id alone; names change, ids do
-   * not. The Gateway stores a profile user's id as `senderId` (typed identities
-   * persist only when their id equals it), so an untyped id that matches a
-   * counted profile is that person. Any other untyped id is its own person.
-   */
-  for (const sender of untypedSenders) {
-    if (!sender.id) {
-      people.add(JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]));
-      continue;
-    }
-    const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
-    people.add(
-      people.has(profile) || profile === localPerson
-        ? profile
-        : JSON.stringify(["sender", sender.id]),
-    );
-  }
-  // Automatic attribution is only useful when several people share the thread.
-  const shared = people.size >= 2;
-
-  // Rows outside the context (live output) take the state of the next row that
-  // has one, or the transcript end.
-  const states: ReplyState[] = [];
-  let next = state;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]!;
-    const known =
-      item.kind === "group"
-        ? item.messages.map((source) => stateBefore.get(source.key)).find(Boolean)
-        : item.kind === "stream"
-          ? stateBefore.get(item.key)
-          : undefined;
-    next = known ?? next;
-    states[index] = next;
-  }
-  for (const [index, item] of items.entries()) {
-    const { sender, message, turnSource } = states[index]!;
-    if (item.kind === "group") {
-      // Every strip follows the thread: an unattributed source is "You" only in 1:1.
-      if (shared) {
-        item.replyShared = true;
-      }
-      if (
-        item.role !== "assistant" ||
-        hasForwardedSource(item) ||
-        assistantGroupIsIndependentBoundary(item)
-      ) {
-        continue;
-      }
-      const currentSource =
-        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
-          ? runPrompts.get(item.runId)
-          : undefined;
-      if (turnSource) {
-        item.replyTurnSource = turnSource;
-      }
-      if (currentSource) {
-        item.replyCurrentSource = currentSource;
-      }
-    } else if (item.kind !== "stream") {
-      continue;
-    }
-    if (shared && (item.kind === "stream" || sender)) {
-      item.replyToSender = sender;
-      item.replyToMessage = message;
-    }
-  }
-  return items;
-}
-
 /** Transcript facts that outlive the rendered subset of rows. */
 export type ReplyAttributionContext = {
   /** Every transcript row, including those a search hides from `items`. */
@@ -175,6 +49,16 @@ export type ReplyAttributionContext = {
   people?: readonly string[];
   /** Key of the signed-in viewer, who authors local user messages without a sender. */
   localPerson?: string;
+  /** Receives the transcript-wide attribution facts. */
+  facts?: ReplyAttributionFacts;
+};
+
+export type ReplyAttributionFacts = {
+  people?: ReadonlySet<string>;
+  /** Prompts per persisted user-turn run; a repeated run has no single prompt. */
+  prompts?: ReadonlyMap<string, number>;
+  /** Runs whose shown replies answer the prompt that started them. */
+  currentReplies?: ReadonlySet<string>;
 };
 
 const groupedSegments = new WeakMap<
@@ -218,24 +102,17 @@ function groupChatItems(
         item.key,
         item.message,
         normalizeMessage(item.message),
-        item.duplicateCount,
         item.startsTurn,
         rowsAfterHiddenTurn?.has(item.key) === true,
       );
     }
     const cached = owner && groupedSegments.get(owner);
-    // Duplicate collapse annotates wrappers, never the retained cache inputs.
     const grouped =
       cached &&
       cached.inputs.length === inputs.length &&
       inputs.every((input, index) => input === cached.inputs[index])
         ? cached.items
-        : groupChatItemSegment(
-            source.map((item) => ({ ...item })),
-            visibleReasoning,
-            rowsAfterHiddenTurn,
-            showReasoning,
-          );
+        : groupChatItemSegment(source, visibleReasoning, rowsAfterHiddenTurn, showReasoning);
     if (grouped !== cached?.items) {
       const segment = { inputs, items: grouped };
       // Hidden or retained source objects must not keep overlapping old snapshots alive.
@@ -307,7 +184,152 @@ export function groupMessages(
   const context = replyContext.items
     ? groupChatItems(replyContext.items, visibleReasoning, undefined, showReasoning)
     : result;
-  return stampReplyAttribution(result, context, replyContext);
+  /**
+   * Reply context comes from the full transcript, not the rendered rows: search
+   * renders a subset that can drop the other speaker or the prompt a reply answers.
+   */
+  const { people: sessionPeople, localPerson } = replyContext;
+  const people = new Set(sessionPeople);
+  const untypedSenders: SenderIdentity[] = [];
+  // reply_to_current names the prompt that started the run. Only the persisted
+  // user-turn run identity resolves it; an ambiguous owner stays unresolved.
+  const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
+  const promptCounts = new Map<string, number>();
+  const stateBefore = new Map<string, ReplyState>();
+  let state: ReplyState = {};
+  for (const item of context) {
+    // System notices and projected/forwarded inputs own turns too. Clear the
+    // previous prompt before recording reply state for their output.
+    if (chatItemStartsUserTurn(item) && !(item.kind === "group" && item.role === "user")) {
+      state = {};
+    }
+    if (item.kind === "stream") {
+      stateBefore.set(item.key, { ...state });
+    }
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const source of item.messages) {
+      stateBefore.set(source.key, { ...state });
+    }
+    if (item.role === "user") {
+      for (const source of item.messages) {
+        const runId = userTurnRunId(source.message);
+        if (runId) {
+          runPrompts.set(runId, runPrompts.has(runId) ? null : source);
+          promptCounts.set(runId, (promptCounts.get(runId) ?? 0) + 1);
+        }
+      }
+      // A local message carries no sender metadata: its author is the signed-in
+      // viewer, one person for counting, never a name for this message.
+      if (item.sender?.identity) {
+        people.add(sessionParticipantIdentityKey(item.sender.identity));
+      } else if (item.sender) {
+        untypedSenders.push(item.sender);
+      } else if (!item.senderSession && localPerson) {
+        people.add(localPerson);
+      }
+      // A sender-less user group clears attribution: no chip is safer than
+      // mislabeling the reply as addressed to the previous participant.
+      const last = item.messages.at(-1);
+      state = { sender: item.sender, message: item.sender ? last : undefined, turnSource: last };
+    } else if (
+      item.role === "assistant" &&
+      (hasForwardedSource(item) || assistantGroupIsIndependentBoundary(item))
+    ) {
+      // Forwarded input starts a turn without a local human reply recipient.
+      state = {};
+    }
+  }
+  // Untyped senders resolve after every typed person is known, so order never splits one.
+  /**
+   * Keys a sender without a typed identity by its id alone; names change, ids do
+   * not. The Gateway stores a profile user's id as `senderId` (typed identities
+   * persist only when their id equals it), so an untyped id that matches a
+   * counted profile is that person. Any other untyped id is its own person.
+   */
+  for (const sender of untypedSenders) {
+    if (!sender.id) {
+      people.add(JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]));
+      continue;
+    }
+    const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
+    people.add(
+      people.has(profile) || profile === localPerson
+        ? profile
+        : JSON.stringify(["sender", sender.id]),
+    );
+  }
+  // Automatic attribution is only useful when several people share the thread.
+  const shared = people.size >= 2;
+  const currentReplies = new Set<string>();
+  if (replyContext.facts) {
+    Object.assign(replyContext.facts, { people, prompts: promptCounts, currentReplies });
+  }
+
+  // Rows outside the context (live output) take the state of the next row that
+  // has one, or the transcript end.
+  const states: ReplyState[] = [];
+  let next: ReplyState = state;
+  for (let index = result.length - 1; index >= 0; index -= 1) {
+    const item = result[index]!;
+    const known =
+      item.kind === "group"
+        ? item.messages.map((source) => stateBefore.get(source.key)).find(Boolean)
+        : item.kind === "stream"
+          ? stateBefore.get(item.key)
+          : undefined;
+    next = known ?? next;
+    states[index] = next;
+  }
+  let previousMessageId: string | undefined;
+  for (const [index, item] of result.entries()) {
+    const { sender, message, turnSource } = states[index]!;
+    if (item.kind === "group" || item.kind === "stream") {
+      item.replyPreviousMessageId = previousMessageId;
+    }
+    if (item.kind === "group") {
+      // Excerpts are redundant only when their source is in the displayed projection.
+      if (item.role === "user" || item.role === "assistant") {
+        for (const source of item.messages) {
+          if (source.hasVisibleContent) {
+            previousMessageId = persistedMessageEntryId(source.message) ?? undefined;
+          }
+        }
+      }
+      // Every strip follows the thread: an unattributed source is "You" only in 1:1.
+      if (shared) {
+        item.replyShared = true;
+      }
+      if (
+        item.role !== "assistant" ||
+        hasForwardedSource(item) ||
+        assistantGroupIsIndependentBoundary(item)
+      ) {
+        continue;
+      }
+      const currentRun = item.messages.some((source) => source.replyTarget?.kind === "current")
+        ? item.runId
+        : undefined;
+      if (currentRun) {
+        currentReplies.add(currentRun);
+      }
+      const currentSource = currentRun ? runPrompts.get(currentRun) : undefined;
+      if (turnSource) {
+        item.replyTurnSource = turnSource;
+      }
+      if (currentSource) {
+        item.replyCurrentSource = currentSource;
+      }
+    } else if (item.kind !== "stream") {
+      continue;
+    }
+    if (shared && (item.kind === "stream" || sender)) {
+      item.replyToSender = sender;
+      item.replyToMessage = message;
+    }
+  }
+  return result;
 }
 
 function groupChatItemSegment(
@@ -339,15 +361,18 @@ function groupChatItemSegment(
       !identity.isImported &&
       visibleReasoning.has(JSON.stringify([identity.runId, identity.id])) &&
       Boolean(extractThinkingCached(item.message));
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
     const hasAssistantText =
+      normalizedRole === "tool" &&
       record?.role === "assistant" &&
-      record.stopReason === "toolUse" &&
+      (record.stopReason === "toolUse" ||
+        assistantMessageCanOwnTurnActions(item.message, Boolean(normalized.senderSession))) &&
       Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
     // Saved reasoning stays visible until its live owner retires the receipts.
-    // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // Mixed answers retain assistant ownership; forwarded narration needs an
+    // explicit answer before gaining its own display-turn boundary.
     // Classify after content projection; prepared outcomes may outlive their blocks.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
-    const normalizedRole = normalizeRoleForGrouping(normalized.role);
     const hasPreparedActivity =
       normalizedRole === "assistant" &&
       visibleContent === "none" &&
@@ -361,7 +386,6 @@ function groupChatItemSegment(
     const source = {
       message: item.message,
       key: item.key,
-      duplicateCount: item.duplicateCount,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
         hasVisibleReasoning ||

@@ -5,7 +5,8 @@ import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/
 import type { GatewayProtocolRequestOptions } from "../../../../packages/gateway-client/src/protocol-client.js";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { useFakeClock as fakeTimers } from "../../test-helpers/fake-clock.ts";
 import { sessionRequest as gatewayRequest } from "./hydration-family.test-support.ts";
 import {
@@ -156,7 +157,7 @@ describe("session placement startup", () => {
       }
       await vi.advanceTimersByTimeAsync(waitMs - 30_000);
       ready = true;
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(8_000);
       expect(await outcome).toMatchObject({ status: cancel ? "cancelled" : "started" });
       expect(writes).toBe(cancel ? 0 : 1);
       expect(new Set(frames).size).toBe(1);
@@ -379,7 +380,7 @@ describe("session placement startup", () => {
         status: "cleanup-rejected",
         error:
           observation === "pending"
-            ? "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent."
+            ? "Device setup is still in progress. Retry to check the existing device. Your message hasn’t been sent."
             : "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
       });
       expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());

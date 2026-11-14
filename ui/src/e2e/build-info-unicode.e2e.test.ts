@@ -74,7 +74,7 @@ suite.define(() => {
       await page.mouse.up();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/about");
       const branch = page
-        .locator(".settings-kv dt", { hasText: "Branch" })
+        .locator('dl[aria-label="Control UI build details"] dt', { hasText: "Branch" })
         .locator("xpath=following-sibling::dd[1]/code");
       await expect.poll(() => branch.textContent()).toBe(`${NORMALIZED_BRANCH}*`);
       await page.reload();

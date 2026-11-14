@@ -216,7 +216,6 @@ async function createCompletionFixture(
         runStartedAt: params.runStartedAt,
         conversation: { sessionKey, ...generation },
         payloads: params.deliveryPayloads,
-        text: params.synthesizedText,
         signal: params.abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       }),

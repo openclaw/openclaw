@@ -15,7 +15,11 @@ import {
   validateWorkerDesktopObserveParams,
   validateWorkerDesktopLaunchParams,
   type DesktopObserveParams,
+  validateEnvironmentsAdoptSuggestedProfileParams,
+  type SuggestedWorkerProfileSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readConfigFileSnapshotForWrite, resolveConfigSnapshotHash } from "../../config/io.js";
+import { resolveSuggestedWorkerProfile } from "../../plugins/worker-profile-suggestions.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { DesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
@@ -36,6 +40,7 @@ import {
   resolveRequiredNodeCommandAuthority,
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
@@ -43,10 +48,6 @@ import { formatForLog } from "../ws-log.js";
 import { listWorkerProfilesWithMachines } from "./environments.profiles.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
-import {
-  adoptSuggestedWorkerProfile,
-  listSuggestedWorkerProfile,
-} from "./environments.suggested-profile.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type {
@@ -56,6 +57,96 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
+
+async function listSuggestedWorkerProfile(
+  context: GatewayRequestContext,
+): Promise<SuggestedWorkerProfileSummary | undefined> {
+  const config = context.getRuntimeConfig();
+  if (Object.keys(config.cloudWorkers?.profiles ?? {}).length > 0) {
+    return undefined;
+  }
+  const suggestion = await resolveSuggestedWorkerProfile({ config });
+  if (!suggestion || context.getRuntimeConfig() !== config) {
+    return undefined;
+  }
+  return {
+    id: suggestion.id,
+    providerId: suggestion.profile.provider,
+    ...(suggestion.providerDisplayId ? { providerDisplayId: suggestion.providerDisplayId } : {}),
+  };
+}
+
+async function requireActiveCloudProfile(context: GatewayRequestContext) {
+  const summaries = await listWorkerProfilesWithMachines(context);
+  const profile = summaries.find((summary) => summary.id === "cloud");
+  if (!profile) {
+    throw new Error(
+      "The cloud worker profile is saved but is not active on this Gateway. Wait for the Gateway to restart, then retry; if it does not restart, restart it manually.",
+    );
+  }
+  return profile;
+}
+
+const adoptSuggestedWorkerProfile = defineValidatedGatewayHandler(
+  "environments.adoptSuggestedProfile",
+  validateEnvironmentsAdoptSuggestedProfileParams,
+  async (options) => {
+    const { context, respond } = options;
+    const authority = readGatewayRequestMutationAuthority(options);
+    await respondUnavailableOnThrow(respond, async () => {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      authority.assertCurrent();
+      const existing = snapshot.sourceConfig.cloudWorkers?.profiles?.cloud;
+      if (existing) {
+        const profile = await requireActiveCloudProfile(context);
+        authority.assertCurrent();
+        respond(true, { profile }, undefined);
+        return;
+      }
+      const suggestion = await resolveSuggestedWorkerProfile({
+        config: snapshot.config,
+        refresh: true,
+      });
+      authority.assertCurrent();
+      if (!suggestion || suggestion.id !== "cloud") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "No cloud worker profile is available to configure"),
+        );
+        return;
+      }
+      const hash = resolveConfigSnapshotHash(snapshot);
+      const { configHandlers } = await import("./config.js");
+      authority.assertCurrent();
+      let saved = false;
+      // The config owner commits with its snapshot CAS; restart-required writes may stay inactive.
+      await configHandlers["config.patch"]!({
+        ...options,
+        req: { ...options.req, method: "config.patch" },
+        params: {
+          raw: JSON.stringify({ cloudWorkers: { profiles: { cloud: suggestion.profile } } }),
+          ...(hash ? { baseHash: context.configRevisionProjector.projectRawHash(hash) } : {}),
+          response: "summary",
+        },
+        sessionMutationCommitGuard: authority.assertCurrent,
+        respond: (ok, payload, error, meta) => {
+          if (ok) {
+            saved = true;
+          } else {
+            respond(false, payload, error, meta);
+          }
+        },
+      });
+      if (!saved) {
+        return;
+      }
+      const profile = await requireActiveCloudProfile(context);
+      authority.assertCurrent();
+      respond(true, { profile }, undefined);
+    });
+  },
+);
 
 function respondDesktopObserveFailure(respond: RespondFn, error: unknown, fallback: string) {
   if (error instanceof DesktopCredentialsRequiredError) {
@@ -412,6 +503,18 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       const profiles = await listWorkerProfilesWithMachines(context);
       const suggestedProfile = await listSuggestedWorkerProfile(context);
       authority.assertCurrent();
+      const role = resolveOperatorRolePolicy(client ?? null, context.getRuntimeConfig());
+      const currentScopes = client?.connect.scopes ?? [];
+      const administrator =
+        currentScopes.includes(ADMIN_SCOPE) && (!role || role.scopes.includes(ADMIN_SCOPE));
+      const canWrite =
+        authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, currentScopes).allowed &&
+        (!role || authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, role.scopes).allowed);
+      const dispatchableProfileIds = profiles
+        .filter(
+          (profile) => canWrite && (administrator || role?.workerProfiles?.includes(profile.id)),
+        )
+        .map((profile) => profile.id);
       const includeCurrentPreparedDetails =
         includePreparedDetails &&
         authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? []).allowed;
@@ -427,6 +530,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         true,
         {
           environments,
+          ...(profiles.length > 0 ? { dispatchableProfileIds } : {}),
           ...(suggestedProfile ? { suggestedProfile } : {}),
           ...(context.getRuntimeConfig().cloudWorkers?.requiredProfile
             ? { requiredProfile: context.getRuntimeConfig().cloudWorkers?.requiredProfile }

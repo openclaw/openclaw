@@ -55,13 +55,15 @@ describe("provider request header redaction", () => {
     );
   });
 
-  it("redacts a secret prefix only when the response was truncated", () => {
-    const secret = "boundary-credential-secret";
-    const text = `safe diagnostic ${secret.slice(0, -4)}`;
-    expect(redact(text, { "X-Auth": secret }, { sourceTruncated: true })).toBe(
-      "safe diagnostic ***",
-    );
-    expect(redact(text, { "X-Auth": secret })).toBe(text);
+  it.each([
+    ["raw", "boundary-credential-secret", "boundary-credential-se"],
+    ["URI", 'river +17/GLASS~MOTH%"tail', "river%20%2b17%2fGLASS~MOTH%25%22"],
+    ["form", 'river +17/GLASS~MOTH%"tail', "river+%2b17%2fGLASS%7eMOTH%25%22"],
+  ])("redacts a %s secret prefix only when the response was truncated", (_name, secret, prefix) => {
+    const text = `safe id%afpart diagnostic ${prefix}`;
+    const headers = { "X-Auth": secret, "X-Other": "another +% credential" };
+    expect(redact(text, headers, { sourceTruncated: true })).toBe("safe id%afpart diagnostic ***");
+    expect(redact(text, headers)).toBe(text);
   });
 
   it("redacts raw and JSON forms when a value contains a lone surrogate", () => {

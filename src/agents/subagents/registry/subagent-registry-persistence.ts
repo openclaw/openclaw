@@ -25,7 +25,6 @@ import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-w
 import {
   compactSubagentRunForMemory,
   immutableSubagentRun,
-  isSubagentRunPayloadEvicted,
   restoreSubagentRunPayload,
   subagentRuns,
 } from "./subagent-registry-memory.js";
@@ -39,7 +38,6 @@ import type {
   SubagentRunMutationOptions,
 } from "./subagent-registry-persistence.types.js";
 import { readFullSubagentRuns } from "./subagent-registry-read-cache.js";
-import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
@@ -61,6 +59,7 @@ import {
   isSameSubagentRunOwner,
   retainSubagentRunRuntimeOwner,
 } from "./subagent-run-generation.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 
 type Admission = OpenClawStateWorkerContext["admission"];
 const pendingWrites = new Set<PendingRegistryWrite>();
@@ -224,13 +223,28 @@ export async function runSubagentRegistryWorkerWrite<T>(
   prepare: () => SubagentRegistryWorkerWrite<T>,
 ): Promise<T> {
   const write = prepare();
+  let acknowledged = false;
   let commitGranted = false;
   let admission: SqliteWorkerOperationAdmission | undefined;
   try {
     return await runOpenClawStateWorkerOperation(
       context,
-      async (scope) =>
-        write.kind === "registry" ? write.decode(await write.execute(scope)) : write.execute(scope),
+      async (scope) => {
+        if (write.kind !== "registry") {
+          return write.execute(scope);
+        }
+        await write.execute(scope);
+        // The broker drains native receipts before acknowledging the command.
+        if (!admission?.committed) {
+          throw new SqliteWorkerError(
+            "Registry committed receipt is unavailable",
+            "outcome-unknown",
+          );
+        }
+        const result = write.decode(admission.committed.facts);
+        acknowledged = true;
+        return result;
+      },
       {
         assertCurrent: write.assertCurrent,
         createAdmission: () => {
@@ -303,7 +317,7 @@ export async function runSubagentRegistryWorkerWrite<T>(
       throw error;
     }
     throw new SubagentRegistryWriteError(
-      write.kind === "registry" && write.acknowledged()
+      write.kind === "registry" && acknowledged
         ? "committed"
         : commitGranted || hasSqliteWorkerOutcomeUnknown(error)
           ? "unknown"
@@ -350,10 +364,8 @@ async function commitRows<T>(
     return { value: planned.value, postimages };
   }
   return runSubagentRegistryWorkerWrite(context, () => {
-    let acknowledged = false;
     const decode = (value: unknown): SubagentRunMutationReceipt<T> => {
       const receipt = parseSubagentRegistryWriteReceipt(value, write);
-      acknowledged = true;
       // Runtime reservations are not encoded state; keep the admitted postimage intact.
       return {
         value: planned.value,
@@ -368,7 +380,6 @@ async function commitRows<T>(
       execute: (scope) => scope.execute({ type: "subagents.persistChanges", input: write }),
       decode,
       terminalEvents: planned.terminalEvents,
-      acknowledged: () => acknowledged,
     };
   });
 }
@@ -381,30 +392,10 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
 ): Promise<P["value"]> {
   const context = options.context ?? captureOpenClawStateWorkerContext();
   const runs = options.runs ?? subagentRuns;
-  const recovery = options.gatewayRecovery;
-  const recoveredRuntimeKey = recovery ? {} : undefined;
   const runtimeKeyFor = (current: SubagentRunRecord | undefined, row: SubagentRunRecord) =>
-    recoveredRuntimeKey ??
-    (current && isSameSubagentRun(current, row)
+    current && isSameSubagentRun(current, row)
       ? getSubagentRunRuntimeKey(current)
-      : getSubagentRunRuntimeKey(row));
-  const assertRecoveryCurrent = () => {
-    if (!recovery) {
-      return;
-    }
-    const current = runs.get(recovery.expected.runId);
-    if (
-      !current ||
-      !isSameSubagentRunOwner(current, recovery.expected) ||
-      (!(current.execution.status === "terminal" && current.requesterSettleWake) &&
-        !isRetiredSubagentExecution(current)) ||
-      getGatewayContextResolver(current) !== recovery.previousResolver ||
-      recovery.previousResolver() !== undefined ||
-      recovery.resolver() !== recovery.gateway
-    ) {
-      throw new SubagentRegistryMutationRejectedError("Subagent Gateway recovery owner changed");
-    }
-  };
+      : getSubagentRunRuntimeKey(row);
   const runIds = [...new Set(selectedRunIds.map((id) => id.trim()).filter(Boolean))].toSorted();
   assertSubagentRegistryWriteOutcomeKnown(runIds, context.admission);
   const queue = sourceQueue(context.admission);
@@ -429,7 +420,6 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       assertSubagentRegistryWriteSourceCurrent(context);
       assertSubagentRegistryWriteOutcomeKnown(runIds, context.admission);
       options.assertCurrent?.();
-      assertRecoveryCurrent();
     },
   };
   let published = false;
@@ -595,7 +585,12 @@ export async function restoreSubagentRunsFromDisk(params: {
           continue;
         }
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
-        params.runs.set(runId, compactSubagentRunForMemory(entry));
+        const retained = compactSubagentRunForMemory(entry);
+        params.runs.set(runId, retained);
+        if (params.runs === subagentRuns && !getGatewayContextResolver(retained)?.()) {
+          // Retained rows are history. Only a newly admitted live task may own completion.
+          subagentRuns.retireCompletionAuthority(retained);
+        }
         rememberRestoredSubagentRunNotification(entry);
         added += 1;
       }

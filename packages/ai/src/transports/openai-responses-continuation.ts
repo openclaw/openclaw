@@ -1,6 +1,8 @@
+import { createHash, type Hash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isProxy } from "node:util/types";
 import type { ModelRequestHeaders } from "@openclaw/llm-core";
+import { writeStableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
@@ -11,17 +13,20 @@ import {
   type SessionResourceOwner,
 } from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import {
   canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
+import { retainedJsonBytes } from "./openai-responses-retained-bytes.js";
 import {
   normalizeOpenAIResponsesFunctionCallId,
   shouldNormalizeOpenAIResponsesToolCallId,
   splitOpenAIFunctionCallPairing,
 } from "./openai-responses-tool-call-id-shape.js";
+import { isSanitizedFrozenResponsesInput } from "./responses-image-payload-sanitizer.js";
 import { sha256Hex } from "./transport-utils.js";
 
 // Keep completed baselines across ordinary conversation gaps; ready entries are
@@ -88,27 +93,38 @@ function projectJsonValue(value: unknown, key: string, ancestors: Set<object>): 
       }
       return result;
     }
-    const fields: [string, unknown][] = [];
+    const result: Record<string, unknown> = {};
     for (const name of Object.keys(value)) {
       const member = projectJsonValue(Reflect.get(value, name), name, ancestors);
       if (member !== undefined) {
-        fields.push([name, member]);
+        if (name in result) {
+          // Match JSON's own data properties, including __proto__ and inherited setters.
+          Object.defineProperty(result, name, {
+            value: member,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+        } else {
+          result[name] = member;
+        }
       }
     }
-    return Object.fromEntries(fields);
+    return result;
   } finally {
     ancestors.delete(value);
   }
 }
 
+function projectJsonObject(value: object): unknown {
+  const projected = projectJsonValue(value, "", new Set());
+  // A root toJSON returning undefined was not valid JSON either.
+  return projected === undefined ? JSON.parse("undefined") : projected;
+}
+
 function jsonValuesEqual(left: object, right: object): boolean {
-  const normalize = (value: object) => {
-    const projected = projectJsonValue(value, "", new Set());
-    // A root toJSON returning undefined was not a valid JSON comparison either.
-    return projected === undefined ? JSON.parse("undefined") : projected;
-  };
   // Finish the left side before evaluating any right-side hook values.
-  return isDeepStrictEqual(normalize(left), normalize(right));
+  return isDeepStrictEqual(projectJsonObject(left), projectJsonObject(right));
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
@@ -335,19 +351,98 @@ function normalizeContinuationHistory(input: readonly unknown[]): unknown[] | un
 export function responsesContinuationRequestFingerprint(
   request: ResponsesContinuationRequest,
 ): string {
-  const serialized = JSON.stringify(requestWithoutInput(request));
-  return sha256StableValue(JSON.parse(serialized)).digest;
+  return sha256StableValue(projectJsonObject(requestWithoutInput(request))).digest;
+}
+
+type ResponsesPrefixCheckpoint = { previous?: ResponsesPrefixCheckpoint; digest?: Hash };
+const emptyPrefix = { digest: createHash("sha256").update("[") };
+const prefixCheckpoints = new WeakMap<object, ResponsesPrefixCheckpoint>();
+
+function appendPrefixValues(digest: Hash, values: readonly unknown[], offset: number): void {
+  let text = "";
+  let index = offset;
+  const write = (chunk: string) => {
+    text += chunk;
+    if (text.length >= 16_384) {
+      digest.update(text);
+      text = "";
+    }
+  };
+  for (const value of values) {
+    if (index > 0) {
+      write(",");
+    }
+    writeStableStringify(projectJsonValue(value, String(index++), new Set()) ?? null, write);
+  }
+  digest.update(text);
 }
 
 export function responsesContinuationPrefixFingerprint(
   input: readonly unknown[],
   output: readonly unknown[] = [],
 ): string {
-  const serialized = JSON.stringify([
-    ...normalizeAssistantReplayInput(input),
-    ...normalizeAssistantReplayInput(output, true),
-  ]);
-  return sha256StableValue(JSON.parse(serialized)).digest;
+  // These hashes are persisted. Copy the SHA state, never substitute a hash of entry hashes.
+  // The complete immutable identity chain fences rewrites, branches and replay reordering.
+  const immutable = getAiTransportHost().immutableData;
+  let prefix: ResponsesPrefixCheckpoint = emptyPrefix;
+  let retainedDigest = emptyPrefix.digest;
+  let retainedLength = 0;
+  let length = 0;
+  for (const item of input) {
+    if (!item || typeof item !== "object") {
+      break;
+    }
+    const compactionIdentity = getResponsesCompactionInputIdentity(item);
+    const identity = compactionIdentity ?? item;
+    let next = prefixCheckpoints.get(identity);
+    if (
+      !next &&
+      !compactionIdentity &&
+      !isSanitizedFrozenResponsesInput(item) &&
+      !immutable?.isDeeplyFrozenPlainData(item)
+    ) {
+      break;
+    }
+    if (next?.previous !== prefix) {
+      next = { previous: prefix };
+      prefixCheckpoints.set(identity, next);
+    }
+    prefix = next;
+    length++;
+    if (next.digest) {
+      retainedDigest = next.digest;
+      retainedLength = length;
+    }
+  }
+  if (length > 0) {
+    const digest = retainedDigest.copy();
+    if (retainedLength < length) {
+      appendPrefixValues(
+        digest,
+        normalizeAssistantReplayInput(input.slice(retainedLength, length)),
+        retainedLength,
+      );
+      // One SHA checkpoint per requested boundary, not per historical entry.
+      prefix.digest = digest.copy();
+    }
+    if (length < input.length || output.length > 0) {
+      appendPrefixValues(
+        digest,
+        [
+          ...normalizeAssistantReplayInput(input.slice(length)),
+          ...normalizeAssistantReplayInput(output, true),
+        ],
+        length,
+      );
+    }
+    return digest.update("]").digest("hex");
+  }
+  return sha256StableValue(
+    projectJsonObject([
+      ...normalizeAssistantReplayInput(input),
+      ...normalizeAssistantReplayInput(output, true),
+    ]),
+  ).digest;
 }
 
 export function resolveResponsesContinuationRequest(
@@ -399,46 +494,64 @@ export function resolveResponsesContinuationRequest(
       normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
     ),
   );
-  const historyCurrentInput = currentInput.slice(0, previousInput.length);
-  for (const [index, previousItem] of previousInput.entries()) {
-    const currentItem = historyCurrentInput[index];
-    if (!isRecord(previousItem) || !isRecord(currentItem)) {
-      continue;
+  if (!historyToolRoundUnchanged) {
+    return { request, continuationStatus: "history_changed" };
+  }
+  // Conversion already owns these immutable wire items. An identical sent prefix
+  // needs no replay-ID remapping; only the new response and delta need ownership checks.
+  const immutable = getAiTransportHost().immutableData;
+  let samePrefix = true;
+  for (let index = 0; index < previousInput.length; index++) {
+    const item = previousInput[index];
+    if (
+      item !== currentInput[index] ||
+      item === null ||
+      typeof item !== "object" ||
+      !(isSanitizedFrozenResponsesInput(item) || immutable?.isDeeplyFrozenPlainData(item))
+    ) {
+      samePrefix = false;
+      break;
     }
-    if (previousItem.type === "function_call" && currentItem.type === "function_call") {
+  }
+  if (!samePrefix) {
+    const historyCurrentInput = currentInput.slice(0, previousInput.length);
+    for (const [index, previousItem] of previousInput.entries()) {
+      const currentItem = historyCurrentInput[index];
+      if (!isRecord(previousItem) || !isRecord(currentItem)) {
+        continue;
+      }
+      if (previousItem.type === "function_call" && currentItem.type === "function_call") {
+        if (
+          typeof previousItem.call_id === "string" &&
+          typeof currentItem.call_id === "string" &&
+          !toolCallReplayShapes({
+            callId: previousItem.call_id,
+            ...(typeof previousItem.id === "string" ? { itemId: previousItem.id } : {}),
+          }).has(currentItem.call_id)
+        ) {
+          return { request, continuationStatus: "history_changed" };
+        }
+      }
       if (
+        previousItem.type === "function_call_output" &&
+        currentItem.type === "function_call_output" &&
         typeof previousItem.call_id === "string" &&
         typeof currentItem.call_id === "string" &&
-        !toolCallReplayShapes({
-          callId: previousItem.call_id,
-          ...(typeof previousItem.id === "string" ? { itemId: previousItem.id } : {}),
-        }).has(currentItem.call_id)
+        currentItem.call_id !== previousItem.call_id &&
+        currentItem.call_id !== canonicalizeToolCallId(previousItem.call_id, undefined)
       ) {
         return { request, continuationStatus: "history_changed" };
       }
     }
+    const normalizedPrevious = normalizeContinuationHistory(previousInput);
+    const normalizedCurrent = normalizeContinuationHistory(historyCurrentInput);
     if (
-      previousItem.type === "function_call_output" &&
-      currentItem.type === "function_call_output" &&
-      typeof previousItem.call_id === "string" &&
-      typeof currentItem.call_id === "string" &&
-      currentItem.call_id !== previousItem.call_id &&
-      currentItem.call_id !== canonicalizeToolCallId(previousItem.call_id, undefined)
+      normalizedPrevious === undefined ||
+      normalizedCurrent === undefined ||
+      !jsonValuesEqual(normalizedCurrent, normalizedPrevious)
     ) {
       return { request, continuationStatus: "history_changed" };
     }
-  }
-  const normalizedPrevious = normalizeContinuationHistory(previousInput);
-  const normalizedCurrent = normalizeContinuationHistory(historyCurrentInput);
-  if (
-    !(
-      normalizedPrevious !== undefined &&
-      normalizedCurrent !== undefined &&
-      jsonValuesEqual(normalizedCurrent, normalizedPrevious)
-    ) ||
-    !historyToolRoundUnchanged
-  ) {
-    return { request, continuationStatus: "history_changed" };
   }
   // Restore accepted replay IDs in the delta to match the provider's cached call.
   const delta = currentInput.slice(baselineLength);
@@ -511,6 +624,7 @@ type HttpContinuationEntry =
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
       retainedBytes: number;
+      jsonBytes: ReadonlyMap<string | object, number>;
     }
   | { kind: "claimed"; sessionId: string; owner: SessionResourceOwner };
 
@@ -628,7 +742,7 @@ export function claimOpenAIResponsesHttpContinuation(
         previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
       );
       // Serialized-content budget, not JavaScript heap overhead.
-      const retainedBytes = Buffer.byteLength(JSON.stringify(state), "utf8");
+      const { retainedBytes, jsonBytes } = retainedJsonBytes(state, previous?.jsonBytes);
       if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
         // Keep other sessions when this baseline cannot fit alone. Its next
         // request sends full history; the completed response remains valid.
@@ -642,6 +756,7 @@ export function claimOpenAIResponsesHttpContinuation(
         state,
         idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
         retainedBytes,
+        jsonBytes,
       } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
       httpContinuationRetainedBytes += retainedBytes;
       httpContinuationEntries.set(key, ready);

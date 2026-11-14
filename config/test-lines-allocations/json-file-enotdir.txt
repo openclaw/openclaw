@@ -1,0 +1,2 @@
+# Invalid credential symlink regression and retained resolution-error codes.
+43

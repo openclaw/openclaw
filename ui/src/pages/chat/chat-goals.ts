@@ -31,7 +31,7 @@ import {
   scopedAgentIdForSession,
   scopedAgentListParamsForSession,
   visibleSessionMatches,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
@@ -445,6 +445,9 @@ export async function mutateChatGoal(
     // A descriptor can expose Goal actions before history binds their recovery identity.
     if (!sessionId || isInitialChatHistoryUnavailable(host)) {
       return rejectGoalOperation(host, t("chat.thread.loading"));
+    }
+    if (action.action === "resume" && (isChatBusy(host) || hasDirectSessionRun(host))) {
+      return rejectGoalOperation(host, t("chat.goals.busy"));
     }
     const identity = {
       sessionKey,

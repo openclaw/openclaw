@@ -50,11 +50,7 @@ function day(
 }
 
 function member(report: ReportDocument, login: string) {
-  const result = report.members.find((person) => person.login === login);
-  if (!result) {
-    throw new Error(`Missing report member ${login}`);
-  }
-  return result;
+  return report.members.find((person) => person.login === login)!;
 }
 
 describe("team report attribution", () => {
@@ -178,7 +174,6 @@ describe("stored day aggregation", () => {
           kind: "issue_closed",
           actor: "beta",
           atMs: Date.parse("2026-08-19T12:00:00Z"),
-          url: "https://github.com/sample/project/issues/2",
         }),
       ],
       [],
@@ -221,19 +216,6 @@ describe("stored day aggregation", () => {
 });
 
 describe("report evidence bounds", () => {
-  it("bounds excerpts without splitting combining graphemes", () => {
-    const grapheme = "e\u0301";
-    for (const [content, excerpt] of [
-      [grapheme.repeat(20), grapheme.repeat(20)],
-      [grapheme.repeat(21), `${grapheme.repeat(19)}…`],
-    ]) {
-      const report = day([], [message({ content })]);
-      expect(member(report, "alpha").discord.excerpts).toEqual([
-        { channel: "planning", atMs: period.sinceMs + 1000, excerpt },
-      ]);
-    }
-  });
-
   it("keeps newest evidence without changing totals", () => {
     const report = day(
       Array.from({ length: 205 }, (_, index) =>

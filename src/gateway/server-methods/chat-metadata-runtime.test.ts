@@ -199,7 +199,9 @@ describe("gateway chat metadata runtime", () => {
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);
       expect(coldReads.map((mock) => mock.mock.calls)).toEqual([[], [], [], []]);
       expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
-      expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
+      expect(harness.getAuthStoreRevision.mock.calls.map(([agentDir]) => agentDir)).toContain(
+        undefined,
+      );
     },
   );
 
@@ -636,7 +638,9 @@ describe("gateway chat metadata runtime", () => {
     expect(second).toEqual(first);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
     expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
-    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
+    expect(harness.getAuthStoreRevision.mock.calls.map(([agentDir]) => agentDir)).toContain(
+      undefined,
+    );
   });
 
   test("waits for replacement only for canonical metadata, including session auth projections", async () => {

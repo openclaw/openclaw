@@ -56,7 +56,7 @@ suite.define(() => {
         if (surface !== "header") {
           const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
           await expect
-            .poll(() => dialog.getByRole("alert").textContent())
+            .poll(() => dialog.locator(".callout[role=alert]").textContent())
             .toContain("changed before patch. Retry.");
           expect(await input.inputValue()).toBe("Stale rename");
           await dialog.getByRole("button", { name: "Cancel", exact: true }).click();

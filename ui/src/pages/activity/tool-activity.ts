@@ -110,15 +110,24 @@ function stringifyOutput(value: unknown): string | null {
   }
 }
 
-function buildOutputPreview(value: unknown): { text?: string; truncated: boolean } {
+function buildOutputPreview(
+  value: unknown,
+  previous?: string,
+): { text?: string; truncated: boolean } {
   const raw = stringifyOutput(value);
   if (!raw) {
     return { truncated: false };
   }
   const truncated = truncateText(raw, ACTIVITY_OUTPUT_PREVIEW_LIMIT);
+  if (truncated.text === previous) {
+    return { text: previous, truncated: truncated.truncated };
+  }
   // A sliced preview can retain the whole output after the raw event is evicted.
-  // Copy its characters here so the bounded Activity entry owns only its preview.
-  return { text: Array.from(truncated.text).join(""), truncated: truncated.truncated };
+  // The JSON round trip copies only the bounded preview, preserving lone surrogates
+  // without allocating an array and a string for every Unicode code point.
+  // eslint-disable-next-line unicorn/prefer-structured-clone -- structuredClone retains a sliced string's full backing storage.
+  const text: string = JSON.parse(JSON.stringify(truncated.text));
+  return { text, truncated: truncated.truncated };
 }
 
 function countArgumentFields(value: unknown): number {
@@ -188,7 +197,7 @@ export function updateToolActivity(
       : data.phase === "result"
         ? data.result
         : null;
-  const preview = buildOutputPreview(outputValue);
+  const preview = buildOutputPreview(outputValue, existing?.outputPreview);
   const hiddenArgCount = answerCandidate
     ? 0
     : data.args !== undefined

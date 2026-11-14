@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { DEFAULT_POSIX_TMP_ROOT, resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -81,13 +82,71 @@ it("skips the POSIX preferred path on Windows even when /tmp is accessible (#607
   });
   expect(result).toBe(winFallback);
 });
+
+it("leaves Android ancestor group admission with fs-safe", () => {
+  expect(
+    resolveWithStats(makeDirStat(), makeDirStat(), {
+      platform: "android",
+      lstatSync: (directory) =>
+        makeDirStat({ mode: directory === DEFAULT_POSIX_TMP_ROOT ? 0o40700 : 0o40775 }),
+    }),
+  ).toBe(DEFAULT_POSIX_TMP_ROOT);
+});
 describe.skipIf(process.platform === "win32")("POSIX temp directory admission and repair", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       vi.restoreAllMocks();
+      vi.unstubAllEnvs();
       cleanup();
     });
   });
+
+  it.each(["private-state", "unsafe-state", "coordination"] as const)(
+    "handles a real writable temp ancestor with %s policy",
+    async (fallback) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-temp-ancestor-"));
+      const unsafe = path.join(root, "unsafe");
+      fs.mkdirSync(unsafe);
+      fs.chmodSync(unsafe, 0o775);
+      const state = path.join(fallback === "unsafe-state" ? unsafe : root, "state");
+      vi.stubEnv("OPENCLAW_STATE_DIR", state);
+      const warn = vi.fn();
+      const resolve = () =>
+        resolvePreferredOpenClawTmpDir({
+          preferredDir: path.join(unsafe, "openclaw"),
+          tmpdir: () => unsafe,
+          purpose: fallback === "coordination" ? "coordination" : "workspace",
+          warn,
+        });
+      if (fallback === "coordination") {
+        const selected = resolve();
+        expect(selected).toBe(path.join(unsafe, "openclaw"));
+        vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "other-profile"));
+        expect(resolve()).toBe(selected);
+        expect(warn).not.toHaveBeenCalled();
+        return;
+      }
+      if (fallback === "unsafe-state") {
+        expect(resolve).toThrow(unsafe);
+        expect(resolve).toThrow(/chmod \+t|chmod go-w/);
+        return;
+      }
+      const selected = resolve();
+      expect(path.dirname(selected)).toBe(path.join(state, "tmp"));
+      expect(resolve()).toBe(selected);
+      expect(fs.statSync(selected).mode & 0o7777).toBe(0o700);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(unsafe));
+      await withTempWorkspace(
+        { rootDir: selected, prefix: "openclaw-update-admission-" },
+        async (w) => {
+          await w.writeText("admitted", "ok");
+          expect((await w.read("admitted")).toString()).toBe("ok");
+        },
+      );
+      expect(fs.readdirSync(selected)).toEqual([]);
+      expect(fs.statSync(unsafe).mode & 0o7777).toBe(0o775);
+    },
+  );
 
   function fixture(route: "preferred" | "fallback") {
     const directory = tempDirs.make("openclaw-temp-repair-");

@@ -89,7 +89,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.getByText("Here is the desktop screenshot.", { exact: true }).waitFor();
           if (running) {
-            await page.getByRole("button", { name: "Stop generating" }).waitFor();
+            await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
             const toolEvent = (seq: number, data: Record<string, unknown>) =>
               gateway.emitGatewayEvent("agent", {
                 sessionKey,
@@ -135,7 +135,7 @@ suite.define(() => {
           await page.locator("openclaw-image-lightbox .image").waitFor({ state: "visible" });
           if (running) {
             await page.getByRole("button", { name: "Close image preview" }).click();
-            const stop = page.getByRole("button", { name: "Stop generating" });
+            const stop = page.getByRole("button", { name: "Stop", exact: true });
             expect(await stop.isVisible()).toBe(true);
           } else {
             await page.reload();

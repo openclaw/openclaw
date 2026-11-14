@@ -15,7 +15,6 @@ import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
-import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import { resolveEligibleManifestCatalogPlugins } from "./model-catalog-manifest.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
@@ -28,13 +27,6 @@ import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js"
 import type { AuthStorageData } from "./sessions/index.js";
 
 const log = createSubsystemLogger("model-catalog");
-
-export type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-export {
-  findModelCatalogEntry,
-  findModelInCatalog,
-  modelSupportsInput,
-} from "./model-catalog-lookup.js";
 
 export type BuildPreparedModelCatalogParams = {
   agentDir: string;
@@ -524,11 +516,4 @@ export async function buildPreparedModelCatalogSnapshot(
         authoritative: params.providerOutcomes.every((outcome) => outcome.status === "ready"),
       }
     : snapshot;
-}
-
-/**
- * Check if a model supports image input based on its catalog entry.
- */
-export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
-  return modelCatalogEntrySupportsInput(entry, "image");
 }

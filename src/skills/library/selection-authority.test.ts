@@ -3,21 +3,27 @@ import fs from "node:fs";
 import asyncFs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { sqliteFamilyHashes as familyHashes } from "../../../test/helpers/sqlite-family-hashes.js";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { declareAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import * as stateRead from "../../state/openclaw-state-db-readonly.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { openOpenClawStateDatabase as openDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync as closeDatabase,
+  openOpenClawStateDatabase as openDatabase,
+} from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import {
   linkEmail,
@@ -25,20 +31,36 @@ import {
   setUserProfileRole,
 } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { materializeSkill } from "../loading/skill-materializer.js";
+import {
+  materializeSkillResources,
+  prepareSkillResourceDelivery as deliver,
+} from "../runtime/resources.js";
 import { SkillLibraryError } from "../skill-library-error.js";
-import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
+import type { SkillSnapshot } from "../types.js";
+import {
+  decodeSkillLibraryFile as decodeFile,
+  prepareSkillLibraryBundle,
+  skillLibraryRevisionDir,
+} from "./bundle.js";
+import * as bundles from "./bundle.js";
 import { skillLibraryReadOperations } from "./read.kernel.js";
+import * as selectionReads from "./selection-read.js";
+import * as selection from "./selection.js";
 import {
   assertPreparedSkillLibrarySelection as assertSelection,
+  loadSkillLibrarySelection as loadSelection,
   prepareSkillLibrarySelection as prepareSelection,
   prepareSkillLibrarySession as prepareSession,
   readSelectedSkillLibraryFiles as readFiles,
-  seedSkillLibrarySelection as seed,
 } from "./selection.js";
-import { resolveSkillLibraryPresentation as presentation } from "./service.js";
+import { saveSkillLibrary } from "./service.js";
 import {
   content,
   draft,
+  expectCode,
   expectSingleWinner,
   libraryPin,
   useSkillLibraryFixture,
@@ -58,44 +80,20 @@ function withSql<T>(run: (sql: ReturnType<typeof observeHostDataSql>) => T): T {
 }
 const readLibrary = skillLibraryReadOperations["skillLibrary.read"];
 
-const writerConfig: ReturnType<SkillLibraryAuthority["getConfig"]> = {
-  gateway: {
-    roles: {
-      default: "writer",
-      definitions: {
-        writer: {
-          sessions: { others: "none" },
-          agents: "*",
-          scopes: ["operator.read", "operator.write"],
-        },
-        blocked: { sessions: { others: "none" }, agents: [], scopes: [] },
-      },
-    },
-  },
-};
+function role(
+  scopes: GatewayOperatorRoleDefinition["scopes"],
+  others: "none" | "view" = "none",
+  agents: "*" | string[] = "*",
+) {
+  return { scopes, sessions: { others }, agents };
+}
 
-it("reuses library facts until a library or profile writer changes their inputs", async () => {
-  const { options, admin, lib } = fixture();
-  const saved = await lib.save();
-  using reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
-  const first = await lib.seed();
-  expect(first).toHaveLength(1);
-  const count = reads.mock.calls.length;
-  first[0]!.name = "caller mutation";
-  expect(await lib.seed()).toEqual([libraryPin(saved.entry)]);
-  expect(reads.mock.calls).toHaveLength(count);
-
-  await lib.change(saved.entry, "disable");
-  expect(await lib.seed()).toEqual([]);
-  expect(await presentation(admin, options)).toMatchObject({
-    multipleProfiles: false,
-    defaultTarget: "workspace",
-  });
-  ensureProfileForEmail("new-person@example.test", options);
-  expect(await presentation(admin, options)).toMatchObject({
-    multipleProfiles: true,
-    defaultTarget: "personal",
-  });
+const roleConfig = (defaultRole: string, definitions: Record<string, ReturnType<typeof role>>) => ({
+  gateway: { roles: { default: defaultRole, definitions } },
+});
+const writerConfig = roleConfig("writer", {
+  writer: role(["operator.read", "operator.write"]),
+  blocked: role([], "none", []),
 });
 
 it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows", async () => {
@@ -109,9 +107,11 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
   const revision = db.prepare(`INSERT INTO skill_library_revisions
       SELECT ?, revision, description, files_json, created_at
       FROM skill_library_revisions WHERE skill_id = ?`);
+  const ids = [saved.entry.skillId];
   db.exec("BEGIN");
   for (let index = 1; index < 100; index++) {
     const id = `catalog-${index}`;
+    ids.push(id);
     entry.run(id, id, saved.entry.skillId);
     revision.run(id, saved.entry.skillId);
   }
@@ -160,17 +160,17 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
       sql.restore();
     }
   };
+  const expectCost = (measured: ReturnType<typeof measure>, profiles: number) => {
+    expect(measured.counts).toEqual({ entries: 1, profiles, other: 0 });
+    expect(measured.blobs).toBe(0);
+  };
   const listed = measure("list");
   assert.equal(listed.result.kind, "list");
   expect(listed.result.value.profileId).toBe(alice.profileId);
   expect(listed.result.value.entries.map((item) => item.skillId).toSorted()).toEqual(
-    [
-      saved.entry.skillId,
-      ...Array.from({ length: 99 }, (_, index) => `catalog-${index + 1}`),
-    ].toSorted(),
+    ids.toSorted(),
   );
-  expect(listed.counts).toEqual({ entries: 1, profiles: 3, other: 0 });
-  expect.soft(listed.blobs).toBe(0);
+  expectCost(listed, 3);
   const session = measure("session");
   expect(session.result).toMatchObject({
     kind: "session",
@@ -181,8 +181,7 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
   });
   assert.equal(session.result.kind, "session");
   expect(session.result.value.selections).toHaveLength(64);
-  expect(session.counts).toEqual({ entries: 1, profiles: 1, other: 0 });
-  expect(session.blobs).toBe(0);
+  expectCost(session, 1);
   expect(listed.result.value.entries.find((item) => item.skillId === saved.entry.skillId)).toEqual(
     saved.entry,
   );
@@ -194,8 +193,7 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
     value: { profileId: alice.profileId, entries: listed.result.value.entries },
   });
   // Together with the canonical read's three profile queries, this retains the seven-query bound.
-  expect(merged.counts).toEqual({ entries: 1, profiles: 4, other: 0 });
-  expect(merged.blobs).toBe(0);
+  expectCost(merged, 4);
   setUserProfileRole(alice.profileId!, "blocked", options);
   const blocked = measure("list", alias.id, writerConfig);
   expect(blocked.result).toMatchObject({ value: { profileId: alice.profileId, entries: [] } });
@@ -224,8 +222,7 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
       UPDATE skill_library_entries SET owner_profile_id = 'missing-owner' WHERE skill_id = 'catalog-5'`);
   db.exec("COMMIT");
   const cohorts = measure("list");
-  expect(cohorts.counts).toEqual({ entries: 1, profiles: 5, other: 0 });
-  expect(cohorts.blobs).toBe(0);
+  expectCost(cohorts, 5);
   assert.equal(cohorts.result.kind, "list");
   expect(cohorts.result.value.entries).toHaveLength(501);
   expect(cohorts.result.value.defaultSelectionNotice).toContain("detach");
@@ -248,9 +245,8 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
   const seeded = measure("seed");
   expect(seeded.result).toMatchObject({ kind: "seed", value: [] });
   expect.soft(seeded.entryRows).toBe(0);
-  expect.soft(seeded.blobs).toBe(0);
   expect(measure("list").entryRows).toBe(501);
-  expect(seeded.counts).toEqual({ entries: 1, profiles: 1, other: 0 });
+  expectCost(seeded, 1);
 });
 
 it("keeps solo defaults, counts aliases once, and never creates library tables on discovery", async () => {
@@ -273,19 +269,6 @@ it("keeps solo defaults, counts aliases once, and never creates library tables o
   });
 });
 
-it("seeds no skills without creating a missing shared store", async () => {
-  const { alice } = fixture();
-  const stateDir = tempDirs.make("skill-library-missing-");
-  const options = {
-    path: path.join(stateDir, "state", "openclaw.sqlite"),
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  };
-  const pins = await seed(alice, options);
-  expect(pins).toEqual([]);
-  expect(() => assertSelection(pins)).not.toThrow();
-  expect(fs.existsSync(options.path)).toBe(false);
-});
-
 it("skips empty-session SQL and refreshes committed profile and library facts", async () => {
   const { options, alice, admin, lib } = fixture();
   admin.getConfig = () => ({
@@ -293,19 +276,15 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
       roles: {
         default: "administrator",
         definitions: {
-          administrator: {
-            scopes: ["operator.admin"],
-            agents: "*",
-            sessions: { others: "view" },
-          },
-          reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+          administrator: role(["operator.admin"], "view"),
+          reader: role(["operator.read"], "view"),
         },
       },
     },
   });
   onTestFinished((await prepareUserProfileCatalog(options)).release);
   const { db } = openDatabase(options);
-  using reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+  using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   const before = await prepareSession(admin, options);
   const request = reads.mock.calls.find(([, command]) => command.type === "skillLibrary.read")?.[1];
   reads.mockRestore();
@@ -351,6 +330,12 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
     profileId: alice.profileId,
     defaultTarget: "personal",
   });
+  const seed = await lib.seed();
+  seed[0]!.name = "caller mutation";
+  expect(() => assertSelection(seed)).toThrow(expect.objectContaining({ code: "CONFLICT" }));
+  expect(await lib.seed()).toEqual([libraryPin(saved.entry)]);
+  await lib.change(saved.entry, "disable");
+  expect(await lib.seed()).toEqual([]);
 });
 
 it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
@@ -380,12 +365,9 @@ it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
     } else {
       await lib.change(saved.entry, change);
     }
-    withSql((sql) => {
-      expect(() => assertSelection(freshSeed)).toThrow(SkillLibraryError);
-      expect(() => prepared.assertCurrent()).toThrow(SkillLibraryError);
-      expect(() => assertSelection(durablePins)).not.toThrow();
-      expect(sql.queries).toEqual([]);
-    });
+    expect(() => assertSelection(freshSeed)).toThrow(SkillLibraryError);
+    expect(() => prepared.assertCurrent()).toThrow(SkillLibraryError);
+    expect(() => assertSelection(durablePins)).not.toThrow();
     expect(await prepareSelection(durablePins, options, () => {})).toHaveLength(1);
     expect(await readFiles(durablePins[0]!, options)).toContainEqual(
       expect.objectContaining({ path: "SKILL.md" }),
@@ -400,13 +382,11 @@ it("preserves a prepared seed when worker commit admission rolls back the mutati
   await expect(lib.revise(saved.entry, content)).resolves.toMatchObject({ state: "unchanged" });
   expect(() => assertSelection(pins)).not.toThrow();
   const rollback = new Error("rollback library change");
-  let checkedCommit = false;
   const refusal = probe.admission(workerAdmission, (request, grant, admit) => {
     admit(
       request,
       request.stage === "commit" && request.facts !== undefined
         ? () => {
-            checkedCommit = true;
             expect(() => assertSelection(pins)).toThrow(SkillLibraryError);
             throw rollback;
           }
@@ -418,7 +398,6 @@ it("preserves a prepared seed when worker commit admission rolls back the mutati
   } finally {
     refusal.mockRestore();
   }
-  expect(checkedCommit).toBe(true);
   expect(() => assertSelection(pins)).not.toThrow();
   expect(await lib.seed()).toEqual(pins);
 });
@@ -429,7 +408,6 @@ it("revokes a prepared seed after a lost worker receipt without replaying the mu
   const pins = await lib.seed();
   const failed = new SqliteWorkerError("native commit outcome unavailable", "outcome-unknown");
   const original = workerStore.runSqliteWorkerStoreOperation;
-  let executed = 0;
   let admission: workerAdmission.SqliteWorkerOperationAdmission | undefined;
   const lostReceipt = createDeferredCore();
   let receiptFault: { mockRestore(): void } | undefined;
@@ -446,13 +424,7 @@ it("revokes a prepared seed after a lost worker receipt without replaying the mu
               }
               try {
                 await worker.execute(command, operationOptions);
-                executed++;
-                expect(admission?.committed).toMatchObject({
-                  facts: { entry: { enabled: false } },
-                });
-                if (!admission) {
-                  throw new Error("Expected worker mutation admission");
-                }
+                assert.ok(admission);
                 receiptFault = vi.spyOn(admission, "committed", "get").mockReturnValue(undefined);
                 throw failed;
               } finally {
@@ -482,7 +454,6 @@ it("revokes a prepared seed after a lost worker receipt without replaying the mu
     receiptFault?.mockRestore();
     delivery.mockRestore();
   }
-  expect(executed).toBe(1);
   expect(() => assertSelection(pins)).toThrow();
   expect((await lib.list()).entries[0]?.enabled).toBe(false);
   expect(
@@ -492,52 +463,33 @@ it("revokes a prepared seed after a lost worker receipt without replaying the mu
   ).toMatchObject({ count: 1 });
 });
 
-it.each(["seed", "attach"] as const)(
-  "rejects edited %s pins before admission without caller-thread SQL",
-  async (source) => {
-    const { lib } = fixture();
-    const saved = await lib.save();
-    const pins =
-      source === "seed"
-        ? await lib.seed()
-        : await lib.select([], {
-            action: "attach",
-            sessionKey: "session",
-            skillId: saved.entry.skillId,
-          });
-    expect(pins).toHaveLength(1);
-    pins[0]!.revision = "0".repeat(64);
-    withSql((sql) => {
-      expect(() => assertSelection(pins)).toThrow(expect.objectContaining({ code: "CONFLICT" }));
-      expect(sql.queries).toEqual([]);
-    });
-  },
-);
+it("rejects edited attached pins before admission", async () => {
+  const { lib } = fixture();
+  const saved = await lib.save();
+  const pins = await lib.select([], {
+    action: "attach",
+    sessionKey: "session",
+    skillId: saved.entry.skillId,
+  });
+  expect(pins).toHaveLength(1);
+  pins[0]!.revision = "0".repeat(64);
+  expect(() => assertSelection(pins)).toThrow(expect.objectContaining({ code: "CONFLICT" }));
+});
 
 it("saves, mutates, and settles an upload without caller-thread SQL", async () => {
   const { options, lib } = fixture();
   await openDatabase(options).walMaintenance.stop();
   const sql = observeHostDataSql();
-  try {
-    const { skillId, revision } = (await lib.save()).entry;
-    await expect(lib.change({ skillId, revision }, "disable")).resolves.toMatchObject({
-      entry: { enabled: false },
-    });
-    const bytes = await zipBytes();
-    const upload = await lib.begin(bytes, "uploaded");
-    const chunk = () => lib.chunk(upload.uploadId, bytes);
-    const commit = () => lib.commit(upload.uploadId);
-    const chunks = await Promise.allSettled([chunk(), chunk()]);
-    expectSingleWinner(chunks, "CONFLICT");
-    const rejected = chunks.find((result) => result.status === "rejected");
-    expect(rejected).toMatchObject({ reason: expect.any(SkillLibraryError) });
-    const receipt = await commit();
-    expect(receipt).toMatchObject({ state: "published", entry: { slug: "uploaded" } });
-    await expect(commit()).resolves.toMatchObject({ ...receipt, state: "unchanged" });
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  onTestFinished(() => sql.restore());
+  const { skillId, revision } = (await lib.save()).entry;
+  await lib.change({ skillId, revision }, "disable");
+  const bytes = await zipBytes();
+  const upload = await lib.begin(bytes, "uploaded");
+  const chunk = () => lib.chunk(upload.uploadId, bytes);
+  const chunks = await Promise.allSettled([chunk(), chunk()]);
+  expectSingleWinner(chunks, "CONFLICT");
+  await lib.commit(upload.uploadId);
+  expect(sql.queries).toEqual([]);
 });
 
 it("publishes immutable files before SQL and retains them when the transaction fails", async () => {
@@ -550,10 +502,9 @@ it("publishes immutable files before SQL and retains them when the transaction f
     ...draft().files,
   ]);
   const directory = skillLibraryRevisionDir(skillId, bundle.revision, options.env);
-  openDatabase(options).db.exec(`
-      CREATE TRIGGER reject_library_revision BEFORE INSERT ON skill_library_revisions
-      BEGIN SELECT RAISE(ABORT, 'publication transaction refused'); END;
-    `);
+  openDatabase(options).db.exec(`CREATE TRIGGER reject_library_revision
+    BEFORE INSERT ON skill_library_revisions
+    BEGIN SELECT RAISE(ABORT, 'publication transaction refused'); END;`);
   await expect(lib.save(next)).rejects.toThrow("publication transaction refused");
   expect(await asyncFs.readFile(path.join(directory, "SKILL.md"), "utf8")).toBe(nextContent);
   expect(await asyncFs.readdir(path.dirname(directory))).not.toContainEqual(
@@ -566,48 +517,312 @@ it("publishes immutable files before SQL and retains them when the transaction f
   });
 });
 
-it.each(["role", "alias", "upload expiry"])(
-  "rejects stale %s after file publication without a SQL pointer",
-  async (change) => {
-    const { alice, options, lib } = fixture();
-    const blocked = ensureProfileForEmail("blocked@example.test", options);
-    setUserProfileRole(blocked.id, "blocked", options);
-    const authority: SkillLibraryAuthority = {
-      ...alice,
-      getConfig: () => writerConfig,
-    };
-    const bytes = change === "upload expiry" ? await zipBytes() : undefined;
-    const upload = bytes ? await lib.begin(bytes, "expiring") : undefined;
-    if (upload && bytes) {
-      await lib.chunk(upload.uploadId, bytes);
-    }
-    const rename = asyncFs.rename;
-    let changed = false;
-    const barrier = vi.spyOn(asyncFs, "rename").mockImplementation(async (source, destination) => {
-      await rename(source, destination);
-      if (String(source).includes(".staging-") && !changed) {
-        changed = true;
-        if (upload) {
-          openDatabase(options)
-            .db.prepare("UPDATE skill_library_uploads SET expires_at = 1 WHERE upload_id = ?")
-            .run(upload.uploadId);
-        } else if (change === "role") {
-          setUserProfileRole(alice.profileId!, "blocked", options);
-        } else {
-          linkEmail("alice@example.test", blocked.id, options);
-        }
+it.each(["role", "alias", "upload expiry"])("rechecks %s after publish", async (change) => {
+  const { alice, options, lib } = fixture();
+  const blocked = ensureProfileForEmail("blocked@example.test", options);
+  setUserProfileRole(blocked.id, "blocked", options);
+  const authority: SkillLibraryAuthority = {
+    ...alice,
+    getConfig: () => writerConfig,
+  };
+  const bytes = change === "upload expiry" ? await zipBytes() : undefined;
+  const upload = bytes ? await lib.begin(bytes, "expiring") : undefined;
+  if (upload && bytes) {
+    await lib.chunk(upload.uploadId, bytes);
+  }
+  const rename = asyncFs.rename;
+  let changed = false;
+  const barrier = vi.spyOn(asyncFs, "rename").mockImplementation(async (source, destination) => {
+    await rename(source, destination);
+    if (String(source).includes(".staging-") && !changed) {
+      changed = true;
+      if (upload) {
+        openDatabase(options)
+          .db.prepare("UPDATE skill_library_uploads SET expires_at = 1 WHERE upload_id = ?")
+          .run(upload.uploadId);
+      } else if (change === "role") {
+        setUserProfileRole(alice.profileId!, "blocked", options);
+      } else {
+        linkEmail("alice@example.test", blocked.id, options);
       }
-    });
-    try {
-      await expect(
-        upload ? lib.commit(upload.uploadId) : lib.save(draft(), authority),
-      ).rejects.toMatchObject({
-        code: upload ? "NOT_FOUND" : expect.stringMatching(/^(AUTHORITY_EXPIRED|FORBIDDEN)$/),
-      });
-      expect(changed).toBe(true);
-    } finally {
-      barrier.mockRestore();
     }
-    expect((await lib.list()).entries).toEqual([]);
+  });
+  try {
+    await expect(
+      upload ? lib.commit(upload.uploadId) : lib.save(draft(), authority),
+    ).rejects.toMatchObject({
+      code: upload ? "NOT_FOUND" : expect.stringMatching(/^(AUTHORITY_EXPIRED|FORBIDDEN)$/),
+    });
+    expect(changed).toBe(true);
+  } finally {
+    barrier.mockRestore();
+  }
+  expect((await lib.list()).entries).toEqual([]);
+});
+
+const noop = () => {};
+const inRoot = <T>(root: string, run: () => Promise<T>) =>
+  withEnvAsync({ OPENCLAW_STATE_DIR: root }, run);
+const resourceContent =
+  "---\nname: guide\ndescription: Saved procedure\n---\n# Guide\nRead references/data.bin.\n";
+function snapshotFor(...pins: NonNullable<SkillSnapshot["librarySelections"]>): SkillSnapshot {
+  return { prompt: "", skills: pins.map(({ name }) => ({ name })), librarySelections: pins };
+}
+const syntheticPin = (name: string) => ({
+  skillId: name,
+  revision: "0".repeat(64),
+  name,
+  ownerProfileId: null,
+});
+const resourceActor = (profileId: string) => ({
+  profileId,
+  scopes: ["operator.read", "operator.write"],
+  getConfig: () => ({}),
+  assertCurrent: noop,
+});
+
+async function resourceFixture() {
+  onTestFinished(() => void vi.restoreAllMocks());
+  const { stateDir: root, options, alice: authority, lib } = fixture();
+  const saved = await lib.save({ ...draft(), content: resourceContent });
+  const pin = libraryPin(saved.entry);
+  await closeDatabase();
+  return { root, options, authority, pin, snapshot: snapshotFor(pin), databasePath: options.path };
+}
+
+it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
+  "delivers cold and warm immutable pins without parent SQL under %s reads",
+  async (mode) => {
+    const { root, snapshot, pin, databasePath } = await resourceFixture();
+    const before = familyHashes(databasePath);
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
+    const run = () =>
+      inRoot(root, async () => {
+        const first = await deliver(snapshot, noop);
+        expect(first?.skills).toHaveLength(1);
+        const skill = first!.skills[0]!;
+        expect(skill.modelVisible).toBe(false);
+        const bytes = (name: string) => decodeFile(skill.files.find((file) => file.path === name)!);
+        expect(skill.revision).toBe(pin.revision);
+        expect(bytes("SKILL.md").toString("utf8")).toBe(resourceContent);
+        expect(bytes("references/data.bin")).toEqual(Buffer.from([0, 255, 128]));
+        // The synchronous caller must reuse the same cache key as async preparation.
+        expect(loadSelection([pin])[0]?.skill.name).toBe(pin.name);
+        expect(await deliver(structuredClone(snapshot), noop)).toEqual(first);
+        if (mode === "ordinary") {
+          const selectedSnapshot = {
+            ...snapshot,
+            resolvedSkills: loadSelection([pin]).map((entry) => entry.skill),
+            version: 1,
+          };
+          const remoteWorkspace = path.join(root, "remote-workspace");
+          declareAgentWorkspaceAccess(remoteWorkspace);
+          const selectedDelivery = await deliver(selectedSnapshot, noop, [], remoteWorkspace);
+          expect(selectedDelivery).toEqual({
+            ...first,
+            skills: [{ ...skill, modelVisible: true }],
+          });
+          const materialized = await materializeSkillResources(selectedDelivery!, noop);
+          try {
+            const local = materialized.snapshot.resolvedSkills![0]!;
+            expect(await fs.promises.readFile(local.filePath, "utf8")).toBe(resourceContent);
+            expect(
+              await fs.promises.readFile(path.join(local.baseDir, "references/data.bin")),
+            ).toEqual(Buffer.from([0, 255, 128]));
+            expect(materialized.snapshot.prompt).toContain(local.filePath);
+            expect(materialized.snapshot.prompt).not.toContain(
+              path.dirname(selectedSnapshot.resolvedSkills[0]!.filePath),
+            );
+          } finally {
+            await materialized.cleanup();
+          }
+        }
+        await closeDatabase();
+      });
+    try {
+      if (mode === "artifact-preserving") {
+        await stateReads.withArtifactPreservingStateReads(run);
+      } else if (mode === "disposable") {
+        await stateReads.withArtifactPreservingStateReads(() =>
+          stateReads.withDisposableOpenClawStateReads(databasePath, run),
+        );
+      } else {
+        await run();
+      }
+      sql.expectIdle();
+      if (mode === "artifact-preserving") {
+        expect(familyHashes(databasePath)).toEqual(before);
+      }
+    } finally {
+      sql.restore();
+    }
   },
 );
+
+it("reads both phases from the active snapshot without fetching hidden manifests", async () => {
+  const { root, options, authority, pin, snapshot } = await resourceFixture();
+  const hidden = await saveSkillLibrary(
+    authority,
+    { slug: "hidden", content: resourceContent.replace("guide", "hidden"), expectedRevision: null },
+    options,
+  );
+  snapshot.librarySelections!.push(libraryPin(hidden.entry));
+  await closeDatabase();
+  const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  await inRoot(root, () =>
+    stateReads.withOpenClawStateDatabaseReadSnapshot(async () => {
+      const database = openDatabase(options);
+      database.db
+        .prepare(
+          "UPDATE skill_library_revisions SET description = ?, files_json = ? WHERE skill_id = ?",
+        )
+        .run("Later live description", "invalid live manifest", pin.skillId);
+      const delivery = await deliver(snapshot, noop);
+      expect(delivery?.skills).toEqual([
+        expect.objectContaining({ description: "Saved procedure", revision: pin.revision }),
+      ]);
+      const manifests = execute.mock.calls
+        .map(([, command]) => command)
+        .find((command) => command.type === "skills.library.manifests");
+      expect(manifests?.input).toEqual([{ skillId: pin.skillId, revision: pin.revision }]);
+    }, options),
+  );
+});
+
+it.each(["root", "authority", "admission", "selection", "descriptions", "manifests"] as const)(
+  "retains captured resource facts across a pending %s change",
+  async (change) => {
+    const { root, pin, snapshot } = await resourceFixture();
+    const originalPin = { ...pin };
+    const other = tempDirs.make("skill-library-other-root-");
+    const entered = createDeferredCore();
+    const gate = createDeferredCore();
+    async function hold<T>(value: T) {
+      entered.resolve();
+      await gate.promise;
+      return value;
+    }
+    if (change === "manifests") {
+      const read = selectionReads.readSkillLibrarySelectionManifests;
+      vi.spyOn(selectionReads, "readSkillLibrarySelectionManifests").mockImplementation(
+        async (...args) => hold(await read(...args)),
+      );
+    } else {
+      const read = selectionReads.readSkillLibrarySelectionDescriptions;
+      vi.spyOn(selectionReads, "readSkillLibrarySelectionDescriptions").mockImplementation(
+        async (...args) => hold(await read(...args)),
+      );
+    }
+    const closed = new Error("Synthetic resource owner closed");
+    let current = true;
+    await inRoot(root, async () => {
+      const pending =
+        change === "selection"
+          ? selection
+              .prepareSkillLibrarySelection(snapshot.librarySelections!, {}, noop)
+              .then((entries) => entries.map((entry) => entry.skill))
+          : deliver(snapshot, () => {
+              if (!current) {
+                throw closed;
+              }
+            }).then((delivery) => delivery?.skills);
+      const outcome = pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await entered.promise;
+        if (change === "root") {
+          process.env.OPENCLAW_STATE_DIR = other;
+        } else if (change === "authority") {
+          current = false;
+        } else if (change === "admission") {
+          await closeDatabase();
+        } else {
+          Object.assign(pin, syntheticPin("changed"));
+          snapshot.librarySelections!.push({ ...pin });
+          snapshot.skills[0]!.name = "changed";
+        }
+        gate.resolve();
+        const result = await outcome;
+        if (change === "authority") {
+          expect(result).toEqual({ error: closed });
+        } else if (change === "admission") {
+          expect(result).toHaveProperty("error");
+        } else {
+          expect(result).toMatchObject({
+            value: [{ name: originalPin.name, description: "Saved procedure" }],
+          });
+          if (change === "root") {
+            expect(fs.existsSync(path.join(other, "state", "openclaw.sqlite"))).toBe(false);
+          } else {
+            expect(loadSelection([originalPin])[0]?.skill.name).toBe(originalPin.name);
+          }
+        }
+      } finally {
+        gate.resolve();
+        await outcome;
+      }
+    });
+  },
+);
+
+it.each(["file", "table"] as const)("keeps missing %s storage absent", async (missing) => {
+  const root = tempDirs.make("skill-library-missing-read-");
+  const options = { env: { OPENCLAW_STATE_DIR: root } };
+  if (missing === "table") {
+    openDatabase(options);
+    await closeDatabase();
+  }
+  const snapshot = snapshotFor(syntheticPin("missing"));
+  const pins = await selection.seedSkillLibrarySelection(resourceActor("missing"), options);
+  expect(pins).toEqual([]);
+  expect(() => selection.assertPreparedSkillLibrarySelection(pins)).not.toThrow();
+  await inRoot(root, () => expectCode(deliver(snapshot, noop), "NOT_FOUND"));
+  if (missing === "file") {
+    expect(fs.existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
+  } else {
+    expect(tableExists(openDatabase(options).db, "skill_library_entries")).toBe(false);
+  }
+});
+
+it.each(["workspace", "library"] as const)("preserves the first %s error", async (first) => {
+  const root = tempDirs.make("skill-library-read-order-");
+  onTestFinished(() => void vi.restoreAllMocks());
+  const skills = ["workspace", "library"].map((name) =>
+    materializeSkill({
+      name,
+      description: name,
+      content: resourceContent,
+      frontmatter: {},
+      filePath: path.join(root, name, "SKILL.md"),
+      baseDir: path.join(root, name),
+      source: "openclaw-workspace",
+      sourceOptions: { source: "openclaw-workspace" },
+    }),
+  );
+  const [workspace, library] = skills;
+  const snapshot: SkillSnapshot = {
+    prompt: "",
+    skills: skills.map(({ name }) => ({ name })),
+    resolvedSkills: first === "workspace" ? skills : [library!, workspace!],
+    librarySelections: [syntheticPin("library")],
+  };
+  const workspaceError = new Error("Synthetic workspace read failed");
+  const libraryError = new Error("Synthetic database read failed");
+  vi.spyOn(selection, "prepareSkillLibrarySelection").mockResolvedValue([]);
+  const readWorkspace = vi.spyOn(bundles, "readSkillBundleTree").mockRejectedValue(workspaceError);
+  const readManifests = vi
+    .spyOn(selectionReads, "readSkillLibrarySelectionManifests")
+    .mockRejectedValue(libraryError);
+  await inRoot(root, async () => {
+    await expect(deliver(snapshot, noop)).rejects.toMatchObject({
+      code: "INVALID_BUNDLE",
+      message: expect.stringContaining(`skill="${first}"`),
+      cause: first === "workspace" ? workspaceError : libraryError,
+    });
+  });
+  expect(readWorkspace).toHaveBeenCalledTimes(first === "workspace" ? 1 : 0);
+  expect(readManifests).toHaveBeenCalledTimes(first === "library" ? 1 : 0);
+});

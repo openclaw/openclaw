@@ -295,7 +295,7 @@ it.each([false, true])(
     };
     const before = structuredClone(cfg);
     const pluginLifecycle = await import("../plugins/plugin-lifecycle-lease.js");
-    const originalWithLease = pluginLifecycle.withPluginLifecycleLease;
+    const originalWithLease = pluginLifecycle.withPluginLifecycleLeaseAsync;
     let pending = 0;
     const observeLease: typeof originalWithLease = async (options, run) => {
       pending += 1;
@@ -306,7 +306,7 @@ it.each([false, true])(
       }
     };
     const lease = vi
-      .spyOn(pluginLifecycle, "withPluginLifecycleLease")
+      .spyOn(pluginLifecycle, "withPluginLifecycleLeaseAsync")
       .mockImplementation(observeLease);
     try {
       const note = vi.fn(async (_message: string, _title?: string) => {

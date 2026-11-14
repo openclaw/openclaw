@@ -20,6 +20,81 @@ const sessionLink = (page: Page, session: string) =>
   page.locator(`[data-session-key="agent:main:session-${session}"] a.sidebar-recent-session__link`);
 
 suite.define(() => {
+  it("reopens a parked startup with authoritative history and the retained draft", async () => {
+    const page = await newChatPage(suite);
+    const key = "agent:main:session-b";
+    const draft = "Draft retained through the parked startup";
+    const current = "Authoritative history after reopening";
+    const obsolete = "Obsolete history from the parked read";
+    const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
+      sessionKey: "agent:main:session-a",
+      historyMessages: [chatMessage("assistant", "Established conversation")],
+      sessionTranscripts: { [key]: { messages: [chatMessage("assistant", current)] } },
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+    await textInThread(page, "Established conversation").waitFor({ state: "visible" });
+    const before = (await gateway.getRequests("chat.startup", { sessionKey: key })).length;
+    await gateway.deferNext("chat.startup", { sessionKey: key });
+    await sessionLink(page, "b").click();
+    await gateway.waitForRequest("chat.startup", { after: before, match: { sessionKey: key } });
+    const composer = page.locator(`${visiblePane} .agent-chat__composer-combobox textarea`);
+    // An unsubmitted draft owns no delivery read. Enter would deliberately queue
+    // it in the outbox, whose independent startup custody must survive hiding.
+    await composer.fill(draft);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await sessionLink(page, "a").click();
+    await textInThread(page, "Established conversation", visiblePane).waitFor({ state: "visible" });
+    // Sidebar preview paints before route ownership commits. Only committed hide
+    // retires the old read; resolving it during preview would still be current.
+    await page.waitForURL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+    await page.waitForFunction((parked) => {
+      const panes = Array.from(document.querySelectorAll("openclaw-chat-pane"));
+      const previous = panes.find((pane) => pane.sessionKey === parked);
+      const presented = panes.find((pane) => pane.sessionKey === "agent:main:session-a");
+      return (
+        previous?.getAttribute("aria-hidden") === "true" &&
+        !previous.presented &&
+        presented?.getAttribute("aria-hidden") === "false" &&
+        presented.presented
+      );
+    }, key);
+    await gateway.resolveDeferred(
+      "chat.startup",
+      {
+        messages: [chatMessage("assistant", obsolete)],
+        sessionId: "session-b",
+      },
+      { match: { sessionKey: key } },
+    );
+    await gateway.deferNext("chat.startup", { sessionKey: key });
+    await sessionLink(page, "b").click();
+    await gateway.waitForRequest("chat.startup", { after: before + 1, match: { sessionKey: key } });
+    expect(await composer.inputValue()).toBe(draft);
+    expect(await textInThread(page, obsolete, visiblePane).count()).toBe(0);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await gateway.resolveDeferred(
+      "chat.startup",
+      {
+        messages: [chatMessage("assistant", current)],
+        sessionId: "session-b",
+      },
+      { match: { sessionKey: key } },
+    );
+    await textInThread(page, current, visiblePane).waitFor({ state: "visible" });
+    const send = page.locator(visiblePane).getByRole("button", { name: "Send message" });
+    await expect.poll(() => send.isEnabled()).toBe(true);
+    expect(await composer.inputValue()).toBe(draft);
+    expect(await gateway.getRequests("chat.startup", { sessionKey: key })).toHaveLength(before + 2);
+    await send.click();
+    expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+      sessionKey: key,
+      message: draft,
+    });
+    expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+  });
+
   it("switches immediately but shows a skeleton only for slow history", async () => {
     const page = await newChatPage(suite, {
       ...createControlUiE2eContextOptions(),
@@ -28,6 +103,7 @@ suite.define(() => {
     const previousText = "Previous conversation.";
     const destinationText = "Destination conversation.";
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup", "chat.history"],
       sessionKey: "agent:main:session-a",
       historyMessages: [{ role: "assistant", content: previousText }],
@@ -156,6 +232,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
       const marker = "The selected conversation survived canonical navigation.";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: "agent:main:main",
         historyMessages: [{ role: "assistant", content: "Initial conversation." }],
         sessionTranscripts: {
@@ -229,6 +306,7 @@ suite.define(() => {
     const marker = "Retained transcript";
     const failure = "History refresh failed.";
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
     });
     await page.goto(`${suite.server.baseUrl}chat`);

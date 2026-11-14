@@ -56,6 +56,7 @@ import {
   normalizeStringList,
 } from "./store-normalizers.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
+import { finishRun } from "./store-status-write.js";
 
 class WorkboardClaimRefusedError extends Error {
   constructor(message: string) {
@@ -268,7 +269,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
           .slice(-MAX_CARD_ARTIFACTS)
       : [];
-    const finished = this.finishRun(existing, "done", now);
+    const finished = finishRun(existing, "done", now);
     const metadata = clearDiagnostics(finished.metadata, ["missing_proof"]);
     const notifications = this.appendNotification(metadata, now, {
       kind: "completed",
@@ -305,7 +306,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     now: number,
     options: { clearExecutionAssociation?: boolean } = {},
   ): WorkboardCardPatch & { metadata: WorkboardMetadata } {
-    const finished = this.finishRun(existing, "blocked", now, reason);
+    const finished = finishRun(existing, "blocked", now, reason);
     const metadata = finished.metadata;
     const notifications = this.appendNotification(metadata, now, {
       kind: "failed",

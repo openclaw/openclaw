@@ -439,8 +439,11 @@ describe("commands registry args", () => {
       command: { key: "think" },
       arg: { name: "level" },
       agentRuntime: "codex",
-      catalog: [],
     });
+    // The default model's bundled row supplies its thinking facts.
+    expect(seenChoice.catalog).toEqual([
+      expect.objectContaining({ provider: seenChoice.provider, id: seenChoice.model }),
+    ]);
     expect(typeof seenChoice.provider).toBe("string");
     expect(seenChoice.provider?.trim().length).toBeGreaterThan(0);
     expect(typeof seenChoice.model).toBe("string");
@@ -460,6 +463,15 @@ describe("commands registry args", () => {
       agentRuntime,
     });
     expect(menu.choices.some((choice) => choice.value === "ultra")).toBe(true);
+  });
+  it("builds the /think menu for the configured default model's bundled row", () => {
+    const command = nativeCommand("think");
+    const menu = argMenu({
+      command,
+      cfg: { agents: { defaults: { model: { primary: "moonshot/kimi-k3" } } } },
+    });
+    expect(menuValues(menu)).toContain("max");
+    expect(menuValues(menu)).not.toContain("low");
   });
   it.each<[unknown, CommandArgChoiceContext["catalog"]]>([
     [modelConfig("ollama", ollamaModel), undefined],

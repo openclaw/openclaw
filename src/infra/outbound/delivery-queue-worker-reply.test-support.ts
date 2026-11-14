@@ -58,9 +58,7 @@ export function holdDeliveryQueueReply<T>(
       const result = readResult(deserialize(reply.value));
       if (result !== undefined) {
         captured = true;
-        publish = () => {
-          Reflect.apply(emit, this, [event, ...args]);
-        };
+        publish = emit.bind(this, event, ...args);
         held.resolve(result);
         return true;
       }

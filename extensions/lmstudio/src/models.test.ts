@@ -4,6 +4,7 @@ import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runti
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -547,3 +548,38 @@ it("releases guarded non-ok discovery without waiting for the capture clone", as
   }
   expect(tracked.wasCanceled()).toBe(true);
 });
+
+it.each([
+  { supportedReasoningEfforts: ["off", "on"], reasoningEffortMap: { off: "off", medium: "on" } },
+  {
+    supportedReasoningEfforts: ["none", "low", "high"],
+    reasoningEffortMap: { off: "low", medium: "none" },
+  },
+])(
+  "preserves authored reasoning maps in the configured catalog: $reasoningEffortMap",
+  async (compat) => {
+    const provider = capturePluginRegistration(plugin).providers[0];
+    assert(provider?.augmentModelCatalog, "LM Studio catalog hook is missing");
+    const config = createModelProviderConfig({
+      lmstudio: {
+        baseUrl: "http://localhost:1234/v1",
+        models: [
+          {
+            id: "saved-model",
+            name: "Saved",
+            reasoning: true,
+            input: ["text"],
+            cost: SELF_HOSTED_DEFAULT_COST,
+            maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+            contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+            compat,
+          },
+        ],
+      },
+    });
+    const entries = await provider.augmentModelCatalog({ config, entries: [], env: {} });
+    assert(Array.isArray(entries), "LM Studio catalog hook returned no entries");
+    expect(entries[0]?.compat).toMatchObject(compat);
+    expect(config.models?.providers?.lmstudio?.models[0]?.compat).toEqual(compat);
+  },
+);

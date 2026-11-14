@@ -207,11 +207,11 @@ function runAndroidApproval({
   fs.writeFileSync(
     path.join(tempRoot, "gh"),
     `#!${process.execPath}
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
 const args = process.argv.slice(2);
 const file = name => path.join(process.env.RUNNER_TEMP, name);
-const {publication, parent, nativeRun, identityEndpoint, tooling, attestationExitCode} = require(file("fixture.json"));
+const {publication, parent, nativeRun, identityEndpoint, tooling, attestationExitCode} = JSON.parse(fs.readFileSync(file("fixture.json"), "utf8"));
 const publishing = fs.existsSync(file("publishing"));
 function replace(file, base, phase) {
   if (publication[phase]) fs.writeFileSync(file, JSON.stringify({ ...base, ...publication[phase] }));
@@ -249,7 +249,7 @@ process.stdout.write(JSON.stringify(tooling));
   fs.writeFileSync(
     path.join(tempRoot, "git"),
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const target = JSON.parse(fs.readFileSync(${JSON.stringify(targetPath)}, "utf8"));
 if (JSON.stringify(args) === JSON.stringify(["rev-parse", "v2026.8.1^{commit}"])) {

@@ -1,6 +1,7 @@
 import type { AgentEventSink, ExecutedToolCallBatch } from "./agent-stream-response.js";
 import {
   getInternalToolExecutionPreparer,
+  InternalToolLoopBlocked,
   type InternalToolExecutionPreparation,
   type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
@@ -8,14 +9,19 @@ import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import {
   createErrorToolResult,
+  immediateToolArgumentValidationError,
+  immediateToolPreparationError,
+  TOOL_LOOP_BLOCKED_MESSAGE,
   createToolExecutionErrorResult,
   type FinalizedToolCallOutcome,
+  type ImmediateToolCallOutcome,
 } from "./tool-call-outcome.js";
 import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
-import type { AgentTool, AgentToolCall, AgentToolResult } from "./types.js";
+import type { AgentTool, AgentToolCall, AgentToolResult, ToolLoopIntervention } from "./types.js";
+import { validateToolArguments } from "./validation.js";
 
 export type PreparedToolCall = {
   kind: "prepared";
@@ -24,11 +30,42 @@ export type PreparedToolCall = {
   args: unknown;
 };
 
+export function prepareResolvedToolCall(
+  tool: AgentTool,
+  toolCall: AgentToolCall,
+): PreparedToolCall | ImmediateToolCallOutcome {
+  let preparedToolCall: AgentToolCall;
+  try {
+    const preparedArguments = tool.prepareArguments
+      ? tool.prepareArguments(toolCall.arguments)
+      : toolCall.arguments;
+    preparedToolCall =
+      preparedArguments === toolCall.arguments
+        ? toolCall
+        : {
+            ...toolCall,
+            // SAFETY: The validator below checks this value before returning execution arguments.
+            arguments: preparedArguments as Record<string, unknown>,
+          };
+  } catch (error) {
+    return immediateToolPreparationError(error);
+  }
+
+  let validatedArgs: unknown;
+  try {
+    validatedArgs = validateToolArguments(tool, preparedToolCall);
+  } catch (error) {
+    return immediateToolArgumentValidationError(error);
+  }
+  return { kind: "prepared", toolCall, tool, args: validatedArgs };
+}
+
 export type ExecutedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
   callerCancelled?: true;
+  intervention?: ToolLoopIntervention;
 };
 
 export type ReadyToolCallExecution = {
@@ -173,6 +210,19 @@ export async function prepareToolCallExecution(
             }
             return { result, isError: false, executionStarted };
           } catch (error) {
+            if (implementationStartError?.error instanceof InternalToolLoopBlocked) {
+              const { intervention } = implementationStartError.error;
+              return {
+                result: createErrorToolResult(TOOL_LOOP_BLOCKED_MESSAGE, {
+                  status: "blocked",
+                  deniedReason: "tool-loop",
+                  intervention,
+                }),
+                isError: true,
+                executionStarted: false,
+                intervention,
+              };
+            }
             executionFailure = { error: implementationStartError?.error ?? error };
             if (implementationStartError) {
               throw implementationStartError.error;
@@ -284,7 +334,13 @@ export async function prepareToolCallExecution(
   );
 }
 
-export type ToolPlanState = { executionStarted: boolean };
+export type ToolPlanState = {
+  executionStarted: boolean;
+  /** All tool batches from one provider response share the unseen recovery allowance. */
+  repeatedToolErrorRecoveryGranted?: boolean;
+  /** Closes all unstarted actions while already-started effects drain. */
+  terminalIntervention?: ToolLoopIntervention;
+};
 
 export type ReadyPreparedToolCall = PreparedToolCall & { execution: ReadyToolCallExecution };
 
@@ -300,6 +356,7 @@ type ParallelToolCallLaunches = {
   started: StartedToolCall[];
   completed: Array<Omit<StartedToolCall, "outcome"> & { outcome: ExecutedToolCallOutcome }>;
   rejected?: { index: number; error: unknown };
+  blocked?: { index: number; intervention: ToolLoopIntervention };
 };
 
 export async function launchParallelToolCalls(
@@ -362,10 +419,17 @@ export async function launchParallelToolCalls(
     let rejected = false;
     const onStart = () => {
       try {
+        if (toolPlan.terminalIntervention) {
+          throw new InternalToolLoopBlocked(toolPlan.terminalIntervention);
+        }
         batchLifecycle?.commitReadyCalls?.([
           { toolCallId: current.entry.toolCall.id, args: current.entry.execution.args },
         ]);
       } catch (error) {
+        if (error instanceof InternalToolLoopBlocked) {
+          result.blocked = { index: current.index, intervention: error.intervention };
+          throw error;
+        }
         rejected = true;
         reject(current.index, error);
         finish();
@@ -391,7 +455,11 @@ export async function launchParallelToolCalls(
         resolvePreparation();
         if (!started && !rejected) {
           result.completed.push({ ...current, outcome: completed });
-          queueMicrotask(launchNext);
+          if (result.blocked) {
+            finish();
+          } else {
+            queueMicrotask(launchNext);
+          }
         }
       },
       (error: unknown) => {

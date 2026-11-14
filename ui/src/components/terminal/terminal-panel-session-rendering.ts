@@ -4,6 +4,13 @@ import {
 } from "./terminal-panel-session-types.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
+export function repaintTerminalSession(tab: TerminalPanelSessionTab | undefined): void {
+  if (tab) {
+    tab.controller.fit();
+    forceTerminalRender(tab.controller);
+  }
+}
+
 export async function focusTerminalSession(
   tab: TerminalPanelSessionTab | undefined,
   rendered: Promise<unknown>,
@@ -11,9 +18,8 @@ export async function focusTerminalSession(
   // Refit and repaint after the container becomes visible. A same-size tab
   // switch otherwise leaves the newly shown canvas without dirty rows.
   await rendered;
+  repaintTerminalSession(tab);
   if (tab) {
-    tab.controller.fit();
-    forceTerminalRender(tab.controller);
     tab.controller.terminal.focus();
   }
 }
@@ -45,6 +51,8 @@ export function reattachTerminalSessionHosts(
   if (!viewport) {
     return;
   }
+  const activeTab = tabs.find((tab) => tab.id === activeId);
+  const activeHostDetached = activeTab?.host.parentElement !== viewport;
   // Hiding the panel removes its viewport, which detaches each session's Ghostty
   // host. Re-attach live hosts whenever the viewport is rendered so a
   // hide/show cycle keeps the terminals intact instead of blanking them.
@@ -53,8 +61,8 @@ export function reattachTerminalSessionHosts(
       viewport.append(tab.host);
     }
   }
-  const activeTab = tabs.find((tab) => tab.id === activeId);
-  if (activeTab) {
+  if (activeTab && activeHostDetached) {
+    // ResizeObserver owns attached geometry; ordinary panel publications need no layout read.
     activeTab.controller.fit();
     // FitAddon skips unchanged dimensions; force dirty-row rendering to
     // repair a canvas that was detached while the panel was hidden.

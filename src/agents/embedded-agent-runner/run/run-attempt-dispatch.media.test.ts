@@ -210,6 +210,41 @@ describe("plugin harness prompt media", () => {
     expect(result.media).toBeUndefined();
   });
 
+  it("applies this run's unresolved-attachment suppression to hydratable recorded facts", async () => {
+    const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
+    // Same path twice: only the run's second occurrence was unreadable this turn.
+    const recorded = [
+      { path: "/tmp/shared-unreadable.png", contentType: "image/png" },
+      { path: "/tmp/shared-unreadable.png", contentType: "image/png" },
+    ];
+    const result = await preparePluginHarnessPromptImages({
+      images: [inlineImage],
+      imageOrder: ["inline"],
+      media: [recorded[0], { ...recorded[1], hydrationSuppressed: true, unresolvedThisTurn: true }],
+      userTurnTranscriptRecorder: {
+        async resolveMessage() {
+          return this.message;
+        },
+        message: {
+          role: "user",
+          content: "compare",
+          __openclaw: {
+            media: recorded,
+            mediaImageLayout: {
+              slots: [
+                { kind: "inline", factIndex: 0 },
+                { kind: "offloaded", factIndex: 1 },
+              ],
+            },
+          },
+        },
+      },
+    } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+
+    expect(result.images).toEqual([inlineImage]);
+    expect(result.imageOrder).toEqual(["inline"]);
+  });
+
   it("keeps unsupported native images as aligned type-only facts", async () => {
     const media = [
       { path: "/tmp/photo.png", contentType: "image/png" },

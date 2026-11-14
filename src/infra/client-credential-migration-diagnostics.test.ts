@@ -8,6 +8,7 @@ import { repairOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "../state/openclaw-state-schema.test-support.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -26,32 +27,25 @@ it("preserves an invalid socket cause through migration, candidate capture, and 
   {
     using db = openNodeSqliteDatabase(pathname);
     db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
     db.exec(`
       INSERT INTO schema_meta VALUES ('primary', 'global', 28, NULL, 'fixture', 123, 123);
       INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '28', 1);
       PRAGMA user_version=28;
     `);
-    db.prepare("INSERT INTO exec_approvals_config VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-      "current",
+    db.prepare(`INSERT INTO exec_approvals_config
+      VALUES ('current', ?, NULL, 1, NULL, NULL, NULL, NULL, 0, 0, 1)`).run(
       JSON.stringify({ version: 1, socket: { path: 42, token: "private-socket-token" } }),
-      null,
-      1,
-      null,
-      null,
-      null,
-      null,
-      0,
-      0,
-      1,
     );
   }
   const result = await withStateMigrationBackupForTest({ env }, () =>
     repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true }),
   );
   expect(result.changes).toEqual([]);
-  expect(result.warnings).toHaveLength(1);
-  expect(result.warnings[0]).toContain("invalid socket credentials or projections");
+  expect(result.warnings).toEqual([
+    expect.stringContaining("invalid socket credentials or projections"),
+  ]);
   const entry = path.join(root, "candidate.mjs");
   await fs.writeFile(
     entry,

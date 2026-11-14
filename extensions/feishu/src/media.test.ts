@@ -1,8 +1,10 @@
+import fs from "node:fs/promises";
 import { Readable } from "node:stream";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  type runFfmpeg,
   type runFfprobe,
   type transcodeAudioBufferToOpus,
 } from "openclaw/plugin-sdk/media-runtime";
@@ -10,6 +12,7 @@ import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { saveMessageResourceFeishu, sendMediaFeishu } from "./media.js";
+import { withFeishuSendContext } from "./send-context.js";
 
 type FileUploadData = {
   file: Buffer;
@@ -29,6 +32,8 @@ const loadWebMediaMock = vi.hoisted(() =>
 );
 const transcodeAudioMock = vi.hoisted(() => vi.fn<typeof transcodeAudioBufferToOpus>());
 const runFfprobeMock = vi.hoisted(() => vi.fn<typeof runFfprobe>());
+const runFfmpegMock = vi.hoisted(() => vi.fn<typeof runFfmpeg>());
+const videoCover = Buffer.from("synthetic-video-cover");
 
 const fileCreateMock = vi.hoisted(() =>
   vi.fn<(request: { data: FileUploadData }) => Promise<unknown>>(),
@@ -75,7 +80,12 @@ vi.mock("./runtime.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
-  return { ...actual, transcodeAudioBufferToOpus: transcodeAudioMock, runFfprobe: runFfprobeMock };
+  return {
+    ...actual,
+    transcodeAudioBufferToOpus: transcodeAudioMock,
+    runFfprobe: runFfprobeMock,
+    runFfmpeg: runFfmpegMock,
+  };
 });
 
 function sendMedia(options: Omit<Parameters<typeof sendMediaFeishu>[0], "cfg" | "to">) {
@@ -175,6 +185,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     messageResourceGetMock.mockImplementation(async () => resourceResponse("resource-bytes"));
     transcodeAudioMock.mockResolvedValue(Buffer.from("opus-output"));
     runFfprobeMock.mockResolvedValue("1.234\n");
+    runFfmpegMock.mockImplementation(async (args) => {
+      await fs.writeFile(args.at(-1)!, videoCover);
+      return "";
+    });
   });
 
   it.each([
@@ -264,6 +278,11 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(uploadData()).toMatchObject({ file_type: "mp4", duration: 6789 });
     expect(runFfprobeMock.mock.calls[0]![0].at(-1)).toMatch(/input\.mp4$/);
     expect(messageData().msg_type).toBe("media");
+    expect(JSON.parse(messageData().content)).toEqual({
+      file_key: "file_key_1",
+      image_key: "image_key_1",
+    });
+    expect(imageCreateMock.mock.calls[0]![0].data.image).toEqual(videoCover);
   });
 
   it.each(["transcodes", "falls back"])("%s voice-intent mp3", async (outcome) => {
@@ -304,6 +323,68 @@ describe("sendMediaFeishu msg_type routing", () => {
     const [{ path, data }] = messageReplyMock.mock.calls[0]!;
     expect(path).toEqual({ message_id: "om_parent" });
     expect(data).toMatchObject({ msg_type: "media", reply_in_thread: true });
+    expect(JSON.parse(data.content)).toEqual({
+      file_key: "file_key_1",
+      image_key: "image_key_1",
+    });
+  });
+
+  it.each(["extraction", "empty", "oversized", "upload"])(
+    "delivers video as a file when cover preparation fails: %s",
+    async (failure) => {
+      if (failure === "extraction") {
+        runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+      } else if (failure === "upload") {
+        imageCreateMock.mockResolvedValueOnce({ code: 999, msg: "upload rejected" });
+      } else {
+        runFfmpegMock.mockImplementationOnce(async (args) => {
+          await fs.writeFile(args.at(-1)!, Buffer.alloc(failure === "empty" ? 0 : 1024 * 1024 + 1));
+          return "";
+        });
+      }
+      resolveFeishuAccountMock.mockReturnValue({ ...account, config: { mediaMaxMb: 1 } });
+      await sendMedia({ mediaBuffer: Buffer.from("video"), fileName: "clip.mp4" });
+      expect(messageData().msg_type).toBe("file");
+      expect(JSON.parse(messageData().content)).toEqual({ file_key: "file_key_1" });
+      expect(uploadData().file).toEqual(Buffer.from("video"));
+      if (failure !== "upload") {
+        expect(imageCreateMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("delivers a file when the cover upload stalls", async () => {
+    const started = createDeferred<void>();
+    imageCreateMock.mockImplementationOnce(() => {
+      started.resolve();
+      return new Promise(() => {});
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const sending = sendMedia({ mediaBuffer: Buffer.from("video"), fileName: "clip.mp4" });
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await sending;
+      expect(messageData().msg_type).toBe("file");
+      expect(JSON.parse(messageData().content)).toEqual({ file_key: "file_key_1" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rechecks send authority after extracting a cover", async () => {
+    const controller = new AbortController();
+    runFfmpegMock.mockImplementationOnce(async (args) => {
+      await fs.writeFile(args.at(-1)!, videoCover);
+      controller.abort();
+      return "";
+    });
+    await expect(
+      withFeishuSendContext({ signal: controller.signal }, () =>
+        sendMedia({ mediaBuffer: Buffer.from("video"), fileName: "clip.mp4" }),
+      ),
+    ).rejects.toThrow("Feishu sender retired");
+    expectNotCalled(imageCreateMock, messageCreateMock, messageReplyMock);
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {

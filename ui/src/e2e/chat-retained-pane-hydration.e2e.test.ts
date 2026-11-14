@@ -29,6 +29,7 @@ suite.define(() => {
   it("hydrates only the visible retained session after reconnect", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1440 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         featureMethods: [
           "artifacts.list",
           "chat.metadata",

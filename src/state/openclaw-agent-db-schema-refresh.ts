@@ -1,7 +1,12 @@
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { settleSqliteDatabaseAdmissionPublication } from "../infra/sqlite-database-admission.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
-import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import {
+  admitSqliteSchema,
+  getAdmittedSqliteSchemaFacts,
+  runSqliteReadOperationSync,
+} from "../infra/sqlite-schema-facts.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import {
@@ -68,7 +73,7 @@ export function refreshOpenClawAgentDatabaseSchema(
       ensureOpenClawAgentSchema(db, agentId, pathname);
     }
     // Integrity admission or same-version repair already checked the runtime schema.
-    return runSqliteSchemaReadSnapshotSync(db, () => {
+    const refreshed = runSqliteSchemaReadSnapshotSync(db, () => {
       admitSqliteSchema(db);
       assertCanonicalSessionValidationSchema(db);
       assertCurrent();
@@ -78,6 +83,13 @@ export function refreshOpenClawAgentDatabaseSchema(
       publishOpenClawAgentDatabaseSchema(database);
       return validation;
     });
+    // The checked pin keeps its catalog local. Share current physical facts before
+    // host adoption; the existing validation receipt still fences concurrent DDL.
+    getAdmittedSqliteSchemaFacts(db);
+    if (!settleSqliteDatabaseAdmissionPublication(db)) {
+      throw new Error("Agent schema publication requires a settled connection");
+    }
+    return refreshed;
   } catch (error) {
     invalidateOpenClawAgentDatabaseValidation(pathname);
     throw error;

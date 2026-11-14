@@ -106,7 +106,7 @@ export async function readUpdateStoreSchemaVersion(
     input.preserveSourceArtifacts,
   );
   if (userVersion === 0) {
-    const { readBackupEngine } = await import("../snapshot/database-backup.js");
+    const { readBackupEngine } = await import("./database-engine/physical-store.js");
     if (readBackupEngine(file).engine === "postgres") {
       const { readUpdatePostgresStoreVersion } =
         await import("./update-candidate-state.postgres.js");
@@ -120,14 +120,21 @@ export async function collectSupplementalStateDatabasePaths(
   input: StateInput,
   files: Map<string, StateDatabaseDiscovery>,
 ) {
-  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
   const knownRealpaths = new Set(
     await Promise.all([...files.keys()].map((file) => fs.realpath(file).catch(ignoreMissingPath))),
   );
-  // The private snapshot below owns registry reads, including legacy schemas.
+  // The caller owns registry reads, including legacy schemas.
   // Include declared retained plugin databases on either physical engine here.
-  for (const file of input.additionalPaths ??
-    (await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }))) {
+  // Prepared lists, including [], already own discovery; workers must not reload its graph.
+  const additionalPaths =
+    input.additionalPaths ??
+    (await (
+      await import("./backup-sqlite-snapshot.js")
+    ).discoverBackupDatabasePaths({
+      ...input,
+      agentRegistry: [],
+    }));
+  for (const file of additionalPaths) {
     // Supplemental realpaths must not add aliases to the legacy versions inventory.
     // Registry discovery below still preserves every explicitly recorded spelling.
     if (files.has(resolveUpdateCandidateStateIdentity(input.stateDir, file))) {

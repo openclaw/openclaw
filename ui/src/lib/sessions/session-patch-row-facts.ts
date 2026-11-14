@@ -37,6 +37,9 @@ export function projectSessionPatchRowFields(
       });
     }
   }
+  if (patch.cyberAccessProgram !== undefined) {
+    fields.push({ cyberAccessProgram: entry.cyberAccessProgram });
+  }
   if (patch.fastMode !== undefined) {
     fields.push({ fastMode: entry.fastMode });
   }

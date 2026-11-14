@@ -507,7 +507,6 @@ type MessageActionAgentRuntimeIdentityParams = {
   sessionId?: string;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
-  callerOwnsTerminalReceipt?: boolean;
 };
 
 async function resolveMessageActionIdentity<T>(
@@ -557,11 +556,8 @@ async function resolveMessageActionIdentity<T>(
     throw new Error("terminal source reply requires source-turn correlation");
   }
   if (usesUntrustedGatewayContext) {
-    if (params.callerOwnsTerminalReceipt !== true) {
-      throw new Error("terminal source reply requires the trusted local gateway context");
-    }
-    // Remote gateways cannot trust caller-supplied turn metadata. The agent
-    // process owns the durable receipt and sends no source authority over RPC.
+    // Remote gateways cannot trust caller-supplied turn metadata. Keep source
+    // completion authority in the originating agent process.
     return undefined;
   }
   if (!identity.operationalRunInstance) {

@@ -1,0 +1,2 @@
+# Windows discovery regressions cover SQLite exclusions, changelog mirrors, and frozen records.
+74

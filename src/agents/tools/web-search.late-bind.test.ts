@@ -49,40 +49,33 @@ beforeEach(() => {
 
 afterEach(() => setActiveDegradedSecretOwners([]));
 
-it("prefers active runtime metadata over options.runtimeWebSearch when present", async () => {
-  const config = { tools: { web: { search: { provider: "perplexity" } } } };
-  mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({ config });
-  mocks.getActiveRuntimeWebToolsMetadataFromState.mockReturnValue({
-    search: metadata("perplexity"),
-  });
-  await execute({
-    config: {},
-    lateBindRuntimeConfig: true,
-    runtimeWebSearch: metadata("brave"),
-  });
-  expect(mocks.runWebSearch.mock.calls[0]?.[0]).toMatchObject({
-    config,
-    preferRuntimeProviders: true,
-    runtimeWebSearch: { selectedProvider: "perplexity" },
-  });
-  expect(mocks.runWebSearch.mock.calls[0]?.[0].config).toBe(config);
-});
-
-it.each([true, false])("keeps runtime discovery enabled with metadata=%s", async (withMetadata) => {
-  const runtimeWebSearch = withMetadata ? metadata("custom") : undefined;
-  const result = await execute({
-    config: { tools: { web: { search: { provider: "custom" } } } },
-    sandboxed: true,
-    runtimeWebSearch,
-  });
-  expect(result?.details).toEqual({ kind: "raw", provider: "brave", data: { ok: true } });
-  expect(mocks.runWebSearch).toHaveBeenCalledOnce();
-  expect(mocks.runWebSearch.mock.calls[0]?.[0]).toMatchObject({
-    sandboxed: true,
-    preferRuntimeProviders: true,
-    runtimeWebSearch,
-  });
-});
+it.each(["active", "captured", "configured"] as const)(
+  "uses %s search discovery",
+  async (source) => {
+    const config = { tools: { web: { search: { provider: "custom" } } } };
+    const activeConfig = { tools: { web: { search: { provider: "perplexity" } } } };
+    const captured = source === "configured" ? undefined : metadata("custom");
+    if (source === "active") {
+      mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({ config: activeConfig });
+      mocks.getActiveRuntimeWebToolsMetadataFromState.mockReturnValue({
+        search: metadata("perplexity"),
+      });
+    }
+    const result = await execute({
+      config,
+      lateBindRuntimeConfig: source === "active",
+      sandboxed: true,
+      runtimeWebSearch: captured,
+    });
+    expect(result?.details).toEqual({ kind: "raw", provider: "brave", data: { ok: true } });
+    expect(mocks.runWebSearch.mock.calls[0]?.[0]).toMatchObject({
+      config: source === "active" ? activeConfig : config,
+      sandboxed: true,
+      preferRuntimeProviders: true,
+      runtimeWebSearch: source === "active" ? metadata("perplexity") : captured,
+    });
+  },
+);
 
 it("honors late-bound disabled search config at execute time", async () => {
   mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({

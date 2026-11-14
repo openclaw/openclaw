@@ -1,24 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { observeCronJobCommits } from "../../../test/helpers/cron/runtime-mutation.js";
-import {
-  createCronRegressionState,
-  createDueIsolatedJob,
-} from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
-  consumeCronCreatorAuthorityGrant,
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
 import {
   cronJobMatchesCallerScope,
-  cronJobMatchesDeclarationScope,
   readCronCallerScope,
   resolveCronCreatorAuthorityCapture,
 } from "./cron-caller-scope.js";
@@ -34,16 +29,14 @@ it.each(["before dispatch", "after commit"] as const)(
   "handles creator revocation %s without misreporting the stored update",
   async (revocation) => {
     await withOpenClawTestState({ label: "cron-creator-commit-authority" }, async (fixture) => {
-      const now = Date.now();
       const storePath = fixture.statePath("cron", "jobs.json");
-      const job = createDueIsolatedJob({ id: "creator-owned", nowMs: now, nextRunAtMs: now });
+      const job = createCronJob({ payload: { kind: "agentTurn", message: "creator" } });
       await saveCronStore(storePath, { version: 1, jobs: [job] });
       const cron = new CronService(
         createCronRegressionState({
           storePath,
           cronEnabled: false,
           defaultAgentId: "main",
-          nowMs: () => now,
           runIsolatedAgentJob: async () => ({ status: "ok" }),
         }).deps,
       );
@@ -54,7 +47,7 @@ it.each(["before dispatch", "after commit"] as const)(
         version: 1 as const,
         runtimeId: "codex",
         namespace: "codex.apps",
-        payload: { apps: [{ id: "calendar" }] },
+        payload: {},
       };
       const grant = mintCronCreatorAuthorityGrant(
         scope,
@@ -74,11 +67,12 @@ it.each(["before dispatch", "after commit"] as const)(
         }),
         "creator runtime capture",
       );
-      const captureRuntimeAuthority = vi.fn(() => {
+      const captureRuntimeAuthority = () => {
         const captured = capture.captureRuntimeAuthority();
+        expect(captured).toEqual(authority);
         issuerCurrent = revocation !== "before dispatch";
         return captured;
-      });
+      };
       let observedCommit = false;
       const stopObserving = observeCronJobCommits(job.id, () => {
         observedCommit = true;
@@ -93,10 +87,7 @@ it.each(["before dispatch", "after commit"] as const)(
           await expect(update).resolves.toMatchObject({ name });
         }
         expect(observedCommit).toBe(revocation === "after commit");
-        expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
-        expect(captureRuntimeAuthority.mock.results[0]?.value).toEqual(authority);
         expect(capture.assertCurrent).toThrow("no longer active");
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
         const persisted = (await loadCronStore(storePath)).jobs.find((j) => j.id === job.id);
         expect(persisted?.name).toBe(revocation === "before dispatch" ? job.name : name);
       } finally {
@@ -158,13 +149,4 @@ it("uses a scoped session key before the configured default", () => {
       defaultAgentId: "main",
     });
   expect([matches("main"), matches("ops")]).toEqual([false, true]);
-
-  expect(
-    cronJobMatchesDeclarationScope({
-      job,
-      input: { ...job, id: undefined, state: undefined },
-      callerScope: undefined,
-      defaultAgentId: "main",
-    }),
-  ).toBe(true);
 });

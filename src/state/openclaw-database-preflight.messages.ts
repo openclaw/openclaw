@@ -1,8 +1,10 @@
 import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
 import {
   describeRunningOpenClawBuild,
+  isNewerSqliteWriterVersion,
   SqliteSchemaVersionError,
 } from "../infra/sqlite-user-version.js";
+import { VERSION } from "../version.js";
 import type {
   DeferredStateSchemaPublication,
   IncompatibleOpenClawDatabase,
@@ -26,7 +28,10 @@ export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionErr
 
 function formatIncompatibleDatabase(database: IncompatibleOpenClawDatabase): string {
   const agent = database.agentId ? ` for agent ${database.agentId}` : "";
-  return `${database.kind} database${agent} ${database.path} uses schema ${database.foundVersion}; this build supports ${database.supportedVersion}; writer build ${database.writerAppVersion ?? "unknown"}.`;
+  const writer = isNewerSqliteWriterVersion(database.writerAppVersion)
+    ? `It was written by OpenClaw ${database.writerAppVersion}; it is newer than this Gateway (${VERSION}).`
+    : `writer build ${database.writerAppVersion ?? "unknown"}.`;
+  return `${database.kind} database${agent} ${database.path} uses schema ${database.foundVersion}; this build supports ${database.supportedVersion}; ${writer}`;
 }
 
 function formatIncompatibleDatabaseSchemas(
@@ -43,7 +48,9 @@ function formatIncompatibleDatabaseSchemas(
     `${prefix} because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. ` +
     `${incompatibleDatabases.map(formatIncompatibleDatabase).join(" ")} ` +
     `Refused by ${describeRunningOpenClawBuild()}. ` +
-    "Run a build at least as new as the writer that supports these schemas, or stop the service and restore your pre-upgrade backup created with openclaw backup create. " +
+    (incompatibleDatabases.some((database) => isNewerSqliteWriterVersion(database.writerAppVersion))
+      ? "Use the newer install that supports these schemas, or run openclaw update to update this Gateway service before restarting. To use an older build, stop the service and restore your pre-upgrade backup created with openclaw backup create. "
+      : "Run a build at least as new as the writer that supports these schemas, or stop the service and restore your pre-upgrade backup created with openclaw backup create. ") +
     `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`
   );
 }

@@ -6,13 +6,22 @@ import path from "node:path";
 import { afterAll, expect, vi } from "vitest";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { handleArtifactDownloadHttpRequest } from "../artifact-downloads.js";
+import { createSandboxHostHttpRequestHandler } from "../mcp-app-sandbox-http.js";
 import type {
   GatewayClient,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
 
-type SessionFilesOperation = "list" | "get" | "download" | "assets" | "set" | "reveal";
+type SessionFilesOperation =
+  | "list"
+  | "get"
+  | "download"
+  | "assets"
+  | "preview"
+  | "preview.release"
+  | "set"
+  | "reveal";
 type SessionFilesMethod = `sessions.files.${SessionFilesOperation}`;
 
 type ResponderCall = { ok: boolean; payload?: unknown; error?: unknown };
@@ -130,10 +139,16 @@ export async function openSessionFileDownload(
     offsets: [0],
     createListener: () =>
       createServer((req, res) => {
-        void handleArtifactDownloadHttpRequest(req, res, {
-          clients: downloadClients,
-          basePath: "",
-        });
+        void (async () => {
+          if (
+            !(await handleArtifactDownloadHttpRequest(req, res, {
+              clients: downloadClients,
+              basePath: "",
+            }))
+          ) {
+            await createSandboxHostHttpRequestHandler({ clients: downloadClients })(req, res);
+          }
+        })();
       }),
   });
   const { claim } = await downloadServer;

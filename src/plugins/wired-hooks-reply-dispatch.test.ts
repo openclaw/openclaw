@@ -8,6 +8,7 @@ import type {
 import { createHookRunner } from "./hooks.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { createIdleReplyDispatcher } from "./reply-dispatch.test-support.js";
 import {
   nativeSubagentRuntime,
   withNativeSubagentRequest,
@@ -27,15 +28,7 @@ const replyDispatchEvent = {
 
 const replyDispatchCtx = {
   cfg: {},
-  dispatcher: {
-    sendToolResult: () => false,
-    sendBlockReply: () => false,
-    sendFinalReply: () => false,
-    waitForIdle: async () => {},
-    getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
-    markComplete: () => {},
-  },
+  dispatcher: createIdleReplyDispatcher(),
   recordProcessed: () => {},
   markIdle: () => {},
 };
@@ -106,11 +99,14 @@ describe("reply_dispatch hook runner", () => {
         ],
         { logger },
       );
-      const work = runner.runReplyDispatch(replyDispatchEvent, { ...replyDispatchCtx }, (invoke) =>
-        withNativeSubagentRequest(
-          () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
-          invoke,
-        ),
+      const work = runner.runReplyDispatch(
+        replyDispatchEvent,
+        { ...replyDispatchCtx, dispatchKind: outcome === "declined" ? "acp" : "agent" },
+        (invoke) =>
+          withNativeSubagentRequest(
+            () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
+            invoke,
+          ),
       );
       try {
         await vi.advanceTimersByTimeAsync(5);

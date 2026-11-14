@@ -374,6 +374,9 @@ jobs:
           RELEASE_TAG="$(jq -er '.inputs.tag' <<< "$RELEASE_REQUEST")"
           TARGET_SHA="$(jq -er '.sourceSha' <<< "$RELEASE_REQUEST")"
           PARENT_WORKFLOW_SHA="$(jq -er '.tooling.sha' <<< "$RELEASE_REQUEST")"
+          PARENT_WORKFLOW_FULL_REF="$(jq -er '.tooling.fullRef' <<< "$RELEASE_REQUEST")"
+          RELEASE_PUBLISH_RUN_ID="$(jq -er '.releaseRunId' <<< "$RELEASE_REQUEST")"
+          RELEASE_PUBLISH_RUN_ATTEMPT="$(jq -er '.releaseRunAttempt' <<< "$RELEASE_REQUEST")"
           WINDOWS_NODE_TAG="$(jq -r '.inputs.windows_node_tag // ""' <<< "$RELEASE_REQUEST")"
           WINDOWS_NODE_INSTALLER_DIGESTS="$(jq -r '.inputs.windows_node_installer_digests // ""' <<< "$RELEASE_REQUEST")"
           RELEASE_NPM_DIST_TAG="$(jq -er '.inputs.npm_dist_tag' <<< "$RELEASE_REQUEST")"
@@ -383,7 +386,7 @@ jobs:
             '{tag: $tag, sourceTag: $source, installerDigests: $digests, state: "dispatch-failed"}' \
             > "$RUNNER_TEMP/windows-dispatch.json"
           verify_release_tag_target
-          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "$GITHUB_REF")"
+          CHILD_WORKFLOW_REF="$(resolve_child_workflow_ref "$PARENT_WORKFLOW_FULL_REF")"
           promote_windows_release_assets
           jq --arg runId "${windows_node_run_id}" '. + {state: "dispatched", childRunId: $runId}' \
             "$RUNNER_TEMP/windows-dispatch.json" > "$RUNNER_TEMP/windows-dispatch.next.json"

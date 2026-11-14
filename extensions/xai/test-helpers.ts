@@ -26,6 +26,7 @@ export function captureXaiRequest(
   {
     extraParams = {},
     headers,
+    onPayload,
     payload = {
       reasoning: { effort: "high" },
       tools: [
@@ -43,22 +44,24 @@ export function captureXaiRequest(
   }: {
     extraParams?: Record<string, unknown>;
     headers?: ModelRequestHeaders;
+    onPayload?: NonNullable<Parameters<StreamFn>[2]>["onPayload"];
     payload?: Record<string, unknown>;
     wrap?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
   } = {},
 ) {
   let modelId: string | undefined;
   let capturedHeaders: ModelRequestHeaders | undefined;
+  let payloadResult: unknown;
   const streamFn: StreamFn = (selected, _context, options) => {
     modelId = selected.id;
     capturedHeaders = options?.headers;
-    options?.onPayload?.(payload, selected);
+    payloadResult = options?.onPayload?.(payload, selected);
     return {} as ReturnType<StreamFn>;
   };
   const wrapped = wrap({ provider: "xai", modelId: model.id, extraParams, streamFn });
   if (!wrapped) {
     throw new Error("expected xAI stream wrapper");
   }
-  void wrapped(model, { messages: [] }, { headers });
-  return { modelId, headers: capturedHeaders, payload };
+  void wrapped(model, { messages: [] }, { headers, onPayload });
+  return { modelId, headers: capturedHeaders, payload, payloadResult };
 }

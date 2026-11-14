@@ -106,9 +106,6 @@ it.each([
         {
           pluginMetadataSnapshot: metadata,
           pluginRegistry: registry,
-          inlineProviderModels: [],
-          remoteCatalog: null,
-          configuredCatalogEntries: [],
         },
         "live",
         { modelsJsonContents: null, pluginCatalogs: [] },

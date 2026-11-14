@@ -118,7 +118,7 @@ describe("ModelProvidersPage usage convergence", () => {
       await page.updateComplete;
       await advanceUsageRetries();
       await page.updateComplete;
-      expectContent(page.renderRoot, ["did not finish loading"]);
+      expectContent(page.renderRoot, ["Couldn’t finish loading provider usage"]);
 
       const usageCallsBeforeRestart = requestCount(harness.request, "usage.status");
       expect(usageCallsBeforeRestart).toBe(4);
@@ -258,9 +258,7 @@ describe("ModelProvidersPage usage convergence", () => {
     expectRetainedControls();
     page.view.props.onRefresh();
     await waitForSolid(() =>
-      expectContent(page.renderRoot, [
-        "Provider usage is unavailable; the last request failed. Refresh to retry.",
-      ]),
+      expectContent(page.renderRoot, ["Couldn’t load provider usage. Refresh to try again."]),
     );
     expectRetainedControls();
     usageFails = false;

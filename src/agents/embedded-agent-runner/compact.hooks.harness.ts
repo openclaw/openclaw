@@ -240,7 +240,7 @@ const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: 
       : ["Main compact command guidance."],
 );
 export const buildConfiguredAgentSystemPromptMock = vi.fn<typeof buildConfiguredAgentSystemPrompt>(
-  () => "",
+  async () => "",
 );
 export const resolveSkillsPromptMock = vi.fn<
   typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt

@@ -5,32 +5,9 @@ import type { StoreEntry } from "./stores-contract.js";
 import type { IconName } from "./ui-icons.js";
 
 export type Snapshot = FeatureOutput<typeof contract, "stores_snapshot">;
-export type ChangeResult = FeatureOutput<typeof contract, "stores_change">;
 /** Display name for an agent ID (host roster first). */
 export type Names = (agentId: string) => string;
 
-/** Element with optional text content and class name. */
-export const el = <K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  text?: string,
-  className?: string,
-) => {
-  const n = document.createElement(tag);
-  if (text !== undefined) {
-    n.textContent = text;
-  }
-  if (className) {
-    n.className = className;
-  }
-  return n;
-};
-/** Plain button running `run` on click. */
-export const button = (text: string, run: () => void, className = "knowledge-button") => {
-  const n = el("button", text, className);
-  n.type = "button";
-  n.addEventListener("click", run);
-  return n;
-};
 /** "A", "A and B", "A, B and C". */
 export const andList = (xs: string[]) =>
   xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;

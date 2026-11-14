@@ -321,6 +321,9 @@ it("admits only the prepared own binding and clears withdrawn private/profile ac
       { number: 7, state: "closed", branch: "original" },
     ]);
     await f.subscriptions.pollNow();
+    // Retire the owned watcher before measuring the denied foreign subscription alone.
+    await f.subscribe([]);
+    await f.subscriptions.pollNow();
     // Own-PR authorization is refreshed by the bounded load, never watcher rechecks.
     const reads = io.command.mock.calls.length;
     expect(remote.fetch).not.toHaveBeenCalled();

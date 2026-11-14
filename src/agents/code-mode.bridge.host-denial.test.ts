@@ -29,7 +29,7 @@ import {
   testing,
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
+import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "./tool-effect-receipt.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import * as gatewayTool from "./tools/gateway.js";
@@ -373,7 +373,10 @@ describe("Code Mode subscribed host denial", () => {
         await mutated.promise;
       }
     });
-    const harness = createHostHarness();
+    const harness = createHostHarness({
+      // The late sibling is released only after this budget forces the cell to park.
+      timeoutMs: order === "late-settlement" ? 1_500 : undefined,
+    });
     const mutation = pluginToolWithExecute("record_mutation", "Append marker", async () => {
       if (order === "late-settlement") {
         await releaseLateMutation.promise;

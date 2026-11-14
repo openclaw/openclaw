@@ -19,6 +19,7 @@ import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { capLiveAssistantText } from "./live-chat-projector.js";
 import type { SerializedGatewayFrame } from "./serialized-json.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { answerCandidate } from "./server-chat.agent-events.test-harness.js";
 import {
   emitAgentEvent,
   registerChatRun,
@@ -84,18 +85,6 @@ function emitLifecycleEnd(
   seq: number,
 ) {
   return emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
-}
-function answerCandidate(itemId: string, progressText: string, status = "candidate") {
-  return {
-    itemId,
-    kind: "answer_candidate",
-    title: "Answer candidate",
-    phase: "update",
-    status,
-    progressText,
-    source: "test",
-    hideFromChannelProgress: true,
-  };
 }
 function connect(
   clients: GatewayClientRegistry,
@@ -616,7 +605,7 @@ it("keeps non-text agent events for chat-only clients", async () => {
   const events: Array<Pick<AgentEventRuntimePayload, "stream" | "data">> = [
     { stream: "assistant", data: { text: "Hello", delta: "Hello" } },
     { stream: "tool", data: { phase: "start", name: "read", toolCallId: "tool-1" } },
-    { stream: "item", data: answerCandidate("candidate", "Progress") },
+    { stream: "item", data: answerCandidate("candidate", "Progress", undefined, "test") },
     { stream: "usage", data: { outputTokens: 1 } },
     { stream: "run_status", data: { phase: "retrying", message: "Retrying" } },
     { stream: "plan", data: { phase: "update", steps: [] } },
@@ -933,7 +922,7 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
     let text = "";
     for (const [index, delta] of chunks.entries()) {
       text += delta;
-      await emit(index * 2 + 1, "item", answerCandidate("answer", text));
+      await emit(index * 2 + 1, "item", answerCandidate("answer", text, undefined, "test"));
       await emit(index * 2 + 2, "assistant", { text, delta });
       vi.advanceTimersByTime(75);
     }
@@ -958,7 +947,11 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
       await emit(51, "assistant", { text: expected, delta: expected });
       await emit(52, "lifecycle", { phase: "end" });
     } else if (terminal === "native") {
-      await emit(chunks.length * 2 + 1, "item", answerCandidate("answer", expected, "selected"));
+      await emit(
+        chunks.length * 2 + 1,
+        "item",
+        answerCandidate("answer", expected, "selected", "test"),
+      );
       await emit(chunks.length * 2 + 2, "lifecycle", { phase: "end" });
     } else if (terminal === "dispatch") {
       broadcastChatFinal({

@@ -121,6 +121,10 @@ const schemaCases: Array<[string, unknown, boolean]> = [
     false,
   ],
   ["cron.webhookSsrfPolicy", { allowEverything: true }, false],
+  ["cron.defaultTools", ["read", "web_fetch"], true],
+  ["cron.defaultTools", [], true],
+  ["cron.defaultTools", [" "], false],
+  ["cron.defaultTools", [42], false],
   ...([0, 120_000] as const).map((value): [string, unknown, boolean] => [
     "models.usage.cacheTtlMs",
     value,

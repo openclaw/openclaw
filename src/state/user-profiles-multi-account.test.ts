@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
-import { withOpenClawStateDatabaseReadSnapshot as withSnapshot } from "./openclaw-state-db-readonly.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync as closeAsync,
   closeOpenClawStateDatabaseForTest as closeDatabase,
@@ -32,9 +32,8 @@ const { options, hydrate, github } = useProfileDatabase("openclaw-multi-account-
 const createAccount = (accountId: number, login: string, email: string, initialName?: string) =>
   github(accountId, login, { email, initialName });
 const accountFixture = (accountId: number, login: string, email: string, name: string) => ({
-  accountId,
+  binding: { accountId, email },
   login,
-  email,
   signIn: () => createAccount(accountId, login, email, name),
 });
 const consent = (id: string, enabled: boolean) =>
@@ -157,7 +156,7 @@ describe("multi-account people", () => {
     consent(person.id, false);
     const version = schemaVersion();
     const beforeMerge = await prepareAttribution([work.id], options);
-    linkEmail(secondary.email, person.id, options);
+    linkEmail(secondary.binding.email, person.id, options);
     expect(beforeMerge.isCurrent()).toBe(false);
     closeDatabase();
     await hydrate();
@@ -167,10 +166,11 @@ describe("multi-account people", () => {
         ...display,
         githubIdentity: { login: "person" },
       });
-      expect(
-        (await resolveIdentity({ accountId: account.accountId, email: account.email }, options))
-          ?.profileId,
-      ).toBe(person.id);
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockClear();
+      expect(await resolveIdentity(account.binding, options)).toMatchObject({
+        profileId: person.id,
+      });
+      expect(reads).not.toHaveBeenCalled();
       expect(getUserProfileDisplay(work.id, options)).toMatchObject(display);
       expect(getProfileAvatar(work.id, options)?.bytes).toEqual(new Uint8Array([1, 2, 3]));
       expect(readConsent(person.id)).toEqual(publicCredit(false));
@@ -187,18 +187,18 @@ describe("multi-account people", () => {
     expect(
       syncGitHubIdentity(
         {
-          identity: { accountId: secondary.accountId, login: secondary.login },
+          identity: { accountId: secondary.binding.accountId, login: secondary.login },
           authenticationAlias: { kind: "github-login", login: secondary.login },
         },
         options,
       ),
     ).toMatchObject({ id: person.id, githubIdentity: { login: primary.login } });
     expect(getUserProfileDisplay(signInAlias.id, options).id).toBe(person.id);
-    expect(await resolveIdentity({ accountId: 73, email: primary.email }, options)).toBeUndefined();
+    expect(await resolveIdentity({ ...primary.binding, accountId: 73 }, options)).toBeUndefined();
     expect((await resolveAttribution([person.id, work.id], options)).get(work.id)).toBeNull();
     consent(person.id, true);
     const unverified = ensureProfileForEmail("unverified@example.test", options);
-    const identity = { accountId: primary.accountId, login: primary.login };
+    const identity = { accountId: primary.binding.accountId, login: primary.login };
     expect(
       await resolveAttribution([person.id, work.id, work.id, unverified.id, "missing"], options),
     ).toEqual(
@@ -208,14 +208,14 @@ describe("multi-account people", () => {
         [unverified.id, null],
       ]),
     );
-    await withSnapshot(async () => {
+    await stateReads.withOpenClawStateDatabaseReadSnapshot(async () => {
       consent(person.id, false);
       expect(await attribution(work.id)).toBeNull();
     }, options);
     consent(person.id, true);
     const preparedCredit = await prepareAttribution([work.id], options);
     const credit = await attribution(work.id);
-    expect(credit?.accountId).toBe(primary.accountId);
+    expect(credit?.accountId).toBe(primary.binding.accountId);
     if (credit) {
       credit.login = "caller-edit";
     }

@@ -103,11 +103,12 @@ export async function handleMcpOAuthCallback(
     return true;
   }
   const code = url.searchParams.get("code")?.trim();
-  if (!code) {
+  if (!code || url.searchParams.getAll("iss").length > 1) {
     respondHtml(res, 400, RETRY_HTML);
     return true;
   }
 
+  const iss = url.searchParams.get("iss");
   try {
     const result = await completeOAuthCallback(
       {
@@ -117,7 +118,7 @@ export async function handleMcpOAuthCallback(
         serverUrl: configuredServer.resolved.url,
       },
       configuredServer.resolved,
-      { code, state },
+      { code, state, ...(iss === null ? {} : { iss }) },
       undefined,
       context,
     );

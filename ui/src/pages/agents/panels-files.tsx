@@ -17,6 +17,7 @@ import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -68,16 +69,6 @@ function AgentFileCompletion(props: { request: Promise<AgentFileOutcome>; childr
   );
 }
 
-function getExtensionLabel(fileName: string) {
-  const ext = fileName.split(".").pop()?.trim().toLowerCase();
-  if (ext === "md" || ext === "markdown") {
-    return t("agents.files.markdownPreview");
-  }
-  return ext
-    ? t("agents.files.extensionPreview", { ext: ext.toUpperCase() })
-    : t("agents.files.preview");
-}
-
 function formatWorkspaceRelativePath(filePath: string, workspace: string | null | undefined) {
   const normalizedPath = filePath.trim();
   const normalizedWorkspace = workspace?.trim();
@@ -98,12 +89,11 @@ function toDomId(value: string) {
   return normalized.replace(/^-+|-+$/g, "") || "preview";
 }
 
-function renderPreviewFact(value: string | number, label: string, secondary = false) {
+function renderPreviewFact(text: string, secondary = false) {
   return (
-    <div class="md-preview-dialog__chip" data-priority={secondary ? "secondary" : "essential"}>
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
+    <span class="md-preview-dialog__chip" data-priority={secondary ? "secondary" : "essential"}>
+      {text}
+    </span>
   );
 }
 
@@ -238,9 +228,9 @@ export function AgentFiles(
           )
         }
         actions={
-          <AgentPanelAction
-            label={loading() ? t("common.loading") : t("common.refresh")}
-            disabled={loading()}
+          <RefreshButton
+            label={t("common.refresh")}
+            busy={loading()}
             onClick={() => params.onLoadFiles(params.agentId)}
           />
         }
@@ -304,7 +294,7 @@ export function AgentFiles(
             >
               <Show
                 when={activeEntry()}
-                fallback={<div class="muted">{t("agents.files.selectFile")}</div>}
+                fallback={<SettingsEmpty message={t("agents.files.selectFile")} />}
               >
                 {(entry) => {
                   let previewModal: OpenClawModalDialog | undefined;
@@ -406,11 +396,11 @@ export function AgentFiles(
                               list()?.workspace,
                             );
                             const previewTitleId = `agent-file-preview-title-${toDomId(entry().name)}`;
-                            const [previewStatusLabel, previewStatusClass] = showMissing()
-                              ? [t("agents.files.willCreateOnSave"), "is-missing"]
+                            const previewStatusLabel = showMissing()
+                              ? t("agents.files.willCreateOnSave")
                               : isDirty() || conflictName()
-                                ? [t("agents.files.liveDraftPreview"), "is-dirty"]
-                                : [t("agents.files.savedPreview"), "is-synced"];
+                                ? t("agents.files.liveDraftPreview")
+                                : t("agents.files.savedPreview");
                             const previewUpdatedLabel = entry()?.updatedAtMs
                               ? t("agents.files.updated", {
                                   time: formatRelativeTimestamp(entry().updatedAtMs),
@@ -427,39 +417,32 @@ export function AgentFiles(
                               activePathLabel,
                               previewTitleId,
                               previewStatusLabel,
-                              previewStatusClass,
                               previewUpdatedLabel,
                               activeName: entry().name,
                             };
                           }}
                         >
                           {(preview) => (
-                            <div class={["md-preview-dialog__panel", { fullscreen: fullscreen() }]}>
-                              <div class="md-preview-dialog__header">
-                                <div class="md-preview-dialog__header-main">
-                                  <div class="md-preview-dialog__eyebrow">
-                                    <Icon name="scrollText" />
-                                    <span>{getExtensionLabel(preview().activeName)}</span>
-                                  </div>
-                                  <div class="md-preview-dialog__title-wrap">
-                                    <div
-                                      id={preview().previewTitleId}
-                                      class="md-preview-dialog__title"
-                                      translate="no"
-                                    >
-                                      {preview().activeName}
-                                    </div>
-                                    <div class="md-preview-dialog__path mono" translate="no">
-                                      {preview().activePathLabel}
-                                    </div>
-                                  </div>
-                                </div>
+                            <div
+                              class={[
+                                "oc-dialog md-preview-dialog__panel",
+                                { fullscreen: fullscreen() },
+                              ]}
+                            >
+                              <div class="oc-dialog__header md-preview-dialog__header">
+                                <h2
+                                  id={preview().previewTitleId}
+                                  class="oc-dialog__title md-preview-dialog__title"
+                                  translate="no"
+                                >
+                                  {preview().activeName}
+                                </h2>
                                 <div class="md-preview-dialog__actions">
                                   <openclaw-tooltip prop:content={fullscreenLabel()}>
                                     <button
                                       type="button"
                                       class={[
-                                        "btn btn--sm md-preview-icon-btn md-preview-expand-btn",
+                                        "oc-dialog__close md-preview-expand-btn",
                                         { "is-fullscreen": fullscreen() },
                                       ]}
                                       aria-label={fullscreenLabel()}
@@ -477,7 +460,7 @@ export function AgentFiles(
                                   <openclaw-tooltip prop:content={t("agents.files.closePreview")}>
                                     <button
                                       type="button"
-                                      class="btn btn--sm md-preview-icon-btn"
+                                      class="oc-dialog__close"
                                       aria-label={t("agents.files.closePreview")}
                                       onClick={() => closePreview()}
                                     >
@@ -487,29 +470,30 @@ export function AgentFiles(
                                     </button>
                                   </openclaw-tooltip>
                                 </div>
-                              </div>
-                              <div class="md-preview-dialog__meta">
-                                <div
-                                  class={["md-preview-dialog__chip", preview().previewStatusClass]}
-                                  data-priority="essential"
-                                >
-                                  <strong>{preview().previewStatusLabel}</strong>
+                                {preview().activePathLabel !== preview().activeName ? (
+                                  <div
+                                    class="oc-dialog__description md-preview-dialog__path mono"
+                                    translate="no"
+                                  >
+                                    {preview().activePathLabel}
+                                  </div>
+                                ) : null}
+                                <div class="md-preview-dialog__meta">
+                                  {renderPreviewFact(preview().previewStatusLabel)}
+                                  {renderPreviewFact(preview().readingTimeLabel)}
+                                  {renderPreviewFact(
+                                    t("agents.files.words", {
+                                      count: String(preview().draftWordCount),
+                                    }),
+                                    true,
+                                  )}
+                                  {renderPreviewFact(
+                                    `${preview().draftLineCount} ${t("agents.files.lines")}`,
+                                    true,
+                                  )}
+                                  {renderPreviewFact(preview().draftByteSize)}
+                                  {renderPreviewFact(preview().previewUpdatedLabel, true)}
                                 </div>
-                                {renderPreviewFact(
-                                  preview().readingTimeLabel,
-                                  t("agents.files.words", {
-                                    count: String(preview().draftWordCount),
-                                  }),
-                                )}
-                                {renderPreviewFact(
-                                  preview().draftLineCount,
-                                  t("agents.files.lines"),
-                                  true,
-                                )}
-                                {renderPreviewFact(
-                                  preview().draftByteSize,
-                                  preview().previewUpdatedLabel,
-                                )}
                               </div>
                               <div class="md-preview-dialog__body">
                                 <MarkdownHtml
@@ -519,7 +503,7 @@ export function AgentFiles(
                                   options={{ codeBlockChrome: "none", mode: "document" }}
                                 />
                               </div>
-                              <openclaw-modal-actions class="md-preview-dialog__footer">
+                              <openclaw-modal-actions class="oc-dialog__footer md-preview-dialog__footer">
                                 <button
                                   type="button"
                                   class="btn btn--sm"

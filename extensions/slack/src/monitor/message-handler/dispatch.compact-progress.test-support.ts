@@ -1,3 +1,4 @@
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { expect, vi } from "vitest";
 import { requireRecord } from "./dispatch.preview.test-support.js";
@@ -74,6 +75,37 @@ export type SlackReplyOptionEvent =
   | { kind: "visible_work"; sessions: EventPayload<"onVisibleWorkSessions"> }
   | Checkpoint
   | ({ kind: "approval" } & Parameters<NonNullable<GetReplyOptions["onApprovalEvent"]>>[0]);
+
+export async function emitSlackToolProgressTestEvent(
+  reply: GetReplyOptions | undefined,
+  entry: Extract<SlackReplyOptionEvent, { kind: "command_output" | "tool_start" }>,
+  index: number,
+) {
+  if (entry.kind === "command_output") {
+    const { kind: _kind, explanation: _explanation, ...payload } = entry;
+    await reply?.onCommandOutput?.(payload);
+    if (entry.phase === "end") {
+      const item = projectAgentToolActivity({
+        toolCallId: entry.toolCallId ?? entry.itemId ?? `tool-${index}`,
+        name: entry.name ?? "exec",
+        phase: "result",
+        isError: entry.exitCode == null ? undefined : entry.exitCode !== 0,
+        meta: entry.title,
+      });
+      await reply?.onItemEvent?.({ ...item, itemId: entry.itemId ?? item.itemId });
+    }
+    return;
+  }
+  const { kind: _kind, ...payload } = entry;
+  await reply?.onToolStart?.(payload);
+  const item = projectAgentToolActivity({
+    toolCallId: entry.toolCallId ?? entry.itemId ?? `tool-${index}`,
+    name: entry.name,
+    phase: entry.phase === "update" ? "update" : "start",
+    args: entry.args,
+  });
+  await reply?.onItemEvent?.({ ...item, itemId: entry.itemId ?? item.itemId });
+}
 
 /** A model preamble stays visible while successful and failed work continues. */
 export async function emitCompactProgressScenario(reply: GetReplyOptions) {

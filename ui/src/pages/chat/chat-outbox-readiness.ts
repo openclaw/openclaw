@@ -2,7 +2,7 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
@@ -10,7 +10,7 @@ import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentListParamsForRefreshTarget,
   visibleSessionMatches,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -25,7 +25,7 @@ import {
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   chatSendHoldReason,
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -137,7 +137,7 @@ export async function reconcileStoredChatOutboxHead(
         host,
         outbox.sessionKey,
         outbox.agentId,
-        OFFLINE_QUEUE_STORAGE_ERROR,
+        chatOfflineQueueStorageError(),
       );
       return "blocked";
     }
@@ -203,7 +203,7 @@ export async function reconcileStoredChatOutboxHead(
         host,
         outbox.sessionKey,
         outbox.agentId,
-        retained ? message : OFFLINE_QUEUE_STORAGE_ERROR,
+        retained ? message : chatOfflineQueueStorageError(),
       );
       return retained ? "continue" : "blocked";
     }

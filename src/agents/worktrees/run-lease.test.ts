@@ -7,6 +7,7 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import * as pidAlive from "../../shared/pid-alive.js";
@@ -17,7 +18,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql as withoutHostSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { git } from "./git-fixture.test-support.js";
 import * as gitLock from "./git-lock.js";
 import { lockState } from "./git-lock.js";
@@ -92,16 +93,7 @@ describe("worktree run lease", () => {
       await unlock(record);
     });
   }
-  async function withoutHostSql<T>(run: () => Promise<T>): Promise<T> {
-    const sql = observeMainThreadSql();
-    try {
-      const result = await run();
-      sql.expectIdle();
-      return result;
-    } finally {
-      sql.restore();
-    }
-  }
+
   function seedRunLease(token: string, pid: number, startTime: number) {
     runOpenClawStateWriteTransaction(
       ({ db }) =>
@@ -117,18 +109,28 @@ describe("worktree run lease", () => {
   }
 
   it("shares concurrent runs with SQL-free admission and refcounted Git custody", async () => {
+    // A running Gateway already has an ordered cleanup group before its first worktree turn.
+    const unregister = registerProcessExitCleanup(() => {});
+    const exitListeners = process.listenerCount("exit");
     let parent: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
     let child: typeof parent;
     try {
       [parent, child] = await withoutHostSql(() => Promise.all([acquire(), acquire()]));
+      expect(process.listenerCount("exit")).toBe(exitListeners);
       await expectCustody(true);
       await withoutHostSql(() => parent!.release());
       await expectCustody(true);
 
       await child.release();
       await expectCustody(false);
+      for (let turn = 0; turn < 8; turn++) {
+        const lease = await acquire();
+        await lease.release();
+        expect(process.listenerCount("exit")).toBe(exitListeners);
+      }
     } finally {
       await Promise.all([parent?.release(), child?.release()]);
+      unregister();
     }
   });
 

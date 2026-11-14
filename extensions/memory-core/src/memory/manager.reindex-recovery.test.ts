@@ -233,7 +233,9 @@ describe("memory manager reindex recovery", () => {
       { source: "sessions", text: "User: published session" },
     ]);
 
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
+    const advanced = Date.now() + 30_000;
+    vi.spyOn(Date, "now").mockReturnValue(advanced);
+    vi.spyOn(performance, "now").mockReturnValue(advanced);
     await memoryManager.sync();
     expect(rows.all()).toEqual([
       { source: "memory", text: "replacement memory" },
@@ -998,6 +1000,7 @@ describe("memory manager reindex recovery", () => {
     // The rebuild start and the sibling's write share one controlled clock.
     const now = 2_000_000_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     // A sibling caches a vector for a chunk it has not published yet, after this
     // rebuild started and before it publishes. No published chunk carries its hash.
     const metadata = vi.spyOn(MemoryIndexDatabase.prototype, "writeMetadata");

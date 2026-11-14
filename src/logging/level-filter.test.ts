@@ -40,21 +40,21 @@ afterEach(() => {
 });
 
 describe("resolved logging settings cache", () => {
-  it("loads file settings once per logger generation", () => {
-    process.env.OPENCLAW_TEST_FILE_LOG = "1";
-    readLoggingConfigMock.mockReturnValue({ level: "silent" });
-
-    logging.getLogger();
-    logging.getLogger();
+  it.each(["file", "console"] as const)("loads %s settings once per logger generation", (kind) => {
+    const file = kind === "file";
+    vi.stubEnv(file ? "OPENCLAW_TEST_FILE_LOG" : "OPENCLAW_TEST_CONSOLE", "1");
+    const config = file ? { level: "silent" as const } : { consoleLevel: "silent" as const };
+    const settings = file ? logging.getLogger : consoleLogging.getConsoleSettings;
+    readLoggingConfigMock.mockReturnValue(config);
+    settings();
+    settings();
     expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
-
-    logging.setLoggerOverride({ level: "silent" });
-    logging.getLogger();
+    logging.setLoggerOverride(config);
+    settings();
     expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
-
     logging.setLoggerOverride(null);
-    logging.getLogger();
-    logging.getLogger();
+    settings();
+    settings();
     expect(readLoggingConfigMock).toHaveBeenCalledTimes(2);
   });
 
@@ -67,56 +67,18 @@ describe("resolved logging settings cache", () => {
 
     expect(readLoggingConfigMock).toHaveBeenCalledOnce();
   });
-
-  it("loads console settings once per logger generation", () => {
-    process.env.OPENCLAW_TEST_CONSOLE = "1";
-    readLoggingConfigMock.mockReturnValue({ consoleLevel: "silent" });
-    logging.setLoggerOverride(null);
-    readLoggingConfigMock.mockClear();
-
-    consoleLogging.getConsoleSettings();
-    consoleLogging.getConsoleSettings();
-    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
-
-    logging.setLoggerOverride({ consoleLevel: "silent" });
-    consoleLogging.getConsoleSettings();
-    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
-
-    logging.setLoggerOverride(null);
-    consoleLogging.getConsoleSettings();
-    consoleLogging.getConsoleSettings();
-    expect(readLoggingConfigMock).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe("isFileLogLevelEnabled", () => {
-  for (const { name, level, expected } of [
-    {
-      name: "returns false for all levels when configured as silent",
-      level: "silent",
-      expected: [false, false, false, false, false, false],
-    },
-    {
-      name: "passes fatal, error, warn, info when configured as info",
-      level: "info",
-      expected: [true, true, true, true, false, false],
-    },
-    {
-      name: "passes all levels when configured as trace",
-      level: "trace",
-      expected: [true, true, true, true, true, true],
-    },
-  ] as const) {
-    it(name, () => {
-      logging.setLoggerOverride({ level });
-      expect(logging.isFileLogLevelEnabled("fatal")).toBe(expected[0]);
-      expect(logging.isFileLogLevelEnabled("error")).toBe(expected[1]);
-      expect(logging.isFileLogLevelEnabled("warn")).toBe(expected[2]);
-      expect(logging.isFileLogLevelEnabled("info")).toBe(expected[3]);
-      expect(logging.isFileLogLevelEnabled("debug")).toBe(expected[4]);
-      expect(logging.isFileLogLevelEnabled("trace")).toBe(expected[5]);
-    });
-  }
+  it.each([
+    ["silent", [false, false, false, false, false, false]],
+    ["info", [true, true, true, true, false, false]],
+    ["trace", [true, true, true, true, true, true]],
+  ] as const)("filters every file level with minimum %s", (level, expected) => {
+    logging.setLoggerOverride({ level });
+    const levels = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
+    expect(levels.map((value) => logging.isFileLogLevelEnabled(value))).toEqual(expected);
+  });
 
   it("never treats silent as an emittable file level", () => {
     logging.setLoggerOverride({ level: "info" });

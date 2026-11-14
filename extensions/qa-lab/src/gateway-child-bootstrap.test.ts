@@ -689,3 +689,97 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     expect(existsSync(ready!.tempRoot!)).toBe(false);
   });
 });
+
+it.each([
+  {
+    file: "hook-agent-account-routing",
+    shared: true,
+    load: () => import("./hook-agent-account-routing.e2e.test.js"),
+  },
+  {
+    file: "managed-gateway-service-lifecycle",
+    shared: false,
+    load: () => import("./managed-gateway-service-lifecycle.e2e.test.js"),
+  },
+])("registers cleanup before $file startup settles", async ({ shared, load }) => {
+  const starts: Array<() => Promise<void>> = [];
+  const teardownHooks: Array<() => Promise<void>> = [];
+  const cleaned: string[] = [];
+  const entered = createDeferred<void>();
+  const startup = createDeferred<never>();
+  let pending: Promise<void> | undefined;
+  try {
+    // mock-isolation: Hold startup without launching another Gateway or touching real state.
+    vi.doMock("./gateway-child.js", () => ({
+      createQaGatewayChild: () => ({
+        start: () => {
+          entered.resolve();
+          return startup.promise;
+        },
+        stop: async () => {
+          cleaned.push("gateway");
+          return { errors: [] };
+        },
+      }),
+    }));
+    // mock-isolation: Track provider disposal without opening a network listener.
+    vi.doMock("./providers/server-runtime.js", () => ({
+      startQaProviderServer: async () => ({
+        baseUrl: "http://127.0.0.1:1",
+        stop: async () => {
+          cleaned.push("provider");
+        },
+      }),
+    }));
+    // mock-isolation: Track lab disposal without creating a workspace or server.
+    vi.doMock("./lab-server.js", () => ({
+      startQaLabServer: async () => ({
+        state: {},
+        listenUrl: "http://127.0.0.1:1",
+        stop: async () => {
+          cleaned.push("lab");
+        },
+      }),
+    }));
+    // mock-isolation: The pending-start proof never delivers a channel message.
+    vi.doMock("./qa-channel-transport.js", () => ({ createQaChannelTransport: () => ({}) }));
+    vi.doMock("vitest", () => ({
+      describe: (_name: string, body: () => void) => body(),
+      beforeAll: (body: () => Promise<void>) => starts.push(body),
+      afterAll: (body: () => Promise<void>) => teardownHooks.push(body),
+      afterEach: (body: () => Promise<void>) => teardownHooks.push(body),
+      it: (_name: string, _options: unknown, body: () => Promise<void>) => {
+        if (!shared) {
+          starts.push(body);
+        }
+      },
+      expect,
+      vi,
+    }));
+    await load();
+    pending = starts[0]!();
+    await bounded(
+      Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("fixture completed before Gateway startup");
+        }),
+      ]),
+    );
+    expect(cleaned).toEqual([]);
+    for (const cleanup of teardownHooks) {
+      await cleanup();
+    }
+    expect(cleaned).toEqual(shared ? ["gateway", "provider", "lab"] : ["gateway", "provider"]);
+  } finally {
+    // Release the synthetic hold and join the fixture before retiring its mocks.
+    startup.reject(new Error("synthetic pending-start release"));
+    await Promise.allSettled([startup.promise, pending]);
+    vi.doUnmock("vitest");
+    vi.doUnmock("./gateway-child.js");
+    vi.doUnmock("./providers/server-runtime.js");
+    vi.doUnmock("./lab-server.js");
+    vi.doUnmock("./qa-channel-transport.js");
+    vi.resetModules();
+  }
+});

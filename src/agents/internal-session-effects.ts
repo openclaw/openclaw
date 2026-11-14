@@ -6,10 +6,10 @@ import {
   deleteSessionEntryLifecycle,
   forkSessionFromParentTranscript,
 } from "../config/sessions/session-accessor.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
-  withSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { captureSessionEntryReadScope } from "../config/sessions/session-entry-read-request.js";

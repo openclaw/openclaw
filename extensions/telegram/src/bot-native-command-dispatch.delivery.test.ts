@@ -604,6 +604,29 @@ describe("Telegram registered plugin delivery", () => {
     },
   );
 
+  it.each([
+    { label: "true", continueAgent: true as const },
+    { label: "a replacement prompt", continueAgent: { prompt: "Recall request: now" } },
+  ])("continues a plugin command with $label as an agent turn", async ({ continueAgent }) => {
+    const handler = vi.fn(async () => ({ continueAgent }));
+    registerCommand(handler, { progress: false });
+
+    await dispatchCommand(pluginConfig(), "/plug now", 3206);
+    await harness.settleUpdates();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    const [ctx, opts] = harness.replySpy.mock.calls[0]!;
+    // The reply pipeline gets the dispatch that already ran and applies its result there.
+    expect(ctx).toMatchObject({ CommandSource: "native", BodyForAgent: "/plug now" });
+    expect((opts as Record<PropertyKey, unknown>)[PLUGIN_COMMAND_DISPATCH]).toMatchObject({
+      kind: "plugin",
+    });
+    expect(effects().filter(({ method }) => method === "sendMessage")).toEqual([
+      { method: "sendMessage", payload: expect.objectContaining({ text: "Test response" }) },
+    ]);
+  });
+
   it("rejects unmatched arguments outside a forum topic", async () => {
     registerCommand(
       async () => {

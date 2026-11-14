@@ -3,7 +3,11 @@
 import { flush, createSignal, onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginDiscoveryCategory, PluginDiscoveryResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginDiscoveryCategory,
+  PluginDiscoveryResult,
+} from "../../lib/plugins/index.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -54,6 +58,48 @@ describe("renderPluginCatalogResults", () => {
     cleanupSolid();
     document.body.replaceChildren();
     vi.restoreAllMocks();
+  });
+
+  it("keeps first installed catalog matches current without replacing their cards", async () => {
+    const installed: PluginCatalogItem = {
+      id: "installed",
+      name: "Installed plugin",
+      catalogId: "catalog",
+      kind: ["tool"],
+      origin: "global",
+      installed: true,
+      enabled: false,
+      state: "disabled",
+    };
+    const props = baseProps({
+      intent: "featured",
+      result: { items: [plugin("catalog")] },
+      inventory: [
+        { ...installed, installed: false, state: "not-installed" },
+        installed,
+        { ...installed, id: "second", enabled: true, state: "enabled" },
+      ],
+    });
+    const { container } = await mount(props);
+    const card = container.querySelector('[data-plugin-id="catalog"]');
+    expect(card?.querySelector("[data-plugin-state]")?.getAttribute("data-plugin-state")).toBe(
+      "disabled",
+    );
+
+    update(container, { ...props, inventory: [{ ...installed, enabled: true, state: "enabled" }] });
+    await waitForSolid(() =>
+      expect(card?.querySelector("[data-plugin-state]")?.getAttribute("data-plugin-state")).toBe(
+        "enabled",
+      ),
+    );
+    expect(container.querySelector('[data-plugin-id="catalog"]')).toBe(card);
+
+    update(container, { ...props, inventory: [] });
+    await waitForSolid(() =>
+      expect(card?.querySelector(".plugin-catalog-card__install")).not.toBeNull(),
+    );
+    expect(card?.querySelector("[data-plugin-state]")).toBeNull();
+    expect(container.querySelector('[data-plugin-id="catalog"]')).toBe(card);
   });
 
   it("shows placeholders when the first browse starts after the initial render", async () => {
@@ -146,7 +192,10 @@ describe("renderPluginCatalogResults", () => {
       container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
     const more = () =>
       container.querySelector<HTMLButtonElement>(".plugin-catalog-load-more button")!;
-    await waitForSolid(() => ui.node(".plugin-catalog-grid--skeleton").not.toBeNull());
+    await waitForSolid(() => {
+      ui.node(".plugin-catalog-chip--skeleton").not.toBeNull();
+      ui.node(".plugin-catalog-results__body").toBeNull();
+    });
     const search = container.querySelector("input")!;
     ui.all(".plugin-catalog-chip").toHaveLength(3);
     categories[0]!.reject(new Error("Categories unavailable"));
@@ -195,6 +244,25 @@ describe("renderPluginCatalogResults", () => {
     await waitForSolid(() => ui.node('[data-plugin-id="second"]').not.toBeNull());
     ui.node('[data-plugin-id="tool"]').toBe(card);
     ui.node("input").toBe(search);
+  });
+
+  it.each([
+    { phone: false, focused: true },
+    { phone: true, focused: false },
+  ])("focuses the search on arrival unless at phone width: %o", async ({ phone, focused }) => {
+    vi.stubGlobal("matchMedia", () => ({
+      matches: phone,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    try {
+      const { container } = await mount(baseProps());
+      const search = container.querySelector<HTMLInputElement>("input")!;
+      expect(search.hasAttribute("autofocus")).toBe(focused);
+      expect(document.activeElement === search).toBe(focused);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not rescan the large catalog for unrelated feedback updates", async () => {
@@ -253,6 +321,10 @@ describe("renderPluginCatalogResults", () => {
       });
       const { container, ui } = await mount(props);
       if (timing === "delayed") {
+        await waitForSolid(() => ui.node('[data-plugin-id="featured"]').not.toBeNull());
+      }
+      const card = container.querySelector('[data-plugin-id="featured"]');
+      if (timing === "delayed") {
         update(container, { ...props, reads: { ...props.reads, categories: pending.promise } });
       }
       await waitForSolid(() => {
@@ -260,10 +332,21 @@ describe("renderPluginCatalogResults", () => {
         expect(chips.querySelectorAll("button")).toHaveLength(3);
         expect(chips.querySelectorAll(".plugin-catalog-chip--skeleton").length).toBeGreaterThan(0);
         expect(chips.querySelector('[role="status"]')).not.toBeNull();
+        if (timing === "initial") {
+          ui.node(".plugin-catalog-results__body").toBeNull();
+        } else {
+          ui.node('[data-plugin-id="featured"]').toBe(card);
+        }
       });
       pending.resolve(null);
-      await waitForSolid(() => ui.node(".plugin-catalog-chip--skeleton").toBeNull());
+      await waitForSolid(() => {
+        ui.node(".plugin-catalog-chip--skeleton").toBeNull();
+        ui.node('[data-plugin-id="featured"]').not.toBeNull();
+      });
       ui.all(".plugin-catalog-chips button").toHaveLength(3);
+      if (timing === "delayed") {
+        ui.node('[data-plugin-id="featured"]').toBe(card);
+      }
     },
   );
 

@@ -5,6 +5,8 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/s
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -189,8 +191,9 @@ function observePayloadAcquisition(
     return statement;
   });
   const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-    if (pending.delete(text)) {
+    if (typeof text === "string" && text.includes(marker)) {
       decodedRows++;
+      pending.delete(text);
     }
     return parse(text, reviver);
   });
@@ -211,6 +214,84 @@ function observePayloadAcquisition(
     pendingRows: pending.size,
   };
 }
+
+it("does not acquire unrelated excluded history while selecting background dependencies", async ({
+  scope,
+}) => {
+  const marker = "unrelated-excluded-history";
+  const excluded = Array.from({ length: 16 }, (_, index) =>
+    transcriptMessage(`${marker}-${index}`, index === 0 ? null : `${marker}-${index - 1}`, {
+      ...makeAgentAssistantMessage({ content: [] }),
+      excludeFromContext: true,
+    }),
+  );
+  await persist(scope, [...excluded, user("anchor", `${marker}-15`), user("tail", "anchor")]);
+  await waitProjection(scope);
+  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  const acquisition = observePayloadAcquisition(db, marker, () => {
+    expect(eventIds(readContext(scope, 16384, 1).events)).toEqual([scope.sessionId, "tail"]);
+  });
+  expect(acquisition.acquiredBytes).toBe(0);
+});
+
+it.for([false, true])(
+  "bounds legacy payload reads with an unindexed header: %s",
+  async (unindexedHeader, { scope }) => {
+    const marker = "unselected-legacy-payload";
+    await persist(scope, [
+      ...Array.from({ length: 16 }, (_, index) =>
+        user(`old-${index}`, index === 0 ? null : `old-${index - 1}`, marker),
+      ),
+      user("tail", "old-15"),
+    ]);
+    await waitProjection(scope);
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        database.db
+          .prepare(`UPDATE transcript_events
+          SET navigation_type = NULL, navigation_custom_type = NULL,
+              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+              navigation_last_custom_type = NULL, navigation_valid = 1
+          WHERE session_id = ?`)
+          .run(scope.sessionId);
+        if (unindexedHeader) {
+          // Imported headers can lack identity ownership while later messages are indexed.
+          database.db
+            .prepare(
+              "DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
+            )
+            .run(scope.sessionId, scope.sessionId);
+        }
+      },
+      { agentId: scope.agentId },
+    );
+    const database = openOpenClawAgentDatabaseReadOnly({ agentId: scope.agentId });
+    assert(database.found);
+    const nativeJson = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    const validJson = nativeJson.prepare("SELECT json_valid(?) AS valid");
+    let unrelatedParses = 0;
+    try {
+      requireNativeSqliteDatabase(database.database.db).function(
+        "json_valid",
+        { deterministic: true },
+        (value) => {
+          unrelatedParses += Number(typeof value === "string" && value.includes(marker));
+          return validJson.get(value)?.valid ?? 0;
+        },
+      );
+      const context = runSqliteReadSnapshotSync(database.database.db, () =>
+        boundedContext(scope, { maxBytes: 4096, maxEvents: 1, transaction: database.database }),
+      );
+      expect(eventIds(context.events)).toEqual([scope.sessionId, "tail"]);
+      expect(context).toMatchObject({ totalEvents: 17, truncated: true });
+      // The imported-prefix path needs the immediate predecessor's logical parent ID.
+      expect(unrelatedParses).toBeLessThanOrEqual(unindexedHeader ? 1 : 0);
+    } finally {
+      database.database.close();
+      nativeJson.close();
+    }
+  },
+);
 
 it("enforces context count and byte budgets and releases rejected reads for later appends", async ({
   scope,
@@ -245,24 +326,36 @@ it("enforces context count and byte budgets and releases rejected reads for late
   expect(ids(bounded(1024))).toEqual([scope.sessionId, "next"]);
 });
 
-it("decodes context payloads without buffering the whole encoded window", async ({ scope }) => {
-  const marker = "synthetic-context-payload:";
-  const content = marker + "🦞".repeat(256);
-  await persist(scope, [
-    user("a", null, content),
-    assistant("b", "a", content),
-    user("c", "b", content),
-  ]);
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-  const acquisition = observePayloadAcquisition(db, marker, () => {
-    const context = readContext(scope, 16_384);
-    expect(eventIds(context.events)).toEqual([scope.sessionId, "a", "b", "c"]);
-    expect(context.serializedBytes).toBe(serializedBytes(context.events));
-  });
-  expect(acquisition.decodedRows).toBe(3);
-  expect(acquisition.pendingRows).toBe(0);
-  expect(acquisition.peakPendingBytes).toBeLessThanOrEqual(acquisition.largestRowBytes);
-});
+it.for(["identity", "compressed"] as const)(
+  "decodes %s context payloads without expanded SQL copies",
+  async (storage, { scope }) => {
+    const marker = "synthetic-context-payload:";
+    const content = marker + "🦞".repeat(storage === "compressed" ? 256 : 16);
+    await persist(scope, [
+      user("a", null, content),
+      assistant("b", "a", content),
+      user("c", "b", content),
+    ]);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    expect(
+      db
+        .prepare("SELECT count(*) AS count FROM transcript_events WHERE event_zstd IS NOT NULL")
+        .get()?.count,
+    ).toBe(storage === "compressed" ? 3 : 0);
+    const acquisition = observePayloadAcquisition(db, marker, () => {
+      const context = readContext(scope, 16_384);
+      expect(eventIds(context.events)).toEqual([scope.sessionId, "a", "b", "c"]);
+      expect(context.serializedBytes).toBe(serializedBytes(context.events));
+      expect(recentEvents(scope, 3)).toEqual(context.events.slice(1));
+    });
+    expect(acquisition.decodedRows).toBe(6);
+    expect(acquisition.pendingRows).toBe(0);
+    expect(acquisition.peakPendingBytes).toBeLessThanOrEqual(acquisition.largestRowBytes);
+    if (storage === "compressed") {
+      expect(acquisition.acquiredBytes).toBe(0);
+    }
+  },
+);
 
 it.for(["header", "compaction"] as const)(
   "bounds oversized %s before acquiring its payload",
@@ -557,7 +650,7 @@ it("keeps repeated visits on one snapshot and expires their reader on return", a
   expect(() => savedVisit?.(() => {})).toThrow("outside its read snapshot");
 });
 
-it.for(["json", "sql", "consumer"] as const)(
+it.for(["json", "sql", "compressed", "consumer"] as const)(
   "preserves %s failure precedence and releases the read cursor",
   async (failureKind, { scope }) => {
     await persist(scope, [
@@ -581,10 +674,14 @@ it.for(["json", "sql", "consumer"] as const)(
       // The connection-local view corrupts reads without changing canonical rows or projections.
       database.db.exec(`CREATE TEMP VIEW transcript_events AS
         SELECT event.session_id, event.seq, event.created_at,
-          event.event_zstd, event.event_utf8_bytes, event.navigation_json,
+          CASE WHEN identity.event_id = 'middle' AND ${failureKind === "compressed" ? 1 : 0}
+            THEN x'01' ELSE event.event_zstd END AS event_zstd,
+          CASE WHEN identity.event_id = 'middle' AND ${failureKind === "compressed" ? 1 : 0}
+            THEN 0 ELSE event.event_utf8_bytes END AS event_utf8_bytes,
+          event.navigation_json,
           CASE identity.event_id
             WHEN 'oldest' THEN ${failureKind === "sql" ? "json_extract('{broken', '$')" : "'{\"old\":}'"}
-            WHEN 'middle' THEN '{"newer":}'
+            WHEN 'middle' THEN ${failureKind === "compressed" ? "NULL" : "'{\"newer\":}'"}
             ELSE event.event_json
           END AS event_json
         FROM main.transcript_events AS event
@@ -602,7 +699,11 @@ it.for(["json", "sql", "consumer"] as const)(
         ).toThrow(failure);
       } else {
         expect(() => recentEvents(scope, 3)).toThrow(
-          failureKind === "sql" ? "malformed JSON" : parseFailure,
+          failureKind === "sql"
+            ? "malformed JSON"
+            : failureKind === "compressed"
+              ? "Invalid compressed transcript payload bounds"
+              : parseFailure,
         );
       }
     } finally {

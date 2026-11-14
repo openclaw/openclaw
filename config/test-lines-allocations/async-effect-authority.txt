@@ -1,0 +1,3 @@
+# PR #188552: integrated zero-probe file-write proof and fail-closed generation,
+# receipt, and prepared-source regressions. Exact net growth; lead-approved.
+307

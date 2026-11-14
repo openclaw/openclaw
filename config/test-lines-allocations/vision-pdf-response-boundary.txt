@@ -1,0 +1,2 @@
+# Cover malformed native PDF response content at the existing HTTP boundary.
+48

@@ -53,6 +53,7 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  mockToolTurn,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
@@ -99,16 +100,6 @@ afterEach(() => {
   resetDiagnosticRunActivityForTest();
   resetSecretRedactionRegistryForTest();
 });
-
-function mockToolTurn(content: AssistantMessage["content"]) {
-  streamMocks.streamSimple
-    .mockImplementationOnce((model: Model) =>
-      createAssistantResultStream(createAssistant(model, content, "toolUse")),
-    )
-    .mockImplementation((model: Model) =>
-      createAssistantResultStream(createAssistant(model, "Done.")),
-    );
-}
 
 function createSourceSession(
   sessionManager: SessionManager,

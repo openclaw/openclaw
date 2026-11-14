@@ -35,6 +35,10 @@ RUNTIME_PATHS
 #!/usr/bin/env bash
 exec node "$(dirname "$0")/systemd-fixture.mjs" busctl "$@"
 BUSCTL
+  cat >"$shim_dir/systemd-run" <<'SYSTEMD_RUN'
+#!/usr/bin/env bash
+exec node "$(dirname "$0")/systemd-fixture.mjs" handoff-launch "$@"
+SYSTEMD_RUN
   # Capture endpoint identity once; projected native clients cannot carry fixture-only env.
   {
     printf '#!/usr/bin/env bash\nset -euo pipefail\n'
@@ -94,12 +98,12 @@ is_running() {
   local pid stat_line stat_tail
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   [ -n "$pid" ] || return 1
-  kill -0 "$pid" >/dev/null 2>&1 || return 1
+  # Read stat before probing: a zombie reaped between the reads must not look live.
   stat_line="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
   stat_tail="${stat_line##*) }"
   [[ "$stat_line" == "$pid ("*") $stat_tail" &&
     "$stat_tail" =~ ^Z([[:space:]]+-?[0-9]+){49,}$ ]] && return 1
-  return 0
+  kill -0 "$pid" >/dev/null 2>&1
 }
 
 stop_gateway() {
@@ -500,6 +504,10 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
+    if [ "$property" = Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID,FragmentPath ]; then
+      node "$manager_script" handoff-runtime
+      exit "$?"
+    fi
     if [ "$property" = TimeoutStopUSec,InvocationID,LoadState ]; then
       node "$manager_script" stop-policy --invocation-id
       exit 0
@@ -544,7 +552,7 @@ case "$command" in
 esac
 SHIM
   } >"$shim_dir/systemctl"
-  chmod +x "$shim_dir/systemctl" "$shim_dir/busctl"
+  chmod +x "$shim_dir/systemctl" "$shim_dir/busctl" "$shim_dir/systemd-run"
   export PATH="$shim_dir:$PATH"
 }
 

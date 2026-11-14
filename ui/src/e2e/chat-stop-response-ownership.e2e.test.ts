@@ -24,7 +24,7 @@ async function verifyStopResponse(page: Page, scenario: (typeof scenarios)[numbe
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   const composer = page.locator(".agent-chat__input textarea");
   const send = page.getByRole("button", { name: "Send message", exact: true });
-  const stop = page.getByRole("button", { name: "Stop generating" });
+  const stop = page.getByRole("button", { name: "Stop", exact: true });
   const start = async (prompt: string, reply: string, after = 0) => {
     await composer.fill(prompt);
     await send.click();

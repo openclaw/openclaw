@@ -14,6 +14,7 @@ import {
 } from "./state-migrations.doctor.js";
 import { createLegacyStateMigrationStepReceipt } from "./state-migrations.messages.js";
 import { captureLegacyStateSnapshotIdentity } from "./state-migrations.plan.js";
+import { migrationStepInput } from "./state-migrations.step.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -150,14 +151,7 @@ it.each([
       },
     });
     const receipt = createLegacyStateMigrationStepReceipt(
-      {
-        id: "migration-detection",
-        phase: "shared",
-        source: [],
-        target: [],
-        requiredness: "required",
-        reversibility: "not-applicable",
-      },
+      migrationStepInput("migration-detection", "required", "not-applicable"),
       { ...detected, changes: [] },
     );
     expect(receipt.outcome).toBe(refused ? "refused" : "deferred");

@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionEvents from "../config/sessions/session-accessor.sqlite-events.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -278,19 +279,15 @@ it.each(["concurrent", "implicit", "alias", "retargeted-alias"] as const)(
     await createVoiceSession({ voiceSessionId });
     const writerB = voiceWriters.captureClientVoiceSessionWriter(target);
     const sourceB = writerB.source;
-    const entered = createDeferred();
-    const resume = createDeferred();
+    const writerGate = createEnteredGate();
     let blocker: Promise<void> | undefined;
     let pendingB: Promise<() => void> | undefined;
     let releaseA: (() => void) | undefined;
     let releaseB: (() => void) | undefined;
     try {
       if (mode === "concurrent") {
-        blocker = runOpenClawAgentWorkerWrite(sourceB.options, async () => {
-          entered.resolve();
-          await resume.promise;
-        });
-        await entered.promise;
+        blocker = runOpenClawAgentWorkerWrite(sourceB.options, writerGate.wait);
+        await writerGate.entered;
         pendingB = registerClientVoiceConsultRun({ ...binding, physicalSource: sourceB });
         void pendingB.catch(() => {});
       }
@@ -316,7 +313,7 @@ it.each(["concurrent", "implicit", "alias", "retargeted-alias"] as const)(
         await closeClientVoiceSession({ ...target, voiceSessionId, config: {} }, writerA);
         await settleDigestAttempts();
       }
-      resume.resolve();
+      writerGate.release();
       releaseB = await (pendingB ??
         registerClientVoiceConsultRun({
           ...binding,
@@ -341,7 +338,7 @@ it.each(["concurrent", "implicit", "alias", "retargeted-alias"] as const)(
         ),
       ).toEqual(staysOriginal ? [1, 0] : [0, 1]);
     } finally {
-      resume.resolve();
+      writerGate.release();
       await blocker;
       if (pendingB && !releaseB) {
         releaseB = await pendingB.catch(() => undefined);

@@ -103,7 +103,42 @@ export class ComposerDictationSession {
     if (this.stopped) {
       return;
     }
-    this.unsubscribe = this.client.addEventListener((frame) => this.handleEvent(frame));
+    this.unsubscribe = this.client.addEventListener((frame) => {
+      const payload = eventPayload(frame);
+      if (
+        !payload ||
+        payload.transcriptionSessionId !== this.transcriptionSessionId ||
+        this.stopped
+      ) {
+        return;
+      }
+      if (
+        (payload.type === "transcript" || payload.type === "partial") &&
+        typeof payload.text === "string"
+      ) {
+        const text = payload.text.trim();
+        if (payload.type === "partial" || payload.final !== true) {
+          this.currentPartial = text;
+        } else if (text) {
+          this.finalTranscripts.push(text);
+          this.currentPartial = "";
+        }
+        this.callbacks.onTranscriptChange();
+        return;
+      }
+      if (payload.type === "error") {
+        this.reportFailure(
+          formatUiExternalText(
+            typeof payload.message === "string" ? payload.message : undefined,
+            t("chat.composer.dictationFailed"),
+          ),
+        );
+        return;
+      }
+      if (payload.type === "close" && payload.reason === "error") {
+        this.reportFailure(t("chat.composer.dictationDisconnected"));
+      }
+    });
     try {
       this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
     } catch {
@@ -116,7 +151,24 @@ export class ComposerDictationSession {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
       this.inputMeter.start(media, this.context);
     }
-    this.inputPump.start(media, this.context, (samples) => this.appendAudio(samples));
+    this.inputPump.start(media, this.context, (samples) => {
+      if (this.stopped) {
+        return;
+      }
+      if (!this.sessionId) {
+        const remaining = MAX_PENDING_AUDIO_SAMPLES - this.pendingAudioSamples;
+        if (remaining <= 0) {
+          return;
+        }
+        const buffered = samples.slice(0, remaining);
+        this.pendingAudio.push(buffered);
+        this.pendingAudioSamples += buffered.length;
+        this.detectSilence(samples);
+        return;
+      }
+      this.queueAudio(samples);
+      this.detectSilence(samples);
+    });
     this.callbacks.onReady();
 
     const result = await this.client.request<DictationSessionResult>("talk.session.create", {
@@ -138,7 +190,11 @@ export class ComposerDictationSession {
       this.pendingAudio.length = 0;
       this.pendingAudioSamples = 0;
     } else {
-      this.flushPendingAudio();
+      const pending = this.pendingAudio.splice(0);
+      this.pendingAudioSamples = 0;
+      for (const samples of pending) {
+        this.queueAudio(samples);
+      }
     }
     if (this.stopped) {
       if (!this.discarded) {
@@ -190,25 +246,6 @@ export class ComposerDictationSession {
     return this.hasTranscript();
   }
 
-  private appendAudio(samples: Float32Array): void {
-    if (this.stopped) {
-      return;
-    }
-    if (!this.sessionId) {
-      const remaining = MAX_PENDING_AUDIO_SAMPLES - this.pendingAudioSamples;
-      if (remaining <= 0) {
-        return;
-      }
-      const buffered = samples.slice(0, remaining);
-      this.pendingAudio.push(buffered);
-      this.pendingAudioSamples += buffered.length;
-      this.detectSilence(samples);
-      return;
-    }
-    this.queueAudio(samples);
-    this.detectSilence(samples);
-  }
-
   private detectSilence(samples: Float32Array): void {
     if (!this.options?.silenceTimeoutMs || !this.callbacks.onSilence) {
       return;
@@ -222,14 +259,6 @@ export class ComposerDictationSession {
         this.heardSpeech = false;
         this.callbacks.onSilence();
       }
-    }
-  }
-
-  private flushPendingAudio(): void {
-    const pending = this.pendingAudio.splice(0);
-    this.pendingAudioSamples = 0;
-    for (const samples of pending) {
-      this.queueAudio(samples);
     }
   }
 
@@ -249,43 +278,6 @@ export class ComposerDictationSession {
       .catch((error: unknown) => {
         this.reportFailure(formatDictationError(error));
       });
-  }
-
-  private handleEvent(frame: GatewayEventFrame): void {
-    const payload = eventPayload(frame);
-    if (
-      !payload ||
-      payload.transcriptionSessionId !== this.transcriptionSessionId ||
-      this.stopped
-    ) {
-      return;
-    }
-    if (
-      (payload.type === "transcript" || payload.type === "partial") &&
-      typeof payload.text === "string"
-    ) {
-      const text = payload.text.trim();
-      if (payload.type === "partial" || payload.final !== true) {
-        this.currentPartial = text;
-      } else if (text) {
-        this.finalTranscripts.push(text);
-        this.currentPartial = "";
-      }
-      this.callbacks.onTranscriptChange();
-      return;
-    }
-    if (payload.type === "error") {
-      this.reportFailure(
-        formatUiExternalText(
-          typeof payload.message === "string" ? payload.message : undefined,
-          t("chat.composer.dictationFailed"),
-        ),
-      );
-      return;
-    }
-    if (payload.type === "close" && payload.reason === "error") {
-      this.reportFailure(t("chat.composer.dictationDisconnected"));
-    }
   }
 
   private reportFailure(message: string): void {

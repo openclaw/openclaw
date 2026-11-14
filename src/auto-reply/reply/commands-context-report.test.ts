@@ -11,6 +11,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
@@ -58,7 +59,7 @@ function makeParams(
       ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
       totalTokens: options?.totalTokens ?? 123,
       totalTokensFresh,
-      ...(totalTokensFresh ? { totalTokensVersion: 1 as const } : {}),
+      ...(totalTokensFresh ? { totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION } : {}),
       inputTokens: 100,
       outputTokens: 23,
       systemPromptReport: {

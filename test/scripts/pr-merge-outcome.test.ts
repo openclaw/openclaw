@@ -175,7 +175,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().mutations).toBe(0);
     expect(readFileSync(capture, "utf8")).toBe("");
     expect(run.output).toContain("Legacy .local/merge-output.log: present");
-    expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
+    expect(run.output).toContain("Follow docs/reference/scripts/merge-recovery.md");
     expect(run.output).not.toContain("rerun merge-run; if the operation lock was retained");
     expect(() => f.record()).toThrow();
   });

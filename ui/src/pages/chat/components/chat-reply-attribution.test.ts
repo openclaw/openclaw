@@ -223,7 +223,9 @@ it("renders one recipient per group and navigates from the name by persisted ID"
   ]);
   expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(1);
   expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
-  expect(row.textContent).not.toContain("Original question");
+  expect(row.querySelector(".chat-reply-attribution__excerpt")?.textContent).toBe(
+    "Original question",
+  );
   const target = row.querySelector<HTMLButtonElement>("button")!;
   expect(target.getAttribute("aria-label")).toBe("Replying to Alice");
   expect(target.querySelector(".chat-author-avatar")).not.toBeNull();
@@ -414,6 +416,7 @@ it.each([
       });
       expect(row.classList.contains("chat-reply-attribution--pending")).toBe(false);
       expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Jordan");
+      expect(row.querySelector(".chat-reply-attribution__excerpt")).toBeNull();
       if (lookup === "missing") {
         expect(row.querySelector(".chat-reply-attribution__unavailable")?.textContent).toBe(
           "Original message unavailable",

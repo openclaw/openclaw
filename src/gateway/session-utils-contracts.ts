@@ -74,3 +74,9 @@ export type SessionListActiveRunProjector = (
   entry: SessionEntry,
   agentId: string,
 ) => { active: boolean; status?: "queued" };
+
+export type SessionChildActivity = {
+  revision?: object;
+  childSessions: string[] | undefined;
+  hasActiveSubagentRun: boolean;
+};

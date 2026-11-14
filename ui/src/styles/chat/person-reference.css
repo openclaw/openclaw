@@ -5,8 +5,8 @@
   border: 0;
   border-radius: var(--radius-sm);
   padding: 0 0.2em;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
+  background: var(--person-reference-bg);
+  color: var(--chat-text-link, var(--link));
   font: inherit;
   font-weight: 550;
   line-height: inherit;
@@ -19,11 +19,11 @@
 
 .markdown-person-reference:hover,
 .markdown-person-reference[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: var(--person-reference-hover-bg);
 }
 
 .markdown-person-reference:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--link);
   outline-offset: 2px;
 }
 

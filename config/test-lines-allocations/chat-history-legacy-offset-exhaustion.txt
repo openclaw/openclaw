@@ -1,0 +1,2 @@
+# Cover hidden-prefix exhaustion and lossless initial CLI paging through legacy rows.
+41

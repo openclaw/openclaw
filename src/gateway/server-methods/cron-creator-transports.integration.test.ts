@@ -1,10 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
@@ -12,6 +8,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { bindCronRequesterGrant } from "../../agents/cron-creator-authority-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
@@ -19,20 +16,17 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  stageActivePluginRegistry,
-} from "../../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { createPluginRecord } from "../../plugins/status.test-helpers.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  mintAgentRuntimeIdentityToken,
+  verifyAgentRuntimeIdentityToken,
+} from "../agent-runtime-identity-token.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -42,20 +36,18 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
-import { createOperatorRecoveryFixture } from "../operator-run-recovery.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
+import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
-import {
-  resolveGatewayChatCronCreatorAuthorityAdmission,
-  resolveGatewayCronCreatorAuthorityAdmission,
-} from "./cron-creator-authority-admission.js";
-import { expectCronReply } from "./cron.validation.test-support.js";
-import { deviceHandlers } from "./devices.js";
+import { resolveGatewayChatCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import {
   SESSION,
   CREATOR,
   cfg as baseCfg,
   stateDir,
+  cron as cronService,
   admission,
   inRun,
   createCronFixture,
@@ -185,202 +177,169 @@ function addJob(
   });
 }
 
-it.for([
-  ["fresh operator", "none"],
-  ["recovered operator", "none"],
-  ["legacy System", "none"],
-  ["recovered operator", "device token rotation"],
-  ["recovered operator", "role downgrade"],
-  ["recovered operator", "access grant revocation"],
-  ["recovered operator", "claim retirement"],
-  ["recovered native operator", "none"],
-  ["recovered native operator", "device token rotation"],
-  ["recovered native operator", "role downgrade"],
-  ["recovered native operator", "access grant revocation"],
-  ["recovered native operator", "claim retirement"],
-] as const)(
-  "retains the %s scope boundary through real automation creation (%s)",
-  async ([source, revocation], { signal }) => {
-    const { release } = fixture;
-    fixture.context.invalidateClientsForDevice = (deviceId, options) => {
-      invalidateGatewayDeviceRevocation(fixture.context, deviceId, options?.role);
-    };
-    const profile = ensureProfileForEmail("automation-recovery@example.test");
-    const accessController = new AbortController();
-    const accessGrant = { pluginId: "recovery-proof-access", grantId: "original-proof-grant" };
-    const previousRegistry = captureActivePluginRegistrySnapshot();
-    if (revocation === "access grant revocation") {
-      const grant = {
-        grantId: accessGrant.grantId,
-        signal: accessController.signal,
-        assertCurrent: () => accessController.signal.throwIfAborted(),
-      };
-      const registry = createEmptyPluginRegistry();
-      registry.plugins.push(createPluginRecord({ id: accessGrant.pluginId }));
-      registry.gatewayAccessPolicies.push({
-        pluginId: accessGrant.pluginId,
-        source: "fixture",
-        policy: { authorize: () => grant, resume: () => grant },
-      });
-      stageActivePluginRegistry(registry, null, "default");
-    }
-    const native = source === "recovered native operator";
-    const isRecovered = source === "recovered operator" || native;
-    const recovery = await createOperatorRecoveryFixture({
-      stateDir,
-      context: fixture.context,
-      profileId: profile.id,
-      config,
-      sessionKey: SESSION,
-      sessionId: "requester-session",
-      clientInfo: native
-        ? { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI }
-        : undefined,
-      localOperator: native,
-      gatewayAccessGrant: revocation === "access grant revocation" ? accessGrant : undefined,
-      device: {
-        deviceId: "recovery-proof-device",
-        publicKey: "synthetic-recovery-proof-key",
-        roles: ["operator"],
-        approvedScopes: ["operator.admin"],
-        tokens: {
-          operator: {
-            token: "synthetic-recovery-proof-token",
-            role: "operator",
-            scopes: ["operator.admin"],
-            createdAtMs: 1,
-          },
-        },
-        createdAtMs: 1,
-        approvedAtMs: 1,
-      },
-    });
-    const restored = isRecovered ? await recovery.restore() : undefined;
-    const client =
-      source === "fresh operator"
-        ? recovery.client
-        : createSyntheticPluginRuntimeClient({
-            operatorRoleActor: restored
-              ? { kind: "operator", profileId: restored.authority.profileId }
-              : { kind: "system" },
-            operatorRunAuthority: restored?.authority,
-            scopes: restored ? [...restored.authority.scopes] : ["operator.write"],
-          });
-    const runId = isRecovered ? recovery.target.recoveryRunId : "automation-recovery";
-    const creator = resolveGatewayCronCreatorAuthorityAdmission({
-      runId,
-      resolvedSessionKey: SESSION,
-      sessionId: recovery.target.sessionId,
-      client,
-      request: { message: "Create a checkback", idempotencyKey: runId },
-      hasRestoredCronContinuation: false,
-      isOneShotModelRun: false,
-      isRestartRecoveryResumeRun: source !== "fresh operator",
-    });
-    if (source === "legacy System") {
-      expect(creator).toBeUndefined();
-    } else if (native) {
-      expect(recovery.entry.restartRecoverySourceIngress).toBe("internal");
-      expect(recovery.entry.restartRecoveryOperatorSource?.snapshot.controlUiAdmin).toBe(false);
-      expect(creator?.callerOrigin).toEqual({ kind: "local" });
-      expect(creator?.managementEntitlement).toBeUndefined();
-    } else {
-      expect(creator?.managementEntitlement?.source).toBe("control-ui-admin");
-    }
-    const execute = boundTo(fixture, async (_identity, admitted) => {
-      const tools = await createCreatorTransportTools({
-        transport: "embedded",
-        config,
-        admitted,
-        // The legacy negative case deliberately exposes the tool; its
-        // untrusted owner hint must not confer the real Gateway admin scope.
-        senderIsOwner: source === "legacy System" || hasGatewayAdminScope(client),
-      });
-      const created = addJob(tools, "Recovered caller job", { enabled: false });
-      if (source === "legacy System") {
-        await expect(created).rejects.toThrow("missing scope: operator.admin");
-        expect(await fixture.read()).toEqual([]);
-      } else {
-        await created;
-        expect(await fixture.read()).toMatchObject([
-          { name: "Recovered caller job", enabled: false },
-        ]);
-        if (revocation !== "none") {
-          await fixture.rejectMutation(
-            () =>
-              addJob(tools, "Revoked recovered caller job", {
-                enabled: false,
-              }),
-            /authority|claim retired/i,
-            async () => {
-              if (revocation === "device token rotation") {
-                const respond = vi.fn();
-                const params = { deviceId: "recovery-proof-device", role: "operator" };
-                await expectDefined(
-                  deviceHandlers["device.token.rotate"],
-                  "rotation",
-                )({
-                  req: { type: "req", id: "rotate", method: "device.token.rotate" },
-                  params,
-                  client: recovery.client,
-                  isWebchatConnect: () => true,
-                  context: fixture.context,
-                  respond,
-                });
-                expectCronReply(respond, expect.objectContaining(params));
-              } else if (revocation === "role downgrade") {
-                setUserProfileRole(profile.id, "revoked-role");
-              } else if (revocation === "access grant revocation") {
-                accessController.abort(new Error("Original access grant revoked"));
-              } else {
-                recovery.retire();
-              }
-            },
-            signal,
-          );
-        }
-      }
-    });
+it.each(["operator.cron", "operator.write"])(
+  "admits %s automation creation without owner authority",
+  async (scope) => {
+    const profile = ensureProfileForEmail("scoped-cron@example.test");
+    const client = createOperatorClient({ profileId: profile.id, scopes: [scope] });
+    client.internal = { authenticatedOperator: true };
+    client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
+    const original = expectDefined(
+      await captureGatewayOperatorRunAuthority({
+        client,
+        context: fixture.context,
+        sourceAuthority: null,
+      }),
+      "authenticated source",
+    );
+    const creatorAdmission = expectDefined(
+      admission("restricted-creator", client),
+      "cron admission",
+    );
+    expect(creatorAdmission.managementEntitlement).toBeUndefined();
+    expect(creatorAdmission.callerOrigin).toEqual({ kind: "unknown" });
     try {
       await withPluginRuntimeGatewayRequestScope(
         { client, context: fixture.context, isWebchatConnect: () => false },
-        () => inRun(runId, creator, execute, restored?.authority),
+        () =>
+          inRun(
+            "restricted-creator",
+            creatorAdmission,
+            boundTo(fixture, async (_identity, admitted, creator) => {
+              const tools = await createCreatorTransportTools({
+                transport: "embedded",
+                config,
+                admitted,
+                creator,
+                senderIsOwner: false,
+              });
+              const result = await addJob(tools, "Restricted caller job", {
+                payload: { ...timedPayload },
+              });
+              expect(result).toHaveProperty("details.id");
+              const jobs = await fixture.read();
+              expect(jobs).toMatchObject([
+                {
+                  ...ownedJob,
+                  payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
+                },
+              ]);
+              expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
+              expect(jobs[0]?.operatorSource?.source.snapshot.scopes).toEqual([scope]);
+            }),
+            original.authority,
+          ),
       );
     } finally {
-      release.resolve();
-      restored?.release();
-      restoreActivePluginRegistrySnapshot(previousRegistry);
+      original.release();
     }
   },
 );
-it("preserves ordinary restricted caller creation without management admission", async () => {
-  const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
-  client.internal = {};
-  expect(admission("restricted-creator", client)).toBeUndefined();
-  await inRun(
-    "restricted-creator",
-    undefined,
-    boundTo(fixture, async (_identity, admitted) => {
-      const tools = await createCreatorTransportTools({
-        transport: "embedded",
-        config,
-        admitted,
-        senderIsOwner: true,
-      });
-      await addJob(tools, "Restricted caller job", {
-        payload: { ...timedPayload },
-      });
-      const jobs = await fixture.read();
-      expect(jobs).toMatchObject([
-        {
-          ...ownedJob,
-          payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
-        },
-      ]);
-      expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
-    }),
-  );
-});
+it.each(["operator.cron", "operator.write"])(
+  "persists only owned jobs through signed %s requester grants and fences revocation",
+  async (scope) => {
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "scoped-creator-device", role: "operator" },
+      () => true,
+    );
+    const client = createOperatorClient({ profileName: "scoped-cron", scopes: [scope] });
+    const runId = "signed-scoped-creator";
+    const creatorAdmission = expectDefined(
+      admission(runId, client, undefined, caller.isCurrent),
+      "scoped creator admission",
+    );
+    const job = {
+      name: "Signed requester job",
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "current" as const,
+      sessionKey: SESSION,
+      wakeMode: "next-heartbeat" as const,
+      payload: { ...timedPayload, kind: "agentTurn" as const, toolsAllow: [] },
+      delivery: { mode: "none" as const },
+    };
+    try {
+      await inRun(
+        runId,
+        creatorAdmission,
+        boundTo(fixture, async (identity, admitted, creator) => {
+          expect(creator).toMatchObject({
+            callerOrigin: { kind: "unknown" },
+            callerScopedCreation: true,
+          });
+          expect(creator?.managementEntitlement).toBeUndefined();
+          const mint = expectDefined(bindCronRequesterGrant(runId), "requester grant issuer");
+          const request = async (method: string, params: Record<string, unknown>) => {
+            const token = await mintAgentRuntimeIdentityToken({
+              agentId: identity.agentId,
+              sessionKey: identity.sessionKey,
+              operationalRunInstance: identity.operationalRunInstance,
+              cronCreatorAuthorityGrant: mint(),
+            });
+            const signedIdentity = expectDefined(
+              await verifyAgentRuntimeIdentityToken(token),
+              "verified requester identity",
+            );
+            expect(signedIdentity.cronToolsAllowCapture).toBeUndefined();
+            expect(signedIdentity.cronManagementGrant).toBeUndefined();
+            expect(signedIdentity.turnSourceLocal).toBeUndefined();
+            const signedClient = createSyntheticPluginRuntimeClient({ scopes: [scope] });
+            signedClient.internal!.agentRuntimeIdentity = signedIdentity;
+            return dispatchGatewayRequestInProcess(method, params, {
+              client: signedClient,
+              context: fixture.context,
+            });
+          };
+          await request("cron.add", job);
+          const jobs = await fixture.read();
+          expect(jobs).toMatchObject([{ name: job.name, ...ownedJob }]);
+          expect(jobs[0]?.toolsAllowProvenance).toBeUndefined();
+          expect(jobs[0]?.runtimeAuthority).toBeUndefined();
+          for (const owner of [
+            { ...ownedJob.owner, sessionKey: "agent:main:foreign-conversation" },
+            { ...ownedJob.owner, accountId: "foreign-account" },
+          ]) {
+            const foreign = await cronService.add(
+              { ...job, name: "Foreign job", enabled: true, agentId: "main", owner },
+              {
+                scheduledToolPolicy: {
+                  version: 1,
+                  mode: "account",
+                  ownerSessionKey: owner.sessionKey,
+                  ownerAccountId: owner.accountId,
+                },
+              },
+            );
+            const before = await fixture.read();
+            await expect(
+              request("cron.update", {
+                id: foreign.id,
+                patch: { name: "Must not change" },
+              }),
+            ).rejects.toThrow(`Automation not found: ${foreign.id}.`);
+            expect(await fixture.read()).toEqual(before);
+          }
+          await fixture.rejectMutation(
+            () => request("cron.add", { ...job, name: "Revoked requester job" }),
+            /authority.*no longer active/i,
+            () =>
+              invalidateGatewayDeviceRevocation(
+                fixture.context,
+                "scoped-creator-device",
+                "operator",
+              ),
+          );
+          expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+          expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
+        }),
+      );
+    } finally {
+      fixture.release.resolve();
+      caller.release();
+    }
+  },
+);
+
 it.each([
   ["cli", "local", "device"],
   ["embedded", "local", "device"],

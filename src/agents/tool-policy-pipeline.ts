@@ -1,12 +1,12 @@
+import { rememberBoundedKey } from "../infra/dedupe.js";
 /**
  * Applies layered tool policy in runtime resolution order. Policy diagnostics
  * stay tied to the layer that introduced them, while plugin groups are
  * expanded only after unknown core/plugin entries are classified.
  */
-import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
-import { rememberBoundedKey } from "../infra/dedupe.js";
+import { isFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isKnownCoreToolId } from "./tool-catalog.js";
+import { isKnownCoreToolId, isRunGrantedCoreToolId } from "./core-tool-facts.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
@@ -146,7 +146,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     }
 
     const policy = step.policy;
-    const frozenAllow = isFrozenClawToolAllowPolicy(policy);
+    const frozenAllow = isFrozenTemplateToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
       // Read declarations per layer because callbacks can update the next layer.
@@ -162,8 +162,8 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
             normalizeToolPolicyName(entry),
           ),
         );
-        const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
-          isKnownCoreToolId(entry),
+        const gatedCoreEntries = resolved.unknownAllowlist.filter(
+          (entry) => isKnownCoreToolId(entry) && !isRunGrantedCoreToolId(entry),
         );
         const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
           ? []

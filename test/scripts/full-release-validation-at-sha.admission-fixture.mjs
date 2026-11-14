@@ -55,13 +55,33 @@ export async function respond(args, config) {
       ?.slice(("repos/" + repository + "/").length);
     if (route?.startsWith("compare/")) {
       const sha = route.slice(8).split("...")[0];
-      if (sha !== publisherSha()) {
+      if (sha !== publisherSha() && sha !== config.targetSha) {
         throw new Error("Q must not be subjected to P/main ancestry");
       }
-      git(["merge-base", "--is-ancestor", sha, "refs/heads/main"]);
+      let status = "diverged";
+      try {
+        git(["merge-base", "--is-ancestor", sha, "refs/heads/main"]);
+        status = sha === git(["rev-parse", "refs/heads/main"]) ? "identical" : "ahead";
+      } catch {
+        // GitHub reports a non-ancestor comparison as data, not a transport failure.
+      }
       return JSON.stringify({
-        status: sha === git(["rev-parse", "refs/heads/main"]) ? "identical" : "ahead",
+        status,
       });
+    }
+    if (route?.endsWith("/branches-where-head")) {
+      return JSON.stringify(
+        git([
+          "for-each-ref",
+          "--format=%(refname:short)",
+          "--points-at",
+          config.targetSha,
+          "refs/heads",
+        ])
+          .split("\n")
+          .filter(Boolean)
+          .map((name) => ({ name })),
+      );
     }
     if (route?.startsWith("contents/")) {
       const [name, sha] = route.slice(9).split("?ref=");
@@ -108,10 +128,26 @@ export async function respond(args, config) {
       }
       return JSON.stringify({ ref, object: { type: "commit", sha } });
     }
-    if (route === "collaborators/release-operator/permission") {
+    if (route?.startsWith("collaborators/") && route.endsWith("/permission")) {
+      const permissionActor = decodeURIComponent(route.slice(14, -11));
+      const revokedCandidate =
+        config.options.candidateAuthorityRevoked &&
+        existsSync(config.admissionCapturePath) &&
+        permissionActor === config.options.candidateAuthorityActor;
+      const revokedOperator = config.options.admissionRevokedActor && !active;
       return JSON.stringify({
-        permission: config.options.admissionRevokedActor && !active ? "read" : "write",
-        user: actor,
+        permission: revokedCandidate
+          ? "read"
+          : !existsSync(config.admissionCapturePath)
+            ? "admin"
+            : revokedOperator
+              ? "read"
+              : "write",
+        role_name: revokedCandidate || revokedOperator ? "write" : "maintain",
+        user:
+          permissionActor === actor.login
+            ? actor
+            : { id: 92, login: permissionActor, type: "User" },
       });
     }
     if (route === "actions/runs/321/attempts/1") {

@@ -1,3 +1,7 @@
+import {
+  buildMediaGenerationNormalizationMetadata,
+  normalizeDurationToClosestMax,
+} from "../../packages/media-generation-core/src/normalization.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
@@ -6,8 +10,6 @@ import type {
   listMusicGenerationProviders,
 } from "../media-generation/registry.js";
 import {
-  buildMediaGenerationNormalizationMetadata,
-  normalizeDurationToClosestMax,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";

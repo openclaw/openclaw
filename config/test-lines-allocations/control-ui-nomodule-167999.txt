@@ -1,0 +1,2 @@
+# Regression for visible recovery guidance when module scripts cannot run.
+16

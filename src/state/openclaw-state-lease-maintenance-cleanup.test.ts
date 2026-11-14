@@ -62,7 +62,9 @@ it.each(["retired", "replaced"] as const)(
           await expect(operation).rejects.toBe(retired);
           expect(effect).not.toHaveBeenCalled();
         } else {
-          await expect(operation).rejects.toThrow("cannot adopt a replacement shared database");
+          await expect(operation).rejects.toThrow(
+            "path no longer matches its borrowed native owner",
+          );
         }
         restore();
         await closeOpenClawStateDatabaseAsync();

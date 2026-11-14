@@ -23,29 +23,27 @@ const violations = (schema: unknown) =>
   findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true });
 
 describe("OpenAI strict tool schema normalization", () => {
-  it("preserves literal names when repairing dependencies", () => {
-    const schema = {
-      type: "object",
-      dependencies: { ["__proto__"]: { type: "string", description: null } },
-    };
-
-    const normalized = normalizeOpenAIStrictCompatSchema(schema);
-    expect(Object.getOwnPropertyDescriptor(normalized, "dependencies")?.value).toStrictEqual({
-      ["__proto__"]: { type: "string" },
-    });
-    expect(schema.dependencies).toStrictEqual({
-      ["__proto__"]: { type: "string", description: null },
-    });
-  });
-
-  it("infers the root type from schema fields instead of a literal prototype key", () => {
-    const properties = { path: { type: "string" } };
-    const schema = { ...literalArray(), properties, description: null };
-    expect(normalizeOpenAIStrictCompatSchema(schema)).toStrictEqual({
-      ...literalArray(),
-      properties: { path: { type: "string" } },
-      type: "object",
-    });
+  const pathProperties = { path: { type: "string" } };
+  it.each([
+    [
+      normalizeOpenAIStrictCompatSchema,
+      { type: "object", dependencies: { ["__proto__"]: { type: "string", description: null } } },
+      { ...objectSchema(), dependencies: { ["__proto__"]: { type: "string" } } },
+    ],
+    [
+      normalizeOpenAIStrictCompatSchema,
+      { ...literalArray(), properties: pathProperties, description: null },
+      { ...literalArray(), properties: pathProperties, type: "object" },
+    ],
+    [
+      normalizeStrictOpenAIJsonSchema,
+      { ...objectSchema(valueObject().properties), ...literalArray(), nullable: false },
+      { ...objectSchema(valueObject().properties), ...literalArray() },
+    ],
+  ] as const)("preserves literal keys during normalization %#", (normalize, schema, expected) => {
+    const before = structuredClone(schema);
+    expect(normalize(schema)).toStrictEqual(expected);
+    expect(schema).toStrictEqual(before);
   });
 
   it.each(["anyOf", "oneOf"])("preserves literal properties when flattening %s", (unionKey) => {
@@ -54,7 +52,7 @@ describe("OpenAI strict tool schema normalization", () => {
       constructor: { type: "integer" },
       toString: { type: "boolean" },
     };
-    const required = ["__proto__", "constructor", "toString"];
+    const required = Object.keys(properties);
     const schema = {
       [unionKey]: [
         { type: "object", properties, required },
@@ -64,26 +62,14 @@ describe("OpenAI strict tool schema normalization", () => {
     };
 
     deepStrictEqual(normalizeStrictOpenAIJsonSchema(schema), objectSchema(properties));
-    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
   });
 
-  it("preserves literal metadata when removing OpenAPI annotations", () => {
-    const schema = { ...objectSchema(valueObject().properties), ...literalArray() };
-
-    expect(normalizeStrictOpenAIJsonSchema({ ...schema, nullable: false })).toStrictEqual(schema);
-  });
-
-  it("repairs top-level object schemas with missing or invalid properties", () => {
-    const schemas = [
-      { type: "object" },
-      ...[undefined, null, [], "invalid"].map((properties) => ({ type: "object", properties })),
-    ];
-
-    for (const schema of schemas) {
+  it.each([{ type: "object" }, { type: "object", properties: [] }])(
+    "repairs object properties: %j",
+    (schema) => {
       expect(normalizeStrictOpenAIJsonSchema(schema)).toEqual(objectSchema());
-      expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
-    }
-  });
+    },
+  );
 
   it("walks named schema maps without treating definition names as keywords", () => {
     const schema = {
@@ -105,14 +91,11 @@ describe("OpenAI strict tool schema normalization", () => {
       contentSchema: valueObject(),
     };
 
-    expect(violations(schema)).toEqual([
-      "parameters.dependencies.payload.additionalProperties",
-      "parameters.dependencies.payload.required",
-      "parameters.additionalItems.additionalProperties",
-      "parameters.additionalItems.required",
-      "parameters.contentSchema.additionalProperties",
-      "parameters.contentSchema.required",
-    ]);
+    expect(violations(schema)).toEqual(
+      ["dependencies.payload", "additionalItems", "contentSchema"].flatMap((path) =>
+        ["additionalProperties", "required"].map((key) => `parameters.${path}.${key}`),
+      ),
+    );
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 

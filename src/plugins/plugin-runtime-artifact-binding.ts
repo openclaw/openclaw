@@ -108,6 +108,16 @@ export function getPluginRuntimeEntrySource(record: ArtifactBoundRecord): string
   return record[RUNTIME_ARTIFACT_SELECTION]?.runtimeEntry.source;
 }
 
+/** Sidecars share the selected setup/runtime artifact, not the discovery source tree. */
+export function getPluginLoadedEntry(
+  record: ArtifactBoundRecord,
+): PluginRuntimeArtifact | undefined {
+  const selection = record[RUNTIME_ARTIFACT_SELECTION];
+  return selection?.runtimeRegistrationComplete
+    ? selection.runtimeEntry
+    : (selection?.setupEntry ?? selection?.runtimeEntry);
+}
+
 /** Only the loaded runtime owner can authorize the matching UI-origin distribution. */
 export function hasCanonicalPluginDistribution(record: ArtifactBoundRecord): boolean {
   return (

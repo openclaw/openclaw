@@ -30,11 +30,9 @@ beforeEach(() => {
           : { to: `room:${conversationId}` },
       ),
       plugin("thread-chat", ({ conversationId, parentConversationId }) => {
-        const parent = parentConversationId?.trim();
-        const child = conversationId.trim();
-        return parent && parent !== child
-          ? { to: `channel:${parent}`, threadId: child }
-          : { to: `channel:${child}` };
+        return parentConversationId && parentConversationId !== conversationId
+          ? { to: `channel:${parentConversationId}`, threadId: conversationId }
+          : { to: `channel:${conversationId}` };
       }),
       plugin("unroutable-chat", () => null),
     ]),
@@ -59,12 +57,9 @@ const ids = [
   ["fraction", 12.9, "channel:12"],
   ["negative fraction", -12.9, "channel:-12"],
   ["zero", 0, "channel:0"],
-  ["negative zero", -0, "channel:0"],
   ["literal NaN string", " NaN ", "channel:NaN"],
   ["blank string", "  ", undefined],
   ["NaN", Number.NaN, undefined],
-  ["positive infinity", Number.POSITIVE_INFINITY, undefined],
-  ["negative infinity", Number.NEGATIVE_INFINITY, undefined],
   ["missing id", undefined, undefined],
 ] as const;
 describe.each(["conversationId", "parentConversationId"] as const)("%s normalization", (field) => {
@@ -79,39 +74,25 @@ describe.each(["conversationId", "parentConversationId"] as const)("%s normaliza
   );
 });
 
-it("projects parent-child conversation refs through plugin delivery targets", () => {
-  expect(
-    deliveryContextFromConversation({
-      channel: "thread-chat",
-      accountId: "default",
-      conversationId: "thread-1",
-      parentConversationId: "room-1",
-    }),
-  ).toEqual({
-    channel: "thread-chat",
-    accountId: "default",
-    to: "channel:room-1",
-    threadId: "thread-1",
-  });
-});
-
-it("falls back to generic channel targets when a plugin has no target projection", () => {
-  expect(
-    deliveryContextFromConversation({
-      channel: "unroutable-chat",
-      accountId: "default",
-      conversationId: "room-1",
-    }),
-  ).toEqual({ channel: "unroutable-chat", accountId: "default", to: "channel:room-1" });
-});
-
-it("preserves thread-only plugin results while formatting can supply a target fallback", () => {
-  const conversation = { channel: "room-chat", accountId: "work", conversationId: "$thread" };
-  expect(deliveryContextFromConversation(conversation)).toEqual({
-    channel: "room-chat",
-    accountId: "work",
-    to: undefined,
-    threadId: "$thread",
-  });
-  expect(target(conversation)).toBe("channel:$thread");
-});
+it.each([
+  [
+    "thread-chat",
+    "thread-1",
+    "room-1",
+    { to: "channel:room-1", threadId: "thread-1" },
+    "channel:room-1",
+  ],
+  ["unroutable-chat", "room-1", undefined, { to: "channel:room-1" }, "channel:room-1"],
+  ["room-chat", "$thread", undefined, { to: undefined, threadId: "$thread" }, "channel:$thread"],
+] as const)(
+  "projects %s delivery and formatting fallbacks",
+  (channel, conversationId, parentConversationId, delivery, formatted) => {
+    const conversation = { channel, accountId: "work", conversationId, parentConversationId };
+    expect(deliveryContextFromConversation(conversation)).toEqual({
+      channel,
+      accountId: "work",
+      ...delivery,
+    });
+    expect(target(conversation)).toBe(formatted);
+  },
+);

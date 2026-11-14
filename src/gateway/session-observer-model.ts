@@ -270,7 +270,8 @@ const ModelDigestSchema = z.strictObject({
 
 export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = value.replace(/\s+/gu, " ").trim();
-  return truncateUtf16Safe(normalized, maxChars);
+  // Persisted digest fields must not retain the full model reply backing string.
+  return Buffer.from(truncateUtf16Safe(normalized, maxChars), "utf16le").toString("utf16le");
 }
 
 export function defaultReadSession(

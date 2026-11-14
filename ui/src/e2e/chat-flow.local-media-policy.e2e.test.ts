@@ -1,33 +1,25 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import {
   newChatPage,
-  buildLocalWebchatAudioMessage,
   createChatFlowE2eSuite,
   installMockGateway,
   textContent,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const outbound = "/home/node/.openclaw/media/outbound";
 const ticket = "ticket-local";
 
 suite.define(() => {
-  beforeAll(async () => {
-    // Prepare Gateway fixture workers before the per-case behavior timeout starts.
-    await import("../../../src/gateway/server-methods/chat-webchat-media.ts");
-  });
-
   it.each([
     ["audio", `${outbound}/voice.mp3`, "allowed"],
     ["image", `${outbound}/image.png`, "allowed"],
     ["image", `FILE://${outbound}/upper.png`, "allowed"],
     ["image", `file:${outbound}/plain.png`, "allowed"],
-    ["audio", "structured.mp3", "structured"],
+    ["audio", `${outbound}/structured.mp3`, "structured"],
     ...[
       "~/media/report-voice.mp3",
       "/workspace/project/../media/report-voice.mp3",
@@ -35,12 +27,7 @@ suite.define(() => {
     ].map((source) => ["audio", source, "attachment"] as const),
   ] as const)(
     "renders local assistant %s through server metadata (%s, %s)",
-    async (kind, fixtureSource, mode) => {
-      const source =
-        mode === "structured"
-          ? `FILE:${path.join(mediaTempDirs.make("control-ui-audio-"), fixtureSource)}`
-          : fixtureSource;
-      const expectedSource = mode === "structured" ? new URL(source).pathname : source;
+    async (kind, source, mode) => {
       const page = await newChatPage(suite);
       const requestedMediaUrls: URL[] = [];
 
@@ -48,7 +35,7 @@ suite.define(() => {
         const request = route.request();
         const url = new URL(request.url());
         requestedMediaUrls.push(url);
-        expect(url.searchParams.get("source")).toBe(expectedSource);
+        expect(url.searchParams.get("source")).toBe(source);
         if (url.searchParams.get("meta") === "1") {
           expect(request.headers().authorization).toBe("Bearer e2e-device-token");
           await route.fulfill({
@@ -89,7 +76,18 @@ suite.define(() => {
                 },
               ]
             : mode === "structured"
-              ? (await buildLocalWebchatAudioMessage(source)).content
+              ? [
+                  { type: "text", text: "Audio reply" },
+                  {
+                    type: "attachment",
+                    attachment: {
+                      kind: "audio",
+                      label: "structured.mp3",
+                      mimeType: "audio/mpeg",
+                      url: source,
+                    },
+                  },
+                ]
               : textContent(`Your recording\nMEDIA:${source}`);
       await installMockGateway(page, {
         historyMessages: [
@@ -118,7 +116,7 @@ suite.define(() => {
           .getAttribute("href");
         const download = new URL(href ?? "", suite.server.baseUrl);
         expect(download.searchParams.get("mediaTicket")).toBe(ticket);
-        expect(download.searchParams.get("source")).toBe(expectedSource);
+        expect(download.searchParams.get("source")).toBe(source);
         await expect
           .poll(() =>
             media.locator("audio").evaluate((element) => (element as HTMLMediaElement).readyState),

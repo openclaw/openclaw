@@ -60,6 +60,9 @@ export const UiNavigateCommandSchema = closedObject({
   kind: Type.Literal("navigate"),
   sessionKey: NonEmptyString,
 });
+export const UiAgentGitHubSettingsCommandSchema = closedObject({
+  kind: Type.Literal("agent-github-settings"),
+});
 
 export const UiCommandSchema = Type.Union([
   UiSplitCommandSchema,
@@ -68,6 +71,7 @@ export const UiCommandSchema = Type.Union([
   UiSidebarCommandSchema,
   UiPanelCommandSchema,
   UiNavigateCommandSchema,
+  UiAgentGitHubSettingsCommandSchema,
 ]);
 export type UiCommand = Static<typeof UiCommandSchema>;
 

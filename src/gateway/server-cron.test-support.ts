@@ -7,7 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
-import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
+import { resolveCronJobsStorePath, resolveDefaultCronStorePath } from "../cron/store/paths.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type { ManagedRun, RunExit } from "../process/supervisor/types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -185,10 +185,10 @@ export function loadCronService(cfg: OpenClawConfig, overrides: CronServiceOverr
     ...overrides,
     scheduler: overrides.scheduler ?? createTestGatewayScheduler(),
     env,
-    storePath: resolveSelectedCronJobsStorePath(
-      typeof legacyStore === "string" ? legacyStore : undefined,
-      env,
-    ),
+    storePath:
+      typeof legacyStore === "string"
+        ? resolveCronJobsStorePath(legacyStore, env, env)
+        : resolveDefaultCronStorePath(env),
   });
 }
 

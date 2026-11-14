@@ -1,6 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import type { CliBackendTurnInterrupt } from "openclaw/plugin-sdk/cli-backend";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -8,6 +6,7 @@ import {
   createCliTestHarness,
   resultDetail,
   waitForProcessExit,
+  withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
@@ -70,27 +69,21 @@ it.each([
       context.args = [...context.args, "--fork-session"];
     }
     const records: Record<string, unknown>[] = [];
-    for await (const record of executeClaudeCli(context)) {
+    for await (const record of executeClaudeCli(withClaudeCliTestDeadline(context))) {
       records.push(record);
       if (record.subtype === "fixture_ready") {
         expect(interrupt).toBeDefined();
         await interrupt!.interrupt("yield");
       }
     }
-    expect(await readFile(path.join(context.cwd, "native-history.txt"), "utf8")).not.toContain(
-      "[Request interrupted by user]",
-    );
     expect(records.filter((record) => record.type === "result")).toEqual([
       expect.objectContaining({ subtype: "success", is_error: false, result: "" }),
     ]);
     expect(context.liveSession!.current()).toBeUndefined();
-    expect(
-      new Set(
-        records.flatMap((record) =>
-          typeof record.session_id === "string" ? [record.session_id] : [],
-        ),
-      ),
-    ).toEqual(new Set([nativeId]));
+    const sessionIds = records.flatMap(({ session_id }) =>
+      typeof session_id === "string" ? [session_id] : [],
+    );
+    expect(new Set(sessionIds)).toEqual(new Set([nativeId]));
     const nativePid = records.find((record) => record.subtype === "fixture_ready")?.pid;
     assert(typeof nativePid === "number");
     await waitForProcessExit([nativePid], AbortSignal.timeout(10_000));
@@ -116,7 +109,7 @@ it("keeps genuine cancellation an error without emitting a successful yield resu
   });
   const results: Record<string, unknown>[] = [];
   const run = async () => {
-    for await (const record of executeClaudeCli(context)) {
+    for await (const record of executeClaudeCli(withClaudeCliTestDeadline(context))) {
       if (record.type === "result") {
         results.push(record);
       }

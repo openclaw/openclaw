@@ -11,6 +11,7 @@ const generatedProvider = {
   apiKey: "cached-key-is-not-current-auth",
   models: [{ id: "retained-model", name: "Generated model", contextWindow: 65536 }],
 };
+const catalogOwner = { id: "catalog-owner", providers: ["fixture"] };
 function catalogs(
   providers: Record<string, typeof generatedProvider> = { fixture: generatedProvider },
 ) {
@@ -18,7 +19,7 @@ function catalogs(
   return [{ pluginId: "catalog-owner", contents }];
 }
 const deferredMetadata = createPluginMetadataSnapshotFixture({
-  plugins: [{ id: "catalog-owner", providers: ["fixture"], activation: { onStartup: false } }],
+  plugins: [{ ...catalogOwner, activation: { onStartup: false } }],
 });
 
 type Sources = Parameters<typeof discoverModelsFromCapturedSources>[1];
@@ -95,8 +96,7 @@ it("excludes generated native inventory for a configured proxy endpoint", () => 
     pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
       plugins: [
         {
-          id: "catalog-owner",
-          providers: ["fixture"],
+          ...catalogOwner,
           providerEndpoints: [{ endpointClass: "openai-public", hosts: ["fixture.example"] }],
         },
       ],
@@ -106,3 +106,35 @@ it("excludes generated native inventory for a configured proxy endpoint", () => 
   expect(registry.getAll()).toEqual([]);
   expect(registry.fork(AuthStorage.inMemory()).getAll()).toEqual([]);
 });
+
+it.each([
+  { source: "https://proxy.example/v1", baseUrl: "https://proxy.example", allowed: true },
+  { source: "https://foreign.example/v1", baseUrl: "https://proxy.example", allowed: false },
+  { source: "https://fixture.example/v1", baseUrl: undefined, allowed: true },
+  { source: "https://proxy.example/v1", baseUrl: undefined, allowed: false },
+])(
+  "admits retained runtime inventory from $source for configured origin $baseUrl",
+  ({ source, baseUrl, allowed }) => {
+    const registry = readCatalog(AuthStorage.inMemory(), {
+      config: baseUrl ? configured({ baseUrl, models: [] }) : {},
+      pluginCatalogs: catalogs({ fixture: { ...generatedProvider, baseUrl: source } }),
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            ...catalogOwner,
+            modelCatalog: {
+              discovery: { fixture: "runtime" },
+              configuredEndpointDiscovery: ["fixture"],
+              providers: { fixture: { baseUrl: "https://fixture.example/v1", models: [] } },
+            },
+          },
+        ],
+      }),
+    });
+    expect(registry.getError()).toBeUndefined();
+    expect(Boolean(registry.find("fixture", "retained-model"))).toBe(allowed);
+    expect(Boolean(registry.fork(AuthStorage.inMemory()).find("fixture", "retained-model"))).toBe(
+      allowed,
+    );
+  },
+);

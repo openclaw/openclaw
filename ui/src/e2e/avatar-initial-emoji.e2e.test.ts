@@ -81,7 +81,7 @@ suite.define(() => {
       await gateway.waitForRequest("config.get");
       const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentSelect.locator(".agent-select__trigger").click();
-      await agentSelect.getByRole("menuitemradio", { name: "Rocket", exact: true }).click();
+      await agentSelect.getByRole("option", { name: "Rocket", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/emoji/tools");
       await page.getByRole("tab", { name: "Overview", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/emoji/overview");

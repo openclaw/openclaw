@@ -9,7 +9,8 @@ export function createPausedDeadline(params: {
   control?: MemorySearchDeadlineControl;
   expire: () => void;
 }) {
-  const now = params.kind === "corpus" ? () => performance.now() : () => Date.now();
+  // setTimeout is monotonic. A wall-clock jump must not consume or invent pause budget.
+  const now = () => performance.now();
   let remainingMs = params.timeoutMs;
   let segmentStartedAt = now();
   let paused = false;

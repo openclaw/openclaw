@@ -3,9 +3,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { readSqliteWriterAppVersion } from "../infra/sqlite-schema-header.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion, readSqliteWriterAppVersion } from "../infra/sqlite-user-version.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import type {
   AgentDeletionJournalDisposition,

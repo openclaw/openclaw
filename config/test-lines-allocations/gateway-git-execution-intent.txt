@@ -1,0 +1,2 @@
+# Preserve Gateway PTY placement alongside agent isolation in the existing transport table.
+14

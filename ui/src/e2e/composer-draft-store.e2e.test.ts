@@ -385,6 +385,71 @@ suite.define(() => {
     });
   });
 
+  it("retires context-only comments with their conversation without resurrecting stale edits", async () => {
+    await withStore(async ({ page, store: storeHandle }) => {
+      const result = await page.evaluate(async (store) => {
+        const parent = {
+          gatewayOwner: "comments-fixture",
+          recoveryScope: "person-a",
+          scopeKey: "chat:v3:agent:main:one\0agent:main",
+        };
+        const scope = { ...parent, scopeKey: `comments:v1:${parent.scopeKey}` };
+        const draft = {
+          revision: 1,
+          text: "",
+          attachments: [],
+          selectionAnnotations: [
+            {
+              text: "quoted text",
+              comment: "unsent comment",
+              start: 0,
+              end: 11,
+              sessionKey: "agent:main:one",
+              messageId: "message-one",
+              entryId: "entry-one",
+            },
+          ],
+        };
+        await store.write(scope, draft, { expectedRevision: 0, writeId: "first" });
+        const recovery = await store.prepare(parent);
+        const read = await store.read(scope);
+        const other = await store.read({ ...scope, recoveryScope: "person-b" });
+        await store.retire(parent);
+        return {
+          recovery,
+          read,
+          other,
+          retired: await store.read(scope),
+          stale: await store.write(
+            scope,
+            { ...draft, revision: 2 },
+            { expectedRevision: 1, writeId: "late" },
+          ),
+        };
+      }, storeHandle);
+      expect(result.recovery).toEqual({ status: "ready", entries: [] });
+      expect(result.read).toMatchObject({
+        status: "found",
+        draft: {
+          attachments: [],
+          selectionAnnotations: [
+            {
+              text: "quoted text",
+              comment: "unsent comment",
+              start: 0,
+              end: 11,
+              messageId: "message-one",
+              entryId: "entry-one",
+            },
+          ],
+        },
+      });
+      expect(result.other.status).toBe("not-found");
+      expect(result.retired.status).toBe("not-found");
+      expect(result.stale.status).toBe("conflict");
+    });
+  });
+
   it("keeps question drafts scoped, bounded, and retired with their conversation", async () => {
     await withStore(async ({ page, store: storeHandle }) => {
       const result = await page.evaluate(async (store) => {

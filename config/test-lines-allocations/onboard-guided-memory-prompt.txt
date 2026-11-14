@@ -1,0 +1,2 @@
+2
+# Require the existing guided-driver matrix to explicitly decline optional memory embeddings.

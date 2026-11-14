@@ -1,15 +1,21 @@
+import { Routes } from "discord-api-types/v10";
 import {
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelRunQueue,
+  resolveChannelMessageSourceReplyDeliveryMode,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { Client } from "../internal/discord.js";
+import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import type { DiscordIngressDispatchResult, DiscordIngressLifecycle } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 import { createDiscordLivePolicyReader, type DiscordLivePolicyReader } from "./live-policy.js";
@@ -48,6 +54,11 @@ type DiscordMessageDispatcher = (
 
 type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
+  notifyDeadLetter: (
+    data: DiscordMessageEvent,
+    client: Client,
+    signal: AbortSignal,
+  ) => Promise<void>;
 };
 
 export function createDiscordMessageDispatcher(
@@ -106,6 +117,30 @@ export function createDiscordMessageDispatcher(
   }
   const dispatcherShutdown = new AbortController();
   const avatarResolver = createDiscordAvatarResolver();
+  const preflightMessage = async (
+    data: DiscordMessageEvent,
+    client: Client,
+    options: Pick<
+      DiscordMessagePreflightParams,
+      "abortSignal" | "precedingMessages" | "turnAdoptionLifecycle"
+    >,
+  ) => {
+    const policy = await readPolicy();
+    const { preflightDiscordMessage } = await loadMessagePreflightRuntime();
+    return await preflightDiscordMessage({
+      ...params,
+      ...policy,
+      ...options,
+      isPolicyCurrent: policy.isCurrent,
+      avatarResolver,
+      ackReactionScope:
+        params.discordConfig?.ackReactionScope ??
+        policy.cfg.messages?.ackReactionScope ??
+        "group-mentions",
+      data,
+      client,
+    });
+  };
 
   type DiscordDebounceEntry = {
     data: DiscordMessageEvent;
@@ -171,26 +206,18 @@ export function createDiscordMessageDispatcher(
             return;
           }
           try {
-            const policy = await readPolicy();
-            const { cfg } = policy;
-            const { preflightDiscordMessage } = await loadMessagePreflightRuntime();
-            const ctx = await preflightDiscordMessage({
-              ...params,
-              ...policy,
-              isPolicyCurrent: policy.isCurrent,
-              avatarResolver,
-              ackReactionScope:
-                params.discordConfig?.ackReactionScope ??
-                cfg.messages?.ackReactionScope ??
-                "group-mentions",
+            // A retired attempt must release its debounce slot even if external I/O ignores abort.
+            const ctx = await racePromiseWithAbortSignal(
+              () =>
+                preflightMessage(last.data, last.client, {
+                  abortSignal,
+                  // Preflight hydrates each original before deriving mention facts
+                  // or rendering the batch, so neither text nor metadata is lost.
+                  precedingMessages: entries.slice(0, -1).map((entry) => entry.data.message),
+                  turnAdoptionLifecycle: admissionLifecycle,
+                }),
               abortSignal,
-              data: last.data,
-              client: last.client,
-              // Preflight hydrates each original before deriving mention facts
-              // or rendering the batch, so neither text nor metadata is lost.
-              precedingMessages: entries.slice(0, -1).map((entry) => entry.data.message),
-              turnAdoptionLifecycle: admissionLifecycle,
-            });
+            );
             if (abortSignal?.aborted) {
               await ingress.cancel();
               return;
@@ -240,8 +267,11 @@ export function createDiscordMessageDispatcher(
                     ? AbortSignal.any([ctx.abortSignal, lifecycleSignal])
                     : (ctx.abortSignal ?? lifecycleSignal);
                 try {
-                  const { processDiscordMessage } = await loadMessageProcessRuntime();
-                  await processDiscordMessage({ ...ctx, abortSignal: processAbortSignal });
+                  // The same event's retry also needs its message-keyed run slot back.
+                  await racePromiseWithAbortSignal(async () => {
+                    const { processDiscordMessage } = await loadMessageProcessRuntime();
+                    await processDiscordMessage({ ...ctx, abortSignal: processAbortSignal });
+                  }, processAbortSignal);
                   if (processAbortSignal?.aborted) {
                     // Retain prior retry facts when cancellation ends ownership before delivery.
                     await ingress.cancel();
@@ -253,8 +283,8 @@ export function createDiscordMessageDispatcher(
                     await ingress.cancel();
                   } else {
                     await ingress.abandon(error);
+                    throw error;
                   }
-                  throw error;
                 }
               } finally {
                 settlePending();
@@ -349,6 +379,57 @@ export function createDiscordMessageDispatcher(
   const handler: DiscordMessageDispatcherWithLifecycle = (data, client, options) => {
     const result = dispatchMessage(data, client, options);
     return options?.turnAdoptionLifecycle ? result : result.then(() => undefined);
+  };
+
+  handler.notifyDeadLetter = async (data, client, signal) => {
+    const abortSignal = AbortSignal.any([
+      signal,
+      dispatcherShutdown.signal,
+      ...(params.abortSignal ? [params.abortSignal] : []),
+    ]);
+    const ctx = await preflightMessage(data, client, { abortSignal });
+    if (!ctx) {
+      params.runtime.error(
+        danger(
+          `discord ingress: dead-letter notice suppressed for ${data.message.id} (access or reply policy denied, or authority expired)`,
+        ),
+      );
+      return;
+    }
+    // The REST owner rechecks this assertion after queueing and on rate-limit retries.
+    const assertCurrent = () => {
+      abortSignal.throwIfAborted();
+      if (!lifecycleActive || ctx.isPolicyCurrent?.() !== true) {
+        throw new Error("discord dead-letter notice suppressed: access authority expired");
+      }
+      if (
+        resolveChannelMessageSourceReplyDeliveryMode({
+          cfg: readConfig(),
+          ctx: {
+            ChatType: ctx.isDirectMessage
+              ? "direct"
+              : ctx.isGroupDm
+                ? "group"
+                : ctx.isGuildMessage
+                  ? "channel"
+                  : undefined,
+            InboundEventKind: ctx.inboundEventKind,
+          },
+        }) === "message_tool_only"
+      ) {
+        throw new Error("discord dead-letter notice suppressed: source-reply policy");
+      }
+    };
+    assertCurrent();
+    await withDiscordRequestAuthority(assertCurrent, () =>
+      client.rest.post(Routes.channelMessages(ctx.messageChannelId), {
+        body: {
+          content: "⚠️ Couldn't process this message after repeated failures. Please try again.",
+          message_reference: { message_id: data.message.id, fail_if_not_exists: false },
+          allowed_mentions: { parse: [], replied_user: false },
+        },
+      }),
+    );
   };
 
   handler.deactivate = async () => {

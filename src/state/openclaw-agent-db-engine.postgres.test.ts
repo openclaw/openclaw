@@ -119,6 +119,41 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
     });
   });
 
+  it("retries first creation without publishing an uninitialized anchor", () => {
+    const filename = path.join(dirs.make("pg-interrupted-creation-"), "agent.sqlite");
+    using local = openNodeSqliteDatabase(filename);
+    const selection = {
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: "postgresql://127.0.0.1:1/unavailable", schemaPrefix: "interrupted" },
+    };
+    withEngineStoreAdmission(() => {
+      expect(() =>
+        withDatabaseEngineSelection(selection, () =>
+          openAgentEngineStore(local, "retry", filename),
+        ),
+      ).toThrow("Cannot open PostgreSQL connection");
+      expect(
+        local.prepare("SELECT name FROM sqlite_master WHERE name = 'openclaw_engine_anchor'").all(),
+      ).toEqual([]);
+      selection.postgres.connection = connection!;
+      const retried = withDatabaseEngineSelection(selection, () =>
+        openAgentEngineStore(local, "retry", filename),
+      );
+      if (!isPostgresSqlConnection(retried)) {
+        throw new Error("Expected PostgreSQL agent store");
+      }
+      try {
+        expect(retried.prepare("SELECT agent_id, role FROM schema_meta").get()).toEqual({
+          agent_id: "retry",
+          role: "agent",
+        });
+      } finally {
+        retried.exec(`DROP SCHEMA "${getPostgresPhysicalFacts(retried)!.namespace}" CASCADE`);
+        retried.close();
+      }
+    });
+  });
+
   it("re-admits persisted memory extensions without DDL", () => {
     withEngineStoreAdmission(() => {
       expect(
@@ -283,6 +318,7 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         version: 31,
         postgresVectorDecoderVersion: 1,
         postgresVectorSearchVersion: 1,
+        postgresTextSearchVersion: 1,
       };
       let db = open(predecessor);
       const namespace = getPostgresPhysicalFacts(db)!.namespace;
@@ -324,6 +360,25 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
           FROM memory_index_chunks c JOIN memory_index_chunks_vec v USING(id)`)
             .all();
         const before = retained();
+        const decodeToastReads = () =>
+          db.runTransaction(() => {
+            // Backend-local relation counts exclude catalog planning and other connections.
+            // Keep both samples in one transaction so pending counts cannot flush between them.
+            const reads = () =>
+              Number(
+                db
+                  .prepare(`SELECT pg_stat_get_xact_blocks_fetched(reltoastrelid) AS reads
+                    FROM pg_class WHERE oid = 'memory_index_chunks'::regclass`)
+                  .get()?.reads,
+              );
+            const start = reads();
+            db.prepare(
+              "SELECT public.vector_send(openclaw_vector(embedding, 1536)) FROM memory_index_chunks",
+            ).get();
+            return reads() - start;
+          });
+        // The historical decoder must still trip the repeated-detoasting bound.
+        expect(decodeToastReads()).toBeGreaterThan(100);
         const project = (values: readonly number[], dimensions = values.length) => {
           const bytes = Buffer.alloc(values.length * 8);
           values.forEach((value, i) => bytes.writeDoubleLE(value, i * 8));
@@ -369,13 +424,16 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
           schema_version: agentEngineSchema.version,
         });
-        // Count buffer work, not elapsed time: one stored vector must not be detoasted per byte.
-        const explain = db
-          .prepare(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
-          SELECT public.vector_send(openclaw_vector(embedding, 1536)) FROM memory_index_chunks`)
-          .get();
-        const [plan] = JSON.parse(String(explain?.["QUERY PLAN"]));
-        expect(plan.Plan["Shared Hit Blocks"] + plan.Plan["Shared Read Blocks"]).toBeLessThan(100);
+        // Exercise both warm and cold function plans: EXPLAIN also counts catalog reads.
+        for (const cold of [false, true]) {
+          if (cold) {
+            db.close();
+            db = open(agentEngineSchema);
+          }
+          const reads = decodeToastReads();
+          expect(reads).toBeGreaterThan(0);
+          expect(reads).toBeLessThan(100);
+        }
         expect(retained()).toEqual(before);
       } finally {
         if (db.isOpen) {

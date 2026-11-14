@@ -631,6 +631,20 @@ describe("/acp command", () => {
     }
   });
 
+  it("sends every line of a multiline ACP steer instruction", async () => {
+    mockGatewaySessionResolution(defaultAcpSessionKey);
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+
+    await runCommand(
+      `/acp steer --session ${defaultAcpSessionKey} first line\n  second line\n\nfourth line`,
+    );
+
+    expectMockCallFields(hoisted.runTurnMock, {
+      mode: "steer",
+      text: "first line\n  second line\n\nfourth line",
+    });
+  });
+
   it("keeps bounded ACP steer output UTF-16 safe", async () => {
     const prefix = "a".repeat(799);
     mockGatewaySessionResolution(defaultAcpSessionKey);

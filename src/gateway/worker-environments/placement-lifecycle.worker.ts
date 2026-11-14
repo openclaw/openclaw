@@ -11,10 +11,8 @@ import type {
 } from "../../state/worker-operation-registry.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
 import type { PlacementLifecycleReceipt } from "./placement-lifecycle.types.js";
-import {
-  createPlacementMoveOps,
-  readWorkerPlacementMovesReadOnly,
-} from "./placement-move-intent.js";
+import { createPlacementMoveOps } from "./placement-move-intent.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import {
   nextGeneration,
@@ -33,6 +31,7 @@ import {
   getRequired,
   query,
   readWorkerPlacementsInDatabase,
+  readWorkerPlacementIdentitiesInDatabase,
   readWorkerPlacementsForReconcileInDatabase,
   updateTransition,
 } from "./placement-row-codec.js";
@@ -88,6 +87,10 @@ function operation<Input extends { sessionId: string }>(
 }
 
 export const placementReadOperations = {
+  "workerPlacements.readIdentities": (
+    _input: Record<string, never>,
+    { open }: WorkerOperationContext,
+  ) => readWorkerPlacementIdentitiesInDatabase(open().db),
   "workerPlacements.read": (
     input: { sessionIds?: readonly string[] },
     { open }: WorkerOperationContext,

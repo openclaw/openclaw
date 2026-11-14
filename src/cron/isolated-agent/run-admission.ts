@@ -2,6 +2,18 @@ import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 
+// A CLI child in its parent's workspace runs native tools no tool check sees, so
+// its process also ends when the parent resets.
+export function resolveCliChildAbortSignal(
+  runSignal: AbortSignal | undefined,
+  parentSignal: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (!parentSignal) {
+    return runSignal;
+  }
+  return runSignal ? AbortSignal.any([runSignal, parentSignal]) : parentSignal;
+}
+
 export function assertCronRuntimeAuthorityCandidate(params: {
   authority?: CronRuntimeAuthority;
   candidateRuntime: string;

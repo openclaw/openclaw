@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -224,15 +225,33 @@ it("reads current membership at staging admission and rejects a replaced session
     expect(mutate).toThrow("no longer owns the admitted session");
   }));
 
-it("stages and settles user turns without caller-thread SQL", () =>
-  withFixture(async ({ database, stage, pending, rows }) => {
+it("stages and settles user turns without caller-thread SQL or duplicate receipt replies", () =>
+  withFixture(async ({ database, pending, rows }) => {
     const recorder = makeRecorder("completed", database.path, true);
     let cancelled: SessionPendingInputReceipt | undefined;
+    const replyBytes = new Map<string, number[]>();
+    const replies = interceptPendingInputWorker((worker) => ({
+      execute: async (command, options) => {
+        const result = await worker.execute(command, options);
+        if (command.type === "session.pendingInputs.mutate" && isRecord(command.input)) {
+          const kind = String(command.input.kind);
+          replyBytes.set(kind, [...(replyBytes.get(kind) ?? []), serialize(result).byteLength]);
+        }
+        return result;
+      },
+    }));
     const sql = observeHostDataSql();
     try {
       expect(await recorder.stageApproved?.({ runId: "completed", assertCurrent() {} })).toBe(true);
       expect(sql.queries).toEqual([]);
-      cancelled = await stage("cancelled");
+      cancelled = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "cancelled",
+          message: { ...message("cancelled"), content: "Synthetic input. ".repeat(2048) },
+          assertCurrent() {},
+        }),
+        "Expected accepted input custody",
+      );
       const outcome = ok();
       expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
       expect(recorder.getProcessingCompletion?.()).toEqual(outcome);
@@ -241,11 +260,16 @@ it("stages and settles user turns without caller-thread SQL", () =>
       expect(() => cancelled?.run(() => {})).toThrow(SessionPendingInputCustodyError);
       await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelled.settled?.()]);
       expect(sql.queries).toEqual([]);
+      expect([...replyBytes.keys()].toSorted()).toEqual(["complete", "finish", "stage"]);
+      for (const sizes of replyBytes.values()) {
+        expect(Math.max(...sizes)).toBeLessThan(32);
+      }
     } finally {
       sql.restore();
       recorder.finishPendingInput?.("interrupted");
       cancelled?.finish("interrupted");
       await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelled?.settled?.()]);
+      replies.mockRestore();
     }
     expect(pending()).toMatchObject([{ run_id: "cancelled", state: "cancelled" }]);
     expect(rows("session_input_completions", "run_id, succeeded")).toEqual([

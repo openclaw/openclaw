@@ -12,18 +12,18 @@ const enLabs = {
       finished: "{done} completed · {failed} failed or stopped",
       completed: "{done} completed",
       failedOrStopped: "Failed or stopped",
-      childOutcome: "Child runs finished. Check the conversation for the final response.",
-      childOutcomeProcessing: "Child runs finished. The parent is processing their results.",
-      details: "Child details",
-      detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
+      childOutcome: "Subagents finished. Check the conversation for the final reply.",
+      childOutcomeProcessing: "Subagents finished. The parent agent is processing their results.",
+      details: "Subagent details",
+      detailsUnavailable:
+        "Subagent details are unavailable. Counts include all accepted subagents.",
       otherGroups: "{count} more active groups",
     },
     configure: "Configure",
     configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
-      description:
-        "Enable experimental assistance from your configured Decision model. See the documentation for supported uses, setup, and data handling.",
+      description: "Enable experimental assistance from your configured Decision model.",
       optedIn: "Preference saved.",
       loading: "Loading setting…",
       unavailable: "Couldn’t load this setting. Reconnect or refresh to try again.",
@@ -35,19 +35,19 @@ const enLabs = {
         "Set the global default for compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
       executor: "Code Mode executor",
       executorDescription:
-        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to new runs; agent overrides take precedence.",
+        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to new replies; agent overrides take precedence.",
       executorNode: "Node.js (default)",
       executorQuickjs: "QuickJS (isolated)",
     },
     toolSearch: {
-      title: "Tool Search for all models",
+      title: "Tool search for all models",
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },
     advisor: {
       title: "Advisor",
       description:
-        "Advisor reviews the conversation on the session's own model every few tool calls or minutes. If the agent is going off course, it steers the active run with one short correction. Adds model calls.",
+        "Advisor reviews the conversation on the session’s own model every few tool calls or minutes. If the agent is going off course, it steers the active reply with one short correction. Adds model calls.",
     },
     composerPredictions: {
       title: "Composer predictions",
@@ -55,9 +55,9 @@ const enLabs = {
         "Suggest a next message after a reply in the active conversation. Adds a tool-free model call using conversation context. Tab accepts the suggestion into your draft; it never sends automatically. Off by default.",
       model: "Prediction model",
       modelDescription:
-        "Utility is recommended for short, lower-cost predictions. Conversation uses the current chat model; Default uses the agent's configured primary model. An unavailable choice skips predictions instead of switching models.",
+        "Utility is recommended for short, lower-cost predictions. Session uses the current session model; Default uses the agent’s configured primary model. An unavailable choice skips predictions instead of switching models.",
       utility: "Utility model (recommended)",
-      conversation: "Conversation model",
+      conversation: "Session model",
       default: "Default model",
     },
     chatBubbles: {
@@ -65,24 +65,19 @@ const enLabs = {
       description:
         "Try speech bubbles with compact tool activity. Home uses bubbles by default while enabled; each browser keeps its explicit conversation choices. Disabling this lab restores the standard view without clearing those choices.",
     },
-    customPluginUi: {
-      title: "Custom plugin UI",
-      description:
-        "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available. Reload this tab to clear previously loaded plugin code.",
-    },
-    claws: {
-      title: "Claws",
-      description: "Claws are ready-made agents for specific tasks.",
+    templates: {
+      title: "Templates",
+      description: "Templates are ready-made agents for specific tasks.",
     },
     hostDesktop: {
-      title: "Host Desktop",
+      title: "Desktop on the computer running OpenClaw",
       description:
-        "Watch and control this Gateway machine from the Desktop panel through its existing VNC or Screen Sharing server.",
+        "Watch and control the computer running OpenClaw from the Desktop panel through its existing VNC or Screen Sharing server.",
     },
     workerDesktop: {
-      title: "Cloud Worker Desktop",
+      title: "Cloud device desktop",
       description:
-        "Watch and control node-carried desktops from capable Crabbox AWS, Azure, or Hetzner profiles with desktop: true.",
+        "Watch and control cloud device desktops from Crabbox AWS, Azure, or Hetzner profiles with desktop support enabled.",
     },
   },
 } satisfies TranslationMap;

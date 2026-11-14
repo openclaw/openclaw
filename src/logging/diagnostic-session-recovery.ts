@@ -4,20 +4,6 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 
-type DiagnosticSessionRecoverySkipReason =
-  | "active_embedded_run"
-  | "model_attempt_recovery"
-  | "active_reply_work"
-  | "human_input_wait"
-  | "runtime_owned_wait"
-  | "deferred_maintenance_wait"
-  | "terminal_outcome_committed"
-  | "global_lane_wait"
-  | "active_lane_task"
-  | "already_in_flight"
-  | "missing_session_ref"
-  | "stale_session_state";
-
 export type StuckSessionRecoveryRequest = {
   /** Exact captured controller owner; diagnostic IDs and map absence grant no authority. */
   operation?: ReplyOperation;
@@ -77,7 +63,19 @@ export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "skipped";
       action: "observe_only" | "keep_lane";
-      reason: DiagnosticSessionRecoverySkipReason;
+      reason:
+        | "active_embedded_run"
+        | "model_attempt_recovery"
+        | "active_reply_work"
+        | "human_input_wait"
+        | "runtime_owned_wait"
+        | "deferred_maintenance_wait"
+        | "terminal_outcome_committed"
+        | "global_lane_wait"
+        | "active_lane_task"
+        | "already_in_flight"
+        | "missing_session_ref"
+        | "stale_session_state";
       activeCount?: number;
       queuedCount?: number;
     })

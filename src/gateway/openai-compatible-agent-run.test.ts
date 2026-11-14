@@ -417,6 +417,22 @@ describe("OpenAI-compatible agent run terminal metadata", () => {
 });
 
 describe("OpenAI-compatible agent error envelopes", () => {
+  it("gives certificate failure guidance while retaining the native diagnostic code", () => {
+    const error = new FailoverError("Connection error.", {
+      reason: "tls_certificate",
+      code: "CERT_REVOKED",
+    });
+    expect(resolveOpenAiCompatibleAgentError(error)).toEqual({
+      status: 502,
+      error: {
+        message:
+          "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+        type: "api_error",
+        code: "CERT_REVOKED",
+      },
+    });
+  });
+
   it.each([
     {
       name: "a Gateway-cancelled run",

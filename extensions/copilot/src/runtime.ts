@@ -147,8 +147,16 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}) 
       throw new Error("[copilot] verified runtime changed; rerun setup verification");
     }
     const runtimeArtifact = capture?.binding;
-    const key = {
-      ...normalizePoolKey(inputKey, optionsForCreate.copilotHome, optionsForCreate.mode),
+    const clientMode = optionsForCreate.mode;
+    const key: PoolKey = {
+      agentId: inputKey.agentId,
+      copilotHome: normalizeCopilotHome(optionsForCreate.copilotHome),
+      authMode: inputKey.authMode,
+      authProfileId: inputKey.authProfileId,
+      authProfileVersion: inputKey.authProfileVersion,
+      // Undefined and `copilot-cli` are equivalent SDK defaults. Preserve the
+      // existing cache identity while keeping empty-mode finalizers isolated.
+      ...(clientMode === "empty" ? { clientMode } : {}),
       ...(runtimeArtifact ? { runtimeArtifactFingerprint: runtimeArtifact.fingerprint } : {}),
     };
     const cacheKey = JSON.stringify(key);
@@ -239,23 +247,6 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}) 
     release,
     dispose,
     size: () => entries.size,
-  };
-}
-
-function normalizePoolKey(
-  key: PoolKey,
-  rawCopilotHome: string,
-  clientMode: CopilotClientOptions["mode"],
-): PoolKey {
-  return {
-    agentId: key.agentId,
-    copilotHome: normalizeCopilotHome(rawCopilotHome),
-    authMode: key.authMode,
-    authProfileId: key.authProfileId,
-    authProfileVersion: key.authProfileVersion,
-    // Undefined and `copilot-cli` are equivalent SDK defaults. Preserve the
-    // existing cache identity while keeping empty-mode finalizers isolated.
-    ...(clientMode === "empty" ? { clientMode } : {}),
   };
 }
 

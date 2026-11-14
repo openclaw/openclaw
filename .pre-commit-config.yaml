@@ -50,7 +50,7 @@ repos:
 
   # Python checks for skills scripts
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 38bfb07c0c64c304f47eb52090f8288150c77730 # v0.17.1
+    rev: f368fb366ff7f2f808dd324b83a6d32267799e19 # v0.17.2
     hooks:
       - id: ruff
         files: "^skills/.*\\.py$"

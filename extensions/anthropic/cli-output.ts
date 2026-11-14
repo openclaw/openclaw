@@ -170,24 +170,23 @@ function parseClaudeJsonlRecord(line: string): Record<string, unknown> | null {
 
 /** Project Claude-owned lifecycle records without widening the legacy parser event union. */
 export const parseClaudeCliJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
-  if (!line.includes("compacting") && !line.includes("compact_result")) {
+  if (!/compacting|compact_result|compact_boundary/u.test(line)) {
     return null;
   }
   const parsed = parseClaudeJsonlRecord(line);
-  if (!parsed) {
-    return null;
+  if (
+    parsed?.compact_result === "success" ||
+    parsed?.compact_result === "failed" ||
+    (parsed?.type === "system" &&
+      parsed.subtype === "compact_boundary" &&
+      isRecord(parsed.compact_metadata) &&
+      parsed.compact_metadata.trigger === "auto")
+  ) {
+    return { kind: "compaction", phase: "end", completed: parsed.compact_result !== "failed" };
   }
-  if (parsed.compact_result === "success" || parsed.compact_result === "failed") {
-    return {
-      kind: "compaction",
-      phase: "end",
-      completed: parsed.compact_result === "success",
-    };
-  }
-  if (parsed.type === "system" && parsed.subtype === "status") {
-    return parsed.status === "compacting" ? { kind: "compaction", phase: "start" } : null;
-  }
-  return null;
+  return parsed?.type === "system" && parsed.subtype === "status" && parsed.status === "compacting"
+    ? { kind: "compaction", phase: "start" }
+    : null;
 };
 
 /** Reject malformed terminal Claude results before the generic CLI runner accepts them as prose. */

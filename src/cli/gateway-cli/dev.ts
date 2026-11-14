@@ -12,7 +12,7 @@ import { handleReset } from "../../commands/onboard-helpers.js";
 import { createConfigIO, replaceConfigFile } from "../../config/config.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../../utils.js";
+import { displayPath, resolveUserPath } from "../../utils.js";
 
 const DEV_IDENTITY_NAME = "C3-PO";
 const DEV_IDENTITY_THEME = "protocol droid";
@@ -124,6 +124,6 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
     // replacement. Declare only that synthetic deletion; authored rosters stay protected.
     writeOptions: { allowedAgentRosterRemovals: [LEGACY_IMPLICIT_AGENT_ID] },
   });
-  defaultRuntime.log(`Dev config ready: ${shortenHomePath(configPath)}`);
-  defaultRuntime.log(`Dev workspace ready: ${shortenHomePath(resolveUserPath(workspace))}`);
+  defaultRuntime.log(`Dev config ready: ${displayPath(configPath)}`);
+  defaultRuntime.log(`Dev workspace ready: ${displayPath(resolveUserPath(workspace))}`);
 }

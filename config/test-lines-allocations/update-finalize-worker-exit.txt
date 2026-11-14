@@ -1,0 +1,2 @@
+# Prove a migrated finalizer that exits before writing its result reports its exit, not ENOENT.
+37

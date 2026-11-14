@@ -455,12 +455,17 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           : cliLoopbackCalls.filter((candidate) =>
               matchesCliLoopbackCall(call.toolName, call.args, candidate.current),
             );
+        const toolName = stripOpenClawMcpToolPrefix(call.toolName);
         if (candidates.length === 1 && candidates[0]) {
-          candidates[0].outcome = terminalOutcome;
+          const candidate = candidates[0];
+          candidate.outcome = terminalOutcome;
+          candidate.browserTab =
+            !candidate.ambiguous && toolName === "browser" && call.outcome === "completed"
+              ? readToolResultDetails(call.result)?.browserTab
+              : undefined;
         } else if (candidates.length > 1) {
           markCliLoopbackCallsAmbiguous(candidates);
         }
-        const toolName = stripOpenClawMcpToolPrefix(call.toolName);
         const acceptedSessionSpawn =
           toolName === "sessions_spawn" && call.outcome === "completed"
             ? normalizeAcceptedSessionSpawnResult(call.result)
@@ -685,6 +690,11 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     handleCliToolUseStart,
     handleCliToolResult,
     resolveCliLoopbackTerminalOutcome,
+    resolveCliLoopbackBrowserTab(toolCallId: string): unknown {
+      const activeTool = activeCliTools.get(toolCallId);
+      const call = activeTool?.loopbackCall;
+      return activeTool?.loopbackAmbiguous || call?.ambiguous ? undefined : call?.browserTab;
+    },
     finishDeliveryTracking,
     finalizeCapture,
     withExecutionEvidence(output: CliOutput): CliOutput {

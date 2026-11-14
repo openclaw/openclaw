@@ -250,7 +250,9 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     ["event", "internal_system", "cron", true],
     // The agent RPC can assert provenance but never the host-derived trigger.
     ["user", "internal_system", "cron", false],
-    ["event", "internal_system", "exec", false],
+    // Every host event turn takes the same rule, whatever its source label.
+    ["event", "internal_system", "exec", true],
+    ["event", "internal_system", "cron_failure_repair", true],
     ["event", "inter_session", "cron", false],
     [undefined, undefined, undefined, false],
   ] as const)(

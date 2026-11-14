@@ -1,6 +1,6 @@
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
-  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";

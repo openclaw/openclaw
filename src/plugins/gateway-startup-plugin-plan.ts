@@ -30,6 +30,7 @@ import {
   collectConfiguredMemoryEmbeddingProviderIds,
   collectConfiguredVoiceProviderIds,
   collectConfiguredWebSearchProviderIds,
+  isWebSearchProviderAutoSelected,
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
@@ -115,6 +116,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     ),
     configuredSpeechProviderIds: collectConfiguredSpeechProviderIds(activationSourceConfig),
     configuredWebSearchProviderIds: collectConfiguredWebSearchProviderIds(activationSourceConfig),
+    autoSelectWebSearchProvider: isWebSearchProviderAutoSelected(activationSourceConfig),
     configuredModelProviderIds: collectConfiguredAgentModelProviderIds(
       activationSourceConfig,
       params.manifestRegistry,

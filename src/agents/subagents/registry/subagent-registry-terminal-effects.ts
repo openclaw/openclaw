@@ -116,7 +116,7 @@ export async function completeTerminalEffects(
   const isProvisionalKill = entry.killReconciliation !== undefined;
 
   // Duplicate receipts drain cleanup without replaying best-effort timing writes.
-  if (!suppressSessionEffects && (mutated || completeParams.recoverInterrupted === true)) {
+  if (!suppressSessionEffects && mutated) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {
@@ -152,15 +152,8 @@ export async function completeTerminalEffects(
   }
 
   const suppressedForSteerRestart = params.suppressAnnounceForSteerRestart(entry);
-  // Recovery persists its terminal state before draining this callback, so an
-  // unchanged row still needs its first session-status and progress events.
-  const shouldPublishTerminalStatus =
-    mutated ||
-    (completeParams.recoverInterrupted === true &&
-      !isProvisionalKill &&
-      !context.progressEndedEntries.has(getSubagentRunRuntimeKey(entry)));
   if (
-    shouldPublishTerminalStatus &&
+    mutated &&
     !suppressedForSteerRestart &&
     !suppressSessionEffects &&
     isCurrentSessionEffectsOwner()

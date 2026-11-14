@@ -1,0 +1,2 @@
+# Preserve thumbnail queue refusal, joining at capacity, and retry after capacity returns.
+34

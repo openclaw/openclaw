@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ConfigValidationIssue } from "./types.js";
@@ -26,6 +27,29 @@ export function createConfigWriteSafetyRejectionError(params: {
   });
 }
 
+type ConfigWritePostCommitFailure = {
+  configPath: string;
+  rollbackStatus: ConfigWriteRollbackStatus;
+  cause?: unknown;
+  publication?: "complete" | "partial";
+};
+
+function formatPostCommitFailure(
+  params: ConfigWritePostCommitFailure,
+  text: (value: string) => string = String,
+): string {
+  const recovery = {
+    restored: "The config write was rolled back.",
+    "not-restored": "The write was not rolled back. Inspect the current config before retrying.",
+    unknown: "Rollback could not be confirmed. Inspect the current config before retrying.",
+  }[params.rollbackStatus];
+  const configPath = text(params.configPath);
+  const reason = text(formatErrorMessage(params.cause));
+  return params.publication === "partial"
+    ? `Config publication failed after removing ${configPath}: ${reason}\n${recovery} Inspect recovery backups at ${configPath}.bak.`
+    : `Config was written to ${configPath}, but post-write processing failed: ${reason}\n${recovery}`;
+}
+
 /** A completed file write must not be handled as a retryable pre-write refusal. */
 export class ConfigWritePostCommitError extends Error {
   readonly configPath: string;
@@ -39,23 +63,17 @@ export class ConfigWritePostCommitError extends Error {
     cause: unknown;
     publication?: "complete" | "partial";
   }) {
-    const recovery = {
-      restored: "The config write was rolled back.",
-      "not-restored": "The write was not rolled back. Inspect the current config before retrying.",
-      unknown: "Rollback could not be confirmed. Inspect the current config before retrying.",
-    }[params.rollbackStatus];
-    super(
-      params.publication === "partial"
-        ? `Config publication failed after removing ${params.configPath}: ${formatErrorMessage(params.cause)}\n${recovery} Inspect recovery backups at ${params.configPath}.bak.`
-        : `Config was written to ${params.configPath}, but post-write processing failed: ${formatErrorMessage(params.cause)}\n${recovery}`,
-      { cause: params.cause },
-    );
+    super(formatPostCommitFailure(params), { cause: params.cause });
     this.name = "ConfigWritePostCommitError";
     this.configPath = params.configPath;
     this.rollbackStatus = params.rollbackStatus;
     this.publication = params.publication ?? "complete";
     this.recoveryBackupPath =
       params.publication === "partial" ? `${params.configPath}.bak` : undefined;
+  }
+
+  get humanOutput(): string {
+    return formatPostCommitFailure(this, sanitizeTerminalText);
   }
 }
 

@@ -107,7 +107,7 @@ describe("handleSendChat browser annotation context", () => {
               dataUrl: `data:text/plain;base64,${Buffer.from("Selected text:\nReview the deployment checklist.").toString("base64")}`,
               selectionAnnotation: {
                 text: "Review the deployment checklist.",
-                comment: "",
+                comment: "Is this still current?",
                 sessionKey: "agent:main",
                 messageId: "assistant-1",
                 start: 0,
@@ -139,13 +139,12 @@ describe("handleSendChat browser annotation context", () => {
       expect(modelPrompt.message).toBe(
         kind === "browser"
           ? "Review the annotated page\n\nExplain the highlighted issue"
-          : "Explain the highlighted issue",
+          : "> Review the deployment checklist.\n\nIs this still current?\n\nExplain the highlighted issue",
       );
-      expect(modelPrompt.attachments).toEqual([
-        expect.objectContaining({
-          mimeType: kind === "browser" ? "image/png" : "text/plain",
-        }),
-      ]);
+      // Selection comments are message text, never an uploaded file.
+      expect(modelPrompt.attachments).toEqual(
+        kind === "browser" ? [expect.objectContaining({ mimeType: "image/png" })] : undefined,
+      );
       expect(host.chatAttachments).toEqual([]);
     },
   );

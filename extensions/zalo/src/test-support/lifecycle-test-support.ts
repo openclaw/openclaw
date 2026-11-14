@@ -1,13 +1,10 @@
-import { request as httpRequest } from "node:http";
-import {
-  createPluginRuntimeMediaMock,
-  createPluginRuntimeMock,
-} from "openclaw/plugin-sdk/channel-test-helpers";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, vi } from "vitest";
+import type { monitorZaloProvider } from "../monitor.js";
 import type { ResolvedZaloAccount } from "../types.js";
 import { getUpdatesMock, loadCachedLifecycleMonitorModule } from "./monitor-mocks-test-support.js";
 
@@ -99,102 +96,29 @@ export function createImageUpdate(params?: {
 }
 
 export function createImageLifecycleCore() {
-  const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const buildChannelInboundEventContextMock = vi.fn(
-    (params: Parameters<Channel["inbound"]["buildContext"]>[0]) =>
-      finalizeInboundContextMock({
-        Body: params.message.body ?? params.message.rawBody,
-        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
-        RawBody: params.message.rawBody,
-        CommandBody: params.message.commandBody ?? params.message.rawBody,
-        From: params.from,
-        To: params.reply.to,
-        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
-        AccountId: params.route.accountId ?? params.accountId,
-        ChatType: params.conversation.kind,
-        ConversationLabel: params.conversation.label,
-        SenderName: params.sender.name,
-        SenderId: params.sender.id,
-        Provider: params.channel,
-        Surface: params.channel,
-        MessageSid: params.messageId,
-        Timestamp: params.timestamp,
-        media: params.media,
-        OriginatingChannel: params.channel,
-        OriginatingTo: params.reply.originatingTo,
-        ...params.extra,
-      }),
-  );
-  const recordInboundSessionMock = vi.fn(async () => undefined);
-  const readRemoteMediaBufferMock = vi.fn(async () => ({
-    buffer: Buffer.from("image-bytes"),
-    contentType: "image/jpeg",
-  }));
-  // Preserve the timeout-inspecting mockImplementation signature.
-  const saveRemoteMediaMock = vi.fn<Channel["media"]["saveRemoteMedia"]>(async (_params) => ({
+  const core = createPluginRuntimeMock();
+  vi.mocked(core.channel.media.saveRemoteMedia).mockResolvedValue({
     id: "zalo-photo.jpg",
     path: "/tmp/zalo-photo.jpg",
     size: Buffer.byteLength("image-bytes"),
     contentType: "image/jpeg",
-  }));
-  const saveMediaBufferMock = vi.fn(async () => ({
-    path: "/tmp/zalo-photo.jpg",
-    contentType: "image/jpeg",
-  }));
-  const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn(async () => undefined);
-  const core = createPluginRuntimeMock({
-    channel: {
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
-      },
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/zalo-sessions.json"),
-        readSessionUpdatedAtAsync: vi.fn(async () => undefined),
-        recordInboundSession: recordInboundSessionMock,
-      },
-      text: {
-        resolveMarkdownTableMode: vi.fn(() => "code" as const),
-      },
-      media: createPluginRuntimeMediaMock({
-        readRemoteMediaBuffer:
-          readRemoteMediaBufferMock as unknown as Channel["media"]["readRemoteMediaBuffer"],
-        saveRemoteMedia: saveRemoteMediaMock,
-        saveMediaBuffer: saveMediaBufferMock as unknown as Channel["media"]["saveMediaBuffer"],
-      }),
-      reply: {
-        finalizeInboundContext:
-          finalizeInboundContextMock as unknown as Channel["reply"]["finalizeInboundContext"],
-        dispatchReplyWithBufferedBlockDispatcher:
-          dispatchReplyWithBufferedBlockDispatcherMock as unknown as Channel["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-      },
-      inbound: {
-        buildContext:
-          buildChannelInboundEventContextMock as unknown as Channel["inbound"]["buildContext"],
-      },
-      commands: {
-        shouldComputeCommandAuthorized: vi.fn(() => false),
-        isControlCommandMessage: vi.fn(() => false),
-      },
-    },
   });
+  const buildContext = vi.mocked(core.channel.inbound.buildContext).getMockImplementation()!;
+  const finalizeInboundContextMock = vi.mocked(core.channel.reply.finalizeInboundContext);
+  vi.mocked(core.channel.inbound.buildContext).mockImplementation(((
+    params: Parameters<Channel["inbound"]["buildContext"]>[0],
+  ) => finalizeInboundContextMock(buildContext(params))) as Channel["inbound"]["buildContext"]);
   return {
     core,
     finalizeInboundContextMock,
-    recordInboundSessionMock,
-    readRemoteMediaBufferMock,
-    saveRemoteMediaMock,
-    saveMediaBufferMock,
+    recordInboundSessionMock: vi.mocked(core.channel.session.recordInboundSession),
+    readRemoteMediaBufferMock: vi.mocked(core.channel.media.readRemoteMediaBuffer),
+    saveRemoteMediaMock: vi.mocked(core.channel.media.saveRemoteMedia),
+    saveMediaBufferMock: vi.mocked(core.channel.media.saveMediaBuffer),
   };
 }
 
-export function expectImageLifecycleDelivery(params: {
-  readRemoteMediaBufferMock: ReturnType<typeof vi.fn>;
-  saveRemoteMediaMock: ReturnType<typeof vi.fn>;
-  saveMediaBufferMock: ReturnType<typeof vi.fn>;
-  finalizeInboundContextMock: ReturnType<typeof vi.fn>;
-  recordInboundSessionMock: ReturnType<typeof vi.fn>;
-}) {
+export function expectImageLifecycleDelivery(params: ReturnType<typeof createImageLifecycleCore>) {
   const context = expect.objectContaining({
     SenderName: "Test User",
     media: [expect.objectContaining({ path: "/tmp/zalo-photo.jpg", contentType: "image/jpeg" })],
@@ -221,52 +145,6 @@ export async function settleAsyncWork(): Promise<void> {
   }
 }
 
-async function postWebhookUpdate(params: {
-  baseUrl: string;
-  path: string;
-  secret: string;
-  payload: Record<string, unknown>;
-}) {
-  const url = new URL(params.path, params.baseUrl);
-  const body = JSON.stringify(params.payload);
-  return await new Promise<{ status: number; body: string }>((resolve, reject) => {
-    const req = httpRequest(
-      url,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-          "x-bot-api-secret-token": params.secret,
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        res.on("end", () => {
-          resolve({
-            status: res.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
-        });
-      },
-    );
-    req.on("error", reject);
-    req.end(body);
-  });
-}
-
-export async function postWebhookReplay(
-  params: Parameters<typeof postWebhookUpdate>[0] & { beforeReplay?: () => Promise<void> },
-) {
-  const first = await postWebhookUpdate(params);
-  await params.beforeReplay?.();
-  const replay = await postWebhookUpdate(params);
-  return { first, replay };
-}
-
 export async function replayLifecycleWebhook(
   monitor: {
     route: { handler: Parameters<typeof withServer>[0] };
@@ -276,22 +154,26 @@ export async function replayLifecycleWebhook(
   waitBeforeReplay = false,
   settle = monitor.waitForIdle,
 ) {
-  await withServer(
-    (req, res) => {
-      monitor.route.handler(req, res);
-    },
-    async (baseUrl) => {
-      const { first, replay } = await postWebhookReplay({
-        baseUrl,
-        path: "/hooks/zalo",
-        secret: "supersecret",
-        payload,
-        beforeReplay: waitBeforeReplay ? monitor.waitForIdle : undefined,
+  await withServer(monitor.route.handler, async (baseUrl) => {
+    const post = async () => {
+      const response = await fetch(`${baseUrl}/hooks/zalo`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-bot-api-secret-token": "supersecret",
+        },
+        body: JSON.stringify(payload),
       });
-      expect([first.status, replay.status]).toEqual([200, 200]);
-      await settle();
-    },
-  );
+      await response.arrayBuffer();
+      return response.status;
+    };
+    const first = await post();
+    if (waitBeforeReplay) {
+      await monitor.waitForIdle();
+    }
+    expect([first, await post()]).toEqual([200, 200]);
+    await settle();
+  });
 }
 
 export async function withStoppedMonitor<T extends { stop: () => Promise<void> }>(
@@ -319,17 +201,13 @@ export function queueLifecycleUpdate(
 export async function startPollingLifecycleMonitor(
   cacheKey: string,
   setup: Partial<LifecycleMonitorSetupParams> = {},
-  options: Pick<
-    Parameters<
-      Awaited<ReturnType<typeof loadCachedLifecycleMonitorModule>>["monitorZaloProvider"]
-    >[0],
-    "token" | "fetcher" | "statusSink"
-  > = { token: "zalo-token" },
+  options: Pick<Parameters<typeof monitorZaloProvider>[0], "token" | "fetcher" | "statusSink"> = {
+    token: "zalo-token",
+  },
 ) {
   const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(cacheKey);
   const abort = new AbortController();
   const runtime = createRuntimeEnv();
-  const started = Date.now();
   const run = monitorZaloProvider({
     ...createLifecycleMonitorSetup({ accountId: "default", dmPolicy: "open", ...setup }),
     runtime,
@@ -337,10 +215,7 @@ export async function startPollingLifecycleMonitor(
     ...options,
   });
   return {
-    abort,
-    run,
     runtime,
-    started,
     stop: async () => {
       abort.abort();
       await run;

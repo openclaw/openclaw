@@ -1,20 +1,133 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeAtHashSlug,
+  normalizeStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
 import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { MsgContext } from "../templating.js";
-import {
-  type AllowFromFormatter,
-  type ExplicitElevatedAllowField,
-  buildFormattedTokens,
-  buildMutableTokens,
-  matchesFormattedTokens,
-  matchesMutableTokens,
-  parseExplicitElevatedAllowEntry,
-} from "./elevated-allowlist-matcher.js";
 export { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
+
+/** Explicit allowFrom fields supported by elevated sender matching. */
+type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";
+const INTERNAL_ALLOWLIST_CHANNEL = "webchat";
+
+const EXPLICIT_ELEVATED_ALLOW_FIELDS: readonly ExplicitElevatedAllowField[] = [
+  "id",
+  "from",
+  "e164",
+  "name",
+  "username",
+  "tag",
+];
+
+const SENDER_PREFIXES = [
+  ...CHAT_CHANNEL_ORDER,
+  INTERNAL_ALLOWLIST_CHANNEL,
+  "user",
+  "group",
+  "channel",
+];
+const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
+
+/** Channel-specific formatter for allowFrom identity values. */
+type AllowFromFormatter = (values: string[]) => string[];
+
+/** Parses explicit elevated allowlist entries such as `id:telegram:123`. */
+function parseExplicitElevatedAllowEntry(
+  entry: string,
+): { field: ExplicitElevatedAllowField; value: string } | null {
+  const separatorIndex = entry.indexOf(":");
+  if (separatorIndex <= 0) {
+    return null;
+  }
+  const fieldRaw = normalizeLowercaseStringOrEmpty(entry.slice(0, separatorIndex));
+  const field = EXPLICIT_ELEVATED_ALLOW_FIELDS.find((candidate) => candidate === fieldRaw);
+  if (!field) {
+    return null;
+  }
+  const value = entry.slice(separatorIndex + 1).trim();
+  if (!value) {
+    return null;
+  }
+  return {
+    field,
+    value,
+  };
+}
+
+function addTokenVariants(tokens: Set<string>, value: string): void {
+  if (!value) {
+    return;
+  }
+  tokens.add(value);
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  if (normalized) {
+    tokens.add(normalized);
+  }
+}
+
+/** Builds the channel-formatted identity variants used on both sides of matching. */
+function buildFormattedTokens(params: {
+  formatAllowFrom: AllowFromFormatter;
+  value: string;
+  includeStripped?: boolean;
+}): Set<string> {
+  const tokens = new Set<string>();
+  const values = params.includeStripped
+    ? [params.value, params.value.trim().replace(SENDER_PREFIX_RE, "")].filter(Boolean)
+    : [params.value];
+  for (const entry of params.formatAllowFrom(values)) {
+    addTokenVariants(tokens, entry);
+  }
+  return tokens;
+}
+
+/** Checks a value against formatted identity tokens. */
+function matchesFormattedTokens(params: {
+  formatAllowFrom: AllowFromFormatter;
+  value: string;
+  includeStripped?: boolean;
+  tokens: Set<string>;
+}): boolean {
+  for (const token of buildFormattedTokens(params)) {
+    if (params.tokens.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildMutableTokenVariants(value: string): Set<string> {
+  const tokens = new Set<string>();
+  addTokenVariants(tokens, value);
+  addTokenVariants(tokens, normalizeAtHashSlug(value));
+  return tokens;
+}
+
+/** Builds normalized variants for mutable labels such as names and tags. */
+function buildMutableTokens(value?: string): Set<string> {
+  return buildMutableTokenVariants(normalizeOptionalString(value) ?? "");
+}
+
+/** Checks mutable label text against normalized token variants. */
+function matchesMutableTokens(value: string, tokens: Set<string>): boolean {
+  if (!value || tokens.size === 0) {
+    return false;
+  }
+  for (const probe of buildMutableTokenVariants(value)) {
+    if (tokens.has(probe)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function resolveAllowFromFormatter(params: {
   cfg: OpenClawConfig;

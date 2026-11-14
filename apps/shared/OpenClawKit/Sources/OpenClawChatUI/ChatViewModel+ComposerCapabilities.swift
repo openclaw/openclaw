@@ -220,7 +220,7 @@ extension OpenClawChatViewModel {
 
     var composerWebSearchEnabled: Bool {
         self.composerCapabilityCatalog.webSearchAvailable &&
-            (self.composerToolOverrides.webSearch ?? self.composerCapabilityCatalog.webSearchBaseEnabled)
+            self.composerCapabilityCatalog.webSearchBaseEnabled && self.composerToolOverrides.webSearch != false
     }
 
     func composerSkillEnabled(_ skill: OpenClawChatComposerSkill) -> Bool {

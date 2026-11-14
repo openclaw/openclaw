@@ -453,6 +453,33 @@ describe("native Browser panel ownership", () => {
     expect(controller).toMatchObject({ activeTargetId: null, tabs: [], urlDraft: "" });
   });
 
+  it.each([true, false])(
+    "settles hosted native tab closure from its acknowledgment before the state push (ok=%s)",
+    async (ok) => {
+      const native = fakeNativeBrowser([nativeTab("mac-last")]);
+      const panel = await mountSessionPanel("");
+      await waitForSolid(() => expect(panel.hostedTabs.map((tab) => tab.id)).toEqual(["mac-last"]));
+      native.postMessage.mockImplementation(async (message) =>
+        message.type === "close" && !ok
+          ? { ok: false, error: "Native close refused" }
+          : { ok: true },
+      );
+
+      await panel.closeHostedTab("mac-last");
+      await panel.updateComplete;
+      expect(native.messages()).toContainEqual({ type: "close", tabId: "mac-last" });
+      expect(panel.hostedTabs.map((tab) => tab.id)).toEqual(ok ? [] : ["mac-last"]);
+      expect(address(panel)?.value).toBe(ok ? "" : "https://example.test/page");
+      if (ok) {
+        native.publish([]);
+        await panel.updateComplete;
+        expect(panel.hostedTabs).toEqual([]);
+      } else {
+        expect(panel.textContent).toContain("Native close refused");
+      }
+    },
+  );
+
   it("lets a newer pending open win over the automatic fallback selection", async () => {
     const native = fakeNativeBrowser();
     const { controller } = controllerFixture();

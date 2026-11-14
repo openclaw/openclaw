@@ -2,6 +2,7 @@ import type { BigIntStats } from "node:fs";
 import type { BackupProgressInfo, DatabaseSync } from "node:sqlite";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import type { SqliteIntegrityCheckOptions } from "./sqlite-integrity.js";
+import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
@@ -9,11 +10,12 @@ export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: st
 export type CreateVerifiedSqliteSnapshotOptions = {
   sourcePath: string;
   targetPath: string;
-  /** Only in an isolated child: acquire and consume a fresh private image, including crash recovery. */
+  /** Only in an isolated child: acquire or take custody of the same operation's private image. */
   sourceAcquisition?: {
     mode: "isolated-process";
     stagingRoot: string;
     preserveSourceArtifacts?: boolean;
+    preparedSource?: PreparedSqliteSnapshotSource;
   };
   onProgress?: (progress: BackupProgressInfo) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */

@@ -17,11 +17,6 @@ vi.mock("./http-common.js", async (importOriginal) => ({
   sendMissingScopeForbidden: vi.fn(),
 }));
 
-vi.mock("./method-scopes.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./method-scopes.js")>()),
-  authorizeOperatorScopesForMethod: vi.fn(),
-}));
-
 const {
   readJsonBodyOrError: readBody,
   sendMethodNotAllowed,
@@ -31,7 +26,6 @@ const {
   authorizeGatewayHttpRequestOrReply: authorize,
   resolveSharedSecretHttpOperatorScopes: scopes,
 } = await import("./http-utils.js");
-const { authorizeOperatorScopesForMethod: authorizeScopes } = await import("./method-scopes.js");
 
 type RequestAuth = NonNullable<Awaited<ReturnType<typeof authorize>>>;
 
@@ -65,7 +59,6 @@ const handleEndpoint = (
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(authorizeScopes).mockReturnValue({ allowed: true });
   vi.mocked(scopes).mockReturnValue(["operator.write"]);
 });
 
@@ -125,14 +118,9 @@ it("matches paths without trusting malformed Host headers", async () => {
 it("returns undefined and replies when required operator scope is missing", async () => {
   vi.mocked(authorize).mockResolvedValue(authorizedRequest({ trustDeclaredOperatorScopes: false }));
   vi.mocked(scopes).mockReturnValue(["operator.approvals"]);
-  vi.mocked(authorizeScopes).mockReturnValue({
-    allowed: false,
-    missingScope: "operator.write",
-  });
   const res = {} as ServerResponse;
 
   expect(await handleEndpoint({}, res)).toBeUndefined();
-  expect(authorizeScopes).toHaveBeenCalledWith("chat.send", ["operator.approvals"]);
   expect(sendMissingScopeForbidden).toHaveBeenCalledWith(res, "operator.write");
   expect(readBody).not.toHaveBeenCalled();
 });

@@ -22,8 +22,13 @@ beforeAll(async () => {
   ({ createFeishuReplyDispatcher } = await import("./reply-dispatcher.js"));
 });
 
-async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
-  const finalText = queuedPreviews.length ? final : first;
+it("replaces obsolete previews with the final reply during delayed native CardKit delivery", async ({
+  signal,
+}) => {
+  const queuedPreviews = [
+    `${first} An obsolete intermediate continuation.`,
+    `${first} An obsolete intermediate continuation. Another obsolete continuation.`,
+  ];
   const requests: WireRequest[] = [];
   const errors: unknown[] = [];
   const firstWriteStarted = createDeferred<void>();
@@ -57,11 +62,10 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
           }
           result = { code: 0 };
         } else if (
-          method === "PUT" &&
-          (path.endsWith("/elements/content") || path.endsWith("/elements/note/content"))
+          (method === "PUT" &&
+            (path.endsWith("/elements/content") || path.endsWith("/elements/note/content"))) ||
+          (method === "PATCH" && path.endsWith("/settings"))
         ) {
-          result = { code: 0 };
-        } else if (method === "PATCH" && path.endsWith("/settings")) {
           result = { code: 0 };
         } else {
           throw new Error(`Unexpected owned Feishu request: ${method} ${path}`);
@@ -124,7 +128,6 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
       },
     });
     cleanup = dispatcher.dispatcherOptions.onCleanup;
-    expect(dispatcher.replyOptions.onPartialReply).toBeTypeOf("function");
     dispatcher.replyOptions.onPartialReply?.({ text: first });
     await withinTest(firstWriteStarted.promise, signal);
     // Hold the first real write while queued snapshots and the final arrive.
@@ -132,7 +135,7 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
       dispatcher.replyOptions.onPartialReply?.({ text });
     }
     const delivered = (await withinTest(
-      dispatcher.delivery.deliver({ text: finalText }, { kind: "final" }),
+      dispatcher.delivery.deliver({ text: final }, { kind: "final" }),
       signal,
     )) as FeishuReplyDeliveryResultWithFinalization;
     idle = Promise.resolve(dispatcher.dispatcherOptions.onIdle?.());
@@ -142,18 +145,16 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
     expect(errors).toEqual([]);
     expect(accepted).toMatchObject({
       visibleReplySent: true,
-      content: finalText,
+      content: final,
       receipt: { primaryPlatformMessageId: "om_owned_stream" },
     });
     const messageSends = requests.filter((request) => request.path === "/open-apis/im/v1/messages");
-    expect(messageSends).toMatchObject([
+    expect(messageSends.map(({ search, body }) => Object.assign({ search }, body))).toMatchObject([
       {
         search: "?receive_id_type=chat_id",
-        body: {
-          receive_id: "oc_owned_chat",
-          msg_type: "interactive",
-          content: JSON.stringify({ type: "card", data: { card_id: "owned-card" } }),
-        },
+        receive_id: "oc_owned_chat",
+        msg_type: "interactive",
+        content: JSON.stringify({ type: "card", data: { card_id: "owned-card" } }),
       },
     ]);
     const contentWrites = requests.filter(
@@ -165,17 +166,12 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
         : (JSON.parse(String(request.body.element)) as { content: string }).content,
     );
     const close = requests.find((request) => request.path.endsWith("/settings"));
-    const summary = queuedPreviews.length
-      ? "The first accepted preview sentence. The comple..."
-      : first;
+    const summary = "The first accepted preview sentence. The comple...";
     expect(JSON.parse(String(close?.body.settings))).toMatchObject({
-      config: {
-        streaming_mode: false,
-        summary: { content: summary },
-      },
+      config: { streaming_mode: false, summary: { content: summary } },
     });
     expect(requests.at(-1)).toBe(close);
-    return contents;
+    expect(contents).toEqual([first, final]);
   } finally {
     releaseFirstWrite.resolve();
     await idle?.catch(() => {});
@@ -185,18 +181,4 @@ async function runStreamingTurn(queuedPreviews: string[], signal: AbortSignal) {
     server.closeAllConnections();
     await promisify(server.close.bind(server))();
   }
-}
-
-it.for([
-  {
-    name: "replaces obsolete previews with the final reply",
-    previews: [
-      `${first} An obsolete intermediate continuation.`,
-      `${first} An obsolete intermediate continuation. Another obsolete continuation.`,
-    ],
-    expected: [first, final],
-  },
-  { name: "preserves the single-preview card and receipt", previews: [], expected: [first] },
-])("Feishu delayed native CardKit delivery $name", async ({ previews, expected }, { signal }) => {
-  expect(await runStreamingTurn(previews, signal)).toEqual(expected);
 });

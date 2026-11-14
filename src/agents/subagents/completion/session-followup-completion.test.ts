@@ -199,3 +199,35 @@ it.each([
     expect(release).toHaveBeenCalledOnce();
   },
 );
+
+it("materializes retained cancellation errors before notifying observers without replacing them", async () => {
+  const cause = new Error("requester changed");
+  const reason = new Error("custody revoked", { cause });
+  const formatted = new Set<Error>();
+  const prepareStackTrace = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+  Error.prepareStackTrace = (error) => {
+    formatted.add(error);
+    return `${error.name}: ${error.message}`;
+  };
+  let formattedAtAbort = false;
+  owner.signal.addEventListener("abort", () => {
+    formattedAtAbort = formatted.has(reason) && formatted.has(cause);
+  });
+  const taken = owner.take().catch((error: unknown) => error);
+  try {
+    owner.close(reason);
+    expect(formattedAtAbort).toBe(true);
+    expect(owner.signal.reason).toBe(reason);
+    expect(await taken).toBe(reason);
+    expect(reason.message).toBe("custody revoked");
+    expect(reason.cause).toBe(cause);
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    if (prepareStackTrace) {
+      Object.defineProperty(Error, "prepareStackTrace", prepareStackTrace);
+    } else {
+      Reflect.deleteProperty(Error, "prepareStackTrace");
+    }
+    await taken;
+  }
+});

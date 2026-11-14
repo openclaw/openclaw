@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -166,6 +167,7 @@ async function setup(kind: "channel" | "direct" = "channel") {
     logDebugMessage: vi.fn(),
     core: {
       channel: {
+        inbound: { buildContext: buildChannelInboundEventContext },
         routing: { resolveAgentRoute: () => route },
         activity: { record: vi.fn() },
         commands: { shouldHandleTextCommands: () => false, isControlCommandMessage: () => false },

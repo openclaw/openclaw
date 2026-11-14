@@ -28,7 +28,7 @@ import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fen
 import { readTranscriptStatsAsync } from "./session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
 import { readRecentUserAssistantTextForSession as recentText } from "./transcript.js";
-import type { InternalSessionEntry } from "./types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type InternalSessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -76,7 +76,7 @@ const accounting = {
   estimatedCostUsd: 0.5,
   totalTokens: 100,
   totalTokensFresh: true,
-  totalTokensVersion: 1,
+  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
   contextBudgetStatus: contextBudgetStatusFixture({ route: "compact_only", shouldCompact: true }),
   cliSessionIds: { synthetic: "old" },
   cliSessionBindings: { synthetic: { sessionId: "old" } },

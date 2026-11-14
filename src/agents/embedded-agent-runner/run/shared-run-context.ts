@@ -6,6 +6,7 @@ export function projectEmbeddedMessageContext(run: Partial<EmbeddedForegroundPro
     requesterOrigin: run.requesterOrigin,
     operatorProfileId: run.operatorProfileId,
     conversationId: run.conversationId,
+    sessionPromptDelivery: run.sessionPromptDelivery,
     senderId: run.senderId,
     senderName: run.senderName,
     senderUsername: run.senderUsername,

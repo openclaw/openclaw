@@ -130,6 +130,6 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
         undefined,
       );
     }
-    expect(preparations).toHaveBeenCalledTimes(round + 1);
+    expect(preparations).toHaveBeenCalledTimes(1);
   }
 });

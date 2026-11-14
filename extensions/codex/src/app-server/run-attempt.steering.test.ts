@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type { setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -9,9 +10,10 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { JsonObject } from "./protocol.js";
-import { itemNotification } from "./protocol.test-helpers.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createCodexRuntimePlanFixture,
@@ -55,13 +57,17 @@ async function waitForRegisteredRun(sessionId: string) {
   return registeredRun(sessionId)!;
 }
 
-function registeredCleanup(sessionId: string) {
-  const index = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLastIndex(
-    (call) => call[0] === sessionId,
-  );
-  const cleanup = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.results[index]?.value;
-  expect(cleanup).toBeTypeOf("function");
-  return cleanup;
+type SteeringHarness = ReturnType<typeof createStartedThreadHarness>;
+const steeringRequests = (harness: SteeringHarness) =>
+  harness.requests.filter(({ method }) => method === "turn/steer");
+const complete = (harness: SteeringHarness) =>
+  harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+function assistantDelta(itemId: string, delta: string) {
+  return {
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread-1", turnId: "turn-1", itemId, delta },
+  };
 }
 
 function expectSingleSteer(requests: Array<{ method: string; params?: unknown }>, text: string) {
@@ -97,6 +103,72 @@ function assistantItem(
 
 const consumedUser = (clientId: string, id = "steered-user-message") =>
   itemNotification("item/completed", { id, type: "userMessage", clientId });
+
+it.each(["consumed", "unconfirmed"] as const)(
+  "settles submitted steering before terminal tool interruption (%s)",
+  async (outcome) => {
+    const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
+    const params = createSteeringParams();
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const tool = createRuntimeDynamicTool("terminal_tool");
+    tool.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Waiting for follow-up" }],
+      details: { status: "yielded" },
+    }));
+    setCodexTestToolFactory(params, () => [tool]);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const run = runCodexAppServerAttempt(params);
+    try {
+      await run.waitForTurnAccepted();
+      const handle = registeredRun(params.sessionId)!;
+      const accepted = vi.fn();
+      const settled = vi.fn();
+      const delivery = handle.queueMessage("Keep this follow-up", {
+        debounceMs: 0,
+        waitForTranscriptCommit: true,
+        onQueueAccepted: accepted,
+        onQueueSettled: settled,
+      });
+      await harness.waitForMethod("turn/steer");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+      const clientId = steerClientId(
+        harness.requests.find(({ method }) => method === "turn/steer"),
+      );
+
+      await expect(
+        harness.handleServerRequest({
+          id: "terminal-tool",
+          method: "item/tool/call",
+          params: createDynamicToolCall("terminal_tool", {}, "terminal-tool"),
+        }),
+      ).resolves.toMatchObject({ success: true });
+      await yieldImmediate();
+      expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
+
+      if (outcome === "consumed") {
+        await vi.advanceTimersByTimeAsync(10);
+        await harness.notify(consumedUser(clientId));
+        await expect(delivery).resolves.toBeUndefined();
+      } else {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(delivery).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+      }
+      await harness.waitForMethod("turn/interrupt");
+      await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" }));
+      await run;
+      expect(settled).toHaveBeenCalledOnce();
+      expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toHaveLength(1);
+      expect(harness.requests.filter(({ method }) => method === "turn/steer")).toHaveLength(1);
+    } finally {
+      harness.close();
+      await run;
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each(["host tool", "local projection"] as const)(
   "keeps native execution ownership during %s after a long turn",
@@ -328,15 +400,7 @@ it("marks the active run aborted before asynchronous cleanup releases its handle
   expect(handle?.isAborted?.()).toBe(true);
   expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).not.toHaveBeenCalled();
   expect(readAttemptTerminal(await run).aborted).toBe(true);
-  const cleanup = registeredCleanup(params.sessionId);
-  expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
-    params.sessionId,
-    handle,
-    params.sessionKey,
-    params.sessionFile,
-    undefined,
-    cleanup,
-  );
+  expect(queueActiveRunMessageForTest(params.sessionId, "after abort")).toBe(false);
   expect(requests).toContainEqual({
     method: "turn/interrupt",
     params: { threadId: "thread-1", turnId: "turn-1" },
@@ -424,22 +488,11 @@ it.each([
   );
   for (const id of ["answer-a", "answer-b"]) {
     await notify(assistantItem("item/started", id, ""));
-    await notify({
-      method: "item/agentMessage/delta",
-      params: { threadId: "thread-1", turnId: "turn-1", itemId: id, delta: id },
-    });
+    await notify(assistantDelta(id, id));
     await notify(assistantItem("item/completed", id, id));
   }
   await notify(assistantItem("item/started", "unfinished-answer", ""));
-  await notify({
-    method: "item/agentMessage/delta",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      itemId: "unfinished-answer",
-      delta: "PRE-STEER-INCOMPLETE",
-    },
-  });
+  await notify(assistantDelta("unfinished-answer", "PRE-STEER-INCOMPLETE"));
   await preSteerVisible.promise;
   expect(onPartialReply).toHaveBeenCalledWith({
     text: "PRE-STEER-INCOMPLETE",
@@ -574,33 +627,6 @@ it.each([
   ]);
 });
 
-it("still steers an image when gateway question cancellation fails", async () => {
-  const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
-  const params = createSteeringParams();
-  const run = runCodexAppServerAttempt(params, {
-    pluginConfig: { appServer: { mode: "yolo" } },
-  });
-  await waitForMethod("turn/start");
-  const handle = await waitForRegisteredRun(params.sessionId);
-
-  activeRunRegistrationMocks.cancelQuestionError = new Error("gateway unavailable");
-  const delivered = handle!.queueMessage("inspect this", {
-    debounceMs: 0,
-    images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    isInboundUserMessage: true,
-  });
-  await vi.waitFor(
-    () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
-    fastWait,
-  );
-  const steer = requests.findLast((entry) => entry.method === "turn/steer");
-  const clientUserMessageId = steerClientId(steer);
-  await notify(consumedUser(clientUserMessageId));
-  await delivered;
-  await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-  await run;
-});
-
 it("steers during native automatic compaction through session-file registration", async () => {
   const { requests, completeTurn, notify, waitForMethod } = createStartedThreadHarness();
   const params = createSteeringParams();
@@ -609,15 +635,6 @@ it("steers during native automatic compaction through session-file registration"
 
   const run = runCodexAppServerAttempt(params);
   await run.waitForTurnAccepted();
-
-  expect(activeRunRegistrationMocks.setActiveEmbeddedRun).toHaveBeenCalledWith(
-    params.sessionId,
-    expect.anything(),
-    params.sessionKey,
-    params.sessionFile,
-    "main",
-  );
-  const cleanup = registeredCleanup(params.sessionId);
 
   await notify(
     itemNotification("item/started", { id: "automatic-compaction", type: "contextCompaction" }),
@@ -635,14 +652,7 @@ it("steers during native automatic compaction through session-file registration"
   await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
   await run;
 
-  expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
-    params.sessionId,
-    expect.anything(),
-    params.sessionKey,
-    params.sessionFile,
-    undefined,
-    cleanup,
-  );
+  expect(queueActiveRunMessageForTest(params.sessionId, "after completion")).toBe(false);
 });
 
 it("steers a runtime-event completion with its inbound context ahead of the prompt", async () => {
@@ -722,39 +732,41 @@ it("seals unsent steering without erasing an earlier consumed dispatch", async (
   expect(onLateAccepted).toHaveBeenCalledWith(false);
 });
 
-it("steers a human image control without cancelling the pending Codex question", async () => {
-  const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
-  const params = createSteeringParams();
-  const run = runCodexAppServerAttempt(params, {
-    pluginConfig: { appServer: { mode: "yolo" } },
-  });
-  await run.waitForTurnAccepted();
-  const handle = registeredRun(params.sessionId);
-  if (!handle) {
-    throw new Error("Expected the actual published Codex backend");
-  }
-  const cancellations =
-    activeRunRegistrationMocks.cancelPendingAgentQuestionForSession.mock.calls.length;
-  const accepted = vi.fn();
-  const delivery = handle.queueMessage("inspect this without answering the question", {
-    debounceMs: 0,
-    images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    isInboundUserMessage: true,
-    allowPendingUserInputAnswer: false,
-    onQueueAccepted: accepted,
-  });
-  try {
-    await waitForMethod("turn/steer");
-    const steer = requests.findLast((entry) => entry.method === "turn/steer");
-    await notify(consumedUser(steerClientId(steer)));
-    await delivery;
-    expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
-    expect(activeRunRegistrationMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledTimes(
-      cancellations,
-    );
-    expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1);
-  } finally {
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-  }
-});
+it.each(["cancellation fails", "keep pending question"] as const)(
+  "steers a human image when %s",
+  async (mode) => {
+    const harness = createStartedThreadHarness();
+    const params = createSteeringParams();
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await run.waitForTurnAccepted();
+    const handle = await waitForRegisteredRun(params.sessionId);
+    const cancelQuestion = activeRunRegistrationMocks.cancelPendingAgentQuestionForSession;
+    const cancellations = cancelQuestion.mock.calls.length;
+    if (mode === "cancellation fails") {
+      activeRunRegistrationMocks.cancelQuestionError = new Error("gateway unavailable");
+    }
+    const accepted = vi.fn();
+    const delivery = handle.queueMessage("inspect this", {
+      debounceMs: 0,
+      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
+      isInboundUserMessage: true,
+      ...(mode === "keep pending question" ? { allowPendingUserInputAnswer: false } : {}),
+      onQueueAccepted: accepted,
+    });
+    try {
+      await harness.waitForMethod("turn/steer");
+      await harness.notify(consumedUser(steerClientId(steeringRequests(harness).at(-1))));
+      await delivery;
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+      if (mode === "keep pending question") {
+        expect(cancelQuestion).toHaveBeenCalledTimes(cancellations);
+      }
+      expect(steeringRequests(harness)).toHaveLength(1);
+    } finally {
+      await complete(harness);
+      await run;
+    }
+  },
+);

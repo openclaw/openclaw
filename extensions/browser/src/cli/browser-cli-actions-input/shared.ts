@@ -98,9 +98,12 @@ export async function readFields(opts: {
   if (opts.fields !== undefined && opts.fieldsFile !== undefined) {
     throw new Error("Specify only one of --fields or --fields-file");
   }
-  const payload = opts.fieldsFile
-    ? decodeJsonInput(await fs.readFile(opts.fieldsFile), "--fields-file")
-    : (opts.fields ?? "");
+  let payload = opts.fields ?? "";
+  if (opts.fieldsFile) {
+    // Fields files retain their uncapped, symlink-following input contract.
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(opts.fieldsFile) });
+    payload = decodeJsonInput(buffer, "--fields-file");
+  }
   return normalizeBrowserFormFields(parseBrowserInputArray(payload, "fields"));
 }
 

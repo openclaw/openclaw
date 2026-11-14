@@ -1,0 +1,2 @@
+# Prove both guild-scoped presence markers exist before clearing one scope.
+2

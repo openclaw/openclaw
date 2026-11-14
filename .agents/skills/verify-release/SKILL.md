@@ -61,8 +61,9 @@ Use these checks only for the regular orchestrated release track.
      immutable publication plans, registry readback, and workflow jobs. A selected
      recovery subset must not narrow the full expected release set:
      `gh api repos/openclaw/openclaw/actions/runs/<RUN>/jobs --paginate`.
-   - Each expected npm plugin must have version `<VERSION>` and
-     `dist-tags.latest === <VERSION>`.
+   - For each expected npm plugin, verify the planned version and npm selector
+     from that immutable publication plan. A regular beta publishes to `beta`;
+     do not require it to move `latest`. Verify any planned mirror tags separately.
 4. ClawHub:
    - Check the Plugin ClawHub Release workflow conclusion and publish job count.
    - Use OpenClaw itself for live registry proof:

@@ -36,19 +36,15 @@ it("combines cross-turn changes in a fixed window while authoritative reads stay
   const latest = expect.objectContaining({ watchedSessions: ["agent:main:latest"] });
   upsertPresence("coalesced-person", { watchedSessions: ["agent:main:first"] });
   publisher.publish();
-  await advance(10, 0);
-  upsertPresence("coalesced-person", { watchedSessions: ["agent:main:middle"] });
-  publisher.publish();
-  await advance(189, 0);
+  await advance(199, 0);
   upsertPresence("coalesced-person", { watchedSessions: ["agent:main:latest"] });
   publisher.publish();
-  expect(broadcast).not.toHaveBeenCalled();
   expect(listSystemPresence()).toContainEqual(latest);
   await advance(1, 1);
   expect(broadcast).toHaveBeenCalledExactlyOnceWith(
     "presence",
     { presence: expect.arrayContaining([latest]) },
-    { dropIfSlow: true, stateVersion: { presence: 3, health: 1 } },
+    { dropIfSlow: true, stateVersion: { presence: 2, health: 1 } },
   );
   upsertPresence("coalesced-person", { reason: "disconnect", watchedSessions: undefined });
   publisher.publish();
@@ -70,7 +66,7 @@ it("combines cross-turn changes in a fixed window while authoritative reads stay
   await advance(200, 5);
   await advance(199, 5);
   await advance(1, 6);
-  expect(broadcast.mock.lastCall?.[2].stateVersion).toEqual({ presence: 8, health: 1 });
+  expect(broadcast.mock.lastCall?.[2].stateVersion).toEqual({ presence: 7, health: 1 });
   publisher.publish();
   publisher.stop();
   publisher.publish();

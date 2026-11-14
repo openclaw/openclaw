@@ -1,4 +1,5 @@
 import fs, { existsSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -103,7 +104,7 @@ it("drains accepted preferences before closing the worker owner and accepts writ
   });
 });
 
-it("carries the worker-read path through delivery and plugin prompt rendering without caller SQL", async () => {
+it("carries the worker-read path through delivery and plugin prompts without caller SQL or synchronous file reads", async () => {
   const firstPath = path.join(root, "first.json");
   const nextPath = path.join(root, "next.json");
   writeFileSync(firstPath, JSON.stringify({ tts: { auto: "always", maxLength: 321 } }));
@@ -137,8 +138,24 @@ it("carries the worker-read path through delivery and plugin prompt rendering wi
     expect(await prepareTtsPreferences()).toEqual(preparedTtsPreferences);
     expect(reads).toHaveBeenCalledTimes(1);
     const input = { cfg, preparedTtsPreferences };
-    expect(shouldAttemptTtsPayload(input)).toBe(true);
-    expect(shouldCleanTtsDirectiveText(input)).toBe(true);
+    const syncReads = vi.spyOn(fs, "readFileSync");
+    syncBuiltinESMExports();
+    try {
+      expect(buildTtsSystemPromptHint(cfg, "main", { preparedTtsPreferences })).toContain(
+        "Keep spoken text ≤321 chars",
+      );
+      expect(syncReads.mock.calls.filter(([file]) => file === firstPath)).toHaveLength(1);
+      syncReads.mockClear();
+      expect(await shouldAttemptTtsPayload(input)).toBe(true);
+      expect(await shouldCleanTtsDirectiveText(input)).toBe(true);
+      expect(await buildHint(cfg, "main", { preparedTtsPreferences })).toContain(
+        "Keep spoken text ≤321 chars",
+      );
+      expect(syncReads.mock.calls.filter(([file]) => file === firstPath)).toEqual([]);
+    } finally {
+      syncReads.mockRestore();
+      syncBuiltinESMExports();
+    }
     expect([
       resolveTtsPrefsPath(config, preparedTtsPreferences),
       resolveTtsPrefsPath(config),
@@ -148,7 +165,7 @@ it("carries the worker-read path through delivery and plugin prompt rendering wi
       "Keep spoken text ≤321 chars",
     );
     vi.stubEnv("OPENCLAW_TTS_PREFS", nextPath);
-    expect(shouldAttemptTtsPayload(input)).toBe(false);
+    expect(await shouldAttemptTtsPayload(input)).toBe(false);
     vi.stubEnv("OPENCLAW_TTS_PREFS", "");
     sql.expectIdle();
 
@@ -156,15 +173,15 @@ it("carries the worker-read path through delivery and plugin prompt rendering wi
     writeConfigMachineState("tts.prefsPath", nextPath);
     sql.clear();
     expect(resolveTtsPrefsPath(config)).toBe(nextPath);
-    expect(shouldAttemptTtsPayload(input)).toBe(true);
+    expect(await shouldAttemptTtsPayload(input)).toBe(true);
     const next = await prepareTtsPreferences();
     expect(await buildHint(cfg, "main")).toBeUndefined();
     expect(reads).toHaveBeenCalledTimes(1);
-    expect(shouldAttemptTtsPayload({ cfg, preparedTtsPreferences: next })).toBe(false);
+    expect(await shouldAttemptTtsPayload({ cfg, preparedTtsPreferences: next })).toBe(false);
     expect(buildTtsSystemPromptHint(cfg, "main", { preparedTtsPreferences: next })).toBeUndefined();
     // File preferences remain live within the captured path.
     writeFileSync(firstPath, JSON.stringify({ tts: { auto: "off" } }));
-    expect(shouldAttemptTtsPayload(input)).toBe(false);
+    expect(await shouldAttemptTtsPayload(input)).toBe(false);
     sql.expectIdle();
 
     expect(() =>
@@ -193,7 +210,7 @@ it("carries missing machine state without creating a store or falling back to a 
   expect(await buildTtsSystemPromptHintAsync({})).toBeUndefined();
   expect(resolveTtsPrefsPath(resolveTtsConfig({}))).toBe(path.join(root, "settings", "tts.json"));
   expect(await resolveTtsPrefsPathAsync(resolveTtsConfig({}))).toBeTruthy();
-  expect(shouldAttemptTtsPayload({ cfg: {}, preparedTtsPreferences })).toBe(false);
+  expect(await shouldAttemptTtsPayload({ cfg: {}, preparedTtsPreferences })).toBe(false);
   expect(existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
 });
 

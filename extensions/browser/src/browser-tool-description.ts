@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DecisionRuntimeV2 } from "openclaw/plugin-sdk/decisions";
 import { parseBrowserTabToolBinding } from "./browser-tool-binding.js";
 import {
   BrowserToolOutputSchema,
@@ -17,6 +18,8 @@ export function createBrowserToolDefinition(
         toolCapabilities?: BrowserToolCapabilities;
         sandboxBridgeUrl?: string;
         allowHostControl?: boolean;
+        agentId?: string;
+        decisions?: DecisionRuntimeV2;
       }
     | undefined,
   getConfig: () => OpenClawConfig | undefined,
@@ -34,6 +37,7 @@ export function createBrowserToolDefinition(
           ? resolveProfile(resolveBrowserConfig(config?.browser, config), binding.profile)
           : undefined;
       return resolveBrowserToolCapabilities({
+        canJudge: Boolean(opts?.decisions && opts.agentId),
         tabBound: Boolean(binding),
         evaluateEnabled: config?.browser?.evaluateEnabled !== false,
         ...(profile ? { profileCapabilities: getBrowserProfileCapabilities(profile) } : {}),
@@ -76,6 +80,9 @@ export function createBrowserToolDefinition(
     actions.has("text")
       ? "For page prose, use action=text with optional selector and maxChars; it reads the first selector match, else article, main, or body. Use efficient snapshots for controls; they omit most prose."
       : `For page text, use snapshot${evaluateEnabled ? " or a bounded act:evaluate" : ""}; efficient snapshots omit most prose.`,
+    actions.has("judge")
+      ? "Use action=judge for explicit advisory page-blocker classification with this agent's selected Decision model. Sends up to 6,000 characters of body text to that provider (hosted inference may charge); returns answers, not page text. No automatic fallback or actions. Missing, uncertain or all-low answers do not prove usable content. Requires a text-capable profile; not native Lightpanda judge()."
+      : undefined,
     "Use snapshot query to keep lines matching all whitespace-separated tokens, case-insensitively; matching lines retain element refs.",
     actions.has("requests")
       ? "Use requests for the recent network log; filter matches URL/type, limit defaults to 50, and clear=true clears the collected log after reading."

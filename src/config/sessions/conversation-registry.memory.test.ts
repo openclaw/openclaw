@@ -12,10 +12,8 @@ import {
   commitMemory,
   failSessionActorMemoryPublication,
 } from "./session-actor-memory-publication.test-support.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -140,6 +138,38 @@ describe("memory conversation registry", () => {
     expect(await read(identity.conversationRef)).toHaveProperty("target", "reef:catalogue");
     expect(readOwner().listSessions(authority)).toEqual([]);
   });
+
+  it("filters exact delivery coordinates without hiding ambiguous owners or changing catalogue deduplication", async () => {
+    const { binding } = await fixture();
+    await runWithSessionActorStorage(binding, async () => {
+      const delivery = { channel: "discord", accountId: "default", target: "channel:ops" };
+      expect(await registry.resolveCurrentConversationByDelivery(scope, delivery)).toMatchObject({
+        conversation: { sessionKey, sessionId: "first", target: delivery.target },
+      });
+      for (const changed of [
+        { channel: "slack" },
+        { accountId: "other" },
+        { target: "channel:other" },
+        { threadId: "thread-a" },
+      ]) {
+        expect(
+          await registry.resolveCurrentConversationByDelivery(scope, { ...delivery, ...changed }),
+        ).toEqual({ conversation: undefined });
+      }
+      const secondKey = `${sessionKey}-second`;
+      await createMemoryConversation(secondKey, {
+        entry: { ...entry(delivery.target, 2), sessionId: "second" },
+        routeContext: { peerId: "canonical-ops", guildId: "guild-a" },
+      });
+      expect(await registry.resolveCurrentConversationByDelivery(scope, delivery)).toEqual({
+        ambiguous: true,
+      });
+      expect(await registry.listConversations(scope)).toMatchObject([
+        { target: delivery.target, sessionKey: secondKey, sessionId: "second" },
+      ]);
+    });
+  });
+
   it("retains observed identity through generic writes and changes current bindings at rebind/reset", async () => {
     const { actor, acquire, created } = await fixture();
     const initial = await primary(created.sessionId);

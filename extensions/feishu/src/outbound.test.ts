@@ -213,18 +213,10 @@ function tableText(count: number) {
   );
 }
 
-function textCall(index = 0) {
-  return sendMessageFeishuMock.mock.calls[index]?.[0];
-}
-function mediaCall(index = 0) {
-  return sendMediaFeishuMock.mock.calls[index]?.[0];
-}
-function cardCall() {
-  return sendCardFeishuMock.mock.calls[0]?.[0]?.card;
-}
-function commentCall(index = 0) {
-  return deliverCommentThreadTextMock.mock.calls[index]?.[1];
-}
+const textCall = (index = 0) => sendMessageFeishuMock.mock.calls[index]?.[0];
+const mediaCall = (index = 0) => sendMediaFeishuMock.mock.calls[index]?.[0];
+const cardCall = () => sendCardFeishuMock.mock.calls[0]?.[0]?.card;
+const commentCall = (index = 0) => deliverCommentThreadTextMock.mock.calls[index]?.[1];
 function deliveredText() {
   return sendMessageFeishuMock.mock.calls.map(([params]) => params.text).join("\n");
 }
@@ -299,7 +291,6 @@ describe("Feishu text delivery", () => {
       await sendText(file);
       expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
       expect(textCall()?.text).toBe("Media upload failed. Please try again.");
-      expect(textCall()?.text).not.toContain(file);
     });
   });
 
@@ -676,7 +667,7 @@ describe("Feishu native presentation delivery", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("sends oversized presentation media once before complete safe fallback text", async () => {
+  it("keeps fallback controls safe and thread targets sticky before and after core rendering", async () => {
     const presentation = oversizedPresentation();
     presentation.blocks.push({
       type: "buttons",
@@ -910,7 +901,6 @@ describe("Feishu document comments", () => {
       "reply_msg",
     );
     expect(commentCall()?.content).toBe("see attachment\n\nMedia upload failed. Please try again.");
-    expect(commentCall()?.content).not.toContain(mediaUrl);
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 });
@@ -1055,7 +1045,6 @@ describe("Feishu chunked delivery and media receipts", () => {
     await sendMedia({ text: "spoken reply", mediaUrl, audioAsVoice: true });
     expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
     expect(textCall()?.text).toBe("spoken reply\n\nMedia upload failed. Please try again.");
-    expect(textCall()?.text).not.toContain(mediaUrl);
   });
 
   it("preserves all accepted card caption chunks in propagated upload failures", async () => {

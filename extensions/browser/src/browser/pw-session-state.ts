@@ -1,10 +1,6 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import {
-  isFutureDateTimestampMs,
-  parseFiniteNumber,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
@@ -228,7 +224,7 @@ export function ensurePageState(page: Page): PageState {
     state.pendingDialogs.push(pending);
 
     const armed = state.armedDialogResponse;
-    if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
+    if (armed && performance.now() < armed.expiresAtMonotonicMs) {
       clearArmedDialogResponse(state);
       void settleObservedDialog({
         state,
@@ -253,7 +249,7 @@ export function ensurePageState(page: Page): PageState {
     managedSave.catch(() => {});
     download.path = async () => (await managedSave).path;
     if (actionCapture) {
-      actionCapture.lastEventAtMs = Date.now();
+      actionCapture.lastEventAtMs = performance.now();
     }
     actionCapture?.pending.push(managedSave);
     for (const finish of actionCapture?.waiters.splice(0) ?? []) {
@@ -343,13 +339,12 @@ export function armObservedDialogResponseOnPage(opts: {
   clearArmedDialogResponse(state);
   const parsed = parseFiniteNumber(opts.timeoutMs);
   const timeoutMs = Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
-  const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
-  if (expiresAt === undefined) {
+  if (!Number.isSafeInteger(timeoutMs)) {
     return;
   }
   const response: ArmedDialogResponse = {
     accept: opts.accept,
-    expiresAt,
+    expiresAtMonotonicMs: performance.now() + timeoutMs,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {

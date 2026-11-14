@@ -1,178 +1,135 @@
-import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { afterEach, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  resolveCommandConversationResolution,
-  resolveInboundConversationResolution,
+  resolveCommandConversationResolution as command,
+  resolveInboundConversationResolution as inbound,
 } from "./conversation-resolution.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
-const testConfig: OpenClawConfig = {};
-
-type TestPlugin = Omit<Partial<ChannelPlugin>, "id" | "config"> & {
+type Plugin = Omit<Partial<ChannelPlugin>, "id" | "config"> & {
   id: string;
   config?: Partial<ChannelPlugin["config"]>;
 };
-function registerChannelPlugin({ id, config, ...overrides }: TestPlugin): void {
+function register({ id, config, ...overrides }: Plugin) {
   const plugin = { ...createChannelTestPluginBase({ id, config }), ...overrides };
-  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
 }
-
-function command(channel: string, originatingTo: string, accountId?: string, threadId?: number) {
-  return resolveCommandConversationResolution({
-    cfg: testConfig,
-    channel,
-    originatingTo,
-    accountId,
-    threadId,
-  });
-}
-
-function inbound(channel: string, to: string, threadId: string | number) {
-  return resolveInboundConversationResolution({ cfg: testConfig, channel, to, threadId });
-}
-
-const bindingDefaults = {
+const bindings = (overrides: Partial<NonNullable<ChannelPlugin["bindings"]>>) => ({
   compileConfiguredBinding: () => null,
   matchInboundConversation: () => null,
-};
+  ...overrides,
+});
+afterEach(() => setActivePluginRegistry(createTestRegistry()));
 
-describe("conversation resolution", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry());
-  });
-
-  it("uses the runtime command resolver and plugin default account", () => {
-    registerChannelPlugin({
+type Expected = [conversationId: string, parentConversationId?: string, accountId?: string];
+type CommandCase = [string, Plugin, string, Expected, string?];
+it.each<CommandCase>([
+  [
+    "runtime resolver and default account",
+    {
       id: "discord",
       config: { defaultAccountId: () => "work" },
-      bindings: {
-        ...bindingDefaults,
-        resolveCommandConversation: ({ originatingTo }) => {
-          const conversationId = originatingTo?.trim().replace(/^discord:/i, "");
-          return conversationId ? { conversationId } : null;
-        },
-      },
-    });
-
-    expect(command("discord", "discord:channel:123")).toEqual({
-      channel: "discord",
-      accountId: "work",
-      conversationId: "channel:123",
-    });
-  });
-
-  it("applies provider-owned self-parent defaults in one core path", () => {
-    registerChannelPlugin({
+      bindings: bindings({ resolveCommandConversation: () => ({ conversationId: "channel:123" }) }),
+    },
+    "discord:channel:123",
+    ["channel:123", undefined, "work"],
+  ],
+  [
+    "self-parent default",
+    {
       id: "line",
-      bindings: {
-        ...bindingDefaults,
+      bindings: bindings({
         selfParentConversationByDefault: true,
-        resolveCommandConversation: () => ({
-          conversationId: "user:U1234567890abcdef1234567890abcdef",
-        }),
-      },
-    });
-
-    expect(command("line", "line:user:U1234567890abcdef1234567890abcdef")).toEqual({
-      channel: "line",
-      accountId: "default",
-      conversationId: "user:U1234567890abcdef1234567890abcdef",
-      parentConversationId: "user:U1234567890abcdef1234567890abcdef",
-    });
-  });
-
-  it("normalizes conversation ids returned by the threading resolver", () => {
-    const conversation = {
-      conversationId: "  user:U1234567890abcdef1234567890abcdef  ",
-      parentConversationId: "  room:R1234567890abcdef1234567890abcd  ",
-    };
-    registerChannelPlugin({
+        resolveCommandConversation: () => ({ conversationId: "user:U123" }),
+      }),
+    },
+    "line:user:U123",
+    ["user:U123", "user:U123"],
+  ],
+  [
+    "focused binding normalization",
+    {
       id: "line",
       threading: {
         resolveFocusedBinding: () => ({
-          ...conversation,
-          placement: "current" as const,
+          conversationId: "  user:U123  ",
+          parentConversationId: "  room:R123  ",
+          placement: "current",
           labelNoun: "conversation",
         }),
       },
-    });
-
-    expect(command("line", "ignored", " default ")).toEqual({
-      channel: "line",
-      accountId: "default",
-      conversationId: "user:U1234567890abcdef1234567890abcdef",
-      parentConversationId: "room:R1234567890abcdef1234567890abcd",
-    });
-  });
-
-  it("normalizes alias-prefixed topic routes before fallback resolution", () => {
-    registerChannelPlugin({
+    },
+    "ignored",
+    ["user:U123", "room:R123"],
+    " default ",
+  ],
+  [
+    "alias-prefixed topic fallback",
+    {
       id: "telegram",
       messaging: {
         targetPrefixes: ["tg"],
-        normalizeTarget: () => "telegram:group:-1001234567890:topic:77",
+        normalizeTarget: () => "telegram:group:-100123:topic:77",
       },
-    });
-
-    expect(command("telegram", "tg:group:-1001234567890:topic:77")).toEqual({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-1001234567890",
-    });
+    },
+    "tg:group:-100123:topic:77",
+    ["-100123"],
+  ],
+  [
+    "undeclared raw shorthand",
+    {
+      id: "plainchat",
+      messaging: { normalizeTarget: () => "plainchat:-100123:77" },
+    },
+    "-100123:77",
+    ["-100123:77"],
+  ],
+])("resolves %s", (_name, plugin, to, expected, accountId) => {
+  const [conversationId, parentConversationId, expectedAccount = "default"] = expected;
+  register(plugin);
+  expect(command({ cfg: {}, channel: plugin.id, originatingTo: to, accountId })).toEqual({
+    channel: plugin.id,
+    accountId: expectedAccount,
+    conversationId,
+    parentConversationId,
   });
+});
 
-  it("uses undeclared raw shorthand metadata in fallback resolution", () => {
-    const channel = "plainchat";
-    registerChannelPlugin({
-      id: channel,
-      messaging: {
-        normalizeTarget: () => `${channel}:-1001234567890:77`,
-      },
-    });
-
-    expect(command(channel, "-1001234567890:77")).toEqual({
-      channel,
-      accountId: "default",
-      conversationId: "-1001234567890:77",
-    });
+it.each(["command", "inbound"])("normalizes numeric %s thread ids", (entrypoint) => {
+  register({ id: "test-chat" });
+  const common = { cfg: {}, channel: "test-chat", threadId: 42.9 };
+  const target = "test-chat:channel:parent-room";
+  const result =
+    entrypoint === "command"
+      ? command({ ...common, originatingTo: target, accountId: "default" })
+      : inbound({ ...common, to: target });
+  expect(result).toEqual({
+    channel: "test-chat",
+    accountId: "default",
+    conversationId: "42",
+    parentConversationId: "parent-room",
+    threadId: "42",
   });
+});
 
-  it.each(["command", "inbound"])("normalizes numeric %s thread ids", (entrypoint) => {
-    registerChannelPlugin({ id: "test-chat" });
-    const result =
-      entrypoint === "command"
-        ? command("test-chat", "test-chat:channel:parent-room", "default", 42.9)
-        : inbound("test-chat", "test-chat:channel:parent-room", 42.9);
-    expect(result).toEqual({
-      channel: "test-chat",
-      accountId: "default",
-      conversationId: "42",
-      parentConversationId: "parent-room",
-      threadId: "42",
-    });
+it("keeps provider-resolved Matrix room casing for child threads", () => {
+  register({
+    id: "matrix",
+    messaging: {
+      resolveInboundConversation: () => ({
+        conversationId: "$thread-root",
+        parentConversationId: "!Room:Example.org",
+      }),
+    },
   });
-
-  it("keeps Matrix room casing when the channel resolver returns a child thread", () => {
-    registerChannelPlugin({
-      id: "matrix",
-      messaging: {
-        resolveInboundConversation: ({ threadId, to }) => {
-          const parent = to?.trim().replace(/^(?:matrix:)?(?:channel:|room:)/iu, "");
-          return threadId && parent
-            ? { conversationId: String(threadId), parentConversationId: parent }
-            : null;
-        },
-      },
-    });
-
-    expect(inbound("matrix", "room:!Room:Example.org", "$thread-root")).toEqual({
-      channel: "matrix",
-      accountId: "default",
-      conversationId: "$thread-root",
-      parentConversationId: "!Room:Example.org",
-      threadId: "$thread-root",
-    });
+  expect(
+    inbound({ cfg: {}, channel: "matrix", to: "room:!Room:Example.org", threadId: "$thread-root" }),
+  ).toEqual({
+    channel: "matrix",
+    accountId: "default",
+    conversationId: "$thread-root",
+    parentConversationId: "!Room:Example.org",
+    threadId: "$thread-root",
   });
 });

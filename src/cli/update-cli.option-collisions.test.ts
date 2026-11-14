@@ -1,203 +1,120 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerUpdateCli } from "./update-cli.js";
 
 const mocks = vi.hoisted(() => ({
-  updateCleanupCommand: vi.fn(async (_opts: unknown) => {}),
-  updateAdoptImmutableCommand: vi.fn(async (_opts: unknown) => {}),
-  updateRecoverImmutableCommand: vi.fn(async (_opts: unknown) => {}),
-  updateCommand: vi.fn(async (_opts: unknown) => {}),
-  updateFinalizeCommand: vi.fn(async (_opts: unknown) => {}),
-  updateStatusCommand: vi.fn(async (_opts: unknown) => {}),
-  updateWizardCommand: vi.fn(async (_opts: unknown) => {}),
-  defaultRuntime: {
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  cleanup: vi.fn(async (_opts: unknown) => {}),
+  adopt: vi.fn(async (_opts: unknown) => {}),
+  recover: vi.fn(async (_opts: unknown) => {}),
+  update: vi.fn(async (_opts: unknown) => {}),
+  finalize: vi.fn(async (_opts: unknown) => {}),
+  status: vi.fn(async (_opts: unknown) => {}),
+  wizard: vi.fn(async (_opts: unknown) => {}),
+  defaultRuntime: { error: vi.fn(), exit: vi.fn() },
 }));
 
-// mock-isolation: CLI parsing must not execute update effects.
-vi.mock("./update-cli/update-command.js", () => ({ updateCommand: mocks.updateCommand }));
+// mock-isolation: test real CLI parsing without update, repair, or wizard effects.
+vi.mock("./update-cli/update-command.js", () => ({ updateCommand: mocks.update }));
 // mock-isolation: CLI parsing must not execute finalization effects.
 vi.mock("./update-cli/update-command-finalize.js", () => ({
-  updateFinalizeCommand: mocks.updateFinalizeCommand,
+  updateFinalizeCommand: mocks.finalize,
 }));
-
 // mock-isolation: CLI parsing must not execute repair effects.
-vi.mock("./update-cli/update-repair-command.js", () => ({
-  updateRepairCommand: mocks.updateFinalizeCommand,
-}));
-
-vi.mock("./update-cli/cleanup.js", () => ({ updateCleanupCommand: mocks.updateCleanupCommand }));
+vi.mock("./update-cli/update-repair-command.js", () => ({ updateRepairCommand: mocks.finalize }));
+// mock-isolation: CLI parsing must not remove installed runtime state.
+vi.mock("./update-cli/cleanup.js", () => ({ updateCleanupCommand: mocks.cleanup }));
+// mock-isolation: CLI parsing must not adopt or recover an installed runtime.
 vi.mock("./update-cli/update-command-immutable.js", () => ({
-  updateAdoptImmutableCommand: mocks.updateAdoptImmutableCommand,
-  updateRecoverImmutableCommand: mocks.updateRecoverImmutableCommand,
+  updateAdoptImmutableCommand: mocks.adopt,
+  updateRecoverImmutableCommand: mocks.recover,
 }));
-
 // mock-isolation: CLI parsing must not inspect installed runtime state.
-vi.mock("./update-cli/status.js", () => ({ updateStatusCommand: mocks.updateStatusCommand }));
+vi.mock("./update-cli/status.js", () => ({ updateStatusCommand: mocks.status }));
 // mock-isolation: CLI parsing must not enter the interactive update wizard.
-vi.mock("./update-cli/wizard.js", () => ({ updateWizardCommand: mocks.updateWizardCommand }));
-
+vi.mock("./update-cli/wizard.js", () => ({ updateWizardCommand: mocks.wizard }));
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.defaultRuntime,
 }));
 
-const run = (argv: string[]) => runRegisteredCli({ register: registerUpdateCli, argv });
+const run = (args: string | string[]) =>
+  runRegisteredCli({
+    register: registerUpdateCli,
+    argv: ["update", ...(typeof args === "string" ? args.split(" ") : args)],
+  });
+const adoptionArgs =
+  "adopt-immutable --root /opt/example --service example.service --account openclaw --state-dir /var/lib/example --config /etc/example/openclaw.json --runtime /usr/bin/node";
+const adoptionOptions = {
+  root: "/opt/example",
+  service: {
+    unit: "example.service",
+    scope: "system",
+    account: "openclaw",
+    stateDir: "/var/lib/example",
+    configPath: "/etc/example/openclaw.json",
+    profile: null,
+  },
+  runtime: "/usr/bin/node",
+  previousUpdaterStopped: true,
+  enableActivation: true,
+  inspectReleaseRetention: true,
+};
+const sha = "a".repeat(40);
+type Invocation = { args: string | string[]; expected: unknown };
+type ForwardedInvocation = Invocation & { target: typeof mocks.update };
+beforeEach(() => vi.clearAllMocks());
 
-function expectOptions(mock: { mock: { calls: unknown[][] } }, options: Record<string, unknown>) {
-  expect(mock).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(options));
-}
+it("describes the shared status deadline in rendered timeout help", async () => {
+  const program = new Command();
+  let output = "";
+  program.configureOutput({ writeOut: (text) => (output += text) }).exitOverride();
+  registerUpdateCli(program);
+  await expect(
+    program.parseAsync(["update", "status", "--help"], { from: "user" }),
+  ).rejects.toMatchObject({ code: "commander.helpDisplayed" });
+  expect(output.replace(/\s+/g, " ")).toContain(
+    "--timeout <seconds> Check timeout (default: shared 30s; longer values extend it)",
+  );
+});
 
-function expectRejected(message: string, ...commands: Array<typeof mocks.updateCommand>) {
-  expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(message));
-  for (const command of commands) {
+it.each`
+  args                                                                                            | target            | expected
+  ${"--full-integrity-check"}                                                                     | ${mocks.update}   | ${expect.objectContaining({ fullIntegrityCheck: true })}
+  ${"repair --full-integrity-check"}                                                              | ${mocks.finalize} | ${expect.objectContaining({ fullIntegrityCheck: true })}
+  ${"--full-integrity-check wizard"}                                                              | ${mocks.wizard}   | ${expect.objectContaining({ fullIntegrityCheck: true })}
+  ${`${adoptionArgs} --previous-updater-stopped --enable-activation --inspect-release-retention`} | ${mocks.adopt}    | ${expect.objectContaining(adoptionOptions)}
+  ${"--timeout 600 --json recover --root /opt/example"}                                           | ${mocks.recover}  | ${{ root: "/opt/example", timeout: "600", drainTimeout: undefined, json: true }}
+  ${`--sha ${sha}`}                                                                               | ${mocks.update}   | ${expect.objectContaining({ sha })}
+  ${"--drain-timeout 30 --timeout 600"}                                                           | ${mocks.update}   | ${expect.objectContaining({ drainTimeout: "30", timeout: "600" })}
+  ${"--drain-timeout 30 recover --root /opt/example --timeout 900"}                               | ${mocks.recover}  | ${expect.objectContaining({ drainTimeout: "30", timeout: "900" })}
+  ${"--dry-run --json --yes cleanup"}                                                             | ${mocks.cleanup}  | ${{ dryRun: true, json: true, yes: true }}
+  ${"--json --timeout 31 --channel beta --yes finalize"}                                          | ${mocks.finalize} | ${expect.objectContaining({ channel: "beta", json: true, timeout: "31", yes: true })}
+  ${["--timeout", "9", "status", "--json", "--timeout", ""]}                                      | ${mocks.status}   | ${expect.objectContaining({ json: true, timeout: "" })}
+`("forwards update options for $args", async ({ args, target, expected }: ForwardedInvocation) => {
+  await run(args);
+  expect(target).toHaveBeenCalledExactlyOnceWith(expected);
+  if (target !== mocks.update) {
+    expect(mocks.update).not.toHaveBeenCalled();
+  }
+});
+
+it.each`
+  args                                  | expected
+  ${adoptionArgs}                       | ${expect.stringContaining("--previous-updater-stopped")}
+  ${["--channel", "", "cleanup"]}       | ${expect.stringContaining("is not supported")}
+  ${"--no-restart cleanup"}             | ${expect.stringContaining("is not supported")}
+  ${"--accept-capabilities cleanup"}    | ${expect.stringContaining("is not supported")}
+  ${"--reapply-local-overrides status"} | ${expect.stringContaining("--reapply-local-overrides is not supported")}
+  ${"--dry-run repair"}                 | ${"--dry-run is not supported for `openclaw update repair`. Run `openclaw update --dry-run` instead."}
+  ${`--sha ${sha} status`}              | ${expect.stringContaining("--sha is supported only")}
+  ${"--drain-timeout 30 status"}        | ${expect.stringContaining("--drain-timeout is supported only")}
+`("rejects $args before invoking an update action", async ({ args, expected }: Invocation) => {
+  await run(args);
+  const { defaultRuntime, ...commands } = mocks;
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expected);
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  for (const command of Object.values(commands)) {
     expect(command).not.toHaveBeenCalled();
   }
-}
-
-describe("update cli option collisions", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("describes the shared status deadline in rendered timeout help", async () => {
-    const program = new Command();
-    let output = "";
-    program.configureOutput({ writeOut: (text) => (output += text) }).exitOverride();
-    registerUpdateCli(program);
-    await expect(
-      program.parseAsync(["update", "status", "--help"], { from: "user" }),
-    ).rejects.toMatchObject({
-      code: "commander.helpDisplayed",
-    });
-    expect(output.replace(/\s+/g, " ")).toContain(
-      "--timeout <seconds> Check timeout (default: shared 30s; longer values extend it)",
-    );
-  });
-
-  it.each([
-    { args: ["--full-integrity-check"], target: mocks.updateCommand },
-    { args: ["repair", "--full-integrity-check"], target: mocks.updateFinalizeCommand },
-    { args: ["--full-integrity-check", "wizard"], target: mocks.updateWizardCommand },
-  ])("passes full migration integrity selection through $args", async ({ args, target }) => {
-    await run(["update", ...args]);
-    expectOptions(target, { fullIntegrityCheck: true });
-  });
-
-  const adoptionArgs = [
-    "update adopt-immutable",
-    "--root /opt/example --service example.service --account openclaw",
-    "--state-dir /var/lib/example --config /etc/example/openclaw.json",
-    "--runtime /usr/bin/node",
-  ].flatMap((args) => args.split(" "));
-  it("requires explicit prior-updater acknowledgement for immutable adoption", async () => {
-    await run(adoptionArgs);
-    expectRejected("--previous-updater-stopped", mocks.updateAdoptImmutableCommand);
-    expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("requires explicit activation consent and binds native recovery to its root", async () => {
-    await run([
-      ...adoptionArgs,
-      "--previous-updater-stopped",
-      "--enable-activation",
-      "--inspect-release-retention",
-    ]);
-    expectOptions(mocks.updateAdoptImmutableCommand, {
-      root: "/opt/example",
-      service: {
-        unit: "example.service",
-        scope: "system",
-        account: "openclaw",
-        stateDir: "/var/lib/example",
-        configPath: "/etc/example/openclaw.json",
-        profile: null,
-      },
-      runtime: "/usr/bin/node",
-      previousUpdaterStopped: true,
-      enableActivation: true,
-      inspectReleaseRetention: true,
-    });
-    await run(["update", "--timeout", "600", "--json", "recover", "--root", "/opt/example"]);
-    expect(mocks.updateRecoverImmutableCommand).toHaveBeenCalledWith({
-      root: "/opt/example",
-      timeout: "600",
-      drainTimeout: undefined,
-      json: true,
-    });
-    expect(mocks.updateCommand).not.toHaveBeenCalled();
-  });
-
-  it("passes exact immutable SHA selection only to the update action", async () => {
-    const sha = "a".repeat(40);
-    await run(["update", "--sha", sha]);
-    expectOptions(mocks.updateCommand, { sha });
-    await run(["update", "--sha", sha, "status"]);
-    expectRejected("--sha is supported only", mocks.updateStatusCommand);
-  });
-
-  it("passes a distinct immutable drain budget and refuses it on unrelated leaves", async () => {
-    await run(["update", "--drain-timeout", "30", "--timeout", "600"]);
-    expectOptions(mocks.updateCommand, { drainTimeout: "30", timeout: "600" });
-    await run("update --drain-timeout 30 recover --root /opt/example --timeout 900".split(" "));
-    expectOptions(mocks.updateRecoverImmutableCommand, { drainTimeout: "30", timeout: "900" });
-    await run(["update", "--drain-timeout", "30", "status"]);
-    expectRejected("--drain-timeout is supported only", mocks.updateStatusCommand);
-  });
-
-  it("supports inherited cleanup options", async () => {
-    await run(["update", "--dry-run", "--json", "--yes", "cleanup"]);
-    expect(mocks.updateCleanupCommand).toHaveBeenCalledWith({
-      dryRun: true,
-      json: true,
-      yes: true,
-    });
-    expect(mocks.updateCommand).not.toHaveBeenCalled();
-  });
-
-  it.each([["--channel", ""], ["--no-restart"], ["--accept-capabilities"]])(
-    "rejects unrelated inherited cleanup option %s",
-    async (...flags) => {
-      await run(["update", ...flags, "cleanup"]);
-      expectRejected("is not supported", mocks.updateCleanupCommand, mocks.updateCommand);
-      expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
-    },
-  );
-
-  it("rejects replay consent on update leaves", async () => {
-    await run(["update", "--reapply-local-overrides", "status"]);
-    expectRejected(
-      "--reapply-local-overrides is not supported",
-      mocks.updateCommand,
-      mocks.updateFinalizeCommand,
-      mocks.updateWizardCommand,
-      mocks.updateStatusCommand,
-    );
-  });
-
-  it("rejects parent --dry-run before running update repair", async () => {
-    await run(["update", "--dry-run", "repair"]);
-    expect(mocks.updateFinalizeCommand).not.toHaveBeenCalled();
-    expect(mocks.updateCommand).not.toHaveBeenCalled();
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
-      "--dry-run is not supported for `openclaw update repair`. Run `openclaw update --dry-run` instead.",
-    );
-    expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("forwards all explicitly inherited options to update finalize", async () => {
-    await run("update --json --timeout 31 --channel beta --yes finalize".split(" "));
-    expectOptions(mocks.updateFinalizeCommand, {
-      channel: "beta",
-      json: true,
-      timeout: "31",
-      yes: true,
-    });
-  });
-
-  it("preserves an explicitly empty status timeout over its inherited value", async () => {
-    await run(["update", "--timeout", "9", "status", "--json", "--timeout", ""]);
-    expectOptions(mocks.updateStatusCommand, { json: true, timeout: "" });
-  });
 });

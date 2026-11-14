@@ -29,13 +29,73 @@ const REMOTE_PROJECT = {
   identity: "openclaw/openclaw",
   cloneUrl: "https://github.com/openclaw/openclaw.git",
 };
+const placementAccess = {
+  methods: ["sessions.create", "sessions.dispatch"],
+  scopes: ["operator.admin", "operator.read", "operator.write"],
+};
+const noteAttachment = {
+  id: "note",
+  dataUrl: "data:text/plain;base64,SGk=",
+  mimeType: "text/plain",
+  fileName: "note.txt",
+};
 
 function createDraftFixture(...options: Parameters<typeof makeDraftFixture>) {
   const fixture = makeDraftFixture(...options);
   return { ...fixture, create: vi.mocked(fixture.context.sessions.createResult) };
 }
 
+function composerState(flow: ReturnType<typeof createDraftFixture>["flow"]) {
+  return [flow.message, flow.mentions, flow.attachmentDraft.attachments];
+}
+
 describe("DraftSubmissionFlow", () => {
+  it("formats typed submission failures before storing presentation text", async () => {
+    const error = new TypeError("Cannot read properties of undefined (reading 'map')");
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => report.mockRestore());
+    const { create, flow } = createDraftFixture();
+    flow.setMessage("A synthetic task");
+    create.mockRejectedValueOnce(error);
+
+    await flow.submit();
+
+    expect(flow.error).toBe("Request failed");
+    expect(report).toHaveBeenCalledWith(
+      "[control-ui] programming error hidden from the UI:",
+      error,
+    );
+  });
+
+  it("keeps explicit Draft intent when its chooser becomes unavailable before submission", async () => {
+    const { context, create, flow } = createDraftFixture();
+    expectDefined(context.gateway.snapshot.hello, "connected hello").policy = {
+      allowedSessionVisibilities: ["shared", "draft"],
+      hasMultipleSessionSharingIdentities: false,
+    };
+    flow.setVisibility("draft");
+    flow.setMessage("Keep this private plan");
+    const attachment = registerTextPayload("private-plan");
+    flow.attachmentDraft.restore([attachment]);
+    const refusal = "session visibility is disabled: draft";
+    context.sessions.state.error = refusal;
+    create.mockResolvedValueOnce(null);
+
+    await flow.submit();
+
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ visibility: "draft", message: "Keep this private plan" }),
+      backgroundCreateOptions,
+    );
+    expect(flow).toMatchObject({
+      visibility: "draft",
+      message: "Keep this private plan",
+      error: refusal,
+    });
+    expect(flow.attachmentDraft.attachments).toEqual([attachment]);
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "keeps startup creation client-owned beyond four minutes (cancel=%s)",
     async (cancel) => {
@@ -90,7 +150,7 @@ describe("DraftSubmissionFlow", () => {
       }
       await vi.advanceTimersByTimeAsync(210_000);
       ready = true;
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(8_000);
       await submission;
       expect(writes).toBe(cancel ? 0 : 1);
       expect(new Set(frames).size).toBe(1);
@@ -125,10 +185,7 @@ describe("DraftSubmissionFlow", () => {
   it.each(["available", "unavailable before create", "unavailable after create"] as const)(
     "preserves the runtime through Auto placement when recovery storage is %s",
     async (storage) => {
-      const { context, create, flow, place } = createDraftFixture({
-        methods: ["sessions.create", "sessions.dispatch"],
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-      });
+      const { context, create, flow, place } = createDraftFixture(placementAccess);
       place.applyPendingPlacement({ agentId: "main", profileId: "", autoDevice: true });
       place.modelControl.selected = "openai/gpt-5.6-sol";
       place.modelControl.agentRuntime = "codex";
@@ -162,21 +219,16 @@ describe("DraftSubmissionFlow", () => {
           model: "openai/gpt-5.6-sol",
           agentRuntime: "codex",
         });
-        if (storage === "available") {
-          expect(context.placementStartup.start).toHaveBeenCalledOnce();
-        } else {
-          expect(context.placementStartup.start).not.toHaveBeenCalled();
-          expect(flow).toMatchObject({
-            error:
-              "The session was created, but startup needs attention: placement recovery storage is unavailable",
-            message: "Keep my model and runtime",
-          });
-        }
       } else {
         expect(create).not.toHaveBeenCalled();
-        expect(context.placementStartup.start).not.toHaveBeenCalled();
+      }
+      expect(context.placementStartup.start).toHaveBeenCalledTimes(Number(storage === "available"));
+      if (storage !== "available") {
         expect(flow).toMatchObject({
-          error: "Couldn't prepare session recovery. Your draft has been kept.",
+          error:
+            storage === "unavailable before create"
+              ? "Couldn’t prepare session recovery. Your draft has been kept."
+              : "Couldn’t start this session. Retry setup. placement recovery storage is unavailable",
           message: "Keep my model and runtime",
         });
       }
@@ -220,13 +272,12 @@ describe("DraftSubmissionFlow", () => {
 
       expect(create).not.toHaveBeenCalled();
       expect(context.navigateAndWait).not.toHaveBeenCalled();
-      expect(flow.message).toBe(message);
-      expect(flow.mentions).toEqual(mentions);
-      expect(flow.attachmentDraft.attachments).toEqual(attachments);
+      expect(composerState(flow)).toEqual([message, mentions, attachments]);
       expect(flow.submitting).toBe(false);
       expect(takePreparedTitle).not.toHaveBeenCalled();
       if (oversized) {
         expect(showToast).toHaveBeenCalledExactlyOnceWith({
+          severity: "error",
           message: "Too large to send: second.txt",
         });
       } else {
@@ -296,11 +347,7 @@ describe("DraftSubmissionFlow", () => {
 
       const submission = flow.submit();
       await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
-      const consumed = {
-        message: flow.message,
-        mentions: flow.mentions,
-        attachments: flow.attachmentDraft.attachments,
-      };
+      const consumed = composerState(flow);
       expect(context.navigateAndWait).not.toHaveBeenCalled();
       if (next === "reconnect") {
         flow.invalidate("gateway-changed");
@@ -308,10 +355,8 @@ describe("DraftSubmissionFlow", () => {
       finishCleanup();
       await submission;
 
-      expect(consumed).toEqual({ message: "", mentions: [], attachments: [] });
-      expect(flow.message).toBe("");
-      expect(flow.mentions).toEqual([]);
-      expect(flow.attachmentDraft.attachments).toEqual([]);
+      expect(consumed).toEqual(["", [], []]);
+      expect(composerState(flow)).toEqual(["", [], []]);
       expect(create).toHaveBeenCalledOnce();
       expect(context.navigateAndWait).toHaveBeenCalledTimes(next === "navigation" ? 1 : 0);
       const retained = context.chatSubmissions.readInitial(
@@ -359,8 +404,7 @@ describe("DraftSubmissionFlow", () => {
     const takePreparedTitle = vi.fn(() => "Original prepared title");
     const { context, create, flow, place } = createDraftFixture({
       takePreparedTitle,
-      methods: ["sessions.create", "sessions.dispatch"],
-      scopes: ["operator.admin", "operator.read", "operator.write"],
+      ...placementAccess,
     });
     const original = createDeferred<SessionCreateOutcome>();
     const result = { key: "agent:main:direct-resumed", initialRun: { status: "idle" as const } };
@@ -471,20 +515,23 @@ describe("DraftSubmissionFlow", () => {
     flow.attachmentDraft.replace([current]);
     noteUserMutation.mockClear();
     revokeObjectURL.mockClear();
+    const message = "@Alex recovered cloud prompt";
+    const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
+    const attachments = [
+      {
+        type: "file" as const,
+        mimeType: "text/plain",
+        fileName: "recovered.txt",
+        content: "cmVjb3ZlcmVk",
+      },
+    ];
     expect(
       writeSessionPlacementRecovery({
         sessionKey: "agent:main:dashboard:recovery",
         messageId: "message-recovery",
-        message: "@Alex recovered cloud prompt",
-        mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
-        attachments: [
-          {
-            type: "file",
-            mimeType: "text/plain",
-            fileName: "recovered.txt",
-            content: "cmVjb3ZlcmVk",
-          },
-        ],
+        message,
+        mentions,
+        attachments,
         target: { kind: "profile", profileId: "aws" },
         agentId: "main",
         gatewayUrl: "ws://gateway.example",
@@ -504,16 +551,9 @@ describe("DraftSubmissionFlow", () => {
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:current-draft");
     expect(getChatAttachmentDataUrl(current)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
-    expect(flow.message).toBe("@Alex recovered cloud prompt");
-    expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
-    expect(buildChatApiAttachments(flow.attachmentDraft.attachments)).toEqual([
-      {
-        type: "file",
-        mimeType: "text/plain",
-        fileName: "recovered.txt",
-        content: "cmVjb3ZlcmVk",
-      },
-    ]);
+    expect(flow.message).toBe(message);
+    expect(flow.mentions).toEqual(mentions);
+    expect(buildChatApiAttachments(flow.attachmentDraft.attachments)).toEqual(attachments);
     flow.attachmentDraft.reset();
   });
 
@@ -547,14 +587,7 @@ describe("DraftSubmissionFlow", () => {
       place.selectRemoteProject(REMOTE_PROJECT);
       place.selectWorktree(worktree);
       flow.setMessage(message);
-      flow.attachmentDraft.replace([
-        {
-          id: "attachment-1",
-          dataUrl: "data:text/plain;base64,SGk=",
-          mimeType: "text/plain",
-          fileName: "note.txt",
-        },
-      ]);
+      flow.attachmentDraft.replace([{ ...noteAttachment, id: "attachment-1" }]);
       const submitted = flow.submit();
       const duplicate = flow.submit();
       await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
@@ -590,8 +623,7 @@ describe("DraftSubmissionFlow", () => {
       let waits = 0;
       const { context, create, flow, place, request } = createDraftFixture({
         agents: [{ id: "cloud", workspace: "/workspace", workspaceGit: true }],
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-        methods: ["sessions.create", "sessions.dispatch"],
+        ...placementAccess,
         request: async (method) => {
           if (method === "worktrees.branches") {
             return { repositoryStatus: "git", branches: [] };
@@ -623,14 +655,7 @@ describe("DraftSubmissionFlow", () => {
       const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
       const attachments = [{ fileName: "note.txt", content: "SGk=" }];
       flow.setMessage(message, mentions);
-      flow.attachmentDraft.replace([
-        {
-          id: "note",
-          dataUrl: "data:text/plain;base64,SGk=",
-          mimeType: "text/plain",
-          fileName: "note.txt",
-        },
-      ]);
+      flow.attachmentDraft.replace([{ ...noteAttachment }]);
       flow.pendingPlacement.stageCreate({
         agentId: "cloud",
         target: { kind: "profile", profileId: "aws" },
@@ -661,8 +686,8 @@ describe("DraftSubmissionFlow", () => {
       expect(flow.pendingPlacement.capture()).toBeNull();
       expect(flow.completedSubmission?.key).toBe(recovery.sessionKey);
       expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: message });
-      expect(flow).toMatchObject({ message: "", mentions: [], submitting: false, error });
-      expect(flow.attachmentDraft.attachments).toEqual([]);
+      expect(composerState(flow)).toEqual(["", [], []]);
+      expect(flow).toMatchObject({ submitting: false, error });
       if (background) {
         expect(navigate).not.toHaveBeenCalled();
         expect(context.gateway.setSessionKey).not.toHaveBeenCalled();

@@ -46,6 +46,7 @@ describe("memory source sessions", () => {
         const scope = { agentId: "main", storePath };
         const sessionId = `source-${"x".repeat(300)}`;
         const sessionKey = "agent:main:source-session";
+        const prompt = "memory-target-saved-prompt".repeat(128);
         await upsertSessionEntryCore(
           { ...scope, sessionKey },
           {
@@ -54,6 +55,7 @@ describe("memory source sessions", () => {
             updatedAt: 1_000,
             chatType: "group",
             hookExternalContentSource: "gmail",
+            skillsSnapshot: { prompt, skills: [] },
           },
         );
         recordSessionParticipant(
@@ -85,9 +87,15 @@ describe("memory source sessions", () => {
             sessions: [{ sessionId, sessionKey: "agent:main:another-session" }],
           }),
         ).toEqual([]);
-        expect(resolveMemorySessionTargets({ ...scope, sessionIds: [sessionId] })).toEqual([
-          expect.objectContaining({ sessionId, sessionKey, resolution: "live" }),
-        ]);
+        const parses = vi.spyOn(JSON, "parse");
+        try {
+          expect(resolveMemorySessionTargets({ ...scope, sessionIds: [sessionId] })).toEqual([
+            expect.objectContaining({ sessionId, sessionKey, resolution: "live" }),
+          ]);
+          expect(parses.mock.calls.filter(([text]) => text.includes(prompt))).toHaveLength(0);
+        } finally {
+          parses.mockRestore();
+        }
         const targetSql = observeHostDataSql();
         try {
           expect(await loadMemorySessionMetadataAsync({ ...scope, sessionId })).toMatchObject({

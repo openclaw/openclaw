@@ -135,8 +135,8 @@ auth store.
 If there is no Codex login, the offered ChatGPT sign-in stays isolated in an
 OpenClaw-owned agent home. These are the two Codex modes: **Reuse** shares your
 existing login and sessions; **Separate** uses an OpenClaw login and agent home.
-To switch from reuse to separate, choose **Use a separate login** on the setup
-card and follow the inline ChatGPT sign-in. You can also open **Model Setup**
+To switch from reuse to separate, choose **Sign in separately** on the setup
+card and follow the inline ChatGPT sign-in. You can also open **Models**
 and sign in with ChatGPT or enter an OpenAI API key. Completing that sign-in
 selects the isolated home automatically.
 See [Native Codex state](/plugins/codex-harness/native-features#share-threads-with-codex-desktop-and-cli)
@@ -160,7 +160,7 @@ enabling it, including verified first-party packages. Review the details, then
 explicitly confirm acceptance to continue.
 Declining or confirmed cancellation stops that attempt without selecting another
 inference route. If the confirmation turn fails, the app shows the failure and
-keeps the saved credential. Choose the saved sign-in in **Model Setup** to retry
+keeps the saved credential. Choose the saved sign-in in **Models** to retry
 without signing in again. Runtime plugins installed for that attempt are kept.
 
 Automatic setup leaves native Claude/Codex conversation discovery off. You can

@@ -189,6 +189,7 @@ export async function observeReleaseNpmState(input: {
             timeoutMs: 15_000,
             attempts: 2,
             redirect: "manual",
+            exactVersion: pkg.version,
           });
           if (
             registry.status !== 404 &&

@@ -50,6 +50,11 @@ pnpm ci:full-release \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
 
+For `main`, `--admission-workflow-sha` is the reviewed ancestry anchor; the helper
+may advance it to a verified descendant before dispatch as `main` moves. Add
+`--pin-admission-workflow` only when the exact main SHA must remain unchanged.
+Protected `release-publish/*` admission refs are always pinned.
+
 This example selects normal final-release publication. Select `npmDistTag=beta`
 for a beta, or `route=prepared` when the intended consumer is the prepared release
 button. Core publication requires `all-publishable` plugins. Plugin-only normal

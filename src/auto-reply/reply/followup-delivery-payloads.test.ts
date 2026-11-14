@@ -1,6 +1,10 @@
 // Tests payload visibility, threading, and source-send deduplication.
 import { describe, expect, it, vi } from "vitest";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -17,9 +21,11 @@ function resolve(
 const answer = "The answer remains unchanged.";
 const sideReply = (question: string, text: string) => `BTW\nQuestion: ${question}\n\n${text}`;
 
-function slackTarget(text: string) {
-  return { tool: "slack", provider: "slack", to: "channel:C1", threadId: "111.000", text };
-}
+const threadId = "111.000";
+const questionPayload = (question: string, text = answer): ReplyPayload => ({
+  text,
+  btw: { question },
+});
 
 describe("resolveFollowupDeliveryPayloads", () => {
   it("drops payloads without visible content", () => {
@@ -62,33 +68,24 @@ describe("resolveFollowupDeliveryPayloads", () => {
     });
   });
 
-  it("does not dedupe same-channel text sent to a different routed thread", () => {
-    expect(
-      resolve([{ text: "thread reply" }], {
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        originatingThreadId: "222.000",
-        sentTexts: ["thread reply"],
-        sentTargets: [slackTarget("thread reply")],
-      }),
-    ).toEqual([{ text: "thread reply" }]);
-  });
-
   it.each([
-    [answer, "What about the new case?", answer, false],
-    ["323", "What is 17 * 19?", sideReply("What is 17 * 19?", "323"), true],
-    [answer, "What about the second case?", sideReply("What about the first case?", answer), false],
+    [{ text: answer }, answer, "222.000", false],
+    [questionPayload("new"), answer, threadId, false],
+    [questionPayload("product", "323"), sideReply("product", "323"), threadId, true],
+    [questionPayload("second"), sideReply("first", answer), threadId, false],
   ] as const)(
-    "dedupes side-question %s for %s against %s (duplicate=%s)",
-    (text, question, sentText, duplicate) => {
-      const payload = { text, btw: { question } };
+    "dedupes only the same question and route: %j",
+    (payload, sentText, originThread, duplicate) => {
       const delivered = vi.fn();
       expect(
         resolve([payload], {
           messageProvider: "slack",
           originatingTo: "channel:C1",
-          originatingThreadId: "111.000",
-          sentTargets: [slackTarget(sentText)],
+          originatingThreadId: originThread,
+          sentTexts: [sentText],
+          sentTargets: [
+            { tool: "slack", provider: "slack", to: "channel:C1", threadId, text: sentText },
+          ],
           onDeliveredTerminalDuplicate: delivered,
         }),
       ).toEqual(duplicate ? [] : [payload]);

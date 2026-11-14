@@ -274,7 +274,7 @@ it("replaces failed native images with unavailable cards and offers local retry"
   const card = container.querySelector(
     ".chat-image-frame--compact .chat-assistant-attachment-card",
   );
-  expect(card?.textContent).toContain("Could not load this image. Try again.");
+  expect(card?.textContent).toContain("Couldn’t load this image. Try again.");
   expect(container.querySelector('img[alt="Local image"]')).toBeNull();
   expect(container.querySelectorAll(".chat-image-action")).toHaveLength(1);
   for (const [index, frame] of [...container.querySelectorAll(".chat-image-frame")].entries()) {

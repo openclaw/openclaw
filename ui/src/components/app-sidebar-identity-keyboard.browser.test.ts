@@ -55,6 +55,11 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     expect(theme?.getAttribute("role")).toBe("menuitem");
     const build = menu?.querySelector<HTMLAnchorElement>(".sidebar-footer-build");
     await expect.poll(() => document.activeElement).toBe(items[0]);
+    // Navigation loads on first open; until then keys are queued and replayed later
+    // (menu-navigation cold tests), so wait before asserting each step synchronously.
+    await expect
+      .poll(() => items[0]?.hasAttribute("data-highlighted"), { timeout: 5_000 })
+      .toBe(true);
     expect(tooltip()).toBeNull();
 
     for (const expected of items.slice(1)) {

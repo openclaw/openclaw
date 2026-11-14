@@ -31,7 +31,6 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 const swarmMocks = vi.hoisted(() => ({
   emitSessionLifecycleEvent: vi.fn(),
   getSwarmRunByLaunchReplayKey: vi.fn(),
-  initSubagentRegistry: vi.fn(),
   waitForCollectorCompletion: vi.fn(),
   spawnSubagentDirect: vi.fn(),
 }));
@@ -50,7 +49,6 @@ vi.mock("../sessions/session-lifecycle-events.js", async (importOriginal) => ({
 vi.mock("./subagents/registry/subagent-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagents/registry/subagent-registry.js")>()),
   getSwarmRunByLaunchReplayKey: swarmMocks.getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry: swarmMocks.initSubagentRegistry,
 }));
 
 vi.mock("./tools/agents-wait-tool.js", async (importOriginal) => ({
@@ -210,7 +208,6 @@ beforeEach(() => {
   swarmMocks.spawnSubagentDirect.mockReset().mockResolvedValue({ ...acceptedCollector });
   swarmMocks.emitSessionLifecycleEvent.mockReset();
   swarmMocks.getSwarmRunByLaunchReplayKey.mockReset().mockResolvedValue(undefined);
-  swarmMocks.initSubagentRegistry.mockReset();
   swarmMocks.waitForCollectorCompletion.mockReset().mockResolvedValue({ ...restoredCollector });
 });
 
@@ -665,7 +662,7 @@ describe("Code Mode swarm host bridge", () => {
     },
   );
 
-  it("re-settles a persisted collector after restart without double-spawn", async () => {
+  it("reuses a registered collector for the same invocation without double-spawn", async () => {
     let persisted: SubagentRunRecord | undefined;
     const harness = createSwarmHarness((input) => {
       const replayKey = input.swarmLaunchReplayKey;
@@ -702,41 +699,24 @@ describe("Code Mode swarm host bridge", () => {
       error: "does not match the persisted collector",
     },
     {
-      state: "reservation without durable launch",
+      state: "reservation without current launch",
       task: "Research",
       pending: true,
-      error: "launch reservation cannot be recovered",
+      error: "launch is no longer active; start a new request",
     },
-    { state: "durable pending reservation", task: "Research", pending: true, error: undefined },
-  ])("recovers only valid persisted collectors: $state", async ({ task, pending, error }) => {
+  ])("refuses unusable collector reservations: $state", async ({ task, pending, error }) => {
     swarmMocks.getSwarmRunByLaunchReplayKey.mockResolvedValue(
       collectorRecord({
         swarmLaunchPending: pending,
         swarmLaunchRequestFingerprint: collectorFingerprint(task),
-        queuedLaunch: error
-          ? undefined
-          : {
-              requesterRecovery: {},
-              request: {},
-              timeoutMs: 1,
-              schedulerGroupKey: "group",
-              maxConcurrent: 1,
-            },
       }),
     );
     const harness = createSwarmHarness();
     const result = await runSwarmCode(harness, 'return await agents.run("Research");');
-    if (error) {
-      expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
-      expect(String(result.error)).toContain(error);
-      if (pending) {
-        expect(swarmMocks.initSubagentRegistry).not.toHaveBeenCalled();
-      }
-    } else {
-      expect(result).toMatchObject({ status: "completed", value: "restored" });
-      expect(swarmMocks.initSubagentRegistry).toHaveBeenCalledOnce();
-    }
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
+    expect(String(result.error)).toContain(error);
     expect(harness.spawnTool.execute).not.toHaveBeenCalled();
+    expect(swarmMocks.waitForCollectorCompletion).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

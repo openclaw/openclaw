@@ -10,27 +10,21 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 // Frozen pre-fix retained-tree encoding: full modes, post-order, no ctime/nlink.
-function originalReceipt(root: string) {
+function originalReceipt(root: string, postorder: string[]) {
   const digest = createHash("sha256");
-  const visit = (relative: string) => {
-    const file = path.join(root, relative);
+  for (const file of postorder) {
     const stat = fs.lstatSync(file, { bigint: true });
     const retained = [stat.dev + ":" + stat.ino, stat.mode, stat.uid, stat.gid].map(String);
     if (!stat.isDirectory()) {
       retained.push(String(stat.size), String(stat.mtimeNs));
+      retained.push(
+        ...(stat.isSymbolicLink()
+          ? ["symlink", fs.readlinkSync(file)]
+          : ["file", createHash("sha256").update(fs.readFileSync(file)).digest("hex")]),
+      );
     }
-    if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(file).toSorted()) {
-        visit(relative ? `${relative}/${child}` : child);
-      }
-    } else if (stat.isSymbolicLink()) {
-      retained.push("symlink", fs.readlinkSync(file));
-    } else {
-      retained.push("file", createHash("sha256").update(fs.readFileSync(file)).digest("hex"));
-    }
-    digest.update(JSON.stringify([relative, retained]));
-  };
-  visit("");
+    digest.update(JSON.stringify([path.relative(root, file), retained]));
+  }
   const stat = fs.statSync(root, { bigint: true });
   return { digest: digest.digest("hex"), identity: `${stat.dev}:${stat.ino}`, version: "1.0.0" };
 }
@@ -41,21 +35,20 @@ function fixture(publicModes = false, shared = false) {
   const manifest = path.join(root, "package.json");
   const payload = path.join(directory, "index.js");
   const alias = path.join(directory, "shared.js");
+  const entry = path.join(root, "entry");
   fs.mkdirSync(directory);
   fs.writeFileSync(manifest, '{"name":"openclaw","version":"1.0.0"}\n');
   fs.writeFileSync(payload, "export {};\n");
   const files = [root, directory, manifest, payload];
-  for (const file of files) {
-    fs.chmodSync(
-      file,
-      fs.statSync(file).isDirectory() ? (publicModes ? 0o755 : 0o700) : publicModes ? 0o644 : 0o600,
-    );
+  for (const [index, file] of files.entries()) {
+    fs.chmodSync(file, index < 2 ? (publicModes ? 0o755 : 0o700) : publicModes ? 0o644 : 0o600);
   }
-  fs.symlinkSync("dist/index.js", path.join(root, "entry"));
+  fs.symlinkSync("dist/index.js", entry);
   if (shared) {
     fs.linkSync(payload, alias);
   }
-  const previous = originalReceipt(root);
+  const postorder = [payload, ...(shared ? [alias] : []), directory, entry, manifest, root];
+  const previous = originalReceipt(root, postorder);
   const warning = vi.fn();
   const matches = (expected = previous) =>
     createPackagePublicationTreeMatcher(
@@ -87,30 +80,31 @@ describe.skipIf(process.platform === "win32")("publication permission drift", ()
     }
   });
 
-  it.each(["bytes", "owner-mode", "inode", "target"])(
-    "does not repair a tree with changed %s",
-    async (changed) => {
-      const f = fixture();
-      fs.chmodSync(f.manifest, 0o650);
-      if (changed === "bytes") {
-        fs.writeFileSync(f.payload, "export {x};\n");
-      }
-      if (changed === "owner-mode") {
-        fs.chmodSync(f.payload, 0o400);
-      }
-      if (changed === "inode") {
+  it.each<[string, (f: ReturnType<typeof fixture>) => void]>([
+    ["bytes", (f) => fs.writeFileSync(f.payload, "export {x};\n")],
+    ["owner-mode", (f) => fs.chmodSync(f.payload, 0o400)],
+    [
+      "inode",
+      (f) => {
         fs.renameSync(f.payload, path.join(dirs.make("original-inode-"), "index.js"));
         fs.writeFileSync(f.payload, "export {};\n", { mode: 0o600 });
-      }
-      if (changed === "target") {
+      },
+    ],
+    [
+      "target",
+      (f) => {
         fs.unlinkSync(path.join(f.root, "entry"));
         fs.symlinkSync("package.json", path.join(f.root, "entry"));
-      }
-      await expect(f.matches()).rejects.toThrow("Package publication object changed");
-      expect(fs.statSync(f.manifest).mode & 0o777).toBe(0o650);
-      expect(f.warning).not.toHaveBeenCalled();
-    },
-  );
+      },
+    ],
+  ])("does not repair a tree with changed %s", async (_changed, mutate) => {
+    const f = fixture();
+    fs.chmodSync(f.manifest, 0o650);
+    mutate(f);
+    await expect(f.matches()).rejects.toThrow("Package publication object changed");
+    expect(fs.statSync(f.manifest).mode & 0o777).toBe(0o650);
+    expect(f.warning).not.toHaveBeenCalled();
+  });
 
   it("keeps old public-mode receipts valid across recovery attempts", async () => {
     const f = fixture(true);

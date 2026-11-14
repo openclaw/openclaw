@@ -25,7 +25,9 @@ import { WorkerPlacementWorkspaceUnavailableError } from "./worker-environments/
 afterEach(() => resetConfigRuntimeState());
 
 const sessionRuntime = (
-  findLiveByOwner: WorkerPlacementSessionRuntime["managedWorktrees"]["findLiveByOwner"],
+  findLiveByOwner: WorkerPlacementSessionRuntime["managedWorktrees"]["findLiveByOwner"] = (
+    ...args
+  ) => managedWorktrees.findLiveByOwner(...args),
 ): WorkerPlacementSessionRuntime => ({
   resolveGatewaySessionStoreTargetInWorker,
   resolveCanonicalSessionEntryFromStoreKeys,
@@ -139,7 +141,7 @@ test("captures the physical owner of an unavailable session in a shared store", 
       ...identity,
       config,
       errorMessage: "placement source changed",
-      sessionRuntime: sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args)),
+      sessionRuntime: sessionRuntime(),
     });
     await expect(unavailable).rejects.toBeInstanceOf(WorkerPlacementWorkspaceUnavailableError);
     await expect(unavailable).rejects.toMatchObject({
@@ -147,51 +149,81 @@ test("captures the physical owner of an unavailable session in a shared store", 
     });
   }));
 
-test.each(["missing", "replacement"] as const)(
-  "classifies a %s local worktree without losing restoration to the captured session",
-  (change) =>
-    withEmptyTargetState("unavailable-local-placement-", async () => {
-      const fixture = targetFixture("agent:main:unavailable-local");
-      const original = await createWorktree("unavailable-local", fixture.identity.sessionKey);
-      await fixture.write({ worktree: worktreeEntry(original) });
-      if (change === "missing") {
-        await updateRegistryWorktree(process.env, original.id, { removedAt: 1 });
-      } else {
-        await insertRegistryWorktree(process.env, {
-          ...original,
-          id: "replacement-local",
-          createdAt: original.createdAt + 1,
-        });
+test.each([
+  ["missing", "before"],
+  ["replacement", "before"],
+  ["missing", "during"],
+  ["repository", "during"],
+  ["replacement", "during"],
+] as const)("distinguishes a %s worktree changed %s preparation", (change, phase) =>
+  withEmptyTargetState("changed-local-placement-", async () => {
+    const fixture = targetFixture("agent:main:changed-local");
+    const original = await createWorktree("changed-local", fixture.identity.sessionKey);
+    await fixture.write({ worktree: worktreeEntry(original) });
+    const mutate = () =>
+      change === "replacement"
+        ? insertRegistryWorktree(process.env, {
+            ...original,
+            id: "replacement-local",
+            createdAt: original.createdAt + 1,
+          })
+        : updateRegistryWorktree(
+            process.env,
+            original.id,
+            change === "missing"
+              ? { removedAt: 1 }
+              : {
+                  repositoryIdentity: {
+                    repoRoot: `${original.repoRoot}-changed`,
+                    repoFingerprint: original.repoFingerprint,
+                  },
+                },
+          );
+    if (phase === "before") {
+      await mutate();
+    }
+    const runtime = sessionRuntime(async (...args) => {
+      const worktree = await managedWorktrees.findLiveByOwner(...args);
+      if (phase === "during") {
+        await mutate();
       }
-      const runtime = sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args));
-      const unavailable = fixture.select(runtime);
-      await expect(unavailable).rejects.toBeInstanceOf(WorkerPlacementWorkspaceUnavailableError);
-      await expect(unavailable).rejects.toMatchObject({
-        target: {
-          agentId: fixture.identity.agentId,
-          sessionKey: fixture.identity.sessionKey,
-          storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-          worktreeId: original.id,
-        },
-      });
-      await updateRegistryWorktree(
-        process.env,
-        change === "missing" ? original.id : "replacement-local",
-        { removedAt: change === "missing" ? undefined : 1 },
+      return worktree;
+    });
+    const unavailable = fixture.select(runtime);
+    if (phase === "during") {
+      await expect(unavailable).rejects.toThrow(
+        "Spawn parent managed worktree changed; retry from its current session",
       );
-      using resolved = await fixture.select(runtime);
-      expect(resolved.workspace).toEqual({ kind: "local", path: original.path });
-      resolved.assertCurrent();
-    }),
+      await expect(unavailable).rejects.not.toBeInstanceOf(
+        WorkerPlacementWorkspaceUnavailableError,
+      );
+      return;
+    }
+    await expect(unavailable).rejects.toBeInstanceOf(WorkerPlacementWorkspaceUnavailableError);
+    await expect(unavailable).rejects.toMatchObject({
+      target: {
+        agentId: fixture.identity.agentId,
+        sessionKey: fixture.identity.sessionKey,
+        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+        worktreeId: original.id,
+      },
+    });
+    await updateRegistryWorktree(
+      process.env,
+      change === "missing" ? original.id : "replacement-local",
+      { removedAt: change === "missing" ? undefined : 1 },
+    );
+    using resolved = await fixture.select(runtime);
+    expect(resolved.workspace).toEqual({ kind: "local", path: original.path });
+    resolved.assertCurrent();
+  }),
 );
 
 test("keeps repository absence transient instead of requiring a session or worktree publication", () =>
   withEmptyTargetState("unavailable-repository-placement-", async () => {
     const fixture = targetFixture("agent:main:unavailable-repository");
     await fixture.write({ repositoryWorkspaceId: "absent-repository" });
-    const unavailable = fixture.select(
-      sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args)),
-    );
+    const unavailable = fixture.select(sessionRuntime());
     await expect(unavailable).rejects.toThrow("placement source changed");
     await expect(unavailable).rejects.not.toBeInstanceOf(WorkerPlacementWorkspaceUnavailableError);
   }));
@@ -217,9 +249,7 @@ test("prepares concurrent empty workspaces while another session registers its c
       await awaitGateBeforeSettlement(read.promise, pending, "Workspace read never started");
       const secondWorktree = await createWorktree("second-empty", second.identity.sessionKey);
       await second.write({ worktree: worktreeEntry(secondWorktree) });
-      using secondTarget = await second.select(
-        sessionRuntime((...args) => managedWorktrees.findLiveByOwner(...args)),
-      );
+      using secondTarget = await second.select(sessionRuntime());
       release.resolve();
       using firstTarget = await pending;
       expect(firstTarget.workspace).toEqual({ kind: "local", path: firstWorktree.path });
@@ -231,43 +261,3 @@ test("prepares concurrent empty workspaces while another session registers its c
       (await pending.catch(() => undefined))?.[Symbol.dispose]();
     }
   }));
-
-test.each(["removal", "repository", "replacement"] as const)(
-  "refuses an empty workspace whose own %s changes during preparation",
-  (change) =>
-    withEmptyTargetState("changed-empty-placement-", async () => {
-      const fixture = targetFixture("agent:main:changed-empty");
-      const original = await createWorktree("changed-empty", fixture.identity.sessionKey);
-      await fixture.write({ worktree: worktreeEntry(original) });
-      const pending = fixture.select(
-        sessionRuntime(async (...args) => {
-          const worktree = await managedWorktrees.findLiveByOwner(...args);
-          if (change === "replacement") {
-            await insertRegistryWorktree(process.env, {
-              ...original,
-              id: "replacement-empty",
-              createdAt: original.createdAt + 1,
-            });
-          } else {
-            await updateRegistryWorktree(
-              process.env,
-              original.id,
-              change === "removal"
-                ? { removedAt: 1 }
-                : {
-                    repositoryIdentity: {
-                      repoRoot: `${original.repoRoot}-changed`,
-                      repoFingerprint: original.repoFingerprint,
-                    },
-                  },
-            );
-          }
-          return worktree;
-        }),
-      );
-      await expect(pending).rejects.toThrow(
-        "Spawn parent managed worktree changed; retry from its current session",
-      );
-      await expect(pending).rejects.not.toBeInstanceOf(WorkerPlacementWorkspaceUnavailableError);
-    }),
-);

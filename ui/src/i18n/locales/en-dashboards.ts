@@ -4,8 +4,8 @@ import { en } from "./en.ts";
 const enDashboards = {
   dashboardsPage: {
     emptyTitle: "No dashboards yet",
-    emptyDescription: "Dashboards created in your tasks will appear here.",
-    loadError: "Could not load dashboards: {error}",
+    emptyDescription: "Dashboards created in your sessions appear here.",
+    loadError: "Couldn’t load dashboards. Try again. {error}",
     openFocusMode: "Open dashboard in focus mode",
     live: "Live",
     byAuthor: "By {author}",
@@ -20,7 +20,7 @@ const enDashboards = {
     sortUpdated: "Recently updated",
     sortTitle: "Title A–Z",
     resultCount: "Dashboards: {count}",
-    noResultsTitle: "No matching dashboards",
+    noResultsTitle: "No dashboards match your search.",
     noResultsDescription: "Try another search or author.",
   },
 } satisfies TranslationMap;

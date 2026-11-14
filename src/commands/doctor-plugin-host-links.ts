@@ -18,7 +18,7 @@ import { listManagedPluginNpmRootsSync } from "../plugins/npm-project-roots.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   reconcileRegisteredOpenClawHostLinks,
-  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+  repairInstalledOpenClawHostLinks,
 } from "../plugins/plugin-peer-link.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -172,41 +172,25 @@ export async function maybeRepairPluginOpenClawHostLinks(
     info() {},
     warn: (message: string) => warnings.push(`- ${message}`),
   };
-  const warnReadFailure = (kind: string) => (error: unknown, packageDir: string) => {
-    logger.warn(
-      `Could not inspect ${kind} package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
-    );
-  };
-  const results = await Promise.allSettled(
-    npmRoots.map((npmRoot) =>
-      relinkOpenClawPeerDependenciesInManagedNpmRoot({
-        npmRoot,
-        logger,
-        onPackageReadError: warnReadFailure("managed npm"),
-        beforePersistentEffect: params.beforePersistentEffect,
-      }),
-    ),
-  );
-  let repaired = 0;
-  for (const result of results) {
-    if (result.status === "rejected") {
-      throw result.reason;
-    }
-    repaired += result.value.repaired;
-  }
-  const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
+  const repair = await repairInstalledOpenClawHostLinks({
+    managedNpmRoots: npmRoots,
     installRecords: installRecords ?? {},
     extensionsDir: resolveRegisteredPluginExtensionsRoot(params),
     env: params.env,
-    mode: "repair",
+    stateDir: params.stateDir,
+    filePath: params.filePath,
     logger,
-    onPackageReadError: warnReadFailure("registered"),
+    onPackageReadError: (error, packageDir, kind) => {
+      logger.warn(
+        `Could not inspect ${kind} package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
+      );
+    },
     beforePersistentEffect: params.beforePersistentEffect,
   });
 
   for (const [count, kind] of [
-    [repaired, "managed npm"],
-    [registeredRepair.repaired, "registered"],
+    [repair.managedRepaired, "managed npm"],
+    [repair.registeredRepaired, "registered"],
   ] as const) {
     if (count > 0) {
       note(
@@ -219,5 +203,5 @@ export async function maybeRepairPluginOpenClawHostLinks(
     note(["OpenClaw host peer link warnings:", ...warnings].join("\n"), "Plugin registry");
   }
 
-  return repaired > 0 || registeredRepair.repaired > 0;
+  return repair.managedRepaired > 0 || repair.registeredRepaired > 0;
 }

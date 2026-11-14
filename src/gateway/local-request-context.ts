@@ -67,6 +67,7 @@ const unavailableCron: GatewayCronServiceContract = {
   runEvent: cronUnavailable,
   waitForManualRun: cronUnavailable,
   getJob: () => undefined,
+  getLoadedJobs: () => undefined,
   readJob: async () => undefined,
   readScratch: cronUnavailable,
   writeScratch: cronUnavailable,
@@ -125,8 +126,11 @@ async function createLocalGatewayRequestContext(
     loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
     readPreparedGatewayModelCatalog: (loadParams) =>
       readPreparedGatewayModelCatalog({ ...loadParams, getConfig: params.getRuntimeConfig }),
-    readPreparedGatewayModelCatalogBatch: (agentIds) =>
-      readPreparedGatewayModelCatalogBatch(agentIds, { getConfig: params.getRuntimeConfig }),
+    readPreparedGatewayModelCatalogBatch: (agentIds, options) =>
+      readPreparedGatewayModelCatalogBatch(agentIds, {
+        ...options,
+        getConfig: params.getRuntimeConfig,
+      }),
     readChatMetadata: async () => {
       throw new Error("Chat metadata is unavailable in local embedded agent gateway context.");
     },

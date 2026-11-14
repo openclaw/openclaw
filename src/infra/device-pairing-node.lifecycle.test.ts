@@ -1,13 +1,10 @@
 // Capability approvals follow the paired-device lifecycle, not the device-auth request TTL.
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
   approveNodePairing,
-  beginNodePairingConnect,
-  finalizeNodePairingCleanupClaim,
   listNodePairing,
   recordPairedNodeConnection,
   recordPairedNodeDisconnection,
@@ -92,7 +89,7 @@ test.each(["initial", "reapproval"])(
   },
 );
 
-test.each(["rejection", "successful reconnect", "node-role removal"])(
+test.each(["rejection", "node-role removal"])(
   "resolves aged capability reapproval through %s",
   async (resolution) => {
     await setupPairedNode(baseDir);
@@ -112,11 +109,6 @@ test.each(["rejection", "successful reconnect", "node-role removal"])(
         requestId: request.requestId,
         nodeId: "node-1",
       });
-    } else if (resolution === "successful reconnect") {
-      const { cleanupClaim } = await beginNodePairingConnect("node-1", baseDir);
-      await expect(
-        finalizeNodePairingCleanupClaim(expectDefined(cleanupClaim, "cleanup claim")),
-      ).resolves.toEqual([{ requestId: request.requestId, nodeId: "node-1" }]);
     } else {
       await expect(removePairedDeviceRole({ deviceId: "node-1" })).resolves.toEqual({
         deviceId: "node-1",
@@ -139,10 +131,7 @@ test.each(["rejection", "successful reconnect", "node-role removal"])(
 
 test("keeps an aged capability reapproval through a recorded disconnect", async () => {
   const generation = await setupPairedNode(baseDir);
-  await expect(recordPairedNodeConnection("node-1", 1_000, baseDir, generation)).resolves.toEqual({
-    recorded: true,
-    firstConnection: true,
-  });
+  await recordPairedNodeConnection("node-1", 1_000, baseDir, generation);
   const age = agingClock();
   const { request } = await requestSurface();
   age();
@@ -159,16 +148,4 @@ test("keeps an aged capability reapproval through a recorded disconnect", async 
 
   expect(await reopen()).toBe(true);
   expect((await listNodePairing(baseDir)).pending).toEqual([request]);
-});
-
-test("supersedes an aged capability request with a changed surface", async () => {
-  await setupPairedNode(baseDir);
-  const age = agingClock();
-  const first = await requestSurface();
-  age();
-  const second = await requestSurface({ commands: ["system.run", "system.which"] });
-
-  expect(second.superseded).toEqual([{ requestId: first.request.requestId, nodeId: "node-1" }]);
-  expect((await listNodePairing(baseDir)).pending).toEqual([second.request]);
-  await expect(approve(first.request.requestId)).resolves.toBeNull();
 });

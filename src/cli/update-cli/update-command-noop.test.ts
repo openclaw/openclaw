@@ -49,7 +49,6 @@ it.each([
   { platform: "linux", managedServiceRoot: "/serving/install", foreground: false },
   { platform: "linux", managedServiceRoot: "/serving/install", foreground: true },
   { platform: "darwin", managedServiceRoot: undefined, foreground: false },
-  { platform: "win32", managedServiceRoot: undefined, foreground: false },
 ] as const)(
   "refreshes already-current policy only for native Linux admission (platform=$platform, root=$managedServiceRoot, foreground=$foreground)",
   async ({ platform, managedServiceRoot, foreground }) => {

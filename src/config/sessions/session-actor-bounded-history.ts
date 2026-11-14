@@ -1,15 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-contract.js";
-import {
-  DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
-  DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
-  MAX_VISIBLE_MESSAGE_MAX_BYTES,
-  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-  normalizeVisibleMessageLimit,
-} from "./session-accessor.sqlite-visible-cursor.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
-import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
+import { fitBackgroundResultDependencies } from "./session-background-result-dependencies.js";
+import {
+  normalizeBoundedContextLimits,
+  selectBoundedContextRows,
+} from "./session-bounded-context-selection.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import type {
@@ -33,23 +30,7 @@ export function readSessionActorBoundedHistory(
   limits: SessionTranscriptContextSelection,
 ): Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }> {
   const version = { ...state.hot.transcript.version };
-  const boundedLimits =
-    "compaction" in limits
-      ? undefined
-      : {
-          maxBytes: normalizeVisibleMessageLimit(
-            limits.maxBytes,
-            DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
-            MAX_VISIBLE_MESSAGE_MAX_BYTES,
-            "maxBytes",
-          ),
-          maxEvents: normalizeVisibleMessageLimit(
-            limits.maxEvents,
-            DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
-            MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-            "maxEvents",
-          ),
-        };
+  const boundedLimits = normalizeBoundedContextLimits(limits);
   const navigation = scanSessionTranscriptTree(state.events.map((row) => row.event));
   const active = selectSessionTranscriptTreePathNodes(navigation, navigation.leafId)
     .filter((node) => shouldProjectActiveEvent(node.entry))
@@ -109,10 +90,26 @@ export function readSessionActorBoundedHistory(
     if (!boundedLimits || serializedBytes + boundary.serialized_bytes <= boundedLimits.maxBytes) {
       injected = boundary;
       rows.unshift(boundary);
-      serializedBytes += boundary.serialized_bytes;
     } else {
       truncated = true;
     }
+  }
+  const fitted = fitBackgroundResultDependencies(
+    rows.map((row) => ({ seq: row.rawSeq, serialized_bytes: row.serialized_bytes })),
+    active.map((row) => ({
+      seq: row.rawSeq,
+      serialized_bytes: row.serialized_bytes,
+      event: row.event,
+    })),
+    headerBytes,
+    boundedLimits?.maxBytes,
+  );
+  const bySequence = new Map(active.map((row) => [row.rawSeq, row]));
+  rows.splice(0, rows.length, ...fitted.rows.map((row) => bySequence.get(row.seq)!));
+  serializedBytes = fitted.serializedBytes;
+  truncated ||= fitted.truncated;
+  if (injected && !rows.includes(injected)) {
+    injected = undefined;
   }
   const parents = new Map(
     rows.map((row) => [row.node.id, active[row.activePosition - 1]?.node.id ?? null]),
@@ -161,11 +158,12 @@ export function readSessionActorBoundedHistory(
       endIndex: endIndex + headerOffset,
     });
   }
+  const firstSelected = selectedRows.findLast((row) => rows.includes(row));
   const anchors = [
     ...(injected && isRecord(injected.event) && injected.event.type === "compaction"
       ? [injected]
       : []),
-    ...(selectedRows.at(-1) ? [selectedRows.at(-1)!] : []),
+    ...(firstSelected ? [firstSelected] : []),
   ];
   const cacheTtlProjectionPrefixes = anchors.flatMap((anchor) => {
     const prefix = collectCacheTtlProjectionPrefix(

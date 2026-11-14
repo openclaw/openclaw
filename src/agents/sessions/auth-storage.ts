@@ -10,6 +10,7 @@ import fs from "node:fs";
 import { dirname } from "node:path";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import type { OAuthLoginCallbacks, OAuthProviderId } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
@@ -129,10 +130,7 @@ type StorageBackend = Omit<AuthStorageBackend, "withLockAsync"> & {
 };
 
 function parseStorageData(content: string | undefined): AuthStorageData {
-  if (!content) {
-    return {};
-  }
-  return JSON.parse(content) as AuthStorageData;
+  return content ? (JSON.parse(content) as AuthStorageData) : {};
 }
 
 function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
@@ -426,6 +424,7 @@ export class AuthStorage {
 
   private recordError(error: unknown): Error {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
+    materializeErrorStack(normalizedError);
     this.errors.push(normalizedError);
     return normalizedError;
   }

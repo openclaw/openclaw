@@ -9,6 +9,7 @@ import {
   PR_ATTRIBUTION_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
@@ -29,6 +30,7 @@ export type IdentityChange =
 
 export class ProfileState {
   private publishTarget?: () => void;
+  private refreshAccounts?: () => void;
   readonly modelAccountsTarget: ModelAccountsTargetSource = {
     read: () => ({
       gateway: this.context.gateway.snapshot,
@@ -41,6 +43,12 @@ export class ProfileState {
         this.publishTarget = undefined;
       };
     },
+    subscribeRefresh: (listener) => {
+      this.refreshAccounts = listener;
+      return () => {
+        this.refreshAccounts = undefined;
+      };
+    },
   };
   selfUser: AuthenticatedUser | null = null;
   ownProfile: UserProfile | null = null;
@@ -50,6 +58,7 @@ export class ProfileState {
   identityLoading = false;
   identityBusy: IdentityChange["kind"] | null = null;
   identityError: string | null = null;
+  attributionError: string | null = null;
 
   client: GatewayBrowserClient | null = null;
   connected = false;
@@ -127,6 +136,8 @@ export class ProfileState {
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
+      this.attributionError = null;
+      this.attributionError = null;
     }
     if (identitySourceChanged) {
       this.ownProfile = null;
@@ -160,6 +171,7 @@ export class ProfileState {
       currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
     this.identityLoading = true;
     this.identityError = null;
+    this.attributionError = null;
     const result = this.readIdentity(client, requestId, hasUnsavedDisplayName, displayNameDraft);
     this.identityReceipt = { result };
     this.publish();
@@ -171,6 +183,7 @@ export class ProfileState {
     hasUnsavedDisplayName: boolean,
     displayNameDraft: string,
   ) {
+    let profileLoaded = false;
     try {
       const profile = await this.context.gateway.loadSelfProfile();
       if (requestId !== this.identityRequestId) {
@@ -180,6 +193,7 @@ export class ProfileState {
       if (!profile) {
         return;
       }
+      profileLoaded = true;
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
       this.gitCoauthorEnabled = true;
       this.prAttributionEnabled = false;
@@ -206,7 +220,13 @@ export class ProfileState {
         preferences.status === "ok" && preferences.entries[PR_ATTRIBUTION_PREFERENCE_KEY] === true;
     } catch (error) {
       if (requestId === this.identityRequestId) {
-        this.identityError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
+        const message = formatUiError(error, t("profilePage.identity.profileUnavailable"));
+        // What failed after the profile arrived is its preferences, shown beside their switches.
+        if (profileLoaded) {
+          this.attributionError = message;
+        } else {
+          this.identityError = message;
+        }
       }
     } finally {
       if (requestId === this.identityRequestId) {
@@ -231,6 +251,7 @@ export class ProfileState {
     }
     this.identityBusy = change.kind;
     this.identityError = null;
+    this.attributionError = null;
     this.publish();
     const identityRequestId = this.identityRequestId;
     const isCurrent = () => client === this.client && identityRequestId === this.identityRequestId;
@@ -246,7 +267,13 @@ export class ProfileState {
           }
           this.ownProfile = result.profile;
           this.displayName = result.profile.displayName ?? "";
-          this.context.gateway.updateSelfUser?.({ name: result.profile.displayName ?? undefined });
+          this.context.gateway.updateSelfUser?.({
+            name: userProfileDisplayName(
+              result.profile.id,
+              result.profile.displayName,
+              result.profile.githubIdentity?.login,
+            ),
+          });
           break;
         }
         case "avatar": {
@@ -310,7 +337,9 @@ export class ProfileState {
         }
       }
     } catch (error) {
-      if (isCurrent()) {
+      if (isCurrent() && (change.kind === "git-coauthor" || change.kind === "pr-attribution")) {
+        this.attributionError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
+      } else if (isCurrent()) {
         this.identityError =
           change.kind === "avatar" && error instanceof ProfileAvatarError
             ? t(
@@ -341,6 +370,7 @@ export class ProfileState {
         invalidateUserPreferences(this.client);
       }
       this.loadIdentity();
+      this.refreshAccounts?.();
     }
   }
 }

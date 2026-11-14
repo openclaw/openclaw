@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as boundaryPath from "../../infra/boundary-path.js";
 import {
   resolveSessionFilePathCore,
   resolveSessionStorePathCore,
@@ -19,6 +20,40 @@ afterEach(() => {
 });
 
 describe("resolveSessionFilePath cross-root reroot", () => {
+  it.skipIf(process.platform === "win32")(
+    "resolves a sibling transcript once per call and observes changed symlinks",
+    () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sibling-")));
+      tempDirs.push(root);
+      const sessionsDir = path.join(root, "agents", "main", "sessions");
+      const siblingDir = path.join(root, "agents", "worker", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.mkdirSync(siblingDir, { recursive: true });
+      const transcript = path.join(siblingDir, "sess-1.jsonl");
+      const outside = path.join(root, "outside.jsonl");
+      fs.writeFileSync(transcript, "{}\n");
+      fs.writeFileSync(outside, "{}\n");
+      const alias = path.join(sessionsDir, "alias.jsonl");
+      fs.symlinkSync(transcript, alias);
+      const realpath = vi.spyOn(boundaryPath, "safeRealpathSync");
+      const resolve = () =>
+        resolveSessionFilePathCore(
+          "sess-1",
+          { sessionFile: alias },
+          { sessionsDir, agentId: "worker" },
+        );
+
+      expect(resolve()).toBe(transcript);
+      expect(
+        realpath.mock.calls.filter(([file]) => file === alias || file === transcript),
+      ).toHaveLength(1);
+
+      fs.unlinkSync(alias);
+      fs.symlinkSync(outside, alias);
+      expect(resolve()).toBe(path.join(sessionsDir, "sess-1.jsonl"));
+    },
+  );
+
   it("re-roots foreign-root absolute paths when the file exists in the current sessions dir", () => {
     // Restored backups and moved state dirs persist absolute sessionFile
     // paths from the old root; migration must find the local copy.

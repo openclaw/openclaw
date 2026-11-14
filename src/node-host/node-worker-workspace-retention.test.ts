@@ -171,6 +171,23 @@ it("preserves legacy synchronous plugin acquisition for the exact canonical plac
   );
 });
 
+it("collects runtime-private HOME state only after its workspace lease retires", async () => {
+  const f = managedFixture("native-state-retention");
+  const lease = await f.workspace.acquireManagedWorkspaceAsync(f.request);
+  const nativeState = path.join(f.session, ".openclaw-worker", "codex", "session", "config.toml");
+  try {
+    expect(lease.homeDir).toBe(f.session);
+    fs.mkdirSync(path.dirname(nativeState), { recursive: true });
+    fs.writeFileSync(nativeState, "synthetic native state");
+    await f.collect(1);
+    expectPaths([f.workspaceDir, nativeState], true);
+  } finally {
+    lease.release();
+  }
+  await f.collect(2);
+  expectPaths([f.workspaceDir, nativeState, f.session], false);
+});
+
 it("keeps an in-flight removal fenced until it settles after cancellation", async () => {
   const { workspace, collect, workspaceDir, request } = managedFixture("managed-removal-race");
   const removalStarted = createDeferred();

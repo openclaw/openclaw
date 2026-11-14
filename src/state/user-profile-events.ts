@@ -13,7 +13,11 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import { readProfileAuthority, type ProfileAuthorityDescriptor } from "./user-profile-authority.js";
+import {
+  prepareProfileAuthorityRead,
+  readProfileAuthority,
+  type ProfileAuthorityDescriptor,
+} from "./user-profile-authority.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
 import type { UserProfileEmailBinding, UserProfilesDatabase } from "./user-profiles.types.js";
 
@@ -195,11 +199,12 @@ function authorityBinding(
   store: ProfileAuthorityStore,
   descriptor: ProfileAuthorityDescriptor,
 ): ProfileAuthorityBinding {
+  const readCurrent = prepareProfileAuthorityRead(descriptor);
   return Object.assign(
     () => {
       try {
         admission.assertCurrent();
-        return isAuthorityStoreCurrent(store) && readProfileAuthority(descriptor) === "current";
+        return isAuthorityStoreCurrent(store) && readCurrent() === "current";
       } catch {
         return false;
       }

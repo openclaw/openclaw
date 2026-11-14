@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
 import type { ModelRequestHeaders } from "../llm/types.js";
 import { sanitizeCompactionMessages } from "./compaction-planning.js";
+import { isCompactionSummaryRefusal } from "./compaction-summary-refusal.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {
   AgentMessage,
@@ -110,6 +111,7 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
         // AbortErrors without caller cancellation remain retryable.
         shouldRetry: (err) =>
           !params.signal.aborted &&
+          !isCompactionSummaryRefusal(err) &&
           !(err instanceof SummaryOutputBudgetError) &&
           (isAbortError(err) || !isTimeoutError(err)),
       },

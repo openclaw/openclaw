@@ -100,8 +100,9 @@ For a regular final package on its matching release branch or tag, `all` with
 `release_profile=stable` records `coveragePolicy=npm-stable-v1` and uses CI's
 `npm-stable` scope. Numeric corrections qualify, including an unchanged base
 package whose base tag resolves to the same source SHA. This policy defers only
-macOS Swift/OpenClawKit, iOS/Watch, Android, and native i18n. Linux, macOS, and
-Windows Node coverage, Control UI, plugins, package and installer acceptance,
+iOS/Watch, Android, and native i18n. Because the stable tag also ships the macOS
+app, it retains the regular macOS Swift/OpenClawKit `tests` and `packages`
+phases. Linux, macOS, and Windows Node coverage, Control UI, plugins, package and installer acceptance,
 QA, stable soak, and blocking product performance remain required. Extended-stable,
 `main` without release context, `full`, and explicit `ci` runs retain full CI.
 Evidence reuse requires the same coverage policy, exact package version, target

@@ -21,7 +21,7 @@ suite.define(() => {
         methodResponses: { "chat.history": interruptedChatHistory() },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const thread = page.locator(".chat-thread");
       await thread.getByText(interruptedChatPrompt, { exact: true }).waitFor();
       for (const text of interruptedChatCommentary) {

@@ -110,9 +110,14 @@ export function createAssistantAsyncDelivery(
 export function createAssistantReasoningMessage(
   params: CodexAssistantMessageParams,
   text: string,
+  timestamp: number,
 ): AssistantMessage {
   // Shared history and visibility controls need reasoning, not final-answer text.
-  return createNonterminalAssistantMessage(params, [{ type: "thinking", thinking: text }]);
+  return createNonterminalAssistantMessage(
+    params,
+    [{ type: "thinking", thinking: text }],
+    timestamp,
+  );
 }
 
 function createNonterminalAssistantMessage(

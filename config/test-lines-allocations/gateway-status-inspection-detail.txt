@@ -1,0 +1,2 @@
+20
+# Plain and deep status must expose unclassified launcher inspection recovery details.

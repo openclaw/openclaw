@@ -1,8 +1,4 @@
 import { setImmediate } from "node:timers/promises";
-import {
-  createPluginRegistryFixture,
-  registerTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
@@ -10,28 +6,23 @@ import {
   dispatchPluginAgentEventSubscriptions,
 } from "../host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { registrationFixture } from "../registry-registration.test-support.js";
 import { setActivePluginRegistry } from "../runtime.js";
-import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
 type Subscription = Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0];
 function subscribe(options: Omit<Subscription, "id" | "handle">) {
   const handle = vi.fn<Subscription["handle"]>();
-  const { config, registry } = createPluginRegistryFixture();
-  registerTestPlugin({
-    registry,
-    config,
-    record: createPluginRecord({ id: "event-payload" }),
-    register(api) {
-      api.agent.events.registerAgentEventSubscription({ id: "events", handle, ...options });
-    },
+  const { register, registry } = registrationFixture();
+  register({ id: "event-payload" }, (api) => {
+    api.agent.events.registerAgentEventSubscription({ id: "events", handle, ...options });
   });
   return {
     handle,
     send: (data: Record<string, unknown>, sessionKey?: string) => {
       const event = { runId: "run-payload", seq: 1, ts: 0, stream: "tool", sessionKey, data };
       dispatchPluginAgentEventSubscriptions({
-        registry: registry.registry,
+        registry,
         event,
         isLive: () => true,
       });
@@ -47,12 +38,12 @@ afterEach(() => {
 });
 
 describe("agent event subscription payloads", () => {
-  it.each(
-    [undefined, [], [" start "]].flatMap((phases) => [
-      { phases, payload: undefined },
-      { phases, payload: "metadata" as const },
-    ]),
-  )(
+  it.each([
+    { phases: undefined, payload: undefined },
+    { phases: [], payload: "full" as const },
+    { phases: [" start "], payload: undefined },
+    { phases: [" start "], payload: "metadata" as const },
+  ])(
     "filters event phases before cloning with phases=$phases and payload=$payload",
     async ({ phases, payload }) => {
       const { handle, send } = subscribe({ streams: ["tool"], phases, payload });

@@ -34,7 +34,6 @@ export type SettingsSegmentedProps<T extends string, Label> = {
     }
   | {
       mode: "buttons";
-      variant?: "accent" | "primary" | "compact";
       onClick?: (event: MouseEvent, value: T) => void;
       onChange: (value: T) => void;
       onReselect?: (value: T) => void;

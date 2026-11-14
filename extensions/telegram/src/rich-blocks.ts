@@ -613,22 +613,26 @@ export function markdownToTelegramRichBlocks(
       switch (segment.kind) {
         case "html": {
           blocks.push(
-            ...renderTelegramHtmlIsland(segment.node, (nodes) => {
-              const content: InputRichBlock[] = [];
-              let first = 0;
-              for (let last = 0; last < nodes.length; last += 1) {
-                if (nodes[last + 1]?.start === nodes[last]!.end) {
-                  continue;
+            ...renderTelegramHtmlIsland(
+              segment.node,
+              (nodes) => {
+                const content: InputRichBlock[] = [];
+                let first = 0;
+                for (let last = 0; last < nodes.length; last += 1) {
+                  if (nodes[last + 1]?.start === nodes[last]!.end) {
+                    continue;
+                  }
+                  const start = nodes[first]!.start;
+                  const end = nodes[last]!.end;
+                  // Removed summaries, credits, and checkboxes split body ranges.
+                  // Render the remaining tree with the same Markdown owner as the root.
+                  content.push(...renderChildRange(start, end, nodes.slice(first, last + 1)));
+                  first = last + 1;
                 }
-                const start = nodes[first]!.start;
-                const end = nodes[last]!.end;
-                // Removed summaries, credits, and checkboxes split body ranges.
-                // Render the remaining tree with the same Markdown owner as the root.
-                content.push(...renderChildRange(start, end, nodes.slice(first, last + 1)));
-                first = last + 1;
-              }
-              return content;
-            }),
+                return content;
+              },
+              (start, end) => irRangeToRichText(ir, start, end, skipEntityDetection),
+            ),
           );
           break;
         }

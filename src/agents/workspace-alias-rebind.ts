@@ -168,32 +168,21 @@ export function detectRepointedWorkspaceAlias(
   );
 }
 
-export type WorkspaceAliasRebindOutcome =
-  | "rebound"
-  | "no-repoint"
-  | "repoint-changed"
-  | "current-target-owns-state"
-  | "original-workspace-exists"
-  | "target-directory-missing"
-  | "configured-workspace-conflict";
-
 export function inspectWorkspaceAliasMove(
   workspaceDir: string,
   expected: RepointedWorkspaceAliasFacts,
   configuredWorkspaceDirs: readonly string[] = [workspaceDir],
-):
-  | { kind: "ready"; aliases: WorkspaceStateIdentity[] }
-  | { kind: "blocked"; outcome: Exclude<WorkspaceAliasRebindOutcome, "rebound"> } {
+) {
   if (expected.currentTargetHasOwnState) {
-    return { kind: "blocked", outcome: "current-target-owns-state" };
+    return { kind: "blocked" as const, outcome: "current-target-owns-state" as const };
   }
   const stored = createWorkspaceStateIdentity(expected.storedWorkspacePath);
   const current = createWorkspaceStateIdentity(expected.currentWorkspacePath);
   if (!expected.targetDirectoryIdentity) {
-    return { kind: "blocked", outcome: "target-directory-missing" };
+    return { kind: "blocked" as const, outcome: "target-directory-missing" as const };
   }
   if (directoryIdentity(expected.currentDirectoryPath) !== expected.targetDirectoryIdentity) {
-    return { kind: "blocked", outcome: "repoint-changed" };
+    return { kind: "blocked" as const, outcome: "repoint-changed" as const };
   }
   const matchesDestination = (candidate: string) =>
     resolveWorkspaceStateAliases(candidate).at(-1)!.workspaceKey === current.workspaceKey &&
@@ -204,7 +193,7 @@ export function inspectWorkspaceAliasMove(
       (candidate) => !matchesDestination(candidate),
     )
   ) {
-    return { kind: "blocked", outcome: "original-workspace-exists" };
+    return { kind: "blocked" as const, outcome: "original-workspace-exists" as const };
   }
   const aliases = new Map<string, WorkspaceStateIdentity>();
   const oldAliasKeys = new Set(expected.state.aliases.map((alias) => alias.alias_key));
@@ -221,7 +210,7 @@ export function inspectWorkspaceAliasMove(
     const lexical = resolved[0]!;
     const target = resolved.at(-1)!;
     if (configuredPaths.has(candidate) && target.workspaceKey === stored.workspaceKey) {
-      return { kind: "blocked", outcome: "configured-workspace-conflict" };
+      return { kind: "blocked" as const, outcome: "configured-workspace-conflict" as const };
     }
     if (matchesDestination(candidate)) {
       for (const alias of resolved) {
@@ -231,13 +220,13 @@ export function inspectWorkspaceAliasMove(
       oldAliasKeys.has(lexical.workspaceKey) &&
       (pathMayExistSync(resolveUserPath(candidate)) || configuredPaths.has(candidate))
     ) {
-      return { kind: "blocked", outcome: "configured-workspace-conflict" };
+      return { kind: "blocked" as const, outcome: "configured-workspace-conflict" as const };
     }
   }
   if (resolveWorkspaceStateAliases(workspaceDir).at(-1)!.workspaceKey !== current.workspaceKey) {
-    return { kind: "blocked", outcome: "repoint-changed" };
+    return { kind: "blocked" as const, outcome: "repoint-changed" as const };
   }
-  return { kind: "ready", aliases: [...aliases.values()] };
+  return { kind: "ready" as const, aliases: [...aliases.values()] };
 }
 
 /** Transfer only a confirmed move; source history is never rebuilt from templates. */
@@ -247,13 +236,13 @@ export async function rebindRepointedWorkspaceAlias(
   options: OpenClawStateDatabaseOptions = {},
   configuredWorkspaceDirs: readonly string[] = [workspaceDir],
   verifyConfiguration?: () => Promise<void>,
-): Promise<WorkspaceAliasRebindOutcome> {
+) {
   const observed = detectRepointedWorkspaceAlias(workspaceDir, options);
   if (!observed) {
-    return "no-repoint";
+    return "no-repoint" as const;
   }
   if (JSON.stringify(observed) !== JSON.stringify(expected)) {
-    return "repoint-changed";
+    return "repoint-changed" as const;
   }
   const initial = inspectWorkspaceAliasMove(workspaceDir, expected, configuredWorkspaceDirs);
   if (initial.kind === "blocked") {
@@ -279,7 +268,7 @@ export async function rebindRepointedWorkspaceAlias(
   return runOpenClawStateWriteTransaction((writeDatabase) => {
     const state = readWorkspaceMoveState(writeDatabase, stored);
     if (JSON.stringify(state) !== JSON.stringify(expected.state)) {
-      return "repoint-changed";
+      return "repoint-changed" as const;
     }
     const kysely = getNodeSqliteKysely<WorkspaceDatabase>(writeDatabase.db);
     if (
@@ -291,7 +280,7 @@ export async function rebindRepointedWorkspaceAlias(
           .where("workspace_key", "=", current.workspaceKey),
       )
     ) {
-      return "current-target-owns-state";
+      return "current-target-owns-state" as const;
     }
     applyWorkspaceMigrationReceiptMove(writeDatabase.db, receipts);
     if (state.setup) {
@@ -329,6 +318,6 @@ export async function rebindRepointedWorkspaceAlias(
       retireWorkspaceFileCache(stored.workspacePath);
       retireWorkspaceFileCache(current.workspacePath);
     });
-    return "rebound";
+    return "rebound" as const;
   }, options);
 }

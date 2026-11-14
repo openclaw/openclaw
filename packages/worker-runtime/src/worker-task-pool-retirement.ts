@@ -44,6 +44,7 @@ export function createWorkerIdleTimers(runInContext: <T>(operation: () => T) => 
 export function createWorkerTaskPoolRetirement<Input, Output>({
   slots,
   options,
+  retainOneIdleWorker,
   runInContext,
   dispatch,
   onRotationComplete,
@@ -53,6 +54,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
 }: {
   slots: Set<Slot<Input, Output>>;
   options: WorkerTaskPoolOptions<Output>;
+  retainOneIdleWorker?: true;
   runInContext: <T>(operation: () => T) => T;
   dispatch: () => void;
   onRotationComplete: () => void;
@@ -63,11 +65,27 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   const artifactCleanups = new Map<Promise<void>, RetainedOperation<void>>();
   let lastIdleRetirementAt = -Infinity;
   let warmSlot: Slot<Input, Output> | undefined;
+  let lastBurstRetirementAt = -Infinity;
+  let warmBurstSlot: Slot<Input, Output> | undefined;
   let rotation: RetainedOperation<void> | undefined;
   let rotationFailed = false;
   const idleTimers = createWorkerIdleTimers(runInContext);
   const now = performance.now.bind(performance);
-  const clearIdle = idleTimers.clear;
+  const idleSlots = retainOneIdleWorker ? new Set<Slot<Input, Output>>() : undefined;
+  function newestIdle() {
+    if (!idleSlots) {
+      return undefined;
+    }
+    let newest: Slot<Input, Output> | undefined;
+    for (const slot of idleSlots) {
+      newest = slot;
+    }
+    return newest;
+  }
+  function clearIdle(slot: Slot<Input, Output>): void {
+    idleSlots?.delete(slot);
+    idleTimers.clear(slot);
+  }
   const isBurstSlot = (slot: Slot<Input, Output>) => {
     if (options.burstIdleTimeoutMs !== undefined) {
       for (const available of slots) {
@@ -136,6 +154,9 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           if (cleaned.status === "rejected") {
             throw cleaned.error;
           }
+          // An empty pool also starts fresh after rotation.
+          lastIdleRetirementAt = -Infinity;
+          lastBurstRetirementAt = -Infinity;
           rotation = undefined;
           onRotationComplete();
           completion.resolve();
@@ -159,13 +180,18 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     slot: Slot<Input, Output>,
     reason: WorkerRetirementReason = "closed",
   ): RetainedOperation<void> {
-    if (reason === "idle_timeout" && !isBurstSlot(slot)) {
-      lastIdleRetirementAt = now();
-    } else if (reason === "rotation") {
-      lastIdleRetirementAt = -Infinity;
+    if (reason === "idle_timeout") {
+      if (isBurstSlot(slot)) {
+        lastBurstRetirementAt = now();
+      } else {
+        lastIdleRetirementAt = now();
+      }
     }
     if (warmSlot === slot) {
       warmSlot = undefined;
+    }
+    if (warmBurstSlot === slot) {
+      warmBurstSlot = undefined;
     }
     if (slot.worker) {
       markWorkerRetirement(slot.worker, reason);
@@ -343,13 +369,38 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     if (idleMs <= 0) {
       return;
     }
-    // A promptly reused pool retains one isolate; excess slots keep their own timeout.
+    if (idleSlots && !idleSlots.has(slot)) {
+      const previous = newestIdle();
+      idleSlots.add(slot);
+      // A former floor whose original deadline elapsed is surplus again.
+      if (previous && !previous.idleTimer) {
+        void retire(previous, "idle_timeout").catch(() => undefined);
+      }
+    }
+    // Primary and burst reuse have separate histories so neither extends the other's lifetime.
     if (!burst && !warmSlot && now() - lastIdleRetirementAt < WORKER_WARM_WINDOW_MS) {
       warmSlot = slot;
     }
+    if (
+      burst &&
+      (!warmBurstSlot || !isBurstSlot(warmBurstSlot)) &&
+      now() - lastBurstRetirementAt < WORKER_WARM_WINDOW_MS
+    ) {
+      warmBurstSlot = slot;
+    }
     const startedAt = burst ? now() : 0;
-    const timeoutMs = warmSlot === slot ? Math.max(idleMs, WORKER_WARM_WINDOW_MS) : idleMs;
+    // Retain only one recently needed burst across polling gaps, then still expire it.
+    const timeoutMs = burst
+      ? warmBurstSlot === slot
+        ? idleMs * 3
+        : idleMs
+      : warmSlot === slot
+        ? Math.max(idleMs, WORKER_WARM_WINDOW_MS)
+        : idleMs;
     idleTimers.arm(slot, Math.max(0, timeoutMs - elapsedIdleMs), () => {
+      if (newestIdle() === slot) {
+        return;
+      }
       // A cancellation can leave this formerly surplus worker as the first live slot.
       if (burst && !isBurstSlot(slot)) {
         idle(slot, now() - startedAt);
@@ -360,6 +411,9 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   }
 
   return {
+    get preferredIdle() {
+      return newestIdle();
+    },
     get dispatchAllowed() {
       return rotation === undefined && !rotationFailed;
     },

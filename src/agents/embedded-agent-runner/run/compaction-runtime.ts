@@ -1,9 +1,11 @@
+import { parseCompactionDetails } from "../../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { withSessionTranscriptHydrationCaller } from "../../../config/sessions/session-transcript-hydration-caller.js";
 import { sameSessionTranscriptStorePath } from "../../../config/sessions/transcript-store-identity.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -41,8 +43,9 @@ import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accum
 import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { outsideExecutionCapacity } from "./execution-capacity.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -53,7 +56,7 @@ type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
 export type EmbeddedRunCompactionRecoveryInput = {
   runInput?: PreparedEmbeddedRunInput;
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
   state: EmbeddedRunContextRecoveryState;
   contextEngine: ContextEngine;
   contextTokenBudget?: number;
@@ -98,14 +101,13 @@ export async function compactEmbeddedRunForRecovery(
   recovery: RecoveryCompactionRequest,
 ) {
   const owner = input.prepareRecoveryOwner();
-  const emitProgress = (phase: "start" | "end", completed?: boolean) => {
+  const emitProgress = (
+    phase: "start" | "end",
+    end?: { completed: boolean; qualityDegraded?: true; summaryRefused?: true },
+  ) => {
     const event = {
       stream: "compaction" as const,
-      data: {
-        phase,
-        itemId: recovery.diagId,
-        ...(completed === undefined ? {} : { completed }),
-      },
+      data: { phase, itemId: recovery.diagId, ...end },
       ...(input.runParams.sessionKey ? { sessionKey: input.runParams.sessionKey } : {}),
     };
     emitAgentEvent({ runId: input.runParams.runId, ...event });
@@ -115,14 +117,44 @@ export async function compactEmbeddedRunForRecovery(
       callback: () => input.runParams.onAgentEvent?.(event),
     });
   };
-  let completed = false;
+  let end: Parameters<typeof emitProgress>[1] = { completed: false };
   emitProgress("start");
   try {
+    if (recovery.trigger === "overflow") {
+      // The detached flush needs its own capacity ticket, while this source keeps custody.
+      let outcome: string;
+      try {
+        const checkpoint = input.runParams.beforeRecoveryCompaction;
+        outcome = checkpoint
+          ? await outsideExecutionCapacity(() =>
+              checkpoint({
+                sessionId: owner.session.id,
+                ...input.modelSelection,
+                contextTokenBudget: recovery.tokenBudget,
+              }),
+            )
+          : "skipped: no reply-owned memory checkpoint";
+      } catch {
+        owner.assertActive();
+        log.warn("Overflow memory checkpoint failed; continuing compaction");
+        outcome = "failed";
+      }
+      owner.assertActive();
+      log.info(`[memory-flush] overflow checkpoint ${outcome}`);
+    }
     const result = await executeRecoveryCompaction(input, recovery, owner);
-    completed = result.result.ok && result.result.compacted;
+    if (result.result.ok && result.result.compacted) {
+      // Channel notices read the degraded/refused facts from this end event alone.
+      const details = parseCompactionDetails(result.result.result?.details);
+      end = {
+        completed: true,
+        ...(details?.qualityDegraded ? { qualityDegraded: true } : {}),
+        ...(details?.summaryRefused ? { summaryRefused: true } : {}),
+      };
+    }
     return result;
   } finally {
-    emitProgress("end", completed);
+    emitProgress("end", end);
   }
 }
 
@@ -134,6 +166,13 @@ async function executeRecoveryCompaction(
 ) {
   const { runParams } = input;
   const activeSession = owner.session;
+  const requestAdmission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  const requestFromEntryId =
+    requestAdmission?.agentId === input.sessionAgentId &&
+    requestAdmission.sessionKey === input.resolvedSessionKey &&
+    sameSessionTranscriptStorePath(requestAdmission.storePath, activeSession.target?.storePath)
+      ? requestAdmission.entryId
+      : undefined;
   const promptCacheIdentity = {
     ...runParams,
     sessionId: activeSession.id,
@@ -224,6 +263,7 @@ async function executeRecoveryCompaction(
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: input.state.compactionRequestBudget,
+                requestFromEntryId,
                 pendingRequestState:
                   recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
                 memoryTranscript: owner.sessionManager
@@ -483,10 +523,12 @@ export function createEmbeddedRunCompactionRuntime(input: {
       memoryManager ??
       (detached
         ? undefined
-        : await SessionManager.openAsync(
-            owner.session.target,
-            params.workspaceDir,
-            resolveEmbeddedSessionContextLimits(contextTokenBudget),
+        : await withSessionTranscriptHydrationCaller("compaction", () =>
+            SessionManager.openAsync(
+              owner.session.target,
+              params.workspaceDir,
+              resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
+            ),
           ));
     owner.assertActive();
     return {

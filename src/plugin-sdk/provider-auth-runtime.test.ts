@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOAuthRefreshCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import {
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
@@ -120,14 +121,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
   it("resolves non-secret provider auth profile metadata", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "provider-auth-runtime-"));
     const agentDir = path.join(tempRoot, "agent");
-    const credential = {
-      type: "oauth" as const,
-      provider: "openai",
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
-      accountId: "acct-openai-workspace",
-    };
+    const credential = createOAuthRefreshCredential({ accountId: "acct-openai-workspace" });
     saveAuthProfileStore({ version: 1, profiles: { "openai:chatgpt": credential } }, agentDir);
 
     const params = { provider: "openai", profileId: "openai:chatgpt", agentDir };

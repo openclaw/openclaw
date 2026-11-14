@@ -1,4 +1,5 @@
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
+import type { ChatRunStartupState } from "./chat-run-startup.ts";
 
 const RUN_FIELDS = [
   "chatMessages",
@@ -29,14 +30,40 @@ type ChatRunPublication = "immediate" | "animation-frame";
 
 const presentations = new WeakMap<object, ChatRunPresentation<object>>();
 
+function sameStartupPresentation(
+  left: ChatRunStartupState | null | undefined,
+  right: ChatRunStartupState | null | undefined,
+): boolean {
+  if (left?.state !== right?.state || left?.runId !== right?.runId) {
+    return false;
+  }
+  if (left?.state !== "status" || right?.state !== "status") {
+    return true;
+  }
+  if (left.phase !== right.phase) {
+    return false;
+  }
+  if (left.phase === "waiting_for_model" && right.phase === "waiting_for_model") {
+    return left.waitReason === right.waitReason;
+  }
+  if (
+    (left.phase === "retrying" || left.phase === "fallback") &&
+    (right.phase === "retrying" || right.phase === "fallback")
+  ) {
+    return left.retryAt === right.retryAt;
+  }
+  return true;
+}
+
 /** Synchronous run state with one publication boundary for each accepted event. */
 class ChatRunPresentation<T extends object> {
-  readonly values: ChatRunFields<T> = {};
+  readonly values: ChatRunFields<T> & { chatRunStartup?: ChatRunStartupState | null } = {};
   readonly fields = RUN_FIELDS;
   frame: number | null = null;
   private readonly listeners = createChangeListeners();
   private readonly nonTextListeners = createChangeListeners();
   private nonTextChanged = false;
+  private publishedStartup: ChatRunStartupState | null | undefined;
   private depth = 0;
   private changed = false;
   private cadence: ChatRunPublication | false = false;
@@ -62,15 +89,18 @@ class ChatRunPresentation<T extends object> {
           Object.defineProperty(this.values, key, { value });
           // Arrival and removal change row membership; continuing text does not.
           this.nonTextChanged ||=
-            key !== "chatStream" || (typeof previous === "string") !== (typeof value === "string");
+            key !== "chatRunStartup" &&
+            (key !== "chatStream" ||
+              (typeof previous === "string") !== (typeof value === "string"));
           if (this.depth > 0) {
             this.changed = true;
           } else {
-            this.publish();
+            this.publish("immediate", false);
           }
         },
       });
     }
+    this.publishedStartup = this.values.chatRunStartup;
     Object.defineProperty(host, "chatStreamRenderFrame", {
       configurable: true,
       enumerable: true,
@@ -96,15 +126,15 @@ class ChatRunPresentation<T extends object> {
       if (this.depth === 0 && this.changed) {
         this.changed = false;
         if (this.cadence) {
-          this.publish(this.cadence, true);
+          this.publish(this.cadence, false);
         }
       }
     }
   }
 
-  publish(mode: ChatRunPublication = "immediate", textOnly = false): void {
+  publish(mode: ChatRunPublication = "immediate", forceNonText = true): void {
     // Ordinary explicit publications also cover mutations inside retained objects.
-    this.nonTextChanged ||= !textOnly;
+    this.nonTextChanged ||= forceNonText;
     if (this.depth > 0) {
       this.changed = true;
       if (mode === "immediate") {
@@ -141,7 +171,11 @@ class ChatRunPresentation<T extends object> {
   }
 
   private readonly notify = () => {
-    const nonTextChanged = this.nonTextChanged;
+    // Preserve every sequence update, but compare the final displayed status of the frame.
+    const startup = this.values.chatRunStartup;
+    const nonTextChanged =
+      this.nonTextChanged || !sameStartupPresentation(this.publishedStartup, startup);
+    this.publishedStartup = startup;
     this.nonTextChanged = false;
     this.listeners.publish();
     if (nonTextChanged) {

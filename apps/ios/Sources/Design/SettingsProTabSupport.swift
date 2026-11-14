@@ -6,6 +6,7 @@ import UserNotifications
 enum SettingsRoute: Hashable {
     case gateway
     case appleWatch
+    case espSetup
     case approvals
     case diagnostics
     case licenses

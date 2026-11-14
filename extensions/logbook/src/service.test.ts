@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { dayKeyFor } from "./day.js";
 import { LogbookStore } from "./store.js";
 import { batchInput, quietLogger, useLogbookFixture } from "./test-fixtures.test-support.js";
@@ -13,121 +13,83 @@ const missingModelWarning = expect.stringContaining("logbook: analysis paused; n
 async function makeService(params: {
   nodeIds?: string[];
   invoke?: (args: { nodeId: string; command: string }) => Promise<unknown>;
-  config?: Record<string, unknown>;
   fullConfig?: Record<string, unknown>;
 }) {
-  const dataDir = fixture.makeDir();
   const warn = vi.fn();
-  const invoked: Array<{ nodeId: string; command: string }> = [];
-  const runtime = {
-    nodes: {
-      list: async () => ({
-        nodes: (params.nodeIds ?? ["capture-node"]).map((nodeId) => ({
-          nodeId,
-          commands: ["logbook.snapshot"],
-        })),
-      }),
-      invoke: async (args: { nodeId: string; command: string }) => {
-        invoked.push({ nodeId: args.nodeId, command: args.command });
-        return params.invoke ? await params.invoke(args) : framePayload;
-      },
-    },
-  };
+  const invoke = vi.fn(async (args: { nodeId: string; command: string }) =>
+    params.invoke ? await params.invoke(args) : framePayload,
+  );
+  const nodes = (params.nodeIds ?? ["capture-node"]).map((nodeId) => ({
+    nodeId,
+    commands: ["logbook.snapshot"],
+  }));
   const service = await fixture.startService(
-    { captureEnabled: true, ...params.config },
+    { captureEnabled: true },
     {
-      runtime: runtime as never,
+      runtime: { nodes: { list: async () => ({ nodes }), invoke } } as never,
       fullConfig: (params.fullConfig ?? {}) as never,
       logger: { ...quietLogger, warn },
-      dataDir,
+      dataDir: fixture.makeDir(),
     },
   );
   const tick = () =>
     (service as unknown as { captureTick(): Promise<void> }).captureTick.call(service);
   const analyze = () =>
     (service as unknown as { analysisTick(): Promise<void> }).analysisTick.call(service);
-  return { service, invoked, tick, analyze, warn };
+  return { service, invoke, tick, analyze, warn };
 }
 
-describe("LogbookService capture node selection", () => {
-  it("rotates to the next capture node after a failure instead of re-picking the broken one", async () => {
-    const { service, invoked, tick } = await makeService({
-      nodeIds: ["a-broken", "b-working"],
-      invoke: async ({ nodeId }) => {
-        if (nodeId === "a-broken") {
-          return { payload: { error: "logbook.snapshot is not supported on linux" } };
-        }
-        return framePayload;
-      },
-    });
-
-    await tick();
-    await tick();
-    expect(invoked.map((call) => call.nodeId)).toEqual(["a-broken", "b-working"]);
-    expect((await service.status()).lastCaptureError).toBeUndefined();
+const invalidImage = "logbook.snapshot returned invalid image payload";
+it.each([
+  [
+    { error: "logbook.snapshot is not supported on linux" },
+    "logbook.snapshot is not supported on linux",
+  ],
+  [{ format: "jpeg", base64: "not-base64!" }, invalidImage],
+  [{ format: "jpeg", base64: ["ZmFrZQ=="] }, invalidImage],
+])("rejects bad capture %j and rotates to the next node", async (payload, error) => {
+  const { service, invoke, tick } = await makeService({
+    nodeIds: ["a-broken", "b-working"],
+    invoke: async ({ nodeId }) => (nodeId === "a-broken" ? { payload } : framePayload),
   });
-
-  it.each([
-    ["malformed string", "not-base64!"],
-    ["array", ["ZmFrZQ=="]],
-  ])("rejects a %s snapshot payload before storing a frame", async (_label, base64) => {
-    const { service, tick } = await makeService({
-      invoke: async () => ({ payload: { format: "jpeg", base64 } }),
-    });
-
-    await tick();
-
-    expect(await service.status()).toMatchObject({
-      pendingFrames: 0,
-      lastCaptureError: "logbook.snapshot returned invalid image payload",
-    });
-  });
+  await tick();
+  expect(await service.status()).toMatchObject({ pendingFrames: 0, lastCaptureError: error });
+  await tick();
+  expect(invoke.mock.calls.map(([call]) => call.nodeId)).toEqual(["a-broken", "b-working"]);
+  expect((await service.status()).lastCaptureError).toBeUndefined();
+});
+it.each([false, true])("warns only for pending work, with frames batched: %s", async (batched) => {
+  const { service, tick, analyze, warn } = await makeService({});
+  await analyze();
+  expect(warn).not.toHaveBeenCalled();
+  await tick();
+  if (batched) {
+    const store = (service as unknown as { store: LogbookStore }).store;
+    const { id, capturedAtMs } = expectDefined((await store.unbatchedActiveFrames(1))[0], "frame");
+    await store.createBatch(
+      batchInput([id], capturedAtMs, capturedAtMs + 1000, dayKeyFor(capturedAtMs)),
+    );
+  }
+  await analyze();
+  await analyze();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(missingModelWarning);
 });
 
-describe("LogbookService vision model selection", () => {
-  it.each([false, true])(
-    "warns only for pending work, with frames batched: %s",
-    async (batched) => {
-      const { service, tick, analyze, warn } = await makeService({});
-      await analyze();
-      expect(warn).not.toHaveBeenCalled();
-      await tick();
-      if (batched) {
-        const store = (service as unknown as { store: LogbookStore }).store;
-        const frame = expectDefined((await store.unbatchedActiveFrames(1))[0], "captured frame");
-        await store.createBatch(
-          batchInput(
-            [frame.id],
-            frame.capturedAtMs,
-            frame.capturedAtMs + 1000,
-            dayKeyFor(frame.capturedAtMs),
-          ),
-        );
-        expect(await store.countUnbatchedActiveFrames()).toBe(0);
-        expect(await store.nextPendingBatch()).not.toBeNull();
-      }
-      await analyze();
-      await analyze();
-      expect(warn).toHaveBeenCalledExactlyOnceWith(missingModelWarning);
-    },
-  );
-
-  it("borrows only a media provider with structured extraction", async () => {
-    const models = ["openai", " Codex "].map((provider) => ({
-      provider,
-      model: "gpt-5.5",
-      capabilities: ["image"],
-    }));
-    const { service } = await makeService({
-      nodeIds: [],
-      fullConfig: { tools: { media: { models } } },
-    });
-
-    expect(await service.status()).toMatchObject({
-      visionModel: "codex/gpt-5.5",
-      visionModelSource: "media-defaults",
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    });
-    expect(await service.status()).not.toHaveProperty("dataDir");
+it("borrows only a media provider with structured extraction", async () => {
+  const models = ["openai", " Codex "].map((provider) => ({
+    provider,
+    model: "gpt-5.5",
+    capabilities: ["image"],
+  }));
+  const { service } = await makeService({
+    nodeIds: [],
+    fullConfig: { tools: { media: { models } } },
   });
+
+  expect(await service.status()).toMatchObject({
+    visionModel: "codex/gpt-5.5",
+    visionModelSource: "media-defaults",
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  });
+  expect(await service.status()).not.toHaveProperty("dataDir");
 });

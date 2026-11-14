@@ -106,11 +106,10 @@ function createCacheWriter(
     },
     async write<Key extends CacheWriteKey>(
       type: Key,
-      input: AgentDatabaseOperations[Key]["input"],
+      input: AgentDatabaseOperations[Key]["input"], // Host handler owns rows until settlement.
       authority?: CacheWriteAuthority,
       signal?: AbortSignal,
     ): Promise<AgentDatabaseOperations[Key]["output"]> {
-      const captured = structuredClone(input);
       const source = createCacheWriteSource(authority, signal);
       return runOpenClawAgentWorkerWrite(
         options,
@@ -123,7 +122,7 @@ function createCacheWriter(
           }
           source.assertCurrent();
           const result = await execution.runExisting(source, async (worker) => {
-            return { value: await worker.execute({ type, input: captured }, { signal }) };
+            return { value: await worker.execute({ type, input }, { signal }) };
           });
           if (!result) {
             throw new Error("Usage cache database disappeared before write");
@@ -285,6 +284,12 @@ export function prepareSessionCostUsageRefreshLock(
       signal?: AbortSignal,
     ) {
       return assertCurrent().write("usageCache.writeRollup", params, assertCurrent, signal);
+    },
+    writeQuarters(
+      rows: AgentDatabaseOperations["usageCache.writeQuarters"]["input"],
+      signal?: AbortSignal,
+    ) {
+      return assertCurrent().write("usageCache.writeQuarters", rows, assertCurrent, signal);
     },
     pruneRows(rows: readonly SessionCostUsageRollupSnapshot[], signal?: AbortSignal) {
       return assertCurrent().write("usageCache.prune", rows, assertCurrent, signal);

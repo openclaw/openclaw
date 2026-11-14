@@ -8,7 +8,11 @@ import {
 } from "../../../lib/chat/commands.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
-const SKILL_MENTION_CHAR = /[-a-zA-Z0-9_:]/u;
+// Display titles may use any script (including NFD combining marks);
+// command tokens stay ASCII after selection.
+const SKILL_MENTION_CHAR = /[\p{L}\p{M}\p{N}_:-]/u;
+// Documented shell variables ($HOME/$PATH/$EDITOR) stay ordinary text.
+const UPPERCASE_SHELL_VARIABLE = /^[A-Z_][A-Z0-9_]*$/;
 
 type SkillMentionTarget = {
   start: number;
@@ -62,8 +66,15 @@ function findSkillMentionTarget(value: string, caret: number): SkillMentionTarge
     referenceEnd -= 1;
   }
   const query = value.slice(start, referenceEnd);
-  if (query.length > 0 && !/[a-z]/u.test(query)) {
-    return null;
+  if (query.length > 0) {
+    // Preserve literal uppercase ASCII shell variables (skills docs: $HOME, $PATH, $EDITOR).
+    if (UPPERCASE_SHELL_VARIABLE.test(query)) {
+      return null;
+    }
+    // Require a letter so bare "$123"/"$:" do not open the menu on every dollar.
+    if (!/\p{L}/u.test(query)) {
+      return null;
+    }
   }
   return { start: dollar, end: referenceEnd, query };
 }
@@ -199,35 +210,6 @@ export function createSkillMenu() {
     });
   }
 
-  function handleSkillMenuKeydown(
-    event: KeyboardEvent,
-    state: SkillMenuState,
-    host: SkillMenuHost,
-  ): boolean {
-    if (!state.skillMenuOpen) {
-      return false;
-    }
-    const items = state.skillCommandRefreshPending ? [] : state.skillMenuItems;
-    return handleComposerMenuKeydown(event, {
-      count: items.length,
-      index: state.skillMenuIndex,
-      consumeEmpty: true,
-      close: () => {
-        resetSkillMenuState(state);
-      },
-      move: (index) => {
-        state.skillMenuIndex = index;
-        return getActiveSkillMenuOptionId(state, host.paneId);
-      },
-      select: () => {
-        const command = items[state.skillMenuIndex];
-        if (command) {
-          selectSkillMention(command, state, host);
-        }
-      },
-    });
-  }
-
   return {
     state: presentation,
     update(value: string, caret: number, host: SkillMenuHost) {
@@ -245,7 +227,28 @@ export function createSkillMenu() {
     handleKeydown(event: KeyboardEvent, host: SkillMenuHost) {
       let handled = false;
       setState((draft) => {
-        handled = handleSkillMenuKeydown(event, draft, host);
+        if (!draft.skillMenuOpen) {
+          return;
+        }
+        const items = draft.skillCommandRefreshPending ? [] : draft.skillMenuItems;
+        handled = handleComposerMenuKeydown(event, {
+          count: items.length,
+          index: draft.skillMenuIndex,
+          consumeEmpty: true,
+          close: () => {
+            resetSkillMenuState(draft);
+          },
+          move: (index) => {
+            draft.skillMenuIndex = index;
+            return getActiveSkillMenuOptionId(draft, host.paneId);
+          },
+          select: () => {
+            const command = items[draft.skillMenuIndex];
+            if (command) {
+              selectSkillMention(command, draft, host);
+            }
+          },
+        });
       });
       return handled;
     },

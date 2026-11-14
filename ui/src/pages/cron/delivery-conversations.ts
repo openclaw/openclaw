@@ -198,7 +198,7 @@ export function createDeliveryConversations(deps: DeliveryConversationsDependenc
       if (isCurrent()) {
         setState((draft) => {
           draft.conversations = [];
-          draft.error = `Could not load recipient suggestions: ${formatUiError(error)}`;
+          draft.error = `Couldn’t load recipient suggestions. Check the Gateway connection and try again. Details: ${formatUiError(error)}`;
         });
       }
     }

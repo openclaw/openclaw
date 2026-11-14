@@ -1,4 +1,5 @@
 import net from "node:net";
+import ipaddr from "ipaddr.js";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as containerEnvironment from "../infra/container-environment.js";
 import * as interfaces from "../infra/network-interfaces.js";
@@ -70,6 +71,16 @@ it.each([
   ["empty proxies", "192.168.1.1", [], false],
   ["blank and padded valid proxies", "10.0.0.5", [" ", " 10.0.0.5 ", ""], true],
   ["all-blank proxies", "10.0.0.5", [" ", "\t"], false],
+  ["mapped IPv4 CIDR lower edge", "::ffff:10.0.0.0", ["10.0.0.0/24"], true],
+  ["mapped IPv4 CIDR upper edge", "10.0.0.255", ["::ffff:10.0.0.0/120"], true],
+  ["mapped IPv4 CIDR outside edge", "10.0.1.0", ["::ffff:10.0.0.0/120"], false],
+  ["mapped prefix includes IPv4 block", "203.0.113.9", ["::ffff:10.0.0.0/64"], true],
+  ["IPv6 cannot match mapped IPv4 block", "2001:db8::1", ["::ffff:0:0/96"], false],
+  ["invalid CIDR", "10.0.0.1", ["10.0.0.0/33", "2001:db8::/129"], false],
+  ["invalid address", "10.0.0.999", ["10.0.0.0/8"], false],
+  ["legacy address rejected", "127.1", ["127.0.0.0/8"], false],
+  ["client zone normalized", "fe80::1%ETH0", ["fe80::1%eth0"], true],
+  ["exact proxy zone remains case-sensitive", "fe80::1%eth0", ["fe80::1%ETH0"], false],
 ])("isTrustedProxyAddress: %s", (_name, ip, trustedProxies, expected) => {
   expect(isTrustedProxyAddress(ip, trustedProxies)).toBe(expected);
 });
@@ -145,6 +156,36 @@ describe("resolveClientIp", () => {
     ],
   ])("resolves client IP: %s", (_name, input, expected) => {
     expect(resolveClientIp(input)).toBe(expected);
+  });
+
+  it("reuses each proxy policy generation and parses only the client chain it consumes", () => {
+    using ranges = vi.spyOn(ipaddr, "parseCIDR");
+    using addresses = vi.spyOn(ipaddr, "parse");
+    const trustedProxies = ["10.0.0.0/8", "2001:db8::/32"];
+    const alternateProxies = ["192.0.2.0/24"];
+    const input = {
+      remoteAddr: "::ffff:10.0.0.2",
+      forwardedFor: "203.0.113.99, 198.51.100.8, 10.0.0.1",
+      trustedProxies,
+    };
+    expect(resolveClientIp(input)).toBe("198.51.100.8");
+    expect(isTrustedProxyAddress("192.0.2.1", alternateProxies)).toBe(true);
+    ranges.mockClear();
+    addresses.mockClear();
+
+    expect(resolveClientIp(input)).toBe("198.51.100.8");
+    expect(addresses).toHaveBeenCalledTimes(3);
+    expect(isTrustedProxyAddress("192.0.2.2", alternateProxies)).toBe(true);
+    expect(ranges).not.toHaveBeenCalled();
+
+    trustedProxies[0] = "invalid/8";
+    expect(resolveClientIp(input)).toBe("10.0.0.2");
+    trustedProxies.push("::ffff:10.0.0.0/104");
+    expect(resolveClientIp(input)).toBe("198.51.100.8");
+    trustedProxies.pop();
+    expect(resolveClientIp(input)).toBe("10.0.0.2");
+    expect(resolveClientIp({ ...input, trustedProxies: ["10.0.0.0/8"] })).toBe("198.51.100.8");
+    expect(isTrustedProxyAddress("192.0.2.2", alternateProxies)).toBe(true);
   });
 });
 

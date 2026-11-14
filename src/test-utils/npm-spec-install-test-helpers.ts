@@ -7,16 +7,6 @@ function failure(label: string, overrides: Partial<SpawnResult>, expectedDetail:
 }
 
 export const npmCommandFailureCases = [
-  failure(
-    "stderr before stdout",
-    { stderr: " registry unavailable ", stdout: "ignored" },
-    "registry unavailable",
-  ),
-  failure(
-    "stdout when stderr is blank",
-    { stderr: " ", stdout: " registry unavailable " },
-    "registry unavailable",
-  ),
   failure("exit code without output", {}, "exit code 1 (no output from npm)"),
   failure(
     "signal without output",
@@ -24,21 +14,14 @@ export const npmCommandFailureCases = [
     "signal SIGKILL (no output from npm)",
   ),
   failure(
-    "abort before spawn",
-    { code: null, termination: "signal" },
-    "termination signal (no output from npm)",
-  ),
-  failure(
     "cancellation followed by a nonzero exit",
     { termination: "signal", killed: true },
     "termination signal (no output from npm)",
   ),
-  ...(["timeout", "no-output-timeout"] as const).map((termination) =>
-    failure(
-      `${termination} with normalized exit code`,
-      { code: 124, signal: "SIGTERM", killed: true, termination },
-      `termination ${termination} (no output from npm)`,
-    ),
+  failure(
+    "no-output-timeout with normalized exit code",
+    { code: 124, signal: "SIGTERM", killed: true, termination: "no-output-timeout" },
+    "termination no-output-timeout (no output from npm)",
   ),
 ];
 

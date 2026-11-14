@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import {
@@ -35,13 +36,10 @@ function createSession(
 }
 
 describe("realtime voice bridge session runtime", () => {
-  it("keeps transport callbacks in their registering plugin instance", async () => {
-    const transport = new PluginInstance("voice-transport");
+  it("keeps provider config cloneable and callbacks in their registering plugin instance", async () => {
+    const transport = new PluginInstance("voice");
     const provider = new PluginInstance("voice-provider");
-    const runtime = createPluginRuntimeStore<{ answer: string }>({
-      pluginId: "voice-transport",
-      errorMessage: "Transport runtime not initialized",
-    });
+    const runtime = createPluginRuntimeStore<string>({ pluginId: "voice", errorMessage: "unset" });
     const transcripts: string[] = [];
     let request!: RealtimeVoiceBridgeCreateRequest;
     const voiceProvider = provider.wrap(
@@ -51,16 +49,18 @@ describe("realtime voice bridge session runtime", () => {
       }),
     );
     const session = transport.run(() => {
-      runtime.setRuntime({ answer: "Transport answer" });
+      runtime.setRuntime("Transport answer");
       return createRealtimeVoiceBridgeSession({
         provider: voiceProvider,
+        cfg: { plugins: { allow: [] } },
         providerConfig: {},
         audioSink: { sendAudio: vi.fn() },
-        onTranscript: () => transcripts.push(runtime.getRuntime().answer),
-        runAgentConsult: async () => ({ text: runtime.getRuntime().answer }),
+        onTranscript: () => transcripts.push(runtime.getRuntime()),
+        runAgentConsult: async () => ({ text: runtime.getRuntime() }),
       });
     });
     try {
+      expect(captureRuntimeConfig(request.cfg!)).toEqual({ plugins: { allow: [] } });
       provider.run(() => request.onTranscript?.("user", "Check the agenda", true));
       expect(transcripts).toEqual(["Transport answer"]);
       await expect(

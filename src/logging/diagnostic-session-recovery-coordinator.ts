@@ -10,13 +10,11 @@ export type RecoverStuckSession = (
   params: StuckSessionRecoveryRequest,
 ) => void | StuckSessionRecoveryOutcome | Promise<void | StuckSessionRecoveryOutcome>;
 
-type RequestStuckSessionRecoveryParams = {
+export function requestStuckSessionRecovery(params: {
   recover: RecoverStuckSession;
   request: StuckSessionRecoveryRequest & { operation: StuckSessionRecoveryRequest["operation"] };
   classification: SessionAttentionClassification;
-};
-
-export function requestStuckSessionRecovery(params: RequestStuckSessionRecoveryParams): void {
+}): void {
   // The producer captures before logging or awaiting; absence never adopts a later occupant.
   const operation = params.request.operation;
   if (!operation && params.classification.eventType !== "session.stuck") {

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemorySearchManager } from "../../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -20,7 +21,6 @@ import {
 import {
   readMemorySearchManagerStatus,
   type MemoryProviderStatus,
-  type MemorySearchManager,
   type MemorySearchResult,
 } from "../../memory-host-sdk/host/types.js";
 import {
@@ -105,9 +105,9 @@ async function invokeMemorySearch(
 
 function createStubManager() {
   return {
-    search: vi.fn<import("../../memory-host-sdk/host/types.js").MemorySearchManager["search"]>(
-      async () => [],
-    ),
+    search: vi.fn<
+      import("../../../packages/memory-host-sdk/src/host/search-manager.types.js").MemorySearchManager["search"]
+    >(async () => []),
     status: vi.fn((): MemoryProviderStatus => ({
       backend: "builtin" as const,
       provider: "none",

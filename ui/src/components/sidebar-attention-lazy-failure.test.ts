@@ -28,13 +28,11 @@ vi.mock("../lib/idle-import.ts", async (original) => {
     },
   };
 });
-const stores = new Set<ReturnType<typeof createSidebarAttentionStore>>();
+let store: ReturnType<typeof createSidebarAttentionStore> | undefined;
 afterEach(() => {
   document.body.replaceChildren();
-  for (const store of stores) {
-    store.dispose();
-  }
-  stores.clear();
+  store?.dispose();
+  store = undefined;
   loadFailure.mockReset();
   vi.mocked(showToast).mockClear();
 });
@@ -53,11 +51,10 @@ async function mountAttention() {
     agents: { state: { agentsList: null }, subscribe: () => () => {} },
   };
   // SAFETY: The fixture supplies exactly the owners observed by Inbox.
-  const store = createSidebarAttentionStore(
+  store = createSidebarAttentionStore(
     sources as unknown as Parameters<typeof createSidebarAttentionStore>[0],
   );
   store.activate(SidebarAttentionStoreOwner);
-  stores.add(store);
   // SAFETY: The context fixture fills unrelated application capabilities.
   const provider = createApplicationContextProvider({
     ...sources,
@@ -78,7 +75,7 @@ it("reports a rejected Inbox import and lets the same trigger retry", async () =
   await waitForSolid(() =>
     expect(showToast).toHaveBeenCalledWith({
       message:
-        "Panel failed to load. Some interface files could not be downloaded. Check your connection, then reload.",
+        "Couldn’t load this panel. Some interface files could not be downloaded. Check your connection, then reload.",
       severity: "error",
     }),
   );

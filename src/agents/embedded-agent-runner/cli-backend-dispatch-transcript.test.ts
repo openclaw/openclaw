@@ -48,7 +48,7 @@ beforeEach(() => {
   appendTranscriptMessage.mockResolvedValue({ appended: true, message: {}, messageId: "m" });
 });
 
-it.each(["wrapped", "bare-array"])("mirrors %s recall tool results", async (shape) => {
+it.each(["wrapped", "bare-array"])("mirrors %s recall results and network taint", async (shape) => {
   const recorder = createRecorder();
   const details = shape === "wrapped" ? recallDetails : undefined;
   const result = shape === "wrapped" ? { content: recallContent, details } : recallContent;
@@ -62,6 +62,7 @@ it.each(["wrapped", "bare-array"])("mirrors %s recall tool results", async (shap
     ...recallCall,
     result,
     isError: false,
+    resultContentSource: shape === "wrapped" ? "network" : undefined,
   });
   await recorder.finalize("Lemon pepper.");
 
@@ -93,30 +94,14 @@ it.each(["wrapped", "bare-array"])("mirrors %s recall tool results", async (shap
     },
     assistantMessage("Lemon pepper.", "stop"),
   ]);
+  if (shape === "wrapped") {
+    expect(messages()[2]?.["__openclaw"]).toEqual({ resultContentSource: "network" });
+    expect(messages()[3]?.["__openclaw"]).toEqual({ turnTainted: true });
+  }
 });
 
-it("persists network-result taint on the result and subsequent assistant", async () => {
-  const recorder = createRecorder();
-  recorder.noteToolEvent({
-    phase: "result",
-    toolName: "fake_web_tool",
-    result: { content: textContent("untrusted page") },
-    isError: false,
-    resultContentSource: "network",
-  });
-  await recorder.finalize("summary");
-
-  expect(messages()[1]).toMatchObject({
-    role: "toolResult",
-    __openclaw: { resultContentSource: "network" },
-  });
-  expect(messages()[2]).toMatchObject({
-    role: "assistant",
-    __openclaw: { turnTainted: true },
-  });
-});
-
-it("appends tool records incrementally for the live terminal-search watcher", async () => {
+it("survives a failed append and publishes later tool records before finalization", async () => {
+  appendTranscriptMessage.mockRejectedValueOnce(new Error("store unavailable"));
   const recorder = createRecorder();
   recorder.noteToolEvent({
     phase: "result",
@@ -131,7 +116,8 @@ it("appends tool records incrementally for the live terminal-search watcher", as
       isError: true,
     });
   });
-  await recorder.finalize();
+  await expect(recorder.finalize("text")).resolves.toBeUndefined();
+  expect(messages().at(-1)).toMatchObject(assistantMessage("text", "stop"));
 });
 
 it.each([
@@ -141,26 +127,13 @@ it.each([
   const recorder = createRecorder();
   recorder.noteAssistantText("partial before kill");
   recorder.flushAssistantSnapshot();
-  await vi.waitFor(() => {
-    expect(assistants()).toHaveLength(1);
-  });
+  await vi.waitFor(() => expect(assistants()).toHaveLength(1));
   await recorder.finalize(finalText);
   expect(assistants()).toHaveLength(count);
   expect(assistants()[0]?.message).toMatchObject(
     assistantMessage("partial before kill", "aborted"),
   );
-  expect(assistants()[0]?.scope).toMatchObject(scope);
   if (finalText) {
     expect(assistants()[1]?.message).toMatchObject(assistantMessage(finalText, "stop"));
   }
-});
-
-it("survives append failures without failing the run or later appends", async () => {
-  appendTranscriptMessage.mockRejectedValueOnce(new Error("store unavailable"));
-  const recorder = createRecorder();
-  recorder.noteToolEvent({ phase: "result", toolName: "memory_search", isError: false });
-  await expect(recorder.finalize("text")).resolves.toBeUndefined();
-  expect(messages().map(({ role }) => role)).toEqual(
-    expect.arrayContaining(["toolResult", "assistant"]),
-  );
 });

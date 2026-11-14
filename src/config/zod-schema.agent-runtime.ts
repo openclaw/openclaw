@@ -239,7 +239,7 @@ const ToolExecApplyPatchSchema = z
     enabled: z.boolean().optional(),
     /**
      * Restrict apply_patch paths to the workspace directory.
-     * Default: true (safer; does not affect read/write/edit).
+     * Default: false on the host; explicit containment and required roots still apply.
      */
     workspaceOnly: z.boolean().optional(),
     /**

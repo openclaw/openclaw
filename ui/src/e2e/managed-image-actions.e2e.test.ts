@@ -3,11 +3,8 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import {
-  createChatFlowE2eSuite,
-  expectDefined,
-  installMockGateway,
-} from "./chat-flow.test-support.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
+import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -151,11 +148,12 @@ suite.define(() => {
       }
       for (let attempt = 0; attempt < failures; attempt += 1) {
         await downloadButton.click();
-        const error = page.getByText("Could not download this image. Try again.", {
+        const error = page.getByText("Couldn’t download this image. Try again.", {
           exact: true,
         });
         await error.waitFor({ state: "visible" });
-        await page.clock.runFor(6_000);
+        // Errors stay 10 s, then fade out.
+        await page.clock.runFor(10_200);
         await error.waitFor({ state: "hidden" });
         expect(requestedVariants.filter((variant) => variant === "full")).toHaveLength(attempt + 1);
       }
@@ -165,11 +163,7 @@ suite.define(() => {
         return download;
       };
       expect((await downloadImage()).suggestedFilename()).toBe(`${filenamePrefix}.png`);
-      const downloadedPath = expectDefined(
-        await (await downloadImage()).path(),
-        "downloaded image path",
-      );
-      expect(await readFile(downloadedPath)).toEqual(imageBytes);
+      expect(await readControlUiE2eDownload(await downloadImage())).toEqual(imageBytes);
 
       if (failures > 0) {
         await openImage.click();

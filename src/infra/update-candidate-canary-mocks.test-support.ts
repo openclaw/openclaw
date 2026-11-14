@@ -41,7 +41,11 @@ export function mockCanarySnapshotCommands(
 
 export function mockCanarySqliteOperationAdmission(
   original: typeof import("./sqlite-worker-operation-admission.js"),
-  admission: { active: boolean; beforeGrant?: (stage: string) => void },
+  admission: {
+    active: boolean;
+    beforeGrant?: (stage: string) => void;
+    afterGrant?: (stage: string) => void;
+  },
 ) {
   return {
     ...original,
@@ -53,7 +57,13 @@ export function mockCanarySqliteOperationAdmission(
         admission.active = true;
         try {
           admission.beforeGrant?.(request.stage);
-          admit(request, grant);
+          admit(request, (beforeRelease) => {
+            const granted = grant(beforeRelease);
+            if (granted) {
+              admission.afterGrant?.(request.stage);
+            }
+            return granted;
+          });
         } finally {
           admission.active = false;
         }

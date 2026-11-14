@@ -102,7 +102,7 @@ suite.define(() => {
         const params = requireRecord((await gateway.waitForRequest("chat.send")).params);
         expect(params).toMatchObject({ sessionKey, message: followup, replyToId: sourceId });
         await expect.poll(() => composer.inputValue()).toBe("");
-        await exactButton(pane, "Stop generating").waitFor({ state: "visible" });
+        await exactButton(pane, "Stop").waitFor({ state: "visible" });
         await gateway.emitChatFinal({
           sessionKey,
           runId: requireString(params.idempotencyKey, "reply run ID"),

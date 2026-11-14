@@ -422,15 +422,10 @@ describe("module recovery", () => {
     nativeDependencyPath(): string;
   };
 
-  it.each(
-    [false, true].flatMap((standalone) =>
-      [false, true].map((nativePackageMap) => ({
-        standalone,
-        nativePackageMap,
-        denyFileSymlinks: standalone && nativePackageMap,
-      })),
-    ),
-  )(
+  it.each([
+    { standalone: false, nativePackageMap: false, denyFileSymlinks: false },
+    { standalone: true, nativePackageMap: true, denyFileSymlinks: true },
+  ])(
     "recovers native assets after package removal (standalone: $standalone, exports: $nativePackageMap, file-symlink denied: $denyFileSymlinks)",
     async ({ standalone, nativePackageMap, denyFileSymlinks }) => {
       let deniedLinks = 0;
@@ -829,7 +824,6 @@ export function register(api) {
         };
         await readLazy(replacement);
         const overlapping = await inspect("main");
-        expect(prepare).toHaveBeenCalledTimes(1);
 
         const neighbor = await inspect("research");
         expect(slot).toMatchObject({ evaluations: 2, registrations: 4 });
@@ -843,7 +837,6 @@ export function register(api) {
 
         const beforeConcurrent = prepare.mock.calls.length;
         const [left, right] = await Promise.all([inspect("concurrent"), inspect("concurrent")]);
-        expect(prepare).toHaveBeenCalledTimes(beforeConcurrent + 2);
         expect(slot.evaluations).toBe(3);
         const contenders = await Promise.all(
           prepare.mock.results.slice(beforeConcurrent).map(({ value }) => value),

@@ -16,18 +16,16 @@ type DiscordWebhookMessageLike = {
   webhook_id?: string | null;
 };
 
-type DiscordMemberLike = {
-  nickname?: string | null;
-  nick?: string | null;
-};
-
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
   return normalizeOptionalString(message.webhookId ?? message.webhook_id) ?? null;
 }
 
 export function resolveDiscordSenderIdentity(params: {
   author: User;
-  member?: DiscordMemberLike | null;
+  member?: {
+    nickname?: string | null;
+    nick?: string | null;
+  } | null;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): DiscordSenderIdentity {
   const pkInfo = params.pluralkitInfo ?? null;

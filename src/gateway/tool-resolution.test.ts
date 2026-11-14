@@ -30,6 +30,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
+import { registerGatewayToolFinalEffectTests } from "./tool-resolution.effects.test-support.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 async function resolveTools(
@@ -365,3 +366,5 @@ it("applies sandbox tool denies to sandboxed loopback turns", async () => {
   expect(names).not.toContain("sessions_list");
   expect(names).toContain("sessions_history");
 });
+
+registerGatewayToolFinalEffectTests();

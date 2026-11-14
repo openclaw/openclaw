@@ -1,4 +1,5 @@
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
+import { buffer } from "node:stream/consumers";
 import { expect } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import {
@@ -42,42 +43,35 @@ function callTool(
     content: [{ type: "output_text", text: preamble, annotations: [] }],
   };
   const outputIndex = preamble ? 1 : 0;
+  const event = (type: string, output_index: number, fields: Record<string, unknown>) => ({
+    type: `response.${type}`,
+    output_index,
+    ...fields,
+  });
   return [
     ...(preamble
       ? [
-          {
-            type: "response.output_item.added",
-            output_index: 0,
+          event("output_item.added", 0, {
             item: { ...message, status: "in_progress", content: [] },
-          },
-          {
-            type: "response.output_text.delta",
+          }),
+          event("output_text.delta", 0, {
             item_id: message.id,
-            output_index: 0,
             content_index: 0,
             delta: preamble,
-          },
-          { type: "response.output_item.done", output_index: 0, item: message },
+          }),
+          event("output_item.done", 0, { item: message }),
         ]
       : []),
-    {
-      type: "response.output_item.added",
-      output_index: outputIndex,
-      item: { ...item, arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: outputIndex,
+    event("output_item.added", outputIndex, { item: { ...item, arguments: "" } }),
+    event("function_call_arguments.delta", outputIndex, {
       item_id: item.id,
       delta: item.arguments,
-    },
-    {
-      type: "response.function_call_arguments.done",
-      output_index: outputIndex,
+    }),
+    event("function_call_arguments.done", outputIndex, {
       item_id: item.id,
       arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: outputIndex, item },
+    }),
+    event("output_item.done", outputIndex, { item }),
     {
       type: "response.completed",
       response: {
@@ -88,6 +82,10 @@ function callTool(
       },
     },
   ];
+}
+
+function writeReply(response: ServerResponse, text: string, id: number) {
+  writeOpenAiResponsesText(response, { text, messageId: "m_" + id, responseId: "r_" + id });
 }
 
 /** Only the provider is scripted: cron, tool admission, persistence, history and browser are real. */
@@ -118,14 +116,10 @@ export async function startQuietProvider(options: { baseline?: boolean } = {}) {
             response.writeHead(404).end();
             return;
           }
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
           const body: {
             tools?: Array<{ name: string }>;
             input?: Array<{ role?: string; content?: string | Array<{ text?: string }> }>;
-          } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          } = JSON.parse((await buffer(request)).toString("utf8"));
           const call = callsInStep++;
           const id = ++sequence;
           if (step === "create") {
@@ -152,11 +146,7 @@ export async function startQuietProvider(options: { baseline?: boolean } = {}) {
                 ),
               );
             } else {
-              writeOpenAiResponsesText(response, {
-                text: quietFixture.initial,
-                messageId: "m_" + id,
-                responseId: "r_" + id,
-              });
+              writeReply(response, quietFixture.initial, id);
             }
             return;
           }
@@ -222,11 +212,7 @@ export async function startQuietProvider(options: { baseline?: boolean } = {}) {
             );
           } else {
             const text = step === "no_change" ? quietFixture.waiting : quietFixture[step];
-            writeOpenAiResponsesText(response, {
-              text,
-              messageId: "m_" + id,
-              responseId: "r_" + id,
-            });
+            writeReply(response, text, id);
           }
         })();
         pending.add(handler);

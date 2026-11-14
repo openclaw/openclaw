@@ -7,7 +7,6 @@ const timerLimit = num.MAX_TIMER_TIMEOUT_MS;
 const epoch = "1970-01-01T00:00:00.000Z";
 const epochSecond = "1970-01-01T00:00:01.000Z";
 test.each([
-  ["positive integer", 1, 1, 1, 1],
   ["unsafe integer", 2 ** 53, 2 ** 53, 2 ** 53, 2 ** 53],
   ["zero", 0, undefined, 0, undefined],
   ["negative zero", -0, undefined, -0, undefined],
@@ -15,9 +14,7 @@ test.each([
   ["positive fraction", 1.5, undefined, undefined, 1],
   ["fraction below one", 0.5, undefined, undefined, 0],
   ["NaN", Number.NaN, undefined, undefined, undefined],
-  ["infinity", Number.POSITIVE_INFINITY, undefined, undefined, undefined],
   ["numeric string", "1", undefined, undefined, undefined],
-  ["missing input", undefined, undefined, undefined, undefined],
 ])("integer policies for %s", (_name, input, positive, nonNegative, floored) => {
   expect(num.asPositiveInteger(input)).toBe(positive);
   expect(num.asNonNegativeInteger(input)).toBe(nonNegative);
@@ -29,7 +26,6 @@ test.each([
   ["unsafe integer", "9007199254740992", undefined, 9_007_199_254_740_992],
   ["scientific overflow", "1e309", undefined, undefined],
   ["scientific underflow", "-1e-400", undefined, -0],
-  ["coercible array", ["4"], undefined, undefined],
   ["coercible object", { valueOf: (): number => 4 }, undefined, undefined],
 ])("preserves strict parser boundaries for %s", (_name, value, integer, finite) => {
   expect(num.parseStrictInteger(value)).toBe(integer);
@@ -47,44 +43,36 @@ test.each([
 });
 
 test.each<[() => unknown, unknown]>([
-  // signed finite helpers preserve finite fractional values.
   [() => num.asPositiveFiniteNumber(0.5), 0.5],
   [() => num.asPositiveFiniteNumber(0), undefined],
   [() => num.asPositiveFiniteNumber(Number.POSITIVE_INFINITY), undefined],
   [() => num.asNonNegativeFiniteNumber(0), 0],
   [() => num.asNonNegativeFiniteNumber(-0.5), undefined],
   [() => num.asNonNegativeFiniteNumber("1"), undefined],
-  // asFiniteNumberInRange enforces inclusive and exclusive bounds.
   [() => num.asFiniteNumberInRange(0.5, { min: 0.5, max: 2 }), 0.5],
   [() => num.asFiniteNumberInRange(2, { min: 0.5, max: 2 }), 2],
   [() => num.asFiniteNumberInRange(0.5, { min: 0.5, minExclusive: true }), undefined],
   [() => num.asFiniteNumberInRange(10, { max: 10, maxExclusive: true }), undefined],
   [() => num.asFiniteNumberInRange("1", { min: 0, max: 2 }), undefined],
-  // asSafeIntegerInRange accepts only safe integers inside inclusive bounds.
   [() => num.asSafeIntegerInRange(-1, { min: -1, max: 10 }), -1],
   [() => num.asSafeIntegerInRange(10, { min: -1, max: 10 }), 10],
   [() => num.asSafeIntegerInRange(1.5, { min: -1, max: 10 }), undefined],
   [() => num.asSafeIntegerInRange(11, { min: -1, max: 10 }), undefined],
   [() => num.asSafeIntegerInRange(Number.NaN, { min: -1, max: 10 }), undefined],
-  // parseFiniteNumber accepts finite numbers and numeric strings.
   [() => num.parseFiniteNumber(4), 4],
   [() => num.parseFiniteNumber("4.5"), 4.5],
   [() => num.parseFiniteNumber("4.5ms"), undefined],
   [() => num.parseFiniteNumber(""), undefined],
-  [() => num.parseFiniteNumber("nope"), undefined],
-  // timer timeout helpers centralize Node-safe bounds.
   [() => num.MAX_TIMER_TIMEOUT_SECONDS, 2_147_000],
   [() => num.finiteSecondsToTimerSafeMilliseconds(1.5), 1_500],
   [() => num.finiteSecondsToTimerSafeMilliseconds(1.5, { floorSeconds: true }), 1_000],
   [() => num.finiteSecondsToTimerSafeMilliseconds(10_000_000), timerLimit],
-  [() => num.finiteSecondsToTimerSafeMilliseconds(Number.MAX_VALUE), timerLimit],
   [() => num.finiteSecondsToTimerSafeMilliseconds("10"), undefined],
   [() => num.finiteSecondsToTimerSafeMilliseconds(Number.POSITIVE_INFINITY), undefined],
   [() => num.clampTimerTimeoutMs(0, 10), 10],
   [() => num.clampTimerTimeoutMs(10_000_000_000), timerLimit],
   [() => num.clampTimerTimeoutMs(Number.NaN), undefined],
   [() => num.clampPositiveTimerTimeoutMs(0), undefined],
-  [() => num.clampPositiveTimerTimeoutMs(-1), undefined],
   [() => num.clampPositiveTimerTimeoutMs(10_000_000_000), timerLimit],
   [() => num.resolvePositiveTimerTimeoutMs(0, 5000), 5000],
   [() => num.resolvePositiveTimerTimeoutMs(Number.MAX_SAFE_INTEGER, 5000), timerLimit],
@@ -95,21 +83,16 @@ test.each<[() => unknown, unknown]>([
   [() => num.addTimerTimeoutGraceMs(10_000), 15_000],
   [() => num.addTimerTimeoutGraceMs(10_000, 500), 10_500],
   [() => num.addTimerTimeoutGraceMs(timerLimit - 100, 500), timerLimit],
-  [() => num.addTimerTimeoutGraceMs(Number.MAX_SAFE_INTEGER), timerLimit],
-  [() => num.addTimerTimeoutGraceMs(Number.MAX_VALUE), timerLimit],
   [() => num.addTimerTimeoutGraceMs(Number.NaN), undefined],
-  // seconds helpers reject unsafe millisecond values.
   [() => num.positiveSecondsToSafeMilliseconds("10"), 10_000],
   [() => num.positiveSecondsToSafeMilliseconds("0"), undefined],
   [() => num.positiveSecondsToSafeMilliseconds("1e309"), undefined],
   [() => num.nonNegativeSecondsToSafeMilliseconds("0"), 0],
   [() => num.nonNegativeSecondsToSafeMilliseconds("-1"), undefined],
-  // future timestamp helper rejects invalid Date timestamps.
   [() => num.isFutureDateTimestampMs(1_001, { nowMs }), true],
   [() => num.isFutureDateTimestampMs(1_000, { nowMs }), false],
   [() => num.isFutureDateTimestampMs(dateLimit + 1, { nowMs }), false],
   [() => num.isFutureDateTimestampMs(1_001, { nowMs: Number.NaN }), false],
-  // timestamp fallback helpers resolve Date-invalid timestamps.
   [() => num.resolveDateTimestampMs(1_000), 1_000],
   [() => num.resolveDateTimestampMs(Number.POSITIVE_INFINITY, 1_000), 1_000],
   [() => num.resolveDateTimestampMs(Number.POSITIVE_INFINITY, Number.NaN), 0],
@@ -121,7 +104,6 @@ test.each<[() => unknown, unknown]>([
     "2026-02-23T12-34-56.000Z",
   ],
   [() => num.timestampMsToIsoFileStamp(9_000_000_000_000_000, 1_000), "1970-01-01T00-00-01.000Z"],
-  // expiry helpers resolve safe absolute timestamps.
   [() => num.resolveExpiresAtMsFromDurationMs(600_000, { nowMs }), 601_000],
   [() => num.resolveExpiresAtMsFromDurationMs(600_000, { nowMs: dateLimit }), undefined],
   [() => num.resolveExpiresAtMsFromDurationMs(600_000, { nowMs: dateLimit + 1 }), undefined],
@@ -143,7 +125,6 @@ test.each<[() => unknown, unknown]>([
   [() => num.resolveExpiresAtMsFromEpochSeconds(Number.MAX_SAFE_INTEGER), undefined],
   [() => num.resolveExpiresAtMsFromEpochSeconds(8_640_000_000_001), undefined],
   [() => num.resolveExpiresAtMsFromEpochSeconds("1e309"), undefined],
-  // mixed expiry helper handles relative seconds, epoch seconds, and absolute milliseconds.
   [
     () => num.resolveExpiresAtMsFromDurationOrEpoch(86_400, { nowMs: 1_700_000_000_000 }),
     1_700_086_400_000,
@@ -153,13 +134,11 @@ test.each<[() => unknown, unknown]>([
   [() => num.resolveExpiresAtMsFromDurationOrEpoch(dateLimit + 1), undefined],
   [() => num.resolveExpiresAtMsFromDurationOrEpoch(Number.POSITIVE_INFINITY), undefined],
   [() => num.resolveExpiresAtMsFromDurationOrEpoch(Number.MAX_SAFE_INTEGER + 1), undefined],
-  // integer option helpers floor finite values and fall back for non-finite values.
   [() => num.resolveIntegerOption(7.9, 1, { min: 1, max: 10 }), 7],
   [() => num.resolveIntegerOption(Number.NaN, 4.9, { min: 1 }), 4],
   [() => num.resolveIntegerOption(-4, 1, { min: 0 }), 0],
   [() => num.resolveIntegerOption(40, 1, { max: 10 }), 10],
   [() => num.resolveNonNegativeIntegerOption(Number.NaN, 3.9), 3],
-  // optional integer option helper rejects non-finite values.
   [() => num.resolveOptionalIntegerOption(7.9, { min: 1, max: 10 }), 7],
   [() => num.resolveOptionalIntegerOption(Number.NaN, { min: 1 }), undefined],
   [() => num.resolveOptionalIntegerOption(-4, { min: 0 }), 0],

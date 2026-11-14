@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 
 vi.mock("./session-cold-storage.js", () => ({
   restoreSessionColdTranscript: vi.fn(async () => {}),

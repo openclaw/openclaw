@@ -25,6 +25,7 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   commandResult,
+  overrideCommands,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { updateGitHubToolIdentityConfig } from "./github-tool-identity-config.js";
@@ -100,11 +101,10 @@ async function evidenceFixture(imported = false) {
     "../agents/github-tool-identity.js",
   );
   mocks.matchesIdentity.mockImplementation(actualIdentity.matchesPreparedGitHubPublicationIdentity);
-  const previous = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv, options) =>
+  overrideCommands((argv) =>
     argv.includes(`repos/${f.publication.repository}`) && argv.includes(".id")
       ? commandResult("12345")
-      : previous(argv, options),
+      : undefined,
   );
   if (imported) {
     await syncCanonicalGitHubIdentity({
@@ -148,19 +148,18 @@ async function evidenceFixture(imported = false) {
       base: { repo, ref: base.branch, sha: base.commit },
       head: { repo, ref: head.branch, sha: head.commit },
     });
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (argv, options) => {
-      if (argv.includes("GET")) {
-        if (argv.at(-1) === `repos/${repo.full_name}`) {
-          return commandResult(JSON.stringify(repo));
-        }
-        if (argv.at(-1) === `repos/${repo.full_name}/branches/${encodeURIComponent(head.branch)}`) {
-          return commandResult(
-            JSON.stringify({ name: head.branch, commit: { sha: head.commit }, protected: false }),
-          );
-        }
+    overrideCommands((argv) => {
+      if (argv.includes("GET") && argv.at(-1) === `repos/${repo.full_name}`) {
+        return commandResult(JSON.stringify(repo));
       }
-      return await transport(argv, options);
+      if (
+        argv.includes("GET") &&
+        argv.at(-1) === `repos/${repo.full_name}/branches/${encodeURIComponent(head.branch)}`
+      ) {
+        const branch = { name: head.branch, commit: { sha: head.commit }, protected: false };
+        return commandResult(JSON.stringify(branch));
+      }
+      return undefined;
     });
   }
   let beforeLookup: (() => Promise<void>) | undefined;

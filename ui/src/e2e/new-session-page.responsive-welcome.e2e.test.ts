@@ -297,7 +297,7 @@ suite.define(() => {
     }
   });
 
-  it("centers the mobile composer and scrolls long prompts inside the editor", async () => {
+  it("fits the docked mobile composer and scrolls long prompts inside the editor", async () => {
     const page = await openPage({ viewport: { width: 320, height: 568 } });
     await installMockGateway(page, {
       methodResponses: {

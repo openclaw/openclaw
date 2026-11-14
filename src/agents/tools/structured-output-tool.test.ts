@@ -1,6 +1,5 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { validateStructuredOutputSchema } from "../subagents/swarm/swarm-output-schema.js";
 import { isToolResultError } from "../tool-result-error.js";
@@ -69,7 +68,7 @@ describe("structured_output", () => {
     const retry = await submit(result);
     expectRejected(retry);
     expect(retry.details).toMatchObject({ schemaError: expect.any(String) });
-    const frozen = peek(runId);
+    const frozen = { ...peek(runId) };
     expect(frozen).toMatchObject({ structured: undefined, invalidAttempts: 2 });
     expect(frozen?.schemaError).toBeTruthy();
     // A valid payload after the budget is spent is reported as unevaluated, not
@@ -109,23 +108,20 @@ describe("structured_output", () => {
     const persist = vi.fn();
     const { submit } = makeTool({ onStateChange: persist });
     await expect(submit({ count: "bad" })).rejects.toThrow("Retry once");
-    const previous = peek(runId);
-    const entered = createDeferred();
-    const release = createDeferred();
-    persist.mockImplementationOnce(() => {
-      entered.resolve();
-      return release.promise.then(() => {
-        throw new Error("storage unavailable");
-      });
+    const previous = { ...peek(runId) };
+    const gate = createEnteredGate();
+    persist.mockImplementationOnce(async () => {
+      await gate.wait();
+      throw new Error("storage unavailable");
     });
     const rejected = expect(submit({ count: "still bad" })).rejects.toThrow(
       "Failed to persist structured_output: storage unavailable",
     );
-    await entered.promise;
+    await gate.entered;
     try {
       expect(peek(runId)).toEqual(previous);
     } finally {
-      release.resolve();
+      gate.release();
     }
     await rejected;
     expect(peek(runId)).toEqual(previous);

@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -182,6 +183,55 @@ describe("session roster refresh", () => {
       await advance();
       expect(reads).toBe(2);
       expect(sessions.state.result?.ts).toBe(2);
+    },
+  );
+
+  it.each(["same-client", "replacement-client", "new-profile"])(
+    "recovers %s with history only for an established scope",
+    async (kind) => {
+      vi.useFakeTimers();
+      const refreshed = createDeferred<SessionsListResult>();
+      let reads = 0;
+      const request = listRequest(() => (++reads === 1 ? resultFor("main", 1) : refreshed.promise));
+      const { client, coordinator, publish, update, hold, release, sessions, resolveOnCleanup } =
+        coordinated(request);
+      resolveOnCleanup([refreshed, resultFor("main", 2)]);
+      hold("agent:main:chat");
+      update({ selfUser: { id: "initial-profile" } });
+      await advance();
+      expect(reads).toBe(0);
+      release("agent:main:chat");
+      await advance();
+      expect(reads).toBe(1);
+      expect(sessions.canonicalListReady).toBe(true);
+
+      publish(false);
+      coordinator.synchronize({ client, connected: false });
+      const nextClient = kind === "same-client" ? client : createTestGatewayClient(request);
+      coordinator.synchronize({ client: nextClient, connected: true });
+      if (kind === "new-profile") {
+        update({ selfUser: { id: "different-profile" }, client: nextClient, phase: "connected" });
+      } else {
+        publish(true, nextClient);
+      }
+      await advance();
+      expect(coordinator.foregroundReady).toBe(false);
+      if (kind === "new-profile") {
+        expect(reads).toBe(1);
+        coordinator.setForegroundPane(
+          {},
+          { sessionKey: "agent:main:chat", client: nextClient, ready: true },
+        );
+        await advance();
+      }
+      expect(reads).toBe(2);
+      expect(sessions.canonicalListReady).toBe(false);
+      expect(sessions.presentation.result?.ts).toBe(kind === "same-client" ? 1 : undefined);
+      refreshed.resolve(resultFor("main", 2));
+      await advance();
+      expect(sessions.canonicalListReady).toBe(true);
+      expect(sessions.presentation.result?.ts).toBe(2);
+      expect(coordinator.foregroundReady).toBe(kind === "new-profile");
     },
   );
 

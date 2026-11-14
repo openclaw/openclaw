@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { sql, type ColumnType, type Kysely, type Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
@@ -674,12 +675,7 @@ function countPrepares(database: DatabaseSync): () => number {
 }
 
 function captureError(operation: () => void): unknown {
-  try {
-    operation();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected operation to throw");
+  return captureThrown(operation, "expected operation to throw");
 }
 
 function runRetentionScenario(

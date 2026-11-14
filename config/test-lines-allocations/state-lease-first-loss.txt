@@ -1,0 +1,2 @@
+# Preserve queued worker loss details through synchronous and timer-first observation.
+20

@@ -17,6 +17,7 @@ const CaptureSpaceSchema = z
   .object({
     requiredBytes: z.number().int().nonnegative(),
     availableBytes: z.number().int().nonnegative(),
+    volume: z.enum(["backup", "rollback"]).optional(),
   })
   .refine(({ requiredBytes, availableBytes }) => availableBytes < requiredBytes);
 

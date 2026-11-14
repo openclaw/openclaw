@@ -1,19 +1,20 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { isNativeMobileHost } from "../../app/native-web-chrome.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   desktopSourceForEnvironment,
   loadDesktopEnvironments,
+  resolveChatPaneDesktopTarget,
 } from "../../components/desktop/desktop-source.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import type {
   SessionCapability,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   isSidebarNewTabActive,
@@ -253,7 +254,8 @@ export class ChatPaneActiveResources {
   sync(owner: ActiveResourceOwner | null): void {
     const previousOwner = this.owner;
     this.owner = owner;
-    if (!owner) {
+    if (!owner || isNativeMobileHost()) {
+      this.owner = null;
       this.invalidate();
       // The Desktop panel owns its hidden-view retention timer. Its observed
       // session and connection still fence this source while the pane is hidden.
@@ -300,6 +302,7 @@ export class ChatPaneActiveResources {
       return;
     }
     const current = () =>
+      !isNativeMobileHost() &&
       this.signature === signature &&
       this.descriptorRead === undefined &&
       owner.isCurrent() &&

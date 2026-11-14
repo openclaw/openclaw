@@ -3,6 +3,7 @@ import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-r
 import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
@@ -381,6 +382,7 @@ export function isCodexNativeDelegationDisabledForRun(
     params.delegationCapability === "host_only" ||
     params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
+    deniesCodexNativeDelegation(params.pluginHarnessToolPolicySafeDeniedTools) ||
     isMessageOnlyCodexSourceReply(params) ||
     (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow))
   );

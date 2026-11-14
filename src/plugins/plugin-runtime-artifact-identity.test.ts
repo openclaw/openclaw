@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { StandaloneBuildInfo } from "../../cli-invocation.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gitRuntimeStagingPath } from "../infra/update-runtime-staging.js";
 import { fingerprintPluginRuntimeArtifact } from "./plugin-runtime-artifact-identity.js";
@@ -42,9 +43,77 @@ function interceptReads(
   );
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("fingerprintPluginRuntimeArtifact", () => {
+  it("binds embedded code to its image build and retained sidecar content", () => {
+    const record = { ...createPluginFixture(), origin: "bundled" as const };
+    fs.rmSync(path.join(record.rootDir, "dist"), { recursive: true });
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      (source: string) => source === record.source,
+    );
+    const build = {
+      mode: "aot",
+      openclaw: { version: "2026.10.25" },
+      bun: { version: "1.3.0" },
+      build: {
+        id: "image-one",
+        flavor: "standard",
+        pluginSetSha256: "a".repeat(64),
+        moduleGraphSha256: "b".repeat(64),
+      },
+    } satisfies StandaloneBuildInfo;
+    vi.stubGlobal("__openclawStandaloneBuildInfo", build);
+    const first = fingerprintPluginRuntimeArtifact(record);
+    expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
+
+    for (const changed of [
+      { ...build, build: { ...build.build, id: "image-two" } },
+      { ...build, build: { ...build.build, flavor: "support" } },
+      { ...build, mode: "jit" },
+    ]) {
+      vi.stubGlobal("__openclawStandaloneBuildInfo", changed);
+      expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
+    }
+
+    vi.stubGlobal("__openclawStandaloneBuildInfo", build);
+    write(path.join(record.rootDir, "package.json"), '{"name":"fixture","revision":2}\n');
+    expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
+  });
+
+  it.each(["bundled", "global"] as const)(
+    "rejects a missing %s entry without bundled image membership",
+    (origin) => {
+      const record = { ...createPluginFixture(), origin };
+      fs.rmSync(record.source);
+      vi.stubGlobal("__openclawStandaloneIsEmbeddedModule", () => origin === "global");
+      expect(() => fingerprintPluginRuntimeArtifact(record)).toThrow(
+        "plugin runtime entry is unavailable: fixture",
+      );
+    },
+  );
+
+  it("rejects an embedded entry without an image build identity", () => {
+    const record = { ...createPluginFixture(), origin: "bundled" as const };
+    fs.rmSync(record.source);
+    vi.stubGlobal(
+      "__openclawStandaloneIsEmbeddedModule",
+      (source: string) => source === record.source,
+    );
+    vi.stubGlobal("__openclawStandaloneBuildInfo", {
+      mode: "aot",
+      openclaw: { version: "2026.10.25" },
+      bun: { version: "1.3.0" },
+    });
+    expect(() => fingerprintPluginRuntimeArtifact(record)).toThrow(
+      "plugin runtime image build is unavailable: fixture",
+    );
+  });
+
   it("keeps the same fingerprint when descriptor reads return short chunks", () => {
     const record = createPluginFixture();
     const expected = fingerprintPluginRuntimeArtifact(record);

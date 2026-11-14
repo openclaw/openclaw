@@ -1,0 +1,2 @@
+# Preserve skill-library/workshop assertions while integrating current copy and transfer confirmation fields.
+13

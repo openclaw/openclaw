@@ -32,6 +32,7 @@
     "suggest_task": {"icon":"spark","title":"Suggest Task","detailKeys":["title","tldr","cwd"]},
     "dismiss_task": {"icon":"trash","title":"Dismiss Task","detailKeys":["task_id","reason"]},
     "skill_workshop": {"icon":"wrench","title":"Skill Workshop","detailKeys":["action","name","proposal_id"]},
+    "skill_library": {"icon":"wrench","title":"Skill Library","detailKeys":["action","name","skill_id"]},
     "openclaw": {"icon":"claw","title":"OpenClaw","detailKeys":["action","path","model"]},
     "gateway": {"icon":"plug","title":"Gateway","detailKeys":["action","path"]},
     "plugins": {"icon":"puzzle","title":"Plugins","detailKeys":["action","pluginId","packageName","query"]},

@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { bindSessionMcpRuntimeTestScheduler } from "../../agents/agent-bundle-mcp-manager.test-support.js";
+import { createApiKeyCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { providerResponse } from "../../agents/embedded-agent-runner.wire.test-support.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -41,6 +42,8 @@ it.each(["openai-responses", "openai-completions"] as const)(
       const config = createEmbeddedAgentRunnerOpenAiConfig(["primary", "backup"]);
       const models = expectDefined(config.models, "model fixture");
       const base = expectDefined(models.providers?.openai, "provider fixture");
+      // Exercise provider fallback with room for the full prompt, not context recovery.
+      base.models = base.models.map((model) => ({ ...model, contextWindow: 128_000 }));
       const endpoint = {
         baseUrl: "http://127.0.0.1:44080/v1",
         request: { allowPrivateNetwork: true },
@@ -101,7 +104,7 @@ it.each(["openai-responses", "openai-completions"] as const)(
         profiles: [
           {
             profileId: "mock-openai:fixture",
-            credential: { type: "api_key", provider: "mock-openai", key: "synthetic-fallback-key" },
+            credential: createApiKeyCredential("mock-openai", "synthetic-fallback-key"),
           },
         ],
       });

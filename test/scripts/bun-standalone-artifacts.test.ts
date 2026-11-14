@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
 import { parse as parseAcorn } from "acorn";
+import { transformSync } from "esbuild";
 import { describe, expect, it } from "vitest";
 import { createStandaloneArtifactAdapter } from "../../scripts/lib/bun-standalone-artifacts.mjs";
 import { createStandaloneParser } from "../../scripts/lib/bun-standalone-parser.mjs";
@@ -7,11 +10,11 @@ import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-s
 
 const runtimeRoot = "/removed-build/runtime";
 const parsers = [
-  { name: "Acorn", parse: createStandaloneParser(parseAcorn) },
-  { name: "Babel ESTree", parse: createStandaloneSourceParser() },
+  { name: "Acorn", parse: createStandaloneParser(parseAcorn), typed: false },
+  { name: "Babel ESTree", parse: createStandaloneSourceParser(), typed: true },
 ];
 
-describe.each(parsers)("standalone artifact syntax contract: $name", ({ parse }) => {
+describe.each(parsers)("standalone artifact syntax contract: $name", ({ parse, typed }) => {
   function transform(contents: string) {
     return createStandaloneArtifactAdapter({
       runtimeRoot,
@@ -37,29 +40,65 @@ function fingerprint(record) { fallbacks++; return JSON.stringify([${JSON.string
     expect(loaded.readFallbacks()).toBe(1);
   });
 
-  it("rewrites the owning capture call through its nested availability check", () => {
-    const marker = "Bundled plugin code changed; restart the Gateway before using state operations";
-    const adapted = transform(`function prepare(root, paths) {
-  const selected = capture(root || ".", paths);
-  function assertAvailable() { throw new Error(${JSON.stringify(marker)}); }
-  return selected;
-}
-prepare("", ["entry.js"]);`);
+  it("adapts the real bundled operation owner without bypassing preparation or live checks", () => {
+    const source = fs.readFileSync(
+      new URL("../../src/plugins/plugin-state-operation-module-loader.ts", import.meta.url),
+      "utf8",
+    );
+    const contents = typed ? source : stripTypeScriptTypes(source);
+    const ast = parse(contents, { ecmaVersion: "latest", sourceType: "module" });
+    const [declaration] = ast.body.flatMap((node) =>
+      node.type === "ExportNamedDeclaration" &&
+      node.declaration?.type === "FunctionDeclaration" &&
+      node.declaration.id?.name === "captureBundledPluginStateOperationModules"
+        ? [node.declaration]
+        : [],
+    );
+    if (!declaration || declaration.start == null || declaration.end == null) {
+      throw new Error("Bundled operation capture declaration is missing");
+    }
+    const adapted = transform(contents.slice(declaration.start, declaration.end));
     expect(adapted.count).toBe(1);
     const captured: unknown[][] = [];
+    const capture = { rootDir: "/image/dist", source: ["/image/dist/extensions/demo/op.js"] };
+    const artifact = { linkHost() {} };
     const original = () => {
       throw new Error("Unexpected original capture");
     };
-    expect(
-      vm.runInNewContext(adapted.contents, {
-        capture: original,
+    let codeChanged = false;
+    let assertCodeCurrent: (() => void) | undefined;
+    const prepare = vm.runInNewContext(
+      transformSync(`${adapted.contents}\ncaptureBundledPluginStateOperationModules;`, {
+        loader: "ts",
+        define: { "import.meta.url": JSON.stringify(import.meta.url) },
+      }).code,
+      {
+        resolveBundledPluginStateOperationCapture: () => capture,
+        capturePluginGenerationArtifact: original,
+        preparePluginLoaderAliases: () => ({}),
+        bindPluginStateOperationModuleSource: (binding: { assertCodeCurrent: () => void }) => {
+          assertCodeCurrent = binding.assertCodeCurrent;
+        },
+        getSharedPluginCodeReloadWarning: () => codeChanged,
         __openclawStandaloneCaptureOperationArtifact: (...args: unknown[]) => {
           captured.push(args);
-          return "image-capture";
+          return artifact;
         },
-      }),
-    ).toBe("image-capture");
-    expect(captured).toEqual([[original, ".", ["entry.js"]]]);
+      },
+    );
+    const params = { rootDir: "/image/dist/extensions/demo", source: "index.js" };
+    const owner = prepare(params);
+    expect(captured).toEqual([[original, capture.rootDir, capture.source]]);
+    owner.bind({ onModuleDispose() {} });
+    expect(assertCodeCurrent).toBeTypeOf("function");
+    expect(() => assertCodeCurrent!()).not.toThrow();
+    codeChanged = true;
+    expect(() => assertCodeCurrent!()).toThrow(
+      "Bundled plugin code changed; restart the Gateway before using state operations",
+    );
+    captured.length = 0;
+    expect(prepare({ ...params, preparedArtifact: artifact })).toBeDefined();
+    expect(captured).toEqual([]);
   });
 
   it("admits the image plugin before running fallback counters", () => {

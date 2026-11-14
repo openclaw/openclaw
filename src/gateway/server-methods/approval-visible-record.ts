@@ -24,12 +24,6 @@ import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient } from "./types.js";
 
-type PreparedVisibleApproval = {
-  readCurrent: () => OperatorApprovalRecord | null;
-  guard: OperatorApprovalStoreGuard;
-  [Symbol.dispose]: () => void;
-};
-
 export async function loadVisibleApproval(params: {
   id: string;
   authority: ApprovalRequestAuthority;
@@ -41,7 +35,11 @@ export async function loadVisibleApproval(params: {
   pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   databaseOptions?: OpenClawStateDatabaseOptions;
-}): Promise<PreparedVisibleApproval | null> {
+}): Promise<{
+  readCurrent: () => OperatorApprovalRecord | null;
+  guard: OperatorApprovalStoreGuard;
+  [Symbol.dispose]: () => void;
+} | null> {
   // Reconciliation can settle a live waiter, so authorization must precede
   // every durable read and no unauthorized lookup may reach the bridge.
   const authorized = params.allowApprovalRuntime

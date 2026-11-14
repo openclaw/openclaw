@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { vi } from "vitest";
 import { createChangeListeners } from "../../../src/shared/listeners.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
@@ -8,7 +8,6 @@ import {
   PaletteSessionAttachments,
   PaletteSessionAuxiliary,
   PaletteSessionControls,
-  PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { mountSolid } from "./mount-solid.ts";
@@ -44,7 +43,10 @@ export class PaletteDraftHost {
     {
       changed: this.onDraftChange,
       updateComplete: () => this.updateComplete,
-      onClose: () => this.started(),
+      onClose: () => {
+        this.paletteOpen = false;
+        this.started();
+      },
     },
   );
   constructor(readonly context: ApplicationContext) {
@@ -53,10 +55,6 @@ export class PaletteDraftHost {
       () => {
         const [revision, setRevision] = createSignal({}, { ownedWrite: true });
         this.publish = () => setRevision({});
-        const recovery = createMemo(() => {
-          revision();
-          return this.draft.recoveryAction;
-        });
         const message = createMemo(() => {
           revision();
           return this.draft.message;
@@ -81,9 +79,6 @@ export class PaletteDraftHost {
           <>
             <textarea aria-label="Palette prompt" value={message()} />
             <PaletteSessionControls draft={this.draft} revision={revision()} />
-            <Show when={recovery()}>
-              {(onOpen) => <PaletteSessionRecovery onOpen={onOpen()} />}
-            </Show>
             <PaletteSessionAuxiliary draft={this.draft} revision={revision()} />
             <PaletteSessionAttachments draft={this.draft} revision={revision()} />
           </>
@@ -112,7 +107,8 @@ export async function mount(options: Parameters<typeof createDraftFixture>[0] = 
   const changes = createChangeListeners();
   Object.assign(context.gateway, {
     connectionRevision: 1,
-    subscribe: changes.subscribe,
+    subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) =>
+      changes.subscribe(() => listener(context.gateway.snapshot)),
   });
   Object.assign(context.agents.state, { connected: true, client: context.gateway.snapshot.client });
   Object.assign(context, {

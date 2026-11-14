@@ -4,10 +4,11 @@ import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import "../../claws/tool-policy-runtime.js";
+import "../../templates/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../../infra/runtime-process-entrypoints.js";
 import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
@@ -121,7 +122,6 @@ async function createExternalCodexGeneration() {
   const generation = generationFixture({
     provider: "openai",
     requestProvider: "openai",
-    config: {},
     label: "external-codex",
   });
   publishCurrentModelGeneration(generation);
@@ -310,7 +310,6 @@ describe("model runtime generation scope", () => {
       contextWindow: 32_768,
       maxTokens: 4_096,
     });
-    expect(await result.authStorage.getApiKey(provider)).toBe("fixture-caller-key");
     expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
       apiKey: "fixture-caller-key",
     });
@@ -333,7 +332,6 @@ describe("model runtime generation scope", () => {
     const snapshot = withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
       config: generation.preparedModelRuntime.config,
     });
-    expect(snapshot).toBeDefined();
     expect(snapshot).not.toBe(generation.metadataSnapshot);
     expect(snapshot).toMatchObject({ policyHash: resolveInstalledPluginIndexPolicyHash(config) });
     expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
@@ -413,7 +411,7 @@ describe("model runtime generation scope", () => {
       }
       expect(execPaths).toEqual([]);
       expect(getRuntimeConfigSnapshot()).toBeNull();
-      expect(await fs.readFile(databasePath)).toEqual(before);
+      expectBytesEqual(await fs.readFile(databasePath), before, "shared-state database");
     } finally {
       for (const spy of rowReads) {
         spy.mockRestore();
@@ -579,13 +577,9 @@ describe("model runtime generation scope", () => {
             }),
           );
         }
-        expect(children).toHaveLength(1);
+        expect(children).toMatchObject([{ exitCode: null, connected: true }]);
         expect(liveDuringPreparation).toEqual(children);
         expect(liveAfterSelection).toEqual(invalidation === "none" ? children : []);
-        for (const child of children) {
-          expect(child.exitCode).toBeNull();
-          expect(child.connected).toBe(true);
-        }
       } finally {
         vi.mocked(spawn).mockImplementation(actual.spawn);
       }

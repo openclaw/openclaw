@@ -73,7 +73,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
   });
   if (!isMainThread) {
     const { readSessionRuntimeTargetWorkerRequest } =
-      await import("./session-entry-read.worker.js");
+      await import("./session-runtime-target-read.worker.js");
     const database = toDatabaseOptions(resolveSqliteTranscriptReadScope(bound));
     return {
       ...readSessionRuntimeTargetWorkerRequest({

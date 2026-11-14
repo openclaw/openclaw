@@ -5,6 +5,7 @@ import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-s
 
 describe("runGuidedOnboarding quick start", () => {
   const {
+    canOfferGatewayService,
     ensureAuthProfileStore,
     localOnboarding,
     makeRuntime,
@@ -33,7 +34,10 @@ describe("runGuidedOnboarding quick start", () => {
     });
     const runtime = makeRuntime();
     await runGuidedOnboardingImpl({}, runtime, deps);
-    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.confirm).toHaveBeenCalledExactlyOnceWith({
+      message: "Keep OpenClaw running in the background?",
+      initialValue: true,
+    });
     expect(prompter.text).not.toHaveBeenCalled();
     expect(localOnboarding.persisted.config?.telemetry).toBeUndefined();
     expect(localOnboarding.persisted.config?.wizard?.securityAcknowledgedAt).toEqual(
@@ -63,6 +67,63 @@ describe("runGuidedOnboarding quick start", () => {
       expect.stringContaining("Recommended safer setup"),
       expect.anything(),
     );
+  });
+
+  it("installs the background service and skips foreground hosting when accepted", async () => {
+    const prompter = createWizardPrompter(
+      { confirm: vi.fn(async () => true) },
+      { selectValues: ["quick", "one"] },
+    );
+    const runBrowserHandoff = vi.fn(async () => true);
+    const deps = setupDeps({ prompter, runBrowserHandoff });
+
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(deps.applySetup).toHaveBeenCalledOnce();
+    expect(vi.mocked(deps.applySetup).mock.calls[0]?.[0]).not.toHaveProperty("installDaemon");
+    expect(runBrowserHandoff).toHaveBeenCalledOnce();
+    expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+  });
+
+  it("continues in setup chat without a foreground Gateway when the service fails", async () => {
+    const prompter = createWizardPrompter(
+      { confirm: vi.fn(async () => true) },
+      { selectValues: ["quick", "one"] },
+    );
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn(async () => ({
+        ...setupApplyResult(),
+        gateway: { status: "failed" as const, error: "launchctl bootstrap failed" },
+      })),
+    });
+
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
+    expect(localOnboarding.complete).not.toHaveBeenCalled();
+  });
+
+  it("stays in the foreground without asking on hosts that cannot run the service", async () => {
+    canOfferGatewayService.mockResolvedValue(false);
+    const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn(async () => ({
+        ...setupApplyResult(),
+        gateway: { status: "skipped" as const, reason: "explicit" as const },
+      })),
+    });
+
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ installDaemon: false }),
+      { beforePersistentApply: expect.any(Function) },
+    );
+    expect(deps.runForegroundGateway).toHaveBeenCalledOnce();
   });
 
   it("preserves guarded discovery consent in an incomplete config", async () => {

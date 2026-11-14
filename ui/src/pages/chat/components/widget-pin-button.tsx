@@ -37,7 +37,7 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
       yield refresh(pinned);
     } catch (error) {
       if (button.isConnected) {
-        showToast({ message: t("chat.toolCards.pinToDashboardFailed") });
+        showToast({ severity: "error", message: t("chat.toolCards.pinToDashboardFailed") });
       }
       throw error;
     }

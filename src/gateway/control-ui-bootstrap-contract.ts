@@ -1,3 +1,4 @@
+import type { CanvasDocumentViewResult } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import type { PluginControlUiModule } from "../../packages/gateway-protocol/src/schema/plugins.js";
 
 /** HTTP path for the Control UI bootstrap config payload. */
@@ -43,7 +44,7 @@ export type ControlUiEnvironment = {
 };
 
 /** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
-export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
+export type ControlUiEmbedSandboxMode = NonNullable<CanvasDocumentViewResult["embedSandbox"]>;
 
 /** Route grant successfully issued during authenticated Control UI bootstrap. */
 export type ControlUiPluginFrameGrantAck = {
@@ -85,6 +86,10 @@ export type ControlUiBootstrapConfig = {
   composerPredictionsEnabled?: boolean;
   seamColor?: string;
   environment?: ControlUiEnvironment;
+  /** Whether this Gateway blocks writes to its configuration file. */
+  configReadOnly?: boolean;
+  /** Optional operator guidance shown alongside the read-only policy. */
+  configReadOnlyNotice?: string;
   /** Whether this Gateway's served UI may show the Discord community invitation. */
   communityInvite?: boolean;
   /** Fresh-draft model, runtime and reasoning preference policy; never a selection restriction. */

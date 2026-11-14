@@ -31,10 +31,6 @@ export type InlineAuthFailureReceipt = {
   publication: AuthProfileUsageReceipt["publication"];
 };
 
-type InlineAuthFailureResult =
-  | { ok: true; receipt: InlineAuthFailureReceipt }
-  | { ok: false; error: OpenClawStateWorkerErrorPayload };
-
 export type InlineAuthFailureOperations = AuthProfileAuthorizationOperations &
   AuthStoreUpdateOperations & {
     "authProfiles.inlineSnapshot": {
@@ -43,7 +39,9 @@ export type InlineAuthFailureOperations = AuthProfileAuthorizationOperations &
     };
     "authProfiles.inlineFailure": {
       input: InlineAuthFailureInput;
-      output: InlineAuthFailureResult;
+      output:
+        | { ok: true; receipt: InlineAuthFailureReceipt }
+        | { ok: false; error: OpenClawStateWorkerErrorPayload };
     };
     "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
   };

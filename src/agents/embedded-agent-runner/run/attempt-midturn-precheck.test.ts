@@ -14,6 +14,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
@@ -42,6 +43,7 @@ type AdmissionOptions = Partial<{
   ownsCompaction: boolean;
   oversizedAssembly: boolean;
   compatibleBudget: boolean;
+  strictReplay: boolean;
   responseSchema: boolean;
 }>;
 
@@ -58,6 +60,7 @@ describe("provider request admission", () => {
   it.each`
     name                                   | usage     | chars      | cap       | fits     | options
     ${"compatible reasoning budget"}       | ${1_500}  | ${15_500}  | ${16_000} | ${true}  | ${{ compatibleBudget: true }}
+    ${"compatible strict tool IDs"}        | ${1_500}  | ${15_500}  | ${16_000} | ${true}  | ${{ compatibleBudget: true, strictReplay: true }}
     ${"unchanged schema"}                  | ${24_000} | ${100}     | ${16_000} | ${true}  | ${{ compatibleBudget: true, responseSchema: true }}
     ${"oversized engine assembly"}         | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, oversizedAssembly: true }}
     ${"exaggerated engine estimate"}       | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{ ownsCompaction: true }}
@@ -95,6 +98,7 @@ describe("provider request admission", () => {
         ownsCompaction,
         oversizedAssembly,
         compatibleBudget,
+        strictReplay,
         responseSchema,
       },
     }: AdmissionCase) => {
@@ -235,6 +239,10 @@ describe("provider request admission", () => {
       runtime.cacheTrace = null;
       runtime.isOpenAIResponsesApi = opaque === true;
       runtime.transcriptPolicy = { ...runtime.transcriptPolicy, repairToolUseResultPairing: false };
+      if (strictReplay) {
+        runtime.transcriptPolicy.sanitizeToolCallIds = true;
+        runtime.transcriptPolicy.toolCallIdMode = "strict";
+      }
       const wireRequests: Array<{
         max_tokens?: number;
         messages: Array<Record<string, unknown>>;
@@ -404,7 +412,9 @@ describe("provider request admission", () => {
           toolResultMaxChars: cap,
           toolResultAggregateMaxChars: cap * 4,
           toolResultPromptProjectionState: projectionState,
+          prepareRequestTokenPressure: createFixedRequestTokenEstimator(),
           onModelRequest: streamGuards.onModelRequest,
+          normalizeToolCallIds: streamGuards.normalizeToolCallIds,
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });
         const pendingPrecheck = guards.takePendingMidTurnPrecheckRequest();
@@ -424,6 +434,14 @@ describe("provider request admission", () => {
             ).toBe(true);
           }
           expect(wireRequests.map((request) => request.max_tokens)).toEqual([8_192, 8_192]);
+          if (strictReplay) {
+            expect(wireRequests[1]?.messages).toContainEqual(
+              expect.objectContaining({
+                role: "assistant",
+                tool_calls: [expect.objectContaining({ id: "readreport" })],
+              }),
+            );
+          }
         }
         if (fits) {
           const sent = requests[1]?.messages.find((message) => message.role === "toolResult");

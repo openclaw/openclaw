@@ -37,7 +37,8 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildOpenRouterDecisionProvider, isOpenRouterDecisionModel } from "./decision-provider.js";
+import { isOpenRouterDecisionModel } from "./decision-codec.js";
+import { buildOpenRouterDecisionProvider } from "./decision-provider.js";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";

@@ -4,10 +4,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import { validateApprovalPresentation } from "../../packages/gateway-protocol/src/approval-result-validators.js";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
 import type { ApprovalPresentation } from "../../packages/gateway-protocol/src/schema/approvals.js";
-import {
-  buildApprovalResolutionRef,
-  isApprovalResolutionRef,
-} from "../infra/approval-resolution-ref.js";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   NewOperatorApproval,
@@ -255,7 +252,6 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
   if (
     !presentation ||
     !isWellFormedApprovalId(row.approval_id) ||
-    !isApprovalResolutionRef(row.resolution_ref) ||
     !bindings ||
     !kind ||
     (status !== "pending" &&

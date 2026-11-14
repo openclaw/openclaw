@@ -26,6 +26,53 @@ export function isGenericContainerMime(mime?: string): boolean {
   return mime === "application/zip" || mime === "application/octet-stream";
 }
 
+function readAttachmentImageMetadata(base64: string) {
+  // Fixed headers are selected from bytes, never MIME hints.
+  if (base64.startsWith("iVBORw0KGgoAAAAN")) {
+    return readImageMetadataFromHeader(Buffer.from(base64.slice(0, 32), "base64"));
+  }
+  if (base64.startsWith("R0lGODdh") || base64.startsWith("R0lGODlh")) {
+    return readImageMetadataFromHeader(Buffer.from(base64.slice(0, 16), "base64"));
+  }
+  const head = Buffer.from(base64.slice(0, 40), "base64");
+  if (head.toString("ascii", 0, 4) === "RIFF" && head.toString("ascii", 8, 12) === "WEBP") {
+    return readImageMetadataFromHeader(head);
+  }
+  if (head[0] === 0xff && head[1] === 0xd8) {
+    let offset = 2;
+    // EXIF may follow SOF. Reach the first scan before accepting dimensions;
+    // Rastermill remains the owner of dimensions and EXIF interpretation.
+    for (let bytes = 4096; bytes <= 256 * 1024; bytes *= 4) {
+      const chars = Math.ceil(bytes / 3) * 4;
+      const prefix = Buffer.from(base64.slice(0, chars), "base64");
+      if (chars >= base64.length) {
+        return readImageMetadataFromHeader(prefix);
+      }
+      while (offset + 4 < prefix.length && prefix[offset] === 0xff) {
+        const marker = prefix[offset + 1];
+        if (marker === 0xff) {
+          offset++;
+          continue;
+        }
+        if (marker === 0xda || marker === 0xd9) {
+          const metadata = readImageMetadataFromHeader(prefix);
+          if (metadata) {
+            return metadata;
+          }
+          break;
+        }
+        const length = prefix.readUInt16BE(offset + 2);
+        if (length < 2 || offset + 2 + length > prefix.length) {
+          break;
+        }
+        offset += 2 + length;
+      }
+    }
+  }
+  // Preserve permissive parsing of malformed or unusually long headers and other formats.
+  return readImageMetadataFromHeader(Buffer.from(base64, "base64"));
+}
+
 export async function prepareAttachment(input: AttachmentInput): Promise<PreparedAttachment> {
   const facts = inspectBase64(input.base64, "attachment");
   if (!facts) {
@@ -61,11 +108,11 @@ export async function prepareAttachment(input: AttachmentInput): Promise<Prepare
       mime = `${mime}; charset=${classification.charset}`;
     }
   }
-  // The existing attachment worker owns large base64 decodes and header scans.
-  // Preserve displayed axes (including EXIF rotation) without decoding pixels.
   const dimensions =
     mime.startsWith("image/") && facts.decodedBytes <= MAX_IMAGE_BYTES
-      ? readImageMetadataFromHeader(buffer ?? Buffer.from(input.base64, "base64"))
+      ? buffer
+        ? readImageMetadataFromHeader(buffer)
+        : readAttachmentImageMetadata(input.base64)
       : null;
   return { sizeBytes: facts.decodedBytes, mime, buffer, ...dimensions };
 }

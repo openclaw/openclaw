@@ -53,8 +53,10 @@ vi.mock("../plugins/enable.js", async (importOriginal) => ({
   enablePluginInConfig: fixture.enablePluginInConfig,
   enablePluginWithCapabilityConsent: async (config: OpenClawConfig) => ({ enabled: true, config }),
 }));
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (_options: unknown, run: () => Promise<unknown>) => await run(),
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
+  withPluginLifecycleLeaseAsync: async (_options: unknown, run: () => Promise<unknown>) =>
+    await run(),
 }));
 
 vi.mock("../commands/onboard-inference.js", async (importOriginal) => ({

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createStore } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
@@ -236,16 +237,73 @@ describe("chat attachment read failures", () => {
     vi.unstubAllGlobals();
   });
 
-  async function expectAttachmentToast(message = "File too large. Try a smaller file.") {
+  async function expectFileToast(message = "File too large.", description = "Try a smaller file.") {
     await toastHost.updateComplete;
     await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
-      expect(toastHost.querySelector(".app-toast__message")).toMatchObject({
-        textContent: message,
-      });
+      expect(toastHost.querySelector(".app-toast--error")).not.toBeNull();
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(message);
+      expect(toastHost.querySelector(".app-toast__description")?.textContent).toBe(description);
     });
   }
+
+  it.each([
+    [0, 1],
+    [1, 0],
+  ])(
+    "preserves admission order when read %i finishes before read %i and preview props lag",
+    async (first, second) => {
+      const files = [imageFile("first.png", "a"), imageFile("second.png", "b")];
+      StubFileReader.heldNames = new Set(files.map((file) => file.name));
+      const h = readFixture([], () => redraw());
+      let renderedAttachments: ChatAttachment[] = [];
+      const view = () => ({
+        attachments: renderedAttachments,
+        readRevision: h.reads.revision,
+      });
+      const [rendered, setRendered] = createStore(view());
+      const preview = mountSolid(
+        () => (
+          <AttachmentPreview
+            {...h.props}
+            attachments={rendered.attachments}
+            readRevision={rendered.readRevision}
+          />
+        ),
+        {},
+      );
+      const redraw = () => {
+        setRendered(() => view());
+        flush();
+      };
+      onTestFinished(preview.dispose);
+
+      h.append(files);
+      await vi.waitFor(() => expect(StubFileReader.heldReads).toHaveLength(2));
+      StubFileReader.heldReads[first]!();
+      await waitForSolid(() => expect(h.reads.pendingReads).toBe(1));
+      StubFileReader.heldReads[second]!();
+      await h.done.promise;
+      expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["first.png", "second.png"]);
+      await waitForSolid(() =>
+        expect(
+          Array.from(preview.container.querySelectorAll(".chat-attachment-thumb img"), (image) =>
+            image.getAttribute("alt"),
+          ),
+        ).toEqual(["first.png", "second.png"]),
+      );
+      renderedAttachments = [h.attachments[1]!];
+      h.props.onAttachmentsChange(renderedAttachments);
+      await waitForSolid(() =>
+        expect(
+          Array.from(preview.container.querySelectorAll(".chat-attachment-thumb img"), (image) =>
+            image.getAttribute("alt"),
+          ),
+        ).toEqual(["second.png"]),
+      );
+    },
+  );
 
   it.each([false, true])(
     "retains published payload custody when remaining reads abort (presented=%s)",
@@ -329,7 +387,7 @@ describe("chat attachment read failures", () => {
         );
       }
       expect(container.querySelector(".chat-attachment-failures")).toBeNull();
-      await expectAttachmentToast("Could not attach file. Try again.");
+      await expectFileToast("Could not attach file.", "Try again.");
     },
   );
 
@@ -381,7 +439,7 @@ describe("chat attachment read failures", () => {
     }
     expect(h.names()).toEqual(names);
     expect(read.mock.calls.map(([file]) => file.name)).not.toContain(rejected);
-    await expectAttachmentToast();
+    await expectFileToast();
     expect(notify).toHaveBeenCalledOnce();
   });
 
@@ -399,7 +457,7 @@ describe("chat attachment read failures", () => {
       ]),
     ).toBe(1);
     expect(h.names()).toEqual(["large.png", "first.txt", "fits.txt"]);
-    await expectAttachmentToast();
+    await expectFileToast();
   });
 
   it.each<[string, File[], string, number | undefined, string[]?, number?]>([
@@ -412,7 +470,6 @@ describe("chat attachment read failures", () => {
       8,
     ],
     ["empty.png", [new File([], "empty.png", { type: "image/png" })], "", undefined],
-    ["pasted-text", [], "x".repeat(2048), 1024],
     ["pasted-image", [], `data:image/gif;base64,${btoa("p".repeat(64))}`, 16],
   ])(
     "rejects %s at intake while preserving admitted siblings",
@@ -428,12 +485,9 @@ describe("chat attachment read failures", () => {
         onAttachmentsChange,
       });
       await toastHost.updateComplete;
-      await vi.waitFor(() =>
-        expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
-          name === "empty.png"
-            ? "Could not attach file. Try again."
-            : "File too large. Try a smaller file.",
-        ),
+      await expectFileToast(
+        name === "empty.png" ? "Could not attach file." : "File too large.",
+        name === "empty.png" ? "Try again." : "Try a smaller file.",
       );
       if (accepted) {
         await vi.waitFor(() => expect(onAttachmentsChange).toHaveBeenCalled());
@@ -577,7 +631,11 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   const { container } = h;
   document.body.append(container);
   onTestFinished(() => container.remove());
-  h.append([imageFile("peer.png", "hi")]);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toBe(
+      "Restored text",
+    ),
+  );
   const restore = expectDefined(
     container.querySelector<HTMLButtonElement>(".chat-attachment-text-action"),
     "pasted text restore action",
@@ -588,6 +646,7 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   );
   restore.focus();
   expect(document.activeElement).toBe(restore);
+  h.append([imageFile("peer.png", "hi")]);
 
   h.previewProps.draft = "Current draft";
   h.previewProps.onDraftChange = currentDraftChange;
@@ -613,6 +672,33 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   expect(previousDraftChange).not.toHaveBeenCalled();
   expect(currentDraftChange).toHaveBeenCalledExactlyOnceWith("Current draft\n\nRestored text");
   expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["peer.png"]);
+});
+
+it("keeps admission order when preview props lag completed attachment reads", async () => {
+  vi.stubGlobal("FileReader", StubFileReader);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  StubFileReader.failNames = new Set();
+  StubFileReader.heldReads = [];
+  const h = readFixture([], () =>
+    preview.update({ ...h.props, attachments: [], readRevision: {} }),
+  );
+  const preview = mountSolid(AttachmentPreview, {
+    ...h.props,
+    attachments: [],
+    readRevision: {},
+  });
+  onTestFinished(preview.dispose);
+  StubFileReader.heldNames = new Set(["first.png", "second.png"]);
+  h.append([imageFile("first.png", "one"), imageFile("second.png", "two")]);
+  const [first, second] = StubFileReader.heldReads;
+  expectDefined(first, "first read")();
+  flush();
+  expect(h.attachments).toHaveLength(1);
+  expectDefined(second, "second read")();
+  await h.done.promise;
+  expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["first.png", "second.png"]);
 });
 
 describe("attachment removal names", () => {

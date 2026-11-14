@@ -34,6 +34,37 @@ function keydown(target: EventTarget, key: string, cancelable = true) {
   return event;
 }
 
+it("allocates presentation observation only once a hovercard has an active trigger", async () => {
+  vi.useFakeTimers();
+  const NativeMutationObserver = MutationObserver;
+  const created: MutationObserver[] = [];
+  vi.stubGlobal(
+    "MutationObserver",
+    class extends NativeMutationObserver {
+      constructor(callback: MutationCallback) {
+        super(callback);
+        created.push(this);
+      }
+    },
+  );
+  const controllers = Array.from({ length: 100 }, () => createPortaledHovercardOwner(vi.fn()));
+  expect(created).toHaveLength(0);
+  const trigger = document.body.appendChild(document.createElement("a"));
+  const open = vi.fn();
+  controllers[0]!.scheduleOpen(100, open, trigger);
+  expect(created).toHaveLength(1);
+  const disconnect = vi.spyOn(created[0]!, "disconnect");
+  controllers[0]!.reset();
+  expect(disconnect).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(open).not.toHaveBeenCalled();
+  controllers[0]!.scheduleOpen(100, open, trigger);
+  expect(created).toHaveLength(1);
+  controllers.forEach((controller) => controller.reset());
+  await vi.advanceTimersByTimeAsync(100);
+  expect(open).not.toHaveBeenCalled();
+});
+
 it("keeps a Solid card open while its links hold focus and closes after focus leaves", async () => {
   vi.useFakeTimers();
   const { controller, trigger, dismiss } = fixture();

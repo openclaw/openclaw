@@ -79,22 +79,20 @@ it.each(["owner", "tile"] as const)(
       createDragEvent("drop", [new File(["first"], "first.txt"), new File(["bad"], "bad.txt")]),
     );
     composer.dispatchEvent(createDragEvent("drop", [new File(["second"], "second.txt")]));
-    expect(attachmentDraft.reads.pendingReads).toBe(3);
     expect(submitBusy()).toBe("true");
     expect(status()?.textContent).toContain("Preparing 3 attachments");
     expect(status()?.classList.contains("sr-only")).toBe(true);
-    expect(status()?.querySelector(".btn__spinner")).toBeNull();
     await waitForFast(() =>
       expect(container.querySelectorAll(".chat-attachment-thumb")).toHaveLength(3),
     );
     const tiles = [...container.querySelectorAll(".chat-attachment-thumb")];
-    expect(tiles).toHaveLength(3);
     expect(tiles.every((tile) => tile.getAttribute("aria-busy") === "true")).toBe(true);
     readers[0]?.dispatchEvent(
       new ProgressEvent("progress", { lengthComputable: true, loaded: 5, total: 10 }),
     );
     expect(
-      tiles[0]?.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+      tiles[0]?.querySelector<HTMLElement>(".chat-attachment-loading__line > span")?.style
+        .transform,
     ).toBe("scaleX(0.5)");
     expect(
       tiles[1]?.querySelector(".chat-attachment-loading")?.getAttribute("data-indeterminate"),

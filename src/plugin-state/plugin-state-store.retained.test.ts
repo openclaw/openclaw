@@ -8,7 +8,12 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { keyedStore, stateTest, useState } from "./plugin-state-fixtures.test-support.js";
+import {
+  keyedStore,
+  observePluginStateReads,
+  stateTest,
+  useState,
+} from "./plugin-state-fixtures.test-support.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   createPluginStateKeyedStore,
@@ -80,7 +85,10 @@ describe("plugin-state-store.retained", () => {
       "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
     ).all(pluginId);
 
-  afterEach(reopen);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await reopen();
+  });
 
   it("persists over 50k retained rows without capping sibling namespaces", async ({
     state: _state,
@@ -142,6 +150,7 @@ describe("plugin-state-store.retained", () => {
       { ok: true, value: { body: "superseded" } },
     ]);
     expect(await retained.lookup(key(9))).toBeUndefined();
+    const reads = observePluginStateReads();
     const move = { namespace: "history", entries: pairs([9, 10, 99, 101]) };
     expect(await retained.moveEntriesFrom(move)).toBe(2);
     expect(await retained.moveEntriesFrom(move)).toBe(0);
@@ -152,6 +161,7 @@ describe("plugin-state-store.retained", () => {
       movedEntry(10, { body: "canonical" }, 1),
       movedEntry(9, { body: "legacy 9" }, 9),
     ]);
+    expect(reads).not.toHaveBeenCalled();
     expect(
       query(
         "SELECT value_json, created_at, expires_at FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",

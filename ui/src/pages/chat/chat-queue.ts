@@ -7,20 +7,20 @@ import {
 } from "../../lib/chat/outbox-store-scope.ts";
 import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
-import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
+import type { SessionScopeHost } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 
-type ChatQueueStoreHost = {
+type ChatQueueSessionHost = {
   chatQueue: ChatQueueItem[];
   chatAttachments?: ChatAttachment[];
   chatRunId?: string | null;
   chatSending?: boolean;
   chatSendingScopeKey?: string | null;
-};
-type ChatQueueSessionHost = ChatQueueStoreHost & ChatComposerScope & { sessionKey: string };
+} & ChatComposerScope & { sessionKey: string };
 export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 
 export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {

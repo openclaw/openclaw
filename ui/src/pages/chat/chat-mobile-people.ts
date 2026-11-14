@@ -25,7 +25,8 @@ export type ChatMobilePeople = {
   participantsComplete: boolean;
 };
 
-export type ChatMobilePeopleInput = {
+/** Presentation only. Session, presence and composer owners retain their lifecycles. */
+export function projectChatMobilePeople(input: {
   session: Pick<
     GatewaySessionRow,
     "createdActor" | "owner" | "participants" | "expandedParticipants" | "participantCount"
@@ -36,10 +37,7 @@ export type ChatMobilePeopleInput = {
   viewers: readonly PresenceViewer[];
   /** Current composer directory results, never membership-derived permissions. */
   mentionableUsers: readonly ChatMobilePeopleMention[];
-};
-
-/** Presentation only. Session, presence and composer owners retain their lifecycles. */
-export function projectChatMobilePeople(input: ChatMobilePeopleInput): ChatMobilePeople {
+}): ChatMobilePeople {
   const mentions = new Map(input.mentionableUsers.map((entry) => [entry.profileId, entry]));
   const people = new Map<string, ChatMobilePerson>();
   const viewingKeys = new Set<string>();

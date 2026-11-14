@@ -13,37 +13,29 @@ import { preloadSessionMessageSubscriptions } from "../../lib/sessions/session-s
 import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
 import { sessionRouteHints } from "./route-draft.ts";
 
-function sessionLoaderDeps(
-  face: BoardFace,
-  context: ApplicationContext,
-  location: RouteLocation,
-): string {
-  const search = new URLSearchParams(location.search);
-  const bridgedPath =
-    location.pathname === pathForRoute(face, context.basePath)
-      ? search.get(INTERNAL_SESSION_PATH_PARAM)
-      : null;
-  if (bridgedPath) {
-    search.delete(INTERNAL_SESSION_PATH_PARAM);
-  }
-  const serializedSearch = search.toString();
-  return `${gatewayPresentationScope(context.gateway).key}\u0000${bridgedPath ?? location.pathname}\u0000${
-    serializedSearch ? `?${serializedSearch}` : ""
-  }`;
-}
-
 function sessionPage(face: BoardFace) {
   return definePage({
     ...routePageSpec(face),
     // The application router temporarily maps dynamic session URLs onto the
     // static face route. Both locations describe the same loader match.
-    loaderDeps: (context: ApplicationContext, location: RouteLocation) =>
-      sessionLoaderDeps(face, context, location),
+    loaderDeps: (context: ApplicationContext, location: RouteLocation): string => {
+      const search = new URLSearchParams(location.search);
+      const bridgedPath =
+        location.pathname === pathForRoute(face, context.basePath)
+          ? search.get(INTERNAL_SESSION_PATH_PARAM)
+          : null;
+      if (bridgedPath) {
+        search.delete(INTERNAL_SESSION_PATH_PARAM);
+      }
+      const serializedSearch = search.toString();
+      return `${gatewayPresentationScope(context.gateway).key}\u0000${bridgedPath ?? location.pathname}\u0000${
+        serializedSearch ? `?${serializedSearch}` : ""
+      }`;
+    },
     loader: (context: ApplicationContext, options) => {
       // Subscription acquisition owns errors and retries after this speculative load.
       void preloadSessionMessageSubscriptions().catch(() => undefined);
-      const creation = context.chatSubmissions.creation;
-      if (creation && !creation.admitted) {
+      if (context.chatSubmissions.creating) {
         const mainKey = resolveUiConfiguredMainKey({
           agentsList: context.agents.state.agentsList,
           hello: context.gateway.snapshot.hello,
@@ -60,11 +52,12 @@ function sessionPage(face: BoardFace) {
             : target?.kind === "literal"
               ? target.sessionKey
               : undefined;
-        if (target?.namespace === face && sessionKey === creation.sessionKey) {
+        const creation = sessionKey ? context.chatSubmissions.creationFor(sessionKey) : undefined;
+        if (target?.namespace === face && creation && !creation.admitted) {
           options.signal.throwIfAborted();
           const result = {
             kind: "session" as const,
-            sessionKey,
+            sessionKey: creation.sessionKey,
             agentId: target.agentId,
             ...sessionRouteHints(options.location),
             face,
@@ -84,7 +77,19 @@ function sessionPage(face: BoardFace) {
         module.loadSessionPage(context, face, options),
       );
     },
-    component: () => import("./route-entry.ts"),
+    component: () => {
+      const entry = import("./route-entry.ts");
+      if (face === "dashboard") {
+        // Each rendered boundary owns readiness and errors; preparation never holds the route.
+        void import("./chat-pane-sidebar-view.tsx")
+          .then(({ ChatSidebarRegion }) => ChatSidebarRegion.preload())
+          .catch(() => undefined);
+        void import("./board-session-surface.tsx")
+          .then(({ BoardView }) => BoardView.preload())
+          .catch(() => undefined);
+      }
+      return entry;
+    },
   });
 }
 

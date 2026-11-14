@@ -42,17 +42,11 @@ function notificationParams(deps: Parameters<typeof dispatchCronDelivery>[0]["de
   params.cfgWithAgentDefaults = { gateway: { controlUi: { enabled: false } } };
   params.deps = deps;
   params.job = {
+    ...params.job,
     id: "structured-report",
     name: "Structured report",
-    enabled: true,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Report progress", includeReasoning: true },
     delivery: { mode: "announce", channel: "matrix", to: "!room:example" },
-    state: {},
   };
   // This synthetic transport has no conversation route; notification custody is still real.
   params.resolvedDelivery = { ok: true, mode: "explicit", channel: "matrix", to: "!room:example" };

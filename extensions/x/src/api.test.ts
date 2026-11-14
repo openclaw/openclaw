@@ -10,6 +10,48 @@ const reply = (
 ) => api.reply({ text: "Reply", inReplyToId: "20", assertActive });
 
 describe("X API authentication", () => {
+  it.each(["mentions", "media"])("bounds oversized %s response streams", async (operation) => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(1024 * 1024).fill(32);
+    let pulls = 0;
+    const oversized = new Response(
+      new ReadableStream({
+        pull(controller) {
+          if (++pulls <= 17) {
+            controller.enqueue(chunk);
+          } else {
+            controller.enqueue(
+              new TextEncoder().encode(
+                JSON.stringify({ data: operation === "mentions" ? [] : { id: "101" } }),
+              ),
+            );
+            controller.close();
+          }
+        },
+        cancel,
+      }),
+    );
+    const api = createXApiClient({
+      fetch: vi
+        .fn<XFetch>()
+        .mockResolvedValue(Response.json({ data: { id: "101" } }))
+        .mockResolvedValueOnce(Response.json({ access_token: "access" }))
+        .mockResolvedValueOnce(oversized),
+    });
+    await expect(
+      operation === "mentions"
+        ? api.getMentions({ userId: "9" })
+        : api.uploadMedia({
+            buffer: Buffer.alloc(0),
+            contentType: "image/png",
+            fileName: "test.png",
+            mediaCategory: "tweet_image",
+          }),
+    ).rejects.toThrow(/X (API|media upload): .*response exceeds 16777216 bytes/);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pulls).toBeLessThanOrEqual(18);
+  });
+
   it("lists and streams Activity with the app bearer but creates mentions with the user token", async () => {
     vi.useFakeTimers();
     const requests: string[] = [];

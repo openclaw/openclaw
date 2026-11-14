@@ -1,0 +1,2 @@
+# Fresh disk inheritance with private Git history, staged/dirty bytes, and resume-failure cleanup.
+104

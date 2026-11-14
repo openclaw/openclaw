@@ -466,6 +466,45 @@ it.each([
   },
 );
 
+it.each([1, 2])("continues initial CLI pages ending in legacy rows (limit=%s)", async (limit) => {
+  await withImportedHistory(
+    2,
+    "Earlier import",
+    async ({ read, scope, timestamp, importedIds }) => {
+      const legacy = Array.from({ length: limit * 3 }, (_, index) => ({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: `Legacy local ${index}`,
+          timestamp: timestamp + 100 + index,
+        },
+      }));
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        ...legacy,
+      ]);
+      const newest = await read({ limit });
+      expect(ids(newest)).toEqual(Array.from({ length: limit }, () => undefined));
+      expect(newest.olderCursor).toBeUndefined();
+      expect(newest).toMatchObject({
+        hasMore: true,
+        nextOffset: limit,
+        totalMessages: legacy.length + 2,
+      });
+      const restored = [...newest.messages];
+      let page = newest;
+      while (page.hasMore) {
+        expect(page.nextOffset).toBeGreaterThan(page.offset ?? 0);
+        page = await read({ offset: page.nextOffset, limit });
+        restored.unshift(...page.messages);
+      }
+      expect(restored).toHaveLength(legacy.length + 2);
+      expect(ids({ messages: restored }).slice(0, 2)).toEqual(importedIds);
+      expect(restored.slice(2)).toMatchObject(legacy.map(({ message }) => message));
+    },
+  );
+});
+
 it("deduplicates native history independently of log redaction", async () => {
   const text = "opaqueSeedQ customMask7 laterRegV7 laterCfgV8";
   await withImportedHistory(2, text, async ({ read, append, timestamp, importedIds }) => {

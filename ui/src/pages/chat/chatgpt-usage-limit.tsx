@@ -2,12 +2,12 @@ import { action, createOptimistic, createSignal, Show } from "solid-js";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
-import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import "./chatgpt-usage-limit.css";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 /** Presentation for one failed run; the parent keys its lifetime by session and run. */
 export function ChatGPTUsageLimit(props: { presented: boolean; kind: "business" | "consumer" }) {

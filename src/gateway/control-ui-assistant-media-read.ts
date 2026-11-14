@@ -127,9 +127,9 @@ export async function openAssistantMedia(
       if (!isPathInside(sandbox.hostRoot, opened.realPath)) {
         throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
       }
-      const { prepareLocalWorkspaceImageRead } =
+      const { prepareLocalWorkspaceFileRead } =
         await import("../agents/sandbox/local-workspace-quiescence.js");
-      assertSourceCurrent = await prepareLocalWorkspaceImageRead({
+      assertSourceCurrent = await prepareLocalWorkspaceFileRead({
         workspaceDir,
         containerRoot: sandbox.containerRoot,
         targets: [

@@ -718,10 +718,19 @@ describe("inference relay capacity", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const idle = await open();
     await send(idle.client, idle.upstream, prewarm);
-    await complete(idle.client, idle.upstream);
+    await complete(
+      idle.client,
+      idle.upstream,
+      '{"type":"response.compl\\u0065ted","response":{"id":"synthetic"}}',
+    );
     const active = await open();
     await send(active.client, active.upstream);
     await complete(active.client, active.upstream, '{"type":"response.completed"}');
+    await complete(
+      active.client,
+      active.upstream,
+      '{"type":"response.output_text.delta","delta":"response.failed"}',
+    );
     await complete(active.client, active.upstream, '{"type":"error","message":"unknown event"}');
     const closed = once(idle.client, "close");
     await vi.advanceTimersByTimeAsync(60_000);

@@ -51,6 +51,34 @@ function makeLegacy(file: string) {
 function hash(file: string) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
+
+type PortFixture = Parameters<Parameters<typeof fixture>[0]>[0];
+
+async function expectPreflightRefusal(
+  { state, source }: PortFixture,
+  options: Parameters<typeof doctorDatabasePort>[0],
+  location = source,
+  message?: string,
+) {
+  const before = hash(source);
+  const error = await doctorDatabasePort(options).catch((failure: unknown) => failure);
+  expectSafe(error, location, "preflight");
+  if (message) {
+    expect(String(error)).toContain(message);
+  }
+  expect(hash(source)).toBe(before);
+  expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
+}
+
+function failMigration() {
+  const run = tasks.runDatabasePortTask;
+  vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
+    if (args[0].operation === "migrate") {
+      throw new Error(injected);
+    }
+    return await run(...args);
+  });
+}
 async function loseOneCommittedReply(original: string) {
   const dropped = new Int32Array(new SharedArrayBuffer(4));
   const url = new URL("./port-command-proxy.test-support.ts", import.meta.url);
@@ -105,23 +133,21 @@ describe("database port command custody and inspection", () => {
   );
 
   it("refuses an already hosted owner before touching config or stores", async () => {
-    await fixture(async ({ state, source }) => {
-      const original = hash(source);
+    await fixture(async (f) => {
       const owner = await acquireGatewayLock({
-        env: state.env,
+        env: f.state.env,
         role: "gateway",
         allowInTests: true,
         timeoutMs: 0,
       });
       assert(owner);
       try {
-        const error = await doctorDatabasePort({ to: "postgres" }).catch(
-          (failure: unknown) => failure,
+        await expectPreflightRefusal(
+          f,
+          { to: "postgres" },
+          f.state.stateDir,
+          "hosted Gateway owner",
         );
-        expectSafe(error, state.stateDir, "preflight");
-        expect(String(error)).toContain("hosted Gateway owner");
-        expect(hash(source)).toBe(original);
-        expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
       } finally {
         await owner.release();
       }
@@ -129,12 +155,11 @@ describe("database port command custody and inspection", () => {
   });
 
   it("refuses foreign physical custody instead of dispatching or mutating", async () => {
-    await fixture(async ({ state, source }) => {
-      const original = hash(source);
+    await fixture(async (f) => {
       const url = new URL("./port-command-owner.test-support.ts", import.meta.url);
       const worker = new Worker(url, {
         execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-        workerData: { env: state.env },
+        workerData: { env: f.state.env },
       });
       const exited = new Promise<number>((resolve, reject) => {
         worker.once("error", reject);
@@ -145,12 +170,7 @@ describe("database port command custody and inspection", () => {
           worker.once("message", () => resolve());
           worker.once("error", reject);
         });
-        const error = await doctorDatabasePort({ to: "postgres" }).catch(
-          (failure: unknown) => failure,
-        );
-        expectSafe(error, state.stateDir, "preflight");
-        expect(hash(source)).toBe(original);
-        expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
+        await expectPreflightRefusal(f, { to: "postgres" }, f.state.stateDir);
       } finally {
         worker.postMessage("release", []);
         expect(await exited).toBe(0);
@@ -159,34 +179,21 @@ describe("database port command custody and inspection", () => {
   });
 
   it("refuses insufficient local capacity before capture", async () => {
-    await fixture(async ({ state, source }) => {
-      const before = hash(source);
+    await fixture(async (f) => {
       vi.spyOn(disk, "tryReadDiskSpace").mockImplementation((targetPath) => ({
         targetPath,
         checkedPath: targetPath,
         availableBytes: 0,
         totalBytes: 1,
       }));
-      const error = await doctorDatabasePort({ to: "sqlite", dryRun: true }).catch(
-        (failure: unknown) => failure,
-      );
-      expectSafe(error, source, "preflight");
-      expect(String(error)).toContain("0 bytes free");
-      expect(hash(source)).toBe(before);
-      expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
+      await expectPreflightRefusal(f, { to: "sqlite", dryRun: true }, f.source, "0 bytes free");
     });
   });
 
   it("refuses aliased source paths without exposing database payloads", async () => {
-    await fixture(async ({ state, source }) => {
-      const alias = state.statePath("alias.sqlite");
-      await fsp.link(source, alias);
-      const original = hash(source);
-      const error = await doctorDatabasePort({ to: "sqlite", dryRun: true }).catch(
-        (failure: unknown) => failure,
-      );
-      expectSafe(error, source, "preflight");
-      expect(hash(source)).toBe(original);
+    await fixture(async (f) => {
+      await fsp.link(f.source, f.state.statePath("alias.sqlite"));
+      await expectPreflightRefusal(f, { to: "sqlite", dryRun: true });
     });
   });
 });
@@ -347,13 +354,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         ...JSON.parse(fs.readFileSync(state.configPath, "utf8")),
         agents: { entries: { external: { agentDir } } },
       });
-      const run = tasks.runDatabasePortTask;
-      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
-        if (args[0].operation === "migrate") {
-          throw new Error(injected);
-        }
-        return await run(...args);
-      });
+      failMigration();
       await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("private migrate");
       vi.restoreAllMocks();
       const target = manifest(state).targets[0];
@@ -745,13 +746,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
   it("refuses a changed recovery artifact without changing the original", async () => {
     await fixture(async ({ state, source }) => {
       const before = canonical(source);
-      const run = tasks.runDatabasePortTask;
-      vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
-        if (args[0].operation === "migrate") {
-          throw new Error(injected);
-        }
-        return await run(...args);
-      });
+      failMigration();
       await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("private migrate");
       vi.restoreAllMocks();
       const target = manifest(state).targets[0];

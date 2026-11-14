@@ -86,7 +86,8 @@ export function resolveTranscriptAvatarPlacement(
   props: Pick<
     ChatThreadProps,
     "selectedSession" | "transcriptMetadata" | "sessionKey" | "sessionHost" | "userId"
-  >,
+  > &
+    Pick<ChatThreadProps, "applicationContext">,
   chatItems: ReturnType<typeof buildCachedChatItems>,
 ): { isDirectThread: boolean; avatarPlacement: "none" | "footer" | "gutter" } {
   const sessionHost = props.sessionHost ?? null;
@@ -119,7 +120,7 @@ export function resolveTranscriptAvatarPlacement(
   const defaultAvatarPlacement = resolveChatDefaultAvatarPlacement(
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
       !hasForwardedGroups,
-    props.userId,
+    props.userId ?? props.applicationContext?.sessions.presentation.profileId,
   );
   const avatarPlacement =
     activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)

@@ -5,6 +5,7 @@ import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 export async function restoreSubagentRunMetadata(
   runs: Map<string, SubagentRunRecord>,
@@ -19,7 +20,7 @@ export async function restoreSubagentRunMetadata(
       if (authority.status === "mismatch") {
         continue;
       }
-      const draft = { ...entry };
+      const draft = copySubagentRunRuntimeOwner(entry, { ...entry });
       const requesterAgentId = resolveSubagentRequesterAgentId(cfg, draft);
       const ownerChanged =
         authority.status === "verified" &&

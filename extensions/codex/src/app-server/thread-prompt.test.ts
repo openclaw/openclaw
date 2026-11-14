@@ -56,6 +56,15 @@ function render(
 }
 
 describe("buildDeveloperInstructions deferred tool discovery", () => {
+  it.each(["full", "minimal"] as const)(
+    "keeps shared permission recovery guidance in %s mode",
+    (promptMode) => {
+      const instructions = render({ promptMode }, { dynamicTools: [] });
+      expect(instructions.match(/Permission blocks:/g)).toHaveLength(1);
+      expect(instructions).toContain("Omit unverified remediation advice");
+    },
+  );
+
   it.each([
     [false, false, false],
     [true, false, false],
@@ -136,15 +145,16 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     expect(instructions).not.toContain('runtime="subagent"');
   });
 
-  it.each([{ requireWorkspaceOnly: true }, { delegationCapability: "host_only" }] as const)(
-    "does not advertise native helpers for restricted runs (%j)",
-    (overrides) => {
-      const instructions = render(overrides);
-      expect(instructions).not.toContain("spawn_agent");
-      expect(instructions).not.toContain("wait_agent");
-      expect(instructions).toContain('`sessions_spawn` with `runtime="subagent"`');
-    },
-  );
+  it.each([
+    { requireWorkspaceOnly: true },
+    { delegationCapability: "host_only" },
+    { pluginHarnessToolPolicySafeDeniedTools: ["sessions_send"] },
+  ] as const)("does not advertise native helpers for restricted runs (%j)", (overrides) => {
+    const instructions = render(overrides);
+    expect(instructions).not.toContain("spawn_agent");
+    expect(instructions).not.toContain("wait_agent");
+    expect(instructions).toContain('`sessions_spawn` with `runtime="subagent"`');
+  });
 
   it.each<Partial<CodexThreadPromptContext>>([
     { delegationCapability: "report_only" },

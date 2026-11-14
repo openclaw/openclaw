@@ -561,21 +561,11 @@ describe("embedded run detached session metadata", () => {
     ["codex", true],
     ["codex", false],
   ] as const)(
-    "does not persist detached %s trajectory metadata (caller manager: %s)",
+    "forwards detached lifetime to the %s attempt (caller manager: %s)",
     async (harness, suppliedManager) => {
       const { params, run, expectNoAgent } = await createRun("detached");
-      const { prepareEmbeddedAttemptTrajectory } = await import("./run/attempt-trajectory.js");
       runAttempt.mockImplementationOnce(async (attempt) => {
-        const recorder = await prepareEmbeddedAttemptTrajectory({
-          activeSession: { sessionId: attempt.sessionId },
-          attempt,
-          clientToolCount: 0,
-          effectiveToolCount: 0,
-          effectiveWorkspace: params.workspaceDir,
-          localModelLeanEnabled: false,
-          sessionAgentId: "research",
-        });
-        await recorder?.flush();
+        expect(attempt.sessionPersistence).toBe("detached");
         return successfulAttempt(params.sessionId);
       });
       await expect(

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { parseErrorResponse } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -9,6 +11,7 @@ import {
 import { buildMcpHttpFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 
 const testGlobal = globalThis as Record<string, unknown>;
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -97,9 +100,56 @@ describe("MCP HTTP fetch helpers", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeProviderTransportDispatcherPool();
     vi.unstubAllEnvs();
     delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
+  });
+
+  it("reuses HTTP connections across MCP clients without sharing credentials or authority", async () => {
+    delete testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY];
+    const sockets = new Set<Socket>();
+    const closed: Promise<unknown>[] = [];
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests += 1;
+      if (!sockets.has(request.socket)) {
+        sockets.add(request.socket);
+        closed.push(once(request.socket, "close"));
+      }
+      request.resume();
+      response.end(request.headers.authorization);
+    });
+    const resourceUrl = await listenLoopback(server);
+    onTestFinished(async () => {
+      await closeProviderTransportDispatcherPool();
+      await closeHttpServer(server);
+    });
+    let admitted = true;
+    const createClient = () =>
+      buildMcpHttpFetch({
+        resourceUrl,
+        beforeRequest() {
+          if (!admitted) {
+            throw new Error("MCP authority retired");
+          }
+        },
+      });
+    for (let index = 0; index < 6; index += 1) {
+      const credential = `Bearer synthetic-client-${index % 2}`;
+      const response = await createClient()(resourceUrl, {
+        method: "POST",
+        headers: { authorization: credential },
+        body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+      });
+      expect(await response.text()).toBe(credential);
+    }
+    admitted = false;
+    await expect(createClient()(resourceUrl)).rejects.toThrow("MCP authority retired");
+    expect(requests).toBe(6);
+    expect(sockets.size).toBeLessThan(requests);
+    await closeProviderTransportDispatcherPool();
+    await Promise.all(closed);
   });
 
   it("scopes TLS overrides to the MCP resource origin", async () => {

@@ -1,23 +1,17 @@
 // Real Gateway processes of one built package prove restart continuity for a core-bundled
 // plugin's requester-admitted schedules: the same build re-arms them, while a build change or a
 // disabled plugin ends them for good.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../packages/gateway-protocol/src/client-info.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
-import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
-import { connectRestartClient } from "./gateway-restart.test-support.js";
+import { withDistArtifactOwnership } from "../scripts/lib/dist-artifact-ownership.mts";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
 } from "./helpers/openai-responses-model-fixture.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+import { createScheduledRestartConnector } from "./plugin-command-scheduled-restart.test-support.js";
 
 const PLUGIN_ID = "scheduled-restart-bundled-proof";
 const MODEL = "scheduled-restart-bundled-model";
@@ -29,14 +23,12 @@ const MAX_RUNS = 2;
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
 type Tick = { pid: number; label: string; module: string };
-type ChatEvent = { event?: string; payload?: unknown };
-type CronJobView = { id: string; enabled: boolean; state?: Record<string, unknown> };
 
 /** Links a build output tree into a private package, copying across filesystems. */
 async function linkTree(from: string, to: string): Promise<void> {
   await fs.mkdir(to, { recursive: true });
   const entries = await fs.readdir(from, { withFileTypes: true });
-  await Promise.all(
+  const results = await Promise.allSettled(
     entries.map(async (entry) => {
       const source = path.join(from, entry.name);
       const target = path.join(to, entry.name);
@@ -55,6 +47,11 @@ async function linkTree(from: string, to: string): Promise<void> {
       }
     }),
   );
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
 }
 
 /** Replaces, never edits, a file that may share its data with the checkout's build. */
@@ -67,12 +64,21 @@ async function replaceFile(file: string, content: string) {
  * A private installed package of the checkout's build, as a package manager lays it out: its own
  * `dist` and `dist-runtime` trees, so a bundled plugin's real path lies in that package's build.
  */
-async function stagePackage(root: string, tickFile: string) {
+async function stagePackage(root: string, tickFile: string, signal: AbortSignal) {
   const packageRoot = path.join(root, "openclaw");
-  for (const output of ["dist", "dist-runtime"]) {
-    await linkTree(path.join(repoRoot, output), path.join(packageRoot, output));
-  }
-  await fs.copyFile(path.join(repoRoot, "package.json"), path.join(packageRoot, "package.json"));
+  await withDistArtifactOwnership(
+    repoRoot,
+    async () => {
+      for (const output of ["dist", "dist-runtime"]) {
+        await linkTree(path.join(repoRoot, output), path.join(packageRoot, output));
+      }
+      await fs.copyFile(
+        path.join(repoRoot, "package.json"),
+        path.join(packageRoot, "package.json"),
+      );
+    },
+    signal,
+  );
   for (const entry of await fs.readdir(repoRoot)) {
     if (
       entry === "node_modules" ||
@@ -180,13 +186,13 @@ export default {
 it.skipIf(process.platform === "win32")(
   "resumes a core-bundled plugin's schedule on the same build and ends it on another build",
   { timeout: 600_000 },
-  async () => {
+  async ({ signal }) => {
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "plugin-scheduled-restart-bundled-")),
     );
     onTestFinished(() => fs.rm(root, { recursive: true, force: true }));
     const tickFile = path.join(root, "ticks.jsonl");
-    const pkg = await stagePackage(root, tickFile);
+    const pkg = await stagePackage(root, tickFile, signal);
     const modelRequests: unknown[] = [];
     const server = await startOpenAiResponsesModelServer({
       modelId: MODEL,
@@ -234,9 +240,7 @@ it.skipIf(process.platform === "win32")(
     });
     onTestFinished(() => instance.cleanup());
 
-    const deviceIdentity = loadOrCreateDeviceIdentity({
-      path: instance.state.path("scheduled-restart-device", "client", "credentials.sqlite"),
-    });
+    const connect = createScheduledRestartConnector(instance, SESSION_KEY, "/bundled-schedule");
     const readTicks = async (): Promise<Tick[]> => {
       const text = await fs.readFile(tickFile, "utf8").catch(() => "");
       return text
@@ -246,48 +250,7 @@ it.skipIf(process.platform === "win32")(
     };
     const ticksFor = async (label: string) =>
       (await readTicks()).filter((tick) => tick.label === label);
-    const connect = async () => {
-      const events: ChatEvent[] = [];
-      const client = await connectRestartClient(instance, {
-        deviceIdentity,
-        clientName: GATEWAY_CLIENT_IDS.TUI,
-        mode: GATEWAY_CLIENT_MODES.UI,
-        onEvent: (event) => events.push(event),
-      });
-      const schedule = async (label: string) => {
-        const runId = randomUUID();
-        await client.request("chat.send", {
-          sessionKey: SESSION_KEY,
-          message: "/bundled-schedule " + label,
-          deliver: false,
-          idempotencyKey: runId,
-        });
-        let text: string | undefined;
-        await vi.waitFor(
-          () => {
-            const final = events.find((event) => {
-              const payload = event.payload as { runId?: string; state?: string } | undefined;
-              return (
-                event.event === "chat" && payload?.runId === runId && payload.state === "final"
-              );
-            });
-            text = extractFirstTextBlock((final?.payload as { message?: unknown })?.message);
-            // The loaded build gives the bundled plugin's schedule restart continuity.
-            expect(text, instance.logs()).toMatch(/^SCHEDULED \S+ true$/);
-          },
-          { timeout: 60_000, interval: 50 },
-        );
-        return text!.split(" ")[1]!;
-      };
-      const job = async (id: string) =>
-        (
-          await client.request<{ jobs: CronJobView[] }>("cron.list", {
-            includeDisabled: true,
-            limit: 200,
-          })
-        ).jobs.find((entry) => entry.id === id);
-      return { client, schedule, job };
-    };
+
     const restart = async (
       gateway: Awaited<ReturnType<typeof connect>>,
       whileDown?: () => Promise<unknown>,

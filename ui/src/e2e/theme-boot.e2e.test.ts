@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -92,13 +93,34 @@ async function assertThemeFrames(
   expect(stable).toEqual(expected);
   expect(surfaces.length).toBeGreaterThan(0);
   expect(frames.length).toBeGreaterThan(0);
+  const colors = await page.evaluate(
+    resolveRenderedColors,
+    Object.fromEntries([
+      ...surfaces.map((color, index) => [`surface-${index}`, color]),
+      ...frames.flatMap((frame, index) => [
+        [`html-${index}`, frame.html],
+        [`body-${index}`, frame.body],
+      ]),
+    ]),
+  );
+  const matchesSurface = (name: string) =>
+    surfaces.some((_, index) => {
+      const surface = colors[`surface-${index}`]!;
+      const frame = colors[name]!;
+      return (
+        frame.red === surface.red &&
+        frame.green === surface.green &&
+        frame.blue === surface.blue &&
+        frame.alpha === surface.alpha
+      );
+    });
   expect(
     frames.filter(
-      (frame) =>
+      (frame, index) =>
         frame.theme !== expected.theme ||
         frame.mode !== expected.mode ||
-        !surfaces.includes(frame.html) ||
-        !surfaces.includes(frame.body),
+        !matchesSurface(`html-${index}`) ||
+        !matchesSurface(`body-${index}`),
     ),
     `Every painted frame must use the resolved palette: ${JSON.stringify({ stable, surfaces })}`,
   ).toEqual([]);
@@ -317,6 +339,7 @@ suite.define(() => {
         };
         const pendingGateway = await installMockGateway(pendingPage, {
           ...scenario,
+          awaitInitialRoster: false,
           heldMethods: ["users.prefs.get"],
           methodResponses: {
             "config.get": configResponse(nextConfig, "pending-tab"),

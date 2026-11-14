@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { observeTooltipContent } from "./tooltip-mutations.ts";
 import {
   createTooltip,
   element,
@@ -19,6 +20,157 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+function trackContentObservers() {
+  const NativeObserver = MutationObserver;
+  const observers = new Set<{ targets: Map<Node, MutationObserverInit | undefined> }>();
+  vi.stubGlobal(
+    "MutationObserver",
+    class extends NativeObserver {
+      readonly targets = new Map<Node, MutationObserverInit | undefined>();
+      constructor(callback: MutationCallback) {
+        super(callback);
+        observers.add(this);
+      }
+      override observe(target: Node, options?: MutationObserverInit) {
+        super.observe(target, options);
+        this.targets.set(target, options);
+      }
+      override disconnect() {
+        super.disconnect();
+        this.targets.clear();
+      }
+    },
+  );
+  return observers;
+}
+
+it("shares closed tooltip observation across light and shadow DOM and releases retired targets", async () => {
+  const observers = trackContentObservers();
+  const fixtures = Array.from({ length: 100 }, (_, index) => createTooltip(`Hint ${index}`));
+  const shadowHost = document.createElement("div");
+  const shadow = shadowHost.attachShadow({ mode: "open" });
+  document.body.append(shadowHost, ...fixtures.slice(0, 50).map(({ tooltip }) => tooltip));
+  shadow.append(...fixtures.slice(50).map(({ tooltip }) => tooltip));
+  await Promise.all(fixtures.map(({ tooltip }) => settleTooltip(tooltip)));
+  expect(observers.size).toBe(1);
+  expect([...observers].filter((activeObserver) => activeObserver.targets.size > 0)).toHaveLength(
+    1,
+  );
+  const observer = [...observers][0]!;
+  for (const [index, { tooltip, trigger }] of fixtures.entries()) {
+    expect(observer.targets.get(tooltip)).toEqual({
+      childList: true,
+      characterData: false,
+      subtree: false,
+    });
+    expect(observer.targets.has(trigger)).toBe(false);
+    const root = trigger.getRootNode();
+    const id = trigger.getAttribute("aria-describedby")!;
+    expect((root instanceof ShadowRoot ? root : document).getElementById(id)?.textContent).toBe(
+      `Hint ${index}`,
+    );
+  }
+
+  const first = fixtures[0]!;
+  const replacement = element("button", { textContent: "Replacement" });
+  first.tooltip.replaceChildren(replacement);
+  first.trigger.textContent = "Retired trigger changed in the same commit";
+  await settleTooltip(first.tooltip);
+  expect(first.trigger.hasAttribute("aria-describedby")).toBe(false);
+  expect(description(replacement)).toBe("Hint 0");
+  first.tooltip.remove();
+  await Promise.resolve();
+  expect(replacement.hasAttribute("aria-describedby")).toBe(false);
+  expect([...observers].filter((activeObserver) => activeObserver.targets.size > 0)).toHaveLength(
+    1,
+  );
+  expect(observers.size).toBe(1);
+
+  document.body.replaceChildren();
+  await Promise.resolve();
+  expect([...observers].every((activeObserver) => activeObserver.targets.size === 0)).toBe(true);
+});
+
+it("watches changing description resolvers only while they own a descendant", async () => {
+  const observers = trackContentObservers();
+  const original = element("button", { textContent: "Original" });
+  original.setAttribute("aria-describedby", "original-description");
+  const wrapper = element("span", {}, original);
+  const tooltip = element("openclaw-tooltip", { content: "Details" }, wrapper);
+  document.body.append(tooltip);
+  const watchesWrapper = () => [...observers].some((observer) => observer.targets.has(wrapper));
+  await settleTooltip(tooltip);
+  expect(watchesWrapper()).toBe(false);
+  expect(description(wrapper)).toBe("Details");
+  expect(original.getAttribute("aria-describedby")).toBe("original-description");
+
+  let target = original;
+  tooltip.descriptionTarget = () => target;
+  await settleTooltip(tooltip);
+  expect(watchesWrapper()).toBe(true);
+  expect(wrapper.hasAttribute("aria-describedby")).toBe(false);
+  expect(original.getAttribute("aria-describedby")).toMatch(
+    /^original-description openclaw-tooltip-/,
+  );
+
+  target = element("button", { textContent: "Replacement" });
+  target.setAttribute("aria-describedby", "replacement-description");
+  wrapper.replaceChildren(target);
+  await settleTooltip(tooltip);
+  expect(original.getAttribute("aria-describedby")).toBe("original-description");
+  expect(target.getAttribute("aria-describedby")).toMatch(
+    /^replacement-description openclaw-tooltip-/,
+  );
+
+  tooltip.descriptionTarget = undefined;
+  await settleTooltip(tooltip);
+  expect(watchesWrapper()).toBe(false);
+  expect(target.getAttribute("aria-describedby")).toBe("replacement-description");
+  expect(description(wrapper)).toBe("Details");
+});
+
+it("routes tooltip content through nested targets and fresh parents between batches", async () => {
+  const first = element("section");
+  const second = element("section");
+  const gap = element("div");
+  const inner = element("span");
+  const text = document.createTextNode("Initial");
+  inner.append(text);
+  gap.append(inner);
+  first.append(gap);
+  document.body.append(first, second);
+  const calls: string[] = [];
+  const stops = [
+    observeTooltipContent(document, [first], () => calls.push("first"), { characterData: true }),
+    observeTooltipContent(document, [second], () => calls.push("second"), { characterData: true }),
+    observeTooltipContent(document, [inner], () => calls.push("inner"), {
+      subtree: false,
+      characterData: true,
+    }),
+    observeTooltipContent(document, [text], () => calls.push("text"), { characterData: true }),
+  ];
+  try {
+    text.data = "First parent";
+    await Promise.resolve();
+    expect(calls).toEqual(["text", "first"]);
+
+    second.append(gap);
+    await Promise.resolve();
+    calls.length = 0;
+    text.data = "Second parent";
+    await Promise.resolve();
+    expect(calls).toEqual(["text", "second"]);
+
+    calls.length = 0;
+    inner.append(document.createElement("b"));
+    await Promise.resolve();
+    expect(calls).toEqual(["inner", "second"]);
+  } finally {
+    stops.forEach((stop) => stop());
+  }
 });
 
 it("materializes content on first hover intent and reuses the native surface", async () => {

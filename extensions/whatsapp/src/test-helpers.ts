@@ -159,11 +159,6 @@ vi.mock("./auto-reply/monitor/runtime-api.js", async (importOriginal) => ({
   shouldLogVerbose: () => false,
 }));
 
-vi.mock("./auto-reply/monitor/group-activation.runtime.js", () => ({
-  normalizeGroupActivation: (value: unknown) =>
-    value === "always" || value === "mention" ? value : undefined,
-}));
-
 vi.mock("./auth-store.runtime.js", () => ({
   resolveOAuthDir: () => "/tmp/openclaw-oauth",
 }));

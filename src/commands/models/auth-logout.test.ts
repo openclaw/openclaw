@@ -303,7 +303,7 @@ describe("models auth logout", () => {
       usePersistedStore(agentDir);
       const scrub = catalogCredentials.removePersistedPluginModelCatalogCredentials;
       let calls = 0;
-      const cleanup = vi
+      using _ = vi
         .spyOn(catalogCredentials, "removePersistedPluginModelCatalogCredentials")
         .mockImplementation(async (params) => {
           calls += 1;
@@ -313,21 +313,18 @@ describe("models auth logout", () => {
           }
           await scrub(params);
         });
-      try {
-        await expect(logout(profileId)).rejects.toThrow("saved credentials were restored");
-        expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
-          profile: credential,
-          auth: originalConfig.auth,
-        });
-        await logout(profileId);
-        expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
-          profile: undefined,
-          auth: { profiles: {} },
-        });
-        expect(beforeDelete).toHaveBeenCalledTimes(2);
-      } finally {
-        cleanup.mockRestore();
-      }
+
+      await expect(logout(profileId)).rejects.toThrow("saved credentials were restored");
+      expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
+        profile: credential,
+        auth: originalConfig.auth,
+      });
+      await logout(profileId);
+      expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
+        profile: undefined,
+        auth: { profiles: {} },
+      });
+      expect(beforeDelete).toHaveBeenCalledTimes(2);
     }));
 
   it.each(["profiles", "api_key"] as const)(

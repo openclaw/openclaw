@@ -22,6 +22,17 @@ export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
   );
 }
 
+/** Only the measured account may consume account-specific quota facts. */
+export function providerUsageForAccount(
+  provider: Pick<ModelAuthStatusProvider, "usage">,
+  authProfileId: string | undefined,
+): ModelAuthStatusProvider["usage"] {
+  if (!authProfileId || provider.usage?.authProfileId !== authProfileId) {
+    return undefined;
+  }
+  return provider.usage;
+}
+
 const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] as const;
 
 /** Collapse auth aliases before display; Gateway rows retain their auth facts. */

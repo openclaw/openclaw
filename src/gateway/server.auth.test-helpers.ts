@@ -225,7 +225,9 @@ async function approvePendingPairingIfNeeded() {
   });
 }
 
-export async function configureTrustedProxyControlUiAuth() {
+export async function configureTrustedProxyControlUiAuth(
+  options: Pick<NonNullable<GatewayAuthConfig["trustedProxy"]>, "allowLoopback"> = {},
+) {
   const { replaceConfigFile } = await import("../config/config.js");
   testState.gatewayAuth = undefined;
   testState.gatewayControlUi = {
@@ -240,6 +242,7 @@ export async function configureTrustedProxyControlUiAuth() {
           trustedProxy: {
             userHeader: "x-forwarded-user",
             requiredHeaders: ["x-forwarded-proto"],
+            ...options,
           },
         },
         trustedProxies: ["127.0.0.1"],

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -36,19 +37,20 @@ import type {
 } from "./session-actor-contract.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
 import { runSessionActorCommand } from "./session-actor-scope.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
 import { prepareSessionInputFromReplica } from "./session-input-preparation.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import {
   acceptSessionSourceValidation,
+  admitPublishedSessionSource,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
   completeSessionTurnPublication,
@@ -286,6 +288,7 @@ export async function appendSessionTurnInWorker(
         }
       },
       async run(prepareTurn, commit) {
+        using phase = observeDiagnosticsTimelinePhases("persist.turn.prepare");
         if (fixedVoiceTranscript) {
           // Fixed voice events keep transaction-local validation without a planning read.
           plan.options.messages = messages.map(({ config: _messageConfig, ...message }) => ({
@@ -366,12 +369,43 @@ export async function appendSessionTurnInWorker(
           return { kind: "restore-cold-transcript" };
         }
         // Select one adapter for the whole turn before any message preparer can have effects.
+        phase.mark("persist.turn.authority");
         for (const [index, append] of accepted.entries()) {
           const hooks = append.workerPreparation;
           const facts = preparation?.messages[index];
           if (!facts?.pending && !facts?.existing && hooks?.beforeFreshMessageCommit) {
-            const source = await prepareSessionSourceAuthority(hooks.beforeFreshMessageCommit);
+            let source = await prepareSessionSourceAuthority(hooks.beforeFreshMessageCommit);
             sources[index] = source;
+            const foreign = source.checks.filter(
+              (check) => check.predicate.source.path !== database.path,
+            );
+            if (
+              actor &&
+              !memory &&
+              !source.nativeSource &&
+              !source.opaqueCommitGuard &&
+              !source.hasOpaqueCheck &&
+              foreign.length
+            ) {
+              const prepared = source;
+              source = {
+                ...prepared,
+                checks: prepared.checks.filter(
+                  (check) => check.predicate.source.path === database.path,
+                ),
+                assertCurrent() {
+                  prepared.assertCurrent();
+                  for (const check of foreign) {
+                    if (!admitPublishedSessionSource(check.predicate)) {
+                      throw new Error("Session source publication is unavailable");
+                    }
+                  }
+                },
+              };
+              // The foreign owner stays live; only local predicates enter this actor's writer.
+              source.assertCurrent();
+              sources[index] = source;
+            }
             if (
               (!actor && source.nativeSource) ||
               (memory && source.hasOpaqueCheck) ||
@@ -388,6 +422,7 @@ export async function appendSessionTurnInWorker(
           }
         }
         plan.options.preparedGoalId = preparation?.goalId;
+        phase.mark("persist.turn.message");
         for (const [index, append] of plan.options.messages.entries()) {
           const hooks = accepted[index]!.workerPreparation;
           const facts = preparation?.messages[index];
@@ -428,7 +463,8 @@ export async function appendSessionTurnInWorker(
           };
         }
         assertCurrent();
-        return commit();
+        phase.mark("persist.turn.commit");
+        return await commit();
       },
       onAcknowledged(candidate) {
         if (candidate.result.runtimeTarget) {
@@ -530,7 +566,7 @@ export async function appendSessionTurnInWorker(
               async (snapshot) => {
                 // Metadata may advance; the writer checks the captured lifecycle at commit.
                 if (snapshot) {
-                  expectedState ??= buildRestartRecoveryExpectedState(
+                  expectedState ??= buildSessionTranscriptTurnExpectedState(
                     snapshot.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
                   );
                 }
@@ -634,6 +670,7 @@ export async function appendSessionTurnInWorker(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),
   );
+  using settlementPhase = observeDiagnosticsTimelinePhases("persist.turn.completion");
   const completions = await Promise.allSettled(committedCompletions);
   const completionErrors = completions.flatMap((completion) =>
     completion.status === "rejected" ? [completion.reason] : [],
@@ -649,6 +686,7 @@ export async function appendSessionTurnInWorker(
     }
   }
   try {
+    settlementPhase.mark("persist.turn.releaseAuthority");
     try {
       await releaseSessionSourceAuthorities(sources.filter((source) => source !== undefined));
     } finally {

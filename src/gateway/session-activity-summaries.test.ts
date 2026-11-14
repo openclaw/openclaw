@@ -7,7 +7,10 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as utilityCompletion from "../agents/utility-completion.js";
 import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -24,6 +27,7 @@ import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-acces
 import { getSessionColdStorageStatus } from "../config/sessions/session-cold-storage-status.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
@@ -37,6 +41,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  mergeCanonicalUserProfiles,
+} from "../state/user-profile-writes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -192,6 +200,35 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   const expectProgress = (state: string, calls: number) =>
     expect({ state: view()?.state, calls: complete.mock.calls.length }).toEqual({ state, calls });
 
+  const operatorRecaps = async (allow: string[]) => {
+    const profile = await ensureCanonicalUserProfileForEmail("recap-owner@example.test");
+    cfg = {
+      ...cfg,
+      gateway: {
+        roles: {
+          default: "member",
+          definitions: {
+            member: {
+              agents: "*",
+              sessions: { others: "none" },
+              scopes: ["operator.read", "operator.write"],
+              modelPolicy: { allow },
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    prepare.mockResolvedValue({ ...prepared, useUtilityModel: true });
+    const provider = vi
+      .fn<NonNullable<Parameters<typeof utilityCompletion.runUtilityCompletion>[1]>>()
+      .mockImplementation(async () => result(completedText));
+    complete.mockImplementation((request) =>
+      utilityCompletion.runUtilityCompletion(request, provider),
+    );
+    return { profile, provider };
+  };
+
   beforeEach(async ({ signal }) => {
     releasePending.length = settlePending.length = 0;
     testSignal = signal;
@@ -223,6 +260,84 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await testState.cleanup();
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
+  });
+
+  it("stops an operator recap revoked during preparation and retains its cached result", async () => {
+    const { profile, provider } = await operatorRecaps(["test/utility"]);
+    const alias = await ensureCanonicalUserProfileForEmail("recap-alias@example.test");
+    await assignSessionOwnerInWorker(scope, {
+      expectedSessionId: scope.sessionId,
+      owner: { type: "human", id: alias.id },
+      assignedBy: { type: "system", id: "gateway" },
+    });
+    await mergeCanonicalUserProfiles(alias.id, profile.id);
+    expect(read()?.owner?.actor.id).toBe(alias.id);
+    await messages(2);
+    const allowed = new AsyncWorkScope();
+    await allowed.track(() => ensureRecap(target));
+    await allowed.drain();
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(read()?.activitySummary).toMatchObject(summary(2));
+    const cached = read()?.activitySummary;
+
+    await messages(2, 2);
+    const preparation = createDeferred<typeof prepared>();
+    const started = createDeferred();
+    releasePending.push(() => preparation.resolve(prepared));
+    prepare.mockImplementationOnce(async () => {
+      started.resolve();
+      await withinTest(preparation.promise, testSignal);
+      return { ...prepared, useUtilityModel: true };
+    });
+    const revoked = new AsyncWorkScope();
+    await revoked.track(() => ensureRecap(target));
+    await withinTest(started.promise, testSignal);
+    cfg.gateway!.roles!.definitions.member!.modelPolicy = { allow: [] };
+    setRuntimeConfigSnapshot(cfg);
+    preparation.resolve(prepared);
+    await revoked.drain();
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(read()?.activitySummary).toEqual(cached);
+    expect(view()).toMatchObject({ state: "unavailable", text: completedText });
+    const retainedAssertion = complete.mock.calls[0]?.[0].operatorAuthority?.assertCurrent;
+    expect(retainedAssertion).toBeDefined();
+    expect(() => retainedAssertion?.()).toThrow();
+  });
+
+  it("denies profile-created recaps after a nonhuman assignment while service recaps complete", async () => {
+    const { profile, provider } = await operatorRecaps([]);
+    const createdActor = { type: "human" as const, source: "profile" as const, id: profile.id };
+    const operatorSession = makeConversation("agent:main:operator-recap", "operator-recap-session");
+    await seedConversation(operatorSession.scope, "Completed the requested review.", {
+      createdActor,
+    });
+    expect(read(operatorSession.scope)?.createdActor).toEqual(createdActor);
+    await assignSessionOwnerInWorker(operatorSession.scope, {
+      expectedSessionId: operatorSession.scope.sessionId,
+      owner: { type: "agent", id: "main" },
+      assignedBy: { type: "human", id: profile.id },
+    });
+    // A nonhuman assignee cannot erase the creator's operator model restriction.
+    expect(read(operatorSession.scope)?.owner?.actor.type).toBe("agent");
+    const serviceSession = makeConversation("agent:main:service-recap", "service-recap-session");
+    await seedConversation(serviceSession.scope, "Completed scheduled maintenance.", {
+      createdActor: { type: "system" },
+    });
+    await assignSessionOwnerInWorker(serviceSession.scope, {
+      expectedSessionId: serviceSession.scope.sessionId,
+      owner: { type: "system", id: "gateway" },
+      assignedBy: { type: "system", id: "gateway" },
+    });
+    const work = new AsyncWorkScope();
+    await work.track(() =>
+      Promise.all([ensureRecap(operatorSession.target), ensureRecap(serviceSession.target)]),
+    );
+    await work.drain();
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(provider.mock.calls[0]?.[0].sessionKey).toBe(serviceSession.target.key);
+    expect(read(operatorSession.scope)?.activitySummary).toBeUndefined();
+    expect(view(operatorSession.scope)?.state).toBe("unavailable");
+    expect(read(serviceSession.scope)?.activitySummary).toMatchObject(summary(1));
   });
 
   it("does not enqueue recaps for excluded sessions or disabled utility routing", async () => {

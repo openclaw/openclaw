@@ -6,7 +6,7 @@ import { CLI_NAME } from "../cli/cli-name.js";
 import {
   completionCacheExists,
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
-  findCompletionProfileWriteError,
+  findOptionalCompletionInstallFailure,
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
@@ -45,15 +45,22 @@ async function installCompletionForDoctor(
       "Shell completion",
     );
   } catch (err) {
-    // Completion is optional, but only profile permission failures are safe to downgrade.
-    const writeError = findCompletionProfileWriteError(err);
-    if (!writeError) {
+    // Completion is optional; permission and encoding failures stay nonfatal with session recovery.
+    const failure = findOptionalCompletionInstallFailure(err);
+    if (!failure) {
       throw err;
     }
-    const failedPath = writeError.path ?? resolveCompletionProfilePath(shell);
     const command = formatCompletionReloadCommand(shell, cachePath);
+    if (failure.kind === "write") {
+      const failedPath = failure.error.path ?? resolveCompletionProfilePath(shell);
+      note(
+        `Shell completion could not be ${action} (permission or read-only error at ${failedPath}). For this ${shell} session only, run:\n${command}`,
+        "Shell completion",
+      );
+      return;
+    }
     note(
-      `Shell completion could not be ${action} (permission or read-only error at ${failedPath}). For this ${shell} session only, run:\n${command}`,
+      `Shell completion could not be ${action} (profile is not valid UTF-8 at ${failure.profilePath}). The file was left untouched. For this ${shell} session only, run:\n${command}`,
       "Shell completion",
     );
   }

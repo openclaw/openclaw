@@ -12,6 +12,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { renderChatModelControls } from "./chat-view.test-helpers.ts";
 import type { ChatModelControls } from "./components/chat-model-controls.tsx";
@@ -176,4 +177,13 @@ export const renderModelControls = (
   state: ChatHeaderTestState,
   overrides: Partial<ChatModelControlsProps> = {},
   container = document.createElement("div"),
-) => renderChatModelControls({ ...createChatModelControlsProps(state), ...overrides }, container);
+) => {
+  // jsdom has no Web Animations API; the browser suite owns motion proof.
+  vi.stubGlobal("matchMedia", (query: string) =>
+    createMediaQueryList(query, query === "(prefers-reduced-motion: reduce)"),
+  );
+  return renderChatModelControls(
+    { ...createChatModelControlsProps(state), ...overrides },
+    container,
+  );
+};

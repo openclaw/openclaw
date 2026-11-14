@@ -73,6 +73,7 @@ export type LoginFailureFeedback = {
   primaryCommand?: string;
   refreshAction?: { label: string };
   steps: LoginFailureStep[];
+  details?: string[];
   docsHref: string;
   rawError: string;
 };
@@ -97,6 +98,7 @@ function buildFeedback(
     summaryKey?: string;
     primaryCommand?: string;
     stepKeys: LoginFailureStepDefinition[];
+    detailKeys?: string[];
     stepParams?: Record<string, string>;
     refreshAction?: { label: string };
   },
@@ -118,6 +120,7 @@ function buildFeedback(
         ? { text: translate(step), commands: [] }
         : { text: translate(step.key), commands: step.commands },
     ),
+    details: params.detailKeys?.map(translate),
     docsHref,
     rawError,
   };
@@ -180,14 +183,8 @@ export function resolveLoginFailureFeedback(
     return buildFeedback(rawError, "login.failure.accessDenied", {
       kind: "access-denied",
       tone: "warn",
-      stepKeys: [
-        "stepAdmin",
-        {
-          key: "stepFindProfile",
-          commands: ["openclaw users list --json"],
-        },
-        "stepReconnect",
-      ],
+      stepKeys: ["stepAdmin", "stepReconnect"],
+      detailKeys: ["stepFindProfile"],
       docsHref: "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
     });
   }
@@ -276,7 +273,8 @@ export function resolveLoginFailureFeedback(
       kind: "origin-not-allowed",
       docsHref:
         "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
-      stepKeys: ["stepAllowedOrigins", "stepFullOrigin", "stepRestart"],
+      stepKeys: [],
+      detailKeys: ["stepAllowedOrigins", "stepFullOrigin", "stepRestart"],
     });
   }
 
@@ -302,7 +300,8 @@ export function resolveLoginFailureFeedback(
   if (authHintKind === "trusted-proxy") {
     return buildFeedback(rawError, "login.failure.trustedProxy", {
       kind: "trusted-proxy",
-      stepKeys: ["stepSignIn", "stepHeaders", "stepNoToken"],
+      stepKeys: ["stepSignIn", "stepNoToken"],
+      detailKeys: ["stepHeaders"],
       docsHref: "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
     });
   }

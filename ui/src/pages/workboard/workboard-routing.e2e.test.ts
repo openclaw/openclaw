@@ -99,7 +99,17 @@ suite.define(() => {
       const agentScope = page.locator(".workboard-agent-filter openclaw-agent-select");
       await agentScope.locator(".agent-select__trigger").click();
       const agentOptions = agentScope.locator(".agent-select__option[data-agent-option]");
-      await expectFocus(agentOptions.filter({ hasText: "Main" }));
+      await expectFocus(agentScope.getByRole("listbox"));
+      await expect
+        .poll(() =>
+          agentOptions
+            .filter({ hasText: "Main" })
+            .evaluate(
+              (option) =>
+                document.activeElement?.getAttribute("aria-activedescendant") === option.id,
+            ),
+        )
+        .toBe(true);
       await agentOptions.filter({ hasText: "Writer" }).click();
       await expect.poll(() => agentValue(agentScope)).toBe("writer");
       await expect

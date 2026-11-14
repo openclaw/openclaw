@@ -80,9 +80,6 @@ function nativeDebugger(h: Background, targetIdFor: (tab: number) => string) {
   h.debuggerDetach.mockImplementation(async (source) => {
     clients.delete(resolve(source));
   });
-  h.debuggerGetTargets.mockImplementation(async () =>
-    [...tabs].map(([tab, id]) => ({ tabId: tab, id, attached: clients.has(id) })),
-  );
   h.debuggerGetTargetInfo.mockImplementation(async (source) => ({
     targetInfo: { targetId: resolve(source) },
   }));
@@ -125,13 +122,13 @@ async function fixture(initiallyAttached = false) {
   return { h, old, ...native, replacement: () => replacementSocket(h), attach };
 }
 const { deferred, releaseAll } = deferredScope();
-function heldAccess(h: Awaited<ReturnType<typeof loadBackground>>) {
+function heldAccess(h: Background) {
   const gate = deferred(undefined);
   h.tabsGet.mockClear();
   holdNext(h.tabsGet, gate.promise);
   return gate;
 }
-function heldFocus(h: Awaited<ReturnType<typeof loadBackground>>) {
+function heldFocus(h: Background) {
   const gate = deferred(undefined);
   h.windowsUpdate.mockImplementationOnce(async () => {
     await gate.promise;
@@ -160,7 +157,6 @@ describe("authenticated relay debugger lifetime", () => {
     expectRuntime(next);
     expect(f.h.debuggerDetach).toHaveBeenCalledWith({ targetId: "target-7" });
     expect(f.h.debuggerDetach).not.toHaveBeenCalledWith({ targetId: "target-99" });
-    expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
     expect(f.h.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
     expect(await runtime(f.h, "getTabAccess", { tabId })).toMatchObject({
       accessible: true,
@@ -173,12 +169,10 @@ describe("authenticated relay debugger lifetime", () => {
       const f = await fixture();
       const gate = deferred(undefined);
       const detachGate = deferred(undefined);
-      const held = phase === "target lookup" ? f.h.debuggerGetTargetInfo : f.h.debuggerAttach;
-      if (phase === "target lookup") {
-        holdNext(f.h.debuggerGetTargetInfo, gate.promise);
-      } else {
-        holdNext(f.h.debuggerAttach, gate.promise);
-      }
+      const held =
+        phase === "target lookup"
+          ? holdNext(f.h.debuggerGetTargetInfo, gate.promise)
+          : holdNext(f.h.debuggerAttach, gate.promise);
       holdNext(f.h.debuggerDetach, detachGate.promise);
       send(f.old, 44, "attach");
       await waitCalled(held);
@@ -449,9 +443,7 @@ it("rolls back only its created tab after socket close during focus", async () =
 async function expectPending(promise: Promise<unknown>) {
   const settled = vi.fn();
   void promise.then(settled);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await flush();
   expect(settled).not.toHaveBeenCalled();
 }
 async function nativeFixture() {
@@ -534,14 +526,12 @@ describe("native debugger cleanup debt", () => {
   });
   it("rejects missing native identity and cleans its acquired client", async () => {
     const f = await nativeFixture();
-    f.h.debuggerGetTargets.mockResolvedValue([]);
     f.h.debuggerGetTargetInfo.mockResolvedValue({ targetInfo: { targetId: "" } });
     expect.soft(await f.command("attach", 7)).toMatchObject({ type: "error" });
     expect.soft(f.clients.size).toBe(0);
   });
   it("retains unknown-identity NoTab debt until authoritative native closure", async () => {
     const f = await nativeFixture();
-    f.h.debuggerGetTargets.mockResolvedValue([]);
     f.h.debuggerGetTargetInfo.mockImplementationOnce(async () => {
       f.tabs.delete(7);
       throw new Error("No tab with given id 7.");

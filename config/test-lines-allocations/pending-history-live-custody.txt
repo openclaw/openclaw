@@ -1,0 +1,2 @@
+# Verify captured restart inputs remain hidden while live custody is held.
+3

@@ -9,6 +9,7 @@ import {
   readMainDatabasePosixLocks,
   readSqliteShmPosixLocks,
 } from "../infra/sqlite-posix-locks.test-support.js";
+import * as execRunner from "../process/exec-runner.js";
 import { collectCheckoutDiff, collectCheckoutDiffBaseline } from "./session-diff.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -201,19 +202,26 @@ it("keeps the per-file and aggregate byte caps while rejecting hardlinks", async
   await expect(fs.readFile(outside, "utf8")).resolves.toBe("outside bytes\n");
 });
 
-it.each([undefined, "HEAD"])(
-  "ignores pre-session tracked and untracked edits with review base %s",
-  async (baseCommit) => {
+it.each([
+  { baseCommit: undefined, tracked: true },
+  { baseCommit: "HEAD", tracked: true },
+  { baseCommit: undefined, tracked: false },
+])(
+  "ignores pre-session edits without repeating unrelated Git work ($baseCommit, tracked=$tracked)",
+  async ({ baseCommit, tracked }) => {
     const root = repository();
     await fs.writeFile(path.join(root, "base.txt"), "base\n");
     commit(root, "base");
     git(root, "checkout", "-qb", "feature");
     await fs.writeFile(path.join(root, "feature.txt"), "added on branch\n");
     commit(root, "feature");
-    await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
+    if (tracked) {
+      await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
+    }
     await fs.writeFile(path.join(root, "draft.txt"), "pre-session draft\n");
     const captured = await collectCheckoutDiffBaseline({ cwd: root });
     const baseline = captured && { ...captured, sessionId: "s1" };
+    const commands = vi.spyOn(execRunner, "runCommandWithTimeout");
     const sessionPaths = async () =>
       (
         await collectCheckoutDiff({
@@ -226,6 +234,10 @@ it.each([undefined, "HEAD"])(
       ).files.map((file) => file.path);
 
     await expect(sessionPaths()).resolves.toEqual([]);
+    expect(commands.mock.calls.filter(([argv]) => argv.includes("symbolic-ref"))).toHaveLength(1);
+    expect(commands.mock.calls.filter(([argv]) => argv.includes("--name-status"))).toHaveLength(
+      tracked ? 1 : 0,
+    );
 
     await fs.appendFile(path.join(root, "feature.txt"), "session edit\n");
     await fs.appendFile(path.join(root, "draft.txt"), "session draft\n");

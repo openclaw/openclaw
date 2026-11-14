@@ -1,0 +1,2 @@
+# Browser regression for a mobile sheet moving composer picker targets during native presses.
+41

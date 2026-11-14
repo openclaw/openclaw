@@ -31,6 +31,10 @@ export const EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS = [
   "openclaw.build.openclawVersion",
 ] as const;
 
+export {
+  MAX_PLUGIN_RECOMMENDED_PROMPTS,
+  validatePluginRecommendedPrompts,
+} from "./recommended-prompts.js";
 export { PLUGIN_CATEGORY_SLUGS, validatePluginCategories } from "./categories.js";
 export type { PluginCategorySlug, PluginCategoriesValidationResult } from "./categories.js";
 

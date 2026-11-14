@@ -6,6 +6,7 @@ import {
   type EngineConnection,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -112,6 +113,17 @@ class TeamReportsDatabase {
       PRIMARY KEY (source, key)
     )${input ? " ON COMMIT PRESERVE ROWS" : " STRICT"};`),
     );
+  }
+
+  assertSettled(): void {
+    // Retire a lost native connection without clearing collection scratch between commands.
+    assertTransactionUsable(this.db);
+    if (!this.db.isOpen) {
+      throw new Error("Team Reports database is closed");
+    }
+    if (this.db.isTransaction) {
+      throw new Error("Team Reports database left an unsettled transaction");
+    }
   }
 
   resetActivity(): void {
@@ -625,6 +637,7 @@ export function createSqliteWorkerBackend(
           )
         : execute(command);
     },
+    assertSettled: () => database.assertSettled(),
     close: () => database.close(),
   };
 }

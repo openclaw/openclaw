@@ -80,6 +80,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       preload.searchParams.set("fixture", fixture.baseUrl);
       gateway = await gatewayOwner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,

@@ -492,6 +492,7 @@ export class CustodianSessionStore {
       return;
     }
     const snapshot = context.gateway.snapshot;
+    const isMember = snapshot.hello?.auth.roleAllowsAdmin === false;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     const chatSupported =
       client !== null &&
@@ -542,7 +543,7 @@ export class CustodianSessionStore {
       if (!chatSupported) {
         this.sessionStarted = false;
         this.abandonPendingUserTurn(pendingParams);
-        this.error = t("custodian.accessRequired");
+        this.error = t(isMember ? "custodian.adminAccessRequired" : "custodian.accessRequired");
         return;
       }
       this.chatAvailable = true;
@@ -575,7 +576,7 @@ export class CustodianSessionStore {
       return;
     }
     if (!chatSupported) {
-      this.error = t("custodian.accessRequired");
+      this.error = t(isMember ? "custodian.adminAccessRequired" : "custodian.accessRequired");
       return;
     }
     if (configuredInferenceState === "unresolved") {

@@ -218,6 +218,7 @@ export function registerGatewayStartupFailureTests(
           expect(closeSecond).toHaveBeenCalledExactlyOnceWith({
             retainSharedState: true,
             reason: "gateway startup failed",
+            exitAfterClose: false,
           });
           return cleanup === "unavailable"
             ? undefined

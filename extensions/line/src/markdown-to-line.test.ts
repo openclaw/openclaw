@@ -20,6 +20,7 @@ function cardBody(result: ReturnType<typeof processLineMessage>) {
   }
   return expectDefined(bubble.body, "bubble body").contents;
 }
+const spans = (...cells: object[]) => ({ contents: cells.map((cell) => ({ contents: [cell] })) });
 
 describe("processLineMessage table cards", () => {
   it("replaces empty cells with placeholders", () => {
@@ -37,19 +38,14 @@ describe("processLineMessage table cards", () => {
 | <u>Under</u> | ~~Strike~~ |
 | \`<u>Literal</u>\` | Plain |`);
     const rows = cardBody(result);
-    expect(rows[2]).toMatchObject({
-      contents: [
-        { contents: [{ text: "Bold", weight: "bold" }] },
-        { contents: [{ text: "Italic", style: "italic" }] },
-      ],
-    });
-    expect(rows[3]).toMatchObject({
-      contents: [
-        { contents: [{ text: "Under", decoration: "underline" }] },
-        { contents: [{ text: "Strike", decoration: "line-through" }] },
-      ],
-    });
-    expect(rows[4]).toMatchObject({ contents: [{ text: "<u>Literal</u>" }, {}] });
+    expect(rows.slice(2)).toMatchObject([
+      spans({ text: "Bold", weight: "bold" }, { text: "Italic", style: "italic" }),
+      spans(
+        { text: "Under", decoration: "underline" },
+        { text: "Strike", decoration: "line-through" },
+      ),
+      { contents: [{ text: "<u>Literal</u>" }, {}] },
+    ]);
     expect(result.text).toBe("");
   });
 });
@@ -104,9 +100,7 @@ describe("processLineMessage", () => {
     expect(result.flexMessages.map((message) => message.altText)).toEqual(["Table", "Code"]);
     expect(result.text).not.toContain("Kept");
     expect(result.text).toContain(`• Value: ${value} (https://example.test/report)`);
-    expect(result.text.indexOf("First")).toBeLessThan(result.text.indexOf("Between"));
-    expect(result.text.indexOf("Between")).toBeLessThan(result.text.indexOf("Large"));
-    expect(result.text.indexOf("Large")).toBeLessThan(result.text.indexOf("After"));
+    expect(result.text).toMatch(/First[\s\S]*Between[\s\S]*Large[\s\S]*After/);
     expect(
       result.segments
         ?.map((segment) =>

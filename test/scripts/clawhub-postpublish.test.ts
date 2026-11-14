@@ -633,12 +633,12 @@ describe("ClawHub prepared publication", () => {
   });
 
   it.each(["selected", "all-publishable"])(
-    "retains the %s prepared roster when an exact version is adopted on resume",
+    "retains the native family and exact bytes on %s resume",
     async (selectionMode) => {
       const f = preparedFixture(selectionMode, "cloudflare");
       const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
       expect(entry.alreadyPublished).toBe(true);
-      expect(entry.family).toBe("bundle-plugin");
+      expect(entry.family).toBe("code-plugin");
       expect(entry.publication).toEqual({ state: "published" });
       await restorePreparedClawHubPackage({ ...f.restoreOptions, entry: entry.prepared });
       expect(readFileSync(join(f.restoreOptions.outputDir, "cloudflare.tgz"))).toEqual(f.tarball);

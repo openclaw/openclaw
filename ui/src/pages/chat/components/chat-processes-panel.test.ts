@@ -111,11 +111,11 @@ it.each([false, true])("distinguishes retired vs unlisted (truncated: %s)", asyn
   });
   await vi.advanceTimersByTimeAsync(0);
   await panel.updateComplete;
-  expect(panel.textContent).toContain(truncated ? "limited list" : "no longer retained");
+  expect(panel.textContent).toContain(truncated ? "current list" : "no longer retained");
   if (truncated) {
     expect(panel.textContent).not.toContain("no longer retained");
   }
-  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to Processes"]')!.click();
+  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to processes"]')!.click();
   await panel.updateComplete;
   expect(panel.querySelector(".chat-processes__list")?.textContent).toContain("No processes");
   expect(panel.querySelector(".chat-processes__list .empty-state__icon svg")).not.toBeNull();
@@ -182,7 +182,7 @@ it("keeps Stop separate from opening output and restores list focus after return
   expect(
     panel.querySelector('.chat-processes__detail button[aria-label="Stop Build app"]'),
   ).toBeNull();
-  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to Processes"]')!.click();
+  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to processes"]')!.click();
   await panel.updateComplete;
   expect(list.hidden).toBe(false);
   expect(list.scrollTop).toBe(55);
@@ -308,7 +308,7 @@ it("keeps the full panel read-error flow while compact Details retains its share
   const opener = panel.querySelector<HTMLButtonElement>(".chat-processes__open")!;
   opener.click();
   await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe("Compiling"));
-  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to Processes"]')!.click();
+  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to processes"]')!.click();
   await waitForSolid(() => expect(document.activeElement).toBe(opener));
   expect(request).toHaveBeenCalledTimes(3);
 });

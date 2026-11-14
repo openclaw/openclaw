@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { markFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -119,7 +119,7 @@ describe("tool-policy-pipeline", () => {
     const apply = (frozen: boolean) => {
       const policy = { allow: ["read"] };
       if (frozen) {
-        markFrozenClawToolAllowPolicy(policy);
+        markFrozenTemplateToolAllowPolicy(policy);
       }
       return filterNames(
         ["read", "future_tool"],
@@ -169,6 +169,16 @@ describe("tool-policy-pipeline", () => {
     });
     expect(warnings).toEqual([
       "tools: tools.profile (coding) allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
+  test("does not warn for run-granted core tools absent from this run", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["skill_library", "browser"],
+      label: "tools.allow",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
     ]);
   });
 

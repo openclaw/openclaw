@@ -7,7 +7,10 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { scopePreparedModelRuntimeLease as scopeLease } from "./prepared-model-runtime-generation-scope.js";
+import {
+  runOutsidePreparedModelRuntimePluginGenerationScope,
+  scopePreparedModelRuntimeLease as scopeLease,
+} from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime as acquire,
   beginPreparedModelRuntimePluginDrain as beginDrain,
@@ -17,6 +20,7 @@ import {
   refreshPreparedModelRuntimeSnapshots as refresh,
   type PreparedModelRuntimeInput as RuntimeInput,
 } from "./prepared-model-runtime.js";
+import { acquirePreparedModelRuntimeSnapshotInvocation } from "./prepared-model-runtime.resources.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-runtime-plugin-drain" });
 
@@ -31,7 +35,11 @@ it.each(["draining", "replacing"] as const)(
   "keeps an admitted turn on its own generation while plugins are %s",
   async (phase) => {
     const { registry } = createTestPluginRegistry();
-    const record = createPluginRecord({ id: "retained-model", status: "loaded" });
+    const record = createPluginRecord({
+      id: "retained-model",
+      status: "loaded",
+      generationOverlap: true,
+    });
     registry.plugins.push(record);
     const instance = new PluginInstance(record.id, { record, registry });
     fixture.mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
@@ -42,44 +50,104 @@ it.each(["draining", "replacing"] as const)(
       workspaceDir: published.workspaceDir,
     };
     await using parent = scopeLease(await acquire(input));
+    const tool = instance.wrap(() => "reply completed");
     const start = createDeferred();
-    const pending = instance.run(() =>
-      parent.run(async () => {
-        await start.promise;
-        await using nested = await acquire(input, {
+    const pending = parent.run(async () => {
+      await start.promise;
+      await using nested = scopeLease(
+        await acquire(input, {
           pluginGeneration: parent.pluginGeneration,
           deriveRuntimePluginSelections: () => [],
+        }),
+      );
+      expect(nested.snapshot).toBe(parent.snapshot);
+      expect(nested.pluginGeneration).toBe(parent.pluginGeneration);
+      expect(nested.run(tool)).toBe("reply completed");
+      if (phase === "replacing") {
+        expect(() => runOutsidePreparedModelRuntimePluginGenerationScope(tool)).toThrow(
+          "reloaded or disabled",
+        );
+        instance.run(() => {
+          expect(() => runOutsidePreparedModelRuntimePluginGenerationScope(tool)).toThrow(
+            "reloaded or disabled",
+          );
         });
-        expect(nested.snapshot).toBe(parent.snapshot);
-        expect(nested.pluginGeneration).toBe(parent.pluginGeneration);
-        expect(instance.run(() => "reply completed")).toBe("reply completed");
-        await expect(
+      }
+      await instance.run(() =>
+        expect(
           acquire(
             { ...input, config: { agents: { defaults: { model: "other/model" } } } },
             { pluginGeneration: parent.pluginGeneration },
           ),
-        ).rejects.toMatchObject({ admissionBlocked: true });
+        ).rejects.toMatchObject({ admissionBlocked: true }),
+      );
+      const supplied = acquirePreparedModelRuntimeSnapshotInvocation(parent.snapshot);
+      try {
         await parent[Symbol.asyncDispose]();
-        await expect(
-          acquire(input, { pluginGeneration: parent.pluginGeneration }),
-        ).rejects.toMatchObject({ admissionBlocked: true });
-      }),
-    );
+        expect(() => parent.run(tool)).toThrow("Captured reply runtime lease is closed");
+        expect(nested.run(tool)).toBe("reply completed");
+        expect(supplied.run(tool)).toBe("reply completed");
+      } finally {
+        await supplied.release();
+      }
+      expect(() => supplied.run(tool)).toThrow("Prepared snapshot invocation has been released");
+    });
     const release = instance.reserveReplacement();
     const drain = beginDrain();
     try {
       if (phase === "replacing") {
         invalidate(undefined, { waitForReplacement: true });
+        instance.quiesce();
       }
       start.resolve();
       await pending;
     } finally {
       drain.release();
       release();
+      await parent[Symbol.asyncDispose]();
       await instance.dispose();
     }
   },
 );
+
+it("retains callable authority only for the opted-in plugin in a mixed generation", async () => {
+  const { registry } = createTestPluginRegistry();
+  const createInstance = (generationOverlap: boolean) => {
+    const record = createPluginRecord({
+      id: generationOverlap ? "overlapping-model" : "ordinary-model",
+      status: "loaded",
+      generationOverlap,
+    });
+    registry.plugins.push(record);
+    return new PluginInstance(record.id, { record, registry });
+  };
+  const ordinary = createInstance(false);
+  const overlapping = createInstance(true);
+  const instances = [ordinary, overlapping];
+  fixture.mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+  const input = await publishConfigured();
+  const lease = await acquire(input);
+  try {
+    expect(ordinary.hasRetainedConsumers).toBe(false);
+    expect(overlapping.hasRetainedConsumers).toBe(true);
+    for (const instance of instances) {
+      const call = instance.wrap(() => instance.pluginId);
+      expect(lease.run(call)).toBe(instance.pluginId);
+      instance.quiesce();
+      if (instance === ordinary) {
+        expect(() => lease.run(call)).toThrow("reloaded or disabled");
+      } else {
+        expect(lease.run(call)).toBe(instance.pluginId);
+      }
+    }
+  } finally {
+    await lease[Symbol.asyncDispose]();
+    for (const instance of instances) {
+      expect(instance.hasRetainedConsumers).toBe(false);
+      await instance.dispose();
+    }
+  }
+});
 
 it.each(["call", "consumer"] as const)(
   "refuses a model wait from the %s an external reload is draining",

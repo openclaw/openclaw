@@ -61,15 +61,8 @@ type ControllerPhase =
   | "injection-outcome"
   | "successor-barrier"
   | "followup-barrier"
-  | "lifecycle-admission"
-  | "recovery-predecessor";
-type ControllerPhaseStatus =
-  | "waiting"
-  | "selected"
-  | "settled"
-  | "failed"
-  | "reserved"
-  | "restored";
+  | "lifecycle-admission";
+type ControllerPhaseStatus = "waiting" | "selected" | "settled" | "failed";
 
 type PhaseRecord = {
   phase: ControllerPhase;

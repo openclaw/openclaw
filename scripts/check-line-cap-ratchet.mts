@@ -121,7 +121,16 @@ function collectViolations(
   if (result.error || (result.status !== 0 && result.status !== 1)) {
     throw result.error ?? new Error(result.stderr || "oxlint line-cap probe failed");
   }
-  const report: { diagnostics: OxlintDiagnostic[] } = JSON.parse(result.stdout);
+  let report: { diagnostics: OxlintDiagnostic[] };
+  try {
+    report = JSON.parse(result.stdout);
+  } catch (error) {
+    // Native binding and configuration failures can exit 1 before emitting JSON.
+    // Keep their diagnostic instead of replacing it with a report parse error.
+    throw result.status !== 0
+      ? new Error(result.stderr || result.stdout || "oxlint line-cap probe failed")
+      : error;
+  }
   for (const diagnostic of report.diagnostics) {
     // JetBrains terminals make oxlint emit file URLs; both forms must match Git paths.
     const filename = diagnostic.filename.startsWith("file://")

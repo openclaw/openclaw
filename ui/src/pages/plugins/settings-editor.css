@@ -28,7 +28,7 @@ openclaw-plugin-settings-groups {
   align-items: center;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 0 12px;
 }
 .plugin-editor__search .settings-input {
@@ -47,7 +47,7 @@ openclaw-plugin-settings-groups {
 }
 .plugin-editor__group {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: clip;
   background: var(--card);
 }
@@ -116,8 +116,8 @@ openclaw-plugin-settings-groups {
   opacity: 0;
 }
 .plugin-editor__menu .oc-menu-trigger {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
 }
 .plugin-editor__menu .oc-menu-trigger svg {
   transform: rotate(90deg);
@@ -223,7 +223,7 @@ openclaw-plugin-settings-groups {
 .plugin-editor__nav a {
   color: var(--muted);
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
   text-decoration: none;
 }

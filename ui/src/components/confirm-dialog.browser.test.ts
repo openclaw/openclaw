@@ -42,12 +42,14 @@ describe("promise dialog native focus and dismissal", () => {
     });
     try {
       const result = showConfirmDialog({
-        message: "Remove synthetic device?",
+        title: "Remove synthetic device?",
+        message: "Its pairing stops working.",
+        confirmLabel: "Remove",
         canConfirm: live.connected,
         signal: controller.signal,
       });
       const { dialog } = await getRenderedModalDialog(document.body);
-      const submit = button("Confirm");
+      const submit = button("Remove");
       expect(submit.disabled).toBe(false);
       live.setConnected(false);
       flush();
@@ -67,7 +69,8 @@ describe("promise dialog native focus and dismissal", () => {
   it("aligns mobile choices, focuses Cancel, and restores the opener", async () => {
     await setViewport(390, 844);
     const result = showConfirmChoiceDialog({
-      message: "Change this session?",
+      title: "Change this session?",
+      message: "Your changes aren’t saved yet.",
       confirmLabel: "Save",
       alternativeLabel: "Discard",
       signal: controller.signal,
@@ -89,6 +92,7 @@ describe("promise dialog native focus and dismissal", () => {
     const secondary = "Archive only this session";
     const primary = "Archive all (3)";
     const result = showConfirmChoiceDialog({
+      title: "Archive nested sessions?",
       message: "Synthetic nested-session scope",
       confirmLabel: primary,
       alternativeLabel: secondary,
@@ -102,7 +106,7 @@ describe("promise dialog native focus and dismissal", () => {
       );
     await expect.poll(order).toEqual([secondary, primary, "Cancel"]);
     expect(document.activeElement).toBe(button("Cancel"));
-    for (const name of [secondary, primary, "Cancel"]) {
+    for (const name of ["close", secondary, primary, "Cancel"]) {
       // macOS WebKit uses Option-Tab to visit each control inside the dialog.
       if (
         navigator.platform.includes("Mac") &&
@@ -113,7 +117,9 @@ describe("promise dialog native focus and dismissal", () => {
       } else {
         await userEvent.tab();
       }
-      expect(document.activeElement).toBe(button(name));
+      expect(document.activeElement).toBe(
+        name === "close" ? document.querySelector(".oc-dialog__close") : button(name),
+      );
     }
     for (const width of [1280, 390, 320, 390]) {
       await setViewport(width, 844);

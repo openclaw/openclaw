@@ -127,7 +127,8 @@ export function collectWithheldLspEnvNames(params: {
     }
   }
   const result: WithheldLspEnvNames = { configurable: [], refused: [] };
-  for (const name of [...withheld].toSorted()) {
+  // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is private to this diagnostics pass.
+  for (const name of [...withheld].sort()) {
     const { rejectedOverrideBlockedKeys } = inspectHostExecEnvOverrides({
       overrides: { [name]: "" },
     });

@@ -154,8 +154,8 @@ apply. The Gateway restart ends these process-local PTYs, and terminal sessions
 are not recovered afterward.
 
 An admin can use **Hold 1 h** once to postpone the campaign and shift its hard
-deadline, or choose **Update now** from the sidebar update card or
-**Settings → Updates**. For a `dev` git install, the campaign installs the exact
+deadline, or choose **Update Gateway** from the sidebar update card or
+**Update Gateway…** in **Settings → Updates**. For a `dev` git install, the campaign installs the exact
 commit it announced. The displayed list previews up to five commits from that
 fixed target and does not move if upstream `main` advances during the countdown.
 
@@ -222,9 +222,10 @@ this `update.run` flow directly. This covers browser-hosted Control UI, remote
 Gateways, and manually managed local Gateways.
 
 Manual updates started from the Control UI always ask first. The first click on
-the sidebar update card or on **Settings → Updates → Update now** opens a
-confirmation naming the target, the installed and available versions when known,
-and the restart impact; it sends nothing until you choose **Update and restart**.
+the sidebar update card or on **Settings → Updates → Update Gateway…** opens a
+confirmation titled **Update and restart?**, naming the target, the installed and
+available versions when known, and the restart impact. It sends nothing until you
+choose **Update and restart**.
 Cancel, Escape, and dismissing the dialog leave the Gateway untouched. Automatic
 campaigns, the CLI, and `update.run` API clients are unaffected.
 

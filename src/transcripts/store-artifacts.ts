@@ -84,17 +84,22 @@ export function normalizeExportText(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
 }
 
+export type TranscriptArtifactAuthority = {
+  prepareEffect(): Promise<void>;
+  assertCurrent(): void;
+};
+
 export async function writeTranscriptArtifact(
   rootDir: string,
   fileName: string,
   content: string,
-  assertBeforeMutation?: () => void,
+  authority: TranscriptArtifactAuthority,
 ): Promise<string> {
   await writeTranscriptArtifactFile({
     rootDir,
     fileName,
     write: (filePath) => fs.writeFile(filePath, content, { mode: 0o600 }),
-    assertBeforeMutation,
+    authority,
   });
   return sha256Hex(content);
 }
@@ -104,7 +109,7 @@ export async function writeTranscriptArtifactFile(params: {
   rootDir: string;
   fileName: string;
   write: (filePath: string) => Promise<void>;
-  assertBeforeMutation?: () => void;
+  authority: TranscriptArtifactAuthority;
   signal?: AbortSignal;
 }): Promise<void> {
   const target = await root(params.rootDir);
@@ -120,6 +125,7 @@ export async function writeTranscriptArtifactFile(params: {
   try {
     const source = await root(stage.dir);
     await params.write(stage.path);
+    await params.authority.prepareEffect();
     // copyIn retains the former best-effort file/parent fsync behavior on every platform.
     await target.copyIn(
       params.fileName,
@@ -130,7 +136,7 @@ export async function writeTranscriptArtifactFile(params: {
         maxBytes: Infinity,
         sourceHardlinks: "reject",
         signal: params.signal,
-        assertBeforeMutation: params.assertBeforeMutation,
+        assertBeforeMutation: () => params.authority.assertCurrent(),
       },
     );
   } finally {
@@ -141,13 +147,14 @@ export async function writeTranscriptArtifactFile(params: {
 export async function removeTranscriptArtifact(
   rootDir: string,
   fileName: string,
-  assertBeforeMutation?: () => void,
+  authority: TranscriptArtifactAuthority,
 ): Promise<void> {
+  await authority.prepareEffect();
   await removePathWithinRoot({
     rootDir,
     relativePath: fileName,
     force: true,
-    assertBeforeMutation,
+    assertBeforeMutation: () => authority.assertCurrent(),
   });
 }
 

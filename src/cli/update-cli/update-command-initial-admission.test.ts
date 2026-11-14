@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -22,10 +23,7 @@ beforeEach(() => {
   for (const dir of ["tmp", "state", "dist"]) {
     fs.mkdirSync(path.join(root, dir), { mode: 0o700 });
   }
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "1.0.1" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "1.0.1" });
   fs.writeFileSync(path.join(root, "dist", "index.js"), "");
   fs.writeFileSync(path.join(root, "state", "openclaw.json"), "{}\n");
   env = {

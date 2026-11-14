@@ -1,0 +1,2 @@
+5
+# Preserve typed numeric-error diagnostics and pre-dispatch rejection after the CLI error migration.

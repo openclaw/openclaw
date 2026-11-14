@@ -8,7 +8,7 @@ import type { CronEvent, CronJob } from "../types.js";
 import { finishCronRun } from "./run-history.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { recordSkippedCronRuns } from "./skipped-runs.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, prepareCronServiceStore, type CronServiceState } from "./state.js";
 import { captureCronServiceMutationSource, runPostPersistCronNotifications } from "./store.js";
 
 /** Records ownerless scheduled attempts before one invalid job can block batch admission. */
@@ -26,6 +26,10 @@ export async function skipCronJobsWithoutOwners(
     };
   },
 ): Promise<CronJob[]> {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = opts?.source ?? captureCronServiceMutationSource(state);
   const resolveOwnerAgentId = (job: CronJob) =>
     tryResolveCronJobEffectiveAgentId(

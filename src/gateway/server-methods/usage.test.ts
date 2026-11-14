@@ -179,6 +179,25 @@ it("isolates per-agent cost caches and aggregates only for explicit all-agent sc
   });
 });
 
+it.each(["main", "all"])("does not cache refreshing usage.cost as fresh for %s", async (scope) => {
+  const config = agents("main");
+  const params = { ...dates, ...(scope === "all" ? { agentScope: "all" } : { agentId: "main" }) };
+  const summary = costSummary(10, 1);
+  const status = { cachedFiles: 1, pendingFiles: 0, staleFiles: 0 };
+  loadCost
+    .mockResolvedValueOnce({ ...summary, cacheStatus: { ...status, status: "refreshing" } })
+    .mockResolvedValue({ ...summary, cacheStatus: { ...status, status: "fresh" } });
+
+  expectUsage(await request(params, config), { cacheStatus: { status: "refreshing" } });
+  // Finishing the writer can change freshness without another usage revision.
+  expectUsage(await request(params, config), {
+    cacheStatus: { status: "fresh" },
+    totals: { totalTokens: 10, totalCost: 1 },
+  });
+  expectUsage(await request(params, config), { cacheStatus: { status: "fresh" } });
+  expect(loadCost).toHaveBeenCalledTimes(2);
+});
+
 it("bounds all-agent cache loads", async () => {
   const { promise: released, resolve: release } = createDeferred();
   const { promise: firstBatch, resolve: startedBatch } = createDeferred();

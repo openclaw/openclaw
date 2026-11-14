@@ -34,6 +34,17 @@ function registry(options: ReturnType<typeof fixture>) {
   return listOpenClawRegisteredAgentDatabases({ env: options.env });
 }
 
+function expectRegistry(
+  options: ReturnType<typeof fixture>,
+  ...owners: { agentId: string; path: string }[]
+) {
+  expect(registry(options)).toEqual(
+    owners.map(({ agentId, path: pathname }) =>
+      expect.objectContaining({ agentId, path: pathname }),
+    ),
+  );
+}
+
 function aliasedFixture(options = fixture()) {
   const alias = path.join(options.env.OPENCLAW_STATE_DIR, "alias");
   const directory = path.dirname(options.path);
@@ -75,29 +86,19 @@ it("fences an absent disposal before a successor can open", async () => {
 });
 
 it("disposes only its exact cached owner and unregisters that registry row", async () => {
-  const stateDir = createTempStateDir();
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  const first = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-  const second = openOpenClawAgentDatabase({ agentId: "worker-2", env });
+  const options = fixture("worker-1");
+  const first = openOpenClawAgentDatabase(options);
+  const second = openOpenClawAgentDatabase({ agentId: "worker-2", env: options.env });
 
-  expect(await disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(true);
+  expect(await dispose(options)).toBe(true);
   expect(first.db.isOpen).toBe(false);
   expect(second.db.isOpen).toBe(true);
-  expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-    expect.objectContaining({ agentId: "worker-2", path: second.path }),
-  ]);
-  expect(await disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(false);
+  expectRegistry(options, second);
+  expect(await dispose(options)).toBe(false);
   expect(second.db.isOpen).toBe(true);
 
-  const reopened = openOpenClawAgentDatabase({
-    agentId: "worker-1",
-    env,
-    path: first.path,
-  });
-  expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-    expect.objectContaining({ agentId: "worker-1", path: reopened.path }),
-    expect.objectContaining({ agentId: "worker-2", path: second.path }),
-  ]);
+  const reopened = openOpenClawAgentDatabase(options);
+  expectRegistry(options, reopened, second);
 });
 
 it("rejects a file replacement during registry removal publication", async () => {
@@ -157,9 +158,7 @@ it("disposes a worker-created database through its registry owner without host d
       await expect(dispose(options)).resolves.toBe(true);
       expect(sql.queries).toEqual([]);
     }
-    expect(registry(options)).toEqual([
-      expect.objectContaining({ agentId: "sibling", path: siblingOptions.path }),
-    ]);
+    expectRegistry(options, siblingOptions);
     sibling.assertCurrent();
   } finally {
     await Promise.allSettled([execution.release(), sibling.release()]);

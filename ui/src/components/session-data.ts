@@ -44,8 +44,7 @@ import {
 } from "./session-data-catalog.ts";
 import {
   hasSidebarListFilter,
-  clearSidebarSessionError,
-  publishSidebarSessionError,
+  clearSidebarSessionListError,
   publishScopedSessionError,
   publishSidebarSessionList,
   refreshSidebarSessionList,
@@ -78,6 +77,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   activeSessionLineageRoot: GatewaySessionRow | null = null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null = null;
   sessionMutationError: string | null = null;
+  sessionListError: string | null = null;
   presencePayload: PresencePayload | undefined;
   presenceInstanceId?: string;
   readonly ownerCounts = new SidebarOwnerSessionCounts(() => this.requestSessionDataUpdate());
@@ -473,7 +473,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     }
     publishSidebarSessionList(this, { ...snapshot, ...presentation });
     if (listErrorChanged) {
-      publishSidebarSessionError(this, listError, "list");
+      this.sessionListError = listError;
     }
     this.requestSessionDataUpdate();
   };
@@ -700,7 +700,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.requestSessionDataUpdate();
   }
 
-  dismissSessionMutationError = clearSidebarSessionError.bind(null, this);
+  dismissSessionListError = clearSidebarSessionListError.bind(null, this);
 
   resetSessionList(): void {
     this.retireFilteredSessions();
@@ -726,7 +726,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   private invalidateSessionMutations(): void {
     this.mutations.retireScope();
-    publishSidebarSessionError(this, null, "action");
+    this.sessionMutationError = null;
     this.requestSessionDataUpdate();
   }
 
@@ -740,7 +740,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       selectedAgentId: this.inputs.selectedAgentIdForSessions(),
     });
     if (scope) {
-      this.dismissSessionMutationError();
+      this.sessionMutationError = null;
     }
     return scope;
   }

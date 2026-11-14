@@ -44,12 +44,6 @@ type ProxyValidationCheck = {
 
 type ProxyValidationOutcome = Omit<ProxyValidationCheck, "kind" | "url">;
 
-export type ProxyValidationResult = {
-  ok: boolean;
-  config: ProxyValidationResolvedConfig;
-  checks: ProxyValidationCheck[];
-};
-
 type ProxyValidationFetchCheckParams = {
   proxyUrl: string;
   proxyTls?: ManagedProxyTlsOptions;
@@ -170,13 +164,9 @@ type ProxyValidationDeniedTarget = {
   expectedCanaryToken?: string;
 };
 
-type LoopbackValidationCanary = {
-  url: string;
-  token: string;
-  close: () => Promise<void>;
-};
+type LoopbackValidationCanary = Awaited<ReturnType<typeof createLoopbackValidationCanary>>;
 
-async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanary> {
+async function createLoopbackValidationCanary() {
   const token = randomUUID();
   // Only the per-probe token distinguishes our listener from a proxy response.
   const server = createServer((_request, response) => {
@@ -237,9 +227,7 @@ async function runValidationCheck(
   }
 }
 
-export async function runProxyValidation(
-  options: RunProxyValidationOptions,
-): Promise<ProxyValidationResult> {
+export async function runProxyValidation(options: RunProxyValidationOptions) {
   const config = resolveProxyValidationConfig(options);
   if (config.errors.length > 0 || !config.proxyUrl) {
     return { ok: false, config, checks: [] };

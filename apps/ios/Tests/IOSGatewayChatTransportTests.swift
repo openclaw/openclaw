@@ -1115,3 +1115,80 @@ struct LocalFixtureChatTransportTests {
         #expect(session.toolOverrides == overrides)
     }
 }
+
+extension IOSGatewayChatTransportTests {
+    @Test func `incremental history uses cursor and decodes delta envelope`() async throws {
+        let recorder = ProgressRequestRecorder()
+        let socketSession = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(
+                sendHook: { socket, message, sendIndex in
+                    guard sendIndex > 0 else { return }
+                    let data: Data = switch message {
+                    case let .data(value): value
+                    case let .string(value): Data(value.utf8)
+                    @unknown default: throw URLError(.cannotParseResponse)
+                    }
+                    let frame = try #require(JSONSerialization
+                        .jsonObject(with: data) as? [String: Any])
+                    let id = try #require(frame["id"] as? String)
+                    let params = try #require(frame["params"] as? [String: Any])
+                    #expect(frame["method"] as? String == "chat.history")
+                    try await recorder.append(JSONSerialization.data(withJSONObject: params))
+                    let payload = #"""
+                    {
+                      "kind":"delta","deltaCursor":"tip-2",
+                      "messages":[{"sessionKey":"agent:main:main","messageId":"m2",
+                        "message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}],
+                      "sessionInfo":{"hasActiveRun":false}
+                    }
+                    """#
+                    socket
+                        .emitReceiveSuccess(
+                            .data(
+                                Data(
+                                    #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
+                                        .utf8)))
+                },
+                receiveHook: { socket, receiveIndex in
+                    if receiveIndex ==
+                        0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                    return .data(GatewayWebSocketTestSupport.connectOkData(
+                        id: socket.snapshotConnectRequestID() ?? "connect",
+                        methods: ["chat.history"]))
+                })
+        })
+        let gateway = GatewayNodeSession()
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://history-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: socketSession),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(
+                    id: $0.id,
+                    ok: true) })
+            let transport = IOSGatewayChatTransport(
+                gateway: gateway,
+                globalAgentId: "main")
+            let payload = try await transport.requestHistory(
+                sessionKey: "main",
+                cursor: "tip-1")
+            #expect(payload.kind == "delta")
+            #expect(payload.deltaCursor == "tip-2")
+            #expect(payload.messages?.count == 1)
+            let data = try #require(await recorder.snapshot().first)
+            let params = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(params["cursor"] as? String == "tip-1")
+            #expect(params["maxBytes"] as? Int == 256 * 1024)
+            #expect(params["limit"] == nil)
+            await gateway.disconnect()
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+    }
+}

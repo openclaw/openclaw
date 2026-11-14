@@ -6,7 +6,7 @@ export function openAIImageConfig(provider: Omit<ModelProviderConfig, "models">)
   return { models: { providers: { openai: { ...provider, models: [] } } } };
 }
 
-export function createOpenAIOAuthProfile(access = "codex-access", refresh = "codex-refresh") {
+function createOpenAIOAuthProfile(access = "codex-access", refresh = "codex-refresh") {
   return {
     type: "oauth" as const,
     provider: "openai",

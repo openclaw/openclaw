@@ -77,7 +77,7 @@ describe("gateway suspend coordinator", () => {
           resumeScheduling: resumeWhileClosed,
           inspect: { getQueueSize: () => Number(drain) },
         }),
-      ).toMatchObject({ status: drain ? "draining" : "ready" });
+      ).toMatchObject({ status: "ready" });
 
       markGatewayRestartDraining();
       expect(resumeWhileClosed).not.toHaveBeenCalled();
@@ -109,62 +109,31 @@ describe("gateway suspend coordinator", () => {
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 
-  it("holds a preserve-only drain until terminal persistence, delivery, and sessions settle", () => {
-    let pendingReplies = 1;
+  it("prepares restart after persistence settles while agent and process work continue", () => {
     let terminalPersistence = 1;
-    let terminalSessions = 1;
     const inspect = {
-      getPendingReplies: () => pendingReplies,
+      getAgentRuns: () => 1,
+      getBackgroundExecSessions: () => 1,
+      getPendingReplies: () => 1,
       getTerminalPersistence: () => terminalPersistence,
-      getTerminalSessions: () => terminalSessions,
     };
-
-    expect(
-      prepare({
-        terminalPolicy: "preserve",
-        drain: true,
-        inspect,
-        nowMs: () => 1_000,
-      }),
-    ).toEqual({
+    expect(prepare({ drain: true, inspect, nowMs: () => 1_000 })).toMatchObject({
       status: "draining",
-      suspensionId: LEASE,
-      expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
-      retryAfterMs: 5_000,
-      activeCount: 3,
+      activeCount: 4,
       writeCustody: [{ phase: "terminal-persistence", count: 1 }],
-      blockers: [
-        { kind: "reply", count: 1, message: "1 pending reply delivery operation(s)" },
-        {
-          kind: "terminal-persistence",
-          count: 1,
-          message: "1 pending terminal session write(s)",
-        },
-        { kind: "terminal-session", count: 1, message: "1 open terminal session(s)" },
-      ],
     });
-    expect(pauseScheduling).toHaveBeenCalledOnce();
-    expect(resumeScheduling).not.toHaveBeenCalled();
     expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
-    expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
     expect(tryBeginGatewayPreparedRestartRootWorkAdmission()).toBeNull();
 
     terminalPersistence = 0;
-    terminalSessions = 0;
-    expect(getGatewaySuspendStatus(LEASE)).toEqual({
-      status: "draining",
-      expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
-      retryAfterMs: 5_000,
-      activeCount: 1,
-      blockers: [{ kind: "reply", count: 1, message: "1 pending reply delivery operation(s)" }],
-      writeCustody: [],
-    });
-    expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
-
-    pendingReplies = 0;
     expect(getGatewaySuspendStatus(LEASE)).toEqual({
       status: "ready",
       expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
+      writeCustody: [],
+    });
+    expect(prepare({ drain: true, inspect, nowMs: () => 2_000 })).toMatchObject({
+      status: "ready",
+      activeCount: 3,
       writeCustody: [],
     });
     expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
@@ -178,13 +147,13 @@ describe("gateway suspend coordinator", () => {
   it.each(["preserve", "terminate"] as const)(
     "retains the absolute deadline of the same %s drain and rejects conflicting request, policy, or drain modes",
     (terminalPolicy) => {
-      let queued = 2;
+      let pending = 2;
       let nowMs = 1_000;
       const params = {
         terminalPolicy,
         drain: true,
         inspect: {
-          getQueueSize: () => queued,
+          getTerminalPersistence: () => pending,
           getTerminalSessions: () => (terminalPolicy === "terminate" ? 2 : 0),
         },
         nowMs: () => nowMs,
@@ -198,7 +167,7 @@ describe("gateway suspend coordinator", () => {
       });
 
       nowMs = 2_000;
-      queued = 1;
+      pending = 1;
       expect(prepare(params)).toMatchObject({
         status: "draining",
         suspensionId: LEASE,
@@ -219,7 +188,7 @@ describe("gateway suspend coordinator", () => {
       expect(pauseScheduling).toHaveBeenCalledOnce();
 
       nowMs = 3_000;
-      queued = 0;
+      pending = 0;
       expect(prepare(params)).toEqual({
         status: "ready",
         suspensionId: LEASE,
@@ -242,7 +211,7 @@ describe("gateway suspend coordinator", () => {
       prepare({
         drain: true,
         resumeScheduling: resumeWhileDraining,
-        inspect: { getTerminalSessions: () => 1 },
+        inspect: { getTerminalPersistence: () => 1 },
       }),
     ).toMatchObject({ status: "draining" });
 
@@ -355,7 +324,7 @@ describe("gateway suspend coordinator", () => {
             },
           },
         }),
-      ).toMatchObject({ status: drain ? "draining" : "ready", expiresAtMs });
+      ).toMatchObject({ status: "ready", expiresAtMs });
 
       vi.advanceTimersByTime(ttlMs - preparationMs - 1);
       expect(resumeScheduling).not.toHaveBeenCalled();
@@ -377,7 +346,7 @@ describe("gateway suspend coordinator", () => {
       const params = {
         drain: true,
         inspect: {
-          getQueueSize: vi
+          getTerminalPersistence: vi
             .fn()
             .mockReturnValueOnce(1)
             .mockImplementation(() => {
@@ -456,7 +425,7 @@ describe("external restart handoff", () => {
       nowMs: () => state.now,
       createSuspensionId: () => LEASE,
     };
-    expect(prepare(params).status).toBe(draining ? "draining" : "ready");
+    expect(prepare(params).status).toBe("ready");
     return {
       owner,
       state,

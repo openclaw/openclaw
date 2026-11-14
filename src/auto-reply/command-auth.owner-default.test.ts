@@ -9,6 +9,7 @@ import {
 } from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
+import { nativeGroupContext } from "./test-helpers/command-context-fixtures.js";
 
 installDiscordRegistryHooks();
 
@@ -23,14 +24,11 @@ const sender = (id: string, extra: Partial<MsgContext> = {}): MsgContext => ({
   SenderId: id,
   ...extra,
 });
-const telegramGroup: MsgContext = {
-  Provider: "telegram",
-  Surface: "telegram",
-  ChatType: "group",
-  From: "telegram:group:-100123",
-  SenderId: "200482621",
-  CommandSource: "native",
-};
+const telegramGroup: MsgContext = nativeGroupContext(
+  "telegram",
+  "telegram:group:-100123",
+  "200482621",
+);
 const nonOwner = { senderIsOwner: false, isAuthorizedSender: true };
 
 describe("senderIsOwner only reflects explicit owner authorization", () => {
