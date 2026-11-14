@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CDPSession, Page } from "playwright-core";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { isRetiredFetchInterceptionError } from "./cdp-fetch-interception.js";
@@ -563,18 +564,17 @@ function createTabFence(page: Page, session: CDPSession) {
     ready,
     notify,
     changed: () => stateChanged.promise,
-    /** Starts what only a claimed tab runs, once the last release is acknowledged. */
+    /**
+     * Waits for the last release's answer. A release that is never answered fails
+     * the wait instead of being started over.
+     */
+    untilReleased: async () => {
+      await raceWithTimeout(released, resolveBrowserNavigationTimeoutMs(), () => {
+        throw new Error("Browser navigation interception was not released in time");
+      });
+    },
+    /** Starts what only a claimed tab runs. */
     claim: async () => {
-      // A release that is never answered fails the claim instead of being started over.
-      const unanswered = createDeferred<never>();
-      const timer = setTimeout(() => {
-        unanswered.reject(new Error("Browser navigation interception was not released in time"));
-      }, resolveBrowserNavigationTimeoutMs());
-      try {
-        await Promise.race([released, unanswered.promise]);
-      } finally {
-        clearTimeout(timer);
-      }
       await Promise.all(
         [...states.keys()].map((target) =>
           target.send("Network.enable").catch((error: unknown) => {
@@ -751,8 +751,11 @@ export async function installNavigationAuthorityFence(
       clearTimeout(timer);
     }
   };
+  let started = false;
   try {
     await tab.ready;
+    await tab.untilReleased();
+    started = true;
     await tab.claim();
     while (initialization.size > 0) {
       await Promise.all(initialization);
@@ -760,7 +763,13 @@ export async function installNavigationAuthorityFence(
     assertTargetCurrent();
   } catch (error) {
     fail(error);
-    await dispose();
+    if (started) {
+      await dispose();
+    } else {
+      // Nothing of this invocation started, so it only gives up its claim.
+      invocations.delete(invocation);
+      notify();
+    }
     throw error;
   }
   return dispose;
