@@ -1,15 +1,12 @@
 import SwiftUI
-#if os(iOS)
-import UIKit
-#endif
 
-/// Reader navigation releases following; keyboard avoidance alone keeps the live-edge pin.
-func chatReaderScrollReleasesFollow(_ phase: ScrollPhase, keyboardTransition: Bool = false) -> Bool {
+/// The view's own one-shot positioning always runs in a nil-animation transaction, so
+/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
+/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
+func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
     switch phase {
-    case .interacting:
+    case .interacting, .animating:
         true
-    case .animating:
-        !keyboardTransition
     case .idle, .tracking, .decelerating:
         false
     @unknown default:
@@ -31,24 +28,15 @@ final class ChatScrollFollowState {
     var isAtLiveEdge = true
     var isUserScrolling = false
     var hasNewerContentBelow = false
-    #if os(iOS)
-    @ObservationIgnored weak var transcriptScroller: UIScrollView?
-    var isKeyboardTransitioning = false
-    let readerAnchor = ChatReaderRunAnchor()
-    #endif
 }
 
 struct ChatScrollFollowAnchorModifier: ViewModifier {
     let scroll: ChatScrollFollowState
 
     func body(content: Content) -> some View {
-        #if os(iOS)
-        content
-        #else
         content.defaultScrollAnchor(
             self.scroll.followTarget == .latest && !self.scroll.isUserScrolling ? .bottom : nil,
             for: .sizeChanges)
-        #endif
     }
 }
 
@@ -110,10 +98,6 @@ struct ChatScrollCommandModifier: ViewModifier {
     let currentSessionTarget: @MainActor () -> OpenClawChatSessionTarget
 
     func body(content: Content) -> some View {
-        self.proxyContent(content)
-    }
-
-    private func proxyContent(_ content: Content) -> some View {
         ScrollViewReader { proxy in
             content.onChange(of: self.command.pending) { _, request in
                 guard let request else { return }

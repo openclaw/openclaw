@@ -610,7 +610,7 @@ extension OpenClawChatViewModel {
         let decoded = chat.message.flatMap {
             try? GatewayPayloadDecoding.decode($0, as: OpenClawChatMessage.self)
         }
-        var message = if let decoded,
+        let message = if let decoded,
                          Self.isAssistantMessage(decoded)
         {
             Self.messageWithTimestampIfNeeded(decoded)
@@ -634,23 +634,13 @@ extension OpenClawChatViewModel {
             return
         }
 
-        if let index = canonicalFinalMessageIndex(message, scope: scope) {
+        if hasCanonicalFinalMessageMatching(message, scope: scope) {
             if let runId {
-                // Correlate only after the canonical match, preserving its durable row identity.
-                // The final row must share the live run's reader anchor regardless of arrival order.
-                if self.messages[index].workRunID == nil {
-                    var updated = self.messages
-                    updated[index].transcriptRunID = runId
-                    replaceMessages(updated)
-                }
                 self.runMessageScopesByRunID.removeValue(forKey: runId)
             }
             return
         }
 
-        // Only the provisional row joins its live run (reader anchor and grouping). Stamping before
-        // the canonical checks made a run-less canonical session message look foreign: duplicate reply.
-        if message.workRunID == nil { message.transcriptRunID = runId }
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [message])
         replaceMessages(Self.dedupeMessages(reconciled))
         if self.messages.contains(where: { $0.id == message.id }) {
@@ -775,7 +765,7 @@ extension OpenClawChatViewModel {
             if let text = evt.data["text"]?.value as? String {
                 self.liveRunStateByRunID[evt.runId, default: ChatLiveRunState()].hasAgentAssistantText = true
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
-                self.updateStreamingAssistantText(text, runID: evt.runId)
+                self.updateStreamingAssistantText(text)
             }
         case "plan":
             // Released Gateways through v2026.8.x lack progressCard.get and only emit stream:"plan".

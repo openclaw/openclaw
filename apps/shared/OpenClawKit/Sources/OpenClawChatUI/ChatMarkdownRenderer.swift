@@ -107,33 +107,10 @@ struct ChatMarkdownRenderer: View {
             relativeTo: inlineMath.relativeTo)
     }
 
-    #if os(iOS)
-    @Environment(\.openClawReaderAnchor) private var readerAnchor
-    #endif
-
-    /// Block position distinguishes repeated prefixes; the prefix tolerates live/final whitespace changes.
-    static func readerBlockKey(_ block: ChatMarkdownRenderedBlock, index: Int) -> String? {
-        let prose: ChatMarkdownProse
-        switch block {
-        case let .prose(value): prose = value
-        case let .heading(_, value): prose = value
-        default: return nil
-        }
-        let key = String(String(prose.attributed.characters).filter { !$0.isWhitespace }.prefix(48))
-        return key.isEmpty ? nil : "\(index):\(key)"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(self.snapshot.blocks.enumerated()), id: \.offset) { entry in
                 self.blockView(entry.element, index: entry.offset)
-                    #if os(iOS)
-                        .chatReaderBlockAnchor(
-                            self.readerAnchor,
-                            key: self.readerAnchor == nil ? nil : Self.readerBlockKey(
-                                entry.element,
-                                index: entry.offset))
-                    #endif
             }
 
             if !self.snapshot.images.isEmpty {
@@ -193,8 +170,7 @@ struct ChatMarkdownRenderer: View {
             context: self.context,
             variant: self.variant,
             typography: self.typography,
-            textColor: self.textColor,
-            isStreaming: !self.snapshot.isComplete)
+            textColor: self.textColor)
     }
 
     private func proseText(_ prose: ChatMarkdownProse, index: Int) -> SwiftUI.Text {
@@ -224,10 +200,8 @@ struct ChatMarkdownProseReveal {
 struct ChatMarkdownRenderSnapshot {
     let blocks: [ChatMarkdownRenderedBlock]
     let images: [ChatMarkdownPreprocessor.InlineImage]
-    let isComplete: Bool
 
     init(text: String, isComplete: Bool, preparesReveal: Bool = false) {
-        self.isComplete = isComplete
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
         let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
@@ -254,7 +228,6 @@ struct ChatMarkdownRenderSnapshot {
     init(blocks: [ChatMarkdownRenderedBlock], images: [ChatMarkdownPreprocessor.InlineImage] = []) {
         self.blocks = blocks
         self.images = images
-        self.isComplete = true
     }
 
     private static func renderedBlock(
@@ -378,9 +351,6 @@ private struct ChatMarkdownDisclosureView: View {
                     self.disclosure.summary.inlineAccessibilityText
                         ?? String(self.disclosure.summary.attributed.characters))
         }
-        #if os(iOS)
-        .disclosureGroupStyle(ChatInlineDisclosureStyle())
-        #endif
         .tint(self.context == .user ? self.textColor : OpenClawChatTheme.accent)
     }
 }

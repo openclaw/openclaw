@@ -32,12 +32,12 @@ extension OpenClawChatViewModel {
     static func decodeHistoryDelta(_ payload: OpenClawChatHistoryPayload) async -> [OpenClawChatMessage]? {
         guard ChatPayloadDecoding.trimmedNonEmptyString(payload.deltaCursor) != nil,
               let envelopes = payload.messages,
-              let messages = await Self.decodeHistoryRows(envelopes, isDelta: true) else { return nil }
+              let messages = await decodeHistoryRows(envelopes, isDelta: true) else { return nil }
         return Self.prepareHistoryMessages(messages, activity: payload.activity)
     }
 
-    // Only the value decoder leaves MainActor. Ingestion, sanitization and reconciliation
-    // keep their existing actor; callers recheck admission after this structured suspension.
+    /// Only the value decoder leaves MainActor. Ingestion, sanitization and reconciliation
+    /// keep their existing actor; callers recheck admission after this structured suspension.
     @concurrent
     private nonisolated static func decodeHistoryRows(
         _ raw: [AnyCodable],
@@ -358,22 +358,22 @@ extension OpenClawChatViewModel {
         return start..<end
     }
 
-    func canonicalFinalMessageIndex(
+    func hasCanonicalFinalMessageMatching(
         _ message: OpenClawChatMessage,
-        scope: RunMessageScope) -> Int?
+        scope: RunMessageScope) -> Bool
     {
-        guard let key = Self.finalMessageReconciliationKey(for: message) else { return nil }
-        guard self.isCurrentSession(scope.session) else { return nil }
+        guard let key = Self.finalMessageReconciliationKey(for: message) else { return false }
+        guard self.isCurrentSession(scope.session) else { return false }
         if let runId = Self.finalMessageRunID(for: message) {
-            return self.messages.firstIndex { existing in
+            return self.messages.contains { existing in
                 self.provisionalFinalMessagesByID[existing.id] == nil &&
                     Self.finalMessageRunID(for: existing) == runId
             }
         }
         let searchRange = Self.messageRange(after: scope.latestUserTurn, in: self.messages)
-        guard !searchRange.isEmpty else { return nil }
+        guard !searchRange.isEmpty else { return false }
 
-        return self.messages[searchRange].firstIndex { existing in
+        return self.messages[searchRange].contains { existing in
             self.provisionalFinalMessagesByID[existing.id] == nil &&
                 ChatPayloadDecoding.trimmedNonEmptyString(existing.transcriptRunID) == nil &&
                 Self.finalMessageReconciliationKey(for: existing) == key
