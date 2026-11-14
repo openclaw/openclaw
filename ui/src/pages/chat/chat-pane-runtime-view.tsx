@@ -65,7 +65,6 @@ const ChatProviderReviewHost = lazy(() => import("./chat-provider-review-control
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
   for (const owner of [
-    runtime.tasks,
     runtime.publication,
     runtime.repository,
     runtime.headerPresentation,

@@ -162,31 +162,7 @@ const catalog = {
         "Transferring the update to this device: {transferred} of {total} ({percent}%). The next reply starts when it finishes.",
       installingBody: "Installing the update on this device.",
     },
-    taskSuggestions: {
-      eyebrow: "Suggested task · in {repo}",
-      startSession: "Start in a new session",
-      startOptions: "Choose where to start the task",
-      startWorktree: "Start in a new worktree",
-      chooseRepository: "Choose repository",
-      repositoryFolder: "Repository folder",
-      chooseRepositoryHelp:
-        "Choose a Git repository with a commit. Your task will start in a new worktree; its instructions are preserved.",
-      startCurrentSession: "Start in this session",
-      copyPrompt: "Copy prompt",
-      copyPromptFailed: registerChatSessionEnglish.catalog.chat.taskSuggestions.copyPromptFailed,
-      promptCopied: "Copied",
-      showInstructions: "Show instructions",
-      hideInstructions: "Hide instructions",
-      previous: "Previous suggested task",
-      next: "Next suggested task",
-      starting: "Starting…",
-      dismiss: "Dismiss {title}",
-      started: "Task started",
-      startUnconfirmed: registerChatSessionEnglish.catalog.chat.taskSuggestions.startUnconfirmed,
-      adminRequired: registerChatSessionEnglish.catalog.chat.taskSuggestions.adminRequired,
-      reconnectRequired: registerChatSessionEnglish.catalog.chat.taskSuggestions.reconnectRequired,
-      unavailable: registerChatSessionEnglish.catalog.chat.taskSuggestions.unavailable,
-    },
+
     skillLearned: {
       label: "Learned",
       created: "Created",
@@ -478,7 +454,6 @@ export const registerChatSessionOptionalEnglish = Object.assign(
     Object.assign(en.chat.providerPolicy, catalog.chat.providerPolicy);
     Object.assign(en.chat.diskSpace, catalog.chat.diskSpace);
     Object.assign(en.chat.workerRuntimeInstall, catalog.chat.workerRuntimeInstall);
-    Object.assign(en.chat.taskSuggestions, catalog.chat.taskSuggestions);
     Object.assign(en.chat.skillLearned, catalog.chat.skillLearned);
     Object.assign(en.chat.youtube, catalog.chat.youtube);
     Object.assign(en.chat.rail, catalog.chat.rail);

@@ -236,7 +236,6 @@ suite.define(() => {
           "cron.list",
           "cron.status",
           "talk.catalog",
-          "taskSuggestions.list",
           "mcp.app.discover",
           "models.authStatus",
           "config.get",
