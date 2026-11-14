@@ -369,9 +369,16 @@ it.each(["direct", "lifecycle", "agent", "summary"])("shares %s envelopes", asyn
         }
         return stringify(...args);
       });
+      const utf8 = vi.spyOn(Buffer, "from");
+      let sessionEncodings: string[] = [];
       try {
         await publish(peers.map((peer) => peer.client.connId));
       } finally {
+        sessionEncodings = utf8.mock.calls.flatMap(([value]) => {
+          const offset = typeof value === "string" ? value.indexOf('"session":') : -1;
+          return typeof value === "string" && offset >= 0 ? [value.slice(offset)] : [];
+        });
+        utf8.mockRestore();
         globalThis.Map = MapConstructor;
         encoding.mockRestore();
         enumerating.mockRestore();
@@ -450,6 +457,10 @@ it.each(["direct", "lifecycle", "agent", "summary"])("shares %s envelopes", asyn
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
+      // Capability variants of one delivery must reuse its session UTF-8 bytes.
+      expect(sessionEncodings.length).toBeGreaterThan(0);
+      // Two authorities, each with two delta histories and one legacy delivery.
+      expect(sessionEncodings).toHaveLength(6);
       // Empty ancestor fields are constant across divergent connection histories.
       expect(ancestorFieldEncodings).toBe(0);
     } finally {
