@@ -287,7 +287,7 @@ function billingRouteInputs(cfg: OpenClawConfig) {
  * login) the committed write moved. Advisory: the write already succeeded, so a comparison
  * failure is logged and never fails the response.
  */
-async function collectConfigWriteBillingRouteWarnings(params: {
+export async function collectConfigWriteBillingRouteWarnings(params: {
   before: OpenClawConfig | undefined;
   after: OpenClawConfig;
   context?: GatewayRequestContext;

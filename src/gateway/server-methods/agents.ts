@@ -80,6 +80,8 @@ import {
   startAgentOnboardingConversation,
   type PreparedAgentOnboarding,
 } from "./agents-onboarding.js";
+import { collectConfigWriteBillingRouteWarnings } from "./config-write-flow.js";
+import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -479,6 +481,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
     const nextConfig = configured ? applyAgentConfig(cfg, agentConfigUpdate) : cfg;
     const application = createAgentConfigApplication(respond);
+    let billingRouteWarnings: string[];
 
     try {
       let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
@@ -544,10 +547,15 @@ export const agentsHandlers: GatewayRequestHandlers = {
         assertWorkspaceAccessCurrent();
       }
 
-      await updateAgentConfigEntry(
+      const write = await updateAgentConfigEntry(
         { ...agentConfigUpdate, assertCurrent: assertUploadAllowed },
         application.attach({}),
       );
+      billingRouteWarnings = await collectConfigWriteBillingRouteWarnings({
+        before: write.snapshot.sourceConfig,
+        after: write.nextConfig,
+        context,
+      });
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         respond(false, undefined, error.error);
@@ -568,7 +576,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     if (await application.confirm()) {
-      respond(true, { ok: true, agentId }, undefined);
+      replyWithBillingRouteWarnings(respond, billingRouteWarnings, context)(
+        true,
+        { ok: true, agentId },
+        undefined,
+      );
     }
   },
   "agents.delete": async ({ params, respond, context }) => {

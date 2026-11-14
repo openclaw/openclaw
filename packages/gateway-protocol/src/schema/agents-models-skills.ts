@@ -133,6 +133,7 @@ export const AgentsUpdateParamsSchema = closedObject({
 export const AgentsUpdateResultSchema = closedObject({
   ok: Type.Literal(true),
   agentId: NonEmptyString,
+  billingRouteWarnings: Type.Optional(Type.Array(Type.String())),
 });
 
 /** Deletes an agent and optionally its workspace/config files. */

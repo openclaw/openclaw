@@ -8,7 +8,11 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { mutateConfigFileWithRetry, transformConfigFileWithRetry } from "../../config/config.js";
+import {
+  type ConfigMutationResult,
+  mutateConfigFileWithRetry,
+  transformConfigFileWithRetry,
+} from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
 import { copyRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
@@ -92,7 +96,7 @@ export function createAgentConfigEntry(
 export async function updateAgentConfigEntry(
   params: AgentConfigUpdate & { assertCurrent?: () => void },
   writeOptions?: ConfigWriteOptions,
-): Promise<void> {
+): Promise<ConfigMutationResult<void>> {
   const selectionModules = params.agentRuntime
     ? await Promise.all([
         import("../../agents/model-runtime-choice.js"),
@@ -101,7 +105,7 @@ export async function updateAgentConfigEntry(
       ])
     : undefined;
   let validateSelection: (() => string | undefined) | undefined;
-  await mutateConfigFileWithRetry({
+  return await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
     // Identity replacement may intentionally reduce the configuration size.
     writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
