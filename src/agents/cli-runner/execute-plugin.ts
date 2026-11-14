@@ -602,12 +602,12 @@ export async function executePluginOwnedProcess(params: {
                 assertCurrent();
                 return runAgentHarnessBeforeAgentFinalizeHook({
                   event: {
+                    ...stop,
                     runId: run.runId,
                     sessionId: run.sessionId,
                     ...(run.sessionKey ? { sessionKey: run.sessionKey } : {}),
                     provider: run.provider,
                     model: params.context.modelId,
-                    ...stop,
                   },
                   ctx: {
                     ...(run.agentId ? { agentId: run.agentId } : {}),

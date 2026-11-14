@@ -32,18 +32,13 @@ export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
   assertPrivateInputCurrent?: () => void;
   prepareCredentialUse?: () => Promise<void>;
   /** Present when a plugin registers before_agent_finalize; native Stop asks it to settle. */
-  runBeforeAgentFinalize?: (stop: ClaudeCliFinalizeStop) => Promise<ClaudeCliFinalizeDecision>;
+  runBeforeAgentFinalize?: (stop: {
+    stopHookActive: boolean;
+    lastAssistantMessage?: string;
+    transcriptPath?: string;
+    cwd?: string;
+  }) => Promise<{ action: "continue" | "finalize" } | { action: "revise"; reason: string }>;
 };
-export type ClaudeCliFinalizeStop = {
-  stopHookActive: boolean;
-  lastAssistantMessage?: string;
-  transcriptPath?: string;
-  cwd?: string;
-};
-export type ClaudeCliFinalizeDecision =
-  | { action: "continue" }
-  | { action: "revise"; reason: string }
-  | { action: "finalize"; reason?: string };
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
   controller: AbortController;
@@ -237,7 +232,7 @@ async function handleRequest(
         : {}),
       ...(typeof input.transcript_path === "string" ? { transcriptPath: input.transcript_path } : {}),
       ...(typeof input.cwd === "string" ? { cwd: input.cwd } : {}),
-    }).catch(() => ({ action: "continue" as const }));
+    });
     if (decision.action !== "revise") {
       return {};
     }
