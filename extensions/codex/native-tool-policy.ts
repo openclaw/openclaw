@@ -32,7 +32,7 @@ export function deniesCodexNativeDelegation(
   return safeDeniedTools?.some((name) => CODEX_NATIVE_DELEGATION_DENY_SET.has(name)) === true;
 }
 
-// Audited against @openai/codex 0.160.0. These exact denies
+// Audited against @openai/codex 0.164.0. These exact denies
 // either have no Codex-native equivalent or are enforced by the harness. Keep
 // the list positive and conservative: an omitted tool isolates the native surface.
 export const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
@@ -40,6 +40,16 @@ export const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "x_search",
   "memory_search",
   "memory_get",
+  // These OpenClaw memory stores/vaults have no Codex-native counterpart.
+  "intent",
+  "memory_forget",
+  "memory_recall",
+  "memory_store",
+  "wiki_apply",
+  "wiki_get",
+  "wiki_lint",
+  "wiki_search",
+  "wiki_status",
   "dashboard",
   "canvas",
   "show_widget",

@@ -1,0 +1,2 @@
+# Regression for generic audited plugin-tool denies: native apps stay enabled while the denied callback stays blocked; undeclared/unaudited tools, wildcard, finite allowlist, mixed unsafe policy, and agent scope retain enforcement.
+93

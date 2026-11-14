@@ -41,6 +41,7 @@ import { AgentHarnessPreflightError } from "./errors.js";
 import {
   collectHarnessSafeDeniedToolNames,
   policyDeniesAllTools,
+  resolveHarnessSafeDenies,
   toolPolicyRestrictsHarnessNativeTools,
   type PluginHarnessToolPolicy,
 } from "./native-tool-deny-policy.js";
@@ -383,11 +384,12 @@ type PluginHarnessToolPolicyContext = Pick<
   | "toolsAllow"
   | "disableTools"
   | "swarmCollector"
-> & {
-  sessionId?: string;
-  preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
-  preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
-};
+> &
+  Partial<Pick<EmbeddedRunAttemptParams, "workspaceDir" | "preparedModelRuntime">> & {
+    sessionId?: string;
+    preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
+    preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
+  };
 
 export type ResolvedPluginHarnessToolPolicies = {
   webSearchPolicy?: EmbeddedRunAttemptParams["preparedWebSearchPolicy"];
@@ -628,9 +630,7 @@ export function resolvePluginHarnessToolPolicies(
     policy.runtimeToolPolicyForInheritance,
     requestedToolPolicy,
   ];
-  const safeDenyToolNameSet = safeDenyToolNames
-    ? new Set(safeDenyToolNames.map(normalizeToolPolicyName))
-    : undefined;
+  const safeDenyToolNameSet = resolveHarnessSafeDenies(explicitPolicies, safeDenyToolNames, params);
   const profilePolicies = [
     mergeAlsoAllowPolicy(policy.profilePolicy, policy.profileAlsoAllow),
     mergeAlsoAllowPolicy(policy.providerProfilePolicy, policy.providerProfileAlsoAllow),
