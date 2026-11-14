@@ -17,10 +17,12 @@ import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 
 let parser: typeof import("acorn") | undefined;
 
-// Keep package-map helpers light and the lazy dependency visible to the bundler.
+// Package captures and URL/package-map helpers do not parse source. Load the ESM
+// entry on demand so other host Acorn imports retain the same module identity.
 function parse(...args: Parameters<typeof import("acorn").parse>): Program {
   if (!parser) {
-    const loaded: typeof import("acorn") = createRequire(import.meta.url)("acorn");
+    const entry = moduleResolve("acorn", new URL(import.meta.url), new Set(["node", "import"]));
+    const loaded: typeof import("acorn") = createRequire(import.meta.url)(fileURLToPath(entry));
     parser = loaded;
   }
   return parser.parse(...args);
