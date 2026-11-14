@@ -12,12 +12,9 @@ import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { UPDATE_GIT_RETRY_DELAYS_MS, withGitNetworkRetry } from "../../infra/git-network-retry.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import {
-  resolveOpenClawInstallationRootSync,
-  resolveOpenClawPackageRoot,
-} from "../../infra/openclaw-root.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
-import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
@@ -234,8 +231,7 @@ export async function resolveUpdateRoot(context?: { root: string }): Promise<str
     process.cwd();
   // Node starts a release by its real path. Update the release link, never the
   // release behind it; other links and plain directories keep the root found above.
-  const installation = resolveOpenClawInstallationRootSync(root, process.argv[1]);
-  return installation !== root && readPackageReleaseSlotSync(installation) ? installation : root;
+  return resolvePackageReleaseSlotForRootSync(root) ?? root;
 }
 
 export async function runUpdateStep(

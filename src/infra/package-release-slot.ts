@@ -11,7 +11,6 @@ import {
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
-import type { PackageReleaseTarget } from "./package-update-swap-contract.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import {
   resolveExpectedInstalledVersionFromSpec,
@@ -27,6 +26,9 @@ export type PackageReleaseIdentity = {
   version: string | null;
   build: string | null;
 };
+
+/** The package link (or a plain directory to adopt) on an OpenClaw-owned prefix. */
+export type PackageReleaseTarget = { slot: string; prefix: string };
 
 /** The update run's record of a switch: advice for the next run, always rechecked. */
 export type PackageReleaseRecord = {

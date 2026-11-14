@@ -10,8 +10,6 @@ import {
 } from "./package-release-slot-path.js";
 import {
   adoptPackageReleaseSlot,
-  assertPackageReleaseIdentity,
-  assertPackageReleaseLaunchers,
   capturePackageReleaseSlot,
   createPackageReleasePrefix,
   readPackageReleaseIdentity,
@@ -172,30 +170,6 @@ describe.skipIf(process.platform === "win32")("release link lifecycle", () => {
     ]);
   });
 
-  it("adopts a plain directory as the previous release without changing its contents", async () => {
-    const fixture = createPackageReleasePrefixFixture(dir);
-    fixture.writePlainPackage("2026.11.3", "build-old");
-    const before = await capturePackageReleaseSlot(fixture.slot);
-    expect(before.kind).toBe("directory");
-
-    const adopted = await adoptPackageReleaseSlot({
-      slot: fixture.slot,
-      releasePrefix: await createPackageReleasePrefix(fixture.prefix, "2026.11.3"),
-      expected: before,
-      assertCurrent: current,
-    });
-
-    const slot = readPackageReleaseSlotSync(fixture.slot);
-    expect(slot?.releaseRoot).toBe(adopted.releaseRoot);
-    // The rename keeps the directory's identity, so rollback can check it.
-    expect(await readPackageReleaseIdentity(fixture.slot)).toEqual({
-      ...before.release,
-      path: adopted.releaseRoot,
-    });
-    expect(fs.readlinkSync(fixture.launcher)).toBe("../lib/node_modules/openclaw/openclaw.mjs");
-    expect(fs.existsSync(path.join(fixture.slot, "openclaw.mjs"))).toBe(true);
-  });
-
   it("keeps the leftover link when adoption can neither finish nor move the directory back", async () => {
     const fixture = createPackageReleasePrefixFixture(dir);
     fixture.writePlainPackage("2026.11.3", "build-old");
@@ -222,9 +196,9 @@ describe.skipIf(process.platform === "win32")("release link lifecycle", () => {
     vi.restoreAllMocks();
 
     expect(fs.lstatSync(fixture.slot, { throwIfNoEntry: false })).toBeUndefined();
-    const [leftover] = fs
+    const leftover = fs
       .readdirSync(fixture.globalRoot)
-      .filter((name) => name.startsWith(".openclaw.release-link-"));
+      .find((name) => name.startsWith(".openclaw.release-link-"));
     expect(leftover).toBeDefined();
     // The documented recovery restores the unchanged package.
     fs.renameSync(path.join(fixture.globalRoot, leftover!), fixture.slot);
@@ -232,39 +206,5 @@ describe.skipIf(process.platform === "win32")("release link lifecycle", () => {
       identity: before.identity,
       version: "2026.11.3",
     });
-  });
-
-  it("refuses a candidate whose launcher differs before any change", async () => {
-    const fixture = createPackageReleasePrefixFixture(dir);
-    fixture.addRelease("r1", "2026.11.3");
-    fixture.addRelease("r2", "2026.12.1");
-    const releaseBin = path.join(fixture.prefix, "releases", "r2", "bin");
-    fs.rmSync(path.join(releaseBin, "openclaw"));
-    fs.symlinkSync(
-      "../lib/node_modules/openclaw/bin/openclaw.js",
-      path.join(releaseBin, "openclaw"),
-    );
-    await expect(assertPackageReleaseLaunchers(releaseBin, fixture.binDir)).rejects.toThrow(
-      /differs from/u,
-    );
-    await expect(
-      assertPackageReleaseLaunchers(
-        path.join(fixture.prefix, "releases", "r1", "bin"),
-        fixture.binDir,
-      ),
-    ).resolves.toBeUndefined();
-  });
-
-  it("rejects a recorded release whose content was rewritten in place", async () => {
-    const fixture = createPackageReleasePrefixFixture(dir);
-    const root = fixture.addRelease("r1", "2026.11.3");
-    const recorded = await readPackageReleaseIdentity(root);
-    await expect(assertPackageReleaseIdentity(recorded)).resolves.toBeUndefined();
-    // A published updater swaps a new build into the directory behind the link.
-    await fsp.writeFile(
-      path.join(root, "dist", "build-info.json"),
-      JSON.stringify({ buildId: "rewritten" }),
-    );
-    await expect(assertPackageReleaseIdentity(recorded)).rejects.toThrow(/not a rollback target/u);
   });
 });

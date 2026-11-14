@@ -1,5 +1,5 @@
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
-import type { PackageReleaseRecord } from "./package-release-slot.js";
+import type { PackageReleaseRecord, PackageReleaseTarget } from "./package-release-slot.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackagePostInstallVerifier } from "./package-update-verification-step.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
@@ -53,9 +53,6 @@ export type StagedPackageInstall = {
   /** Set when the stage is a release behind the package link of this prefix. */
   release?: PackageReleaseTarget;
 };
-
-/** The package link (or a plain directory to adopt) on an OpenClaw-owned prefix. */
-export type PackageReleaseTarget = { slot: string; prefix: string };
 
 export type StagedPackageSwapParams = {
   stage: StagedPackageInstall;

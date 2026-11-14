@@ -105,17 +105,16 @@ export async function inspectNpmGlobalDestination(
       (packageRootReal !== null &&
         launcherTarget !== null &&
         isPathStrictlyInside(packageRootReal, launcherTarget));
-    const layout = await summarizeGatewayServiceLayout(command);
     // A service started by a release's real path would keep running that release
     // after the link moves. Published updaters write such paths when run through
     // the link; refuse before any change and name the rebinding step.
-    const releaseSlot = readPackageReleaseSlotSync(packageRoot);
+    const releaseSlot =
+      ownsPackage && ownsLauncher ? readPackageReleaseSlotSync(packageRoot) : null;
+    const releaseLayout = releaseSlot ? await summarizeGatewayServiceLayout(command) : undefined;
     if (
-      ownsPackage &&
-      ownsLauncher &&
       releaseSlot &&
-      layout?.entrypoint &&
-      isPathStrictlyInside(releaseSlot.releaseRoot, path.resolve(layout.entrypoint))
+      releaseLayout?.entrypoint &&
+      isPathStrictlyInside(releaseSlot.releaseRoot, path.resolve(releaseLayout.entrypoint))
     ) {
       const rebind = formatCliCommand("openclaw gateway install --force").replace(
         /^openclaw\b/,
@@ -124,7 +123,7 @@ export async function inspectNpmGlobalDestination(
       return {
         kind: "foreign" as const,
         ...destinationRefusal(
-          `The Gateway service ${layout.sourcePath ?? ""} starts ${layout.entrypoint}, a path inside the release ${releaseSlot.releaseRoot} instead of the package path ${packageRoot}; switching releases would leave it running the old one. No installation was attempted. Run \`${rebind}\` to bind the service to the package path, then rerun the update.`,
+          `The Gateway service ${releaseLayout.sourcePath ?? ""} starts ${releaseLayout.entrypoint}, a path inside the release ${releaseSlot.releaseRoot} instead of the package path ${packageRoot}; switching releases would leave it running the old one. No installation was attempted. Run \`${rebind}\` to bind the service to the package path, then rerun the update.`,
           { ...destination, ownership: "foreign", cause: "package-mismatch" },
         ),
       };
@@ -132,6 +131,7 @@ export async function inspectNpmGlobalDestination(
     if (ownsPackage && ownsLauncher) {
       return { kind: "owned" as const, interruptedLink };
     }
+    const layout = await summarizeGatewayServiceLayout(command);
     const wrapper = [
       process.env,
       command?.environment,

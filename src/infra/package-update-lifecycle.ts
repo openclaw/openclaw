@@ -8,9 +8,9 @@ import {
   PackageLifecycleOwnershipError,
   type PackageLifecycleScript,
 } from "./package-lifecycle.js";
-import { createPackageReleasePrefix } from "./package-release-slot.js";
+import { createPackageReleasePrefix, type PackageReleaseTarget } from "./package-release-slot.js";
 import { classifyPackageUpdatePermissionFailure } from "./package-update-manager-preflight.js";
-import type { PackageReleaseTarget, StagedPackageInstall } from "./package-update-swap-contract.js";
+import type { StagedPackageInstall } from "./package-update-swap-contract.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
