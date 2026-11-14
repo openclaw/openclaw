@@ -262,6 +262,21 @@ it("retains an entry when its newest file cannot be established within the scan 
   expect(await fs.readFile(file, "utf8")).toBe("proof");
 });
 
+it("keeps scanning when a pending candidate vanished between maintenance passes", async () => {
+  const f = await fixture();
+  const proof = await f.file(".openclaw/tmp/a/proof");
+  // A budget-exhausted pass retains its pending candidate; the scratch owner
+  // may remove it before the next pass, which must not abandon the remaining
+  // top-level scan or silently reset the directory cursor.
+  f.cursor.root = f.root;
+  f.cursor.kind = "checkout";
+  f.cursor.pending = path.join(".openclaw/tmp", "gone");
+  const result = await f.run();
+  expect(result.errors).toEqual([]);
+  expect(result.entriesRemoved).toBe(1);
+  await expect(fs.stat(proof)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it("resumes beyond 4096 names without restarting the prefix or deleting outside scratch", async () => {
   const f = await fixture();
   const directory = path.join(f.root, ".openclaw/tmp");
