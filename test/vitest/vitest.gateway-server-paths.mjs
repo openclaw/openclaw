@@ -76,6 +76,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-pr-workspace-acquisition.test.ts",
   "src/gateway/github-pr-workspace-preparation.test.ts",
   "src/gateway/github-pr-workspace-refresh.test.ts",
+  "src/gateway/github-publication-actions.test.ts",
   "src/gateway/github-publication-admission.test.ts",
   "src/gateway/github-publication-attribution.test.ts",
   "src/gateway/github-publication-availability.worker.test.ts",
@@ -167,6 +168,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-run-authority.principal.test.ts",
   "src/gateway/operator-run-authority.reconnect.test.ts",
   "src/gateway/operator-run-authority.worker.test.ts",
+  "src/gateway/operator-run-recovery.access-policy.test.ts",
   "src/gateway/operator-run-recovery.channel.test.ts",
   "src/gateway/operator-run-recovery.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
@@ -292,6 +294,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-restart-resume.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",
+  "src/gateway/session-row-projection.accepted-facts.test.ts",
   "src/gateway/session-row-projection.actor.test.ts",
   "src/gateway/session-row-projection.foreground.test.ts",
   "src/gateway/session-row-projection.invalidation.test.ts",
@@ -704,7 +707,7 @@ export const gatewayCoreTestExclude = [
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-export const gatewayServerExcludedTestFiles = ["src/gateway/gateway.test.ts"];
+export const gatewayServerExcludedTestFiles = [];
 
 const gatewayServerBackedHttpTestFileSet = new Set(gatewayServerBackedHttpTestFiles);
 const gatewayServerExcludedTestFileSet = new Set(gatewayServerExcludedTestFiles);
