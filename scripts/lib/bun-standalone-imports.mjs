@@ -264,7 +264,8 @@ export function rewriteStandaloneImports({
     }
     if (
       node.type === "CallExpression" &&
-      (requireFactories.has(node.callee?.name) ||
+      ((requireFactories.has(node.callee?.name) &&
+        (bindings ??= createStandaloneLexicalBindings(ast)).isModuleBinding(node.callee)) ||
         (node.callee?.type === "MemberExpression" &&
           node.callee.property?.name === "createRequire" &&
           node.callee.object?.type === "CallExpression" &&

@@ -43,6 +43,31 @@ function rewrite(
 }
 
 describe("standalone import relocation", () => {
+  it.each([
+    "((e) => e(0))((value) => value + 1)",
+    "(({ run: e }) => e(0))({ run: (value) => value + 1 })",
+    "(() => { const e = (value) => value + 1; return e(0); })()",
+    "(() => { { let e = (value) => value + 1; return e(0); } })()",
+    "(() => { try { throw (value) => value + 1; } catch (e) { return e(0); } })()",
+    "(() => { for (const e of [(value) => value + 1]) return e(0); })()",
+    "(function e(value) { return value === 0 ? 1 : e(0); })(2)",
+  ])("preserves a callback shadowing an imported require factory: %s", (expression) => {
+    const source = `import { createRequire as e } from "node:module";\n[e("/owner.mjs"), ${expression}];`;
+    const contents = rewrite(source);
+    const calls: string[] = [];
+    const factory = (owner: string) => owner;
+    const result = vm.runInNewContext(contents.slice(contents.indexOf("\n") + 1), {
+      e: factory,
+      __openclawStandaloneCreateRequire: (create: typeof factory, owner: string) => {
+        expect(create).toBe(factory);
+        calls.push(owner);
+        return create(owner);
+      },
+    });
+    expect(result).toEqual(["/owner.mjs", 1]);
+    expect(calls).toEqual(["/owner.mjs"]);
+  });
+
   it("relocates free CommonJS paths while preserving local bindings and property names", () => {
     const source = `[
       { __dirname, __filename },
