@@ -210,12 +210,14 @@ it("recovers an initial read failure and hides a retired retry after pairing acc
   const retired = createDeferred<ChannelsPairingListResult>();
   const recovery = createDeferred<ChannelsPairingListResult>();
   const f = mountChannels([failure, retired, recovery], true);
+  expect(f.container.textContent).not.toContain("No channel accounts use DM access requests yet.");
   const initial = f.channels.refreshPairing();
   failure.reject(new Error("First read failed"));
   await initial;
   await waitForSolid(() =>
     expect(f.container.querySelector('[role="alert"]')?.textContent).toContain("First read failed"),
   );
+  expect(f.container.textContent).not.toContain("No channel accounts use DM access requests yet.");
   const retry = f.channels.refreshPairing();
   await waitForSolid(() => {
     expect(f.container.querySelector(".settings-loading-skeleton")).not.toBeNull();

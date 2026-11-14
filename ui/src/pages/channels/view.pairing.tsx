@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 // DM sender access request queue shared by the Channels hub and detail panels.
 import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/types.ts";
@@ -150,54 +149,43 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
   );
 }
 
-function PairingReadSettled(props: { receipt: ChannelRead; children: JSX.Element }) {
-  const ready = createMemo(async () => {
+function PairingReadCompletion(props: { receipt: ChannelRead }) {
+  const complete = createMemo(async () => {
     const error = await props.receipt.completion;
     if (error !== null) {
       throw new Error(error);
     }
-    return true;
+    return null;
   });
-  return <Show when={ready()}>{props.children}</Show>;
+  return <>{complete()}</>;
 }
 
 function PairingReadFeedback(props: { channels: ChannelsState; prompt?: boolean }) {
-  const empty = () => !props.prompt && !props.channels.pairingSnapshot;
-  const emptyMessage = () => <SettingsEmpty message={t("channels.pairing.noAccounts")} />;
   return (
     // Only stateless feedback is replaced; filters, request rows and dialogs keep their owners.
-    <Show
-      when={props.channels.pairingRead}
-      keyed
-      fallback={<Show when={empty()}>{emptyMessage()}</Show>}
-    >
+    <Show when={props.channels.pairingRead} keyed>
       {(receipt) => (
         <Errored
-          fallback={(error) => (
-            <>
-              {props.prompt ? (
-                <InlineAlert tone="danger" role="alert">
-                  {formatUiError(error())}
-                </InlineAlert>
-              ) : (
-                <div class="settings-row channels-pairing-feedback" role="alert">
-                  <SettingsStatus kind="danger" label={formatUiError(error())} />
-                </div>
-              )}
-              <Show when={empty()}>{emptyMessage()}</Show>
-            </>
-          )}
+          fallback={(error) =>
+            props.prompt ? (
+              <InlineAlert tone="danger" role="alert">
+                {formatUiError(error())}
+              </InlineAlert>
+            ) : (
+              <div class="settings-row channels-pairing-feedback" role="alert">
+                <SettingsStatus kind="danger" label={formatUiError(error())} />
+              </div>
+            )
+          }
         >
           <Loading
             fallback={
-              <Show when={empty()}>
+              <Show when={!props.prompt && !props.channels.pairingSnapshot}>
                 <SettingsLoadingSkeleton rows={2} />
               </Show>
             }
           >
-            <PairingReadSettled receipt={receipt}>
-              <Show when={empty()}>{emptyMessage()}</Show>
-            </PairingReadSettled>
+            <PairingReadCompletion receipt={receipt} />
           </Loading>
         </Errored>
       )}
