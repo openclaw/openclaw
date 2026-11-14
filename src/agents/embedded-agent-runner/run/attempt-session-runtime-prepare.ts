@@ -311,6 +311,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
             systemPrompt: freshSystemPrompt,
             entries: sessionManager[sessionManagerReadTranscriptBranch](),
             historyBoundaryCount: sessionManager.getBoundaryCount(),
+            retainProjectContext: systemPrompt.workspaceContextWithheld === true,
           });
           // Keep an attempt's restart visible through subsequent continuation preparations.
           if (prepared.restart || state.systemPromptSeries === undefined) {

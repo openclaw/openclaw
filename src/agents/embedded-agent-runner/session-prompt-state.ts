@@ -1,5 +1,8 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -442,6 +445,41 @@ export function beginSessionSystemPrompt(state: EmbeddedSessionPromptState): voi
   state.historyBoundary = undefined;
 }
 
+const PROJECT_CONTEXT_HEADING = "\n# Project Context\n";
+const STABLE_SECTION_END = "<!-- /openclaw:attempt:STABLE -->";
+
+/** Project Context closes the stable region: before its framing marker, or the cache boundary. */
+function stableContextEnd(prompt: string): number {
+  const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  if (boundary < 0) {
+    return -1;
+  }
+  const framed = prompt.lastIndexOf(STABLE_SECTION_END, boundary);
+  const end = framed < 0 ? boundary : framed;
+  return prompt[end - 1] === "\n" ? end - 1 : end;
+}
+
+function projectContextBlock(prompt: string): string | undefined {
+  const end = stableContextEnd(prompt);
+  const start = end < 0 ? -1 : prompt.slice(0, end).indexOf(PROJECT_CONTEXT_HEADING);
+  return start < 0 ? undefined : prompt.slice(start, end);
+}
+
+/**
+ * A continuation-skip turn withholds workspace files that the pinned prefix still carries.
+ * Reuse the pinned block so the delta does not announce those instructions as removed. A
+ * comparison state saved by an earlier skipped turn has lost the block; the admitted prefix
+ * still has it, so that comparison redelivers the files once instead.
+ */
+function retainPinnedProjectContext(series: SystemPromptSeries, current: string): string {
+  const end = stableContextEnd(current);
+  const block = projectContextBlock(series.renderedPrefix) ?? projectContextBlock(series.prefix);
+  if (end < 0 || !block || projectContextBlock(current)) {
+    return current;
+  }
+  return current.slice(0, end) + block + current.slice(end);
+}
+
 function promptSections(text: string): Map<string, string> {
   const sections = new Map<string, string>();
   for (const section of text.split(/(?=^## )/m)) {
@@ -488,6 +526,8 @@ export function prepareSessionSystemPrompt(params: {
   systemPrompt: string;
   entries: SessionEntry[];
   historyBoundaryCount?: number;
+  /** The attempt deliberately withheld workspace files already delivered to this series. */
+  retainProjectContext?: boolean;
 }) {
   const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
   const historyId = resolvePromptHistoryId(params);
@@ -534,7 +574,7 @@ export function prepareSessionSystemPrompt(params: {
       params.state.systemPrompt = series;
     }
   }
-  const renderedPrefix =
+  const freshPrefix =
     series?.renderedPrefix === systemPrompt
       ? series.renderedPrefix
       : shareSystemPromptPrefix(systemPrompt);
@@ -548,6 +588,10 @@ export function prepareSessionSystemPrompt(params: {
         : afterCheckpoint.some((later) => later.type === "model_change")
           ? "restarted:model-change"
           : `restarted:${changedPromptRoutePart(previous.routeKey, params.routeKey)}`;
+  const renderedPrefix =
+    params.retainProjectContext && !restart && series
+      ? shareSystemPromptPrefix(retainPinnedProjectContext(series, freshPrefix))
+      : freshPrefix;
   const sections =
     !restart && series && series.renderedPrefix !== renderedPrefix
       ? promptDelta(

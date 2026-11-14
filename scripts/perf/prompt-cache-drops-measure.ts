@@ -231,6 +231,7 @@ try {
               contextFiles: [],
               bootstrapInjectionStats: [],
               shouldRecordCompletedBootstrapTurn: false,
+              workspaceContextWithheld: false,
               workspaceNotes: [],
             },
             capabilityToolNames: new Set(tools.map((tool) => tool.name)),
