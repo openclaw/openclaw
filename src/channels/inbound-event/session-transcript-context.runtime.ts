@@ -222,6 +222,7 @@ export async function mergeSessionTranscriptContext(params: {
     const assistantDedupeKeys = new Set(assistantTextKeys ?? []);
     const seen = new Set(existing.flatMap(messageKeys));
     const seenTranscript = new Set<string>();
+    const admittedAssistantIds = new Set<string>();
     const added: PromptMessage[] = [];
     for (const item of transcript) {
       if (item.transcriptId && ids.has(item.transcriptId)) {
@@ -229,13 +230,12 @@ export async function mergeSessionTranscriptContext(params: {
       }
       const message = historyMessage(item.entry);
       const keys = messageKeys(message);
-      const visibleAssistantKeys =
-        item.role === "assistant"
-          ? messageKeys({
-              ...message,
-              body: stripInlineDirectiveTagsForDelivery(item.entry.body).text,
-            })
-          : keys;
+      // Exact body hints coalesce supplemental text, not identities or stored turns.
+      let visibleAssistantKeys = keys;
+      if (item.role === "assistant") {
+        const body = stripInlineDirectiveTagsForDelivery(item.entry.body).text;
+        visibleAssistantKeys = [...messageKeys({ ...message, body }), `body:${body.trim()}`];
+      }
       if (
         keys.some((key) => seenTranscript.has(key)) ||
         (item.role === "assistant" &&
@@ -246,16 +246,54 @@ export async function mergeSessionTranscriptContext(params: {
       }
       keys.forEach((key) => seenTranscript.add(key));
       added.push(message);
+      if (item.role === "assistant" && item.entry.messageId) {
+        admittedAssistantIds.add(item.entry.messageId);
+      }
     }
-    let messages = [...added, ...existing].toSorted(compareMessages);
+    // Canonical text and its native fragments are alternatives, not extra budget
+    // slots. Missing/filtered canonical rows leave native fallback untouched.
+    const native = existing.filter((message) => {
+      const replacement =
+        typeof message.message_id === "string"
+          ? window.sessionTranscriptMessageReplacements?.[message.message_id]
+          : undefined;
+      return (
+        message.is_reply_target === true || !replacement || !admittedAssistantIds.has(replacement)
+      );
+    });
+    let messages = [...added, ...native].toSorted(compareMessages);
     if (!(messages.length <= limit)) {
       const pinned = messages.filter((message) => message.is_reply_target === true);
-      const available = Math.max(0, limit - pinned.length);
+      const priorityOrder = new Map(
+        filterStringEntries(window.sessionTranscriptPriorityMessageIds).map((id, index) => [
+          id,
+          index,
+        ]),
+      );
+      const priority = messages
+        .flatMap((message) => {
+          const order =
+            typeof message.message_id === "string"
+              ? priorityOrder.get(message.message_id)
+              : undefined;
+          return message.is_reply_target !== true && order !== undefined
+            ? [{ message, order }]
+            : [];
+        })
+        .toSorted((left, right) => left.order - right.order)
+        .map(({ message }) => message);
+      const prioritySlots = Math.max(0, limit - pinned.length);
+      const selectedPriority = prioritySlots === 0 ? [] : priority.slice(-prioritySlots);
+      const available = Math.max(0, prioritySlots - selectedPriority.length);
       const recent =
         available === 0
           ? []
-          : messages.filter((message) => message.is_reply_target !== true).slice(-available);
-      messages = [...pinned.slice(-limit), ...recent].toSorted(compareMessages);
+          : messages
+              .filter((message) => message.is_reply_target !== true && !priority.includes(message))
+              .slice(-available);
+      messages = [...pinned.slice(-limit), ...selectedPriority, ...recent].toSorted(
+        compareMessages,
+      );
     }
     window.payload = { ...window.payload, messages };
     if (added.length > 0) {

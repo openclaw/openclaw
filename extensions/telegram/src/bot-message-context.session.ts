@@ -1,7 +1,6 @@
 import { isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import {
   type BuildChannelInboundEventContextAsyncParams,
-  type BuiltChannelInboundEventContext,
   formatMediaPlaceholderText,
   formatInboundEnvelope,
   formatInboundMediaUnavailableText,
@@ -15,7 +14,10 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
-import type { BuildTelegramInboundContextPayloadParams } from "./bot-message-context.session.types.js";
+import type {
+  BuildTelegramInboundContextPayloadParams,
+  TelegramInboundContextPayload,
+} from "./bot-message-context.session.types.js";
 import type {
   TelegramMediaRef,
   TelegramMessageContextSessionRuntime,
@@ -45,18 +47,6 @@ import { isTelegramMediaKind } from "./message-cache-persistence.js";
 import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH } from "./message-cache.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildTelegramConversationId } from "./topic-conversation.js";
-
-type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
-  From: string;
-  To: string;
-  ChatType: string;
-  RawBody: string;
-  ReplyToIsExternal?: boolean;
-  ReplyToQuotePosition?: number;
-  ReplyToQuoteEntities?: TelegramReplyTarget["quoteEntities"];
-  ReplyToQuoteSourceText?: string;
-  ReplyToQuoteSourceEntities?: TelegramReplyTarget["quoteSourceEntities"];
-};
 
 export async function loadTelegramMessageContextSessionRuntime(
   runtime: TelegramMessageContextSessionRuntime | undefined,
@@ -434,6 +424,7 @@ export async function buildTelegramInboundContextPayload(
         historyLimit,
         ambientWatermark: ambientTranscriptWatermark,
         includeBeforeSelf: inboundEventKind === "room_event",
+        currentTimestampMs: messageTimestamp,
       })
     : baseVisiblePromptContext;
   const groupHistoryPromptEntries = telegramPromptContextHistory(visiblePromptContext);

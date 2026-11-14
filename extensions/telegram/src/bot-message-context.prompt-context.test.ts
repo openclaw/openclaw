@@ -766,7 +766,7 @@ describe("Telegram registered topic recovery", () => {
               ]),
             );
             expect(history).not.toContain("Before self");
-            expect(history).not.toContain("Self marker");
+            expect(history).toContain("Self marker");
           } else if (recovered) {
             expect(history ?? "").not.toContain("General context");
             expect(history ?? "").not.toContain("After watermark");

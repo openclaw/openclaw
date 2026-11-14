@@ -81,6 +81,126 @@ describe("session transcript inbound context", () => {
     expect(prompt).not.toContain("deleted platform message");
   });
 
+  it("coalesces assistant text without merging distinct native candidates or matching user turns", async () => {
+    readRecent.mockResolvedValue([
+      { id: "background", role: "assistant", text: "Build complete", timestamp: 2_000 },
+      { id: "user", role: "user", text: "Build complete", timestamp: 3_000 },
+    ]);
+    const ctx = await merged({
+      ReplyToId: "25",
+      SessionTranscriptContext: { historyLimit: 4 },
+      ChannelStructuredContext: chatWindow(
+        [
+          {
+            message_id: "902",
+            sender: "OpenClaw (you)",
+            body: "Build complete",
+            timestamp_ms: 1_000,
+          },
+          {
+            message_id: "903",
+            sender: "OpenClaw (you)",
+            body: "Build complete",
+            timestamp_ms: 1_500,
+          },
+        ],
+        {
+          source: "telegram",
+          sessionTranscriptAssistantTextDedupeKeys: ["body:Build complete"],
+          sessionTranscriptPriorityMessageIds: ["902", "903"],
+        },
+      ),
+    });
+    expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
+      messages: [{ message_id: "902" }, { message_id: "903" }, { message_id: "session:user" }],
+    });
+    expect(ctx.ReplyToId).toBe("25");
+  });
+
+  it.each([false, true])(
+    "keeps recent native context ahead of unmatched formatted copies (explicit: %s)",
+    async (explicit) => {
+      readRecent.mockResolvedValue([
+        { id: "background", role: "assistant", text: "**Build complete**", timestamp: 2_000 },
+      ]);
+      const ctx = await merged({
+        SessionTranscriptContext: { historyLimit: 2 },
+        ChannelStructuredContext: chatWindow(
+          [
+            ...(explicit
+              ? [
+                  {
+                    message_id: "25",
+                    body: "explicit target",
+                    timestamp_ms: 0,
+                    is_reply_target: true,
+                  },
+                ]
+              : []),
+            {
+              message_id: "902",
+              sender: "OpenClaw (you)",
+              body: "Build complete",
+              timestamp_ms: 1_000,
+            },
+            { message_id: "903", sender: "Pat", body: "next?", timestamp_ms: 3_000 },
+          ],
+          {
+            source: "telegram",
+            sessionTranscriptAssistantTextDedupeKeys: ["body:Build complete"],
+            sessionTranscriptPriorityMessageIds: ["902"],
+          },
+        ),
+      });
+      expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
+        messages: explicit
+          ? [{ message_id: "25" }, { message_id: "902" }]
+          : [{ message_id: "902" }, { message_id: "903" }],
+      });
+      const prompt = buildInboundUserContextPrefix(ctx);
+      expect(prompt.split("Build complete")).toHaveLength(2);
+      expect(prompt).not.toContain("sessionTranscriptPriorityMessageIds");
+    },
+  );
+
+  it.each([false, true])(
+    "prefers an available canonical row and retains native fallback otherwise (canonical: %s)",
+    async (canonical) => {
+      const canonicalId = "session:answer";
+      readRecent.mockResolvedValue([
+        ...(canonical
+          ? [{ id: "answer", role: "assistant" as const, text: "Alpha beta", timestamp: 500 }]
+          : []),
+        { id: "other", role: "assistant", text: "Unrelated newer discussion", timestamp: 3_000 },
+      ]);
+      const ctx = await merged({
+        SessionTranscriptContext: { historyLimit: 2 },
+        ChannelStructuredContext: chatWindow(
+          [
+            { message_id: "700", body: "Alpha", is_reply_target: true, timestamp_ms: 0 },
+            { message_id: "701", body: "beta", timestamp_ms: 2_000 },
+          ],
+          {
+            sessionTranscriptPriorityMessageIds: ["700", "701", canonicalId],
+            sessionTranscriptMessageReplacements: { "700": canonicalId, "701": canonicalId },
+          },
+        ),
+      });
+      expect(ctx.ChannelStructuredContext?.[0]?.payload).toMatchObject({
+        messages: [
+          { message_id: "700" },
+          {
+            message_id: canonical ? canonicalId : "701",
+            body: canonical ? "Alpha beta" : "beta",
+          },
+        ],
+      });
+      expect(buildInboundUserContextPrefix(ctx)).not.toContain(
+        "sessionTranscriptMessageReplacements",
+      );
+    },
+  );
+
   it("restores marked Cron delivery context when no live chat window survives", async () => {
     readRecent.mockImplementation(async (params) =>
       params.includeCronDirectDeliveryContext

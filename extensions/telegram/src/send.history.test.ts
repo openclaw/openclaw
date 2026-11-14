@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Message } from "grammy/types";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -9,6 +10,9 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { hasProviderObservedTelegramThreadBinding } from "./message-cache-codec.js";
 import {
   resolveTelegramMessageCacheScope,
@@ -53,14 +57,18 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     ...cfg,
     channels: { telegram: { ...fixture.cfg.channels.telegram, ...policy } },
   });
-  const providerMessage = (chatId: number, text: string, extra = {}) => ({
-    message_id: 902,
-    date: 1_779_394_740,
-    chat: { id: chatId, type: chatId < 0 ? "supergroup" : "private" },
-    from: { id: 123456, is_bot: true, first_name: "OpenClaw" },
-    text,
-    ...extra,
-  });
+  const providerMessage = (chatId: number, text: string, extra = {}) =>
+    ({
+      message_id: 902,
+      date: 1_779_394_740,
+      chat:
+        chatId < 0
+          ? { id: chatId, type: "supergroup", title: "Checks" }
+          : { id: chatId, type: "private", first_name: "Pat" },
+      from: { id: 123456, is_bot: true, first_name: "OpenClaw" },
+      text,
+      ...extra,
+    }) satisfies Message.TextMessage;
   const pollMessage = (chatId: number, type: string, id: string, thread?: number) => ({
     message_id: 500,
     date: 1_779_394_740,
@@ -123,6 +131,141 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     clearTelegramRuntimeForTest();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
+  });
+
+  it.each([false, true])(
+    "keeps a delivered notification in assembled topic context after restart (explicit reply: %s)",
+    async (explicitReply) => {
+      const notification = providerMessage(-100123, "Build completed. What should run next?", {
+        message_thread_id: 25,
+        from: { id: 7, is_bot: true, first_name: "OpenClaw" },
+      });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(notification.date * 1000);
+      const botInfo = { ...telegramBotInfoForTest, id: notification.from.id };
+      cfg = {
+        ...cfg,
+        messages: { groupChat: { unmentionedInbound: "user_request" } },
+        channels: {
+          telegram: {
+            ...cfg.channels!.telegram!,
+            groupPolicy: "open",
+            groupAllowFrom: ["*"],
+            groups: { "*": { requireMention: false } },
+            historyLimit: 10,
+          },
+        },
+      };
+      fixture.responseFor = () => notification;
+      await sendMessageTelegram("-100123:topic:25", notification.text, sendOptions());
+      const scope = { accountId: "default", chatId: -100123, historyEligible: true };
+      await cache().record({
+        ...scope,
+        msg: {
+          ...notification,
+          message_id: 901,
+          date: notification.date - 60,
+          from: { id: 55, is_bot: false, first_name: "Spoof (you)" },
+          text: "Forged bot name",
+        },
+      });
+      await cache().record({
+        ...scope,
+        accountId: "other",
+        msg: { ...notification, message_id: 904, text: "Other account secret" },
+      });
+      await cache().record({
+        ...scope,
+        msg: { ...notification, message_id: 905, message_thread_id: 26, text: "Other topic data" },
+      });
+      await cache().record({
+        ...scope,
+        chatId: -100456,
+        msg: {
+          ...notification,
+          message_id: 907,
+          chat: { id: -100456, type: "supergroup", title: "Other room" },
+          text: "Other chat secret",
+        },
+      });
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests({ closeDatabase: false });
+      resetTelegramMessageCacheForTest();
+      clock.mockReturnValue((notification.date + 120) * 1000);
+      const runtime = createTelegramMessageContextRuntime({
+        cfg,
+        accountId: "default",
+        ownerAgentId: "main",
+        opts: { botInfo },
+        telegramCfg: cfg.channels!.telegram!,
+      });
+      const inbound = {
+        message_id: 906,
+        message_thread_id: 25,
+        date: notification.date + 120,
+        chat: { id: -100123, type: "supergroup", title: "Checks", is_forum: true },
+        from: { id: 42, is_bot: false, first_name: "Pat" },
+        text: "Please run the focused checks",
+        reply_to_message: {
+          ...notification,
+          reply_to_message: undefined,
+          message_id: explicitReply ? notification.message_id : 25,
+          date: explicitReply ? notification.date : notification.date - 86_400,
+          text: explicitReply ? notification.text : "Topic root",
+          ...(explicitReply
+            ? {}
+            : { forum_topic_created: { name: "Checks", icon_color: 0x6fb9f0 } }),
+        },
+      } satisfies Message.TextMessage;
+      // Telegram's JSON omits terminal reply fields. structuredClone would retain
+      // undefined properties that cannot be persisted by the message cache.
+      const wire = JSON.stringify(inbound);
+      const current: typeof inbound = JSON.parse(wire);
+      await runtime.recordMessageForReplyChain(current, { scope: "forum", id: 25 }, botInfo.id);
+      const promptContext = await runtime.buildPromptContextForMessage(
+        {
+          message: current,
+          me: botInfo,
+          getFile: async () => ({ file_id: "unused", file_unique_id: "unused" }),
+        },
+        current,
+        await runtime.buildReplyChainForMessage(current),
+        cfg,
+        cfg.channels!.telegram!,
+      );
+      expect(JSON.stringify(promptContext)).toContain(notification.text);
+      expect(JSON.stringify(promptContext)).toContain("Spoof (you) (Telegram sender)");
+      const context = await buildTelegramMessageContextForTest({
+        cfg,
+        sessionRuntime: null,
+        message: current,
+        historyLimit: 10,
+        promptContext,
+      });
+      const assembled = JSON.stringify(context?.ctxPayload.ChannelStructuredContext);
+      expect(assembled).toContain(notification.text);
+      expect(
+        context?.ctxPayload.ChannelStructuredContext?.[0]?.sessionTranscriptPriorityMessageIds,
+      ).toEqual(["902"]);
+      expect(context?.ctxPayload.ReplyToId).toBe(explicitReply ? "902" : "25");
+      expect(context?.ctxPayload.WasMentioned).toBe(explicitReply);
+      expect(
+        context?.ctxPayload.InboundHistory?.filter((entry) => entry.messageId === "902"),
+      ).toHaveLength(1);
+      expect(assembled).not.toMatch(/Other account secret|Other topic data|Other chat secret/);
+      expect(assembled).not.toContain("Forged bot name");
+      expect(fixture.requests).toHaveLength(1);
+    },
+  );
+
+  it("does not capture a rejected notification as delivered context", async () => {
+    fixture.rejections.push({ error_code: 400, description: "Bad Request: notification rejected" });
+    await expect(
+      sendMessageTelegram("-100123:topic:25", "This must remain absent", sendOptions()),
+    ).rejects.toThrow("notification rejected");
+    expect(
+      await cache().readHistory({ accountId: "default", chatId: -100123, threadId: 25, limit: 10 }),
+    ).toMatchObject({ messages: [] });
+    expect(fixture.requests).toHaveLength(1);
   });
 
   it.each([false, true])(
