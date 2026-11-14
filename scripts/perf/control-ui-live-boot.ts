@@ -11,10 +11,12 @@ import { startEngineMeasurement, type ControlUiEngine } from "../lib/control-ui-
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "../perf/team-shape-fixture.ts";
 import { freeProofPort, startWarmReloadAdmission } from "../perf/warm-reload-admission.ts";
+import { startFlakyNetworkProxy } from "./flaky-network-proxy.ts";
 
 // Opt-in real-Gateway boot comparison: BOOT_BASE and BOOT_HEAD name built UI roots.
 // BOOT_OUT stays in .artifacts; BOOT_PAIRS defaults to 20. BOOT_ENGINES selects
-// chromium,webkit,firefox. BOOT_TRACE=1 is diagnostic, never timing proof.
+// chromium,webkit,firefox. BOOT_RTT_MS adds TCP round-trip latency (default 0).
+// BOOT_TRACE=1 is diagnostic, never timing proof.
 // Service workers are blocked to match the engine census. No model is invoked.
 // Requires the built Gateway and plugin metadata in dist, as well as both UI builds.
 // BOOT_BASE=.artifacts/base BOOT_HEAD=dist/control-ui node --import ./scripts/tsx.mjs scripts/perf/control-ui-live-boot.ts
@@ -58,6 +60,10 @@ const pairs = Number(process.env.BOOT_PAIRS ?? "20");
 if (!Number.isSafeInteger(pairs) || pairs < 1 || pairs > 60) {
   throw new Error("BOOT_PAIRS must be an integer from 1 to 60");
 }
+const rttMs = Number(process.env.BOOT_RTT_MS ?? "0");
+if (!Number.isSafeInteger(rttMs) || rttMs < 0 || rttMs > 1000) {
+  throw new Error("BOOT_RTT_MS must be an integer from 0 to 1000");
+}
 await mkdir(out, { recursive: true });
 async function createRig(bundle: string, directory: string) {
   const uiIndexSha256 = createHash("sha256")
@@ -65,10 +71,14 @@ async function createRig(bundle: string, directory: string) {
     .digest("hex");
   await mkdir(directory, { recursive: true });
   const port = await freeProofPort([], true);
+  const admissionPort = await freeProofPort([port, port + 1]);
+  const publicPort = rttMs ? await freeProofPort([port, port + 1, admissionPort]) : undefined;
   const admission = await startWarmReloadAdmission({
     gatewayPort: port,
-    port: await freeProofPort([port, port + 1]),
+    port: admissionPort,
+    publicPort,
   });
+  let network: Awaited<ReturnType<typeof startFlakyNetworkProxy>> | undefined;
   let closeGateway: (() => Promise<void>) | undefined = undefined;
   let log: ReturnType<typeof createWriteStream> | undefined = undefined;
   let closing: Promise<void> | undefined;
@@ -76,10 +86,15 @@ async function createRig(bundle: string, directory: string) {
     (closing ??= (async () => {
       await closeGateway?.();
       log?.end();
+      await network?.close();
       await admission.close();
       cleanups.delete(close);
     })());
   cleanups.add(close);
+  if (publicPort !== undefined) {
+    network = await startFlakyNetworkProxy({ port: publicPort, upstreamPort: admissionPort });
+    network.setFaults({ rttMs });
+  }
   const key = "agent:main:interaction-a";
   const fixture = await generateTeamShapeFixture({
     ...parseTeamShapeOptions([
@@ -330,6 +345,7 @@ function probe(profileStyles: boolean) {
     }
     if (data.transcriptMs && data.composerMs) {
       data.readyMs = Math.max(data.transcriptMs, data.composerMs);
+      console.debug("control-ui-live-boot:ready-notify");
       if (profileStyles) {
         console.timeStamp("control-ui-live-boot:ready");
       }
@@ -419,6 +435,9 @@ try {
         });
         const page = await context.newPage();
         const errors: string[] = [];
+        page.on("requestfailed", (request) => {
+          console.log("REQUEST_FAILED", request.url(), request.failure()?.errorText);
+        });
         page.on("pageerror", (e) => {
           errors.push(e.stack ?? e.message);
           console.log("PAGE_ERROR", e.stack ?? e.message);
@@ -427,26 +446,29 @@ try {
         await page.evaluate(() => sessionStorage.removeItem("openclaw-live-boot-navigation-start"));
         try {
           for (const state of ["cold", "warm"]) {
-            const measurement = process.env.BOOT_TRACE
-              ? await startEngineMeasurement(page, engine, { trace: true })
-              : null;
-            const hostLoad = loadavg();
-            const start = performance.now();
-            console.log("NAVIGATE", engine, variant, state);
-            if (state === "cold") {
-              await page.goto(url, { waitUntil: "domcontentloaded" });
-            } else {
+            if (state === "warm") {
               await page.evaluate(() =>
                 sessionStorage.removeItem("openclaw-live-boot-navigation-start"),
               );
-              await page.reload({ waitUntil: "domcontentloaded" });
             }
-            console.log("NAVIGATED", engine, state);
-            await page.waitForFunction(
-              () => Reflect.get(window, "__liveBoot")?.readyMs > 0,
-              {},
-              { timeout: 30000 },
-            );
+            const measurement = process.env.BOOT_TRACE
+              ? await startEngineMeasurement(page, engine, { trace: true })
+              : null;
+            const readyNotification = page.waitForEvent("console", {
+              predicate: (message) => message.text() === "control-ui-live-boot:ready-notify",
+              timeout: 30000,
+            });
+            const hostLoad = loadavg();
+            const start = performance.now();
+            console.log("NAVIGATE", engine, variant, state);
+            const navigation =
+              state === "cold"
+                ? page.goto(url, { waitUntil: "domcontentloaded" })
+                : page.reload({ waitUntil: "domcontentloaded" });
+            await Promise.all([
+              navigation.then(() => console.log("NAVIGATED", engine, state)),
+              readyNotification,
+            ]);
             console.log("GOT_READY", engine, state);
             const data = await page.evaluate(() => {
               const d: BootProbe = Reflect.get(window, "__liveBoot");
@@ -471,6 +493,7 @@ try {
               variant,
               state,
               hostLoad,
+              rttMs,
               wallMs: performance.now() - start,
               ...data,
               metrics: trace?.metrics,

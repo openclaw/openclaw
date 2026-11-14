@@ -19,7 +19,6 @@ import {
   getLastAssistantUsage,
   prepareCompaction,
   prepareCompactionFromSource,
-  iterateCompactionMessages,
   shouldCompact,
 } from "./compaction.js";
 import {
@@ -752,14 +751,16 @@ it.each(["none", "compaction", "reset"] as const)(
       edited: new Set(),
     });
     expect(
-      Array.from(iterateCompactionMessages(preparation.messagesToSummarize), (message) =>
-        structuredClone(message.role === "user" ? message.content : message.role),
-      ),
+      Array.from({ length: preparation.messagesToSummarize.length }, (_, index) => {
+        const message = preparation.messagesToSummarize.get(index);
+        assert(message);
+        return structuredClone(message.role === "user" ? message.content : message.role);
+      }),
     ).toEqual(["past", "assistant"]);
     expect(
       Array.from(
-        iterateCompactionMessages(preparation.turnPrefixMessages),
-        (message) => message.role,
+        { length: preparation.turnPrefixMessages.length },
+        (_, index) => preparation.turnPrefixMessages.get(index)?.role,
       ),
     ).toEqual(["user", "assistant", "toolResult"]);
   },

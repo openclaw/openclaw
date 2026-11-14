@@ -1,4 +1,4 @@
-# 13,010 net test LF against main 19787202 minus the single 400-line PR allowance.
+# 13,010 net test LF against main 088178a6 minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.

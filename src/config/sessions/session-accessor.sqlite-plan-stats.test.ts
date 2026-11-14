@@ -4,9 +4,11 @@ import {
   captureTranscriptSql,
   seedTranscriptPlanStatsFixture,
 } from "../../../test/helpers/transcript-plan-stats.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { withRecentSessionTranscriptActiveEventsInSnapshot } from "./session-accessor.sqlite-active-events-read.js";
 import {
   readCurrentProjectionSnapshot,
@@ -55,6 +57,30 @@ function expectActiveProbes(read: () => unknown, select: (columns: string[]) => 
 
 describe.each(["none", "analyzed", "team"] as const)("%s statistics", (state) => {
   beforeAll(() => applyTranscriptPlanStatistics(db, state));
+  it.each([
+    ["long", 3],
+    ["dense", 9998],
+  ] as const)("reads the latest boundary payload by sequence in %s", (sessionId, boundaryCount) => {
+    const { result, queries } = captureTranscriptSql(db, () =>
+      runSqliteReadSnapshotSync(database.db, () =>
+        readSessionTranscriptBoundedActiveContextCore(
+          { ...scope, sessionId, sessionKey: `agent:synthetic:${sessionId}` },
+          { maxEvents: 20, maxBytes: 100000, transaction: database },
+        ),
+      ),
+    );
+    expect(result).toMatchObject({ boundaryCount, totalEvents: 20000 });
+    const boundaries = queries.filter(({ columns }) => columns.includes("boundary_count"));
+    expect(boundaries).toHaveLength(1);
+    const plan = db
+      .prepare(`EXPLAIN QUERY PLAN ${boundaries[0]!.sql}`)
+      .all()
+      .map((row) => String(row.detail));
+    expect(plan).toContainEqual(
+      expect.stringMatching(/^SEARCH event .*\(session_id=\? AND seq=\?\)/u),
+    );
+    expect(plan).not.toContainEqual(expect.stringMatching(/^SEARCH event .*\(session_id=\?\)/u));
+  });
   it("reads a recent active tail without scanning or sorting payloads", () => {
     expect(
       expectActiveProbes(

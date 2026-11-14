@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { formatByteSize } from "@openclaw/normalization-core";
@@ -490,7 +490,7 @@ export function runOneShotSqliteInspection<T>(
     };
     let stopped = false;
     let nativeClosed = false;
-    const child = execFile(
+    const child = childProcess.execFile(
       process.execPath,
       params.argv,
       {
@@ -592,7 +592,7 @@ export function runSqliteReadOnlyWorkerSync(
 ): string | BackupEngine | boolean {
   assertChildRuntimeAvailable();
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
-  const result = spawnSync(
+  const result = childProcess.spawnSync(
     process.execPath,
     sqliteReadOnlyWorkerArgv(
       sqliteReadOnlyWorkerRequestArgs(pathname, { mode, stagingRoot, expectedSourceIdentity }),

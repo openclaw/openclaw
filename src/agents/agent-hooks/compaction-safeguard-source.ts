@@ -128,7 +128,7 @@ function currentUserAsk(source: SafeguardMessageSource): string | null | undefin
   }
   return undefined;
 }
-export function splitPreservedRecentTurnSource(params: {
+function splitPreservedRecentTurnSource(params: {
   messages: SafeguardMessageSource;
   recentTurnsPreserve: number;
 }): { summarizableMessages: SafeguardMessageSource; preservedMessages: SafeguardMessageSource } {
@@ -333,7 +333,7 @@ function formatBoundedContextSection(params: {
   };
 }
 
-export function buildPreservedTurnsSectionFromSource(
+function buildPreservedTurnsSectionFromSource(
   messages: SafeguardMessageSource,
   maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
 ): ContextSection {
@@ -346,7 +346,7 @@ export function buildPreservedTurnsSectionFromSource(
   });
 }
 
-export function buildSplitTurnContextSectionFromSource(
+function buildSplitTurnContextSectionFromSource(
   messages: SafeguardMessageSource,
   maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
 ): ContextSection {

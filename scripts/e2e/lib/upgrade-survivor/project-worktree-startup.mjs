@@ -182,6 +182,8 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   try {
     for (const [role, prefix, symbol] of [
       ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
+      ["backup", "doctor-migration-backup", "captureFreshDoctorMigrationTables"],
+      ["withBackup", "update-doctor-migration-attribution", "runWithDoctorMigrationBackup"],
       ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
       ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
       ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
@@ -206,10 +208,12 @@ async function prepareSchema(ctx, packageRoot, bindings) {
       env: process.env,
       operation: "project worktree fixture schema preparation",
       run: () =>
-        doctor.api.migrate({
-          env: process.env,
-          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
-        }),
+        doctor.api.withBackup(doctor.api.backup, () =>
+          doctor.api.migrate({
+            env: process.env,
+            configuredAgentDatabaseTargets: [{ agentId: "main", path: agentDb }],
+          }),
+        ),
     });
   } catch (error) {
     errors.push(error);

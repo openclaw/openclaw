@@ -296,7 +296,6 @@ describe("ManagedWorktreeService diagnostics", () => {
         callbackEntered: true,
         omittedObservations: expect.any(Number),
         id: worktree.id,
-        path: worktree.path,
         deferred: false,
         ...attributes,
       });
@@ -306,6 +305,7 @@ describe("ManagedWorktreeService diagnostics", () => {
     beforeEach(() => {
       service = new ManagedWorktreeService({
         env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "private-state") },
+        getConfig: () => ({ worktreeAcceleration: false }),
       });
       diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
       setDiagnosticsEnabledForProcess(true);
@@ -438,11 +438,55 @@ describe("ManagedWorktreeService diagnostics", () => {
         snapshotMs: 1_300,
         bodyFinalizeMs: 200,
         outcome: "threw",
+        errorType: "WorktreeSnapshotError",
+        error:
+          "worktree snapshot failed; removal aborted: private snapshot input could not be read",
       });
       expect(fields).toMatchObject({ tracked: null, untracked: null });
       await expect(service.remove({ id: worktree.id, reason: "retry" })).resolves.toMatchObject({
         removed: true,
       });
+    });
+
+    it("reports a bounded post-snapshot failure and reuses its recovery ref on retry", async () => {
+      const worktree = await materialize("post-snapshot-failure");
+      await fs.writeFile(readme(worktree.path), "recover this edit\n");
+      let failed = false;
+      const fault = vi
+        .spyOn(commandExec, "runCommandWithTimeout")
+        .mockImplementation(async (...args) => {
+          const command = gitCommandArgs(args[0]);
+          if (!failed && command[0] === "config" && command[1] === "--get-all") {
+            failed = true;
+            clock += 1_300;
+            throw new TypeError(
+              `cannot read 'customer records/HEAD': Permission denied\n${worktree.path}/private file: No space left on device ${"x".repeat(1_000)}`,
+            );
+          }
+          return await realRunCommand(...args);
+        });
+      await expect(service.remove({ id: worktree.id, reason: "test" })).rejects.toThrow(
+        "cannot read",
+      );
+      await waitForDiagnosticEventsDrained();
+      expect(records()[0]?.attributes).toMatchObject({
+        outcome: "threw",
+        errorType: "TypeError",
+        error: "Permission denied; No space left on device; [redacted-path]",
+      });
+      expect(records()[0]?.message).not.toContain(worktree.path);
+      expect(records()[0]?.message).not.toContain("customer");
+      const snapshotRef = `refs/openclaw/snapshots/${worktree.id}`;
+      expect((await findRecord(worktree.id))?.snapshotRef).toBe(snapshotRef);
+      expect(await git(repo, "show", `${snapshotRef}:README.md`)).toBe("recover this edit");
+      fault.mockRestore();
+      await fs.writeFile(readme(worktree.path), "latest edit\n");
+      await service.remove({ id: worktree.id, reason: "retry" });
+      expect(
+        await git(repo, "for-each-ref", "--format=%(refname)", "refs/openclaw/snapshots/"),
+      ).toBe(snapshotRef);
+      const restored = await service.restore({ id: worktree.id });
+      expect(await fs.readFile(readme(restored.path), "utf8")).toBe("latest edit\n");
     });
   });
 });
