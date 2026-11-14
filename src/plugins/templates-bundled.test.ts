@@ -182,6 +182,35 @@ process.stdin.on("end", () => {
     expect(await readFile(path.join(record!.installPath!, "index.js"), "utf8")).toBe(
       "Preserve the installed owner's change.\n",
     );
+
+    writeJsonFile(path.join(extracted.packageRoot, "package.json"), {
+      name: "@fixture/bundled-plugin-template",
+      version: "1.1.0",
+      openclaw: { template: "CLAW.md" },
+    });
+    writeJsonFile(path.join(extracted.packageRoot, "plugins/probe/package.json"), {
+      name: "@fixture/template-directory-probe",
+      version: "1.1.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    await writeFile(path.join(extracted.packageRoot, "plugins/probe/index.js"), pluginCode);
+    const updatedSource = await readTemplateManifestFile(extracted.packageRoot);
+    assert(updatedSource.ok, JSON.stringify(updatedSource.diagnostics));
+    // Template Add under `--profile work` must print a command for that profile.
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    const versionConflict = await buildGatewayTemplateAddPlan(updatedSource, {
+      config,
+      sourceMcpServers: {},
+      agentId: "third-consumer",
+    }).finally(() => vi.unstubAllEnvs());
+    expect(versionConflict.blockers).toContainEqual(
+      expect.objectContaining({
+        code: "bundled_plugin_conflict",
+        message:
+          'Plugin template-directory-probe is already installed with different contents (installed version 1.0.0; this Template bundles 1.1.0). Template Add does not replace shared plugins. To use the bundled version, run "openclaw --profile work plugins install <folder> --force" with the plugins/probe folder from this Template release, then retry the Template Add.',
+      }),
+    );
     await rm(path.join(extracted.packageRoot, "plugins/probe/package.json"));
     await rm(path.join(extracted.packageRoot, "plugins/probe/openclaw.plugin.json"));
     const bundleManifest = path.join(extracted.packageRoot, "plugins/probe/.codex-plugin");
