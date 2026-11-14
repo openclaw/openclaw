@@ -618,7 +618,8 @@ struct ChatProTab: View {
     }
 
     private var gatewayAccessibilityLabel: String {
-        "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
+        let status = Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected)
+        return String(format: String(localized: "Gateway: %@"), status)
     }
 
     private var gatewayStatusColor: Color {
@@ -662,13 +663,17 @@ struct ChatProTab: View {
     nonisolated static func gatewayStatusTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
         switch state {
         case .connected:
-            isGatewayUsable ? "Connected" : "Unavailable"
+            if isGatewayUsable {
+                String(localized: "Connected")
+            } else {
+                String(localized: "Unavailable")
+            }
         case .connecting:
-            "Connecting"
+            String(localized: "Connecting")
         case .error:
-            "Attention"
+            String(localized: "Attention")
         case .disconnected:
-            "Offline"
+            String(localized: "Offline")
         }
     }
 
