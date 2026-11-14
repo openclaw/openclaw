@@ -815,11 +815,27 @@ took 17.87 seconds, so these timings do not establish a speed improvement.
 ### Managed proxy CA cleanup continuation
 
 At `7e69bf4c26b3cd00789f55ee4f6185af8aa2dbf3`, the shared proxy CA fixture
-splices every directory from its local list before removal. A removal failure
-aborts cleanup of later directories and drops their ownership. The candidate
-reuses the canonical auto-cleanup tracker while preserving the CA writer API,
-file contents and missing-file fixture. Baseline and failure-path qualification
-are pending; production code is outside this change.
+spliced every directory from its local list before removal. A removal failure
+aborted cleanup of later directories and dropped their ownership. It now uses
+the canonical auto-cleanup tracker. The synchronous writer, filename, contents,
+and omitted-content missing-file fixture remain unchanged. Test support changes
+by +4/-10 lines; production and the shared tracker are unchanged.
+
+All 22 declarations / 31 cases across managed-proxy-undici, proxy-validation and
+proxy-lifecycle remain. Baseline and candidate pass all 31 cases. The existing
+temp-dir helper suite passes its three portable cases; the Windows-only case
+is skipped on macOS. The combined command took 8.32 seconds on the baseline and
+6.21 seconds on the warm candidate; this is not a speed comparison.
+
+A temporary helper-boundary probe captures the actual registered cleanup hook
+and injects a removal failure for the first of two real directories. The baseline
+reports the error but neither removes the second directory nor retries the first
+on the next cleanup call. The candidate preserves the same error, removes the
+second directory and successfully retries the first after removal is restored.
+Both keep normal CA bytes and missing-file behavior. Probe files were removed and
+instrumentation restored byte for byte. Independent review preserves all coverage;
+the lifecycle credential-redaction substring assertion remains a separate
+source-only follow-up, with no production leak claimed.
 
 ## Pending qualification and proof repairs
 
