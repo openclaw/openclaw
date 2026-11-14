@@ -422,11 +422,12 @@ export async function readClawHubTemplatePreview(
   requireTemplateName(params.packageName);
   requireExactVersion(params.version);
   const detail = await fetchClawHubPackageDetail({ ...params, name: params.packageName });
-  requirePublicTemplatePackage(detail, params.packageName);
-  const { preview } = await readClawHubTemplateContents(params, {
-    kind: params.kind,
-    name: params.name,
-  });
+  // `@publisher/slug` may name an unscoped package; the artifact binds to the stored name.
+  const pkg = requirePublicTemplatePackage(detail, params.packageName);
+  const { preview } = await readClawHubTemplateContents(
+    { ...params, packageName: pkg.name },
+    { kind: params.kind, name: params.name },
+  );
   if (!preview) {
     throw new ClawHubSourceError(
       "clawhub_preview_unavailable",
