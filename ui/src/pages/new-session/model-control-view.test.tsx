@@ -351,9 +351,8 @@ it("retains accepted rows and search through failed refresh, then retires them o
     const retry = deferred<ModelCatalogResult>();
     state.request.mockImplementation(() => retry.promise);
     state.emitCatalogChanged();
-    await waitForSolid(() =>
-      expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull(),
-    );
+    await waitForSolid(() => expect(state.request).toHaveBeenCalledTimes(3));
+    expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
     retry.resolve(initial);
     await waitForSolid(() => {
       expect(container.textContent).not.toContain("Couldn’t refresh some models");
