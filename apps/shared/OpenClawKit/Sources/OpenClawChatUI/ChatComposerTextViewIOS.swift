@@ -263,6 +263,9 @@ enum ChatComposerTextViewIOSFactory {
         textView.textContainer.lineFragmentPadding = 0
         textView.returnKeyType = .default
         textView.accessibilityIdentifier = "chat-message-input"
+        // The placeholder is a separate SwiftUI overlay that disappears once the draft has
+        // text, so the editor needs its own name for VoiceOver and the form-controls rotor.
+        textView.accessibilityLabel = String(localized: "Message")
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return textView
     }
