@@ -76,12 +76,9 @@ import {
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatContextTokensValue } from "./status-context-format.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
-import {
-  formatTokensPairValue,
-  formatCacheHitValue,
-  formatContextTokensValue,
-} from "./status-usage-format.js";
+import { formatTokensPairValue, formatCacheHitValue } from "./status-usage-format.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
