@@ -122,7 +122,7 @@ export type ProfileFixture = {
   githubIdentity?: { host?: string; login: string } | null;
 };
 
-export function visitorProfileFixture(
+function visitorProfileFixture(
   initial: ProfileFixture[] = [],
   githubProfiles: Array<{ accountId: number; profileId: string }> = [],
 ) {

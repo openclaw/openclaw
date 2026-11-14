@@ -8,7 +8,6 @@ import { loadSessionEntryForAdmission } from "../../../config/sessions/session-a
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { persistInternalSourceReply } from "../../../gateway/internal-source-reply-persistence.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -24,31 +23,20 @@ import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
-  createTestSession,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
-import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
-import type { AgentSession } from "../../sessions/agent-session.js";
-import type { ExtensionFactory } from "../../sessions/extensions/types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
-  retainEmbeddedSessionPromptState,
   persistToolResultProjections,
 } from "../session-prompt-state.js";
-import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
-import {
-  prepareEmbeddedAttemptSessionBoundary,
-  prepareEmbeddedAttemptSessionManager,
-} from "./attempt-session-prepare.js";
+import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-prepare.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export async function appendCompletedToolWork(
+async function appendCompletedToolWork(
   manager: SessionManager,
   runId: string,
   beforeNested?: () => void | Promise<void>,
@@ -90,7 +78,7 @@ export async function appendCompletedToolWork(
   await original.appendCustomEntryAsync("openclaw.cache-ttl", { timestamp: 4 });
 }
 
-export async function appendOversizedCacheSnapshot(manager: SessionManager) {
+async function appendOversizedCacheSnapshot(manager: SessionManager) {
   const state = createToolResultPromptProjectionState();
   state.frozen.add("prior-result");
   state.sourceHashByKey.set("prior-result", "synthetic-source");
@@ -349,102 +337,4 @@ export async function withInterruptedTurn(
       clearEmbeddedSessionPromptStates([target.sessionId]);
     }
   });
-}
-
-export async function withReplaySession(
-  fixture: Parameters<Parameters<typeof withInterruptedTurn>[1]>[0],
-  appendOnlyRuntimeContext: boolean,
-  run: (
-    session: AgentSession,
-    submit: () => Promise<void>,
-    manager: SessionManager,
-  ) => Promise<void>,
-  options: {
-    beforeStart?: () => Promise<unknown>;
-    afterReplayPreparation?: () => Promise<unknown>;
-    recovery?: "retry" | "compaction";
-    compactionReserveTokens?: number;
-    images?: ImageContent[];
-  } = {},
-) {
-  const { attempt, target, prepare } = fixture;
-  const prepared = await prepare();
-  const handlers: ExtensionFactory = (api) => {
-    if (options.beforeStart) {
-      api.on("before_agent_start", async () => {
-        await options.beforeStart?.();
-      });
-    }
-    if (options.recovery === "compaction") {
-      api.on("session_before_compact", async (event) => {
-        const { preparation } = event as {
-          preparation: { firstKeptEntryId: string; tokensBefore: number };
-        };
-        return {
-          compaction: {
-            summary: "Continue the current request",
-            firstKeptEntryId: preparation.firstKeptEntryId,
-            tokensBefore: preparation.tokensBefore,
-          },
-        };
-      });
-    }
-  };
-  const { session } = await createTestSession({
-    sessionManager: prepared.sessionManager,
-    resourceLoader: await createResourceLoader(handlers),
-    settingsManager: SettingsManager.inMemory({
-      compaction: {
-        enabled: options.recovery === "compaction",
-        reserveTokens: options.compactionReserveTokens ?? 0,
-        keepRecentTokens: 1,
-      },
-      retry: { enabled: options.recovery === "retry", baseDelayMs: 1 },
-    }),
-  });
-  session[agentSessionSetPromptPreparation](async () => {
-    const admit = await prepared.prepareInitialUserTurnReplay?.();
-    await options.afterReplayPreparation?.();
-    return admit;
-  });
-  try {
-    await prepareEmbeddedAttemptSessionBoundary({
-      activeSession: session,
-      appendOnlyRuntimeContext,
-      attempt,
-      ...prepared.userMessageBoundary,
-      isRawModelRun: false,
-      sessionManager: prepared.sessionManager,
-      setActiveSessionSystemPrompt: () => {},
-    });
-    using promptStateLease = retainEmbeddedSessionPromptState(target.sessionId);
-    const promptState = promptStateLease.state;
-    const submit = () =>
-      submitEmbeddedAttemptPrompt({
-        attempt,
-        activeSession: session,
-        appendOnlyRuntimeContext,
-        contextTokenBudget: 8000,
-        images: options.images ?? [],
-        modelPrompt: attempt.prompt,
-        onFinalPromptText: () => {},
-        persistToolResultProjections: async () => {},
-        runtimeOnly: false,
-        systemPrompt: "",
-        toolResultAggregateMaxChars: 8000,
-        toolResultMaxChars: 4000,
-        toolResultPromptProjectionState: promptState.toolResults,
-        trajectoryRecorder: null,
-        transcriptLeafId: prepared.sessionManager.getLeafId(),
-        transcriptPrompt: attempt.prompt,
-        runtimeContextMessage: buildRuntimeContextCustomMessage("Current runtime context"),
-        promptActiveSession: (text, opts) =>
-          attempt.userTurnTranscriptRecorder!.withPendingInput!(() =>
-            session.prompt(text, { ...opts, expandPromptTemplates: false }),
-          ),
-      });
-    await run(session, submit, prepared.sessionManager);
-  } finally {
-    session.dispose();
-  }
 }

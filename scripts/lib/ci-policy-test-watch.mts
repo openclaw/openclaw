@@ -481,7 +481,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
@@ -1668,7 +1667,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
   },
   ...[
-    "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
     "src/config/sessions/session-accessor.sqlite-branches.test.ts",
     "src/gateway/session-message-events.test.ts",

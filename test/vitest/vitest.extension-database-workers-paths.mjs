@@ -535,7 +535,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/topic-name-cache.test.ts",
   "extensions/telegram/src/transport-payload.test.ts",
   "extensions/telegram/src/update-offset-store.test.ts",
-  "extensions/visitor-access/index.test.ts",
   "extensions/voice-call/doctor-contract-api.test.ts",
   "extensions/voice-call/src/call-delivery-runtime.test.ts",
   "extensions/voice-call/src/call-delivery.test.ts",
