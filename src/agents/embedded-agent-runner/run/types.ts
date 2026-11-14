@@ -417,6 +417,8 @@ export type EmbeddedRunAttemptResult = {
     asyncTaskId?: string;
     /** Producer-recorded: this exec result parked a Code Mode run (status "waiting"). */
     codeModeSuspended?: boolean;
+    /** The ask_user owner returned action_unresolved; this turn awaits new user instruction. */
+    requiredActionUnresolved?: true;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   /** Core successfully settled this requester's explicit yield in the registry. */

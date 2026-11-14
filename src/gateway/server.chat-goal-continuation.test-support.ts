@@ -70,6 +70,25 @@ export function registerGoalAutomaticContinuationCases(
     });
   });
 
+  it("waits for a new user instruction after a required action is unresolved", async () => {
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      if (runEmbeddedAgent.mock.calls.length > 1) {
+        await setGoalStatus("paused");
+      }
+      return Object.assign(result(params.sessionId), {
+        didEncounterUnresolvedRequiredAction: true as const,
+      });
+    });
+    await start("Wait for a new instruction before retrying the required step");
+    await expectDrained();
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(loadSessionEntry(scope())?.goal).toMatchObject({
+      status: "active",
+      continuationTurns: 0,
+    });
+  });
+
   // Admit the completion before ending the first turn. Goal successors outlive the
   // event's signal and one-shot delivery but retain its explicit delivery restriction.
   const completeExecDuringFirstTurn = (

@@ -68,6 +68,18 @@ describe("terminal resolution", () => {
     resetGeneratedMediaTaskActivityForTests();
   });
 
+  it("carries an unresolved required action into the run result", async () => {
+    const resolved = await resolveTerminal({
+      assistant: textAssistant("The dependent step remains blocked."),
+      attemptOverrides: {
+        toolMetas: [{ toolName: "ask_user", isError: false, requiredActionUnresolved: true }],
+      },
+    });
+    expectComplete(resolved);
+
+    expect(resolved.result.didEncounterUnresolvedRequiredAction).toBe(true);
+  });
+
   it.each(["failed", "recovered", "cancelled"] as const)(
     "retains observations only for the selected failed attempt (%s)",
     async (selection) => {
