@@ -1,7 +1,7 @@
 import { unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   DEFAULT_COMPACTION_SETTINGS,
   prepareCompaction,
@@ -9,6 +9,7 @@ import {
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { onAgentRuntimeEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -465,6 +466,16 @@ it.each(["throws", "rejects"] as const)(
       const manager = await fixture.open();
       await appendUser(manager, "old".repeat(1000), 1);
       await appendUser(manager, "recent request", 2);
+      const runId = `seed-observer-${failure}`;
+      const published: AgentEventPayload[] = [];
+      onTestFinished(
+        onAgentRuntimeEvent((event) => {
+          if (event.runId === runId) {
+            published.push(event);
+          }
+        }),
+      );
+      const source = new AbortController();
       const onAgentEvent = vi.fn(() => {
         if (failure === "throws") {
           throw new Error("observer down");
@@ -472,10 +483,10 @@ it.each(["throws", "rejects"] as const)(
         return Promise.reject(new Error("observer down"));
       });
       const prepare = expectDefined(
-        fixture.bind({
-          config: seedConfig(1024, false),
-          onAgentEvent,
-        })?.prepareBoundedSeed,
+        fixture.bind(
+          { config: seedConfig(1024, false), runId, onAgentEvent },
+          source.signal,
+        )?.prepareBoundedSeed,
         "seed capability",
       );
       const seed = await prepare({ assertCurrent: () => {} });
@@ -489,5 +500,19 @@ it.each(["throws", "rejects"] as const)(
           message: expect.stringContaining("Older history outside that window is omitted"),
         },
       });
+      expect(published).toMatchObject([
+        {
+          runId,
+          sessionKey: fixture.target.sessionKey,
+          stream: "compaction",
+          data: {
+            phase: "context_bounded",
+            message: expect.stringContaining("Older history outside that window is omitted"),
+          },
+        },
+      ]);
+      source.abort(new Error("seed source closed"));
+      await expect(prepare({ assertCurrent: () => {} })).rejects.toThrow("seed source closed");
+      expect(published).toHaveLength(1);
     }),
 );
