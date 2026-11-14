@@ -62,13 +62,13 @@ const CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS = 9_000;
 // must follow the same physical client across duplicate plugin module copies.
 const { configuredClients, physicalThreadReleases, claimedThreadReleaseTokens } =
   defineCodexBuildState("openclaw.codexAppServerClientRuntime", () => ({
-    configuredClients: new WeakMap<CodexAppServerClient, ClientRuntime>(),
+    configuredClients: new WeakMap<object, ClientRuntime>(),
     physicalThreadReleases: new WeakMap<ThreadRelease, ThreadRelease>(),
     claimedThreadReleaseTokens: new WeakMap<ThreadRelease, ThreadOwnerToken>(),
   }))();
 
 /** Only an initialized, still-open physical client can own retained native subscriptions. */
-export function isCodexAppServerClientRuntimeLive(client: CodexAppServerClient): boolean {
+export function isCodexAppServerClientRuntimeLive(client: object): boolean {
   const runtime = configuredClients.get(client);
   return runtime !== undefined && !runtime.closed;
 }
