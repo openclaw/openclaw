@@ -146,3 +146,52 @@ it.each(["tool", "item"] as const)(
     expect(rows()).toEqual([...accepted.slice(0, -1), "Continued. Finishing. Done."]);
   },
 );
+
+// Claude CLI runs stream one cumulative text for the whole run, and every history read
+// during the run returns it as inFlightRun.text. Saved narration must not reappear as a
+// live tail below an accepted steer (steer-while-streaming ordering, 10 Nov).
+it("shows only unsaved CLI narration after an accepted steer", async () => {
+  const history = activeHistory("active-run");
+  const { original, steer } = steerPrompts(3, 3_000);
+  history.messages = [original];
+  const state = createState(history);
+  await loadChatHistory(state);
+  const narration = (text: string, seq: number) =>
+    nativeMessage("assistant", text, 1_000 + seq, {
+      id: `narration-${seq}`,
+      seq,
+      runId: "active-run",
+      idempotencyKey: `cli-assistant:active-run:seg:native:${seq}`,
+    });
+  const accept = (payload: unknown) =>
+    applySessionMessagePayload(state, payload, true, { kind: "live", activeRunId: "active-run" });
+  const emitCumulative = (content: string) =>
+    handleChatGatewayEvent(state, {
+      sessionKey: state.sessionKey,
+      runId: "active-run",
+      state: "delta",
+      replace: true,
+      message: { role: "assistant", content },
+    });
+  const rows = () =>
+    buildStateItems(state, "cli-steer").flatMap((item) =>
+      item.kind === "stream"
+        ? [`live:${item.text.trim()}`]
+        : chatItemGroups(item).flatMap((group) =>
+            group.messages.map(({ message }) => extractText(message)?.trim() ?? group.role),
+          ),
+    );
+  emitCumulative("Narration 1.");
+  const first = narration("Narration 1.", 2);
+  accept({ runId: "active-run", message: first });
+  accept({ message: steer });
+  // The steer's history read carries the saved narration in the in-flight text.
+  history.messages = [original, first, steer];
+  history.inFlightRun!.text = "Narration 1.";
+  await loadChatHistory(state);
+  expect(rows()).toEqual(["Original prompt", "Narration 1.", "Steer prompt"]);
+  emitCumulative("Narration 1.\n\nNarration 2.");
+  expect(rows()).toEqual(["Original prompt", "Narration 1.", "Steer prompt", "live:Narration 2."]);
+  accept({ runId: "active-run", message: narration("Narration 2.", 4) });
+  expect(rows()).toEqual(["Original prompt", "Narration 1.", "Steer prompt", "Narration 2."]);
+});

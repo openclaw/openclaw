@@ -13,6 +13,7 @@ export type TranscriptReplacementOptions = {
 };
 
 export type TranscriptRewriteOptions = {
+  assistantMetadataOnly?: boolean;
   legacyTextStorage?: boolean;
   projectionCurrent?: boolean;
   touchMutation?: boolean;

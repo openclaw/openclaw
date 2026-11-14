@@ -1,0 +1,3 @@
+734
+# Native completed-row durability, identity deduplication, partial exclusion, and writer-fenced settlement regressions,
+# plus the mid-run hold: completed snapshots stay out of display until settlement or stranding.

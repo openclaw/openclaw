@@ -61,6 +61,16 @@ function assistant(content: unknown[], model = "claude-sonnet-4-6") {
     message: { model, role: "assistant", content },
   };
 }
+function nativeText(uuid: string, text: string, fields: Record<string, unknown> = {}) {
+  return {
+    type: "assistant",
+    uuid,
+    message: { role: "assistant", content: [{ type: "text", text }], ...fields },
+  };
+}
+function nativeTool(uuid: string) {
+  return { ...assistant([{ type: "tool_use", id: "tool", name: "exec", input: {} }]), uuid };
+}
 function syntheticNoResponse(text = "No response requested.", model = "<synthetic>") {
   return assistant([{ type: "text", text }], model);
 }
@@ -452,3 +462,115 @@ it.each([
   expect(completed).toEqual([]);
   expect(parser.getOutput()?.errorText).toBeTruthy();
 });
+
+// Completed parent text must reach durability before any terminal outcome, even without drafts.
+it.each([false, true])(
+  "captures completed native text with commentary=%s before settlement",
+  (commentary) => {
+    const segments: Cli.CliCommentarySegment[] = [];
+    const parser = createClaudeParser({
+      onCommentaryText: commentary ? () => {} : undefined,
+      onCommentarySegment: (segment) => segments.push(segment),
+    });
+    parser.push(
+      joinJsonlFrames(
+        init("native-session"),
+        nativeText("answer-row", "<thinking>secret</thinking>Did it react?", {
+          id: "answer",
+          stop_reason: "end_turn",
+        }),
+        "",
+      ),
+    );
+    expect(segments).toEqual([]);
+    parser.push(joinJsonlFrames(nativeTool("tool-row"), ""));
+    expect(segments).toMatchObject([
+      {
+        key: "native-session:answer-row",
+        text: "Did it react?",
+        native: { entryId: "answer-row", sessionId: "native-session" },
+      },
+    ]);
+    // A later failure cannot retract the already completed block.
+    parser.push(joinJsonlFrames({ type: "result", is_error: true, errors: ["stopped"] }, ""));
+    parser.finish();
+    expect(segments).toHaveLength(1);
+  },
+);
+
+it.each([false, true])("identifies only snapshot-owned output with commentary=%s", (commentary) => {
+  const parser = createClaudeParser({ onCommentaryText: commentary ? () => {} : undefined });
+  finishFrames(
+    parser,
+    init("native"),
+    { ...messageStart, event: { type: "message_start", message: { id: "m1" } } },
+    claudeTextDelta("Check"),
+    nativeText("commentary", "Check", { id: "m1", stop_reason: "end_turn" }),
+    toolStart(),
+    messageStop,
+    { ...messageStart, event: { type: "message_start", message: { id: "m2" } } },
+    claudeTextDelta("Checking"),
+    claudeTextDelta(" succeeded"),
+    nativeText("answer", "Checking succeeded", { id: "m2", stop_reason: "end_turn" }),
+    claudeTextDelta(" unfinished"),
+  );
+  const output = parser.getOutput()!;
+  expect(output.text).toBe(
+    commentary ? "Checking succeeded unfinished" : "Check\n\nChecking succeeded unfinished",
+  );
+  expect(
+    output.textSnapshotRanges?.map((range) => ({
+      key: range.key,
+      text: output.text.slice(range.start, range.end),
+    })),
+  ).toEqual(
+    commentary
+      ? [{ key: "native:answer", text: "Checking succeeded" }]
+      : [
+          { key: "native:commentary", text: "Check" },
+          { key: "native:answer", text: "\n\nChecking succeeded" },
+        ],
+  );
+});
+
+it.each([
+  ["raw protocol", toolProtocol, null, "abort", true],
+  ["protocol before tool boundary", toolProtocol, null, "next-uuid", true],
+  ["protocol on unfinished stream", toolProtocol, null, "finish", true],
+  ["protocol on failed result", toolProtocol, null, "failure", true],
+  ["plain prose", "Answer", null, "abort", false],
+  ["fenced example", "Example:\n```xml\n" + toolProtocol, null, "abort", false],
+  ["indented example", "    " + toolProtocol.replace("\n", "\n    "), null, "abort", false],
+  ["completed explanation", "Example:\n" + toolProtocol, "end_turn", "abort", false],
+  ["successful explanation", "Example:\n" + toolProtocol, null, "success", false],
+] as const)(
+  "flushes %s without interrupted delivery",
+  (_name, text, stop_reason, boundary, rejected) => {
+    const delivered: string[] = [];
+    const segments: Cli.CliCommentarySegment[] = [];
+    const parser = createClaudeParser({
+      onAssistantDelta: ({ delta }) => delivered.push(delta),
+      onCommentaryText: () => {},
+      onCommentarySegment: (segment) => segments.push(segment),
+    });
+    parser.push(joinJsonlFrames(init("native"), nativeText("answer", text, { stop_reason }), ""));
+    if (boundary === "next-uuid") {
+      parser.push(joinJsonlFrames(nativeTool("tool"), ""));
+    } else if (boundary === "success" || boundary === "failure") {
+      parser.push(joinJsonlFrames(result(text, { is_error: boundary === "failure" }), ""));
+    }
+    const before = [...delivered];
+    if (boundary === "finish" || boundary === "success" || boundary === "failure") {
+      parser.finish();
+    } else {
+      parser.flushCompletedSegments();
+    }
+    parser.flushCompletedSegments();
+    if (boundary === "abort" || boundary === "next-uuid") {
+      expect(delivered).toEqual(before);
+    }
+    expect(segments.map((segment) => segment.text)).toEqual(rejected ? [] : [text]);
+    parser.finish();
+    expect(segments).toHaveLength(rejected ? 0 : 1);
+  },
+);

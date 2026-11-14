@@ -672,7 +672,11 @@ export function applySessionMessageRewrite<T>(
                 seq: current.seq,
               },
             ],
-            { projectionCurrent: facts !== undefined, touchMutation: options.touchMutation },
+            {
+              projectionCurrent: facts !== undefined,
+              touchMutation: options.touchMutation,
+              assistantMetadataOnly: input.assistantMetadataOnly,
+            },
           );
         } catch (error) {
           if (error instanceof SqliteTranscriptMutationConflictError) {

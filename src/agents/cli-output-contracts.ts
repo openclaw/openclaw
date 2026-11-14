@@ -30,11 +30,25 @@ export type CliTerminalInterruption = {
   reason: "aborted" | "timeout";
 };
 
+/**
+ * One completed pre-tool commentary block; `key` names its native message when known.
+ * `native` names the CLI's own record of that block, so history pairs the two even when
+ * display transforms changed the text.
+ */
+export type CliCommentarySegment = {
+  key?: string;
+  text: string;
+  timestamp: number;
+  native?: { entryId: string; sessionId: string };
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
   /** Completed result boundaries, retained for independent delivery and retry. */
   textParts?: string[];
+  /** Parser-owned native snapshot boundaries in rawText (or text before transforms). */
+  textSnapshotRanges?: { key: string; start: number; end: number }[];
   rawText?: string;
   /**
    * Raw text of the model's final message when it differs from the cumulative
@@ -151,6 +165,8 @@ export type CliJsonlStreamingParserOptions = {
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
+  /** The same commentary text, for canonical history: it never reaches the terminal reply. */
+  onCommentarySegment?: (segment: CliCommentarySegment) => void;
   onSessionId?: (sessionId: string) => void;
   /** Parent initialization fact; its authority owner validates the raw tool list. */
   onNativeTools?: (tools: unknown) => void;

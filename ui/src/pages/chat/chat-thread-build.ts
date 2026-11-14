@@ -8,7 +8,6 @@ import {
   type ChatGuardianNotice,
   type ChatItem,
   type MessageGroup,
-  accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   trimAccumulatedStreamPrefix,
@@ -71,6 +70,7 @@ import {
   rawMessageTimestamp,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
+  unsavedCliAssistantText,
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
@@ -596,10 +596,7 @@ export function buildChatItems(
     });
   }
 
-  const visibleText = trimAccumulatedStreamPrefix(
-    sanitizeStreamText(props.stream ?? ""),
-    accumulatedStreamText(segments, sanitizeStreamText),
-  );
+  const visibleText = unsavedCliAssistantText(historyItems, currentRunId, props.stream, segments);
   if (props.reasoning) {
     const { runId } = props.reasoning;
     for (const reasoning of props.reasoning.items) {

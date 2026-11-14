@@ -18,6 +18,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import * as cliCredentials from "../cli-credentials.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import {
+  persistCliAssistantSegment,
+  persistCliAssistantSettlement,
+  type CliPersistedSegment,
+} from "./cli-assistant-settlement.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { createHistoryBoundaryFixture, history } from "./history-boundary.test-support.js";
@@ -422,25 +427,6 @@ describe("native CLI login owner", () => {
     expect(relabelled.seeded).toContain("native canary");
   });
 
-  it("attests a token the CLI rotated mid-run before covering the run's rows", async () => {
-    const { f, backend } = await setupNative(true);
-    const before = coveredSeq(f);
-    await withWriter(f, "boundary-native-rotated", backendUsing(backend), async (writer) => {
-      writer.bindExecutionEnv({ CLAUDE_CONFIG_DIR: backend }, false);
-      loginIn(backend, "uuid:account-a", { rotate: true });
-      writer.checkNativeLoginBoundary(false);
-      // Coverage waits for the background attestation.
-      expect(writer.confirmsOwner?.()).toBe(false);
-      await writer.settleNativeLogin();
-      expect(writer.confirmsOwner?.()).toBe(true);
-      append(f, "rotated turn", 2);
-      expectCoverage(f, before + 1);
-    });
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(true);
-    expect(next.seeded).toContain("rotated turn");
-  });
-
   it("stops coverage when a mid-run token attests to another account", async () => {
     const { f, backend } = await setupNative(true);
     await withWriter(f, "boundary-native-rotated-away", backendUsing(backend), async (writer) => {
@@ -536,25 +522,49 @@ describe("native CLI login owner", () => {
     expect(JSON.stringify(f.manager().getEntries())).toContain("queued report b");
   });
 
-  it("runs a refresh-due turn without saved history but keeps covering it", async () => {
-    const { f, backend } = await setupNative(true);
-    const before = coveredSeq(f);
-    // Valid, but inside the window where Claude CLI rotates it before accepting a prompt.
-    loginIn(backend, "uuid:account-a", { rotate: true, expiresAt: Date.now() + 60_000 });
-    await withWriter(f, "boundary-native-refresh-due", backendUsing(backend), async (writer) => {
-      expect(writer.replaysHistory).toBe(false);
-      append(f, "refresh-due ask", 2);
-      writer.bindExecutionEnv({ CLAUDE_CONFIG_DIR: backend }, false);
-      // The CLI rotates after the last boundary check; settling attests what it left.
-      loginIn(backend, "uuid:account-a", { rotate: true });
-      await writer.settleNativeLogin();
-      f.manager().appendMessage({ role: "assistant", content: "reply", timestamp: 3 } as never);
-      expectCoverage(f, before + 2);
-    });
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(true);
-    expect(next.seeded).toContain("refresh-due ask");
-  });
+  it.each([false, true])(
+    "covers rotated snapshots and settlement (refreshDue=%s)",
+    async (refreshDue) => {
+      const { f, backend } = await setupNative(true);
+      const before = coveredSeq(f);
+      // Valid, but inside the window where Claude CLI rotates it before accepting a prompt.
+      if (refreshDue) {
+        loginIn(backend, "uuid:account-a", { rotate: true, expiresAt: Date.now() + 60_000 });
+      }
+      await withWriter(f, "refresh-due", backendUsing(backend), async (writer, params) => {
+        expect(writer.replaysHistory).toBe(!refreshDue);
+        append(f, "refresh-due ask", 2);
+        writer.bindExecutionEnv({ CLAUDE_CONFIG_DIR: backend }, false);
+        // The CLI rotates after the last boundary check; settling attests what it left.
+        loginIn(backend, "uuid:account-a", { rotate: true });
+        writer.checkNativeLoginBoundary(false);
+        expect(writer.confirmsOwner?.()).toBe(false);
+        await writer.settleNativeLogin();
+        expect(writer.confirmsOwner?.()).toBe(true);
+        const runParams = { ...params, persistAssistantTranscript: true };
+        const segments: CliPersistedSegment[] = [];
+        await persistCliAssistantSegment(
+          runParams,
+          "test",
+          segments,
+          { key: "snapshot", text: "reply", timestamp: 3 },
+          0,
+        );
+        await persistCliAssistantSettlement({
+          runParams,
+          segments,
+          output: { text: "" },
+          modelId: "test",
+          sourceReplyWasDelivered: false,
+        });
+        expectCoverage(f, before + 2);
+      });
+      const next = await prepareWith(f, backendUsing(backend));
+      expect(next.allowed).toBe(true);
+      expect(next.seeded).toContain("refresh-due ask");
+      expect(next.seeded).toContain("reply");
+    },
+  );
 
   it("covers a SessionManager append only while the native login owner holds", async () => {
     const { f, backend } = await setupNative();

@@ -10,7 +10,10 @@ import type {
   SessionActorMemoryReportsWrites,
 } from "./session-actor-memory-reports-contract.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
-import { transcriptRewritePreservesAdmission } from "./session-transcript-rewrite-effects.js";
+import {
+  transcriptAssistantMetadataSettlementIsValid,
+  transcriptRewritePreservesAdmission,
+} from "./session-transcript-rewrite-effects.js";
 import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
@@ -85,11 +88,21 @@ export function commitSessionActorMemoryMessageRewrite(
   if (changed) {
     const event = canonicalizeTranscriptEventMedia({ ...current.event, message: input.message });
     const eventJson = JSON.stringify(event);
+    if (
+      input.assistantMetadataOnly &&
+      !transcriptAssistantMetadataSettlementIsValid(current.eventJson, eventJson)
+    ) {
+      throw new Error("Assistant metadata settlement changed transcript content");
+    }
     createSessionActorMemoryEvents(context).replaceRows(
       context.state.events.map((row) =>
         row.rawSeq === current.seq ? { ...row, event, eventJson } : row,
       ),
-      { preserveGeneration: transcriptRewritePreservesAdmission(current.eventJson, eventJson) },
+      {
+        preserveGeneration:
+          input.assistantMetadataOnly ||
+          transcriptRewritePreservesAdmission(current.eventJson, eventJson),
+      },
     );
   }
   const generation = context.state.hot.transcript.version.generation;

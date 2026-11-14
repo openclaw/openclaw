@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AssistantMessage } from "../../llm/types.js";
 import { prepareModelPromptProjection } from "../../sessions/user-turn-transcript.message.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
@@ -20,6 +22,7 @@ import { readSessionActorStorageResult } from "./session-actor-storage-result.js
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type { SessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { executeSessionMessageRewriteOperation } from "./session-message-rewrite-domain.js";
+import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import type {
   SessionMessageRewriteCommitted,
   SessionMessageRewriteSelection,
@@ -42,6 +45,7 @@ type MessageRewriteResult<T> = {
 /** Closed projections run in the worker; arbitrary callbacks prepare on the host. */
 async function rewritePreparedTranscriptMessage<T>(
   params: {
+    assistantMetadataOnly?: boolean;
     scope: SessionTranscriptWriteScope;
     readSource?: SessionEntryReadSource;
     target: SessionMessageRewriteSelection["target"];
@@ -73,6 +77,7 @@ async function rewritePreparedTranscriptMessage<T>(
           scope: { ...scope, sessionId: scope.sessionId },
           target: params.target,
           expectedEntry: params.expectedEntry,
+          assistantMetadataOnly: params.assistantMetadataOnly,
         };
         const expected = await memory.actor.storage.read(
           { type: "session.rewrite.prepare", input },
@@ -119,6 +124,7 @@ async function rewritePreparedTranscriptMessage<T>(
     scope,
     target: params.target,
     expectedEntry: params.expectedEntry,
+    assistantMetadataOnly: params.assistantMetadataOnly,
   };
   return await runSessionEntryWorkerOperation<
     SessionMessageRewriteCommitted,
@@ -261,4 +267,52 @@ export async function rewritePreparedAssistantTranscriptMessageForRun(params: {
     },
   });
   return result ? { messageId: result.messageId } : null;
+}
+
+/** Settle a prepared assistant without revoking account-bound replay coverage. */
+export async function settlePreparedAssistantTranscriptMetadataAtAnchor(
+  anchor: TranscriptEntryAnchor,
+  prepareAssistant: (message: AssistantMessage) => AssistantMessage | undefined,
+  options: {
+    assertCurrent?: () => void;
+    expectedEntry?: SessionMessageRewriteSelection["expectedEntry"];
+  } = {},
+) {
+  const prepare = (message: unknown) => {
+    // SAFETY: The canonical owner stores typed messages; the role is checked below before use and commit validates the closed patch.
+    const assistant = message as AssistantMessage;
+    if (!isRecord(message) || message.role !== "assistant") {
+      return undefined;
+    }
+    return prepareAssistant(assistant);
+  };
+  const result = !isMainThread
+    ? await rewriteNativeTranscriptMessageAtAnchor(
+        anchor,
+        (message) => {
+          options.assertCurrent?.();
+          if (!isDeepStrictEqual(readActiveTranscriptEntryAnchor(anchor), anchor)) {
+            throw new SessionTranscriptWriterClaimReboundError();
+          }
+          return prepare(message);
+        },
+        { assistantMetadataOnly: true, expectedEntry: options.expectedEntry },
+      )
+    : await rewritePreparedTranscriptMessage({
+        ...options,
+        scope: anchor,
+        target: { kind: "anchor", anchor, active: "exact" },
+        assistantMetadataOnly: true,
+        prepare,
+      });
+  if (!result) {
+    return null;
+  }
+  const current = (await readSessionTranscriptAnchorsAsync(anchor, { entryIds: [anchor.entryId] }))
+    .anchors[0];
+  options.assertCurrent?.();
+  if (!current || current.generation !== result.generation) {
+    throw new SessionTranscriptWriterClaimReboundError();
+  }
+  return { ...result, anchor: current };
 }
