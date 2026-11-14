@@ -11,6 +11,7 @@ import type {
   ChannelMessageActionName,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -48,7 +49,7 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { readToolResultDetails } from "../tool-result-error.js";
+import { readToolResultDetails, resolveToolResultFailureKind } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
@@ -392,6 +393,58 @@ describe("message tool queued gateway delivery", () => {
     await tool.execute("send-again", { action: "send", message: "hello" });
     expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
     expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
+  });
+});
+
+describe("message tool partial delivery", () => {
+  it.each([
+    ["provider-accepted ids", ["100000000000000021"]],
+    ["no confirmed ids", []],
+  ])("keeps %s on the failed send", async (_name, messageIds) => {
+    const { tool } = createFailingMessageTool(
+      createChannelPartialDeliveryError(new Error("second part failed"), {
+        messageIds,
+        visibleReplySent: true,
+      }),
+    );
+
+    const result = await tool.execute("partial", { action: "send", message: "hello" });
+
+    expect(readToolResultDetails(result)).toMatchObject({
+      ok: false,
+      action: "send",
+      deliveryStatus: "partial_failed",
+      sentBeforeError: true,
+      acceptedMessageIds: messageIds,
+      remainderUnconfirmed: true,
+    });
+    expect(resolveToolResultFailureKind(result)).toBe("failed");
+    expect(result.content).toEqual([
+      { type: "text", text: expect.stringContaining("unconfirmed") },
+    ]);
+  });
+
+  it("reads accepted ids from the receipt when the transport omits messageIds", async () => {
+    const { tool } = createFailingMessageTool(
+      createChannelPartialDeliveryError(new Error("second post failed"), {
+        receipt: {
+          platformMessageIds: ["100000000000000021"],
+          parts: [{ platformMessageId: "100000000000000021", kind: "text", index: 0 }],
+          sentAt: 1,
+        },
+        visibleReplySent: true,
+      }),
+    );
+
+    const result = await tool.execute("partial-receipt", { action: "send", message: "hello" });
+
+    expect(readToolResultDetails(result)).toMatchObject({
+      ok: false,
+      deliveryStatus: "partial_failed",
+      acceptedMessageIds: ["100000000000000021"],
+      remainderUnconfirmed: true,
+    });
+    expect(resolveToolResultFailureKind(result)).toBe("failed");
   });
 });
 
