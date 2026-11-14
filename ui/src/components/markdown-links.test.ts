@@ -60,6 +60,21 @@ describe("toSanitizedMarkdownHtml links", () => {
         "www.example.com/path%22with%22quotes",
       ],
       ["(see www.example.com/foo(bar))", "www.example.com/foo(bar)", "(see ", ")"],
+      ["www.example.com/foo(bar)))", "www.example.com/foo(bar)", "", "))"],
+      [
+        "www.example.com/foo[bar]]",
+        "www.example.com/foo[bar]",
+        "",
+        "]",
+        "www.example.com/foo%5Bbar%5D",
+      ],
+      [
+        "www.example.com/foo{bar}}",
+        "www.example.com/foo{bar}",
+        "",
+        "}",
+        "www.example.com/foo%7Bbar%7D",
+      ],
       ["Visit www.example.com/<token> here", "www.example.com/", "Visit ", "&lt;token&gt; here"],
       ["www.example.com重新解读", "www.example.com", "", "重新解读"],
     ])("preserves URL boundaries and encoding in %s", expectWwwLink);

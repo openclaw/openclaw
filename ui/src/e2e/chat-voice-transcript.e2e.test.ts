@@ -53,7 +53,7 @@ suite.define(() => {
         await transcript.getByText(backend, { exact: true }).first().waitFor();
         expect(await disclosure.getAttribute("open")).toBeNull();
         await page.locator(".agent-chat__composer-combobox textarea").focus();
-        await page.keyboard.press("Control+f");
+        await page.keyboard.press("ControlOrMeta+f");
         const search = page.getByRole("textbox", { name: "Search messages", exact: true });
         await search.fill("code zero");
         await transcript.getByText(speech, { exact: true }).waitFor();

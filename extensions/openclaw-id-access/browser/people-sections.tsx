@@ -17,7 +17,7 @@ import {
   personInitials,
 } from "./people-format.js";
 import type { PeopleMotion } from "./people-motion.js";
-import type { Invite, Member, MemberDevice, OwnerDevice } from "./types.js";
+import type { ExistingProfile, Invite, Member, MemberDevice, OwnerDevice } from "./types.js";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -120,9 +120,15 @@ export function InviteForm(props: {
   busy?: boolean;
   locale: string;
   error?: PeopleError | null;
-  onCreate: (email: string, role: MemberRole) => Promise<CreatedInvite | undefined>;
+  existingProfiles?: ExistingProfile[];
+  onCreate: (
+    email: string,
+    role: MemberRole,
+    existingProfileId?: string,
+  ) => Promise<CreatedInvite | undefined>;
 }) {
   const [email, setEmail] = createSignal("");
+  const [existingProfileId, setExistingProfileId] = createSignal("");
   const [role, setRole] = createSignal<MemberRole>("operator");
   const [created, setCreated] = createSignal<(CreatedInvite & { role: MemberRole }) | null>(null);
   const [copied, setCopied] = createSignal(false);
@@ -130,12 +136,17 @@ export function InviteForm(props: {
   let inviteAgain!: HTMLButtonElement;
   const submit = async () => {
     const invitedRole = role();
-    const made = await props.onCreate(email().trim().toLowerCase(), invitedRole);
+    const made = await props.onCreate(
+      email().trim().toLowerCase(),
+      invitedRole,
+      existingProfileId() || undefined,
+    );
     if (made) {
       props.motion.update(() => {
         setCreated({ ...made, role: invitedRole });
         setCopied(false);
         setEmail("");
+        setExistingProfileId("");
       });
       onSettled(() => inviteAgain.focus());
     }
@@ -170,6 +181,29 @@ export function InviteForm(props: {
                 }
               }}
             >
+              <label class="ocid-access__profile-select">
+                <span>
+                  Existing person on this claw <span class="ocid-access__hint">(optional)</span>
+                </span>
+                <select
+                  class="settings-input"
+                  aria-label="Existing person on this claw"
+                  value={existingProfileId()}
+                  disabled={props.disabled}
+                  onChange={(event) => setExistingProfileId(event.currentTarget.value)}
+                >
+                  <option value="">Create a new person</option>
+                  <For each={props.existingProfiles ?? []} keyed={(profile) => profile.id}>
+                    {(profile) => (
+                      <option value={profile().id}>{profile().displayName || profile().id}</option>
+                    )}
+                  </For>
+                </select>
+                <span class="ocid-access__hint">
+                  They join as this person after you approve. Their existing conversations stay with
+                  them.
+                </span>
+              </label>
               <input
                 ref={(element) => (emailInput = element)}
                 class="settings-input"
@@ -334,6 +368,13 @@ export function PendingRequests(props: {
                       {pending().reported.locationHint ?? "location unknown"} · decide by{" "}
                       {formatDay(pending().decideBy, props.locale)}
                     </div>
+                    <Show when={invite().existingProfile}>
+                      {(profile) => (
+                        <p class="ocid-access__hint">
+                          Will join as {profile().displayName || profile().id}
+                        </p>
+                      )}
+                    </Show>
                   </div>
                   <Show when={!props.readOnly}>
                     <div class="ocid-access__actions">
@@ -537,6 +578,18 @@ export function Members(props: {
             : null
         }
       />
+      <For
+        each={props.invites.filter(
+          (invite) => invite.status === "approved" && invite.existingProfile?.fallbackReason,
+        )}
+        keyed={(invite) => invite.inviteId}
+      >
+        {(invite) => (
+          <p class="ocid-access__notice" role="status">
+            {invite().label}: {invite().existingProfile?.fallbackReason}
+          </p>
+        )}
+      </For>
       <ul class="ocid-access__list" ref={props.motion.group()}>
         <li class="ocid-access__row ocid-access__row--owner">
           <Avatar name="You" />
