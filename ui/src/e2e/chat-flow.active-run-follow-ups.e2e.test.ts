@@ -110,7 +110,7 @@ async function restoredSteer(name: string, age: number, offset: number, seq: num
 }
 
 suite.define(() => {
-  it("keeps Send now after a long exec sends a pending steer to the follow-up queue", async () => {
+  it("keeps Interrupt tools and send after a long exec sends a pending steer to the follow-up queue", async () => {
     const { page } = await newChatPage(suite);
     await page.clock.install();
     const sessionKey = "agent:main:main";
@@ -170,7 +170,7 @@ suite.define(() => {
       .getByRole("img", { name: "exec", exact: true });
     const stop = page.getByRole("button", { name: "Stop", exact: true });
     const user = page.locator(".chat-group.user", { hasText: prompt });
-    const link = user.getByRole("button", { name: "Send now", exact: true });
+    const link = user.getByRole("button", { name: "Interrupt tools and send", exact: true });
     await tool.waitFor();
     await stop.waitFor();
     await link.waitFor();

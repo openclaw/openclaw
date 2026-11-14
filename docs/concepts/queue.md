@@ -143,7 +143,7 @@ When channel streaming is `partial` or `block`, steering can look like several s
 - `block`: draft-sized blocks can create the same sequential appearance.
 - Without streaming, steering falls back to a followup after the active run when the runtime cannot accept same-turn steering.
 
-Ordinary `steer` does not abort in-flight tools. The Control UI's **Send now** link
+Ordinary `steer` does not abort in-flight tools. The Control UI's **Interrupt tools and send** link
 explicitly interrupts supported tools for a waiting steer while keeping the run
 alive; unsupported tools show why they must finish. Skipped OpenClaw tool calls
 receive synthetic paired error results so the transcript remains valid. Use

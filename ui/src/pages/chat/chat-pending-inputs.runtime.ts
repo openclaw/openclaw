@@ -45,7 +45,7 @@ export async function executePendingInputAction(
     await client.request("chat.steerNow", { ...scope, sessionId, runId: action.runId });
     // A refused steer stays queued; the refreshed row shows why (listing and
     // steering read the same controller state). If it changed in between, the
-    // row still offers "Send now" and the user can retry.
+    // row still offers the interruption action and the user can retry.
     if (current()) {
       await requestPendingInputPage(state, view.before, "refresh");
     }

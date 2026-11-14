@@ -110,16 +110,16 @@ suite.define(() => {
     });
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     const user = page.locator(".chat-group.user", { hasText: prompt });
-    const links = user.getByRole("button", { name: "Send now", exact: true });
+    const links = user.getByRole("button", { name: "Interrupt tools and send", exact: true });
     const link = links.first();
     await link.waitFor({ state: "visible" });
-    // Steers waiting together drain together: one Send now, on the newest sendable steer.
+    // Steers waiting together drain together: one Interrupt tools and send, on the newest sendable steer.
     await expectCount(links, 1);
     await expectCount(user, 1);
     const bubble = await user.locator(".chat-bubble").first().elementHandle();
     const banner = page.locator(".chat-pending-inputs");
     const historyReads = async () => (await gateway.getRequests("chat.history")).length;
-    // A refused Send now refreshes the row instead of raising a composer banner.
+    // A refused Interrupt tools and send refreshes the row instead of raising a composer banner.
     await gateway.setMethodResponse("chat.steerNow", {
       __mockError: {
         code: "FORBIDDEN",
@@ -157,7 +157,7 @@ suite.define(() => {
     await expectCount(banner, 0);
     await expectCount(user, 1);
     expect(await bubble?.evaluate((element) => element.isConnected)).toBe(true);
-    // When only the earlier steer can interrupt, it carries Send now and the newest stays bare.
+    // When only the earlier steer can interrupt, it carries Interrupt tools and send and the newest stays bare.
     const [firstInput] = history.pendingInputs.items;
     const remaining = {
       ...history,

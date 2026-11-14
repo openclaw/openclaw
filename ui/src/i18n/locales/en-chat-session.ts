@@ -255,7 +255,7 @@ const enChatSession = {
       copyPath: en.chat.workspaceFiles.copyPath,
     },
     pendingInputs: {
-      sendNow: "Send now",
+      sendNow: "Interrupt tools and send",
       steering: "Steering…",
       steerBlocked: "Steering — sends when the current step finishes.",
       steerUnavailable: "Steering — sends on the next model turn.",
