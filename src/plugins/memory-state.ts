@@ -2,7 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isMemorySidecarEnabled } from "./config-normalization-shared.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type {
   MemoryCorpusSupplement,
@@ -20,7 +22,7 @@ import type {
   MemoryPromptSectionPreparer,
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
-import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
   getActivePluginRegistry,
   getPluginRegistryForContext,
@@ -28,6 +30,7 @@ import {
   requireActivePluginRegistry,
   resolveDirectPluginRegistrationOwner,
 } from "./runtime.js";
+import { hasKind } from "./slots.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
 
@@ -490,6 +493,31 @@ export function resolveLoadedMemoryProviderKind(
     return standaloneMemoryOwner.native ? "native" : "legacy";
   }
   return undefined;
+}
+
+/**
+ * Whether this process loaded a memory plugin that the operator runs beside a different slot
+ * owner (plugins.entries.<id>.memory.sidecar). Never loads a plugin. A config without any
+ * sidecar entry answers false before reading a registry.
+ */
+export function hasLoadedMemorySidecar(cfg: OpenClawConfig): boolean {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  const slotPluginId = plugins.enabled ? plugins.slots.memory : undefined;
+  if (
+    !slotPluginId ||
+    !Object.values(plugins.entries).some((entry) => entry.memorySidecar === true)
+  ) {
+    return false;
+  }
+  const slotPolicyId = normalizePluginPolicyId(slotPluginId);
+  const isLoadedSidecar = (record: PluginRecord) =>
+    record.status === "loaded" &&
+    hasKind(record.kind, "memory") &&
+    normalizePluginPolicyId(record.id) !== slotPolicyId &&
+    isMemorySidecarEnabled(plugins, record.id);
+  return [getPluginRegistryForContext(), getActivePluginRegistry()].some(
+    (registry) => registry?.plugins.some(isLoadedSidecar) === true,
+  );
 }
 
 // Standalone managers are intentionally absent from the active plugin registry.

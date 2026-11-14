@@ -16,6 +16,7 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => fakeSess
 // mock-isolation: Select the memory provider kind without activating a real plugin.
 vi.mock("../../../plugins/memory-state.js", () => ({
   resolveLoadedMemoryProviderKind: () => (mocks.native ? "native" : undefined),
+  hasLoadedMemorySidecar: () => false,
 }));
 // mock-isolation: captures the attempt's log levels without emitting them.
 vi.mock("../logger.js", () => ({ log: { warn: mocks.warn, info: mocks.info, debug: vi.fn() } }));
