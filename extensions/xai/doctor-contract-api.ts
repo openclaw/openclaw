@@ -1,6 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { isLegacyXaiBuiltinModel } from "./model-definitions.js";
+import {
+  isLegacyXaiBuiltinModel,
+  resolveXaiCatalogEntry,
+  resolveXaiPricingCatalogModelId,
+  XAI_BASE_URL,
+  XAI_GROK_OAUTH_BASE_URL,
+} from "./model-definitions.js";
 import { isXaiProviderId } from "./provider-id.js";
 
 type LegacyConfigRule = {
@@ -64,6 +70,49 @@ function isRetiredToolModel(value: unknown, retiredModels: ReadonlySet<string>):
 
 function hasLegacyBuiltinCatalogRows(value: unknown): boolean {
   return Array.isArray(value) && value.some((model) => isLegacyXaiBuiltinModel(model));
+}
+
+const normalizeBaseUrl = (url: string) => url.trim().replace(/\/+$/, "").toLowerCase();
+const XAI_OFFICIAL_BASE_URLS = new Set(
+  [XAI_BASE_URL, XAI_GROK_OAUTH_BASE_URL].map(normalizeBaseUrl),
+);
+
+// OAuth sign-in saved each catalog row's flat cost before the catalog carried xAI's
+// long-context tier, and saved rows override the catalog. Only rows on an official xAI
+// route that still carry the catalog's flat rates get the tier. A custom baseUrl owns its
+// own billing, and custom prices or existing tiers stay as written.
+function catalogPricingTiersFor(model: unknown, providerBaseUrl: unknown) {
+  const record = asObjectRecord(model);
+  const cost = asObjectRecord(record?.cost);
+  const route =
+    typeof record?.baseUrl === "string" && record.baseUrl.trim() ? record.baseUrl : providerBaseUrl;
+  const catalog =
+    typeof record?.id === "string"
+      ? resolveXaiCatalogEntry(resolveXaiPricingCatalogModelId(record.id))?.cost
+      : undefined;
+  if (
+    !cost ||
+    (typeof route === "string" &&
+      route.trim() &&
+      !XAI_OFFICIAL_BASE_URLS.has(normalizeBaseUrl(route))) ||
+    cost.tieredPricing !== undefined ||
+    !catalog?.tieredPricing?.length ||
+    cost.input !== catalog.input ||
+    cost.output !== catalog.output ||
+    cost.cacheRead !== catalog.cacheRead ||
+    cost.cacheWrite !== catalog.cacheWrite
+  ) {
+    return undefined;
+  }
+  return catalog.tieredPricing;
+}
+
+function hasUntieredCatalogPricedRows(value: unknown): boolean {
+  const provider = asObjectRecord(value);
+  return (
+    Array.isArray(provider?.models) &&
+    provider.models.some((model) => catalogPricingTiersFor(model, provider.baseUrl))
+  );
 }
 
 function asXaiProviderMediaEntry(value: unknown) {
@@ -138,6 +187,12 @@ export const legacyConfigRules: LegacyConfigRule[] = [
     message:
       'models.providers.xai.models contains stale generated xAI catalog rows; run "openclaw doctor --fix" to remove them.',
     match: hasLegacyBuiltinCatalogRows,
+  },
+  {
+    path: ["models", "providers", "xai"],
+    message:
+      'models.providers.xai.models has saved xAI rows without the catalog\'s long-context price tier; run "openclaw doctor --fix" to add it.',
+    match: hasUntieredCatalogPricedRows,
   },
 ];
 
@@ -224,6 +279,30 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
         },
       };
       changes.push(`Removed ${removed} stale generated xAI model catalog row(s).`);
+    }
+  }
+
+  const savedProvider = next.models?.providers?.xai;
+  if (savedProvider && Array.isArray(savedProvider.models)) {
+    let tiered = 0;
+    const models = savedProvider.models.map((model) => {
+      const tiers = catalogPricingTiersFor(model, savedProvider.baseUrl);
+      if (!tiers) {
+        return model;
+      }
+      tiered += 1;
+      // Config takes its own copy; later config edits must not reach the shared catalog.
+      return { ...model, cost: { ...model.cost, tieredPricing: structuredClone(tiers) } };
+    });
+    if (tiered > 0) {
+      next = {
+        ...next,
+        models: {
+          ...next.models,
+          providers: { ...next.models?.providers, xai: { ...savedProvider, models } },
+        },
+      };
+      changes.push(`Added xAI's long-context price tier to ${tiered} saved xAI model row(s).`);
     }
   }
 

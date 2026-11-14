@@ -7,6 +7,8 @@ import { isXaiFrontierModelId, normalizeXaiModelId } from "./model-id.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const XAI_BASE_URL = manifest.modelCatalog.providers.xai.baseUrl;
+/** Grok OAuth subscription route. */
+export const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
 export const XAI_IMAGE_MODELS = [
   "grok-imagine-image",
@@ -30,13 +32,35 @@ function isXaiModelInput(value: string): value is XaiModelInput {
   return value === "text" || value === "image" || value === "video" || value === "audio";
 }
 
+type XaiPricingTier = NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]>[number];
+
+// JSON imports widen the manifest's half-open [start, end] / [start] tier tuples.
+function toXaiPricingTier({
+  range: [start = 0, end],
+  ...rates
+}: Omit<XaiPricingTier, "range"> & { range: number[] }): XaiPricingTier {
+  return { ...rates, range: end === undefined ? [start] : [start, end] };
+}
+
 function toXaiModelDefinition(model: (typeof manifest.modelCatalog.providers.xai.models)[number]) {
-  return { ...model, input: model.input.filter(isXaiModelInput) } satisfies ModelDefinitionConfig;
+  return {
+    ...model,
+    input: model.input.filter(isXaiModelInput),
+    cost: { ...model.cost, tieredPricing: model.cost.tieredPricing.map(toXaiPricingTier) },
+  } satisfies ModelDefinitionConfig;
 }
 
 // The manifest is the one curated xAI model list; discovery only adds or prunes around it.
 const XAI_MODEL_CATALOG: ModelDefinitionConfig[] =
   manifest.modelCatalog.providers.xai.models.map(toXaiModelDefinition);
+
+/**
+ * OAuth discovery lists `grok-build` and prices it as `grok-build-0.1`.
+ * The provider-facing id stays `grok-build`; only catalog lookup uses this alias.
+ */
+export function resolveXaiPricingCatalogModelId(modelId: string): string {
+  return modelId === "grok-build" ? "grok-build-0.1" : modelId;
+}
 
 /** Curated pricing and supported-family capabilities share one lookup owner. */
 export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig | undefined {
