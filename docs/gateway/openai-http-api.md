@@ -109,6 +109,8 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session. For custom apps, reuse the same `user` value per conversation thread; avoid account-level identifiers unless you want multiple conversations/devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients/threads, with application-owned keys that avoid the reserved namespaces above.
 
+Responses (streaming and non-streaming) include the resolved session key in the `x-openclaw-session-key` response header once the request passes session authorization, provided the key is valid as an HTTP header value. Keys containing characters that HTTP headers cannot represent (for example, Unicode characters in a JSON `user` value) are not echoed, but the request continues normally; use a header-safe session key when the response header is needed. The OpenAI response `id` is the run id (`chatcmpl_...`), not the session key. To continue the same agent conversation, send the echoed value back as the `x-openclaw-session-key` request header on later requests; requests rejected before session resolution (for example invalid `model`, unknown agent, or reserved-namespace session keys) do not include the header.
+
 If that session is archived, non-streaming requests return HTTP `409` with
 `invalid_request_error` and guidance to restore it in the Control UI. Streaming
 requests report the same error in the stream. Unarchive the session before
