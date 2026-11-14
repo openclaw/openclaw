@@ -81,13 +81,19 @@ const retiredDelivery = {
 it.each([
   "direct",
   "batch",
+  "batch-retry",
   "yielded-batch",
   "legacy-yielded-batch",
+  "direct-legacy-yielded-batch",
+  "expiry-delivered",
+  "expiry-failed",
+  "expiry-error-failed",
   "replaced-session",
   "replaced-revision",
 ] as const)(
   "records a required failed completion in its original requester transcript (%s)",
   async (route) => {
+    const expiry = route.startsWith("expiry-");
     const { subagent } = records();
     const target = {
       agentId: "main",
@@ -108,10 +114,12 @@ it.each([
       requesterStorePath: target.storePath,
       requesterSettleWake: { status: "pending", attemptCount: 0 },
     });
-    subagent.execution.outcome = {
-      status: "error",
-      error: "Descendant completion can no longer continue this yielded requester.",
-    };
+    if (!expiry || route === "expiry-error-failed") {
+      subagent.execution.outcome = {
+        status: "error",
+        error: "Descendant completion can no longer continue this yielded requester.",
+      };
+    }
     subagent.completion = { required: true, resultText: null, capturedAt: Date.now() };
     const batch = [subagent];
     if (route.endsWith("yielded-batch")) {
@@ -122,41 +130,62 @@ it.each([
         requesterRunId: "yielded-requester",
         batchRunIds: [subagent.runId, "second-child"],
       };
-      if (route === "legacy-yielded-batch") {
+      if (route.includes("legacy-yielded-batch")) {
         delete subagent.requesterSettleWake.requesterRunId;
         delete subagent.requesterSettleWake.batchRunIds;
       }
-      batch.push({ ...structuredClone(subagent), runId: "second-child", taskRunId: "second-task" });
+    }
+    if (route.endsWith("yielded-batch") || route === "batch-retry") {
+      batch.push({
+        ...structuredClone(subagent),
+        runId: "second-child",
+        taskRunId: "second-task",
+        childSessionKey: "agent:main:subagent:second-child",
+      });
     }
     for (const sibling of batch.slice(1)) {
       publishCommittedRecords(sibling);
     }
     publishCommittedRecords(subagent);
-    subagentRuns.retireCompletionAuthority(subagent);
-    if (route !== "batch" && !route.endsWith("yielded-batch")) {
+    if (!expiry) {
+      subagentRuns.retireCompletionAuthority(subagent);
+    }
+    if (route === "direct-legacy-yielded-batch") {
+      await suspendReplacedStoreNotifications({ runs: subagentRuns, resumedRuns: new Set() });
+    } else if (route !== "batch" && route !== "batch-retry" && !route.endsWith("yielded-batch")) {
       expect(
         await blockSubagentCompletionDelivery({
           subagent,
-          reason: "store replaced",
-          storeReplaced: true,
-          suspendedReason: "permanent_failure",
+          reason: expiry ? "deadline reached" : "store replaced",
+          storeReplaced: expiry ? undefined : true,
+          suspendedReason: expiry ? "expiry" : "permanent_failure",
         }),
       ).toBe(true);
     } else {
-      await mutateRequesterCompletionBatch({
-        entries: batch,
-        assertCurrent: () => {},
-        operation: {
-          kind: "settle",
-          outcome: {
-            delivered: false,
-            path: "none",
-            storeReplaced: true,
-            disposition: "intentional_non_delivery",
-            error: "store replaced",
+      let committed: Parameters<typeof mutateRequesterCompletionBatch>[0]["committed"];
+      const settle = () =>
+        mutateRequesterCompletionBatch({
+          entries: batch,
+          assertCurrent: () => {},
+          committed,
+          onCommitted: (write) => {
+            committed = write;
           },
-        },
-      });
+          operation: {
+            kind: "settle",
+            outcome: {
+              delivered: false,
+              path: "none",
+              storeReplaced: true,
+              disposition: "intentional_non_delivery",
+              error: "store replaced",
+            },
+          },
+        });
+      await settle();
+      if (route === "batch-retry") {
+        await settle();
+      }
     }
     const events = await loadTranscriptEvents({
       ...target,
@@ -164,7 +193,7 @@ it.each([
     });
     const notices = events.filter((event) => isRecord(event) && event.type === "custom_message");
     expect(notices).toEqual(
-      route.startsWith("replaced-")
+      route.startsWith("replaced-") || expiry
         ? []
         : [
             expect.objectContaining({
@@ -175,8 +204,25 @@ it.each([
             }),
           ],
     );
+    if (expiry) {
+      await mutateRequesterCompletionBatch({
+        entries: [subagent],
+        assertCurrent: () => {},
+        operation: {
+          kind: "settle",
+          outcome:
+            route === "expiry-delivered"
+              ? { delivered: true, path: "direct" }
+              : { delivered: false, path: "none", error: "requester turn failed" },
+        },
+      });
+      const settledNotices = (await loadTranscriptEvents(target)).filter(
+        (event) => isRecord(event) && event.type === "custom_message",
+      );
+      expect(settledNotices).toHaveLength(route === "expiry-delivered" ? 0 : 1);
+    }
     expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery?.disposition).toBe(
-      "permanent_failure",
+      route === "expiry-delivered" ? "delivered" : "permanent_failure",
     );
   },
 );

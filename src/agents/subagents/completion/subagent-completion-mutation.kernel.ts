@@ -152,6 +152,9 @@ function prepareBlockedSubagentCompletion(
   if (
     !successful &&
     !params.operatorAuthorityUnavailable &&
+    !(
+      subagent.delivery?.status === "suspended" && subagent.delivery.suspendedReason === "expiry"
+    ) &&
     !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending")
   ) {
     return undefined;

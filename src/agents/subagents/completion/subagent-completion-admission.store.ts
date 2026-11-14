@@ -70,19 +70,20 @@ async function recordRequiredCompletionFailure(
   }
   const wake = entry.requesterSettleWake;
   // Share the yielded requester's failure identity with its lifecycle settlement.
-  const runId = wake?.requesterYieldBatch
-    ? (wake.requesterRunId ??
-      buildAnnounceIdempotencyKey(
-        `${
-          buildRequesterSettleWakeIdentity({
-            requesterSessionKey: entry.requesterSessionKey,
-            requesterAgentId: entry.requesterAgentId,
-            batchRunIds: wake.batchRunIds ?? batch.map((member) => member.runId),
-            rearmGeneration: wake.rearmGeneration,
-          }).batchKey
-        }:delivery-failure`,
-      ))
-    : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
+  const runId =
+    wake?.requesterYieldBatch || batch.length > 1
+      ? (wake?.requesterRunId ??
+        buildAnnounceIdempotencyKey(
+          `${
+            buildRequesterSettleWakeIdentity({
+              requesterSessionKey: entry.requesterSessionKey,
+              requesterAgentId: entry.requesterAgentId,
+              batchRunIds: wake?.batchRunIds ?? batch.map((member) => member.runId),
+              rearmGeneration: wake?.rearmGeneration,
+            }).batchKey
+          }:delivery-failure`,
+        ))
+      : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
   // This records a failed obligation, without borrowing its retired execution authority.
   // A deleted/reset requester refuses the append; never redirect it to a replacement.
   await runWithoutOwnedSessionTranscriptWrites(() =>
@@ -452,12 +453,14 @@ export async function settleSubagentCompletionDelivery(
 }
 
 export async function blockSubagentCompletionDelivery(
-  params: BlockSubagentCompletionRequest & CompletionMutationOptions,
+  params: BlockSubagentCompletionRequest &
+    CompletionMutationOptions & { requesterBatch?: readonly SubagentRunRecord[] },
 ): Promise<boolean> {
   const {
     context: _context,
     databaseOptions: _databaseOptions,
     assertCurrent: _assertCurrent,
+    requesterBatch: _requesterBatch,
     ...request
   } = params;
   if (params.storeReplaced) {
@@ -493,9 +496,11 @@ export async function blockSubagentCompletionDelivery(
   );
   if (
     result.applied &&
-    (params.storeReplaced || params.suspendedReason || params.disposition === "permanent_failure")
+    (params.storeReplaced ||
+      params.suspendedReason === "permanent_failure" ||
+      params.disposition === "permanent_failure")
   ) {
-    await recordRequiredCompletionFailure(params.subagent);
+    await recordRequiredCompletionFailure(params.subagent, params.requesterBatch);
   }
   return result.applied === true;
 }
@@ -630,9 +635,7 @@ export async function mutateRequesterCompletionBatch(
   if (
     publication.applied &&
     params.operation.kind === "settle" &&
-    !params.operation.outcome.delivered &&
-    (params.operation.outcome.storeReplaced ||
-      params.operation.outcome.disposition === "permanent_failure")
+    !params.operation.outcome.delivered
   ) {
     for (const entry of params.entries) {
       await recordRequiredCompletionFailure(entry, params.entries);
