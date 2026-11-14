@@ -148,6 +148,7 @@ export function normalizeGoogleProviderConfig(
 export function resolveGoogleThinkingProfile({
   modelId,
   reasoning,
+  thinkingLevelMap,
 }: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile | undefined {
   const normalizedModelId = normalizeGoogleModelId(modelId);
   const isGemini3ThinkingModel = isGoogleGemini3ThinkingLevelModel(normalizedModelId);
@@ -156,7 +157,7 @@ export function resolveGoogleThinkingProfile({
   }
 
   // Gemini 3.1 Pro has no MINIMAL thinking level.
-  const levels: ProviderThinkingProfile["levels"] = [
+  const baseLevels: ProviderThinkingProfile["levels"] = [
     { id: "off" },
     ...(isGoogleGemini3ProModel(normalizedModelId) ? [] : [{ id: "minimal" as const }]),
     { id: "low" },
@@ -164,6 +165,12 @@ export function resolveGoogleThinkingProfile({
     { id: "adaptive" },
     { id: "high" },
   ];
+  // Only some Gemini models accept XHIGH (Gemini 4 Hydrogen does, Carbon does not), so the
+  // catalog row opts in; the transport sends XHIGH under the same condition.
+  const levels: ProviderThinkingProfile["levels"] =
+    isGemini3ThinkingModel && thinkingLevelMap?.xhigh === "xhigh"
+      ? [...baseLevels, { id: "xhigh" }]
+      : baseLevels;
 
   return {
     levels,

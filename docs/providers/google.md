@@ -276,6 +276,12 @@ Google can choose the level; Gemini 2.5 sends Google's dynamic sentinel
 Gemini 4 Argon supports `low`, `medium`, and `high`. OpenClaw maps `minimal` and
 `off` to `low`, because thinking cannot be fully disabled on this model.
 
+Only some Gemini models accept `xhigh`: Gemini 4 Hydrogen does, while Gemini 4
+Carbon rejects it. OpenClaw offers `xhigh` and sends `thinkingLevel: XHIGH` only
+for model rows with `thinkingLevelMap: { xhigh: "xhigh" }`. Add that entry to a
+custom `models.providers.*.models` row (for example a Vertex row) to enable it;
+without it, `xhigh` sends `HIGH`.
+
 Gemma 4 models (for example `gemma-4-26b-a4b-it`) support thinking mode. OpenClaw
 rewrites `thinkingBudget` to a supported Google `thinkingLevel` for Gemma 4.
 Setting thinking to `off` preserves thinking disabled instead of mapping to

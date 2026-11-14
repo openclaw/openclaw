@@ -1,6 +1,9 @@
 import { isGoogleGemini3ThinkingLevelModel } from "@openclaw/ai/internal/google-model-family";
-import { googleFlashSupportsMinimalThinking } from "@openclaw/ai/transports";
-import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
+import {
+  googleFlashSupportsMinimalThinking,
+  googleSupportsXHighThinking,
+} from "@openclaw/ai/transports";
+import type { ModelThinkingLevel, ThinkingLevelMap } from "@openclaw/llm-core/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
@@ -131,6 +134,8 @@ export function sanitizeGoogleThinkingPayload(params: {
   payload: unknown;
   modelId?: string;
   thinkingLevel?: GoogleThinkingInputLevel;
+  /** Catalog row map; `xhigh: "xhigh"` keeps xhigh/max at Google's XHIGH. */
+  thinkingLevelMap?: ThinkingLevelMap;
 }): void {
   if (!params.payload || typeof params.payload !== "object") {
     return;
@@ -204,11 +209,15 @@ export function sanitizeGoogleThinkingPayload(params: {
         // Gemini 3 and 4 adaptive mode omits both controls so the provider chooses.
         delete thinkingConfigObj.thinkingLevel;
       } else {
-        const mappedLevel = resolveGoogleGemini3ThinkingLevel({
-          modelId,
-          thinkingLevel,
-          thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
-        });
+        const mappedLevel =
+          (thinkingLevel === "xhigh" || thinkingLevel === "max") &&
+          googleSupportsXHighThinking(params)
+            ? "XHIGH"
+            : resolveGoogleGemini3ThinkingLevel({
+                modelId,
+                thinkingLevel,
+                thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
+              });
         if (mappedLevel) {
           thinkingConfigObj.thinkingLevel = mappedLevel;
         }

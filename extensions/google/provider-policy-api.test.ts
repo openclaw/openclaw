@@ -142,6 +142,19 @@ describe("google provider policy public artifact", () => {
     },
   );
 
+  it.each([
+    [{ minimal: null, xhigh: "xhigh" }, true],
+    [{ minimal: null }, false],
+  ] as const)("offers xhigh for a Gemini 4 row with thinkingLevelMap %o: %s", (map, expected) => {
+    const levels = resolveThinkingProfile({
+      provider: "google-vertex",
+      modelId: "gemini-4-hydrogen",
+      reasoning: true,
+      thinkingLevelMap: map,
+    })?.levels.map(({ id }) => id);
+    expect(levels?.includes("xhigh")).toBe(expected);
+  });
+
   it("honors catalog reasoning=false for non-thinking-level Google models", () => {
     expect(thinking("gemma-4-26b-a4b-it")).toBeUndefined();
   });

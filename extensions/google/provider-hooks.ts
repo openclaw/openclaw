@@ -34,6 +34,7 @@ export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
           payload,
           modelId: stripGoogleProviderPrefix(model.id).replace(/^models\//u, ""),
           thinkingLevel: ctx.thinkingLevel,
+          thinkingLevelMap: model.thinkingLevelMap,
         });
       }
       if (
