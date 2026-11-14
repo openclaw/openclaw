@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import {
   bindCronManagementGrant,
   createCronCreatorAuthorityCapability,
@@ -21,7 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAccountCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
-import { loadCronStore } from "../../cron/store.js";
+import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -38,6 +39,7 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { cronHandlers } from "./cron.js";
+import { createCronJob } from "./cron.validation.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const gatewayCall = vi.hoisted(() => vi.fn());
@@ -531,4 +533,145 @@ it("allows only the current human owner or admin to edit and transfer an automat
       }
     },
   );
+});
+
+describe("Gateway automation execution agent", () => {
+  // Both agents must be configured with a routable model: create-time inference capture resolves
+  // the execution agent's own catalog and credential, which is the leg that used to run for the
+  // configured default agent while the job was stored for another one.
+  const twoAgents = {
+    agents: {
+      defaults: { skipBootstrap: true, model: "openai/gpt-4.1" },
+      entries: { main: {}, worker: {} },
+    },
+    plugins: { enabled: false },
+  } satisfies OpenClawConfig;
+  const workerSessionJob = (overrides: Partial<CronJobCreate> = {}): CronJobCreate => ({
+    name: "probe",
+    enabled: false,
+    schedule: { kind: "every", everyMs: 3_600_000 },
+    sessionTarget: "session:agent:worker:dashboard:2b6f1c9a",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "ping", toolsAllow: [] },
+    delivery: { mode: "none" },
+    ...overrides,
+  });
+  const createdJobId = (response: Parameters<RespondFn>) => {
+    // A declaration-keyed create reports `{ created, job }`; a plain create reports the job itself.
+    const payload = response[1] as { id?: string; job?: { id: string } } | undefined;
+    return expectDefined(payload?.job?.id ?? payload?.id, "created job id");
+  };
+
+  async function withTwoAgentCron(
+    run: (fixture: ReturnType<typeof createPolicyFixture>) => Promise<void>,
+  ) {
+    await withOpenClawTestState({ label: "cron-execution-agent" }, async (state) => {
+      await persistAuthProfileBatch({
+        stateDir: state.stateDir,
+        profiles: [
+          {
+            profileId: "openai:cron-execution-agent",
+            credential: {
+              type: "api_key",
+              provider: "openai",
+              key: "synthetic-execution-agent-key",
+            },
+          },
+        ],
+      });
+      setRuntimeConfigSnapshot(twoAgents);
+      const fixture = createPolicyFixture(state.statePath("cron", "jobs.json"));
+      try {
+        await fixture.cron.start();
+        await run(fixture);
+      } finally {
+        fixture.cron.stop();
+        await fixture.scheduler.stop();
+      }
+    });
+  }
+
+  it("stores the session's agent and converges a repeated declaration onto that job", async () => {
+    await withTwoAgentCron(async ({ invoke, readJobs }) => {
+      const declaration = { ...workerSessionJob(), declarationKey: "daily-probe" };
+      const first = await invoke("cron.add", declaration);
+      expect(first[2]?.message ?? first[0]).toBe(true);
+      const jobId = createdJobId(first);
+      const repeat = await invoke("cron.add", declaration);
+      expect(repeat[2]?.message ?? repeat[0]).toBe(true);
+      expect(createdJobId(repeat)).toBe(jobId);
+      const { jobs } = await readJobs();
+      expect(jobs.map((job) => job.id)).toEqual([jobId]);
+      expect(jobs[0]).toMatchObject({ agentId: "worker", declarationKey: "daily-probe" });
+    });
+  });
+
+  it("reports the session's agent to operator listings and keeps it out of the default agent", async () => {
+    await withTwoAgentCron(async ({ invoke, readJobs }) => {
+      const created = await invoke("cron.add", workerSessionJob());
+      expect(created[2]?.message ?? created[0]).toBe(true);
+      const jobId = createdJobId(created);
+      expect((await readJobs()).jobs.map((job) => job.agentId)).toEqual(["worker"]);
+      const listed = await invoke("cron.list", { includeDisabled: true, agentId: "worker" });
+      expect(listed[0]).toBe(true);
+      expect((listed[1] as { jobs: { id: string }[] }).jobs.map((job) => job.id)).toEqual([jobId]);
+      const defaultAgent = await invoke("cron.list", { includeDisabled: true, agentId: "main" });
+      expect((defaultAgent[1] as { jobs: unknown[] }).jobs).toEqual([]);
+    });
+  });
+
+  it("still refuses an agent caller a job that another agent would execute", async () => {
+    await withTwoAgentCron(async ({ invoke, readJobs }) => {
+      await withModelTurn("control-ui-admin", async (identity) => {
+        expectDenied(
+          await invoke("cron.add", workerSessionJob(), identity, undefined, ["operator.admin"]),
+          "job agentId outside caller scope",
+        );
+        const own = await invoke(
+          "cron.add",
+          workerSessionJob({
+            name: "own probe",
+            sessionTarget: "session:agent:main:dashboard:2b6f1c9a",
+          }),
+          identity,
+          undefined,
+          ["operator.admin"],
+        );
+        expect(own[2]?.message ?? own[0]).toBe(true);
+      });
+      expect((await readJobs()).jobs.map((job) => job.agentId)).toEqual(["main"]);
+    });
+  });
+
+  it("loads and serves a job stored before execution agents were bound at admission", async () => {
+    await withOpenClawTestState({ label: "cron-legacy-owner" }, async (state) => {
+      setRuntimeConfigSnapshot(twoAgents);
+      const storePath = state.statePath("cron", "jobs.json");
+      // A row written by an older build: no owner, but a session reference naming another agent.
+      const legacy = createCronJob({
+        id: "legacy-worker-job",
+        name: "legacy probe",
+        enabled: false,
+        sessionTarget: "session:agent:worker:dashboard:2b6f1c9a",
+      });
+      await saveCronStore(storePath, { version: 1, jobs: [legacy] });
+      const fixture = createPolicyFixture(storePath);
+      try {
+        await fixture.cron.start();
+        const get = await fixture.invoke("cron.get", { id: legacy.id });
+        expect(get[0]).toBe(true);
+        expect((get[1] as { name: string }).name).toBe("legacy probe");
+        const list = await fixture.invoke("cron.list", { includeDisabled: true });
+        expect(list[0]).toBe(true);
+        expect((list[1] as { jobs: { id: string }[] }).jobs.map((job) => job.id)).toEqual([
+          legacy.id,
+        ]);
+        // Reading a stored job never reinterprets it: the blank owner survives unchanged.
+        expect((await fixture.readJobs()).jobs[0]?.agentId ?? null).toBeNull();
+      } finally {
+        fixture.cron.stop();
+        await fixture.scheduler.stop();
+      }
+    });
+  });
 });
