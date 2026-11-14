@@ -29,7 +29,10 @@ import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { recordSessionOperatorSource } from "../session-operator-sources.js";
-import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
+import {
+  invalidateSkillAuthoringForOtherRequester,
+  isHumanSkillAuthoringInput,
+} from "../skill-library-authoring.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import {
@@ -638,7 +641,7 @@ export async function handleChatSendWithStorage(
         },
         isHumanTurn:
           !options &&
-          !systemInputProvenance &&
+          isHumanSkillAuthoringInput(systemInputProvenance) &&
           !reconnectResumeRequested &&
           request.turnKind === "main",
       },

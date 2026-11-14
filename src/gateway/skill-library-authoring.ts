@@ -5,6 +5,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import {
   mergeSkillLibrarySupportFiles,
   type SkillLibraryAuthoringCapability,
@@ -33,6 +34,16 @@ import {
 } from "./server-methods/skills-library.js";
 
 const active = new Map<string, Set<{ profileId: string; revoke: () => void }>>();
+
+/** Classify the input; requester, scope, and admitted-run authority are checked separately. */
+export function isHumanSkillAuthoringInput(
+  provenance: InputProvenance | undefined,
+  suppressPromptPersistence = false,
+): boolean {
+  // A human transcript may already be saved before its execution handoff.
+  // Keeping that provenance must not remove the person's available skill tools.
+  return provenance?.kind === "external_user" || (!provenance && !suppressPromptPersistence);
+}
 
 /** A mixed-person steer revokes mutation authority without changing the session's committed pins. */
 export function invalidateSkillAuthoringForOtherRequester(

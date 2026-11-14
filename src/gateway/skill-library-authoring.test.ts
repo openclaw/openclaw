@@ -7,6 +7,7 @@ import { createToolSurfacePresentationForTest } from "../agents/tool-surface-pla
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -21,6 +22,7 @@ import {
 } from "./server-methods/skills-library.js";
 import {
   invalidateSkillAuthoringForOtherRequester,
+  isHumanSkillAuthoringInput,
   prepareGatewaySkillAuthoring,
   prepareGatewaySkillLibraryTurn,
 } from "./skill-library-authoring.js";
@@ -112,6 +114,55 @@ async function admitted(
 }
 
 describe("human personal namespace authority", () => {
+  it("preserves personal skill tools across an attributed human handoff", async () => {
+    const { alice, request } = await setup();
+    const owner = request(alice.id);
+    const direct = await prepareTurn(owner);
+    const provenance: InputProvenance = {
+      kind: "external_user",
+      sourceChannel: "voice",
+      sourceTool: "gateway.voice.transcript",
+    };
+    const handedOff = await prepareGatewaySkillLibraryTurn(
+      { owner, sessionKey, isHumanTurn: isHumanSkillAuthoringInput(provenance, true) },
+      async () => {},
+      () => {},
+    );
+    expect(handedOff).toBeDefined();
+    expect(createSkillLibraryTool(handedOff!).parameters).toEqual(
+      createSkillLibraryTool(direct!).parameters,
+    );
+    using run = await admitted(handedOff!);
+    const created = await run.invoke({ action: "create", slug: "voice-procedure", content });
+    expect(created).toMatchObject({ entry: { slug: "voice-procedure", canEdit: true } });
+    run.close();
+    await expect(run.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
+  });
+
+  it.each([
+    { kind: "internal_system", sourceTool: "exec" },
+    { kind: "inter_session", sourceTool: "sessions_send" },
+    undefined,
+  ] satisfies Array<InputProvenance | undefined>)(
+    "does not authorize a non-human or unattributed suppressed handoff: %j",
+    async (provenance) => {
+      const { alice, request } = await setup();
+      expect(
+        await prepareGatewaySkillLibraryTurn(
+          {
+            owner: request(alice.id),
+            sessionKey,
+            isHumanTurn: isHumanSkillAuthoringInput(provenance, true),
+          },
+          async () => {},
+          () => {},
+        ),
+      ).toBeUndefined();
+    },
+  );
+
   it("checks workspace authority from committed profile facts without a main-thread read", async () => {
     const { alice, request } = await setup();
     const owner = request(alice.id);
