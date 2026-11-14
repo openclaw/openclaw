@@ -58,10 +58,7 @@ function refreshChatEventHistory(
   presented: boolean,
   supersedeInFlight?: true | "append",
 ): void {
-  void loadChatHistory(state, {
-    deferBranches: !presented,
-    ...(supersedeInFlight ? { supersedeInFlight } : {}),
-  });
+  void loadChatHistory(state, { deferBranches: !presented, supersedeInFlight });
 }
 
 function globalSessionEventMatchesChat(
