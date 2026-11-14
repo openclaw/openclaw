@@ -20,7 +20,7 @@ it("collects a large cold-embed result without spreading it as call arguments", 
       expectedMessageType: "done",
       workerData: {},
     });
-    worker.postMessage("go");
+    worker.postMessage("go", []);
     const results = await operation;
     expect(results).toHaveLength(150_000);
     expect(results.at(-1)).toBe("149999");
