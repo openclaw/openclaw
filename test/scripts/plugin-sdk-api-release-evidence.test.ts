@@ -132,6 +132,46 @@ describe("Plugin SDK API release evidence", () => {
     expect(JSON.parse(accepted.stdout)).toMatchObject({ hasChanges: true, status: "checked" });
   });
 
+  it("reports a malformed release-evidence manifest with a named diagnostic", () => {
+    const manifestPath = join(tempDirs.make("plugin-sdk-evidence-"), "malformed-manifest.json");
+    writeFileSync(manifestPath, "{");
+    const run = spawnSync(
+      process.execPath,
+      [
+        "scripts/plugin-sdk-api-release-evidence.mjs",
+        "--manifest",
+        manifestPath,
+        "--head",
+        headSha,
+        "--workflow-sha",
+        workflowSha,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(run.status, run.stderr).toBe(1);
+    expect(run.stderr).toContain("--manifest is not valid JSON");
+  });
+
+  it("keeps filesystem failures out of the malformed-JSON diagnostic", () => {
+    const manifestPath = join(tempDirs.make("plugin-sdk-evidence-"), "missing-manifest.json");
+    const run = spawnSync(
+      process.execPath,
+      [
+        "scripts/plugin-sdk-api-release-evidence.mjs",
+        "--manifest",
+        manifestPath,
+        "--head",
+        headSha,
+        "--workflow-sha",
+        workflowSha,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(run.status, run.stderr).toBe(1);
+    expect(run.stderr).toContain("ENOENT");
+    expect(run.stderr).not.toContain("--manifest is not valid JSON");
+  });
+
   it("round-trips oversized shared comparisons under the unchanged 16 MiB file cap", () => {
     const beta = evidence([{ declaration: "x".repeat(9 * 1024 * 1024) }]);
     const latest = { ...beta, baseRef: "v2026.7.31", baseSha: "c".repeat(40) };
