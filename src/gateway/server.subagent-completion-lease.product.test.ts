@@ -463,7 +463,7 @@ for (const testCase of cases) {
           }
         : null,
     );
-    expect(current.completionAuthority?.signal.aborted).toBe(false);
+    expect(current.completionAuthority?.signal?.aborted).toBe(false);
     expect(() => current.completionAuthority!.assertCurrent()).not.toThrow();
     if (route === "followup") {
       expect(owned).toMatchObject({ taskRunId: child.runId, generation: 2 });
@@ -511,7 +511,7 @@ for (const testCase of cases) {
     if (invalidation) {
       await withinTest(current.settled.promise, signal);
       expect(current.deliveries).toBe(0);
-      expect(current.completionAuthority?.signal.aborted).toBe(true);
+      expect(current.completionAuthority?.signal?.aborted).toBe(true);
       expect(policyAuthorities.size).toBe(capturesBeforeInvalidation);
       expect(policyAuthorities.size).toBeGreaterThan(0);
       expect([...policyAuthorities].map((authority) => authority.failureCause)).toContain(
@@ -555,7 +555,7 @@ for (const testCase of cases) {
           current.completionAuthority!.assertCurrent();
         }),
       ).not.toThrow();
-      expect(current.completionAuthority?.signal.aborted).toBe(false);
+      expect(current.completionAuthority?.signal?.aborted).toBe(false);
       expect(current.deliveries).toBe(0);
       expect(completed.delivery?.status).not.toBe("delivered");
       // Preserve the live-authority/scheduler control, then let the ordinary producer
