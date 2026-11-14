@@ -157,8 +157,7 @@ it("retains live suggestions only while the editor is presented", async () => {
   expect(view.container.querySelector("datalist")).toBeNull();
 });
 
-it("retains history controls and forwards the current transcript target after refresh", () => {
-  const onViewRunTranscript = vi.fn();
+it("retains activity history and filters without transcript controls after refresh", () => {
   const first = {
     ts: 1,
     runId: "run-stable",
@@ -169,10 +168,12 @@ it("retains history controls and forwards the current transcript target after re
     summary: "First summary",
   };
   const [props, setProps] = createSignal(
-    createCronViewProps({ listTab: "activity", runs: [first], onViewRunTranscript }),
+    createCronViewProps({ listTab: "activity", runs: [first] }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
-  const button = getElement(view.container, ".cron-run-entry button", HTMLButtonElement);
+  const row = getElement(view.container, ".cron-run-entry", HTMLDivElement);
+  expect(row.textContent).toContain("First summary");
+  expect(row.textContent).not.toContain("View transcript");
   const option = getElement(
     view.container,
     '[data-filter="status"] [data-value="option:ok"]',
@@ -181,7 +182,8 @@ it("retains history controls and forwards the current transcript target after re
   const refreshed = { ...first, summary: "Updated summary" };
   setProps((previous) => ({ ...previous, runs: [refreshed], runsStatuses: ["ok"] }));
   flush();
-  expect(view.container.querySelector(".cron-run-entry button")).toBe(button);
+  expect(view.container.querySelector(".cron-run-entry")).toBe(row);
+  expect(row.textContent).not.toContain("View transcript");
   expect(view.container.querySelector('[data-filter="status"] [data-value="option:ok"]')).toBe(
     option,
   );
@@ -189,8 +191,6 @@ it("retains history controls and forwards the current transcript target after re
   expect(view.container.querySelector(".cron-run-entry__body")?.textContent).toContain(
     "Updated summary",
   );
-  button.click();
-  expect(onViewRunTranscript).toHaveBeenCalledExactlyOnceWith(refreshed, button);
 });
 
 it("keeps retained row controls current across pending queries and access changes", () => {

@@ -446,7 +446,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/cron/event-source.ts":
     case "ui/src/pages/cron/human-owner.ts":
     case "ui/src/pages/cron/route-model.ts":
-    case "ui/src/pages/cron/run-transcript.tsx":
     case "ui/src/pages/cron/suggestions.ts":
     case "ui/src/pages/cron/view-props.ts":
     case "ui/src/pages/cron/view-controls.tsx":
