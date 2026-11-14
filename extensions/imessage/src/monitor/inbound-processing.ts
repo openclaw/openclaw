@@ -691,11 +691,11 @@ export async function resolveIMessageInboundDecision(params: {
       isGroup,
       message: params.message,
       requireMentionOverride: params.opts?.requireMention,
+      route: { agentId: route.agentId, sessionKey: route.sessionKey },
     });
   // An explicit bot-thread requirement remains enforced when patterns are disabled.
   const canDetectMention = mentionRegexes.length > 0 || enforceMentionRequirement;
 
-  const commandAuthorized = commandAccess.authorized;
   if (commandAccess.shouldBlockControlCommand) {
     logInboundDrop({
       log: logVerbose,
@@ -718,7 +718,7 @@ export async function resolveIMessageInboundDecision(params: {
       requireMention,
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
-      commandAuthorized,
+      commandAuthorized: commandAccess.authorized,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
@@ -769,7 +769,7 @@ export async function resolveIMessageInboundDecision(params: {
     replyContext: filteredReplyContext,
     effectiveWasMentioned,
     groupRequireMention: requireMention,
-    commandAuthorized,
+    commandAuthorized: commandAccess.authorized,
     hasControlCommand: hasControlCommandInMessage,
     groupSystemPrompt,
   };
