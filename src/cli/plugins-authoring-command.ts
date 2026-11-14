@@ -648,6 +648,10 @@ jobs:
     const indexSource = `import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
+export function echo({ input }: { input: string }) {
+  return { input };
+}
+
 export default defineToolPlugin({
   id: ${idLiteral},
   name: ${JSON.stringify(name)},
@@ -659,28 +663,22 @@ export default defineToolPlugin({
       parameters: Type.Object({
         input: Type.String({ description: "Text to echo." }),
       }),
-      execute: async ({ input }) => ({ input }),
+      execute: echo,
     }),
   ],
 });
 `;
     const testSource = `import { describe, expect, it } from "vitest";
-import entry from "./index.js";
+import entry, { echo } from "./index.js";
 import { getToolPluginMetadata } from "openclaw/plugin-sdk/tool-plugin";
-import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 
 describe(${idLiteral}, () => {
   it("declares tool metadata", () => {
     expect(getToolPluginMetadata(entry)?.tools.map((tool) => tool.name)).toEqual(["echo"]);
   });
 
-  it("invokes echo with the runtime argument order", async () => {
-    const captured = createCapturedPluginRegistration({ id: entry.id });
-    entry.register(captured.api);
-    const echo = captured.tools.find((tool) => tool.name === "echo");
-    expect(await echo?.execute("call-1", { input: "hello" })).toMatchObject({
-      details: { input: "hello" },
-    });
+  it("invokes the declarative callback with known input", () => {
+    expect(echo({ input: "hello" })).toEqual({ input: "hello" });
   });
 });
 `;

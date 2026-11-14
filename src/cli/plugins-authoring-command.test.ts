@@ -694,6 +694,18 @@ describe("plugin authoring commands", () => {
   it("scaffolds an invocable tool and preserves deliberately authored profile grants", async () => {
     const projectDir = path.join(tempDirs.make("openclaw-tool-init-"), "project");
     await runPluginsInitCommand("fixture-tools", { directory: projectDir });
+    // Consumer imports must pass the npm package export map, not the loader
+    // aliases used by the in-repository registration checks below.
+    const packageExports = readJson(process.cwd(), "package.json").exports;
+    for (const file of ["src/index.ts", "src/index.test.ts"]) {
+      for (const [, specifier] of readText(projectDir, file).matchAll(
+        /from "(openclaw\/[^"]+)"/gu,
+      )) {
+        expect(Object.hasOwn(packageExports, `./${specifier!.slice("openclaw/".length)}`)).toBe(
+          true,
+        );
+      }
+    }
     fs.mkdirSync(path.join(projectDir, "node_modules"));
     fs.symlinkSync(
       path.resolve("node_modules/typebox"),
