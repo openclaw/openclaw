@@ -21,7 +21,7 @@ export function createSqliteAcpEventLedger(
     recordUserPrompt: ({ prompt, ...session }) =>
       execute("acpReplay.append", {
         session,
-        events: createAcpPromptUpdates(prompt).map((update) => ({
+        events: createAcpPromptUpdates(prompt, session.runId).map((update) => ({
           update,
           createdAt: Date.now(),
           at: Date.now(),
