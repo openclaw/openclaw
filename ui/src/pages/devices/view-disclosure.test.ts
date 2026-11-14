@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("Devices disclosure lifetime", () => {
-  it("builds only opened bodies from current inventory and retains them after closing", () => {
+  it("builds only opened bodies from current inventory and retains them after closing", async () => {
     const node = {
       nodeId: "node-one",
       displayName: "Node One",
@@ -45,7 +45,8 @@ describe("Devices disclosure lifetime", () => {
     expect(row.querySelector(".device-entry__body")).toBeNull();
 
     row.open = true;
-    row.dispatchEvent(new Event("toggle"));
+    // The native toggle task may follow paint; the open-attribute microtask must suffice.
+    await Promise.resolve();
     flush();
     const body = expectDefined(row.querySelector(".device-entry__body"), "opened body");
     const remove = () =>

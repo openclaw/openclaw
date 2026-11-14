@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -161,8 +161,22 @@ export function DeviceDisclosure(props: {
   // Keep drafts and nested disclosures alive after first open. Unopened bodies
   // intentionally do not participate in browser find-in-page.
   const [hasOpened, setHasOpened] = createSignal(false);
+  let details: HTMLDetailsElement;
+  onSettled(() => {
+    // Native toggle can arrive after the first expanded paint. Attribute
+    // delivery also covers programmatic opening, before the next frame.
+    const observer = new MutationObserver(() => {
+      if (details.open) {
+        setHasOpened(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(details, { attributes: true, attributeFilter: ["open"] });
+    return () => observer.disconnect();
+  });
   return (
     <details
+      ref={(element) => (details = element)}
       class="device-entry"
       data-device-id={props.deviceId}
       onToggle={(event) => {

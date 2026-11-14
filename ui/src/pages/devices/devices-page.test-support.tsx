@@ -251,15 +251,13 @@ export async function selectEntryAction(
 ) {
   // Let initial native readiness settle before keeping an interactive row reference.
   await waitForSolid(() => expect(container.textContent).toContain(name));
+  openDeviceDisclosures(container);
   const selector = `[data-device-action="${action}"]`;
   const row = [...container.querySelectorAll(".device-entry")].find(
-    (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
+    (entry) =>
+      entry.querySelector(".settings-row__title")?.textContent === name &&
+      entry.querySelector(selector) !== null,
   );
-  if (row instanceof HTMLDetailsElement) {
-    row.open = true;
-    row.dispatchEvent(new Event("toggle"));
-    flush();
-  }
   expectDefined(row?.querySelector<HTMLButtonElement>(selector), `device action ${action}`).click();
   await Promise.resolve();
   flush();
