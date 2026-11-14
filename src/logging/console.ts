@@ -239,7 +239,7 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
 
 /**
  * Route console.* calls through file logging while still emitting to stdout/stderr.
- * This keeps user-facing output unchanged but guarantees every console call is captured in log files.
+ * User-facing output stays unchanged; read-only diagnostic scopes omit only file capture.
  */
 export function enableConsoleCapture(): void {
   if (loggingState.consolePatched) {

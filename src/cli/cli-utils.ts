@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { withoutFileLogging } from "../logging/state.js";
 import { formatCliOperatorError, isExpectedCliError } from "./failure-output.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 export { formatErrorMessage } from "../infra/errors.js";
@@ -52,7 +53,7 @@ export async function runCommandWithRuntime(
       onError(err);
       return;
     }
-    runtime.error(formatCliOperatorError(err));
+    withoutFileLogging(() => runtime.error(formatCliOperatorError(err)));
     runtime.exit(1);
   }
 }

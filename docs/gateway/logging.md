@@ -309,6 +309,12 @@ evidence, not zero activity; durations do not attribute native CPU or client rec
 
 The CLI captures `console.log/info/warn/error/debug/trace`, writes them to file logs, and still prints to stdout/stderr.
 
+Source-only config inspection, update preview output, Gateway ownership-wait and
+startup-maintenance refusal diagnostics, and terminal CLI failure presentation
+do not create log files. Their console output and diagnostic events remain
+available. These operation-local exceptions preserve state during inspection or
+refusal; ordinary runtime file logging continues outside them.
+
 `console.trace()` keeps its redacted stack in every console style, including
 forced stderr output. File capture records it once at `trace` level, subject to
 the configured file log level.

@@ -9,6 +9,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { withoutFileLogging } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPidAlive, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
@@ -576,8 +577,10 @@ export async function acquireGatewayLock(
               return false;
             }
             if (!waited) {
-              (opts.onWait ?? log.warn)(
-                `Waiting up to ${Math.ceil(remaining / 1000)} seconds for the previous Gateway to release state; an unverifiable owner will not be reclaimed automatically. ${error.message}`,
+              withoutFileLogging(() =>
+                (opts.onWait ?? log.warn)(
+                  `Waiting up to ${Math.ceil(remaining / 1000)} seconds for the previous Gateway to release state; an unverifiable owner will not be reclaimed automatically. ${error.message}`,
+                ),
               );
             }
             waited = true;
@@ -590,8 +593,10 @@ export async function acquireGatewayLock(
             return false;
           }
           if (!waited && deadlineMs > startedAt && role === "gateway") {
-            log.warn(
-              `waiting for Gateway state ownership held by another OpenClaw process, up to ${Math.ceil((deadlineMs - startedAt) / 1000)} s`,
+            withoutFileLogging(() =>
+              log.warn(
+                `waiting for Gateway state ownership held by another OpenClaw process, up to ${Math.ceil((deadlineMs - startedAt) / 1000)} s`,
+              ),
             );
           }
           waited = true;

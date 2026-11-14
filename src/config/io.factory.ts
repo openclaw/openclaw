@@ -1,5 +1,6 @@
 import path from "node:path";
 import { root } from "../infra/fs-safe.js";
+import { withoutFileLogging } from "../logging/state.js";
 import { createConfigIoContext } from "./io.context.js";
 import { captureConfigHealthStateStore } from "./io.health-state.js";
 import { loadConfigFromContext, loadConfigFromContextAsync } from "./io.load.js";
@@ -49,7 +50,8 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
     readBestEffortConfig: async () =>
       (await readBestEffortConfigSnapshotFromContext(context)).config,
     readBestEffortConfigSnapshot: () => readBestEffortConfigSnapshotFromContext(context),
-    readSourceConfigBestEffort: () => readSourceConfigBestEffortFromContext(context),
+    readSourceConfigBestEffort: () =>
+      withoutFileLogging(() => readSourceConfigBestEffortFromContext(context)),
     readConfigFileSnapshot: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotFromContext(context, readOptions),
     readConfigFileSnapshotFromRaw: async (sourceRaw: string) =>
