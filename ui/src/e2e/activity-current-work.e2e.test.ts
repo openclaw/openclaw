@@ -76,11 +76,9 @@ suite.define(() => {
       expect(await entries.count()).toBe(0);
 
       // Sidebar narration remains; Activity must not acquire full tool streams.
-      expect(
-        (await gateway.getRequests("sessions.messages.subscribe")).every(
-          (request) => request.params?.mode === "narration",
-        ),
-      ).toBe(true);
+      for (const { params } of await gateway.getRequests("sessions.messages.subscribe")) {
+        expect(params).toMatchObject({ mode: "narration" });
+      }
 
       await gateway.setMethodResponse("sessions.list", listing([queued]));
       await gateway.emitGatewayEvent("sessions.changed", {
