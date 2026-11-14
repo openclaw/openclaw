@@ -9,11 +9,6 @@ import { withProgress, type ProgressReporter } from "../cli/progress.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { formatConfigIssueLine } from "../config/issue-format.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
-import {
-  resolveGatewayLogPaths,
-  resolveGatewayRestartLogPath,
-  resolveGatewaySupervisorLogPaths,
-} from "../daemon/restart-logs.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -41,12 +36,13 @@ import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildWorkspaceSkillReadiness } from "../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import { formatDeliveryQueueHealthLine } from "./health-format.js";
+import { readStatusAllLogTails } from "./status-all-log-tails.js";
 import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
 } from "./status-all/channels-table.js";
 import { formatTimeAgo, redactStatusSecrets } from "./status-all/format.js";
-import { readFileTailLines, summarizeLogTail } from "./status-all/gateway.js";
+import { summarizeLogTail } from "./status-all/gateway.js";
 import {
   buildStatusAgentTableRows,
   buildStatusChannelDetailSections,
@@ -58,7 +54,7 @@ import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusAllOverviewRows } from "./status-overview-rows.ts";
 import { buildStatusSecretDiagnostics, countActiveStatusAgents } from "./status-overview-values.js";
 import {
-  reportStatusScanFailure,
+  reportStatusScanFailureUnlessInterrupted,
   resolveStatusServiceSummaries,
   resolveStatusUsageSummary,
   resolveStatusGatewayDiagnosticsSafe,
@@ -137,30 +133,6 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
       return typeof ts === "number" && Number.isFinite(ts) ? Math.max(max, ts) : max;
     }, 0);
   return latestTs > 0 ? Date.now() - latestTs : null;
-}
-
-async function readStatusAllLogTails() {
-  const logPaths = (() => {
-    try {
-      // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
-      return process.platform === "darwin"
-        ? resolveGatewaySupervisorLogPaths(process.env)
-        : resolveGatewayLogPaths(process.env);
-    } catch {
-      return null;
-    }
-  })();
-  if (logPaths) {
-    const restartLogPath = resolveGatewayRestartLogPath(process.env);
-    const readStderr = process.platform !== "darwin";
-    const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readStderr ? readFileTailLines(logPaths.stderrPath, 40) : [],
-      readFileTailLines(logPaths.stdoutPath, 40),
-      readFileTailLines(restartLogPath, 30),
-    ]);
-    return { logPaths, restartLogPath, readStderr, stderrTail, stdoutTail, restartTail };
-  }
-  return null;
 }
 
 async function resolveStatusAllLocalDiagnosis(params: {
@@ -302,7 +274,9 @@ export async function statusAllCommand(
         queryingChannelStatus: "Querying gateway…",
         summarizingChannels: "Summarizing channels…",
       },
-    }).catch((error: unknown) => reportStatusScanFailure(error, runtime, opts?.timeoutMs));
+    }).catch((error: unknown) =>
+      reportStatusScanFailureUnlessInterrupted(error, runtime, opts?.timeoutMs),
+    );
     progress.setLabel("Checking services…");
     const [daemon, nodeService] = await resolveStatusServiceSummaries(opts.timeoutMs);
     const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
@@ -744,5 +718,7 @@ export async function statusAllCommand(
     progress.setLabel("Rendering…");
     runtime.log(lines.join("\n"));
     progress.tick();
-  });
+  }).catch((error: unknown) =>
+    reportStatusScanFailureUnlessInterrupted(error, runtime, opts?.timeoutMs),
+  );
 }
