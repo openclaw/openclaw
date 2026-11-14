@@ -1,3 +1,4 @@
+import { buildSessionContext } from "../agents/sessions/session-manager-codec.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
 import {
@@ -7,10 +8,12 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
+import { buildSessionResetBoundaryEvent } from "../config/sessions/session-reset-boundary-event.js";
 import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { DEFAULT_REPLAY_MAX_MESSAGES } from "../config/sessions/transcript-replay.js";
 import {
   captureSessionTranscriptTargetBinding,
   type CapturedSessionTranscriptTargetBinding,
@@ -25,6 +28,7 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   maxItems: number,
   maxChars: number,
   view: "display" | "model-context" = "display",
+  resetReason?: "daily" | "idle",
 ): Promise<SessionPreviewItem[]> {
   const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
@@ -33,7 +37,7 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
     }
     return view === "display"
       ? (await memory.read("session.history.preview", { maxItems, maxChars })).items
-      : readSessionModelPreviewItems(memory.target, maxItems, maxChars);
+      : readSessionModelPreviewItems(memory.target, maxItems, maxChars, resetReason);
   }
   const target = prepareSessionTranscriptReadTargetCore(scope);
   if (view === "model-context") {
@@ -49,7 +53,7 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
       storePath,
       ...(scope.env ? { env: scope.env } : {}),
     });
-    return readSessionModelPreviewItems(modelTarget, maxItems, maxChars);
+    return readSessionModelPreviewItems(modelTarget, maxItems, maxChars, resetReason);
   }
   const readScope: SessionTranscriptReadScope = {
     agentId: target.agentId,
@@ -98,8 +102,10 @@ function readSessionModelPreviewItems(
   target: CapturedSessionTranscriptTargetBinding,
   maxItems: number,
   maxChars: number,
+  resetReason?: "daily" | "idle",
 ): Promise<SessionPreviewItem[]> {
-  return readBoundedSessionPreviewItemsAsync(maxItems, async (maxEvents, maxBytes) => {
+  const wantedItems = resetReason ? Math.min(maxItems, DEFAULT_REPLAY_MAX_MESSAGES) : maxItems;
+  return readBoundedSessionPreviewItemsAsync(wantedItems, async (maxEvents, maxBytes) => {
     let truncated = false;
     const manager = await withSessionTranscriptHydrationCaller("preview", () =>
       SessionManager.openBoundedAsync(target, {
@@ -110,13 +116,22 @@ function readSessionModelPreviewItems(
         },
       }),
     );
+    let messages: ReturnType<typeof buildSessionContext>["messages"];
+    if (resetReason) {
+      const events = manager.getBranch();
+      const boundary = buildSessionResetBoundaryEvent({
+        events,
+        context: "preserve-tail",
+        reason: resetReason,
+      });
+      messages = buildSessionContext([...events, boundary]).messages.filter(
+        (message) => message.role === "user" || message.role === "assistant",
+      );
+    } else {
+      messages = manager.buildSessionContext().messages;
+    }
     return {
-      items: buildSessionPreviewItems(
-        manager.buildSessionContext().messages,
-        maxItems,
-        maxChars,
-        "model-context",
-      ),
+      items: buildSessionPreviewItems(messages, maxItems, maxChars, "model-context"),
       hasOlderEvents: truncated,
     };
   });
