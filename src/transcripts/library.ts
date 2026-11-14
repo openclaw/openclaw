@@ -15,6 +15,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
+import { escapeMarkdownText } from "../shared/text/escape-markdown.js";
 import { readTranscriptCaptureSnapshot } from "./capture.js";
 import { presentTranscriptSession } from "./read-live.js";
 import {
@@ -175,12 +176,12 @@ export async function exportTranscriptLibrary(
         ? [
             projectTranscriptMarkdown(notes.markdown),
             ...(summary ? [`Summary covers ${summary.utteranceCount} saved utterances.`] : []),
-            `## Full Transcript\n${parts.map((line) => `- ${line}`).join("\n")}`,
+            `## Full Transcript\n${parts.map((line) => `- ${escapeMarkdownText(line)}`).join("\n")}`,
             `Transcript utterances: ${entry.utteranceCount}\n`,
           ].join("\n\n")
         : summary
           ? `${renderTranscriptsMarkdown({ ...summary, title, transcript: parts, utteranceCount: entry.utteranceCount })}\n\nSummary covers ${summary.utteranceCount} saved utterances.\n`
-          : `# ${title}\n\nSession: ${sanitizeTerminalText(entry.session.sessionId)}\nStarted: ${entry.session.startedAt}\n\n## Transcript\n${parts.map((line) => `- ${line}`).join("\n")}\n`;
+          : `# ${escapeMarkdownText(title)}\n\nSession: ${escapeMarkdownText(sanitizeTerminalText(entry.session.sessionId))}\nStarted: ${entry.session.startedAt}\n\n## Transcript\n${parts.map((line) => `- ${escapeMarkdownText(line)}`).join("\n")}\n`;
   const bodySizeBytes = Buffer.byteLength(body, "utf8");
   assertTranscriptByteCount(bodySizeBytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
   const digest = createHash("sha256").update(entry.selector).digest("hex").slice(0, 12);

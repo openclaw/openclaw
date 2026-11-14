@@ -23,6 +23,7 @@ import {
 import { engineStringPosition } from "../infra/database-engine/scalar.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { escapeMarkdownText } from "../shared/text/escape-markdown.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { projectTranscriptSession } from "./read.js";
 import {
@@ -354,12 +355,12 @@ function readTranscriptPage<Entry>(
   if (options.query) {
     const search = options.query;
     query = query.where((eb) => {
-      const matches = (field: Expression<string | null>): Expression<SqlBool> =>
+      const matches = (field: Expression<string | null>, text = search): Expression<SqlBool> =>
         eb(
           engineStringPosition(
             database,
             eb.fn<string | null>("lower", [field]),
-            eb.fn<string>("lower", [eb.val(search)]),
+            eb.fn<string>("lower", [eb.val(text)]),
           ),
           ">",
           0,
@@ -377,7 +378,7 @@ function readTranscriptPage<Entry>(
         eb.ref("source_file_id"),
       ];
       return eb.or([
-        ...fields.map(matches),
+        ...fields.map((field) => matches(field)),
         eb.exists(
           eb
             .selectFrom("meeting_transcript_summaries as notes")
@@ -387,6 +388,9 @@ function readTranscriptPage<Entry>(
             .where((notes) =>
               notes.or([
                 matches(notes.ref("notes.markdown")),
+                // Notes store rendered Markdown; encode the literal query too so
+                // punctuation in newly rendered decisions remains searchable.
+                matches(notes.ref("notes.markdown"), escapeMarkdownText(search)),
                 matches(notes.ref("notes.overview")),
               ]),
             ),

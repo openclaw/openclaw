@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
+import { marked } from "marked";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TRANSCRIPTS_EXPORT_MAX_BYTES as EXPORT_LIMIT,
@@ -376,8 +377,9 @@ describe("transcript library SQLite reads", () => {
     const publicOutputs = [JSON.stringify(first), JSON.stringify(await list())];
     for (const format of ["markdown", "jsonl"] as const) {
       const content = contents(await download(selector, format));
-      expect(content).toContain("First decision: approved.");
-      expect(content).toContain("Follow up: FIRST milestone.");
+      const rendered = format === "markdown" ? marked.parse(content) : content;
+      expect(rendered).toContain("First decision: approved.");
+      expect(rendered).toContain("Follow up: FIRST milestone.");
       publicOutputs.push(content);
     }
     for (const output of publicOutputs) {
@@ -416,7 +418,7 @@ describe("transcript library SQLite reads", () => {
       const action = { text: "Action: verify downloads" };
       await seed(target, [
         {
-          text: "Opening context",
+          text: "Opening **context** &copy; <options>",
           id: "utterance-1",
           speaker: { label: "Alex", id: "speaker-1" },
           startedAt: "2026-08-20T10:01:00.000Z",
@@ -443,8 +445,8 @@ describe("transcript library SQLite reads", () => {
         expect((await get(selector)).summary?.markdown).toBe(projectedMarkdown);
         expect(text).toContain(projectedMarkdown);
       }
-      expect(text).toContain("Alex: Opening context");
-      expect(text).toContain("Action: verify downloads");
+      expect(marked.parse(text)).toContain("Alex: Opening **context** &amp;copy; &lt;options&gt;");
+      expect(text).toContain("Action\\: verify downloads");
       expect(text).toContain("Transcript utterances: 2");
       if (notesKind !== "markdown-only") {
         expect(text).toContain("Summary covers 1 saved utterances.");

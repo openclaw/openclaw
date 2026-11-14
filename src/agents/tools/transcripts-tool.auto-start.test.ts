@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { hasTerminalControl } from "../../../packages/terminal-core/src/safe-text.js";
+import { escapeMarkdownText } from "../../shared/text/escape-markdown.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import type {
   TranscriptSourceProvider,
@@ -76,7 +77,7 @@ it.each(["terminal warning", "manual export"] as const)(
           expect(stored.stoppedAt).toEqual(expect.any(String));
           expect(await reopened.readSummary(stored)).toMatchObject({
             summary: { utteranceCount: 1, transcript: [capturedText] },
-            markdown: expect.stringContaining(capturedText),
+            markdown: expect.stringContaining(escapeMarkdownText(capturedText)),
           });
           if (id === "subject") {
             expect(await fs.readFile(sessionDir, "utf8")).toBe(obstruction);
@@ -84,7 +85,7 @@ it.each(["terminal warning", "manual export"] as const)(
           } else {
             expect(
               await fs.readFile(path.join(reopened.sessionDir(stored), "summary.md"), "utf8"),
-            ).toContain(capturedText);
+            ).toContain(escapeMarkdownText(capturedText));
           }
         }
         await f.status([]);
