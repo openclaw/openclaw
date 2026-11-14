@@ -179,6 +179,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 .agent-arc {
   position: relative;
   flex: none;
+  container-type: inline-size;
 }
 
 .agent-arc__face {
@@ -203,6 +204,15 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+/* A face without an image sits on a disc the size of its seat, the glyph at 54% of the diameter. */
+.new-session-page .agent-arc__face .identity-avatar--agent.is-fallback:has(.identity-avatar__text) {
+  background: var(--secondary);
+}
+
+.new-session-page .agent-arc .agent-arc__face .identity-avatar__text {
+  font-size: 54cqw;
 }
 
 .agent-arc__face:focus-visible {
