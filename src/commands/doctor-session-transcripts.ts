@@ -428,8 +428,8 @@ export async function noteSessionTranscriptHealth(options?: {
     note(
       [
         params.shouldRepair
-          ? `- Repaired ${titleReport.repaired} of ${titleReport.found} missing session title(s) without changing activity.`
-          : `- Found ${titleReport.found} missing session title(s). Run "openclaw doctor --fix" to repair them.`,
+          ? `- Repaired ${titleReport.repaired} of ${titleReport.found} missing or internal-wake session title(s) without changing activity.`
+          : `- Found ${titleReport.found} missing or internal-wake session title(s). Run "openclaw doctor --fix" to repair them.`,
         ...titleReport.warnings,
       ].join("\n"),
       "Session titles",
