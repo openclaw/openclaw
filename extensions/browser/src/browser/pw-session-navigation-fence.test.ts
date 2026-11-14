@@ -255,11 +255,14 @@ describe("navigation authority fence lifecycle", () => {
         outcome = error;
       },
     );
-    await vi.advanceTimersByTimeAsync(40_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     expect({ outcome, enabledAfterRelease: enables() - enabledBefore }).toEqual({
       outcome: new Error("Browser navigation interception was not released in time"),
       enabledAfterRelease: 0,
     });
+    // It started nothing, so it leaves the tab as it found it.
+    expect(send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
+    expect(send.mock.calls.filter(([method]) => method === "Fetch.disable")).toHaveLength(1);
     expect(await released).toEqual(
       new Error("Browser navigation did not settle before authority cleanup"),
     );
