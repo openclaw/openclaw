@@ -368,6 +368,10 @@ it("does not disclose hidden session keys in cron.history errors", () =>
       { runId: "public-old-run", cursor: "invalid" },
     ]) {
       const { calls } = await query(selector, { client }, context);
+      expect(context.logGateway.debug).toHaveBeenCalledWith(
+        expect.stringMatching(/^cron\.history unavailable: /),
+      );
+      expect(JSON.stringify(vi.mocked(context.logGateway.debug).mock.calls)).not.toContain(baseKey);
       expect(calls).toEqual([
         [
           false,

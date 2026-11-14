@@ -51,6 +51,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
       const signal = AbortSignal.any([testSignal, stopping.signal]);
       const receipts = await openFixtureReceiptChannel();
       let barrierReady = false;
+      let phase = "gateway setup";
       const acquiringInstance = createOpenClawTestInstance({
         name: "progress-refresh",
         signal,
@@ -247,6 +248,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
             expect(result).toMatchObject({ status: "ok" });
           };
           const warmupRunId = `progress-warmup-${randomUUID()}`;
+          phase = "warmup completion";
           const warmup = await waitDuring(
             (event) =>
               event.event === "chat" &&
@@ -269,6 +271,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
             barrierReady = true;
           });
           const startSignal = AbortSignal.any([signal, AbortSignal.timeout(RUN_TIMEOUT_MS)]);
+          phase = "barrier readiness";
           await withinTest(
             Promise.all([
               ready,
@@ -325,10 +328,12 @@ describeLive("progress refresh through the live embedded runtime", () => {
             }
             return { accepted, eventIndex, revision: card.revision };
           };
+          phase = "active refresh publication";
           const activeRefresh = await refresh();
           const active = await readHistory();
           expect(active.sessionInfo.hasActiveRun).toBe(true);
           expect(active.inFlightRun?.runId).toBe(rootRunId);
+          phase = "parent completion after barrier release";
           const final = await waitDuring(
             (event) =>
               event.event === "chat" &&
@@ -410,7 +415,9 @@ describeLive("progress refresh through the live embedded runtime", () => {
           );
 
           const idleEventIndex = events.length;
+          phase = "idle refresh publication";
           const { accepted: idle } = await refresh();
+          phase = "idle refresh settlement";
           await waitRun(idle.runId);
           const afterIdle = await readHistory();
           expect(afterIdle.messages).toEqual(beforeIdle.messages);
@@ -423,6 +430,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
         }),
         cleanup,
       ).catch((error: unknown) => {
+        console.error(`Progress refresh failed during ${phase}; barrierReady=${barrierReady}`);
         console.error(instance.logs());
         throw error;
       });

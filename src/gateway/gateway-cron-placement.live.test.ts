@@ -98,6 +98,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
       await runQaGatewayFixture(
         async () => {
           const config: OpenClawConfig = {
+            logging: { consoleLevel: "debug" },
             gateway: {
               mode: "local",
               port: instance.port,
@@ -397,7 +398,19 @@ describeLive("cron placement identity through production Gateway routing", () =>
         async () => await client?.stopAndWait(),
         () => hookProbe.close(),
         () => instance.cleanup(),
-      );
+      ).catch((error: unknown) => {
+        // Cleanup has drained the child output before collecting its bounded diagnostics.
+        const diagnostics = instance
+          .logs()
+          .split("\n")
+          .filter((line) => line.includes("cron.history unavailable:"))
+          .slice(-8)
+          .join("\n");
+        if (diagnostics) {
+          console.error(diagnostics);
+        }
+        throw error;
+      });
     },
     15 * 60_000,
   );
