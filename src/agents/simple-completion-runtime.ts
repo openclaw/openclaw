@@ -24,7 +24,6 @@ import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureAgentDatabaseAdmission } from "../state/agent-database-admission.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
-import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import {
@@ -59,6 +58,10 @@ import {
 } from "./runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
+import {
+  resolveModelForSelectedCredential,
+  resolveSimpleCompletionAuthStore,
+} from "./simple-completion-credential-model.js";
 import type { SimpleCompletionAuthProfiles } from "./simple-completion-profile-failover.js";
 import {
   createPreparedSimpleCompletionResolverContext,
@@ -92,6 +95,9 @@ export type PrepareSimpleCompletionModelParams = {
   agentDir?: string;
   profileId?: string;
   preferredProfile?: string;
+  authStore?: AuthProfileStore;
+  /** Resolve the model again for the account the selected credential belongs to. */
+  credentialScopedModelMetadata?: boolean;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
   skipAgentDiscovery?: boolean;
@@ -211,16 +217,11 @@ async function prepareSimpleCompletionModelCore(
         pluginMetadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
       }) === "plugin";
     // Plugin-owned credentials must not depend on opening an agent store or its health state.
-    authStore =
-      !pluginOwnedAuth &&
-      (params.onAuthProfiles || params.bindAuthOwner || initialModel.provider === "openai")
-        ? await ensureAuthProfileStoreAsync(params.agentDir, {
-            readOnly: true,
-            allowKeychainPrompt: false,
-            config: params.cfg,
-            profileId: params.profileId,
-          })
-        : undefined;
+    authStore = await resolveSimpleCompletionAuthStore({
+      ...params,
+      pluginOwnedAuth,
+      provider: initialModel.provider,
+    });
 
     const authParams = {
       provider: initialModel.provider,
@@ -365,6 +366,16 @@ async function prepareSimpleCompletionModelCore(
         ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
         secretSentinels: true,
       });
+      if (params.credentialScopedModelMetadata) {
+        resolvedModel = await resolveModelForSelectedCredential({
+          ...params,
+          model: initialModel,
+          auth,
+          workspaceDir,
+          modelResolver,
+          assertCurrent,
+        });
+      }
     }
   } catch (err) {
     return {
