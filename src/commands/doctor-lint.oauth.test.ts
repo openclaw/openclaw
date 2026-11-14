@@ -28,8 +28,9 @@ vi.mock("../flows/doctor-health-contributions.js", () => ({
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   readPreparedModelCatalog: async () => [],
 }));
+// mock-isolation: OAuth custody is real; coding-tool construction is outside this boundary.
 vi.mock("../agents/agent-tools.js", () => ({
-  createOpenClawCodingTools: () => [],
+  createOpenClawCodingToolsInternalAsync: async () => [],
 }));
 vi.mock("../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: () => [],
