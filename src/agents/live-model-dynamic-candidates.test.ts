@@ -8,10 +8,13 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   runProviderDynamicModel: vi.fn(),
 }));
 
-const normalizeDiscoveredAgentModelMock = vi.hoisted(() => vi.fn((value: unknown) => value));
+const normalizationMocks = vi.hoisted(() => {
+  const normalize = vi.fn((value: unknown) => value);
+  return { normalize, create: vi.fn(() => normalize) };
+});
 
 vi.mock("./model-discovery-normalize.js", () => ({
-  normalizeDiscoveredAgentModel: normalizeDiscoveredAgentModelMock,
+  createDiscoveredAgentModelNormalizer: normalizationMocks.create,
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => providerRuntimeMocks);
@@ -54,7 +57,8 @@ function candidates(overrides: Partial<CandidateOptions> = {}) {
 
 describe("appendLiveModelCandidates", () => {
   beforeEach(() => {
-    normalizeDiscoveredAgentModelMock.mockClear();
+    normalizationMocks.create.mockClear();
+    normalizationMocks.normalize.mockClear();
     providerRuntimeMocks.prepareProviderDynamicModel.mockReset().mockResolvedValue(undefined);
     providerRuntimeMocks.runProviderDynamicModel.mockReset().mockReturnValue(undefined);
   });
@@ -120,10 +124,11 @@ describe("appendLiveModelCandidates", () => {
       expect(providerRuntimeMocks.runProviderDynamicModel).toHaveBeenCalledTimes(
         mode === "prepared" ? 0 : 1,
       );
-      expect(normalizeDiscoveredAgentModelMock).toHaveBeenCalledWith(preparedModel, agentDir, {
+      expect(normalizationMocks.create).toHaveBeenCalledWith(agentDir, {
         config: options.config,
         workspaceDir: options.workspaceDir,
       });
+      expect(normalizationMocks.normalize).toHaveBeenCalledWith(preparedModel);
     },
   );
 });
