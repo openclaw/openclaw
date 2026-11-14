@@ -23,8 +23,6 @@ jobs:
       DIAGNOSTIC_SHA: ${{ inputs.diagnostic_sha }}
       EXPECTED_WORKFLOW_SHA: ${{ inputs.tooling_sha }}
       WORKFLOW_SHA: ${{ github.workflow_sha }}
-      PRIVATE_PROOF: ${{ runner.temp }}/swift-cancellation-private
-      SAFE_PROOF: ${{ runner.temp }}/swift-cancellation-safe
     steps:
       - name: Checkout clean diagnostic commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -52,6 +50,9 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          export PRIVATE_PROOF="$RUNNER_TEMP/swift-cancellation-private"
+          export SAFE_PROOF="$RUNNER_TEMP/swift-cancellation-safe"
+          printf 'PRIVATE_PROOF=%s\nSAFE_PROOF=%s\n' "$PRIVATE_PROOF" "$SAFE_PROOF" >> "$GITHUB_ENV"
           mkdir -p "$PRIVATE_PROOF" "$SAFE_PROOF"
           python3 proof/scripts/swift-cancellation-proof/verify.py bind "$PWD" "$GITHUB_WORKSPACE/harness"
       - name: Setup Node environment for Apple assets
