@@ -36,12 +36,13 @@ it.each(["session", "selection", "connection", "access", "participation", "uploa
     const item: ImageLightboxItem = {
       src: "data:image/png;base64,cG5n",
       title: "reference.png",
-      readOriginalBlob: () => original.promise,
+      readOriginalBlob: vi.fn(() => original.promise),
     };
     const use = pane.render().layout!.overlays.onUseImage!;
     expect(use).toBeTypeOf("function");
     const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
     const pending = use(item, () => true);
+    await vi.waitFor(() => expect(item.readOriginalBlob).toHaveBeenCalledOnce());
     if (retired === "session") {
       state.sessionKey = "agent:main:another";
     }

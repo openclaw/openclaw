@@ -202,6 +202,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
     const panePresentation = { owner: this.element, isPresented: () => this.presented };
     const connectionGeneration = this.connectionGeneration;
+    const canUseImage = !catalog && chatProps.canCompose && !chatProps.suggestionComposer;
     const headerPresentation = {
       owner: this.element,
       isPresented: () => this.visuallyPresented,
@@ -715,7 +716,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         presentation: panePresentation,
         image: state.imageLightbox,
         onCloseImage: state.handleCloseImage,
-        onUseImage: catalog ? undefined : createLightboxComposerAction(this, state, chatProps),
+        onUseImage: canUseImage ? createLightboxComposerAction(this, state) : undefined,
         reset: this.renderResetConfirmation(),
       },
     };
