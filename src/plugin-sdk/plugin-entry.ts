@@ -285,6 +285,11 @@ export type {
 } from "../plugins/hook-message.types.js";
 
 export type {
+  PluginHookBeforeModelRequestEvent,
+  PluginHookBeforeModelRequestResult,
+} from "../plugins/hook-model.types.js";
+
+export type {
   RepositoryIntegration,
   RepositoryActor,
   RepositoryOperation,

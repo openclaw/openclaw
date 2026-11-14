@@ -19,6 +19,7 @@ import {
 } from "./agent-tool-result-middleware.js";
 import {
   resolveConversationAccessAllowed,
+  resolveModelRequestAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
@@ -640,6 +641,15 @@ export function createPluginRegistrars(state: PluginRegistryState) {
   ) => {
     if (!isPluginHookName(hookName)) {
       reportRegistrationWarning(record, `unknown typed hook "${String(hookName)}" ignored`);
+      return;
+    }
+    if (hookName === "before_model_request" && !resolveModelRequestAllowed(policy)) {
+      // Gateway startup logs registration warnings, so the ignored hook is not silent.
+      reportRegistrationWarning(
+        record,
+        `typed hook "before_model_request" ignored: it is off by default; set ` +
+          `plugins.entries.${record.id}.hooks.allowModelRequest=true to enable it`,
+      );
       return;
     }
     if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {

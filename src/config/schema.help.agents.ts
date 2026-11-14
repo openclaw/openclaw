@@ -37,6 +37,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust. Allowed by default. Set false to block prompt-modifying hooks, tool prompt guidance, next-turn prompt contributions, and active-run steering.",
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+  "plugins.entries.*.hooks.allowModelRequest":
+    "Allows this plugin's `before_model_request` hook to rewrite or withhold the final provider request body of embedded model calls and the prompt text handed to CLI-backed runtimes. Off by default for every plugin, bundled ones included; when off, the hook registration is ignored with a plugin warning. The hook also needs conversation access and prompt modification. Only enable it for plugins you trust.",
   "plugins.entries.*.hooks.timeoutMs":
     "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. When unset, each hook uses the plugin's declared timeout or the Gateway's per-hook policy; there is no single fixed default. Per-hook values in hooks.timeouts take precedence.",
   "plugins.entries.*.hooks.timeouts":
