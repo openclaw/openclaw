@@ -9,7 +9,7 @@
  * the real host image normalizer and existing serialization on both revisions.
  * --mode system isolates system normalization; use --prepared-system and --iterations 20000.
  * --prepared-system carries a session-owned 64 KiB prompt revision through request construction.
- * All non-build modes consume contiguous bytes, matching the guarded Blob body path.
+ * All non-build modes consume contiguous bytes, flattening older Blob bodies like guarded fetch.
  * scenarioHashes must match across revisions: tool turns, moved cache boundaries, hook edits.
  * Run five alternating base/candidate arms per workload and instrumentation mode.
  * --restored replays 199 restored messages with 40 KiB tool results through attempt
@@ -22,16 +22,17 @@
  * Other modes retain their no-material-GC-regression rule. Measure allocation separately.
  * Restored mode includes transport/SSE replay; other modes measure preparation only.
  * No mode measures live provider calls or whole-Gateway latency.
- * --turns 100|500 uses three messages/turn and 40 KiB tool results; --hook
+ * --turns 100|500 uses three messages/turn and ~40 KiB tool results; --hook
  * none|observer|service-tier selects no hook, an observer, or the bundled tier wrapper.
  * --diagnostics reports cold/warm/appended encode work separately from timing passes.
+ * --interval-ms 200 paces each request to compare memory at five requests/second.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
+import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { AnthropicOptions } from "../../packages/ai/src/provider-options.js";
@@ -52,6 +53,7 @@ const { values } = parseArgs({
     turns: { type: "string" },
     hook: { type: "string" },
     diagnostics: { type: "boolean", default: false },
+    "interval-ms": { type: "string" },
     "baseline-dir": { type: "string" },
   },
 });
@@ -72,6 +74,12 @@ const iterations = parseStrictIntegerOption({
   fallback: values.restored ? 20 : 2000,
   min: 1,
   label: "iterations",
+});
+const intervalMs = parseStrictIntegerOption({
+  raw: values["interval-ms"],
+  fallback: 0,
+  min: 0,
+  label: "interval-ms",
 });
 if (values["baseline-dir"]) {
   process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["baseline-dir"]);
@@ -248,10 +256,17 @@ const encoder = new TextEncoder();
 async function encode(prepared: Prepared): Promise<Uint8Array<ArrayBuffer>> {
   const body = { ...prepared.params, stream: true as const };
   const encoded = serialize ? serialize(body, prepared.messageSources) : JSON.stringify(body);
-  // This is the exact contiguous immutable-body copy performed by the fetch guard.
-  return encoded instanceof Blob
-    ? new Uint8Array(await encoded.arrayBuffer())
-    : encoder.encode(encoded);
+  // Guarded fetch flattens older Blob bodies; owned encoded bytes pass through.
+  return consumeBody(encoded);
+}
+async function consumeBody(
+  body: string | Blob | Uint8Array<ArrayBuffer>,
+): Promise<Uint8Array<ArrayBuffer>> {
+  return typeof body === "string"
+    ? encoder.encode(body)
+    : body instanceof Blob
+      ? new Uint8Array(await body.arrayBuffer())
+      : body;
 }
 async function collect(): Promise<void> {
   for (let index = 0; index < 3; index++) {
@@ -267,7 +282,7 @@ if (values.diagnostics) {
     messageEncodes: 0,
     wholeEncodes: 0,
     encodedBytes: 0,
-    assemblyMs: 0,
+    blobAssemblyMs: 0,
     frozenChecks: 0,
     frozenCheckMs: 0,
   };
@@ -310,7 +325,7 @@ if (values.diagnostics) {
       const start = performance.now();
       super(...args);
       if (args[1]?.type === "application/json") {
-        counts.assemblyMs += performance.now() - start;
+        counts.blobAssemblyMs += performance.now() - start;
       }
     }
   };
@@ -325,8 +340,13 @@ if (values.diagnostics) {
         Reflect.set(counts, key, 0);
       }
       const prepared = await build();
+      const serializeStart = performance.now();
       const body = serialize(prepared.params, prepared.messageSources);
-      const wire = typeof body === "string" ? body : await body.text();
+      const serializationMs = performance.now() - serializeStart;
+      const consumeStart = performance.now();
+      const bytes = await consumeBody(body);
+      const consumeMs = performance.now() - consumeStart;
+      const wire = new TextDecoder().decode(bytes);
       assert.equal(wire, nativeStringify(prepared.params));
       console.log(
         nativeStringify({
@@ -334,6 +354,8 @@ if (values.diagnostics) {
           messages: prepared.params.messages.length,
           hook: values.hook,
           ...counts,
+          serializationMs,
+          consumeMs,
           reusedMessageFragments: counts.wholeEncodes
             ? 0
             : prepared.params.messages.length - counts.messageEncodes,
@@ -480,6 +502,7 @@ let last: Uint8Array<ArrayBuffer> | undefined;
 let lastSystem: ReturnType<typeof buildAnthropicSystemBlocks>;
 async function run() {
   for (let index = 0; index < iterations; index++) {
+    const requestStart = intervalMs ? performance.now() : 0;
     if (values.mode === "system") {
       assert(context);
       lastSystem = buildAnthropicSystemBlocks(
@@ -496,6 +519,9 @@ async function run() {
     }
     lastPrepared = values.mode === "serialize" ? prepared : await build();
     last = values.mode === "build" ? undefined : await encode(lastPrepared);
+    if (intervalMs) {
+      await delay(Math.max(0, intervalMs - (performance.now() - requestStart)));
+    }
   }
 }
 async function verifyLast() {
@@ -557,6 +583,7 @@ console.log(
     images: values.images ? 12 : 0,
     turns: values.turns,
     hook: values.hook,
+    intervalMs,
     allocation: values.allocation,
     iterations,
     scenarioHashes,

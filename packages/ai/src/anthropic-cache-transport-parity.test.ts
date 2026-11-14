@@ -25,6 +25,7 @@ import {
   serializeAnthropicRequestBody,
 } from "./transports/anthropic-request-body.js";
 import { createAnthropicMessagesTransportStreamFn } from "./transports/anthropic-transport-stream.js";
+import { modelRequestBodyState } from "./transports/model-request-body.js";
 import { createZeroUsage } from "./usage.test-support.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./utils/system-prompt-cache-boundary.js";
 
@@ -274,20 +275,26 @@ describe("Anthropic immutable request bytes", () => {
         return response;
       },
     });
+    const options: AnthropicOptions = {
+      apiKey: "synthetic-request-key",
+      cacheRetention: "long",
+      onPayload: async (value, target) => {
+        const replacement = await hook?.(value, target);
+        payload = replacement === undefined ? value : replacement;
+        return replacement;
+      },
+    };
+    let reportedBytes = 0;
+    modelRequestBodyState(options).onBytes = (bytes) => {
+      reportedBytes = bytes;
+    };
     const stream = await createAnthropicMessagesTransportStreamFn()(
       model,
       { ...context, messages },
-      {
-        apiKey: "synthetic-request-key",
-        cacheRetention: "long",
-        onPayload: async (value, target) => {
-          const replacement = await hook?.(value, target);
-          payload = replacement === undefined ? value : replacement;
-          return replacement;
-        },
-      },
+      options,
     );
     expect((await stream.result()).stopReason).toBe("stop");
+    expect(reportedBytes).toBe(Buffer.byteLength(wire));
     return { wire, encodedBody, payload };
   }
 
@@ -314,6 +321,9 @@ describe("Anthropic immutable request bytes", () => {
         messages.forEach(freezeJsonSnapshot);
         const first = await send(messages, hook);
         expect(hash("sha256", first.wire)).toBe(hash("sha256", JSON.stringify(first.payload)));
+        if (first.encodedBody instanceof Uint8Array) {
+          first.encodedBody.fill(0);
+        }
         const stringify = JSON.stringify;
         let wholePayloadEncodes = 0;
         let assistantEncodes = 0;
@@ -333,7 +343,7 @@ describe("Anthropic immutable request bytes", () => {
           spy.mockRestore();
         }
         expect(wholePayloadEncodes).toBe(0);
-        expect(first.encodedBody).toBeInstanceOf(Blob);
+        expect(first.encodedBody).toBeInstanceOf(Uint8Array);
         expect(repeated.wire).toBe(first.wire);
         expect(markerPaths(JSON.parse(repeated.wire))).toContain(
           `messages[${turn * 2}].content[0]`,

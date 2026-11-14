@@ -1,2 +1,2 @@
-# Extend the existing growing-history byte/work regression to envelope-editing hooks.
-10
+# Growing-history envelope-edit reuse, body isolation, and encoded request-byte accounting.
+20
