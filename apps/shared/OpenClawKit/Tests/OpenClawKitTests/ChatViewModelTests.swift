@@ -14463,29 +14463,29 @@ struct ChatStreamPresentationTests {
         let user = OpenClawChatMessage(role: "user", content: [.init(type: "text", text: "Again")], timestamp: 2)
         vm.replaceMessages([prior, user])
         vm.adoptRun(runId: "run", bufferedText: "Answer")
-        #expect(vm.liveAssistantDisplayText == "Answer")
+        #expect(vm.liveAssistantTextShape == "Answer")
         let other = message("Answer complete", run: "other")
         vm.replaceMessages([prior, user, other])
-        #expect(vm.liveAssistantDisplayText == "Answer")
+        #expect(vm.liveAssistantTextShape == "Answer")
         let commentary = message("Answer complete", run: "run", phase: "commentary")
         vm.replaceMessages([prior, user, other, commentary])
-        #expect(vm.liveAssistantDisplayText == "Answer")
+        #expect(vm.liveAssistantTextShape == "Answer")
         let prepended = message("Answer complete", run: "run")
         vm.replaceMessages([prepended, prior, user, other, commentary])
-        #expect(vm.liveAssistantDisplayText == "Answer")
+        #expect(vm.liveAssistantTextShape == "Answer")
         let final = message("Answer complete", run: "run")
         vm.replaceMessages([prepended, prior, user, other, commentary, final])
         // The display pacer has not caught up: text equality cannot retire this copy.
         #expect(vm.streamingAssistantText == "Answer")
-        #expect(vm.liveAssistantDisplayText == nil)
+        #expect(vm.liveAssistantTextShape == nil)
         vm.updateStreamingAssistantText("Different follow-up", runID: "run")
         if let scheduledID = vm.streamPacing.scheduledID {
             vm.flushStreamingAssistantDisplay(scheduledID: scheduledID)
         }
-        #expect(vm.liveAssistantDisplayText == "Different follow-up")
+        #expect(vm.liveAssistantTextShape == "Different follow-up")
         vm.updateStreamingAssistantText(nil)
         vm.updateStreamingAssistantText("Answer", runID: "run")
-        #expect(vm.liveAssistantDisplayText == "Answer")
+        #expect(vm.liveAssistantTextShape == "Answer")
     }
 
     @Test @MainActor func `revised owned final retires its source once before matching delta`() {
@@ -14502,16 +14502,16 @@ struct ChatStreamPresentationTests {
             phase: "final_answer")
         vm.replaceMessages([user, final])
         #expect(vm.streamingAssistantText == "Original draft")
-        #expect(vm.liveAssistantDisplayText == nil)
+        #expect(vm.liveAssistantTextShape == nil)
         vm.updateStreamingAssistantText("Revised answer", runID: "run")
         if let id = vm.streamPacing.scheduledID { vm.flushStreamingAssistantDisplay(scheduledID: id) }
-        #expect(vm.liveAssistantDisplayText == nil)
+        #expect(vm.liveAssistantTextShape == nil)
         vm.updateStreamingAssistantText("Distinct follow-up", runID: "run")
         if let id = vm.streamPacing.scheduledID { vm.flushStreamingAssistantDisplay(scheduledID: id) }
-        #expect(vm.liveAssistantDisplayText == "Distinct follow-up")
+        #expect(vm.liveAssistantTextShape == "Distinct follow-up")
         let tool = OpenClawChatMessage(role: "toolResult", content: [], timestamp: 3)
         vm.replaceMessages([user, final, tool])
-        #expect(vm.liveAssistantDisplayText == "Distinct follow-up")
+        #expect(vm.liveAssistantTextShape == "Distinct follow-up")
     }
 
     @Test @MainActor func `paced words do not invalidate transcript shape or timeline`() throws {
