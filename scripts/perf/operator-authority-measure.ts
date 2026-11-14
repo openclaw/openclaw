@@ -14,6 +14,7 @@
 // callback with --plugins 40 --access-policies 1 --iterations 5000 --samples 5.
 // Set OPENCLAW_STATE_DIR to an isolated synthetic scratch directory for this scenario.
 // Admission and effects still check the plugin; progress only owns run liveness.
+// --root reuses an offline synthetic state fixture for recovery-source; it is never removed.
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
@@ -79,6 +80,7 @@ const { values } = parseArgs({
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string", default: "unspecified" },
+    root: { type: "string" },
   },
 });
 function positiveInteger(value: string, label: string): number {
@@ -329,7 +331,9 @@ let recovery: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefin
 let recoveryStateDir: string | undefined;
 let recoveryConfig = config;
 if (values.scenario === "all" || values.scenario === "recovery-source") {
-  recoveryStateDir = await mkdtemp(path.join(os.tmpdir(), "operator-authority-measure-"));
+  recoveryStateDir = values.root
+    ? path.resolve(values.root)
+    : await mkdtemp(path.join(os.tmpdir(), "operator-authority-measure-"));
   process.env.OPENCLAW_STATE_DIR = recoveryStateDir;
   const person = ensureProfileForEmail("recovery@authority.example.test");
   allowedProfiles.add(person.id);
@@ -343,30 +347,36 @@ if (values.scenario === "all" || values.scenario === "recovery-source") {
     );
     assert(recoveredAccess?.gatewayAccessGrant);
     // Decode the persisted shape so this is never an already-issued policy identity.
-    const source = decodeQueuedOperatorRecoverySource({
-      kind: "gateway",
-      snapshot: {
-        profileId: person.id,
-        scopes: ["operator.write"],
-        assignedRole: facts.assignedRole,
-        githubLogin: facts.githubLogin ?? null,
-        rolePolicy: sourceRolePolicy(config.gateway?.roles?.definitions["synthetic-operator"]),
-        grant: recoveredAccess.gatewayAccessGrant,
-        aliasBindingIds: identity.emailBindingIds,
-        authPolicy: {
-          ...captureGatewayAuthPolicy(config, {
-            role: "operator",
-            authMethod: "token",
-            verifiedIdentity: "recovery@authority.example.test",
-            browserOrigin: authPolicy.browserOrigin,
-          }),
-          generation: "",
-        },
-        controlUiAdmin: false,
-        localOperator: false,
-        sourceIngress: "control-ui",
-      },
-    });
+    const source = decodeQueuedOperatorRecoverySource(
+      // JSON persistence drops undefined fields; structuredClone would retain them.
+      // oxlint-disable-next-line unicorn/prefer-structured-clone
+      JSON.parse(
+        JSON.stringify({
+          kind: "gateway",
+          snapshot: {
+            profileId: person.id,
+            scopes: ["operator.write"],
+            assignedRole: facts.assignedRole,
+            githubLogin: facts.githubLogin ?? null,
+            rolePolicy: sourceRolePolicy(config.gateway?.roles?.definitions["synthetic-operator"]),
+            grant: recoveredAccess.gatewayAccessGrant,
+            aliasBindingIds: identity.emailBindingIds,
+            authPolicy: {
+              ...captureGatewayAuthPolicy(config, {
+                role: "operator",
+                authMethod: "token",
+                verifiedIdentity: "recovery@authority.example.test",
+                browserOrigin: authPolicy.browserOrigin,
+              }),
+              generation: "",
+            },
+            controlUiAdmin: false,
+            localOperator: false,
+            sourceIngress: "control-ui",
+          },
+        }),
+      ),
+    );
     assert(source.kind === "gateway");
     // Recovery only consumes the config reader and optional owner identities.
     const context = { getRuntimeConfig: () => recoveryConfig } as GatewayRequestContext;
@@ -692,6 +702,8 @@ try {
   recovery?.release();
   if (recoveryStateDir) {
     await closeOpenClawStateDatabaseByPathAsync(profileCatalogPath({}));
-    await rm(recoveryStateDir, { recursive: true, force: true });
+    if (!values.root) {
+      await rm(recoveryStateDir, { recursive: true, force: true });
+    }
   }
 }

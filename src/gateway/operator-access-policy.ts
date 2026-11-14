@@ -514,11 +514,19 @@ export function resumeGatewayOperatorAccessGrant(
       throw new GatewayOperatorAccessDeniedError("policy-set-changed");
     }
   }
+  if (resumed?.signal.aborted) {
+    throw new GatewayOperatorAccessDeniedError("grant-revoked");
+  }
   try {
-    // Other policies can synchronously invalidate the original grant without aborting its signal.
-    resumed?.signal.throwIfAborted();
     resumed?.assertCurrent();
-  } catch {
+  } catch (error) {
+    if (resumed?.signal.aborted || error instanceof GatewayOperatorAccessDeniedError) {
+      throw new GatewayOperatorAccessDeniedError("grant-revoked");
+    }
+    // Re-evaluate a failed retained assertion once; an unavailable check cannot end its grant.
+    if (options.retained) {
+      resumeGatewayOperatorAccessGrant(profile, config, grant, { ...options, retained: undefined });
+    }
     throw new GatewayOperatorAccessUnavailableError();
   }
   return resumed;
