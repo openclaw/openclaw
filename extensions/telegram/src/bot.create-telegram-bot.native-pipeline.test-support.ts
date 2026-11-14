@@ -95,6 +95,7 @@ export const harness: {
   readonly state: OpenClawTestState;
   replySpy: Mock<ReplyResolver>;
   transcribeFirstAudio: typeof transcribeFirstAudio;
+  saveRemoteMedia: typeof saveRemoteMedia;
   settleUpdates: typeof settleUpdates;
   prepareSkillCommandsForAgents: typeof prepareSkillCommandsForAgents;
   buildModelsProviderData: typeof buildModelsProviderData;
@@ -104,6 +105,7 @@ export const harness: {
   },
   replySpy,
   transcribeFirstAudio,
+  saveRemoteMedia,
   settleUpdates,
   prepareSkillCommandsForAgents,
   buildModelsProviderData,
