@@ -18,6 +18,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatComposerOwner
@@ -6165,7 +6166,20 @@ class ChatComposerLayoutTest {
       verifyGeometry("confirmed")
       assertTrue(geometryFailures.joinToString("\n"), geometryFailures.isEmpty())
 
-      val image = ChatMessageContent(type = "image", mimeType = "image/jpeg", base64 = syntheticLargeChatPhotoBase64())
+      // Transcript images use the inline budget; the large camera fixture intentionally exceeds it.
+      val imageBase64 =
+        java.io.ByteArrayOutputStream().use { output ->
+          val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
+          try {
+            bitmap.eraseColor(android.graphics.Color.rgb(88, 139, 70))
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 85, output))
+            Base64.getEncoder().encodeToString(output.toByteArray())
+          } finally {
+            bitmap.recycle()
+          }
+        }
+      assertTrue("Transcript fixture must fit inline image admission", imageBase64.length <= CHAT_IMAGE_MAX_BASE64_CHARS)
+      val image = ChatMessageContent(type = "image", mimeType = "image/jpeg", base64 = imageBase64)
       composeRule.runOnIdle {
         controllerFlow<List<ChatMessage>>("_messages").value =
           listOf(
