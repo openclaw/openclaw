@@ -34,9 +34,16 @@ type HeldOccurrence = ReturnType<typeof claimSessionEventOccurrenceInput> & {
 const lanes = new Map<string, HeldOccurrence[]>();
 
 /**
+ * Waiting occurrences already sat behind a whole turn. Exits spread about a second apart
+ * often straddle its end (measured: 2 of 6 real-agent trials split), so give stragglers
+ * this long to join. A first or lone occurrence never waits.
+ */
+const BATCH_SETTLE_MS = 1_000;
+
+/**
  * Admit one producer occurrence. With no turn of this lane in flight it starts at once,
  * like enqueueSessionEventForHost. Otherwise it waits, and every compatible occurrence still
- * waiting when that turn settles starts one shared turn.
+ * waiting shortly after that turn settles starts one shared turn.
  *
  * Accepted edges: waiting occurrences start after the in-flight turn settles, so a human
  * message queued in followup or collect mode meanwhile may run first; once a shared turn is
@@ -121,7 +128,13 @@ function retire(key: string, member: HeldOccurrence) {
 
 function track(key: string, held: HeldOccurrence[], receipt: SessionEventReceipt) {
   lanes.set(key, held);
-  const next = () => flush(key, held);
+  const next = () => {
+    if (held.length === 0) {
+      lanes.delete(key);
+      return;
+    }
+    setTimeout(() => flush(key, held), BATCH_SETTLE_MS).unref?.();
+  };
   void receipt.settled.then(next, next);
 }
 
