@@ -146,6 +146,8 @@ export function prepareMessageGroupFrame(
     ) &&
     !isForwarded &&
     !sourceOnly &&
+    // A user group with no recorded sender has no name to show, like its avatar.
+    showAvatar &&
     (normalizedRole !== "user" || !isOwnGroup || opts.showOwnSenderName !== false);
   const visibleSources = group.sourceClients?.filter(
     (source) => gatewayClientKind(source) !== "web",
