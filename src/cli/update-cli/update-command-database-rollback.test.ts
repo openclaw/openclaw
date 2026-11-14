@@ -48,6 +48,7 @@ import {
   readDatabase,
   readVersion,
   buildRollbackPackageSource,
+  failActivatedBootAfterWrite,
 } from "./update-command-database-rollback.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
@@ -188,6 +189,7 @@ it.each([
   "git",
   "git-edited",
   "verification",
+  "newer-schema",
   "activated-boot",
   "convergence",
   "started",
@@ -203,7 +205,9 @@ it.each([
   "restores pre-migration databases only before settled activation: %s",
   async (scenario) => {
     const independentPlugin = scenario.startsWith("independent-");
-    const sharedVersion = independentPlugin ? OPENCLAW_STATE_SCHEMA_VERSION : 15;
+    // newer-schema: Doctor commits a schema this (previous) build cannot open, then fails.
+    const newerSchema = scenario === "newer-schema";
+    const sharedVersion = independentPlugin || newerSchema ? OPENCLAW_STATE_SCHEMA_VERSION : 15;
     const gitInstall = scenario === "git" || scenario === "git-edited";
     const outsideWrite = [
       "git-edited",
@@ -215,7 +219,14 @@ it.each([
     const candidateSchemas =
       scenario === "schema-neutral-write"
         ? { state: 15, agent: 21 }
-        : { state: independentPlugin ? OPENCLAW_STATE_SCHEMA_VERSION : 18, agent: 23 };
+        : {
+            state: newerSchema
+              ? OPENCLAW_STATE_SCHEMA_VERSION + 1
+              : independentPlugin
+                ? OPENCLAW_STATE_SCHEMA_VERSION
+                : 18,
+            agent: 23,
+          };
     const migratedVersions = [candidateSchemas.state, candidateSchemas.agent];
     // The activated release boots after a successful Doctor, writes state, then fails.
     const activatedBoot = scenario === "activated-boot";
@@ -589,31 +600,9 @@ it.each([
         }),
       );
     const unsettled = new CommandProcessCleanupError();
-    mocks.activatedCheck.mockImplementation(async ({ result }) => {
-      if (!activatedBoot) {
-        return result;
-      }
-      // Gateway boot bookkeeping lands on the migrated databases before readiness fails.
-      for (const file of files) {
-        using db = new DatabaseSync(file);
-        db.exec("INSERT INTO payload(rowid,value) VALUES(98,'activated-boot')");
-      }
-      return {
-        ...result,
-        status: "error",
-        reason: "activated-gateway-startup-failed",
-        steps: [
-          ...result.steps,
-          {
-            name: "activated-gateway-startup",
-            command: "gateway run",
-            cwd: packageRoot,
-            durationMs: 1,
-            exitCode: 1,
-          },
-        ],
-      };
-    });
+    mocks.activatedCheck.mockImplementation(async ({ result }) =>
+      activatedBoot ? failActivatedBootAfterWrite(result, files, packageRoot) : result,
+    );
     convergence.mockImplementation(async (params) => {
       if (activatedBoot) {
         throw new Error("A failed activated boot must not reach convergence");
@@ -873,7 +862,7 @@ it.each([
               JSON.parse(await fs.readFile(doctorEvidence, "utf8")).map(
                 (entry: { version: number }) => entry.version,
               ),
-            ).toEqual([18, 23]);
+            ).toEqual(migratedVersions);
             if (scenario === "config-refused") {
               assert(finishFailure instanceof UpdateCommandFailure);
               expect(finishFailure.result.reason).toBe("state-migrated-no-rollback");
@@ -888,7 +877,7 @@ it.each([
               expect(readState()).toEqual(before);
               expect(
                 files.map((file) => readDatabase(`${file}.migrated-${run.runId}`).version),
-              ).toEqual([18, 23]);
+              ).toEqual(migratedVersions);
               expect(
                 JSON.parse(await fs.readFile(serviceEnv.OPENCLAW_CONFIG_PATH!, "utf8")),
               ).toEqual({
@@ -915,7 +904,7 @@ it.each([
               }
               expect(starts).toEqual(["1.0.0"]);
               for (const [file, version] of [
-                [shared, 18],
+                [shared, migratedVersions[0]],
                 [agent, 23],
               ] as const) {
                 expect(readDatabase(file).version).toBe(version);
@@ -992,7 +981,11 @@ it.each([
                 readOnly: true,
               });
               expect(readSqliteUserVersion(retained)).toBe(
-                entry.path === shared ? 18 : entry.path === agent ? 23 : entry.userVersion,
+                entry.path === shared
+                  ? migratedVersions[0]
+                  : entry.path === agent
+                    ? 23
+                    : entry.userVersion,
               );
             }
           });

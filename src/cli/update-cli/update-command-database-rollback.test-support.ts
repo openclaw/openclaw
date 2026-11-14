@@ -14,6 +14,7 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { pluginCohortPublicationContext } from "../../infra/update-plugin-cohort-context.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { prepareCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import {
   readPersistedInstalledPluginIndexRowSync,
@@ -132,6 +133,33 @@ export function buildRollbackPackageSource(p: {
       process.on('disconnect',shutdown);
     }
   `;
+}
+
+/** The activated release writes boot bookkeeping to the migrated databases, then fails readiness. */
+export function failActivatedBootAfterWrite(
+  result: UpdateRunResult,
+  files: readonly string[],
+  root: string,
+): UpdateRunResult {
+  for (const file of files) {
+    using db = new DatabaseSync(file);
+    db.exec("INSERT INTO payload(rowid,value) VALUES(98,'activated-boot')");
+  }
+  return {
+    ...result,
+    status: "error",
+    reason: "activated-gateway-startup-failed",
+    steps: [
+      ...result.steps,
+      {
+        name: "activated-gateway-startup",
+        command: "gateway run",
+        cwd: root,
+        durationMs: 1,
+        exitCode: 1,
+      },
+    ],
+  };
 }
 
 let preparedHost: ReturnType<typeof prepareCompiledSdkHost> | undefined;

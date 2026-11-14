@@ -346,14 +346,17 @@ export async function restoreFailedUpdateDatabases(params: {
     // Every restore path, including a settled Doctor failure before finalization,
     // must retain this run's matching recovery pair in the restored database.
     // Preserve the source artifacts until the restore owner checks their generation.
-    const pair = loadPluginCohortRecovery(params.runId, {
-      env: params.env,
-    });
+    // Use the binding captured before Doctor: this (previous) build cannot open a
+    // state database Doctor migrated to a newer schema. The restore owner still
+    // validates the live pair from the raw database before replacing it.
+    const pair = params.backup.pluginCohortRecovery
+      ? undefined
+      : loadPluginCohortRecovery(params.runId, { env: params.env });
     const migratedPaths = await restoreUpdateDatabaseBackup({
       ...params,
-      pluginCohortRecovery: pair
-        ? { runId: pair.cohort.runId, transactionId: pair.cohort.transactionId }
-        : undefined,
+      pluginCohortRecovery:
+        params.backup.pluginCohortRecovery ??
+        (pair ? { runId: pair.cohort.runId, transactionId: pair.cohort.transactionId } : undefined),
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
       onLiveMutation: () => {
         liveMutationStarted = true;
