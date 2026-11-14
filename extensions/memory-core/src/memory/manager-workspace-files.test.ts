@@ -24,6 +24,19 @@ import type { MemoryIndexManager } from "./manager.js";
 
 const managers = await import("./index.js");
 
+const memoryWarnings = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (original) => {
+  const actual =
+    await original<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
+      ...actual.createSubsystemLogger(...args),
+      warn: memoryWarnings,
+    }),
+  };
+});
+
 describe("Gateway index over Harness workspace files", () => {
   const fixture = createManagerIndexFixture(managers);
   const createConfig = (overrides: Parameters<typeof fixture.createConfig>[0] = {}) =>
@@ -267,59 +280,112 @@ describe("Gateway index over Harness workspace files", () => {
     },
   );
 
-  it("uses host change notifications and closes the subscription with the manager", async () => {
-    const { harness, files } = await registerHarness();
-    const note = path.join(harness, "memory/notes.md");
-    await fs.writeFile(note, "alpha initial host note.");
-    let changed: (() => void) | undefined;
-    let watchSignal: AbortSignal | undefined;
-    let watchRequest: Parameters<MemoryWorkspaceFiles["watch"]>[0] | undefined;
-    const cancellation = createDeferred<void>();
-    const retired = createDeferred<void>();
-    files.watch = async (request, onChange, signal) => {
-      watchRequest = request;
-      changed = () => onChange("change");
-      watchSignal = signal;
-      signal.addEventListener("abort", () => cancellation.resolve(), { once: true });
-      await cancellation.promise;
-      await retired.promise;
-      // The node transport finishes cancellation with this exact signal reason.
-      signal.throwIfAborted();
-    };
-    const manager = await fixture.getPersistentManager(createConfig());
-    try {
-      await manager.sync({ reason: "initial", force: true });
-      expect(changed).toBeTypeOf("function");
-      expect(Object.keys(watchRequest!.settings).toSorted()).toEqual([
-        "extraPaths",
-        "multimodal",
-        "sync",
-      ]);
-      expect(Object.keys(watchRequest!.settings.sync)).toEqual(["watchDebounceMs"]);
-      await fs.writeFile(note, "beta changed host note.");
-      changed?.();
-      await idle(manager);
-      using index = new DatabaseSync(manager.status().dbPath!, { readOnly: true });
-      expect(index.prepare(`SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE}`).all()).toEqual([
-        { path: "memory/notes.md", text: "beta changed host note." },
-      ]);
-      const closed = vi.fn();
-      const closing = manager.close().then(closed);
-      try {
-        await cancellation.promise;
-        expect(watchSignal?.aborted).toBe(true);
-        await Promise.resolve();
-        expect(closed).not.toHaveBeenCalled();
-        changed?.();
-      } finally {
-        retired.resolve();
-        await closing;
+  it.each([false, true])(
+    "indexes host edits and joins shutdown (re-subscribed: %s)",
+    async (restart) => {
+      const { harness, files } = await registerHarness();
+      const note = path.join(harness, "memory/notes.md");
+      await fs.writeFile(note, "alpha initial host note.");
+      let changed: (() => void) | undefined;
+      let watchSignal: AbortSignal | undefined;
+      let watchRequest: Parameters<MemoryWorkspaceFiles["watch"]>[0] | undefined;
+      const cancellation = createDeferred<void>();
+      const retired = createDeferred<void>();
+      const unexpectedEnd = createDeferred<void>();
+      const watch = vi
+        .spyOn(files, "watch")
+        .mockImplementation(async (request, onChange, signal) => {
+          watchRequest = request;
+          changed = () => onChange("change");
+          watchSignal = signal;
+          signal.addEventListener("abort", () => cancellation.resolve(), { once: true });
+          await cancellation.promise;
+          await retired.promise;
+          // The node transport finishes cancellation with this exact signal reason.
+          signal.throwIfAborted();
+        });
+      if (restart) {
+        watch.mockImplementationOnce(() => unexpectedEnd.promise);
       }
-      expect(closed).toHaveBeenCalledOnce();
-    } finally {
-      retired.resolve();
-      await manager.close();
+      const manager = await fixture.getPersistentManager(createConfig());
+      try {
+        await manager.sync({ reason: "initial", force: true });
+        if (restart) {
+          const retirement = Reflect.get(manager, "remoteWatchRetirement") as Promise<void>;
+          unexpectedEnd.resolve();
+          await retirement;
+          await idle(manager);
+          expect(watch).toHaveBeenCalledTimes(2);
+          expect(memoryWarnings).toHaveBeenCalledWith(
+            "memory workspace watcher ended unexpectedly; re-subscribing",
+          );
+        }
+        memoryWarnings.mockClear();
+        expect(changed).toBeTypeOf("function");
+        expect(Object.keys(watchRequest!.settings).toSorted()).toEqual([
+          "extraPaths",
+          "multimodal",
+          "sync",
+        ]);
+        expect(Object.keys(watchRequest!.settings.sync)).toEqual(["watchDebounceMs"]);
+        await fs.writeFile(note, "beta changed host note.");
+        changed?.();
+        await idle(manager);
+        using index = new DatabaseSync(manager.status().dbPath!, { readOnly: true });
+        expect(index.prepare(`SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE}`).all()).toEqual([
+          { path: "memory/notes.md", text: "beta changed host note." },
+        ]);
+        const closed = vi.fn();
+        const closing = manager.close().then(closed);
+        try {
+          await cancellation.promise;
+          expect(watchSignal?.aborted).toBe(true);
+          await Promise.resolve();
+          expect(closed).not.toHaveBeenCalled();
+          changed?.();
+        } finally {
+          retired.resolve();
+          await closing;
+        }
+        expect(closed).toHaveBeenCalledOnce();
+        expect(memoryWarnings).not.toHaveBeenCalled();
+        expect(watch).toHaveBeenCalledTimes(restart ? 2 : 1);
+      } finally {
+        unexpectedEnd.resolve();
+        retired.resolve();
+        await manager.close();
+      }
+    },
+  );
+
+  it("warns after the bounded retry and keeps the existing index searchable", async () => {
+    const { harness, files } = await registerHarness();
+    await write(harness, "memory/notes.md", "alpha initial host note.");
+    const ends = [createDeferred<void>(), createDeferred<void>()];
+    const watch = vi.spyOn(files, "watch").mockImplementation(() => {
+      throw new Error("Unexpected third subscription");
+    });
+    for (const end of ends) {
+      watch.mockImplementationOnce(() => end.promise);
     }
+    const { manager } = await createIndexedManager({}, true);
+    memoryWarnings.mockClear();
+    for (const end of ends) {
+      const retirement = Reflect.get(manager, "remoteWatchRetirement") as Promise<void>;
+      end.resolve();
+      await retirement;
+      await idle(manager);
+    }
+    expect(watch).toHaveBeenCalledTimes(2);
+    expect(memoryWarnings).toHaveBeenLastCalledWith(
+      expect.stringContaining("restart the Gateway to restore remote memory watching"),
+    );
+    expect(memoryWarnings).toHaveBeenCalledTimes(2);
+    expect((await search(manager, "alpha"))[0]?.snippet).toContain("initial host note");
+    memoryWarnings.mockClear();
+    await manager.close();
+    expect(memoryWarnings).not.toHaveBeenCalled();
+    expect(watch).toHaveBeenCalledTimes(2);
   });
   it("keeps local Memory with a stopped document-only bridge", async () => {
     const workspace = fixture.paths.workspace;
