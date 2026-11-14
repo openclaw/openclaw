@@ -277,6 +277,28 @@ openclaw message poll --channel msteams \
 - `thread reply`: channels Discord. Required: `--target` (thread id),
   `--message`. Optional: `--media`, `--reply-to`.
 
+Discord `thread list` returns active threads by default. `--include-archived`
+selects public archived threads in the parent specified by `--channel-id`, which
+is required for this mode. It does not combine active threads with public or
+private archives.
+
+In JSON output, `source` and `query` identify the selected listing.
+`complete: true` means that listing is exhausted, not that all thread history or
+private archives have been searched. When `hasMore` is true, pass the actual
+returned `nextBefore` value to `--before` for the next page. This cursor is an
+ISO 8601 archive timestamp, not a thread or message id.
+
+```bash
+openclaw message thread list --channel discord --guild-id 123 \
+  --channel-id 456 --include-archived --json
+```
+
+If you already know a thread id, `message read --channel discord --target
+channel:<thread-id> --limit <n>` can read a bounded page under the existing
+channel policy and provider access checks. An empty public archive listing does
+not establish whether a private thread exists or is readable. A known id does
+not bypass those checks or guarantee access to all private content.
+
 ### Emojis
 
 - `emoji list`: Discord (`--guild-id`), Slack (no extra flags).
