@@ -318,7 +318,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
         "src/agents/subagents/registry/subagent-control.accounting.test.ts",
-        "src/agents/tools/sessions-send-communication.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/state/dreaming-startup-admission.test.ts",
         "test/canonical-descendant.integration.test.ts",
@@ -651,7 +650,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       extra: [
         "src/agents/provider-auth-websocket.test.ts",
-        "src/cron/session-run.session-model-strictness.integration.test.ts",
         "src/agents/sessions/agent-session-steering-context.test.ts",
       ],
       preset: "runtime",
