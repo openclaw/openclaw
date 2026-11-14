@@ -305,7 +305,7 @@ function MobileRoot(
       publicationEntry={
         props.details.githubPublication ? props.content.publicationEntry : undefined
       }
-      skills={<ChatDetailsSkills details={props.details} presented={props.presented} />}
+      skills={<ChatDetailsSkills details={props.details} presented={props.presented} mobile />}
       processes={
         props.content.processes ? (
           <ChatDetailsMobileProcesses

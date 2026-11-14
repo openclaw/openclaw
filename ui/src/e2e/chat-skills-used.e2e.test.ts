@@ -194,6 +194,41 @@ suite.define(() => {
           animations: "disabled",
         });
         await fs.writeFile(path.join(suite.artifactDir, "skills-mobile.png"), mobileFrame.png);
+        const geometry = await mobile.evaluate((panel) => {
+          const standard = panel.querySelector<HTMLElement>(
+            '[data-details-destination="outputs"]',
+          )!;
+          const skills = panel.querySelector<HTMLElement>('[data-details-group="skills"]')!;
+          const header = skills.querySelector<HTMLElement>("summary")!;
+          const row = skills.querySelector<HTMLElement>('[role="listitem"]')!;
+          const measure = (element: HTMLElement) => {
+            const style = getComputedStyle(element);
+            return {
+              padding: style.padding,
+              minHeight: style.minHeight,
+              gap: style.gap,
+              fontSize: style.fontSize,
+              marginInlineStart: style.marginInlineStart,
+              width: element.getBoundingClientRect().width,
+            };
+          };
+          return {
+            standard: measure(standard),
+            header: measure(header),
+            row: measure(row),
+            headerIcons: header.querySelectorAll(".chat-details-mobile-root__leading > svg").length,
+            labelStart: header
+              .querySelector(".chat-details-mobile-root__copy")!
+              .getBoundingClientRect().x,
+            standardLabelStart: standard
+              .querySelector(".chat-details-mobile-root__copy")!
+              .getBoundingClientRect().x,
+          };
+        });
+        expect.soft(geometry.headerIcons).toBe(1);
+        expect.soft(geometry.header).toEqual(geometry.standard);
+        expect.soft(geometry.row).toEqual(geometry.standard);
+        expect.soft(geometry.labelStart).toBe(geometry.standardLabelStart);
       },
     );
   });
