@@ -1,2 +1,0 @@
-# Telegram: photo posted just before a separate group mention reaches the agent; covers stale, other-sender and sticker-crowded cases.
-69

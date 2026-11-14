@@ -145,7 +145,10 @@ export type SelectionChange =
       id: string;
       key: string;
       agentId: string;
+      storePath: string;
       row: SelectionRow | undefined;
+      /** Display-only replacements still update indexed entry references. */
+      factsChanged?: boolean;
       /** Synchronous internal publication scope; deferred refreshes have no causal label. */
       scope?: string;
     };

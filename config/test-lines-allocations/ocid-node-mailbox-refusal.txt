@@ -1,2 +1,0 @@
-69
-# Reader-boundary regression: node_redemption settles an observable refusal before acknowledgment and cursor persistence, without authority submission or redemption.

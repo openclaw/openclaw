@@ -102,7 +102,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`, `threadBindings`
 - streaming: `streaming` (modes `off | partial | block | progress`), `streaming.preview.toolProgress`
-- formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
+- formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `widgets` (opt-in message widgets), `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`), `trustedLocalFileRoots` (self-hosted Bot API absolute `file_path` roots)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookCertPath`, `legacyWebhook` (optional explicit forwarding endpoint; omitted or `false` uses only the Gateway port)

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -80,6 +81,7 @@ function pairedDevice(overrides: Partial<GatewayPairedDevice> = {}) {
 }
 
 describe("collectDevicePairingHealthFindings", () => {
+  const unreadablePath = path.join(os.homedir(), ".openclaw", "client", "credentials.sqlite");
   let collectDevicePairingHealthFindings: typeof import("./doctor-device-pairing.js").collectDevicePairingHealthFindings;
   const collect = (mode: "local" | "remote", healthOk = false) =>
     collectDevicePairingHealthFindings({ cfg: { gateway: { mode } }, healthOk });
@@ -261,16 +263,50 @@ describe("collectDevicePairingHealthFindings", () => {
     });
   });
 
-  it("preserves pairing diagnostics when the token inventory read rejects", async () => {
-    await withApprovedOperatorPairing(async () => {
-      using inventory = vi
-        .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
-        .mockRejectedValueOnce(new Error("synthetic inventory failure"));
+  it.each([
+    {
+      name: "device identity",
+      stub: async () =>
+        vi
+          .spyOn(
+            await import("../infra/device-identity-async.js"),
+            "loadDeviceIdentityIfPresentAsync",
+          )
+          .mockRejectedValueOnce(new Error("synthetic identity failure")),
+      message: "Could not read the local device identity",
+    },
+    {
+      name: "token inventory",
+      stub: async () =>
+        vi
+          .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
+          .mockRejectedValueOnce(
+            new Error(`EACCES: permission denied, realpath '${unreadablePath}'`),
+          ),
+      message: `Could not read the local device auth token inventory, so local device token scopes were not checked: EACCES: permission denied, realpath '${path.join("~", ".openclaw", "client", "credentials.sqlite")}'`,
+    },
+  ] as const)(
+    "reports an unreadable local $name instead of a clean device check",
+    async ({ stub, message }) => {
+      await withApprovedOperatorPairing(async () => {
+        using rejected = await stub();
 
-      await expect(collect("local")).resolves.toEqual([]);
-      expect(inventory).toHaveBeenCalledOnce();
-    });
-  });
+        const findings = await collect("local");
+        expect(findings).toEqual([
+          expect.objectContaining({
+            severity: "warning",
+            category: "fix-now",
+            path: "identity.device-auth",
+            requirement: "local-device-auth-unreadable",
+            message: expect.stringContaining(message),
+            fixHint: expect.stringContaining("openclaw devices list"),
+          }),
+        ]);
+        expect(findings[0]?.message).not.toContain(unreadablePath);
+        expect(rejected).toHaveBeenCalledOnce();
+      });
+    },
+  );
 
   it.each([
     { role: "node", tokenScopes: ["operator.read"], recoveryOption: " --no-scopes" },

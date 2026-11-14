@@ -23,10 +23,10 @@ it("extends the owned generation config without copying or sharing it between re
       maxTokens: 8192,
     };
     const context = { messages: [] };
+    const sampling = { temperature: 0.25, topP: 0.4, seed: 7 };
     const first = buildGoogleGenerativeAiParams(model, context, {
       maxTokens: 64,
-      temperature: 0.25,
-      topP: 0.4,
+      ...sampling,
       stop: ["END"],
     });
     const second = buildGoogleGenerativeAiParams(model, context, { maxTokens: 128 });
@@ -35,8 +35,7 @@ it("extends the owned generation config without copying or sharing it between re
     expect(second.generationConfig).toBe(buildConfig.mock.results[1]?.value);
     expect(first.generationConfig).toEqual({
       maxOutputTokens: 64,
-      temperature: 0.25,
-      topP: 0.4,
+      ...sampling,
       stopSequences: ["END"],
     });
     expect(second.generationConfig).toEqual({ maxOutputTokens: 128 });

@@ -86,6 +86,11 @@ digits** shown in the terminal with the owner's approval dialog. The owner must
 review the advertised surface and explicitly click **Approve**. Deny the request
 if the codes differ; opening the dialog alone does not approve anything.
 
+Pairing assumes the invitation remains secret. The six-digit comparison does not
+protect against wrong-node approval when an attacker has stolen the invitation
+and can observe and control Discovery's pairing-message delivery. If the link
+is exposed, do not approve requests made with that invitation.
+
 After approval, the node verifies and saves the OpenClaw ID target and runs in
 the foreground. Add `--service` to install and run it as a user service instead.
 The invitation is not a reconnect credential: use `openclaw node run` or the
@@ -510,12 +515,21 @@ Gateway endpoint flags resumes that target. Explicit `--host` / `--port` options
 continue to select the existing WebSocket transport.
 
 The saved target contains the claw id, root fingerprint, highest verified binding
-sequence, signed ServerBinding, and relay hint. The node verifies the binding and
-dials only its `K_srv`; a failed tunnel never falls back to a direct WebSocket.
+sequence and Gateway key, signed ServerBinding, newest verified membership snapshot
+marker, and relay hint. Before each dial or periodic connection probe, the node
+fetches a descriptor with its node key and verifies the binding, snapshot freshness,
+and its own membership. Stronger verified facts are saved before dialing, including
+facts that require refusal, so reconnects and restarts cannot roll back trust.
+A replacement server key closes the old connection. Missing, stale, invalid, or
+replayed evidence refuses the tunnel; a failed tunnel never falls back to a direct WebSocket.
+An invalid relay hint from Discovery also refuses the tunnel, but the signed facts in that
+response are still saved.
 IP transports remain enabled so iroh can establish a direct encrypted path.
 
-The public target can also retain `discoveryUrl`, the deployment-selected Discovery
-API origin for future enrollment and descriptor refresh. It is never inferred from
+The public target requires `discoveryUrl`, the deployment-selected Discovery
+API origin for enrollment and descriptor refresh. A preview target saved without
+it does not connect: ask the owner to remove the node on the Access page, then re-join
+with a new link and `--discovery-url`, which keeps the target's verified trust. The origin is never inferred from
 the claw hostname or relay URL. Enrollment saves the selected origin; an explicit
 `--discovery-url` overrides a saved origin. There is no default Discovery origin.
 The origin must use HTTPS (HTTP is allowed
@@ -535,9 +549,12 @@ workers require a separate transport integration.
 Saved OpenClaw ID targets do not inherit Cloudflare Access or Gateway bearer
 credentials from the installing shell; the service resumes its enrolled key.
 
-The transport sends QUIC keep-alives, probes silent connections, and backs off
+The transport sends QUIC keep-alives, periodically refreshes authority and probes connections, and backs off
 when the relay denies admission. A removed or unadmitted node key stops the host
-with **“re-join this node”** rather than retrying indefinitely. Ordinary Gateway
+with **“re-join this node”** rather than retrying indefinitely. If Discovery
+refuses to serve the node's descriptor, for example after a restart once the owner
+removed it, that refusal is not signed. The host then keeps retrying without dialing,
+and prints once how to re-join. Ordinary Gateway
 pairing-pending responses retain the existing wait-and-retry behavior.
 
 Node is the qualified runtime for this preview. The native addon loads and binds

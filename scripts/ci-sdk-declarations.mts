@@ -50,11 +50,16 @@ function assertRegularPath(
   return target;
 }
 
-function currentSdk(root: string) {
+function currentSdk(root: string, onMismatch?: (reason: string) => void) {
   const unit = sdkBoundaryUnit();
   const inputReceipt = `${unit.outDir}/.inputs.json`;
   const record = readArtifactRecord(path.join(root, recordName));
-  if (!record || !fs.existsSync(path.join(root, inputReceipt))) {
+  if (!record) {
+    onMismatch?.("SDK artifact record is missing or invalid");
+    return undefined;
+  }
+  if (!fs.existsSync(path.join(root, inputReceipt))) {
+    onMismatch?.("SDK compiler receipt is missing");
     return undefined;
   }
   const snapshot = new BoundaryInputSnapshot(root);
@@ -65,6 +70,7 @@ function currentSdk(root: string) {
     [...unit.required, inputReceipt],
     inputReceipt,
     path.join(root, unit.outDir),
+    onMismatch,
   )
     ? record
     : undefined;
@@ -200,8 +206,15 @@ function restore(root: string, required: boolean) {
       fs.mkdirSync(path.dirname(file.path), { recursive: true });
       fs.writeFileSync(file.path, file.content);
     }
-    if (!currentSdk(root)) {
-      throw new Error("Prepared SDK receipt does not match current inputs and toolchain");
+    let mismatch: string | undefined;
+    if (
+      !currentSdk(root, (reason) => {
+        mismatch = reason;
+      })
+    ) {
+      throw new Error(
+        `Prepared SDK receipt does not match current inputs and toolchain: ${mismatch}`,
+      );
     }
     console.log(`Prepared SDK restored and validated: ${files.length} files`);
   } catch (error) {
@@ -251,8 +264,15 @@ async function main() {
         );
       }
     } else if (operation === "validate") {
-      if (!currentSdk(root)) {
-        throw new Error("Prepared SDK receipt does not match current inputs and toolchain");
+      let mismatch: string | undefined;
+      if (
+        !currentSdk(root, (reason) => {
+          mismatch = reason;
+        })
+      ) {
+        throw new Error(
+          `Prepared SDK receipt does not match current inputs and toolchain: ${mismatch}`,
+        );
       }
       console.log("Prepared SDK receipt is current");
     } else {

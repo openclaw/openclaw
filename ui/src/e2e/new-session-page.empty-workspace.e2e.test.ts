@@ -1,3 +1,4 @@
+import { errors } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiSessionPath,
@@ -52,8 +53,23 @@ suite.define(() => {
       const empty = page.locator('.new-session-page__project-popover [data-value="new-workspace"]');
       await expect.poll(() => empty.getAttribute("aria-pressed")).toBe("true");
       await expect
-        .poll(() => empty.getAttribute("title"))
-        .toBe("Start without existing files. The agent uses its default workspace.");
+        .poll(
+          async () => {
+            try {
+              return (
+                (await empty.getAttribute("title", { timeout: 500 })) ??
+                (await empty.textContent({ timeout: 500 }))
+              );
+            } catch (error) {
+              if (error instanceof errors.TimeoutError) {
+                return null;
+              }
+              throw error;
+            }
+          },
+          { timeout: 10_000 },
+        )
+        .toContain("Start without existing files. The agent uses its default workspace.");
       await empty.click();
 
       await page.locator(".new-session-page__message").fill(message);

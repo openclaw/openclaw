@@ -28,15 +28,11 @@ import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
+import type { ProviderAuthOptionBag } from "./provider-auth-types.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { applyPrimaryModel } from "./provider-model-primary.js";
 import { buildProviderPluginMethodChoice } from "./provider-plugin-choice.js";
-import type {
-  ProviderAuthMethod,
-  ProviderAuthOptionBag,
-  ProviderAuthResult,
-  ProviderPlugin,
-} from "./types.js";
+import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "./types.js";
 
 type ApplyProviderAuthChoiceParams = {
   authChoice: string;

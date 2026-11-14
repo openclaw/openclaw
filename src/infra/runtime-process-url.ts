@@ -4,12 +4,12 @@ import { isEmbeddedStandaloneModule, resolveStandaloneSidecarRoot } from "../../
 import { createRuntimeProcessScriptFile } from "../../runtime-process-scripts.generated.mjs";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import {
-  createSealedRuntimeProcessEntrypoints,
   runtimeProcessDeployEntryFileName,
   runtimeProcessExternalPackageEntrypoints,
   runtimeProcessScriptEntrypoints,
   type runtimeProcessDeployManifest,
-  type runtimeProcessSealedManifest,
+  runtimeProcessSealedManifest,
+  createRuntimeProcessEntrypoints,
 } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -21,6 +21,20 @@ type RuntimeScriptFileEntrypointName = {
     ? Name
     : never;
 }[keyof RuntimeScriptEntrypoints];
+
+export function createSealedRuntimeProcessEntrypoints(
+  group: keyof typeof runtimeProcessSealedManifest,
+  currentModuleUrl: string,
+) {
+  const runtimeEntries = new Map(Object.entries(createRuntimeProcessEntrypoints(currentModuleUrl)));
+  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
+    name,
+    url: new URL(
+      `./${runtimeEntries.get(entry)?.distWorkerPath ?? `${entry}.mjs`}`,
+      currentModuleUrl,
+    ),
+  }));
+}
 
 const sealedEntrypoints = new Map<RuntimeProcessEntrypointName, URL>();
 

@@ -22,12 +22,13 @@ function report() {
   });
 }
 
-/** Sample the owner's actual inventory on memory heartbeats, never on row writes or scrapes. */
+/** Count inventory on memory heartbeats; bound graph walks to once every five minutes. */
 export function observeSessionRowProjectionRetention(rows: ReadonlyMap<string, Row>) {
   projections++;
   let previousEntries = 0;
   let previousBytes = 0;
   let previousTruncated = 0;
+  let nextEstimateAt = 0;
   let active = true;
   const stop = onInternalDiagnosticEvent(
     (_event, metadata) => {
@@ -37,14 +38,18 @@ export function observeSessionRowProjectionRetention(rows: ReadonlyMap<string, R
       ) {
         return;
       }
-      // The estimator has a fixed visit/depth budget and never invokes row getters/closures.
-      const size = estimateRetainedDataSize([rows]);
+      const now = performance.now();
+      if (now >= nextEstimateAt) {
+        // Byte estimates are sampled; exact row counts remain current on every heartbeat.
+        const size = estimateRetainedDataSize([rows]);
+        estimatedBytes += size.approximateBytes - previousBytes;
+        truncatedProjections += Number(size.truncated) - previousTruncated;
+        previousBytes = size.approximateBytes;
+        previousTruncated = Number(size.truncated);
+        nextEstimateAt = now + 5 * 60_000;
+      }
       entries += rows.size - previousEntries;
-      estimatedBytes += size.approximateBytes - previousBytes;
-      truncatedProjections += Number(size.truncated) - previousTruncated;
       previousEntries = rows.size;
-      previousBytes = size.approximateBytes;
-      previousTruncated = Number(size.truncated);
       report();
     },
     { include: ["diagnostic.memory.sample"] },

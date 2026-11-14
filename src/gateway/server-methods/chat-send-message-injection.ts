@@ -11,6 +11,7 @@ import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-p
 import { resolveModelFallbackAvailability } from "../../agents/model-selection-config.js";
 import { resolveCommandAuthorizationAsync } from "../../auto-reply/command-auth.js";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
+import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -357,6 +358,9 @@ export function createChatSendInjectionDisposition(
   queue: QueueConfig | undefined,
 ) {
   let collaborationBlocked = false;
+  let rejection:
+    | Extract<Awaited<ReplyMessageInjectionAttempt["outcome"]>, { status: "rejected" }>
+    | undefined;
   const runState: ReplyOperationRunState = {};
   const isRefused = () =>
     (collaborationBlocked && queue?.collaborativeSteeringFallback === "reject") ||
@@ -365,9 +369,17 @@ export function createChatSendInjectionDisposition(
   return {
     runState,
     isRefused,
-    isCollaborationBlocked: () => collaborationBlocked,
+    replyOptions: (
+      attempted: boolean,
+    ): Pick<GetReplyOptions, "messageInjectionDisposition" | "messageInjectionRejection"> =>
+      collaborationBlocked
+        ? { messageInjectionDisposition: "collaborative-steering-disabled" }
+        : attempted
+          ? { messageInjectionDisposition: "rejected", messageInjectionRejection: rejection }
+          : {},
     async observe(attempt: ReplyMessageInjectionAttempt | undefined) {
       const outcome = await attempt?.outcome;
+      rejection = outcome?.status === "rejected" ? outcome : undefined;
       if (outcome?.status === "rejected" && outcome.reason === "collaborative_steering_disabled") {
         collaborationBlocked = true;
         if (queue?.collaborativeSteeringFallback === "reject") {

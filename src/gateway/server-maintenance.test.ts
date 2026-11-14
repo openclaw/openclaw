@@ -30,6 +30,7 @@ import { createChannelThawScenario } from "./server-maintenance.thaw.test-suppor
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
+import * as worktreeMaintenance from "./worktree-maintenance.js";
 
 const {
   cleanOldMediaMock,
@@ -37,12 +38,14 @@ const {
   prunePlaybackTranscodeCacheMock,
   cleanupManagedOutgoingMediaRecordsMock,
   startDevicePairSetupMaintenanceMock,
+  pruneToolUsageMock,
 } = vi.hoisted(() => ({
   cleanOldMediaMock: vi.fn(async () => {}),
   pruneOutboundMediaMock: vi.fn(async () => {}),
   prunePlaybackTranscodeCacheMock: vi.fn(async () => {}),
   cleanupManagedOutgoingMediaRecordsMock: vi.fn(async () => {}),
   startDevicePairSetupMaintenanceMock: vi.fn(async () => 0),
+  pruneToolUsageMock: vi.fn(async (_input: { now: number; assertCurrent: () => void }) => {}),
 }));
 
 // mock-isolation: In-memory maintenance timers must not start the device expiry worker.
@@ -63,6 +66,11 @@ vi.mock("../media/store.js", async () => {
 // mock-isolation: Timer fixtures control managed cleanup while retaining the real lazy owner path.
 vi.mock("./managed-image-attachments.js", () => ({
   cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingMediaRecordsMock,
+}));
+
+// mock-isolation: The scheduler owns cadence and cancellation; worker retention has its database-boundary proof.
+vi.mock("../config/sessions/tool-usage.js", () => ({
+  pruneRegisteredAgentToolUsage: pruneToolUsageMock,
 }));
 
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
@@ -87,6 +95,12 @@ function createMaintenanceTimerDeps(
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
 
 async function createThawScenario() {
+  // Thaw timing assertions exclude unrelated root work and admission waiters.
+  vi.spyOn(worktreeMaintenance, "startWorktreeMaintenance").mockReturnValue({
+    request: vi.fn(),
+    notifyArchive: vi.fn(),
+    stop: async () => {},
+  });
   const clock = createGatewaySchedulerClock();
   let nowMs = 0;
   let cpuUsage = { user: 0, system: 0 };
@@ -249,6 +263,8 @@ describe("startGatewayMaintenanceTimers", () => {
         }
         expect(harness.stops).toEqual(["first"]);
         expect(harness.starts).toEqual(["first", "second", "first"]);
+        // Settle the startup cleanup queued by the first wake before testing idle recovery.
+        await harness.advance(0);
         harness.state.busy = false;
         await harness.advance(TICK_INTERVAL_MS);
         expect(harness.stops).toEqual(["first", "second"]);
@@ -523,6 +539,27 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("prunes tool usage while the lab and media cleanup are disabled, then revokes maintenance", async () => {
+    const clock = createGatewaySchedulerClock();
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      scheduler: createTestGatewayScheduler(clock.clock),
+      getRuntimeConfig: () => ({}),
+    });
+    for (let tick = 0; tick < 4; tick++) {
+      await clock.advanceBy(30_000);
+    }
+    await clock.advanceBy(10_000);
+    expect(pruneToolUsageMock).toHaveBeenCalledTimes(1);
+    const lifetime = pruneToolUsageMock.mock.calls[0]![0];
+    expect(() => lifetime.assertCurrent()).not.toThrow();
+    await timers.stopMediaCleanup();
+    expect(() => lifetime.assertCurrent()).toThrow();
+    await clock.advanceBy(60 * 60_000);
+    expect(pruneToolUsageMock).toHaveBeenCalledTimes(1);
+    await stopMaintenanceTimers(timers);
+  });
+
   it("does not run media cleanup before the lifecycle owner activates it", async () => {
     vi.useFakeTimers();
     const timers = startGatewayMaintenanceTimers({
@@ -560,7 +597,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("delays worktree cleanup until the first hourly tick and joins slow sweeps", async () => {
+  it("starts worktree cleanup immediately and joins slow sweeps across hourly ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const deps = createMaintenanceTimerDeps();
@@ -569,8 +606,6 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
 
     await Promise.resolve();
-    expect(deps.worktreeGc).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
     expect(deps.worktreeGc).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2);
     expect(deps.worktreeGc).toHaveBeenCalledTimes(1);

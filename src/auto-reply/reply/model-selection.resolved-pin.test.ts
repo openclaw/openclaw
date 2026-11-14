@@ -9,7 +9,14 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { resolveReplyDirectives } from "./get-reply-directives.js";
+import { replyDirectiveParams } from "./get-reply-directives.target-session.test-helpers.js";
 import { createModelSelectionState } from "./model-selection.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
+import { buildTestCtx } from "./test-ctx.js";
 
 // mock-isolation: Literal model identity cases use an empty store without discovering host accounts.
 vi.mock("../../agents/auth-profiles.runtime.js", () => ({
@@ -17,6 +24,54 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
 }));
 
 afterEach(() => resetPluginRuntimeStateForTest());
+
+test("delivers the unsupported-chat diagnosis before a channel turn without clearing its pin", async () =>
+  withStateDirEnv("reply-non-chat-pin-", async () => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: { defaults: { model: "custom/default", models: { "custom/voice": {} } } },
+    };
+    const sessionKey = "agent:main:telegram:direct:synthetic";
+    const entry: SessionEntry = { sessionId: "non-chat-pin", updatedAt: 1 };
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "custom", model: "voice" },
+    });
+    const before = { ...entry };
+    const ctx = buildTestCtx({
+      Body: "hello",
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: sessionKey,
+    });
+    const runState: ReplyOperationRunState = {};
+    const entries = [
+      { provider: "custom", id: "voice", name: "Voice", inference: { chat: false } },
+    ];
+    const params = replyDirectiveParams({
+      ctx,
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionCtx: { ...ctx },
+      sessionEntry: entry,
+      sessionStore: { [sessionKey]: entry },
+      sessionKey,
+      storePath: undefined,
+      defaultProvider: "custom",
+      defaultModel: "default",
+      provider: "custom",
+      model: "voice",
+      preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
+    });
+    await expect(resolveReplyDirectives(params)).resolves.toEqual({
+      kind: "reply",
+      reply: { text: "This model doesn't support chat; pick another model.", isError: true },
+    });
+    expect(entry).toEqual(before);
+    expect(runState.preRunRejection).toBe("model-selection-rejected");
+    expect(params.typing.cleanup).toHaveBeenCalledOnce();
+  }));
 
 test.each<[string, string | undefined, string | undefined, boolean, string | undefined]>([
   ["configured selection", "openai", "gpt-x", false, "openai"],

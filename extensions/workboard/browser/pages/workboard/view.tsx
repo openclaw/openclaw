@@ -376,10 +376,7 @@ export function WorkboardView(
                     {t("workboard.newBoard")}
                   </button>
                 ) : null}
-                <span
-                  class="workboard-refresh-control"
-                  title={view().refreshStatus || t("common.refresh")}
-                >
+                <span class="workboard-refresh-control" title={view().refreshStatus || undefined}>
                   <button
                     class={[
                       "btn btn--icon btn--ghost workboard-refresh",

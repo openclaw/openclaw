@@ -78,6 +78,17 @@ function averageCostSummary(container: ParentNode) {
 }
 
 describe("renderUsage", () => {
+  it("renders the toolbar's filter, display and refresh actions as one row of icon buttons", () => {
+    const { container } = mountReactiveUsage(createUsageProps());
+    const actions = [...container.querySelectorAll(".usage-view-options button")];
+    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Filters",
+      "Display",
+      "Refresh",
+    ]);
+    expect(actions.every((button) => button.matches(".oc-icon-button--32:not(.btn)"))).toBe(true);
+  });
+
   it("identifies each query removal action and removes only its named token", () => {
     const props = createUsageProps();
     props.filters.queryDraft = 'provider:openai "label:Team Planning"';
@@ -209,7 +220,7 @@ describe("renderUsage", () => {
         flush();
         expect(averageCostSummary(container)).toEqual({
           hint: missing
-            ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
+            ? "Average cost per message with reported pricing. Some sessions have no cost data."
             : "Average cost per message when providers report costs.",
           value,
         });
@@ -495,15 +506,51 @@ describe("renderUsage", () => {
       )
       ?.querySelector(".usage-summary-value");
     expect(messagesValue?.textContent?.trim()).toBe("100");
-    expect(container.textContent).toContain(
-      "Cost data is missing for some or all sessions in this range.",
-    );
+    expect(container.textContent).toContain("Some sessions have no cost data.");
     expect(texts(container, ".usage-metric-badge strong", false)).toEqual(["1.0K", "$10.00", "1"]);
     const firstDay = container.querySelector(".daily-bar-wrapper");
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
     expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
+  });
+
+  it("retains an accepted zero overview and guards refresh until settlement, but not an error or retired result", async () => {
+    const props = usageFixture({ totals: createEmptyCostUsageTotals() });
+    const refresh = vi.fn();
+    props.callbacks.filters.onRefresh = refresh;
+    const { container, setData } = mountReactiveUsage(props);
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const button = container.querySelector<HTMLButtonElement>(".usage-empty-state button")!;
+    expect(button).not.toBeNull();
+    button.focus();
+    button.click();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    const pending = Promise.withResolvers<null>();
+    onTestFinished(() => pending.resolve(null));
+    setData({ ...props.data, read: pending.promise });
+    flush();
+    expect(container.querySelector(".usage-empty-state button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    button.click();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    pending.resolve(null);
+    await waitForSolid(() => expect(button.getAttribute("aria-disabled")).not.toBe("true"));
+    expect(container.querySelector(".usage-empty-state button")).toBe(button);
+    expect(document.activeElement).toBe(button);
+    button.click();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    const retired = Promise.withResolvers<null>();
+    onTestFinished(() => retired.resolve(null));
+    setData({ ...props.data, read: retired.promise, error: "Usage unavailable" });
+    flush();
+    expect(container.querySelector(".usage-empty-state")).toBeNull();
+    setData({ ...props.data, read: retired.promise, totals: null });
+    flush();
+    expect(container.querySelector(".usage-empty-state")).toBeNull();
+    expect(container.querySelector(".usage-loading-card")).not.toBeNull();
   });
 
   it("shows the empty state for an all-zero successful response", () => {

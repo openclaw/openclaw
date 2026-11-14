@@ -1,2 +1,0 @@
-89
-# OpenClaw ID protocol versions: unsupported statement and descriptor versions are refused as unsupported_version before type or fields, invalid versions stay malformed, the v1 signing domain is unchanged, and the authority reports unsupported versions without state changes.

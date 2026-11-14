@@ -1,5 +1,5 @@
 import { inspect } from "node:util";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -18,9 +18,6 @@ import {
 } from "./load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
 
-const loadConfigMock = vi.hoisted(() =>
-  vi.fn<typeof import("../../config/config.js").loadConfig>(),
-);
 const applyPluginAutoEnableMock = vi.hoisted(() =>
   vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
 );
@@ -33,11 +30,6 @@ const config = { plugins: {} };
 const env = { HOME: "/tmp/openclaw-home" };
 const resolvePluginMetadataSnapshotMock = vi.hoisted(() => vi.fn(() => metadataSnapshot));
 const resolveConfigWidePluginMetadataSnapshotMock = vi.hoisted(() => vi.fn(() => metadataSnapshot));
-
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: loadConfigMock,
-  loadConfig: loadConfigMock,
-}));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: applyPluginAutoEnableMock,
@@ -61,8 +53,8 @@ vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
 }));
 
 describe("resolvePluginRuntimeLoadContext", () => {
+  afterEach(() => clearRuntimeConfigSnapshot());
   beforeEach(() => {
-    loadConfigMock.mockReset().mockReturnValue(config);
     applyPluginAutoEnableMock.mockReset();
     resolvePluginMetadataSnapshotMock.mockReset().mockReturnValue(metadataSnapshot);
     resolveConfigWidePluginMetadataSnapshotMock.mockReset().mockReturnValue(metadataSnapshot);
@@ -73,6 +65,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       autoEnabledReasons: {},
     }));
     clearRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(config);
     clearPluginMetadataLifecycleCaches();
   });
 

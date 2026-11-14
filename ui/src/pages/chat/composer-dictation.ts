@@ -4,6 +4,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import type { ComposerDictationSession } from "./composer-dictation-session.ts";
+import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -105,6 +106,10 @@ export class ComposerDictationOwner extends EventTarget {
     return this.pendingCommitSession !== null;
   }
 
+  get inputLevel(): RealtimeTalkLevelSignal | undefined {
+    return this.session?.inputLevel;
+  }
+
   get transcript(): string {
     return this.session?.transcriptSnapshot() ?? "";
   }
@@ -145,7 +150,8 @@ export class ComposerDictationOwner extends EventTarget {
       const keepFinal = this.active && !options.connected;
       const preservesText = keepFinal ? (this.session?.markGatewayDisconnected() ?? false) : false;
       void this.stop({ commit: keepFinal });
-      if (keepFinal) {
+      // Empty drains report their failure through the session; retained text needs this notice.
+      if (keepFinal && preservesText) {
         options.onError(t("chat.composer.dictationDisconnected"), {
           kind: "interrupted",
           preservesText,
@@ -282,7 +288,11 @@ export class ComposerDictationOwner extends EventTarget {
     }
   };
 
-  private readonly handleWindowBlur = (): void => this.cancel();
+  // Losing the window interrupts capture but keeps dictated text in the draft.
+  private readonly handleWindowBlur = (): void => {
+    this.clearClickSuppression();
+    void this.finishActive();
+  };
 
   private canHold(): boolean {
     return (

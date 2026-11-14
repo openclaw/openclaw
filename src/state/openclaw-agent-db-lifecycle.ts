@@ -17,7 +17,10 @@ import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admissi
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { agentDatabaseBorrowers, retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
-import { createAgentDatabaseHandleCloser } from "./openclaw-agent-db-close.js";
+import {
+  createAgentDatabaseHandleCloser,
+  stopAgentDatabaseWalMaintenance,
+} from "./openclaw-agent-db-close.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -169,15 +172,18 @@ export function startAgentDatabaseOpenTiming(
     phaseDurationsMs[phase] = completedMs - elapsedMs;
     elapsedMs = completedMs;
     if (phase === "validation" && diagnostics.integrityGateReason) {
-      agentDbLog.info("agent database integrity gate", {
-        agentId,
-        path: pathname,
-        pid: process.pid,
-        threadId,
-        isMainThread,
-        admissionMode,
-        ...diagnostics,
-      });
+      agentDbLog.info(
+        `agent database integrity gate for ${agentId}: reason=${diagnostics.integrityGateReason}, mode=${diagnostics.integrityGateMode}, outcome=${diagnostics.integrityGateOutcome}, elapsedMs=${diagnostics.integrityGateMs ?? phaseDurationsMs.validation}`,
+        {
+          agentId,
+          path: pathname,
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          admissionMode,
+          ...diagnostics,
+        },
+      );
     }
     // Registration is the final checkpoint; intermediate phases never emit a partial summary.
     if (phase === "registration" && elapsedMs >= OPENCLAW_AGENT_DB_SLOW_OPEN_MS) {
@@ -295,7 +301,7 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
 export async function closeMaintenanceAgentDatabase(
   database: OpenClawAgentDatabase,
 ): Promise<void> {
-  await database.walMaintenance.stop();
+  await stopAgentDatabaseWalMaintenance(database);
   if (cache.databases.get(database.path) !== database) {
     return;
   }
@@ -389,7 +395,7 @@ export async function settleOpenClawAgentDatabaseWorkerClose(
   if (database) {
     try {
       // Join sidecar inspection before native close; a guarded close is not a failed owner.
-      await database.walMaintenance.stop();
+      await stopAgentDatabaseWalMaintenance(database);
       closeCachedOpenClawAgentDatabase(database);
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
@@ -509,7 +515,7 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
     await Promise.allSettled(pending.map((owner) => owner.promise));
     const database = cache.databases.get(selection.path);
     if (database && (expectedAgentId === undefined || database.agentId === expectedAgentId)) {
-      await database.walMaintenance.stop();
+      await stopAgentDatabaseWalMaintenance(database);
     }
     return closeOpenClawAgentDatabaseByPath(selection.path, expectedAgentId);
   });

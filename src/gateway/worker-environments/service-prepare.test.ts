@@ -157,9 +157,9 @@ describe("on-demand prepared worker admission", () => {
     }
   });
 
-  it.each(["reserve"] as const)(
-    "cancels an in-flight %s while retaining cleanup ownership until the provider settles",
-    async () => {
+  it.each(["current", "removed before acceptance", "removed after acceptance"])(
+    "cancels an in-flight reserve with requester %s while retaining cleanup ownership",
+    async (requester) => {
       const f = await fixture();
       const entered = createDeferredCore<AbortSignal>();
       const release = createDeferredCore();
@@ -202,18 +202,54 @@ describe("on-demand prepared worker admission", () => {
       const cancelled = new Promise<void>((resolve) => {
         signal.addEventListener("abort", () => resolve(), { once: true });
       });
-      const destroyed = f.service.destroyUnattached(environmentId);
+      const admissionEntered = createDeferredCore();
+      const admissionRelease = createDeferredCore();
+      const requestPreparedDestroy = support.testState.store.requestPreparedDestroy.bind(
+        support.testState.store,
+      );
+      const admission = vi
+        .spyOn(support.testState.store, "requestPreparedDestroy")
+        .mockImplementationOnce(async (input) => {
+          admissionEntered.resolve();
+          await admissionRelease.promise;
+          return requestPreparedDestroy(input);
+        });
+      let current = true;
+      const destroyed = f.service.destroyUnattached(environmentId, () => {
+        if (!current) {
+          throw new Error("Deletion requester removed");
+        }
+      });
+      const settled = destroyed.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       try {
+        await admissionEntered.promise;
+        current = requester !== "removed before acceptance";
+        admissionRelease.resolve();
+        if (!current) {
+          await Promise.race([cancelled, settled]);
+          expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBeNull();
+          expect(signal.aborted).toBe(false);
+          expect(await settled).toMatchObject({ message: "Deletion requester removed" });
+          expect(destroyProvider).not.toHaveBeenCalled();
+          return;
+        }
         await cancelled;
         expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
           support.testState.nowMs,
         );
         expect(signal.aborted).toBe(true);
         expect(destroyProvider).not.toHaveBeenCalled();
+        current = requester !== "removed after acceptance";
       } finally {
+        admissionRelease.resolve();
         release.resolve();
-        await destroyed;
+        await settled;
+        admission.mockRestore();
       }
+      expect(await settled).toBeUndefined();
       expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
       expect(destroyProvider).toHaveBeenCalledOnce();
     },

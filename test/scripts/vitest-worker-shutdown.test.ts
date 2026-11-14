@@ -70,7 +70,7 @@ const shutdownCases = [
   { route: "ci-shared", phase: "compilation" },
   { route: "ci", phase: "admission" },
   { route: "ci", phase: "disposal" },
-  { route: "ci-disconnect", phase: "disposal" },
+  { route: "ci-disconnect", phase: "admission" },
   { route: "ci", phase: "deletion" },
   { route: "direct", phase: "deletion" },
   { route: "serial", phase: "deletion" },
@@ -203,15 +203,15 @@ cp.spawn=(bin,args,options)=>{
   // CI's intermediate project parent must remain real; replace only the Vitest leaf.
   if(path.basename(args[bootstrap+2])!=='vitest.mjs') {
     generation=args[bootstrap+1];
-    if(phase==='deletion') publish('ci-owner.json',{pid:process.pid});
+    if(phase==='deletion' || phase==='disposal') publish('ci-owner.json',{pid:process.pid});
     const child=spawn(bin,args,options);
-    child.once('close',()=>publish('owner-'+child.pid+'.closed',{pid:child.pid}));
+    child.once('close',()=>{borrowerClosed=true;publish('owner-'+child.pid+'.closed',{pid:child.pid});});
     return child;
   }
   const child=spawn(bin,[${JSON.stringify(borrower)}],options);
   child.once('close',(code,signal)=>{borrowerClosed=true;publish('borrower-closed',{pid:child.pid,code,signal});});
   generation=args[bootstrap+1];
-  const owner=${route === "ci" && phase === "deletion"} ? JSON.parse(fs.readFileSync(path.join(root,'ci-owner.json'),'utf8')).pid : process.pid;
+  const owner=${route === "ci" && (phase === "deletion" || phase === "disposal")} ? JSON.parse(fs.readFileSync(path.join(root,'ci-owner.json'),'utf8')).pid : process.pid;
   publish(process.env.OPENCLAW_VITEST_SHARD_NAME==='ci-held'?'held-owner.json':'owner.json',{owner,borrower:child.pid,generation});
   return child;
 };
@@ -429,7 +429,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
             expect(result.stdout).toContain("owner disconnected before group completion");
           }
           expect(result.stdout).toContain(
-            phase === "deletion"
+            phase === "deletion" || phase === "disposal"
               ? "[shard:ci-shutdown] end (exit 0)"
               : `[shard:ci-shutdown] [test] FAILED (exit ${shutdownSignal === "SIGINT" ? 130 : 143})`,
           );

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -25,13 +26,25 @@ export async function prepareInterruptedManagedServiceFixture(params: {
   ledgerRuntimeImport: string;
   runId: string;
   updaterStopped?: "native" | "legacy";
+  operatorRestart?: "before-recovery" | "service-inspection";
   cut: "before" | "prepared" | "publishing" | "after" | "risk";
   pluginCohort?: "own" | "foreign" | "risk";
+  finalizeFailure?: true;
 }) {
   const fixture = await createPackageSwapFixture(params.root);
   const installRoot = fixture.packageRoot;
   const installedRecovery = path.join(installRoot, "dist/cli/daemon-cli.js");
   const recovery = await fs.readFile(params.recoveryModulePath, "utf8");
+  const writerDatabasePath = path.join(params.root, "terminal-writer.sqlite");
+  const writerCheck = (column: string) => `
+    const { DatabaseSync } = await import("node:sqlite");
+    using db = new DatabaseSync(${JSON.stringify(writerDatabasePath)});
+    db.prepare("SELECT ${column} FROM writer_schema").get();
+  `;
+  if (params.finalizeFailure) {
+    using db = new DatabaseSync(writerDatabasePath);
+    db.exec("CREATE TABLE writer_schema (previous INTEGER)");
+  }
   const runtimeUrl = JSON.stringify(
     resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.handoffPublication).href,
   );
@@ -64,6 +77,16 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       ${managedServiceStateUpdateScript(params.statePath, "state.postCoreRepaired = true; state.repairRunId = runId;")};
       ledger.recordUpdateRunStep(runId, {step:"finalize:doctor",status:"completed"});
     });
+    ${
+      params.finalizeFailure
+        ? `
+      const { DatabaseSync } = await import("node:sqlite");
+      using db = new DatabaseSync(${JSON.stringify(writerDatabasePath)});
+      db.exec("ALTER TABLE writer_schema RENAME COLUMN previous TO candidate");
+      throw new Error("Post-core repair failed after schema migration");
+    `
+        : ""
+    }
     console.log(JSON.stringify({status:"ok",coreUpdate:"completed",mode:"finalize"}));
   `;
   const stageRoot = fixture.params.stage.packageRoot;
@@ -79,7 +102,19 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       path.join(directory, "package.json"),
       JSON.stringify({ name: "openclaw", version, type: "module" }),
     );
-    await fs.writeFile(path.join(directory, "dist/cli/daemon-cli.js"), recovery);
+    await fs.writeFile(
+      path.join(directory, "dist/cli/daemon-cli.js"),
+      params.finalizeFailure && version === "2.0.0"
+        ? recovery.replace(
+            "export const { finishUpdateRun } = ledger;",
+            `
+          export async function finishUpdateRun(...args) {
+            ${writerCheck("candidate")}
+            return await ledger.finishUpdateRun(...args);
+          }`,
+          )
+        : recovery,
+    );
     await fs.writeFile(path.join(directory, "openclaw.mjs"), repair);
     await writePackageDistInventory(directory);
   }
@@ -95,6 +130,8 @@ export async function prepareInterruptedManagedServiceFixture(params: {
   if (params.pluginCohort) {
     reservePluginCohort(stateEnv, cohortRunId, installRoot);
   }
+  const operatorRestart = `${params.operatorRestart ? `${managedServiceStateUpdateScript(params.statePath, "state.interruptedRunId = runId;")};` : ""}
+    ${params.operatorRestart === "before-recovery" ? 'ledger.recordUpdateRunStep(runId, {step:"service-start", status:"completed", endedAtMs:Date.now()});' : ""}`;
   const updaterScript = `void (async () => {
     ${params.ledgerRuntimeImport}
     const fs = require("node:fs");
@@ -147,15 +184,37 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       fs.renameSync(${JSON.stringify(installRoot)}, prepared.anchor + "/previous");
       `
       }
+      ${operatorRestart}
       process.kill(process.pid,"SIGKILL");
     });
     `
     }
+    ${operatorRestart}
     process.kill(process.pid,"SIGKILL");
   })().catch(error=>{console.error(error);process.exit(18)});`;
   return {
     installRoot,
     updaterScript,
+    async prepareStagedRuntime(directory: string) {
+      if (!params.finalizeFailure) {
+        return;
+      }
+      // The sealed old writer and installed candidate enforce different schema contracts.
+      const runtime = path.join(directory, "runtime/managed-handoff-runtime.mjs");
+      const previous = "managed-handoff-runtime-previous.mjs";
+      await fs.rename(runtime, path.join(path.dirname(runtime), previous));
+      await fs.writeFile(
+        runtime,
+        `
+        export * from "./${previous}";
+        import { finishUpdateRun as finish } from "./${previous}";
+        export async function finishUpdateRun(...args) {
+          ${writerCheck("previous")}
+          return await finish(...args);
+        }
+      `,
+      );
+    },
     helperParams: {
       recoveryModulePath: installedRecovery,
       finalizeCommandArgv: [
