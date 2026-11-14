@@ -1,5 +1,5 @@
 // One Gateway session through every mid-session trigger: each provider request must extend the
-// previous one byte for byte, except at the explicit compaction.
+// previous one byte for byte, except at a compaction (explicit, or the provider's own).
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -13,8 +13,8 @@ const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
 
-export type Api = "anthropic-messages" | "openai-completions";
-type Reply = { text: string } | { tool: string; args: Record<string, unknown> };
+export type Api = "anthropic-messages" | "openai-completions" | "openai-responses";
+type Reply = { text: string; compaction?: true } | { tool: string; args: Record<string, unknown> };
 type WireRequest = { system: string; tools: string; messages: string[]; text: string };
 
 // Cache markers move to the newest message on every request, and the newest message carries
@@ -39,6 +39,18 @@ function withoutCacheMarkers(value: unknown): unknown {
 }
 
 function readWireRequest(api: Api, body: Record<string, unknown>): WireRequest {
+  if (api === "openai-responses") {
+    const system = JSON.stringify(body.instructions ?? null);
+    const messages = ((body.input as unknown[] | undefined) ?? []).map((item) =>
+      JSON.stringify(item),
+    );
+    return {
+      system,
+      tools: JSON.stringify(body.tools ?? []),
+      messages,
+      text: `${system}\n${messages.join("\n")}`,
+    };
+  }
   const all = (body.messages as Array<{ role?: unknown }> | undefined) ?? [];
   // Chat Completions sends the system prompt as leading system messages.
   const lead =
@@ -59,7 +71,7 @@ function readWireRequest(api: Api, body: Record<string, unknown>): WireRequest {
 /** Messages after the newest assistant reply: the current input, carriers and tool results. */
 function lastMessage(request: WireRequest): string {
   const assistant = request.messages.findLastIndex((message) =>
-    message.startsWith('{"role":"assistant"'),
+    /"role":"assistant"|"type":"(function_call|compaction)"/.test(message),
   );
   return request.messages.slice(assistant + 1).join("\n");
 }
@@ -101,6 +113,54 @@ function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: n
     response.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
     return;
   }
+  if (api === "openai-responses") {
+    const items = [
+      // The provider compacts the request it received and returns the checkpoint first.
+      ...("compaction" in reply && reply.compaction
+        ? [{ type: "compaction", id: `cmp_${ordinal}`, encrypted_content: `checkpoint-${ordinal}` }]
+        : []),
+      "text" in reply
+        ? {
+            type: "message",
+            id: `msg_${ordinal}`,
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: reply.text, annotations: [] }],
+          }
+        : {
+            type: "function_call",
+            id: `fc_${ordinal}`,
+            call_id: `call_${ordinal}`,
+            name: reply.tool,
+            arguments: JSON.stringify(reply.args),
+            status: "completed",
+          },
+    ];
+    const events = [
+      ...items.flatMap((item, index) => [
+        { type: "response.output_item.added", output_index: index, item },
+        { type: "response.output_item.done", output_index: index, item },
+      ]),
+      {
+        type: "response.completed",
+        response: {
+          id: `resp_${ordinal}`,
+          object: "response",
+          status: "completed",
+          model: "gpt-5.4",
+          output: items,
+          usage: {
+            input_tokens: 10,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 5,
+            total_tokens: 15,
+          },
+        },
+      },
+    ];
+    response.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
+    return;
+  }
   const chunk = (delta: unknown, finish: string | null) =>
     `data: ${JSON.stringify({
       id: `chatcmpl_${ordinal}`,
@@ -130,8 +190,12 @@ function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: n
 }
 
 function buildProvider(api: Api, baseUrl: string) {
-  const id = api === "anthropic-messages" ? "claude-opus-5" : "gpt-5.4-mini";
-  const providerId = api === "anthropic-messages" ? "fake-anthropic" : "fake-completions";
+  const routes: Record<Api, readonly [providerId: string, id: string]> = {
+    "anthropic-messages": ["fake-anthropic", "claude-opus-5"],
+    "openai-completions": ["fake-completions", "gpt-5.4-mini"],
+    "openai-responses": ["fake-responses", "gpt-5.4"],
+  };
+  const [providerId, id] = routes[api];
   const model: ModelDefinitionConfig = {
     id,
     name: `Fake ${id}`,
@@ -196,7 +260,7 @@ export function usePrefixStabilityJourney() {
     let ordinal = 0;
     const script = (request: WireRequest): Reply => {
       const latest = lastMessage(request);
-      const hasToolResult = /tool_result|"role":"tool"/.test(latest);
+      const hasToolResult = /tool_result|"role":"tool"|function_call_output/.test(latest);
       if (request.tools === "[]") {
         return { text: "Summary: the session ran the probe journey." };
       }
@@ -220,6 +284,9 @@ export function usePrefixStabilityJourney() {
           tool: "exec",
           args: { command: "sleep 1; echo exec-finished", background: true },
         };
+      }
+      if (latest.includes("STEP-PROVIDER-COMPACT")) {
+        return { text: `ok ${targetRequests.length}`, compaction: true };
       }
       if (latest.includes("STEP-SPAWN")) {
         return {
@@ -258,6 +325,7 @@ export function usePrefixStabilityJourney() {
           },
         },
         {
+          diagnostics: { cacheTrace: { enabled: true } },
           plugins: { enabled: false },
           tools: {
             codeMode: { enabled: false },
@@ -333,6 +401,17 @@ export function usePrefixStabilityJourney() {
         await send(TARGET, "TARGET after skill");
         await fs.appendFile(path.join(fixture.workspaceDir, "AGENTS.md"), "- Prefer bullets.\n");
         await send(TARGET, "TARGET after workspace edit");
+        // The provider compacts on its own (Responses server-side compaction): its checkpoint
+        // replaces the history it summarized from the next request on, an allowed rebuild point.
+        const providerCompactionAt =
+          api === "openai-responses"
+            ? await (async () => {
+                await send(TARGET, "STEP-PROVIDER-COMPACT continue");
+                const at = targetRequests.length;
+                await send(TARGET, "TARGET after provider compaction");
+                return at;
+              })()
+            : undefined;
         // Explicit compaction is the one allowed rebuild point in this journey.
         await client.request("sessions.compact", { key: TARGET }, { timeoutMs: 65_000 });
         await settle();
@@ -343,7 +422,39 @@ export function usePrefixStabilityJourney() {
         expect(
           breaks.map(({ at }) => at),
           JSON.stringify(breaks, null, 2),
-        ).toEqual([compactionAt]);
+        ).toEqual(
+          providerCompactionAt === undefined
+            ? [compactionAt]
+            : [providerCompactionAt, compactionAt],
+        );
+        if (providerCompactionAt !== undefined) {
+          // The cache observer attributes the provider checkpoint to compaction, not to drift.
+          const trace = await fs.readFile(
+            path.join(fixture.stateDir, "logs", "cache-trace.jsonl"),
+            "utf8",
+          );
+          const attributed = trace
+            .split("\n")
+            .filter(Boolean)
+            .map(
+              (line) =>
+                JSON.parse(line) as {
+                  stage?: string;
+                  sessionKey?: string;
+                  options?: { changes?: Array<{ detail?: string }> | null };
+                },
+            )
+            .filter(
+              (event) =>
+                event.stage === "cache:result" &&
+                event.sessionKey === TARGET &&
+                event.options?.changes?.some(
+                  ({ detail }) =>
+                    detail === "provider compaction checkpoint replaced earlier history",
+                ),
+            );
+          expect(attributed).toHaveLength(1);
+        }
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
       }
