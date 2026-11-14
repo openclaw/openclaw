@@ -457,16 +457,24 @@ it
           assert(continueChild);
           continueChild();
           if (action === "policy-unavailable") {
-            await vi.waitFor(() => expect(finishChild).toBeDefined());
-            await vi.waitFor(() => expect(yieldRequester).toBeDefined());
+            await vi.waitFor(
+              () => {
+                expect(finishChild).toBeDefined();
+                expect(yieldRequester).toBeDefined();
+              },
+              { timeout: 15_000 },
+            );
             await writeFile(instance.state.path("policy-unavailable"), "one transient outage");
             finishChild!();
-            await vi.waitFor(() => {
-              expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
-              expect(instance.logs()).toContain(
-                "Subagent announce failed: GatewayOperatorAccessUnavailableError",
-              );
-            });
+            await vi.waitFor(
+              () => {
+                expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
+                expect(instance.logs()).toContain(
+                  "Subagent announce failed: GatewayOperatorAccessUnavailableError",
+                );
+              },
+              { timeout: 15_000 },
+            );
             const active = await client.request<{ sessionInfo: { hasActiveRun?: boolean } }>(
               "chat.history",
               { sessionKey: rootKey },

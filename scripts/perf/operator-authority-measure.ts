@@ -346,37 +346,32 @@ if (values.scenario === "all" || values.scenario === "recovery-source") {
       { requireLivePolicySet: true },
     );
     assert(recoveredAccess?.gatewayAccessGrant);
-    // Decode the persisted shape so this is never an already-issued policy identity.
-    const source = decodeQueuedOperatorRecoverySource(
-      // JSON persistence drops undefined fields; structuredClone would retain them.
-      // oxlint-disable-next-line unicorn/prefer-structured-clone
-      JSON.parse(
-        JSON.stringify({
-          kind: "gateway",
-          snapshot: {
-            profileId: person.id,
-            scopes: ["operator.write"],
-            assignedRole: facts.assignedRole,
-            githubLogin: facts.githubLogin ?? null,
-            rolePolicy: sourceRolePolicy(config.gateway?.roles?.definitions["synthetic-operator"]),
-            grant: recoveredAccess.gatewayAccessGrant,
-            aliasBindingIds: identity.emailBindingIds,
-            authPolicy: {
-              ...captureGatewayAuthPolicy(config, {
-                role: "operator",
-                authMethod: "token",
-                verifiedIdentity: "recovery@authority.example.test",
-                browserOrigin: authPolicy.browserOrigin,
-              }),
-              generation: "",
-            },
-            controlUiAdmin: false,
-            localOperator: false,
-            sourceIngress: "control-ui",
-          },
-        }),
-      ),
-    );
+    // Decode persisted bytes, including JSON omission of undefined fields.
+    const persistedSource = JSON.stringify({
+      kind: "gateway",
+      snapshot: {
+        profileId: person.id,
+        scopes: ["operator.write"],
+        assignedRole: facts.assignedRole,
+        githubLogin: facts.githubLogin ?? null,
+        rolePolicy: sourceRolePolicy(config.gateway?.roles?.definitions["synthetic-operator"]),
+        grant: recoveredAccess.gatewayAccessGrant,
+        aliasBindingIds: identity.emailBindingIds,
+        authPolicy: {
+          ...captureGatewayAuthPolicy(config, {
+            role: "operator",
+            authMethod: "token",
+            verifiedIdentity: "recovery@authority.example.test",
+            browserOrigin: authPolicy.browserOrigin,
+          }),
+          generation: "",
+        },
+        controlUiAdmin: false,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    });
+    const source = decodeQueuedOperatorRecoverySource(JSON.parse(persistedSource));
     assert(source.kind === "gateway");
     // Recovery only consumes the config reader and optional owner identities.
     const context = { getRuntimeConfig: () => recoveryConfig } as GatewayRequestContext;
