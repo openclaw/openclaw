@@ -432,9 +432,16 @@ test("completions pending behind a completion turn share the next turn", async (
     return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
   });
   const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const release = path.join(
+    await fs.realpath(await fs.mkdtemp(path.join(state.workspaceDir, "batch-"))),
+    "release",
+  );
+  // Every command captures its destination before any exit changes the session.
   for (const job of [1, 2, 3]) {
-    runningSession((await exec(`batch-${job}`, `process.stdout.write("BATCH_${job}")`)).details);
+    const script = `const t = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(release)})) { clearInterval(t); process.stdout.write("BATCH_${job}"); } }, 20);`;
+    runningSession((await exec(`batch-${job}`, script)).details);
   }
+  await fs.writeFile(release, "");
   await withinTest(waitForExecScope(sessionKey), signal);
   await withinTest(firstTurn.promise, signal);
   const jobs = (prompt: string) => prompt.match(/BATCH_\d/g) ?? [];
