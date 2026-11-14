@@ -95,30 +95,18 @@ function escapeMarkdownLinkLabel(value: string): string {
 }
 
 function escapeMarkdownLinkDestination(href: string): string {
-  let remainingClosers = 0;
+  let depth = 0;
   for (const character of href) {
-    if (character === ")") {
-      remainingClosers++;
+    depth += character === "(" ? 1 : character === ")" ? -1 : 0;
+    if (depth < 0) {
+      break;
     }
   }
-  let depth = 0;
-  // Preserve balanced destinations byte-for-byte; escape only unmatched parentheses.
-  return escapePreMarkerText(href).replace(/[\\()<>\s]/gu, (character) => {
-    if (character === "(" && depth < remainingClosers) {
-      depth++;
-      return character;
-    }
-    if (character === ")") {
-      remainingClosers--;
-      if (depth > 0) {
-        depth--;
-        return character;
-      }
-    }
-    return character === "(" || character === ")" || character === "\\"
-      ? `\\${character}`
-      : encodeURIComponent(character);
-  });
+  // Angle destinations allow spaces and unmatched parentheses, but not line endings.
+  const destination = escapePreMarkerText(href)
+    .replace(/[\\<>]/g, "\\$&")
+    .replace(/[\r\n]/g, encodeURIComponent);
+  return depth === 0 && !/\s/.test(href) ? destination : `<${destination}>`;
 }
 
 function appendText(stack: RenderContext[], value: string): void {
