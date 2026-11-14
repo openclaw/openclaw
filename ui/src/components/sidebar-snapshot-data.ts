@@ -141,6 +141,7 @@ export const sidebarSnapshotSchema = json.object({
       name: text,
       mainKey: text,
       lastActiveAt: json.optional(json.number),
+      unread: json.optional(json.boolean),
       avatar: json.optional(json.nullable(text)),
       textAvatar: json.optional(json.nullable(text)),
       role: optionalText,

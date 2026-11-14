@@ -440,7 +440,10 @@ In **Show all agents**, compact agent rows show a muted preview of the agent's
 most recent available agent reply across its visible, non-archived sessions.
 A newer user message does not replace that preview. Agents without an available
 agent reply keep a name-only row. The top-level roster does not show the
-session list's empty-filter hint.
+session list's empty-filter hint. A red dot on an agent avatar, including a pinned
+agent, means at least one available non-archived, non-incognito conversation in
+the shared activity window is unread. It clears when those conversations are marked read;
+opening the agent's main conversation does not clear unread independent chats.
 
 Choose **Pin** in an agent's options menu to move it into the icon section above
 the roster. Hover or focus its avatar to read the full name and a short preview

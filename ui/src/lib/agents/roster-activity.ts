@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.ts";
 import {
   isSubagentSessionRow,
@@ -66,6 +67,9 @@ export function agentRosterCards(
       textAvatar: resolveAgentTextAvatar(agent, identity),
       mainKey,
       activeNow: sessions.some(isSessionRunStateActive),
+      unread: sessions.some(
+        (row) => row.unread === true && !row.incognito && !isIncognitoSessionKey(row.key),
+      ),
       lastActiveAt: recent ? sessionActivityTimestamp(recent) : 0,
       preview: (main ?? recent)?.lastMessagePreview,
       assistantPreview: lastAssistantMessage?.text,

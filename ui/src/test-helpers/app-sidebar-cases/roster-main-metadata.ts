@@ -45,7 +45,7 @@ describe("AppSidebar main-chat metadata", () => {
     expect(header().querySelector(".sidebar-agent-roster__name")?.textContent).toBe("Forge");
   });
 
-  it("keeps main activity on the avatar without session metadata or disclosure", async () => {
+  it("keeps main activity and unread on the avatar without session metadata or disclosure", async () => {
     const { sidebar } = await mountRoster(roster, [
       session("working", 10, {
         owner: { actor: owners[0] },
@@ -70,7 +70,9 @@ describe("AppSidebar main-chat metadata", () => {
       expect(header().querySelector("[data-pull-request-state]")).toBeNull();
       expect(header().querySelector(".sidebar-child-session-toggle__count")).toBeNull();
       expect(header().querySelector(".session-row-badge--draft")).toBeNull();
-      expect(header().querySelector('[aria-label="Unread"]')).toBeNull();
+      expect(
+        header().querySelector('.sidebar-agent-roster__avatar [aria-label="Unread"]'),
+      ).not.toBeNull();
       expect(sessionKeys(sidebar)).toEqual([]);
     });
   });
