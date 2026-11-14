@@ -527,6 +527,28 @@ describe("public ClawHub Template catalog", () => {
     await expectPreview("instruction", "SOUL.md", "# Travel planner\n");
   });
 
+  it("lists a binary workspace file without an excerpt and declines its preview", async () => {
+    await fs.rm(path.join(fixtureRoot, "BOOTSTRAP.md"));
+    await fs.writeFile(
+      path.join(fixtureRoot, "package.json"),
+      packageJson(packageName, version, "CLAW.md"),
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "icon.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]),
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      "---\nschemaVersion: 1\nagent: { id: travel }\nworkspace:\n  files:\n    - { source: icon.png, path: assets/icon.png }\n---\n# Travel planner\n",
+    );
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(detail.contents.instructions).toContainEqual({
+      name: "assets/icon.png",
+      source: "icon.png",
+    });
+    await expectCode(previewContent("instruction", "assets/icon.png"), "clawhub_preview_not_text");
+  });
+
   it("starts exact-release reads together and reuses their artifact metadata", async () => {
     const gate = Promise.withResolvers<Awaited<ReturnType<typeof mocks.detail>>>();
     mocks.detail.mockReturnValueOnce(gate.promise);
