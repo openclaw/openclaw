@@ -101,9 +101,10 @@ text shown.
    the next time the Scribes tab loads.
    A once scribe does its work and reports back. Nothing is scheduled.
 
-Scribes run as you, with your private access to the store, and use the agent's
-default model. A once scribe does its work in its conversation. Each run of an
-ongoing scribe starts in a fresh session of its conversation (the automation's
+On a shared Gateway, visible scribes may belong to another person. Viewing a
+scribe does not transfer its ownership or private access. The conversation’s
+model settings apply to setup requests. A once scribe does its work in its
+conversation. Each run of an ongoing scribe starts in a fresh session of its conversation (the automation's
 `current` session target): it keeps the conversation's private access and
 workspace, but not earlier runs' history, so it reads the skills that ship with
 the installed Knowledge rather than copies from earlier runs. The conversation

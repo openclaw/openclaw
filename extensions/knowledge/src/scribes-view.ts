@@ -283,13 +283,12 @@ function pageNames(ui: Page) {
 
 // Open the start dialog; a successful start shows the scribe's detail.
 function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
-  const { agentId, agentName, storeName } = pageNames(ui);
+  const { agentId, agentName } = pageNames(ui);
   const host = ui.s.context.host;
   const attempt = crypto.randomUUID();
   openStartDialog({
     scribe: snapshot.scribe,
     agentName,
-    storeName,
     detection,
     canWrite: host.connection.canWrite,
     basePath: host.basePath,
@@ -314,7 +313,7 @@ function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection)
   root.append(
     el(
       "p",
-      `Scribes keep ${storeName} up to date on their own. Each one is a conversation you own that follows a skill shipped with Knowledge, once or on a schedule. Open one any time to see exactly what it did.`,
+      `Scribes keep ${storeName} up to date on their own. Each one uses a conversation that follows a skill shipped with Knowledge, once or on a schedule. Open one any time to see exactly what it did.`,
       "scribes-intro",
     ),
   );
@@ -341,7 +340,7 @@ function list(ui: Page, snapshots: ScribeSnapshot[], detection: ScribeDetection)
   root.append(
     el(
       "p",
-      "Scribes run as you, with your private access, and use your agent’s default model. Ongoing scribes also appear on the Automations page.",
+      "Ongoing scribes also appear on the Automations page.",
       "knowledge-muted scribes-footnote",
     ),
   );
