@@ -262,6 +262,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onGoalDraftModeChange?: (mode: ChatGoalDraftMode | null) => void;
   currentSessionId?: string | null;
   onGatewayQuestionChange?: () => void;
+  onGatewayQuestionInteraction?: (id: string) => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
 } & ChatSessionProgressProps &

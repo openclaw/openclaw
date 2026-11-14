@@ -123,6 +123,8 @@ export const QuestionRecordSchema = closedObject({
   status: QuestionStatusSchema,
   answers: Type.Optional(QuestionAnswersSchema),
   resolvedBy: Type.Optional(NonEmptyString),
+  /** Human interaction stopped expiry at this time; expiresAtMs is no longer enforced. */
+  expiryStoppedAtMs: Type.Optional(withSince("2026.11", Type.Integer({ minimum: 0 }))),
 });
 
 export const QuestionRequestParamsSchema = closedObject({
@@ -132,6 +134,8 @@ export const QuestionRequestParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** The waiter keeps waiting after question.engage; ordinary questions only. */
+  stopExpiryOnInteraction: Type.Optional(withSince("2026.11", Type.Literal(true))),
 });
 
 export const QuestionRequestResultSchema = closedObject({
@@ -179,6 +183,8 @@ export const QuestionResolveResultSchema = Type.Union([
 ]);
 
 export const QuestionGetParamsSchema = closedObject({ id: NonEmptyString });
+/** Reports human interaction; the Gateway decides whether expiry stops. */
+export const QuestionEngageParamsSchema = closedObject({ id: NonEmptyString });
 export const QuestionGetResultSchema = closedObject({ question: QuestionRecordSchema });
 export const QuestionListParamsSchema = closedObject({});
 export const QuestionListResultSchema = closedObject({
@@ -216,6 +222,7 @@ export type QuestionWaitAnswerResult = Static<typeof QuestionWaitAnswerResultSch
 export type QuestionResolveParams = Static<typeof QuestionResolveParamsSchema>;
 export type QuestionResolveResult = Static<typeof QuestionResolveResultSchema>;
 export type QuestionGetParams = Static<typeof QuestionGetParamsSchema>;
+export type QuestionEngageParams = Static<typeof QuestionEngageParamsSchema>;
 export type QuestionGetResult = Static<typeof QuestionGetResultSchema>;
 export type QuestionListParams = Static<typeof QuestionListParamsSchema>;
 export type QuestionListResult = Static<typeof QuestionListResultSchema>;

@@ -1655,6 +1655,11 @@ export function isQuestionGetParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").QuestionGetParamsSchema
 >;
+export function isQuestionEngageParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").QuestionEngageParamsSchema
+>;
 export function isQuestionListParams(
   value: unknown,
 ): value is import("typebox").Static<

@@ -5,6 +5,7 @@ import {
   type QuestionRequestParams,
   type QuestionRecord,
   type QuestionResolvedEvent,
+  validateQuestionEngageParams,
   validateQuestionGetParams,
   validateQuestionListParams,
   validateQuestionRequestParams,
@@ -313,6 +314,7 @@ export function createQuestionHandlers(
             ...(sessionKey ? { sessionKey } : {}),
             ...(request.runId ? { runId: request.runId } : {}),
             timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
+            stopExpiryOnInteraction: request.stopExpiryOnInteraction,
             isRequesterActive,
             sessionAccess,
             requesterRun: requester?.operationalRunInstance,
@@ -587,6 +589,27 @@ export function createQuestionHandlers(
             );
           }
         }
+      } catch (error) {
+        if (!managerError(error, respond)) {
+          throw error;
+        }
+      }
+    },
+    "question.engage": async (options) => {
+      const { params, respond } = options;
+      if (!assertValidParams(params, validateQuestionEngageParams, "question.engage", respond)) {
+        return;
+      }
+      try {
+        // Only someone who could answer may keep the question open.
+        const selected = prepareSelectedQuestion(options, params.id, "mutate");
+        if (!selected) {
+          return;
+        }
+        await selected.withCurrent(() => {
+          selected.authorize.assertCurrent();
+          respond(true, { question: manager.engage(params.id) }, undefined);
+        });
       } catch (error) {
         if (!managerError(error, respond)) {
           throw error;

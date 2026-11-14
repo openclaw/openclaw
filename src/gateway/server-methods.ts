@@ -638,7 +638,11 @@ export async function handleGatewayRequest(
           diagnostics,
         );
       };
-      if (req.method === "question.get" || req.method === "question.resolve") {
+      if (
+        req.method === "question.get" ||
+        req.method === "question.resolve" ||
+        req.method === "question.engage"
+      ) {
         // Draining admission consults the pending owner before handler entry.
         requestMutationAuthority.assertCurrent();
         profileBinding?.assertCurrent();

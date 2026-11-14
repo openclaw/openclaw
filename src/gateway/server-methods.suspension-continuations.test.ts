@@ -247,7 +247,7 @@ describe("draining Gateway completion ownership", () => {
     },
   );
 
-  it("admits exact question inspection and resolution during restart drain without admitting unrelated roots", async () => {
+  it("admits exact question inspection, engagement and resolution during restart drain without admitting unrelated roots", async () => {
     const manager = new QuestionManager(createTestGatewayScheduler());
     managerCleanups.push(() => manager.close());
     const client = createClient("operator");
@@ -255,7 +255,12 @@ describe("draining Gateway completion ownership", () => {
     const call = bindDispatch(context, client);
     const root = expectDefined(tryBeginGatewayRootWorkAdmission(), "admitted owner");
     await root.run(async () => {
-      manager.request({ id: "question-owned", questions: questionChoices, timeoutMs: 60_000 });
+      manager.request({
+        id: "question-owned",
+        questions: questionChoices,
+        timeoutMs: 60_000,
+        stopExpiryOnInteraction: true,
+      });
     });
     root.release();
     // question.request returns before question.waitAnswer begins. The pending
@@ -277,6 +282,13 @@ describe("draining Gateway completion ownership", () => {
       expect.objectContaining({ question: expect.any(Object) }),
     );
     expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    const engaged = await call("question.engage", { id: "question-owned" }, ({ respond }) =>
+      respond(true, { question: manager.engage("question-owned") }),
+    );
+    expect(engaged).toHaveBeenCalledWith(true, {
+      question: expect.objectContaining({ expiryStoppedAtMs: expect.any(Number) }),
+    });
 
     const unrelated = await call(
       "question.resolve",

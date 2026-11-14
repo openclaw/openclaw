@@ -14,6 +14,8 @@ import { listTrackedTestFiles } from "./list-test-files.mts";
 export const RELEASE_ONLY_UI_TEST_FILES: ReadonlySet<string> = new Set(
   [
     "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
+    // Each case waits past ask_user's 30-second minimum; unit owners keep PR coverage.
+    "ui/src/e2e/ask-user-engaged-expiry.real-gateway.e2e.test.ts",
     "ui/src/components/app-sidebar.stress.browser.test.ts",
     "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",

@@ -108,6 +108,7 @@ export {
   isQuestionWaitAnswerParams,
   isQuestionResolveParams,
   isQuestionGetParams,
+  isQuestionEngageParams,
   isQuestionListParams,
   isCapabilityConsentErrorDetails,
   isLogsTailParams,

@@ -494,6 +494,7 @@ export function createGatewayAuxHandlers(
       "question.request": questionHandler("question.request"),
       "question.waitAnswer": questionHandler("question.waitAnswer"),
       "question.resolve": questionHandler("question.resolve"),
+      "question.engage": questionHandler("question.engage"),
       "question.get": questionHandler("question.get"),
       "question.list": questionHandler("question.list"),
       "secrets.reload": secretsHandler("secrets.reload"),

@@ -30,6 +30,8 @@ export type QuestionPanelProps = {
   onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
   onChange?: () => void;
+  /** First real human interaction with this pending question (pointer, keyboard, typing, paste). */
+  onInteraction?: () => void;
   onOpenSession?: () => void;
   onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
   onDismissError?: () => void;
@@ -41,6 +43,7 @@ export type QuestionPanelProps = {
 export type QuestionPanelOptions = Pick<
   QuestionPanelProps,
   | "onChange"
+  | "onInteraction"
   | "onSubmit"
   | "onSkip"
   | "onCollapsedChange"
