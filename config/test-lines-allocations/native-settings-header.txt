@@ -1,0 +1,3 @@
+26
+# Extend existing navigation to cover visible hub headings and agent alignment
+# in Skills, Plugins and Workshop, including direct entry; no new browser setup.
