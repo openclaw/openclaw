@@ -31,6 +31,15 @@ Once the upgraded version owns the account, a failed final save or abnormal proc
 
 Run `openclaw matrix doctor inspect` to list blocked account stores; `openclaw doctor` also reports them but `--fix` never clears this refusal. Preserve a copy of the state directory for investigation. Once **all** Gateway and CLI processes are stopped, inspect the canonical SQLite snapshot and any backup. If you accept that keys received after the last successful snapshot may be lost, run `openclaw matrix doctor recover --account <id> --accept-snapshot-rollback`, then restart the Gateway. Recovery requires exactly one blocked store for that account, an exclusive owner lock, and a SQLite snapshot that passes complete IndexedDB replay in isolation. It publishes a new guard and seal; it does not prove the snapshot contains the failed owner's latest keys. If the snapshot is absent/invalid or the account has multiple blocked stores, recovery refuses; seek storage-owner assistance. Do not delete `.owner.poisoned` manually. If Rust initialization fails, custody remains held until the process exits because backend teardown cannot be confirmed.
 
+In containers, sharing the state mount does not share the Gateway's PID namespace.
+A one-off or replacement container can therefore refuse unverifiable ownership
+even after the recorded holder has stopped. Follow the
+[Compose ownership instructions](/install/docker/compose-operations) and
+[explicit stopped-owner recovery](/gateway/gateway-lock#recover-a-crashed-foreign-owner).
+An old heartbeat alone does not authorize takeover. Keep all Gateway and CLI
+processes using that state stopped during Matrix crypto recovery, and complete
+the snapshot recovery above before restarting the Gateway.
+
 An invalid canonical SQLite snapshot also stops startup and prevents snapshot replacement, even without a blocked-owner marker. Missing metadata with leftover chunks, malformed metadata or payloads, missing chunks, and checksum failures are errors, not a new account. Preserve the account state and backups, stop all processes using it, and restore a valid backup or seek storage-owner assistance. Doctor recovery does not repair corrupt snapshots. Startup also replays the complete candidate snapshot in isolation before replacing retained account databases; invalid keys, schemas, or index constraints refuse startup without changing those databases.
 
 ### Enable encryption
