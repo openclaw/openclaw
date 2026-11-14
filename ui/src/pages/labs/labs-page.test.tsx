@@ -159,6 +159,7 @@ describe("LabsPage", () => {
     expect(toggle.checked).toBe(false);
     const select = page.querySelector<HTMLSelectElement>('select[aria-label="Prediction model"]')!;
     expect(select.closest(".settings-row--nested")).not.toBeNull();
+    expect(labRow(page, "Prediction model").textContent).toContain("configured fallback models");
     expect(select.value).toBe("utility");
     for (const model of ["conversation", "default", "utility"]) {
       runtimeConfig.patch.mockClear();
