@@ -554,37 +554,41 @@ export async function prepareReplyAgentTurn<TConfigured>(
         const tracePhase = <T>(phase: string, runPhase: () => Promise<T>) =>
           trace ? trace(phase, runPhase) : runPhase();
         try {
-          activeEntry = await tracePhase("reply.preflight_compaction", () =>
-            runSessionCompactionIfNeeded({
-              ...preparation,
-              replyOperation: operation,
-              pendingUserEntryId: preflightAdmission?.entryId,
-              abortSignal: operation.abortSignal,
-              // Compaction decides whether work is needed, then replans from the
-              // checkpoint result. A queued source must not bypass this memory write.
-              beforeCompaction: async (entry) => {
-                await admitReplyMaintenance(turn, replySessionKey, assertAdmissionCurrent);
-                const flushed = await tracePhase("reply.memory_flush", () =>
-                  runMemoryFlushIfNeeded({
-                    ...preparation,
-                    preflightAdmission,
-                    replyOperation: operation,
-                    abortSignal: operation.abortSignal,
-                    sessionEntry: entry,
-                  }),
-                );
-                turn.memoryFlushAttempted ||= flushed.outcome !== "skipped";
-                session.publish(flushed.sessionEntry);
-                operation.abortSignal.throwIfAborted();
-                if (flushed.outcome === "exhausted") {
-                  await preparation.onCompactionNotice?.("memory_flush_degraded");
-                }
-                return flushed.sessionEntry;
-              },
-              onCompactionStart: () => operation.setPhase("preflight_compacting"),
-              onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
-            }),
-          );
+          // Isolated replies do not consume session history, so neither compaction
+          // nor its memory-flush model calls belong to this public turn.
+          activeEntry = turn.queued.run.isolatedContext
+            ? activeEntry
+            : await tracePhase("reply.preflight_compaction", () =>
+                runSessionCompactionIfNeeded({
+                  ...preparation,
+                  replyOperation: operation,
+                  pendingUserEntryId: preflightAdmission?.entryId,
+                  abortSignal: operation.abortSignal,
+                  // Compaction decides whether work is needed, then replans from the
+                  // checkpoint result. A queued source must not bypass this memory write.
+                  beforeCompaction: async (entry) => {
+                    await admitReplyMaintenance(turn, replySessionKey, assertAdmissionCurrent);
+                    const flushed = await tracePhase("reply.memory_flush", () =>
+                      runMemoryFlushIfNeeded({
+                        ...preparation,
+                        preflightAdmission,
+                        replyOperation: operation,
+                        abortSignal: operation.abortSignal,
+                        sessionEntry: entry,
+                      }),
+                    );
+                    turn.memoryFlushAttempted ||= flushed.outcome !== "skipped";
+                    session.publish(flushed.sessionEntry);
+                    operation.abortSignal.throwIfAborted();
+                    if (flushed.outcome === "exhausted") {
+                      await preparation.onCompactionNotice?.("memory_flush_degraded");
+                    }
+                    return flushed.sessionEntry;
+                  },
+                  onCompactionStart: () => operation.setPhase("preflight_compacting"),
+                  onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
+                }),
+              );
         } catch (error) {
           const recorder = preparation.followupRun.userTurnTranscriptRecorder;
           if (recorder && buildPreflightCompactionFailureText(formatErrorMessage(error)) !== null) {

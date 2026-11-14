@@ -1,0 +1,8 @@
+# PR #194308, issue #153678: 692 net test lines; exact excess above 400.
+# Two independent production boundaries are required: grammY final transport with
+# caller/routing/retry guards, and real model HTTP requests with installed private
+# bootstrap/prompt/memory/context-engine canaries, retained stored history,
+# overflow recovery, and custom/native runtime refusal. Neither can be proven by
+# mocking dispatch or prompt assembly. Removed the mocked adoption-order case;
+# existing owner suites cover the durable ingress queue and restart behavior.
+292

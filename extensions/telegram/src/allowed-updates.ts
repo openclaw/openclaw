@@ -19,7 +19,12 @@ export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateTyp
   const updates: TelegramUpdateType[] = DEFAULT_TELEGRAM_UPDATE_TYPES.filter(
     (type) => type !== "stopped_message_generation",
   );
-  for (const type of ["message_reaction", "channel_post", TELEGRAM_WIDGET_QUERY_UPDATE] as const) {
+  for (const type of [
+    "message_reaction",
+    "channel_post",
+    "guest_message",
+    TELEGRAM_WIDGET_QUERY_UPDATE,
+  ] as const) {
     if (!updates.includes(type)) {
       updates.push(type);
     }

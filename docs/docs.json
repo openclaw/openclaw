@@ -1601,6 +1601,7 @@
                       "channels/telegram/media",
                       "channels/telegram/events",
                       "channels/telegram/transports",
+                      "channels/telegram/guest-mode",
                       "channels/telegram/mini-app",
                       "channels/telegram/troubleshooting"
                     ]

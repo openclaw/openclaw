@@ -29,6 +29,7 @@ export function normalizeTelegramBotInfo(value: unknown): TelegramBotInfo | unde
     supports_join_request_queries: bot.supports_join_request_queries === true,
     can_connect_to_business: bot.can_connect_to_business === true,
     has_main_web_app: bot.has_main_web_app === true,
+    supports_guest_queries: bot.supports_guest_queries === true,
     has_topics_enabled: bot.has_topics_enabled === true,
     allows_users_to_create_topics: bot.allows_users_to_create_topics === true,
   };
