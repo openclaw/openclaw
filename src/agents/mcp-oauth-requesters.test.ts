@@ -14,10 +14,14 @@ import {
   clearMcpOAuthServer,
   countMcpOAuthPrincipals,
   readMcpOAuthCredentialsStatus,
+  readMcpOAuthCredentialsStatuses,
   resolveMcpOAuthAccessToken,
 } from "./mcp-oauth.js";
 import { requesterIdentity, withMcpOAuthTempHome } from "./mcp-oauth.test-harness.js";
-import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
+import {
+  saveMcpOAuthAccessTokenForTest,
+  withMcpOAuthProviderForTest,
+} from "./mcp-oauth.test-support.js";
 
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 const requesterTest = (name: string, run: () => Promise<void>) =>
@@ -42,6 +46,25 @@ const saveAccessToken = (identity: McpOAuthIdentity, accessToken: string) =>
       expires_in: 3600,
     });
   });
+
+requesterTest(
+  "reports stored sign-in without checking or refreshing expired credentials",
+  async () => {
+    await saveMcpOAuthAccessTokenForTest(REMOTE_IDENTITY, "expired-fixture-token", -1);
+    await reopenState();
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Service is offline"));
+    try {
+      const [status] = await readMcpOAuthCredentialsStatuses([REMOTE_IDENTITY]);
+      expect(status).toEqual({ state: "authorized", expiresAt: expect.any(Number) });
+      expect(status?.state === "authorized" ? status.expiresAt : undefined).toBeLessThan(
+        Date.now(),
+      );
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+    }
+  },
+);
 
 requesterTest("fails closed when canonical SQLite JSON is malformed", async () => {
   const { serverName, serverUrl } = REMOTE_IDENTITY;
