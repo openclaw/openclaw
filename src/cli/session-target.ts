@@ -130,7 +130,7 @@ function shapeTargetError(
     if (!effectiveGatewayUrl) {
       return error;
     }
-    const hostname = new URL(effectiveGatewayUrl).hostname;
+    const hostname = URL.parse(effectiveGatewayUrl)?.hostname ?? "";
     const displayGatewayUrl = projectGatewayUrlForDiagnostics(effectiveGatewayUrl);
     const tailscaleHint = hostname.endsWith(".ts.net")
       ? " For this .ts.net host, check that Tailscale is connected and the gateway is reachable on your tailnet."
