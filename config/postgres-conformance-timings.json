@@ -452,10 +452,6 @@
       "group": "infra",
       "seconds": 9.412
     },
-    "src/infra/database-engine/port-command.credentials-local.test.ts": {
-      "group": "infra",
-      "seconds": 134.755
-    },
     "src/infra/database-engine/port-command.credentials.integration.test.ts": {
       "group": "infra",
       "seconds": 364.385
