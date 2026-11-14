@@ -20,7 +20,7 @@ const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 
 
 suite.define(() => {
   it.each([320, 400, 560])(
-    "keeps mobile model loading steady at %s px under CPU throttling",
+    "keeps background model reads steady at %s px under CPU throttling",
     async (width) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
@@ -31,7 +31,8 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}new`);
           await gateway.waitForRequest("models.list");
           const trigger = page.locator('[data-chat-model-select="true"]');
-          await pollAttribute(trigger, "aria-busy").toBe("true");
+          await pollAttribute(trigger, "aria-busy").not.toBe("true");
+          expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(0);
           await page.evaluate(() => document.fonts.ready);
           const controls = page.locator(
             ".new-session-page__composer .agent-chat__composer-controls",
@@ -122,7 +123,7 @@ suite.define(() => {
       },
     );
   });
-  it("accepts a draft while keeping the default hidden until model metadata arrives", async () => {
+  it("accepts a draft without a model loader while metadata arrives", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         agentModel: "openai/gpt-5.6-luna",
@@ -134,10 +135,11 @@ suite.define(() => {
       const modelTrigger = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
-      await pollAttribute(modelTrigger, "aria-busy").toBe("true");
-      expect(await modelTrigger.getAttribute("aria-label")).toContain("Loading models…");
+      await gateway.waitForRequest("models.list");
+      await pollAttribute(modelTrigger, "aria-busy").not.toBe("true");
+      expect(await modelTrigger.getAttribute("aria-label")).not.toContain("Loading models…");
       expect(await modelTrigger.textContent()).not.toContain("gpt-5.6-luna");
-      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(1);
+      expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(0);
       await page
         .locator(".new-session-page__message")
         .fill("Start without waiting for the catalog");
