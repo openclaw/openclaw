@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
   bindCronManagementGrant,
@@ -12,6 +13,10 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import {
+  createChannelReminderAuthorityFactory,
+  resolvePersonalReminderOrigin,
+} from "../../auto-reply/reply/personal-reminder-origin.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -725,5 +730,116 @@ it("limits personal reminder reads and removal to the originating human in one t
         revokeCronCreatorAuthorityRunScope(bobScope);
       }
     });
+  });
+});
+
+it("manages an accepted personal reminder from a fresh nonowner topic turn", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "synthetic-reminder-fixture-key");
+  await withCron(async ({ cron, tool, invoke }) => {
+    const sessionKey = "agent:main:telegram:group:-1001234567890:topic:99";
+    const sessionId = "reminder-topic-session";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId, updatedAt: 1, visibility: "shared" },
+    );
+    let sequence = 0;
+    const turn = async (
+      profileId: string,
+      args: Record<string, unknown>,
+      route: { threadId?: string; accountId?: string } = {},
+    ) => {
+      const runId = "reminder-turn-" + ++sequence;
+      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const operator = createAdmittedRunOperatorAuthority({
+        profileId,
+        scopes: ["operator.write"],
+        assertCurrent: () => {},
+      });
+      const replyRoute = {
+        channel: "telegram",
+        to: "telegram:-1001234567890",
+        accountId: route.accountId ?? "default",
+        threadId: route.threadId ?? "99",
+      };
+      const personalReminder = resolvePersonalReminderOrigin({
+        eligible: true,
+        messageProvider: "telegram",
+        operator,
+        requesterProfileId: profileId,
+        sessionKey,
+        sessionId,
+        replyRoute,
+      });
+      const factory = expectDefined(
+        createChannelReminderAuthorityFactory({
+          inherited: false,
+          fresh: true,
+          messageProvider: "telegram",
+          senderId: profileId,
+          accountId: replyRoute.accountId,
+          cronOwner: {},
+          isCurrentChannelOwner: () => false,
+          personalReminder,
+          operator,
+        }),
+        "reminder authority factory",
+      );
+      const scope = expectDefined(factory(runId), "fresh reminder scope");
+      const identity: AgentRuntimeIdentity = {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey,
+        operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...authority },
+        turnSourceChannel: "telegram",
+        turnSourceAccountId: replyRoute.accountId,
+        turnSourceTo: replyRoute.to,
+        turnSourceThreadId: replyRoute.threadId,
+      };
+      try {
+        return await runWithCronCreatorAuthorityCapability(scope, () =>
+          withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, () =>
+            tool(identity).execute(runId, args),
+          ),
+        );
+      } finally {
+        revokeCronCreatorAuthorityRunScope(scope);
+        releaseAgentRunDelegatedAuthority(authority);
+      }
+    };
+    const created = await turn("alice", {
+      action: "add",
+      job: {
+        name: "Personal reminder",
+        schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+        sessionTarget: "current",
+        payload: { kind: "agentTurn", message: "Reminder", toolsAllow: [] },
+        delivery: { mode: "announce" },
+      },
+    });
+    const id = (created.details as { id: string }).id;
+    expect(cron.getJob(id)).toMatchObject({ ownerProfileId: "alice", enabled: true });
+    expect((await turn("alice", { action: "list", includeDisabled: true })).details).toMatchObject({
+      jobs: [expect.objectContaining({ id })],
+      total: 1,
+    });
+    expect((await turn("alice", { action: "get", jobId: id })).details).toMatchObject({ id });
+    for (const [profileId, route] of [
+      ["bob", {}],
+      ["alice", { threadId: "100" }],
+      ["alice", { accountId: "other" }],
+    ] as const) {
+      expect(
+        (await turn(profileId, { action: "list", includeDisabled: true }, route)).details,
+      ).toMatchObject({ jobs: [], total: 0 });
+      for (const action of ["get", "remove"]) {
+        await expect(turn(profileId, { action, jobId: id }, route)).rejects.toThrow(/not found/);
+      }
+    }
+    expect((await turn("alice", { action: "remove", jobId: id })).details).toMatchObject({
+      removed: true,
+    });
+    expectDenied(await invoke("cron.get", { id }), "cron job not found");
   });
 });
