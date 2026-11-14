@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getSpeechProvider } from "../../tts/provider-registry.js";
+import { mergeProviderConfigWithPersona } from "../../tts/tts-provider-resolution.js";
+import { resolveTtsConfig } from "../../tts/tts-settings.js";
 import { createTtsTool } from "./tts-tool.js";
 
 const models = [
@@ -245,6 +247,218 @@ async function withFixture(
 }
 
 describe("registered ClawRouter Google speech", () => {
+  it.each([
+    ["voice", "speakerVoiceId", "model", "modelId"],
+    ["voiceId", "speakerVoice", "modelId", "model"],
+  ])(
+    "persona replaces inherited %s with %s before readiness",
+    async (baseVoice, nextVoice, baseModel, nextModel) => {
+      await withFixture(async (f) => {
+        f.cfg.tts!.providers!.clawrouter = {
+          upstreamProvider: "google",
+          [baseVoice]: "Kore",
+          [baseModel]: "google/" + models[0],
+        };
+        f.cfg.tts!.persona = "narrator";
+        f.cfg.tts!.personas = {
+          narrator: {
+            providers: {
+              clawrouter: {
+                [nextVoice]: " Puck ",
+                [nextModel]: " google/" + models[3] + " ",
+                apiKey: "synthetic-persona-key",
+              },
+            },
+          },
+        };
+        const result = await f.tool.execute("persona", { text: "Synthetic speech" });
+        expect(result.details).toMatchObject({ provider: "clawrouter" });
+        expect(f.catalogKeys).toEqual(["Bearer synthetic-persona-key"]);
+        expect(f.calls).toHaveLength(1);
+        expect(f.calls[0]).toMatchObject({
+          auth: "Bearer synthetic-persona-key",
+          body: {
+            body: {
+              model: models[3],
+              generation_config: { speech_config: [{ voice: "Puck" }] },
+            },
+          },
+        });
+      }, models[3]);
+    },
+  );
+
+  it.each([
+    { voice: "Kore", voiceName: "Puck" },
+    { model: "google/" + models[0], modelId: "google/" + models[3] },
+    { speakerVoice: "Kore", speakerVoiceId: "Puck" },
+    { voice: null },
+    { model: null },
+    { voice: "" },
+    { voice: "   " },
+    { model: "" },
+    { model: "   " },
+  ])("persona keeps invalid authored aliases visible: %j", async (overrides) => {
+    await withFixture(async (f) => {
+      f.cfg.tts!.persona = "narrator";
+      f.cfg.tts!.personas = {
+        narrator: { fallbackPolicy: "fail", providers: { clawrouter: overrides } },
+      };
+      await expect(f.tool.execute("persona", { text: "Synthetic speech" })).rejects.toThrow();
+      expect(f.catalogKeys).toHaveLength(0);
+      expect(f.calls).toHaveLength(0);
+    });
+  });
+
+  it.each([
+    { voice: " Puck ", voiceName: "Puck", speakerVoiceId: "Puck" },
+    { voiceId: undefined, modelId: undefined },
+  ])("persona admits equal or undefined aliases: %j", async (overrides) => {
+    await withFixture(async (f) => {
+      f.cfg.tts!.persona = "narrator";
+      f.cfg.tts!.personas = { narrator: { providers: { clawrouter: overrides } } };
+      await f.tool.execute("persona", { text: "Synthetic speech" });
+      expect(f.catalogKeys).toEqual(["Bearer synthetic-router-key"]);
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0]?.body).toMatchObject({
+        generationConfig: {
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName:
+                  overrides.voiceId === undefined && !("voice" in overrides) ? "Kore" : "Puck",
+              },
+            },
+          },
+        },
+      });
+    });
+  });
+
+  function mergePersona(
+    base: Record<string, unknown>,
+    authored: Record<string, unknown>,
+    provider = "clawrouter",
+  ) {
+    const config = resolveTtsConfig({
+      tts: {
+        providers: { [provider]: base },
+        personas: {
+          Narrator: { providers: { [provider]: authored } },
+        },
+      },
+    });
+    const providerConfig = config.providerConfigs[provider === "edge" ? "microsoft" : provider];
+    if (!providerConfig) {
+      throw new Error("Missing normalized test provider");
+    }
+    return mergeProviderConfigWithPersona({
+      providerId: provider,
+      providerConfig,
+      persona: config.personas.narrator,
+    });
+  }
+
+  it("normalizes persona strings and IDs without hiding conflicts or changing base normalization", () => {
+    const base = Object.freeze({ speakerVoice: " Base ", voice: "legacy", model: "base-model" });
+    const authored = Object.freeze({
+      voice: " Kore ",
+      voiceName: "Puck",
+      voiceId: undefined,
+      speakerVoiceId: null,
+      model: " one ",
+      modelId: "two",
+    });
+    const merged = mergePersona(base, authored, "edge");
+    expect(merged.personaBinding).toBe("applied");
+    expect(merged.personaProviderConfig).toMatchObject({
+      voice: "Kore",
+      voiceName: "Puck",
+      voiceId: undefined,
+      speakerVoiceId: null,
+      model: "one",
+      modelId: "two",
+    });
+    expect(Object.hasOwn(merged.personaProviderConfig!, "voiceId")).toBe(true);
+    expect(
+      resolveTtsConfig({ tts: { providers: { edge: base } } }).providerConfigs.microsoft,
+    ).toMatchObject({ speakerVoice: "Base", voice: "Base", voiceName: "Base" });
+    expect(base).toEqual({ speakerVoice: " Base ", voice: "legacy", model: "base-model" });
+    expect(authored.voice).toBe(" Kore ");
+  });
+
+  it("overlays only selected families, preserves credentials, and replaces nested values", () => {
+    const nested = Object.freeze({ old: true }),
+      replacement = Object.freeze({ next: true });
+    const base = Object.freeze({
+      voice: "Kore",
+      model: "original",
+      apiKey: "synthetic-base",
+      nested,
+    });
+    const overlay = mergePersona(base, { modelId: "next", nested: replacement });
+    const changed = overlay.providerConfig;
+    expect(changed).toMatchObject({ voice: "Kore", modelId: "next", apiKey: "synthetic-base" });
+    expect(changed).not.toHaveProperty("model");
+    expect(changed.nested).toBe(overlay.personaProviderConfig?.nested);
+    expect(changed.nested).toEqual(replacement);
+    expect(base.nested).toBe(nested);
+    const unchanged = mergePersona(base, { voiceId: undefined, modelId: undefined }).providerConfig;
+    expect(unchanged).toMatchObject({ voice: "Kore", model: "original", apiKey: "synthetic-base" });
+    expect(mergePersona(base, { apiKey: "synthetic-persona" }).providerConfig).toMatchObject({
+      voice: "Kore",
+      model: "original",
+      apiKey: "synthetic-persona",
+    });
+    const inheritedOnly = { __proto__: { voice: "Puck", model: "other" } };
+    expect(
+      mergeProviderConfigWithPersona({
+        providerConfig: base,
+        providerId: "clawrouter",
+        persona: { id: "narrator", providers: { clawrouter: inheritedOnly } },
+      }).providerConfig,
+    ).toEqual(base);
+    for (const persona of [undefined, { id: "missing", providers: { other: {} } }]) {
+      const result = mergeProviderConfigWithPersona({
+        providerConfig: base,
+        persona,
+        providerId: "clawrouter",
+      });
+      expect(result.providerConfig).toBe(base);
+      expect(result.personaBinding).toBe(persona ? "missing" : "none");
+    }
+  });
+
+  it.each([
+    ["openai", "openai/tts-1", "alloy", "nova"],
+    ["gradium", undefined, "voice_old", "voice_new"],
+    ["azure-speech", undefined, "en-US-JennyNeural", "en-US-AriaNeural"],
+    ["elevenlabs", "eleven_multilingual_v2", "21m00Tcm4TlvDq8ikWAM", "EXAVITQu4vr4xnSDxMaL"],
+    ["openrouter", "openrouter/hexgrad/kokoro-82m", "af_alloy", "af_bella"],
+  ] as const)(
+    "preserves %s persona name/ID selection",
+    async (upstreamProvider, model, oldVoice, voice) => {
+      await withFixture(async (f) => {
+        const provider = getSpeechProvider("clawrouter", f.cfg)!;
+        for (const [baseVoice, authored] of [
+          [{ speakerVoice: oldVoice }, { speakerVoiceId: voice }],
+          [{ speakerVoiceId: oldVoice }, { voiceName: voice }],
+          [{ voice: oldVoice }, { speakerVoice: voice, speakerVoiceId: oldVoice }],
+        ]) {
+          const merged = mergePersona({ upstreamProvider, model, ...baseVoice }, authored!);
+          const result = provider.resolveConfig!({
+            cfg: f.cfg,
+            rawConfig: { providers: { clawrouter: merged.providerConfig } },
+            timeoutMs: 5000,
+          });
+          expect(result.voice).toBe(voice);
+          expect(result.upstreamProvider).toBe(upstreamProvider);
+        }
+        expect(f.catalogKeys).toHaveLength(0);
+        expect(f.calls).toHaveLength(0);
+      });
+    },
+  );
   it.each(models)("the actual TTS tool delivers WAV for %s", async (model) => {
     await withFixture(async (f) => {
       const result = await f.tool.execute("google-speech", { text: "Synthetic speech" });
