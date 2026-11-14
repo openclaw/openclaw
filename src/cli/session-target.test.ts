@@ -23,7 +23,7 @@ describe("session target connection errors", () => {
         details: { reason: "websocket-upgrade-rejected", httpStatus: 302 },
       }),
     );
-    const error = await resolveSessionTarget({ raw: "gateway.example/main/a1166b81" }).catch(String);
+    const error = await resolveSessionTarget({ raw: "gw.example/main/a1166b81" }).catch(String);
     expect(error).toContain("gateway.remote.edgeAuth");
     expect(error).not.toContain("tailnet");
     expect(error).not.toContain("SSH tunnel");
