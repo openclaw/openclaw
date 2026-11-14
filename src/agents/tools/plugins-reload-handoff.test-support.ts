@@ -4,6 +4,12 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
+import type { GatewayRequestHandlerOptions } from "../../gateway/server-methods/types.js";
+import { createPluginReloadCleanup } from "../../gateway/server-plugin-reload-cleanup.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
@@ -44,6 +50,66 @@ export function queueReloadSuccessor(
     }
     return result;
   });
+}
+
+/** Exercise the real cleanup budget while another admitted turn still holds the plugin. */
+async function waitForSiblingPluginWork(waitForDrain: boolean) {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({ id: "reload-fixture", status: "loaded" });
+  registry.plugins.push(record);
+  const instance = new PluginInstance(record.id, { record, registry });
+  const release = instance.retainWork();
+  const signal = new AbortController().signal;
+  vi.useFakeTimers();
+  try {
+    const cleanup = createPluginReloadCleanup({
+      previousRegistry: registry,
+      changedPluginIds: new Set([record.id]),
+      port: 0,
+      pluginWorkspaceDir: undefined,
+      getCron: () => {
+        throw new Error("drain must not use cron");
+      },
+      abortSignal: signal,
+      log: createSubsystemLogger("test/reload-handoff"),
+      recordCleanup: () => {},
+      recordWarning: () => {},
+      retainRetirement: () => {},
+      waitForDrain,
+    });
+    const observation = cleanup.drainRetainedWork(new Set([record.id]), signal, () => {});
+    // The baseline rejects at 60 seconds while the fixture clock is still advancing.
+    void observation.catch(() => {});
+    await vi.advanceTimersByTimeAsync(61_000);
+    release();
+    await observation;
+  } finally {
+    release();
+    vi.useRealTimers();
+    await instance.dispose();
+  }
+}
+
+export async function respondToReloadHandoff(
+  { respond, params }: GatewayRequestHandlerOptions,
+  outcome: string,
+  order: string[],
+  successorAdmitted: () => boolean,
+) {
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(successorAdmitted()).toBe(false);
+  order.push("reload");
+  if (outcome === "sibling drain") {
+    try {
+      await waitForSiblingPluginWork(params.waitForDrain === true);
+    } catch (error) {
+      respond(false, undefined, { code: "UNAVAILABLE", message: String(error) });
+      return;
+    }
+  }
+  respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
 }
 
 export async function runAdversarialReloadHandoff(params: {
