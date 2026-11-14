@@ -102,9 +102,10 @@ it.each([
   });
   await vi.waitFor(() => expect(loading()).toBeNull());
   await vi.waitFor(() => expect(explore() !== null).toBe(enabled));
+  expect(fixture.history.location().pathname).toBe(pathname);
   if (!enabled) {
     expect(view.container.textContent).toContain("Templates is turned off");
     expect(request).not.toHaveBeenCalled();
+    expect(view.container.querySelector("button.btn.primary")?.textContent).toBe("Open Labs");
   }
-  expect(fixture.history.location().pathname).toBe(pathname);
 });

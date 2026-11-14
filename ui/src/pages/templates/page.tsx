@@ -1,6 +1,7 @@
 import { createMemo, onSettled, Show } from "solid-js";
 import { templateCatalogPackageNameFromPath, pathForRoute } from "../../app-route-paths.ts";
-import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -77,9 +78,16 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
         when={available()}
         fallback={
           <SettingsPage wide carapace>
-            <InlineAlert tone="warning" role="status">
-              {t("templatesCatalog.disabled")}
-            </InlineAlert>
+            <PanelEmptyState
+              icon={<Icon name="blobster" />}
+              heading={t("templatesCatalog.disabled")}
+              description={t("templatesCatalog.disabledDescription")}
+              action={
+                <button type="button" class="btn primary" onClick={() => context.navigate("labs")}>
+                  {t("templatesDraft.openLabs")}
+                </button>
+              }
+            />
           </SettingsPage>
         }
       >
