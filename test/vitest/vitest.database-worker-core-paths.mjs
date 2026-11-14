@@ -1069,6 +1069,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-harness-native-custody.test.ts",
   "src/agents/openclaw-tools.subagents.scope.test.ts",
   "src/agents/tools/media-generate-background-retention.test.ts",
+  "src/agents/tools/media-generate-review-delivery.test.ts",
   "src/agents/tools/media-generate-tool.donor-resources.test.ts",
   "src/agents/tools/media-generate-tool.resources.test.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",

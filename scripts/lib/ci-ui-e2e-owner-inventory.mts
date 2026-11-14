@@ -401,10 +401,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-attachment-spacing.e2e.test.ts", ["chat", "profile"]),
   pageWatch(
-    ["chat", "config", "profile"],
-    ["ui/src/components/solid/viewer-facepile.tsx"],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-background-invalidation.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/chat-state-host.ts"],
@@ -436,10 +432,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "config",
     "skills",
   ]),
-  pageWatch(
-    ["chat", "config", "skills"],
-    ["ui/src/components/modal-dialog.tsx"],
-  ),
   pageWatch(
     "ui/src/e2e/chat-composer-catalog.e2e.test.ts",
     ["chat", "config", "model-providers"],
@@ -499,7 +491,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/components/chat-detail-panel.ts"],
   ),
-  pageWatch("ui/src/e2e/chat-flow.active-run-follow-ups.e2e.test.ts", ["chat", "config"]),
   pageWatch("ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts", ["chat", "config"]),
   pageWatch(
     "ui/src/e2e/chat-flow.dynamic-catalog.e2e.test.ts",
@@ -676,14 +667,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
-    ["chat", "terminal"],
-    [
-      "ui/src/components/tooltip.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/components/chat-session-rail.ts",
-    ],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-reasoning-visibility.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
@@ -706,7 +689,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
-  pageWatch("ui/src/e2e/chat-run-lifecycle.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/chat-scroll-dock.e2e.test.ts",
     ["chat"],
@@ -853,10 +835,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-startup-progress.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-stop-response-ownership.e2e.test.ts", ["chat"]),
-  pageWatch(
-    ["chat"],
-    ["ui/src/pages/chat/chat-page.tsx", "ui/src/pages/chat/chat-pane.ts"],
-  ),
   pageWatch("ui/src/e2e/chat-submit-responsiveness.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/chat-swarm-history.e2e.test.ts",
@@ -1090,15 +1068,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/command-palette.tsx",
       "ui/src/components/desktop/desktop-client.ts",
       "ui/src/components/desktop/desktop-panel-solid.tsx",
-    ],
-  ),
-  pageWatch(
-    ["activity", "chat", "terminal"],
-    [
-      "ui/src/components/command-palette.tsx",
-      "ui/src/components/desktop/desktop-client.ts",
-      "ui/src/components/desktop/desktop-panel-solid.tsx",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
     ],
   ),
   {
@@ -1415,15 +1384,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/new-session/new-session-page-entry.ts"],
   ),
   pageWatch(
-    ["chat", "new-session"],
-    [
-      "ui/src/pages/chat/chat-page.tsx",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/pending-session-create.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-    ],
-  ),
-  pageWatch(
     "ui/src/e2e/new-session-page.model-catalog.e2e.test.ts",
     ["agents-home", "chat", "new-session"],
     ["ui/src/pages/new-session/new-session-page-entry.ts"],
@@ -1466,23 +1426,9 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/new-session-page.title.e2e.test.ts", ["chat", "new-session"]),
   pageWatch(
-    ["chat", "new-session"],
-    [
-      "ui/src/components/image-lightbox.tsx",
-      "ui/src/components/modal-dialog.tsx",
-      "ui/src/pages/chat/chat-page.tsx",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/pending-session-create.ts",
-    ],
-  ),
-  pageWatch(
     "ui/src/e2e/new-session-page.workspace-memory.e2e.test.ts",
     ["chat", "new-session"],
     ["ui/src/pages/new-session/new-session-page-entry.ts"],
-  ),
-  pageWatch(
-    ["chat", "new-session"],
-    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/new-session/new-session-page-entry.ts"],
   ),
   pageWatch(
     "ui/src/e2e/operator-admin.e2e.test.ts",
@@ -1590,10 +1536,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
   ),
   pageWatch(
-    ["chat", "sessions"],
-    [...sessionMenuOwnerRoots, "ui/src/lib/toast.ts", "ui/src/pages/chat/chat-pane.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/session-management.archived-actions.e2e.test.ts",
     ["chat"],
     [
@@ -1646,10 +1588,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/session-management.group-return.e2e.test.ts",
     ["chat"],
     sessionMenuOwnerRoots,
-  ),
-  pageWatch(
-    ["chat", "sessions"],
-    [...sessionMenuOwnerRoots, "ui/src/lib/cron/types.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.mutation-scope.e2e.test.ts",
@@ -1751,14 +1689,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch("ui/src/e2e/session-progress-hovercard.navigation.e2e.test.ts", ["chat"]),
-  pageWatch(
-    ["chat", "config"],
-    [
-      "ui/src/components/session-progress-card-controller.ts",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
   pageWatch("ui/src/e2e/session-progress-motion.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/session-progress-polish.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/session-progress-preference.e2e.test.ts", ["chat", "config"]),
@@ -2059,7 +1989,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/usage/usage-page.tsx"],
   ),
   pageWatch("ui/src/e2e/usage-tool-count.e2e.test.ts", ["usage"]),
-  pageWatch("ui/src/e2e/warm-boot.e2e.test.ts", ["chat", "profile", "sessions"]),
   pageWatch("ui/src/e2e/workboard-board-widget-layout.e2e.test.ts", [
     "chat",
     "plugin",

@@ -4012,6 +4012,7 @@
       "ui/src/e2e/cron-agent-ownership.e2e.test.ts": 6,
       "ui/src/e2e/cron-attention-details.e2e.test.ts": 10,
       "ui/src/e2e/cron-descriptions.e2e.test.ts": 7,
+      "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts": 51,
       "ui/src/e2e/cron-filters.e2e.test.ts": 22,
       "ui/src/e2e/cron-heartbeat-scratch.e2e.test.ts": 5,
       "ui/src/e2e/cron-history-recovery.e2e.test.ts": 3,

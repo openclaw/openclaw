@@ -638,7 +638,6 @@ const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
 // Keep these config-scoped work hints through file regrouping. The two-slot
 // work estimate was 369.995s; its 389.731s wrapper included 12.745s preparation.
 const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
-  ["src/infra/sqlite-readonly-location.copy.test.ts", 0.852],
   ["src/infra/sqlite-snapshot-staging-cancelled-owner.test.ts", 0.368],
   ["src/infra/sqlite-worker-client.test.ts", 0.379],
   ["src/infra/sqlite-worker-store.generation.test.ts", 2.427],
@@ -649,20 +648,17 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/tui/tui-last-session.test.ts", 5.299],
   ["src/worker/worker.chat-abort.test.ts", 15.867],
   ["src/agents/bash-tools.exec-background-followup.test.ts", 2.969],
-  ["src/channels/message-access/operator-authority.test.ts", 31.775],
   ["src/agents/subagents/registry/subagent-registry.persistence.test.ts", 23.639],
   ["src/auto-reply/reply/session.acp-reset-routing.test.ts", 8.938],
   ["src/templates/package-update.test.ts", 4.164],
   ["src/cli/update-cli.git-service.test.ts", 24.578],
   ["src/flows/doctor-health.fleet-preflight.test.ts", 8.648],
-  ["src/agents/embedded-agent-runner/compact.delegate.test.ts", 16.151],
   ["src/cli/plugins-cli.update.test.ts", 9.511],
   ["src/state/openclaw-agent-participants-migration.test.ts", 9.279],
   ["src/agents/tools/transcripts-tool.selection.test.ts", 14.535],
   ["test/runtime-agent.codex-initialization.integration.test.ts", 45.303],
   ["src/tasks/task-executor.test.ts", 7.528],
   ["src/agents/agent-harness-native-custody.test.ts", 27.986],
-  ["src/system-agent/setup-inference-activate.test.ts", 69.039],
   ["src/plugins/install-record-commit.retention.test.ts", 7.563],
   ["src/infra/device-pairing-node.lifecycle.test.ts", 4.165],
   ["src/agents/tools-effective-inventory.cold-provider.test.ts", 9.37],
