@@ -116,6 +116,8 @@ suite.define(() => {
           await capture("2-ask-photo");
           // The photo control is a real button: reachable and operable from the keyboard.
           const upload = step.getByRole("button", { name: "Upload photo", exact: true });
+          // The button stays disabled until the name save settles.
+          await expect.poll(() => upload.isEnabled()).toBe(true);
           await upload.focus();
           const chooser = page.waitForEvent("filechooser");
           await page.keyboard.press("Enter");

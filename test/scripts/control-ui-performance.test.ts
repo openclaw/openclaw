@@ -607,7 +607,7 @@ describe("Control UI performance budgets", () => {
             createHash("sha256").update(String(index)).digest("hex"),
           ).join(""),
       );
-      for (let index = 0; index < 32; index++) {
+      for (let index = 0; index < 34; index++) {
         fixture.writeAsset("extra-" + index + ".css", 53_000, 10_500);
       }
       const summary = path.join(fixture.rootDir, "summary.md");
