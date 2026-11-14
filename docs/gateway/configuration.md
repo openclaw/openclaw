@@ -108,10 +108,15 @@ When validation still fails:
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (`--repair` is the same flag, and `--yes` skips prompts) to apply repairs
 
+A config written by an older supported release starts even when it uses retired
+keys: the Gateway runs Doctor's migration in memory and warns until
+`openclaw doctor --fix` saves it. See
+[configs written by an older release](/gateway/doctor/config-migrations#configs-written-by-an-older-release).
+
 The Gateway keeps a trusted last-known-good copy after each successful startup,
 but startup and hot reload do not restore it automatically - only `openclaw doctor --fix`
-does. If `openclaw.json` remains invalid after eligible startup migrations (including
-plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
+does, and only when `openclaw.json` cannot be parsed. If `openclaw.json` remains invalid
+after eligible startup migrations (including plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
 the current runtime keeps the last accepted config. When a write is blocked as an
 accidental clobber, OpenClaw attempts to save the rejected payload as
 `<path>.rejected.<timestamp>` for inspection. The warning reports whether that save

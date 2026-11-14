@@ -2,7 +2,7 @@
 
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import type { BestEffortConfigSnapshot } from "../config/io.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -34,6 +34,7 @@ export type StatusScanOverviewResult = {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
+  configMigration?: ConfigFileSnapshot["olderReleaseMigration"];
   secretDiagnostics: string[];
   osSummary: ReturnType<typeof resolveOsSummary>;
   tailscaleMode: string;
@@ -340,6 +341,7 @@ export async function collectStatusScanOverview(params: {
     cfg,
     sourceConfig,
     configDiagnostics,
+    ...(snapshot.olderReleaseMigration ? { configMigration: snapshot.olderReleaseMigration } : {}),
     secretDiagnostics,
     osSummary,
     tailscaleMode: bootstrap.tailscaleMode,

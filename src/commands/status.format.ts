@@ -7,6 +7,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { formatCliCommand } from "../cli/command-format.js";
 import type { BestEffortConfigSnapshot } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import type { ConfigFileSnapshot } from "../config/types.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
@@ -20,6 +21,15 @@ export const formatStatusConfigDiagnosticEntries = (
   `- Config file is invalid: ${sanitizeTerminalText(diagnostics.path)}`,
   ...formatConfigIssueLines(diagnostics.issues, "-", { normalizeRoot: true }),
   `- Fix: ${formatCliCommand("openclaw doctor --fix")}`,
+];
+
+/** Formats the status notice for a config an older release wrote, running on Doctor's migration. */
+export const formatStatusConfigMigrationEntries = (
+  migration: NonNullable<ConfigFileSnapshot["olderReleaseMigration"]>,
+): string[] => [
+  `- Config written by OpenClaw ${sanitizeTerminalText(migration.version)} uses settings this release retired; running with Doctor's migration in memory. The file is unchanged.`,
+  ...migration.changes.map((change) => `- ${sanitizeTerminalText(change)}`),
+  `- Fix: ${formatCliCommand("openclaw doctor --fix")} (saves the migration; keeps the original file)`,
 ];
 
 /** Formats session token usage and prompt-cache hit rate for the sessions table. */

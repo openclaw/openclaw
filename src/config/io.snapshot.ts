@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,6 +9,7 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { VERSION } from "../version.js";
 import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
@@ -57,12 +59,34 @@ import { warnIfConfigFromFuture } from "./io.warnings.js";
 import { captureConfigFileWritePathProof } from "./io.write-safety.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
-import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
+import type {
+  ConfigFileSnapshot,
+  ConfigValidationIssue,
+  LegacyConfigIssue,
+  OpenClawConfig,
+} from "./types.js";
+import { compareOpenClawVersions } from "./version.js";
 import {
   composeConfigWriteAssertions,
   createConfigWriteAuthorityGuard,
 } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
+
+// Upgrades are supported from releases published since 2026.7.1 (Doctor retention policy).
+const OLDEST_SUPPORTED_UPGRADE_SOURCE = "2026.7.1";
+
+function readOlderSupportedReleaseVersion(
+  config: unknown,
+): { config: Record<string, unknown>; version: string } | undefined {
+  const version =
+    isRecord(config) && isRecord(config.meta) ? config.meta.lastTouchedVersion : undefined;
+  return typeof version === "string" &&
+    (compareOpenClawVersions(version, VERSION) ?? 0) < 0 &&
+    (compareOpenClawVersions(version, OLDEST_SUPPORTED_UPGRADE_SOURCE) ?? -1) >= 0 &&
+    isRecord(config)
+    ? { config, version }
+    : undefined;
+}
 
 let legacyIssuesModule: Promise<typeof import("./io.legacy-issues.runtime.js")> | undefined;
 
@@ -269,10 +293,34 @@ async function readConfigSnapshot(
       raw: effectiveConfigRaw,
       sourceRaw: effectiveParsed,
     };
-    const { deferredPluginMigrations, validated } = await deps.measure(
+    let { deferredPluginMigrations, validated } = await deps.measure(
       "config.snapshot.read.validate",
       () => prepareConfigSnapshotValidation(validationRequest),
     );
+    const olderReleaseWarnings: ConfigValidationIssue[] = [];
+    let olderReleaseMigration: ConfigFileSnapshot["olderReleaseMigration"];
+    const olderRelease = readOlderSupportedReleaseVersion(effectiveConfigRaw);
+    if (!validated.ok && olderRelease && options.prepareValidation !== "strict") {
+      // An upgrade must not refuse settings the previous release accepted. Run Doctor's
+      // own transform in memory; new edits are still validated strictly on write.
+      const { projectOlderReleaseConfig } =
+        await import("../commands/doctor/shared/older-release-config-projection.js");
+      const projected = projectOlderReleaseConfig(olderRelease.config, effectiveParsed);
+      const retried =
+        projected &&
+        (await deps.measure("config.snapshot.read.validate-older-release", () =>
+          prepareConfigSnapshotValidation({ ...validationRequest, raw: projected.config }),
+        ));
+      if (projected && retried?.validated.ok) {
+        validated = retried.validated;
+        deferredPluginMigrations = retried.deferredPluginMigrations;
+        olderReleaseMigration = { version: olderRelease.version, changes: projected.changes };
+        olderReleaseWarnings.push({
+          path: "meta.lastTouchedVersion",
+          message: `Config written by OpenClaw ${olderRelease.version} uses settings this release retired. Running with Doctor's migration until it is saved: ${projected.changes.join(" ")} Run "openclaw doctor --fix" to save it; Doctor keeps the original file.`,
+        });
+      }
+    }
     const snapshotSource = () => ({
       path: configPath,
       includedPaths: [...includeFilePathsForWatch].toSorted(),
@@ -287,7 +335,7 @@ async function readConfigSnapshot(
       sourceConfig: coerceConfig(effectiveConfigRaw),
       hash: snapshotHash,
       deferredPluginMigrations,
-      warnings: [...validated.warnings, ...envVarWarnings],
+      warnings: [...olderReleaseWarnings, ...validated.warnings, ...envVarWarnings],
       resolutionFacts: readResolution.resolutionFacts,
     });
     if (!validated.ok) {
@@ -400,6 +448,7 @@ async function readConfigSnapshot(
             runtimeConfig: snapshotConfig,
             issues: [],
             legacyIssues: [],
+            ...(olderReleaseMigration ? { olderReleaseMigration } : {}),
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
           includeFileHashesForWrite,
@@ -463,6 +512,8 @@ export async function prepareConfigRecoveryFromContext(
     if (
       !current.exists ||
       !current.valid ||
+      // The file of a projected older-release config is not valid; Doctor migrates it instead.
+      current.olderReleaseMigration ||
       typeof current.raw !== "string" ||
       containsConfigIncludeDirective(current.parsed)
     ) {

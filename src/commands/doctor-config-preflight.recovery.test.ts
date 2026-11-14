@@ -103,6 +103,40 @@ it("preserves an invalid future-writer config instead of restoring an older back
   await expectClobbered(configPath);
 });
 
+it("migrates an older-release config instead of restoring a larger older backup", async ({
+  configPath,
+}) => {
+  const backup = '{ gateway: { mode: "local", port: 19091 }, plugins: { enabled: false } }'.padEnd(
+    1024,
+    " ",
+  );
+  await fs.writeFile(configPath, backup);
+  const io = createConfigIO({ configPath });
+  expect(await io.promoteConfigSnapshotToLastKnownGood(await io.readConfigFileSnapshot())).toBe(
+    true,
+  );
+  await fs.writeFile(`${configPath}.bak`, backup);
+  const original = JSON.stringify({
+    meta: { lastTouchedVersion: "2026.10.10" },
+    gateway: { mode: "local", port: 19092 },
+    agents: { defaults: { compaction: { memoryFlush: { model: "openai/gpt-6-astra" } } } },
+  });
+  await fs.writeFile(configPath, original);
+
+  await runDoctorConfigPreflight(repairOptions);
+
+  const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+  expect(saved.gateway.port).toBe(19092);
+  expect(saved.agents?.defaults?.compaction?.memoryFlush ?? {}).not.toHaveProperty("model");
+  // Doctor's write rotates the older-release bytes into .bak; the larger backup is never restored.
+  await expectFiles({
+    [`${configPath}.last-good`]: backup,
+    [`${configPath}.bak`]: original,
+    [`${configPath}.pre-2026.10.10`]: original,
+  });
+  await expectClobbered(configPath);
+});
+
 it.for(["authored", "env", "include"] as const)(
   "Doctor repairs only authored OTel backups without flattening %s ownership",
   async (owner, { configPath }) => {

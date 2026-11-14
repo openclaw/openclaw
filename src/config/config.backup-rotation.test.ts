@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { useConfigCliIntegrationHarness } from "../cli/config-cli.integration.test-harness.js";
-import { createPreUpdateConfigSnapshot } from "./backup-rotation.js";
+import { createPreUpdateConfigSnapshot, prepareConfigFileWrite } from "./backup-rotation.js";
 import { withExecutor } from "./config-executor.test-support.js";
 import {
   expectPosixMode,
@@ -93,6 +93,55 @@ describe("config backup rotation", () => {
       await expectPathMissing(`${configPath}.bak.5`);
       await expectFile(`${configPath}.pre-update`, original, 0o600);
       await expectFile(manualBackupPath, manualBackupContent);
+    });
+  });
+
+  it("keeps the file an older release wrote beside the first rewrite", async () => {
+    const original =
+      '{"gateway":{"mode":"local","port":19000},"meta":{"lastTouchedVersion":"2026.10.10"}}\n';
+    await withConfig("openclaw-config-older-release-", original, async ({ configPath }) => {
+      await set("gateway.port", "19001");
+      await set("gateway.port", "19002");
+
+      await expectFile(`${configPath}.pre-2026.10.10`, original, 0o600);
+      expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19002);
+    });
+  });
+
+  it("never keeps a partial older-release original and retries after a failed write", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const retainedPath = `${configPath}.pre-2026.10.10`;
+      const original = '{"gateway":{"mode":"local"},"meta":{"lastTouchedVersion":"2026.10.10"}}\n';
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const failing = {
+        ...fsNode,
+        promises: {
+          ...fsNode.promises,
+          writeFile: async (
+            file: string,
+            data: string,
+            options?: Parameters<typeof fs.writeFile>[2],
+          ) => {
+            if (file.startsWith(retainedPath)) {
+              await fs.writeFile(file, data.slice(0, 10), options);
+              throw Object.assign(new Error("injected ENOSPC"), { code: "ENOSPC" });
+            }
+            return await fs.writeFile(file, data, options);
+          },
+        },
+      } as typeof fsNode; // SAFETY: spreads the real module and overrides one promise method.
+      const prepare = (fsModule: typeof fsNode) =>
+        prepareConfigFileWrite({ configPath, content: "{}", previousRaw: original, fsModule });
+
+      await prepare(failing);
+      await expectPathMissing(retainedPath);
+      expect(await fs.readdir(path.dirname(configPath))).toEqual(
+        expect.not.arrayContaining([expect.stringMatching(/\.tmp$/)]),
+      );
+
+      await prepare(fsNode);
+      await expectFile(retainedPath, original, 0o600);
     });
   });
 
