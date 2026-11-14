@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -199,11 +200,12 @@ export function createComposerContainer() {
   onTestFinished(() => plugins.dispose());
   const context: Pick<
     ApplicationContext,
-    "gateway" | "agentSelection" | "runtimeConfig" | "plugins"
+    "gateway" | "agentSelection" | "runtimeConfig" | "plugins" | "chatSubmissions"
   > = {
     gateway,
     runtimeConfig,
     plugins,
+    chatSubmissions: createChatSubmissions(),
     agentSelection: {
       state: { selectedId: "main", scopeId: "main" },
       intentRevision: 0,
