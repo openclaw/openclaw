@@ -231,71 +231,83 @@ describe("prepared model runtime snapshots", () => {
   it.each([
     {
       name: "provider settings",
-      patch: { models: { providers: { openai: { baseUrl: "https://changed.example", models: [] } } } },
+      patch: {
+        models: { providers: { openai: { baseUrl: "https://changed.example", models: [] } } },
+      },
     },
     { name: "auth order", patch: { auth: { order: { openai: ["openai:personal"] } } } },
     {
       name: "configured environment",
       patch: { env: { vars: { OPENAI_API_KEY: "synthetic-different-key" } } },
     },
-  ])("does not borrow the configured published catalog when staged $name change", async ({ patch }) => {
-    mocks.configuredAgentIds = ["pro"];
-    mocks.preparedAuthStore = { version: 1, profiles: {} };
-    const config = { agents: { entries: { pro: {} } } } as unknown as OpenClawConfig;
-    const catalog: ModelCatalogSnapshot = {
-      entries: [
-        {
-          provider: "openai",
-          id: "gpt-5.5",
-          name: "gpt-5.5",
-          api: "openai-chatgpt-responses",
-        },
-      ],
-      routeVariants: [
-        {
-          provider: "openai",
-          id: "gpt-5.5",
-          name: "gpt-5.5",
-          api: "openai-chatgpt-responses",
-        },
-      ],
-    };
-    setPreparedModelFullCatalogAuth(catalog, {
-      authStore: mocks.preparedAuthStore,
-      credentials: mocks.authStorage.getAll(),
-      authModes: { openai: "oauth" },
-      providerAuthLabels: new Map(),
-    });
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue(catalog);
-    await refresh(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-      allowGatewaySubagentBinding: true,
-    });
-    // Materialize the configured agent's published catalog rows before the probe runs.
-    await readSnapshot({
-      config,
-      agentId: "pro",
-      agentDir: fixture.state.agentDir("pro"),
-    })!.loadFullModelCatalog!({ refresh: true });
-    // Staged provider, account-selection, and environment inputs affect catalog discovery.
-    const stagedConfig: OpenClawConfig = { ...config, ...patch };
-    const input = inputFor("pro", stagedConfig, {
-      agentId: "pro",
-      workspaceDir: "/tmp/setup-probe-scratch",
-      inheritedAuthDir: fixture.state.agentDir("default"),
-    });
-    await using lease = await acquireReadOnly(input, { catalogMode: "static" });
-    // Catalog-relevant changes must not reuse inventory published for the previous inputs.
-    const captured = readCapturedPreparedModelRuntimeCatalog(lease.snapshot);
-    const entries = (captured ?? lease.snapshot.modelCatalog)?.entries ?? [];
-    expect(entries.map(({ provider, id }) => `${provider}/${id}`)).not.toContain("openai/gpt-5.5");
-  });
+  ])(
+    "does not borrow the configured published catalog when staged $name change",
+    async ({ patch }) => {
+      mocks.configuredAgentIds = ["pro"];
+      mocks.preparedAuthStore = { version: 1, profiles: {} };
+      const config = { agents: { entries: { pro: {} } } } as unknown as OpenClawConfig;
+      const catalog: ModelCatalogSnapshot = {
+        entries: [
+          {
+            provider: "openai",
+            id: "gpt-5.5",
+            name: "gpt-5.5",
+            api: "openai-chatgpt-responses",
+          },
+        ],
+        routeVariants: [
+          {
+            provider: "openai",
+            id: "gpt-5.5",
+            name: "gpt-5.5",
+            api: "openai-chatgpt-responses",
+          },
+        ],
+      };
+      setPreparedModelFullCatalogAuth(catalog, {
+        authStore: mocks.preparedAuthStore,
+        credentials: mocks.authStorage.getAll(),
+        authModes: { openai: "oauth" },
+        providerAuthLabels: new Map(),
+      });
+      mocks.runPreparedModelCatalogWorker.mockResolvedValue(catalog);
+      await refresh(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
+      // Materialize the configured agent's published catalog rows before the probe runs.
+      await readSnapshot({
+        config,
+        agentId: "pro",
+        agentDir: fixture.state.agentDir("pro"),
+      })!.loadFullModelCatalog!({ refresh: true });
+      // Staged provider, account-selection, and environment inputs affect catalog discovery.
+      const stagedConfig: OpenClawConfig = { ...config, ...patch };
+      const input = inputFor("pro", stagedConfig, {
+        agentId: "pro",
+        workspaceDir: "/tmp/setup-probe-scratch",
+        inheritedAuthDir: fixture.state.agentDir("default"),
+      });
+      await using lease = await acquireReadOnly(input, { catalogMode: "static" });
+      // Catalog-relevant changes must not reuse inventory published for the previous inputs.
+      const captured = readCapturedPreparedModelRuntimeCatalog(lease.snapshot);
+      const entries = (captured ?? lease.snapshot.modelCatalog)?.entries ?? [];
+      expect(entries.map(({ provider, id }) => `${provider}/${id}`)).not.toContain(
+        "openai/gpt-5.5",
+      );
+    },
+  );
 
   it.each([
     { name: "copied reviewer", reviewer: "openai/reviewer", existing: false, borrows: true },
     { name: "existing reviewer", reviewer: "openai/reviewer", existing: true, borrows: true },
-    { name: "changed reviewer", reviewer: "openai/other-reviewer", existing: false, borrows: false },
+    {
+      name: "changed reviewer",
+      reviewer: "openai/other-reviewer",
+      existing: false,
+      borrows: false,
+    },
   ])("checks setup projection refs for $name", async ({ reviewer, existing, borrows }) => {
     mocks.configuredAgentIds = ["pro"];
     mocks.preparedAuthStore = { version: 1, profiles: {} };
@@ -363,7 +375,9 @@ describe("prepared model runtime snapshots", () => {
     // An exact copied reviewer is harmless; a new reviewer needs its own inventory.
     const captured = readCapturedPreparedModelRuntimeCatalog(lease.snapshot);
     const entries = (captured ?? lease.snapshot.modelCatalog)?.entries ?? [];
-    expect(entries.some(({ provider, id }) => `${provider}/${id}` === "openai/gpt-5.5")).toBe(borrows);
+    expect(entries.some(({ provider, id }) => `${provider}/${id}` === "openai/gpt-5.5")).toBe(
+      borrows,
+    );
   });
 
   it("never returns a standalone generation invalidated while it is building", async () => {
