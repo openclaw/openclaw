@@ -19,6 +19,7 @@ import { readPluginNoticeData, type PluginNotice } from "../shared/plugin-notice
 import { isActiveStoreWriter } from "../shared/store-writer-queue.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -423,4 +424,36 @@ describe("channel-final transcript mirrors", () => {
       expect((await entries()).at(-1)?.message).toHaveProperty(sourceId, "active-answer");
     },
   );
+
+  it("preserves legacy SDK costs and row bytes across physical database reopen", async () => {
+    const request = mediaDelivery("legacy-cost-reopen");
+    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const original = await answer("legacy-cost-message", chartContent, undefined, {
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      usage: { ...zero, totalTokens: 0, cost: { ...zero, total: 0 } },
+      stopReason: "stop",
+      idempotencyKey: request.idempotencyKey,
+      openclawDeliveryMirror: request.deliveryMirror,
+    });
+    const before = rows();
+    expect(await appendMirror(request)).toEqual({ ok: true, messageId: original.messageId });
+    expect(rows()).toEqual(before);
+    const owner = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
+    );
+    expect(await closeOpenClawAgentDatabaseByPathAsync(owner.path, scope.agentId)).toBe(true);
+    expect(owner.db.isOpen).toBe(false);
+    expect(await appendMirror(request)).toEqual({ ok: true, messageId: original.messageId });
+    expect(rows()).toEqual(before);
+    expect((await entries()).at(-1)?.message).toHaveProperty("usage.cost", { ...zero, total: 0 });
+    const fresh = { ...request, idempotencyKey: "current-unknown-cost" };
+    const admitted = await appendMirror(fresh);
+    expect(admitted.ok).toBe(true);
+    const currentRows = rows();
+    expect(await appendMirror(fresh)).toEqual(admitted);
+    expect(rows()).toEqual(currentRows);
+    expect((await entries()).at(-1)?.message).toHaveProperty("usage.cost", {});
+  });
 });

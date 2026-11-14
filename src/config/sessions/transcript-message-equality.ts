@@ -5,6 +5,18 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 
+const mirrorTokenFields = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"];
+const legacyMirrorCostFields = ["input", "output", "cacheRead", "cacheWrite", "total"];
+
+function isZeroTokenMirrorUsage(usage: unknown): usage is Record<string, unknown> {
+  return (
+    isRecord(usage) &&
+    Object.keys(usage).length === mirrorTokenFields.length + 1 &&
+    mirrorTokenFields.every((field) => usage[field] === 0) &&
+    isRecord(usage.cost)
+  );
+}
+
 export function messagesMatchForIdempotentReplay(stored: unknown, candidate: unknown): boolean {
   const storedDelivery = isRecord(stored) ? stored.openclawDelivery : undefined;
   // Shipped core and SDK mirrors did not retain URLs. Compare their original representation
@@ -36,5 +48,44 @@ export function messagesMatchForIdempotentReplay(stored: unknown, candidate: unk
     const serialized = JSON.stringify(stable);
     return serialized === undefined ? undefined : JSON.parse(serialized);
   };
-  return isDeepStrictEqual(serializedShape(stored), serializedShape(candidate, legacyMediaMirror));
+  const storedShape = serializedShape(stored);
+  const candidateShape = serializedShape(candidate, legacyMediaMirror);
+  if (isDeepStrictEqual(storedShape, candidateShape)) {
+    return true;
+  }
+  // Recognize only the shipped mirror format, not caller authority or measured provider usage.
+  // Replay keeps the accepted row and its usage unchanged; this projection is comparison-only.
+  if (
+    !isRecord(storedShape) ||
+    !isRecord(candidateShape) ||
+    !isOpenClawDeliveryMirrorAssistantMessage(storedShape) ||
+    !isOpenClawDeliveryMirrorAssistantMessage(candidateShape) ||
+    (storedShape.api !== OPENCLAW_TRANSCRIPT_ARTIFACT_API &&
+      storedShape.api !== "openai-responses") ||
+    candidateShape.api !== storedShape.api ||
+    typeof storedShape.idempotencyKey !== "string" ||
+    !storedShape.idempotencyKey.trim() ||
+    candidateShape.idempotencyKey !== storedShape.idempotencyKey ||
+    storedShape.stopReason !== "stop" ||
+    candidateShape.stopReason !== "stop" ||
+    !isZeroTokenMirrorUsage(storedShape.usage) ||
+    !isZeroTokenMirrorUsage(candidateShape.usage)
+  ) {
+    return false;
+  }
+  const storedCost = storedShape.usage.cost;
+  const candidateCost = candidateShape.usage.cost;
+  if (
+    !isRecord(storedCost) ||
+    Object.keys(storedCost).length !== legacyMirrorCostFields.length ||
+    !legacyMirrorCostFields.every((field) => storedCost[field] === 0) ||
+    !isRecord(candidateCost) ||
+    Object.keys(candidateCost).length !== 0
+  ) {
+    return false;
+  }
+  return isDeepStrictEqual(storedShape, {
+    ...candidateShape,
+    usage: { ...candidateShape.usage, cost: storedCost },
+  });
 }

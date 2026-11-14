@@ -14,6 +14,7 @@ import { readTranscriptEventMessage } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import * as transcriptAnchors from "./session-transcript-anchor-read.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { messagesMatchForIdempotentReplay } from "./transcript-message-equality.js";
 import { withSessionTranscriptWriteAssertion } from "./transcript-write-context.js";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -336,5 +337,141 @@ describe("assistant mirror media identity", () => {
       }),
     ).rejects.toThrow("conflicts with the admitted message");
     expect(readRawEvents(scope.sessionId)).toEqual(before);
+  });
+
+  it("keeps legacy-cost replay under current writer and session authority", async () => {
+    const scope = await createScope();
+    const original = { ...legacyMirrorMessage(), idempotencyKey: "legacy-cost-authority" };
+    const first = await appendExactAssistantMessageToSessionTranscript({
+      ...scope,
+      message: original,
+    });
+    expect(first.ok).toBe(true);
+    const before = readRawEvents(scope.sessionId);
+    const request = {
+      ...scope,
+      expectedSessionId: scope.sessionId,
+      idempotencyKey: original.idempotencyKey,
+      content: original.content,
+    };
+    expect(await appendAssistantMessageToSessionTranscript(request)).toEqual(first);
+    expect(readRawEvents(scope.sessionId)).toEqual(before);
+    await expect(
+      appendAssistantMessageToSessionTranscript({
+        ...request,
+        assertCurrent() {
+          throw new Error("mirror writer revoked");
+        },
+      }),
+    ).rejects.toThrow("mirror writer revoked");
+    expect(readRawEvents(scope.sessionId)).toEqual(before);
+    await replaceSessionEntry(scope, { sessionId: "replacement-session", updatedAt: 2 });
+    expect(await appendAssistantMessageToSessionTranscript(request)).toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
+    expect(readRawEvents(scope.sessionId)).toEqual(before);
+  });
+
+  it("rejects reverse cost conversion without rewriting a current unknown-cost row", async () => {
+    const scope = await createScope();
+    const original = { ...legacyMirrorMessage(), idempotencyKey: "current-cost" };
+    const current = { ...original, usage: { ...original.usage, cost: {} } };
+    const first = await appendTranscriptMessage(scope, { message: current });
+    expect(first.appended).toBe(true);
+    const before = readRawEvents(scope.sessionId);
+    const replay = await appendTranscriptMessage(scope, { message: current });
+    expect(replay).toMatchObject({ appended: false, messageId: first.messageId, message: current });
+    await expect(appendTranscriptMessage(scope, { message: original })).rejects.toThrow(
+      "conflicts with the admitted message",
+    );
+    expect(readRawEvents(scope.sessionId)).toEqual(before);
+  });
+});
+
+describe("legacy mirror cost comparison", () => {
+  const legacy = { ...legacyMirrorMessage(), idempotencyKey: "cost-comparison" };
+  const current = { ...legacy, usage: { ...legacy.usage, cost: {} } };
+
+  it("compares serialized usage once without changing either input", () => {
+    const storedUsage = vi.fn(() => legacy.usage);
+    const currentUsage = vi.fn(() => current.usage);
+    const stored = {
+      ...legacy,
+      get usage() {
+        return storedUsage();
+      },
+    };
+    const candidate = {
+      ...current,
+      get usage() {
+        return currentUsage();
+      },
+    };
+    const before = JSON.stringify([legacy, current]);
+    expect(messagesMatchForIdempotentReplay(stored, candidate)).toBe(true);
+    expect(storedUsage).toHaveBeenCalledTimes(1);
+    expect(currentUsage).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify([legacy, current])).toBe(before);
+    expect(messagesMatchForIdempotentReplay(current, legacy)).toBe(false);
+  });
+
+  it.each([
+    ["positive cost", { ...legacy.usage, cost: { ...legacy.usage.cost, total: 1 } }],
+    ["partial cost", { ...legacy.usage, cost: { total: 0 } }],
+    ["cost metadata", { ...legacy.usage, cost: { ...legacy.usage.cost, source: "provider" } }],
+    ["nonzero tokens", { ...legacy.usage, input: 1 }],
+    ["string tokens", { ...legacy.usage, input: "0" }],
+    [
+      "missing tokens",
+      { output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: legacy.usage.cost },
+    ],
+    ["total origin", { ...legacy.usage, totalOrigin: "provider" }],
+    ["usage report", { ...legacy.usage, usageReport: { state: "available" } }],
+    ["extra usage", { ...legacy.usage, reasoning: 0 }],
+  ] as const)("does not project %s into empty cost", (_label, usage) => {
+    const stored = { ...legacy, usage };
+    const candidate = { ...stored, usage: { ...usage, cost: {} } };
+    expect(messagesMatchForIdempotentReplay(stored, stored)).toBe(true);
+    expect(messagesMatchForIdempotentReplay(stored, candidate)).toBe(false);
+  });
+
+  it.each([
+    { role: "user" },
+    { provider: "provider-billed-zero" },
+    { model: "gateway-injected" },
+    { api: "foreign-api" },
+    { idempotencyKey: "" },
+    { idempotencyKey: undefined },
+    { stopReason: "error" },
+  ])("keeps nonhistorical identity strict: %j", (identity) => {
+    expect(
+      messagesMatchForIdempotentReplay({ ...legacy, ...identity }, { ...current, ...identity }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { api: "openai-responses" },
+    { content: [{ type: "text", text: "Different" }] },
+    { idempotencyKey: "conflicting-key" },
+    { openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "foreign-source" } },
+    { openclawDisplayContent: [{ type: "text", text: "Different" }] },
+    { usageReport: { state: "available" } },
+  ])("keeps remaining serialized fields strict: %j", (change) => {
+    expect(messagesMatchForIdempotentReplay(legacy, { ...current, ...change })).toBe(false);
+  });
+
+  it.each([
+    { mediaUrls: [] },
+    { mediaUrls: null },
+    { mediaUrls: ["https://example.com/original.png"] },
+  ])("retains explicit stored media identity: %j", ({ mediaUrls }) => {
+    const stored = { ...legacy, openclawDelivery: { mediaUrls } };
+    expect(
+      messagesMatchForIdempotentReplay(stored, {
+        ...current,
+        openclawDelivery: { mediaUrls: ["https://example.com/different.png"] },
+      }),
+    ).toBe(false);
   });
 });

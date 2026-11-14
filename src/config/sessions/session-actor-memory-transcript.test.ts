@@ -574,4 +574,59 @@ describe("memory actor transcript", () => {
       truncated: true,
     });
   });
+
+  it.each(["openclaw-transcript", "openai-responses"])(
+    "replays legacy mirror costs without rewriting memory bytes: %s",
+    async (api) => {
+      const { actor, metadata, append, write } = await fixture();
+      const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      const legacy = {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api,
+        content: [{ type: "text", text: "Delivered" }],
+        idempotencyKey: "legacy-mirror",
+        stopReason: "stop",
+        usage: { ...zero, totalTokens: 0, cost: { ...zero, total: 0 } },
+      };
+      const messageJson = JSON.stringify(legacy, null, 1);
+      const input = {
+        ...messageInput("legacy-mirror-id", "user-1", messageJson),
+        view: { loadedVersion: { generation: null, rawSeq: null, updatedAt: null } },
+      };
+      const first = committed(await metadata("legacy", input));
+      const initial = metadataResult(first);
+      assert(initial.reload?.ok && initial.reload.value.kind === "full");
+      const before = initial.reload.value.snapshot.eventJson;
+      expect(before?.at(-1)).toContain(`"message":${messageJson}}`);
+      const current = { ...legacy, usage: { ...legacy.usage, cost: {} } };
+      const replay = committed(
+        await metadata("legacy-replay", {
+          ...input,
+          event: { ...input.event, id: "unused-retry-id" },
+          message: { ...input.message, messageJson: JSON.stringify(current) },
+        }),
+      );
+      expectMessage(replay.receipt, false, "legacy-mirror-id", legacy);
+      expect(replay.receipt.transcript.after).toEqual(first.receipt.transcript.after);
+      const reloaded = metadataResult(replay);
+      assert(reloaded.reload?.ok && reloaded.reload.value.kind === "full");
+      expect(reloaded.reload.value.snapshot.eventJson).toEqual(before);
+      const fresh = { ...current, idempotencyKey: "current-mirror" };
+      const admitted = await write({ message: fresh, eventId: "current-mirror-id" });
+      const repeated = await write({ message: fresh });
+      expectMessage(repeated.receipt, false, "current-mirror-id", fresh);
+      expect(repeated.receipt.transcript.after).toEqual(admitted.receipt.transcript.after);
+      const snapshot = actor.snapshot(authority);
+      for (const message of [
+        { ...legacy, idempotencyKey: fresh.idempotencyKey },
+        { ...current, content: [{ type: "text", text: "Different" }] },
+        { ...current, usage: { ...current.usage, output: 1 } },
+      ]) {
+        expect(await append(turn({ message }))).toMatchObject({ kind: "rolled-back" });
+        expect(actor.snapshot(authority)).toEqual(snapshot);
+      }
+    },
+  );
 });
