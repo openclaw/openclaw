@@ -244,12 +244,21 @@ export async function readVerifiedArtifactSource(params: {
 }): Promise<ResolvedClawHubSource> {
   const loaded = await readTemplateManifestFile(params.sourceRoot);
   if (!loaded.ok) {
+    const sourceRoot = await fs
+      .realpath(params.sourceRoot)
+      .catch(() => path.resolve(params.sourceRoot));
+    const sourceRoots = [...new Set([sourceRoot, path.resolve(params.sourceRoot)])];
     throw new ClawHubSourceError(
       "clawhub_manifest_invalid",
       [
         "Downloaded Template package manifest is invalid.",
         ...loaded.diagnostics.map((diagnostic) =>
-          sanitizeTerminalText(`${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`),
+          sanitizeTerminalText(
+            sourceRoots.reduce(
+              (text, root) => text.replaceAll(`${root}${path.sep}`, "").replaceAll(root, "."),
+              `${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`,
+            ),
+          ),
         ),
       ].join("\n"),
     );

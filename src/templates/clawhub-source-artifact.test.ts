@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -59,6 +59,38 @@ it("includes safe manifest diagnostics when a verified release is invalid", asyn
   );
   expect(error).toHaveProperty("message", expect.not.stringContaining("\u001b"));
 });
+
+it.each([false, true])(
+  "keeps malformed manifest filenames package-relative (linked=%s)",
+  async (linked) => {
+    const f = await fixture({ template: "nested/CLAW.md" });
+    await mkdir(join(f.root, "nested"));
+    await writeFile(join(f.root, "nested", "CLAW.md"), "---\nschemaVersion: [1\n---\n");
+    let sourceRoot = f.root;
+    if (linked) {
+      sourceRoot = join(dirs.make("published-template-link-"), "package");
+      await symlink(f.root, sourceRoot, process.platform === "win32" ? "junction" : "dir");
+    }
+
+    const error = await readVerifiedArtifactSource({
+      sourceRoot,
+      packageName,
+      version,
+      artifactSha256,
+      artifactByteLength: 321,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toMatchObject({
+      code: "clawhub_manifest_invalid",
+      message: expect.stringContaining(
+        `invalid_template_frontmatter $: Could not parse ${join("nested", "CLAW.md")}:`,
+      ),
+    });
+    expect(error).toHaveProperty("message", expect.stringContaining("Flow sequence"));
+    expect(error).toHaveProperty("message", expect.not.stringContaining(await realpath(f.root)));
+    expect(error).toHaveProperty("message", expect.not.stringContaining(sourceRoot));
+  },
+);
 
 it.each(["CLAW.md", null])(
   "rejects a legacy key alongside the canonical selector: %s",
