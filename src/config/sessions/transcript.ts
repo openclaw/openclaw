@@ -187,9 +187,14 @@ export function readRecentUserAssistantTextForSession(
 
 /** Internal channel reconciliation projection; the SDK reader above stays text-only. */
 export async function readRecentUserAssistantTurnsForSession(
-  params: ReadRecentSessionConversationTextParams,
+  params: ReadRecentSessionConversationTextParams &
+    Pick<ReadRecentSessionConversationTurnOptions, "candidateMessageIds">,
   includeTurnIdentity = true,
 ): Promise<SessionRecentConversationTurn[]> {
+  const options = {
+    ...params,
+    candidateMessageIds: params.candidateMessageIds?.slice(),
+  };
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return [];
@@ -225,7 +230,7 @@ export async function readRecentUserAssistantTurnsForSession(
           env: owner.scope?.env,
         },
         owner.assertCurrent,
-        { ...params, includeTurnIdentity },
+        { ...options, includeTurnIdentity },
       );
       owner.assertCurrent();
       return result;

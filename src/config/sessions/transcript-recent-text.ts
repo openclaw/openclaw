@@ -18,6 +18,10 @@ import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
 } from "./session-accessor.sqlite-projection-read.js";
+import {
+  MAX_VISIBLE_MESSAGE_MAX_BYTES,
+  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+} from "./session-accessor.sqlite-visible-cursor.js";
 
 function readPreferredUpstreamUserText(message: {
   __openclaw?: unknown;
@@ -56,6 +60,8 @@ export type ReadRecentSessionConversationTextOptions = {
 
 export type ReadRecentSessionConversationTurnOptions = ReadRecentSessionConversationTextOptions & {
   includeTurnIdentity?: boolean;
+  /** Internal history candidates; stop at their newest occurrences within the bounded tail. */
+  candidateMessageIds?: readonly string[];
 };
 
 type ExtractedRecentConversationText = {
@@ -106,7 +112,7 @@ function extractRecentConversationText(
     message.role === "assistant"
       ? extractAssistantPhaseText(message)
       : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
-  if (!text) {
+  if (!text && !(options.includeTurnIdentity && message.role === "user")) {
     return undefined;
   }
   const provenance = asOptionalRecord(message.provenance);
@@ -114,7 +120,8 @@ function extractRecentConversationText(
   const entry: SessionRecentConversationTurn = {
     ...(typeof parsed?.id === "string" && parsed.id ? { id: parsed.id } : {}),
     role: message.role,
-    text,
+    // Image-only users still separate an earlier request from a later answer.
+    text: text ?? "",
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(typeof provenance?.sourceChannel === "string" && provenance.sourceChannel.trim()
       ? { sourceChannel: provenance.sourceChannel.trim() }
@@ -153,10 +160,31 @@ export function readRecentTranscriptConversationText(
 ): SessionRecentConversationTurn[] {
   const limit = Math.max(1, Math.floor(options.limit ?? 10));
   const pageSize = 250;
+  const pending =
+    options.includeTurnIdentity && options.candidateMessageIds
+      ? new Set(options.candidateMessageIds)
+      : undefined;
+  // Reuse the transcript reader's physical-message ceiling. Missing candidates
+  // retain their platform context instead of turning this into an unbounded scan.
+  const maxMessages = pending ? MAX_VISIBLE_MESSAGE_MAX_MESSAGES : Number.POSITIVE_INFINITY;
+  let remainingBytes = MAX_VISIBLE_MESSAGE_MAX_BYTES;
   const recent: ExtractedRecentConversationText[] = [];
-  for (let offset = 0; recent.length < limit; offset += pageSize) {
-    const page = readPage({ maxMessages: pageSize, maxBytes: Number.MAX_SAFE_INTEGER, offset });
-    for (const event of page.events.toReversed()) {
+  for (
+    let offset = 0;
+    offset < maxMessages && (pending ? pending.size > 0 : recent.length < limit);
+    offset += pageSize
+  ) {
+    const page = readPage({
+      maxMessages: Math.min(pageSize, maxMessages - offset),
+      maxBytes: pending ? remainingBytes : Number.MAX_SAFE_INTEGER,
+      offset,
+    });
+    // Never bridge a skipped message: an omitted user may separate this answer
+    // from a candidate. The byte-limited reader can also return older sparse rows.
+    const events = pending
+      ? page.events.slice(page.events.length - page.newestContiguousEventCount)
+      : page.events;
+    for (const event of events.toReversed()) {
       const extracted = extractRecentConversationText(event.event, options);
       if (
         extracted &&
@@ -167,10 +195,21 @@ export function readRecentTranscriptConversationText(
           extracted.entry.timestamp === undefined ||
           extracted.entry.timestamp >= options.minTimestampMs)
       ) {
+        // Preserve intervening user rows: they prevent unrelated later answers
+        // from suppressing an earlier unanswered candidate.
         recent.push(extracted);
-        if (recent.length >= limit) {
+        if (extracted.entry.messageId) {
+          pending?.delete(extracted.entry.messageId);
+        }
+        if (pending ? pending.size === 0 : recent.length >= limit) {
           break;
         }
+      }
+    }
+    if (pending) {
+      remainingBytes -= page.serializedBytes;
+      if (remainingBytes <= 0 || page.newestContiguousEventCount < page.scannedMessages) {
+        break;
       }
     }
     if (offset + page.scannedMessages >= page.totalMessages) {
