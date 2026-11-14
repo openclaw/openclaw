@@ -7,6 +7,7 @@ import type { API, EmitOutputFile } from "typescript/async";
 import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
+import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
 import {
   collectNativeTypeScriptDiagnosticsAsync,
   formatNativeTypeScriptDiagnostics,
@@ -304,6 +305,8 @@ async function compileDeclarationsWithCompilerCli({
     return assertInput ? assertInput(accepted) : accepted;
   };
   const config = admit(configFile);
+  // Inherited configs can change emit; admit the whole extends chain, as the API path did.
+  readNativeTypeScriptConfig({ cwd: root, configFileName: config, assertInput: admit });
   const artifacts = admit(path.join(root, ".artifacts"));
   fs.mkdirSync(artifacts, { recursive: true });
   const stage = fs.mkdtempSync(path.join(artifacts, "native-declarations-"));

@@ -359,6 +359,22 @@ it("rejects a native reference through an unrelated outside symlink back inside"
   await expect(f.compile()).rejects.toThrow(`Declaration input escapes checkout: ${reference}`);
 });
 
+it("rejects a checkout config that inherits options from outside the checkout", async () => {
+  const ancestor = tempRoot("inherited-config");
+  const root = path.join(ancestor, "checkout");
+  const f = createNativeFixture(root);
+  fs.writeFileSync(
+    path.join(ancestor, "shared-base.json"),
+    JSON.stringify({ compilerOptions: { ...moduleOptions, strict: true, skipLibCheck: true } }),
+  );
+  f.json("tsconfig.json", { extends: "../shared-base.json", files: ["src/index.ts"] });
+  f.write({ "src/index.ts": "export const marker = 1;\n" });
+  // The bounded config reader hides outside files, so the inherited base cannot be read.
+  await expect(f.compile()).rejects.toThrow(
+    `Cannot read file '${path.join(ancestor, "shared-base.json")}'`,
+  );
+});
+
 it("preserves original nested config paths and explicit override precedence during native emission", async () => {
   const root = tempRoot("config-context");
   const fixture = createNativeFixture(root);
