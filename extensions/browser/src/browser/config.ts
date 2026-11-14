@@ -278,11 +278,10 @@ export function resolveBrowserConfig(
   const defaultProfile =
     normalizeOptionalString(cfg?.defaultProfile) ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
 
-  const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const profiles = { ...cfg?.profiles };
   profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] ||= {
     cdpPort: rawCdpUrl ? cdpInfo.port : derivedCdpRange.start,
-    ...(rawCdpUrl && isWsUrl ? { cdpUrl: cdpInfo.normalized } : {}),
+    ...(rawCdpUrl ? { cdpUrl: cdpInfo.normalized } : {}),
   };
   profiles.user ||= { driver: "existing-session", attachOnly: true };
   profiles.chrome ||= { driver: "extension" };
