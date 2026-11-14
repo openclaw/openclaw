@@ -794,6 +794,15 @@ bootstrap/reset ownership, CA rotation and lazy runtime-loading proof remain in
 their existing cases. This proves the synchronous dispatch ordering under the
 WSL policy fixture; it does not claim live Windows or WSL network coverage.
 
+### Managed proxy CA fixture cleanup
+
+At `9cb3c14855e5a5216148a1c125f9240c5da1f6de`, the supplied-env TLS proxy
+case creates its CA directory before protected setup and removes it only after
+successful dispatcher teardown. The candidate moves directory ownership to the
+shared Vitest cleanup tracker and reuses the existing dispatcher closer, keeping
+the real HTTP/SOCKS/TLS assertions. Baseline and injected setup/teardown failure
+qualification are pending; no production behavior change is proposed.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
