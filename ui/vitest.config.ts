@@ -124,6 +124,7 @@ const webkitTestFiles = [
   "src/components/session-people-search.browser.test.ts",
   "src/components/control-theme.browser.test.tsx",
   "src/components/menu-surface.browser.test.tsx",
+  "src/components/solid/overlay-style.browser.test.tsx",
   "src/components/session-progress-hovercard.browser.test.ts",
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
