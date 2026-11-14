@@ -1,0 +1,5 @@
+62
+# LOCAL 2026.11.8 row 74; source 8c70f579729d6287d2300843bd16a4834bb8b8f8.
+# Passes host run identity through shared mutation scope and rejects only recorded superseded attempts. Scope limits: Unrecorded old runs after bounded attempt eviction remain accepted edge.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
