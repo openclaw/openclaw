@@ -1,0 +1,47 @@
+.notification-agents__trigger {
+  max-width: 340px;
+  min-width: 0;
+  text-align: start;
+}
+.notification-agents__trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notification-agents-modal {
+  --openclaw-modal-width: 480px;
+}
+.notification-agents > .oc-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.notification-agents .settings-input,
+.notification-agents .settings-select {
+  width: 100%;
+  max-width: none;
+}
+.notification-agents__options {
+  overflow-y: auto;
+  max-height: min(320px, 40dvh);
+}
+.notification-agents__option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+}
+.notification-agents__option > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.notification-agents__option strong,
+.notification-agents__option small {
+  display: block;
+}
+.notification-agents__option strong {
+  font-weight: 500;
+}
+.notification-agents__option small {
+  color: var(--muted);
+}
