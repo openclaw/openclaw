@@ -155,7 +155,6 @@ const userProfileWriteOperations = {
     "userProfiles.linkOpenClawId",
     (input: Parameters<typeof linkOpenClawIdUserProfile>[0], owned) =>
       linkOpenClawIdUserProfile(input, owned),
-    (input) => input.profileId,
   ),
   "userProfiles.unlinkOpenClawId": createUserProfileWriteOperation(
     "userProfiles.unlinkOpenClawId",

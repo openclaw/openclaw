@@ -11,11 +11,7 @@ import {
   ChatModelAccountSectionView,
 } from "./chat-model-account-control.tsx";
 import { ChatModelAuthState, modelAuthState } from "./chat-model-auth-state.tsx";
-import {
-  ChatModelCatalogRefresh,
-  ChatModelCatalogState,
-  isModelCatalogLoading,
-} from "./chat-model-catalog-state.tsx";
+import { ChatModelCatalogState, isModelCatalogLoading } from "./chat-model-catalog-state.tsx";
 import {
   createChatModelFavorites,
   createChatModelFavoritesOpening,
@@ -332,7 +328,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       <Show when={!activeAuth() || panel.params.modelCatalogState?.status !== "ready"}>
         {renderCatalogStatus()(() => (
           <ChatModelCatalogState
-            loadingSkeleton
             state={panel.params.modelCatalogState}
             hasOptions={modelOptions().length > 0}
             hasSelectableOptions={state().hasSelectableModelOptions}
@@ -532,12 +527,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                 }
                 onKeyDown={handleModelSearchKeydown}
               />
-              {modelOptions().length > 0 ? (
-                <ChatModelCatalogRefresh
-                  state={panel.params.modelCatalogState}
-                  providerLabel={providerDisplayLabel}
-                />
-              ) : undefined}
             </div>
           ) : undefined}
           <Show when={favorites.snapshot().error}>
