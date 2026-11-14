@@ -60,7 +60,9 @@ export function createMemoryOverview(
       const payload = readyPayload();
       return (
         props.status.kind === "error" ||
-        (!noSearchRuntime() && payload !== null && hasEmbeddingError(payload))
+        (!noSearchRuntime() &&
+          payload !== null &&
+          (payload.health ? payload.health.status !== "ready" : hasEmbeddingError(payload)))
       );
     };
     const headline = () =>
@@ -70,11 +72,18 @@ export function createMemoryOverview(
           ? t("memoryPage.overview.hero.waking")
           : noSearchRuntime()
             ? t("memoryPage.overview.hero.noSearchRuntime")
-            : error()
-              ? t("memoryPage.overview.hero.needsAttention")
-              : t("memoryPage.overview.hero.awake");
+            : readyPayload()?.health?.status === "unavailable"
+              ? t("memoryPage.overview.hero.unavailable")
+              : error()
+                ? t("memoryPage.overview.hero.needsAttention")
+                : t("memoryPage.overview.hero.awake");
     const description = () => {
       const payload = readyPayload();
+      if (!off() && payload?.health) {
+        return payload.health.message
+          ? context.formatError(payload.health.message)
+          : (engineId() ?? t("common.unknown"));
+      }
       return off()
         ? t(
             props.engineDisabled
@@ -392,6 +401,7 @@ export function createMemoryOverview(
     return (
       <Show when={payload()}>
         {(current) =>
+          !current().health &&
           current().searchRuntimeRegistered !== false && (
             <EngineHealth payload={current()} overview={props} />
           )

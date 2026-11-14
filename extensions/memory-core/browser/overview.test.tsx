@@ -217,6 +217,36 @@ describe("MemoryOverview", () => {
     expect(container.querySelector('[data-reading="true"]')).not.toBeNull();
   });
 
+  it.each([
+    ["ready", "Memory is awake", undefined],
+    ["degraded", "Memory needs attention", "Memory index is still warming up."],
+    ["unavailable", "Memory is unavailable", "The memory service is temporarily unavailable."],
+  ] as const)(
+    "uses native provider health instead of skipped embedding checks: %s",
+    (status, headline, message) => {
+      const container = renderOverview(
+        {
+          kind: "ready",
+          payload: {
+            agentId: "main",
+            provider: "records",
+            health: { status, message },
+            embedding: { ok: false, checked: false },
+          },
+        },
+        { kind: "pinned", id: "records", availability: "enabled" },
+      );
+      expectText(
+        container,
+        [headline, message ?? "records"],
+        ["hybrid search", "Embeddings", "No recent check"],
+      );
+      expect(findButton(container, /^Test$/)).toBeUndefined();
+      expect(findButton(container, /^Refresh status$/)).toBeDefined();
+      expect(Boolean(container.querySelector('[data-reading="true"]'))).toBe(status === "ready");
+    },
+  );
+
   it("renders a grumpy error hero with retry and no book", () => {
     const container = renderOverview({ kind: "error", message: "gateway request failed" });
 
