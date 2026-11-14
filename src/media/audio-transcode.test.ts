@@ -264,7 +264,7 @@ it.each(["encoder-exit", "encoder-timeout", "probe-mismatch", "probe-timeout"])(
       }
       return {
         code: 0,
-        stdout: "Data format: 1 ch, 24000 Hz\naudio 99 valid frames",
+        stdout: `Data format: 1 ch, 24000 Hz\naudio ${failure === "probe-mismatch" ? 99 : 2} valid frames`,
         stderr: "",
         termination: failure === "probe-timeout" ? "timeout" : "exit",
       };
