@@ -1,4 +1,8 @@
-import { listAgentIds, resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveSessionAgentIdStrict,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -265,9 +269,26 @@ export default definePluginEntry({
         id: "memory-core-index",
         reload: { configPrefixes: ["memory.search", "agents", "models.providers"] },
         start({ config, logger }) {
-          // Restore watched indexes without opening untouched agents' databases
-          // and workers just because another agent used memory before this reload.
-          const agentIds = retainMemoryIndexingAgents(listAgentIds(config));
+          const configured = listAgentIds(config);
+          // Cold start stays demand-driven by default: the first search, flush,
+          // or turn opens an agent's index, keeping idle-startup workers and
+          // peak RSS down (#174718). memory.search.coldStart "eager" opts an
+          // operator into opening an agent's index at boot and on later
+          // service starts; a per-agent override at
+          // agents.entries.<id>.memory.search.coldStart wins over the global
+          // default in both directions, matching the memory config resolver
+          // elsewhere (agent overrides take precedence). Manager construction
+          // marks each opened index live, so subsequent reloads retain already
+          // demanded managers like any watched index.
+          const globalColdStart = config.memory?.search?.coldStart;
+          const eagerAgentIds = configured.filter(
+            (agentId) =>
+              (resolveAgentConfig(config, agentId)?.memory?.search?.coldStart ??
+                globalColdStart) === "eager",
+          );
+          const agentIds = [
+            ...new Set([...eagerAgentIds, ...retainMemoryIndexingAgents(configured)]),
+          ];
           if (agentIds.length === 0) {
             return;
           }
