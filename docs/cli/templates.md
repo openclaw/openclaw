@@ -220,8 +220,10 @@ target; change those in the automation's settings if needed.
 
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
-reports the conflict without replacing them. Plugin and skill trust warnings
-require explicit consent. Automations are assigned to the new agent.
+reports the conflict without replacing them. An MCP server's `timeout` and
+`connectTimeout` are in seconds; Add stores and compares them as
+`requestTimeoutMs` and `connectionTimeoutMs` in milliseconds. Plugin and skill
+trust warnings require explicit consent. Automations are assigned to the new agent.
 If a declared plugin still needs setup, a referenced environment variable is
 missing, or an OAuth MCP server is not authorized, Add creates the declared
 automations paused. Their schedules, prompts, and imported scratch stay intact.
