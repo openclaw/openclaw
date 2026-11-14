@@ -191,6 +191,18 @@ $remotes
 EOF
       ;;
     objects) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null ;;
+    missing_blobs)
+      # Unlike cat-file on older Git, missing=print never hydrates these blob roots.
+      present=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" rev-list --objects --no-walk --ignore-missing --missing=print --stdin 2>/dev/null <<EOF
+$missing
+EOF
+      ) || return 1
+      printf '%s\\n--\\n%s\\n' "$present" "$missing" | awk '
+        $0 == "--" { candidates=1; next }
+        candidates { if (!seen[$1]) print $1; next }
+        { seen[$1]=1 }
+      '
+      ;;
     resolve) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" rev-parse --verify --end-of-options "$revision" 2>/dev/null ;;
     revisions)
       marker='HEAD^{commit}'
@@ -378,7 +390,7 @@ prepare_blobs() {
 $blob_expression
 EOF
     )
-    case $object in *' missing') ;; *) return 0 ;; esac
+    case $object in *' missing'|'') ;; *) return 0 ;; esac
   fi
   query_repository blobless "$@" || return 0
   query_repository shared "$@" || return 0
@@ -406,10 +418,8 @@ EOF
     fi
     candidates=$(query_repository history_blobs "$@")
     case $candidates in ''|skip) return 0 ;; esac
-    missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
-$candidates
-EOF
-    )
+    missing=$candidates
+    missing=$(query_repository missing_blobs "$@")
     [ -n "$missing" ] || return 0
     # Serialize across linked worktrees, then inspect the objects under the lock:
     # overlapping callers fetch only the part not already supplied by the leader.
@@ -433,10 +443,7 @@ EOF
     trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null' 0
     trap 'exit 1' HUP INT TERM
     echo $$ > "$lock/pid"
-    missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
-$missing
-EOF
-    )
+    missing=$(query_repository missing_blobs "$@")
     [ -n "$missing" ] || return 0
     query_repository fetch_blobs "$@" 2>/dev/null || :
   )
