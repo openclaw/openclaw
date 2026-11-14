@@ -39,21 +39,58 @@ function reserveRow(view: OpenClawCanvasWidgetView) {
 }
 
 describe("Canvas widget layout settlement", () => {
-  it("reserves early iframe sizes until a real report after document rendering", async () => {
+  it("keeps the titled geometry until the current sandbox presentation is validated", async () => {
     const { view, frame } = await loaded();
+    view.title = "Team metric 12";
+    await settle(view);
+    const reservation = () => view.querySelector<HTMLElement>(".chat-tool-card__reservation");
+    const expectReserved = () => {
+      expect(reservation()?.textContent).toBe("Team metric 12");
+      // The in-flow frame keeps the reserved geometry; the later overlay paints above it.
+      expect(frame.style.height).toMatch(/^\d+px$/u);
+      expect(
+        frame.compareDocumentPosition(reservation()!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(view.previewFrame).toBe(frame);
+      expect(frame.isConnected).toBe(true);
+      expect(getComputedStyle(frame).visibility).toBe("visible");
+      expect(getComputedStyle(frame).display).not.toBe("none");
+    };
+    expectReserved();
     const { layout, row } = reserveRow(view);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     proxyReady(frame);
+    expectReserved();
     await settle(view);
+    expectReserved();
     const renderId = post.mock.calls.find(
       ([data]) => data.method === "ui/notifications/sandbox-resource-ready",
     )![0].params.renderId;
     message(frame, { type: "openclaw:widget-size", height: 200 });
     await settle(view);
+    expectReserved();
     expect(frame.style.height).toBe("600px");
     expect(layout.read(row)).toBe(700);
+    for (const [id, origin, source] of [
+      ["stale-render", undefined, frame.contentWindow],
+      [renderId, "https://wrong.example", frame.contentWindow],
+      [renderId, undefined, window],
+    ] as const) {
+      message(
+        frame,
+        { method: "ui/notifications/sandbox-resource-loaded", params: { renderId: id } },
+        [],
+        origin,
+        source,
+      );
+      await settle(view);
+      expectReserved();
+    }
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame");
     message(frame, { method: "ui/notifications/sandbox-resource-loaded", params: { renderId } });
     await settle(view);
+    expect(animationFrame).not.toHaveBeenCalled();
+    expect(reservation()).toBeNull();
     expect(frame.style.height).toBe("600px");
     expect(layout.read(row)).toBe(700);
     message(frame, { type: "openclaw:widget-size", height: 200 });

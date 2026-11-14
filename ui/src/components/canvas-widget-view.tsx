@@ -115,43 +115,11 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
         <Show
           when={Boolean(source())}
           fallback={
-            <Show
-              when={read().pending || Boolean(read().view)}
-              fallback={
-                // Preserve the empty reserved box across the lazy element's upgrade.
-                <div
-                  role="status"
-                  aria-label={t("common.loading")}
-                  style={{ "min-height": `${height()}px` }}
-                />
-              }
-            >
-              <div
-                class="board-widget__notice"
-                role="status"
-                style={{ "min-height": `${height()}px` }}
-              >
-                {read().view
-                  ? t("common.loading")
-                  : t(
-                      read().awaitingResult
-                        ? "board.widget.waitingForResult"
-                        : "board.widget.waitingForConnection",
-                    )}
-              </div>
-            </Show>
+            // Preserve the reserved box across the lazy element's upgrade.
+            <div aria-hidden="true" style={{ "min-height": `${height()}px` }} />
           }
         >
           <Show when={!source()?.error} fallback={<div role="alert">{source()?.error}</div>}>
-            <Show when={read().pending}>
-              <div class="board-widget__notice" role="status">
-                {t(
-                  read().awaitingResult
-                    ? "board.widget.waitingForResult"
-                    : "board.widget.waitingForConnection",
-                )}
-              </div>
-            </Show>
             <Show when={read().resourceError}>
               <div class="board-widget__notice" role="status">
                 {t("board.widget.resourceUnavailable")}
@@ -185,6 +153,16 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
               )}
             </Show>
           </Show>
+        </Show>
+        {/* Covers the iframe, which keeps painting beneath, until the sandbox confirms it painted. */}
+        <Show when={!source() || (props.allowScripts && !source()?.error && !read().rendered)}>
+          <div class="chat-tool-card__reservation">
+            {/* Script-free documents have no presentation acknowledgement to hold a title. */}
+            {props.allowScripts ? props.title : undefined}
+            <Show when={read().awaitingResult}>
+              <div role="status">{t("board.widget.waitingForResult")}</div>
+            </Show>
+          </div>
         </Show>
       </Show>
     );

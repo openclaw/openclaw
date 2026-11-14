@@ -194,7 +194,7 @@ export function expectRead(widgetClient: WidgetClient, docId: string) {
 
 export function expectRecovering(view: OpenClawCanvasWidgetView) {
   expect(alert(view)).toBeNull();
-  expect(notice(view)).toContain("reconnects automatically");
+  expect(view.querySelector(".chat-tool-card__reservation")).not.toBeNull();
 }
 
 export const alert = (view: Element) => view.querySelector('[role="alert"]');
