@@ -19,7 +19,7 @@ import {
 } from "../cli-auth-epoch.js";
 import { resolveCliExecutableIdentity } from "../cli-executable-identity.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
-import type { CliOutput } from "../cli-output-contracts.js";
+import type { CliCommentarySegment, CliOutput } from "../cli-output-contracts.js";
 import {
   detectImageReferences,
   hasHydratableMediaImages,
@@ -79,6 +79,7 @@ function exactToolAvailabilityError(params: {
 type ExecutePreparedCliRunOptions = {
   /** Exact current-turn image snapshot approved by before_agent_run, reused on recovery. */
   promptImages?: ImageContent[];
+  onCommentarySegment?: (segment: CliCommentarySegment) => void;
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
   /** Receives the exact composed prompt sent to the CLI, once per attempt. */
   onPromptPrepared?: (prompt: string) => void;
@@ -558,6 +559,7 @@ export async function executePreparedCliRun(
         cliTurnStartedAt,
         observeForkSuccessor,
         options,
+        onCommentarySegment: options?.onCommentarySegment,
       });
     } catch (error) {
       recordRunError(error);

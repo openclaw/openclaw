@@ -18,6 +18,10 @@ import {
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliBeforeAgentReply } from "./cli-runner/before-agent-reply.js";
+import {
+  persistCliAssistantSettlement,
+  createCliAssistantSegmentQueue,
+} from "./cli-runner/cli-assistant-settlement.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
   resolveCliSessionId,
@@ -40,7 +44,6 @@ import {
   buildCliHookUserMessage,
   finalizeCliContextEngineTurn,
   persistApprovedCliUserTurnTranscript,
-  persistCliAssistantTranscript,
   persistCliRunBlock,
   resolveCliAssistantStopReason,
   runCliAgentEndHook,
@@ -354,7 +357,9 @@ async function runPreparedCliAgentOwned(
     }
   };
 
+  const segmentQueue = createCliAssistantSegmentQueue(context, (message) => log.warn(message));
   const executeCliAttempt = async (cliSessionIdToUse?: string, options?: CliRecoveryOptions) => {
+    await segmentQueue.strand();
     const timeoutMs = options?.timeoutMs ?? params.timeoutMs;
     const forkCliSessionOnResume =
       options?.forkCliSessionOnResume ?? context.params.forkCliSessionOnResume;
@@ -388,22 +393,27 @@ async function runPreparedCliAgentOwned(
             },
           };
     diagnosticLifecycle?.setPhase("send");
-    const output = await executePreparedCliRun(
-      attemptContext,
-      cliSessionIdToUse,
-      diagnosticLifecycle || promptImages
-        ? {
-            promptImages,
-            ...(diagnosticLifecycle
-              ? {
-                  onPhase: diagnosticLifecycle.setPhase,
-                  onPromptPrepared: (prompt: string) =>
-                    diagnosticLifecycle.publishCapturedContent({ userPrompt: prompt }),
-                }
-              : {}),
-          }
-        : undefined,
-    );
+    let output: CliOutput;
+    try {
+      output = await executePreparedCliRun(
+        attemptContext,
+        cliSessionIdToUse,
+        diagnosticLifecycle ||
+          promptImages ||
+          (!turnSideEffectsDisabled && params.persistAssistantTranscript && params.sessionKey)
+          ? {
+              promptImages,
+              onCommentarySegment: !turnSideEffectsDisabled ? segmentQueue.push : undefined,
+              onPhase: diagnosticLifecycle?.setPhase,
+              onPromptPrepared: (prompt) =>
+                diagnosticLifecycle?.publishCapturedContent({ userPrompt: prompt }),
+            }
+          : undefined,
+      );
+    } finally {
+      await segmentQueue.drain();
+    }
+
     try {
       params.assertCurrent?.();
     } catch (error) {
@@ -576,16 +586,16 @@ async function runPreparedCliAgentOwned(
           usage: output.usage,
           turnUsage: output.diagnosticUsage,
         });
-        const assistantTranscript = await persistCliAssistantTranscript({
+        await segmentQueue.drain();
+        const assistantTranscript = await persistCliAssistantSettlement({
           runParams: params,
-          // Dispatch owns source-reply transcript mirrors and their idempotency keys.
-          // Persisting them here would duplicate the same visible assistant reply.
-          text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? output.text),
-          ...(nativeFinal ? { nativeIdentity: nativeFinal.identity } : {}),
+          segments: segmentQueue.segments,
+          textReplacements: context.backendResolved.textTransforms?.output,
+          nativeFinal,
+          output,
           modelId: context.modelId,
           usage: pricedUsage.usage,
-          stopReason: resolveCliAssistantStopReason(output),
-          yielded: output.yielded,
+          sourceReplyWasDelivered,
         });
         const runResult = buildCliRunResult({
           ...resultContext,
@@ -709,6 +719,7 @@ async function runPreparedCliAgentOwned(
     diagnosticLifecycle?.publishResultContent(result);
     return result;
   } catch (error) {
+    await segmentQueue.strand();
     throw coerceToFailoverError(error, cliFailoverContext) ?? error;
   }
 }

@@ -77,8 +77,6 @@ function createLifecycle() {
   };
 }
 
-// The context engine reads history from the canonical store, so the runner must forward
-// the exact target it was given rather than re-deriving one from a session file token.
 const sessionTarget = {
   agentId: "main",
   sessionId: "openclaw-session-1",
@@ -173,7 +171,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     testAdmission.close();
     vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
   });
-
   it("keeps valid-empty isolated completion outside the turn lifecycle", async () => {
     const hooks = createLifecycle();
     const context = buildPreparedContext(createContextEngine(hooks));
@@ -193,7 +190,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       ...Object.values(hooks),
     );
   });
-
   it("publishes the generated response before backend cleanup can throw", async () => {
     const context = buildPreparedContext(createContextEngine());
     context.preparedBackend.cleanup = async () => {
@@ -219,7 +215,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       }),
     });
   });
-
   it("runs a native control command on the existing session without turn side effects", async () => {
     const { bootstrap, afterTurn } = createLifecycle();
     const context = buildPreparedContext(createContextEngine({ bootstrap, afterTurn }));
@@ -258,6 +253,69 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     });
   });
 
+  it.each(["error", "abort", "empty"] as const)(
+    "drains completed parent text before the %s failure boundary",
+    async (failure) => {
+      const transcript = await import("./cli-runner/cli-run-transcript.js");
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const order: string[] = [];
+      const persist = vi
+        .spyOn(transcript, "persistCliAssistantTranscript")
+        .mockImplementation(async () => {
+          started.resolve();
+          await release.promise;
+          order.push("durable");
+          return { owned: true };
+        });
+      try {
+        const context = buildPreparedContext(createContextEngine());
+        context.cliHistoryWriter = {
+          target: sessionTarget,
+          runId: "run",
+          authFingerprint: "account",
+          bindsNativeLogin: true,
+          replaysHistory: false,
+          assertCurrent() {},
+          assertReadable() {},
+          checkNativeLoginBoundary() {},
+          bindExecutionEnv() {},
+          settleNativeLogin: async () => {
+            order.push("attested");
+          },
+        };
+        context.params.persistAssistantTranscript = true;
+        context.params.terminalReplyExpectation = "result-required";
+        executeMock.mockImplementation(async (_context, _session, options) => {
+          options?.onCommentarySegment?.({
+            key: "native:answer",
+            text: "Completed answer before failure.",
+            timestamp: 1,
+            native: { entryId: "answer", sessionId: "native" },
+          });
+          if (failure === "error") {
+            throw new Error("cli boom");
+          }
+          if (failure === "abort") {
+            throw Object.assign(new Error("aborted"), { name: "AbortError" });
+          }
+          return { text: "", rawText: "" };
+        });
+        const result = runPreparedCliAgent(context).then(
+          () => order.push("success"),
+          () => order.push("failed"),
+        );
+        await started.promise;
+        expect(order).toEqual(["attested"]);
+        release.resolve();
+        await result;
+        expect(order).toEqual(["attested", "durable", "failed"]);
+      } finally {
+        release.resolve();
+        persist.mockRestore();
+      }
+    },
+  );
   it("finalizes full post-bootstrap history with transcript turn text", async () => {
     const { bootstrap, afterTurn, maintain, dispose } = createLifecycle();
     const history = Array.from({ length: 101 }, (_, index) =>
@@ -429,7 +487,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       prepared.close();
     }
   });
-
   it("does not emit CLI turn facts without a terminal transcript", async () => {
     const { afterTurn, maintain, dispose } = createLifecycle();
     const context = buildPreparedContext(createContextEngine({ afterTurn, maintain, dispose }));
@@ -463,8 +520,18 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       } else {
         context.params.currentInboundEventKind = "room_event";
         context.params.persistAssistantTranscript = false;
+        executeMock.mockImplementation(async (_context, _session, options) => {
+          expect(options?.onCommentarySegment).toBeTypeOf("function");
+          options?.onCommentarySegment?.({ text: "Ambient progress", timestamp: 1 });
+          return { text: "Ambient progress" };
+        });
       }
-      await runPreparedCliAgent(context);
+      await runPreparedCliAgent(context, {
+        setPhase: vi.fn(),
+        setExecutionContext: vi.fn(),
+        publishCapturedContent: vi.fn(),
+        publishResultContent: vi.fn(),
+      });
       expect(candidate).toHaveBeenCalledWith(
         expect.objectContaining({
           boundary: { admission, terminal: admission },
@@ -566,9 +633,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       const admitted = await admission.admit("embedded");
       const context = buildPreparedContext(createContextEngine());
       context.params.admittedRunContext = admitted;
-      // Revoke after the final reply commits: cleanup runs inside settlement
-      // between the committed complete() and the return, so the wrapper must
-      // not re-assert authority afterwards; the committed turn stays successful.
       context.preparedBackend.cleanup = async () => {
         revoked = true;
       };
