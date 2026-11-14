@@ -1,13 +1,11 @@
 import { Session } from "node:inspector/promises";
-import { isMainThread, threadId } from "node:worker_threads";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isMainThread } from "node:worker_threads";
 
 declare const Bun: { gc(full: boolean): number };
 
 const IDLE_GC_DELAY_MS = 1_000;
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
 const SLOW_IDLE_GC_MS = 1_000;
-const log = createSubsystemLogger("worker/idle-gc");
 const bun = typeof Bun === "object" ? Bun : undefined;
 let collectedMemory = { heapUsed: 0, external: 0 };
 let session: Session | undefined;
@@ -50,14 +48,9 @@ async function collectWorkerIdleGarbage(): Promise<void> {
     if (elapsedMs >= SLOW_IDLE_GC_MS) {
       // The forced collection blocks this thread, so requests posted meanwhile show
       // only as slow broker delivery; name the pause instead.
-      log.warn("slow idle worker garbage collection", {
-        elapsedMs,
-        threadId,
-        heapUsedBeforeBytes: before.heapUsed,
-        heapUsedAfterBytes: collectedMemory.heapUsed,
-        externalBeforeBytes: before.external,
-        externalAfterBytes: collectedMemory.external,
-      });
+      // Small workers must not load the logging graph unless a collection is slow.
+      const { logSlowWorkerIdleGc } = await import("./worker-idle-gc-log.js");
+      logSlowWorkerIdleGc(elapsedMs, before, collectedMemory);
     }
   } catch (error) {
     process.emitWarning(error instanceof Error ? error : String(error));
