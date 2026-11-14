@@ -49,7 +49,6 @@ export type UsageFilterState = {
   scope: "instance" | "family";
   selectedSessions: string[];
   selectedDays: string[];
-  selectedHours: number[];
   creatorKey: string | null;
   query: string;
   queryDraft: string;
@@ -61,8 +60,6 @@ export type UsageDisplayState = {
   dailyChartMode: "total" | "by-type" | "by-provider";
   sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
   sessionSortDir: "asc" | "desc";
-  recentSessions: string[];
-  sessionsTab: "all" | "recent";
   contextExpanded: boolean;
   headerPinned: boolean;
 };
