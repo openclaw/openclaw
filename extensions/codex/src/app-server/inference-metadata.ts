@@ -62,8 +62,22 @@ export function readCodexInferenceMetadata(
   ) {
     throw new Error("Codex inference request has no native thread metadata");
   }
-  const readTurnId = (field: string, key: string) =>
-    readId(field, flat?.[key], ...nativeField(key));
+  const readTurnId = (field: string, key: string) => {
+    const values = [flat?.[key], ...nativeField(key)];
+    // Startup prewarm carries an empty turn ID before any conversational turn
+    // exists. Only normalize that sentinel when all supplied carriers agree.
+    if (
+      key === "turn_id" &&
+      requestKind === "prewarm" &&
+      body.generate === false &&
+      generation === undefined &&
+      values.some((value) => value === "") &&
+      values.every((value) => value == null || value === "")
+    ) {
+      return undefined;
+    }
+    return readId(field, ...values);
+  };
   // Codex root forks put the parent's cache key in session-id. Actual session
   // identity remains in native metadata; the HTTP routing hint is not attribution.
   const sessionId = readId("session", flat?.session_id, ...nativeField("session_id"));
