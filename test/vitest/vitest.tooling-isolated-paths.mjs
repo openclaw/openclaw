@@ -2,6 +2,8 @@
 export const toolingIsolatedTestFiles = [
   // Personal account authority uses the host-owned shared-state broker.
   "test/codex-account-usage.integration.test.ts",
+  // Signal's real durable ingress queue requires the host-owned shared-state broker.
+  "test/signal-quote-context.integration.test.ts",
   // The admitted Browser fixture mutates the global runtime config snapshot.
   "test/worker-browser-config.test.ts",
   // Shipped updater composition belongs to the manual/full-release tooling tier.
