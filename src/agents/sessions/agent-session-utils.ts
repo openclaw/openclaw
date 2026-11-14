@@ -1,6 +1,11 @@
 import { collectTextContentBlocks } from "../content-blocks.js";
-import type { AgentMessage } from "../runtime/index.js";
-import { estimateTokens } from "../runtime/index.js";
+import {
+  estimateTokens,
+  buildSessionContext,
+  type AgentMessage,
+  type CompactionResult,
+  type SessionTreeEntry,
+} from "../runtime/index.js";
 
 export function unwrapCoreResult<T>(
   result: { ok: true; value: T } | { ok: false; error: Error },
@@ -38,4 +43,24 @@ export function estimateMessagesFromContent(messages: AgentMessage[]): number {
 export function compactionErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.trim() ? message : fallback;
+}
+
+/** Project the persisted replacement through the canonical replay boundary. */
+export function projectCompactionReplacement(
+  pathEntries: SessionTreeEntry[],
+  itemId: string,
+  result: Pick<CompactionResult, "firstKeptEntryId" | "tokensBefore">,
+  summary: string,
+) {
+  return buildSessionContext([
+    ...pathEntries,
+    {
+      ...result,
+      type: "compaction",
+      id: itemId,
+      parentId: pathEntries.at(-1)?.id ?? null,
+      timestamp: new Date().toISOString(),
+      summary,
+    },
+  ]).messages;
 }
