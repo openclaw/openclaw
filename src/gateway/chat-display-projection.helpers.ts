@@ -143,9 +143,13 @@ export function truncateChatHistoryText(
   let limit = maxChars;
   if (toolResultMaxChars !== undefined && toolResultMaxChars < Math.min(text.length, maxChars)) {
     // Complete JSON drives source cards, Canvas, and structured output rendering.
-    const preview = truncateUtf16Safe(text, maxChars);
-    if (!/^\s*[[{]/u.test(preview) || safeParseJson(preview) === undefined) {
-      limit = toolResultMaxChars;
+    // Text within maxChars is already whole, so it needs no structured preview:
+    // a plain-text result can never parse and must keep the general maxChars cap.
+    if (text.length > maxChars) {
+      const preview = truncateUtf16Safe(text, maxChars);
+      if (!/^\s*[[{]/u.test(preview) || safeParseJson(preview) === undefined) {
+        limit = toolResultMaxChars;
+      }
     }
   }
   if (text.length <= limit) {
