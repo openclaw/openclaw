@@ -1432,12 +1432,8 @@ it("executes coding tools locally without reading the preexisting auth profile",
 
 // The probe uses a POSIX shell; Windows launches exec through PowerShell.
 it.skipIf(process.platform === "win32")(
-  "binds the turn GitHub identity and authenticates managed Git access without publishing its token",
-  async () =>
-    await runManagedWorkerGitIdentityProof({
-      setup,
-      managedCommand,
-    }),
+  "runs the worker CLI with the turn GitHub identity and authenticates managed Git access without publishing its token",
+  async () => await runManagedWorkerGitIdentityProof({ setup }),
 );
 
 it.skipIf(process.platform === "win32")(

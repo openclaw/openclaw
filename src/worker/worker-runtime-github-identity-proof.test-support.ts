@@ -1,6 +1,7 @@
+import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { connect as connectTcp } from "node:net";
@@ -15,7 +16,6 @@ import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol
 import { runExec } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
-import type { WorkerProcessResult } from "./worker-process-protocol.js";
 
 type CredentialProofGateway = {
   inferenceRequests: WorkerInferenceStartParams[];
@@ -28,31 +28,18 @@ type CredentialProofOptions = {
   execCommand: string;
 };
 
-type CredentialProofManagedCommand = {
-  results: WorkerProcessResult[];
-  send: (launch: WorkerLaunchDescriptor, idleRetention?: boolean) => string;
-  waitResults: (count: number) => Promise<void>;
-  close: () => Promise<void>;
-};
-
 type CredentialProofDependencies = {
   setup: (options: CredentialProofOptions) => Promise<{
     gateway: CredentialProofGateway;
     workspaceDir: string;
     launch: WorkerLaunchDescriptor;
   }>;
-  managedCommand: () => CredentialProofManagedCommand;
 };
 
 type CloseableServer = {
   listening: boolean;
   close: (callback: (error?: Error) => void) => unknown;
 };
-
-function githubProfileDir(stateDir: string, turnId: string) {
-  const turnHash = createHash("sha256").update(turnId).digest("hex").slice(0, 16);
-  return path.join(stateDir, "github-profiles", turnHash);
-}
 
 async function closeServer(server: CloseableServer | undefined) {
   if (!server?.listening) {
@@ -63,11 +50,36 @@ async function closeServer(server: CloseableServer | undefined) {
   });
 }
 
-/** Run real Git HTTPS requests through managed exec using only ephemeral fixture credentials. */
-export async function runManagedWorkerGitIdentityProof({
-  setup,
-  managedCommand,
-}: CredentialProofDependencies) {
+async function runWorkerCli(launch: WorkerLaunchDescriptor) {
+  const child = spawn(
+    process.execPath,
+    ["--import", "./scripts/tsx.mjs", "src/entry.ts", "worker"],
+    { cwd: process.cwd(), env: process.env, stdio: ["pipe", "pipe", "pipe"] },
+  );
+  let stdout = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout = `${stdout}${chunk}`.slice(-4_096);
+  });
+  const exited = once(child, "exit");
+  const timeout = setTimeout(() => child.kill("SIGTERM"), 30_000);
+  try {
+    child.stdin.end(`${JSON.stringify(launch)}\n`);
+    const [code, signal] = (await exited) as [number | null, NodeJS.Signals | null];
+    if (code !== 0) {
+      throw new Error(
+        `openclaw worker CLI exited with code ${code ?? "unknown"} (${signal ?? "no signal"})`,
+      );
+    }
+    const result = JSON.parse(stdout.trim()) as { status?: unknown };
+    expect(result.status).toBe("completed");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Exercise the shipped worker CLI with real Git HTTPS requests and ephemeral fixture credentials. */
+export async function runManagedWorkerGitIdentityProof({ setup }: CredentialProofDependencies) {
   const proofDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-credential-proof-"));
   const certPath = path.join(proofDir, "server-cert.pem");
   const keyPath = path.join(proofDir, "server-key.pem");
@@ -84,13 +96,14 @@ export async function runManagedWorkerGitIdentityProof({
     remoteUrl: "https://github.com/openclaw/worker-fixture.git",
   };
   const authenticatedHosts = new Set<string>();
+  const proxyTargets = new Map<string, number>();
+  const allowedProxyTargets = new Set(["github.com:443", "forgejo.example:443"]);
   const expectedCredentials = new Map([
     ["github.com", { username: "", password: binding.token }],
     ["forgejo.example", { username: forgejoUsername, password: forgejoPassword }],
   ]);
   let tlsServer: ReturnType<typeof createHttpsServer> | undefined;
   let proxyServer: ReturnType<typeof createServer> | undefined;
-  let closeWorkerCommand: (() => Promise<void>) | undefined;
   try {
     await runExec(
       "openssl",
@@ -126,8 +139,6 @@ export async function runManagedWorkerGitIdentityProof({
       "utf8",
     );
     await chmod(forgejoHelperPath, 0o700);
-    await writeFile(globalConfigPath, `[credential]\n\thelper = ${forgejoHelperPath}\n`, "utf8");
-
     const certificate = await readFile(certPath);
     const privateKey = await readFile(keyPath);
     tlsServer = createHttpsServer({ cert: certificate, key: privateKey }, (request, response) => {
@@ -175,7 +186,13 @@ export async function runManagedWorkerGitIdentityProof({
     }
 
     proxyServer = createServer();
-    proxyServer.on("connect", (_request, clientSocket, head) => {
+    proxyServer.on("connect", (request, clientSocket, head) => {
+      const target = (request.url ?? "").toLowerCase();
+      proxyTargets.set(target, (proxyTargets.get(target) ?? 0) + 1);
+      if (!allowedProxyTargets.has(target)) {
+        clientSocket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        return;
+      }
       const upstream = connectTcp(tlsAddress.port, "127.0.0.1", () => {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length > 0) {
@@ -195,6 +212,20 @@ export async function runManagedWorkerGitIdentityProof({
       throw new Error("credential proof proxy did not bind to loopback");
     }
     const proxyUrl = `http://127.0.0.1:${proxyAddress.port}`;
+    await writeFile(
+      globalConfigPath,
+      [
+        "[http]",
+        `\tproxy = ${proxyUrl}`,
+        `\tsslCAInfo = ${certPath}`,
+        "[credential]",
+        `\thelper = ${forgejoHelperPath}`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const configPath = path.join(proofDir, "openclaw.json");
+    await writeFile(configPath, "{}\n", "utf8");
 
     const { gateway, workspaceDir, launch } = await setup({
       inferencePlans: ["tool", "text"],
@@ -208,6 +239,8 @@ export async function runManagedWorkerGitIdentityProof({
         "git symbolic-ref HEAD",
         "git remote get-url origin",
         'printf "profile=%s\\n" "$GH_CONFIG_DIR"',
+        'node -e \'const fs=require("node:fs");const p=require("node:path");const d=process.env.GH_CONFIG_DIR;if((fs.statSync(d).mode&0o777)!==0o700||(fs.statSync(p.join(d,"hosts.yml")).mode&0o777)!==0o600)process.exit(1);console.log("profile-active: mode=700, hosts.yml=600")\'',
+        'grep -Fq "$WORKER_PROOF_GITHUB_LOGIN" "$GH_CONFIG_DIR/hosts.yml" && printf "profile-identity=matched\\n"',
         'NO_PROXY= no_proxy= GIT_TERMINAL_PROMPT=0 git -c protocol.version=0 -c http.connectTimeout=2 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=2 -c http.proxy="$WORKER_PROOF_PROXY" -c http.sslCAInfo="$WORKER_PROOF_CA" ls-remote https://forgejo.example/team/project.git >/dev/null && printf "forgejo-authenticated\\n"',
         'NO_PROXY= no_proxy= GIT_TERMINAL_PROMPT=0 git -c protocol.version=0 -c http.connectTimeout=2 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=2 -c http.proxy="$WORKER_PROOF_PROXY" -c http.sslCAInfo="$WORKER_PROOF_CA" ls-remote https://github.com/openclaw/worker-fixture.git >/dev/null && printf "github-authenticated\\n"',
       ].join("; "),
@@ -235,21 +268,25 @@ export async function runManagedWorkerGitIdentityProof({
     const baseCommit = (await git(["rev-parse", "HEAD"])).stdout.trim();
     await writeFile(path.join(workspaceDir, ".git", "shallow"), `${baseCommit}\n`);
 
-    const managed = managedCommand();
-    closeWorkerCommand = managed.close;
     await withEnvAsync(
       {
         GIT_CONFIG_GLOBAL: globalConfigPath,
         GIT_CONFIG_NOSYSTEM: "1",
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: proofDir,
+        HTTPS_PROXY: proxyUrl,
+        https_proxy: proxyUrl,
+        NO_PROXY: "",
+        no_proxy: "",
+        GIT_SSL_CAINFO: certPath,
         OPENCLAW_FORGEJO_USERNAME: forgejoUsername,
         OPENCLAW_FORGEJO_PASSWORD: forgejoPassword,
+        WORKER_PROOF_GITHUB_LOGIN: githubLogin,
         WORKER_PROOF_PROXY: proxyUrl,
         WORKER_PROOF_CA: certPath,
       },
       async () => {
-        managed.send(launch);
-        await managed.waitResults(1);
-        expect(managed.results[0]).toMatchObject({ result: { status: "completed" } });
+        await runWorkerCli(launch);
 
         const workerMessages = gateway.inferenceRequests.flatMap(
           (request) => request.context.messages,
@@ -258,9 +295,6 @@ export async function runManagedWorkerGitIdentityProof({
           (message) => message.role === "toolResult" && message.toolName === "exec",
         );
         expect(toolResult).toMatchObject({ isError: false });
-        const stateDir = process.env.OPENCLAW_STATE_DIR;
-        expect(stateDir).toBeTruthy();
-        const profileDir = githubProfileDir(stateDir!, launch.assignment.turnId);
         const content = toolResult?.content;
         const output =
           typeof content === "string"
@@ -281,9 +315,9 @@ export async function runManagedWorkerGitIdentityProof({
         expect(output).toContain(createHash("sha256").update(binding.token).digest("hex"));
         expect(output).toContain("github-token=");
         expect(output).toContain("helpers-start");
-        expect(output).toContain(
-          [`refs/heads/${binding.branch}`, binding.remoteUrl, `profile=${profileDir}`].join("\n"),
-        );
+        expect(output).toContain("profile-active");
+        expect(output).toContain("profile-identity=matched");
+        expect(output).toContain([`refs/heads/${binding.branch}`, binding.remoteUrl].join("\n"));
         expect(
           output
             .split("\n")
@@ -294,26 +328,21 @@ export async function runManagedWorkerGitIdentityProof({
         // The empty scoped value resets inherited helpers only for GitHub HTTPS.
         expect(helpers?.slice(helpers.lastIndexOf(""))).toEqual(["", "!gh auth git-credential"]);
         expect(output).toContain("forgejo-authenticated\ngithub-authenticated");
-        expect((await stat(profileDir)).mode & 0o777).toBe(0o700);
-        const hostsPath = path.join(profileDir, "hosts.yml");
-        expect((await stat(hostsPath)).mode & 0o777).toBe(0o600);
-        expect(await readFile(hostsPath, "utf8")).toContain(binding.login);
         expect(JSON.stringify(gateway.transcriptRequests)).not.toContain(binding.token);
         expect(JSON.stringify(gateway.liveEventRequests)).not.toContain(binding.token);
+        expect([...proxyTargets.keys()].toSorted()).toEqual([...allowedProxyTargets].toSorted());
+        expect(proxyTargets.get("github.com:443")).toBeGreaterThanOrEqual(2);
+        expect(proxyTargets.get("forgejo.example:443")).toBeGreaterThanOrEqual(1);
         process.stdout.write(
-          "managed-worker authenticated HTTPS: forgejo-authenticated, github-authenticated\n",
+          `worker CLI authenticated HTTPS: forgejo-authenticated, github-authenticated; loopback CONNECT: github.com=${proxyTargets.get("github.com:443")}, forgejo.example=${proxyTargets.get("forgejo.example:443")}; profile active and assigned identity matched\n`,
         );
       },
     );
   } finally {
-    try {
-      await closeWorkerCommand?.();
-    } finally {
-      await Promise.all([
-        closeServer(proxyServer),
-        closeServer(tlsServer),
-        rm(proofDir, { recursive: true, force: true }),
-      ]);
-    }
+    await Promise.all([
+      closeServer(proxyServer),
+      closeServer(tlsServer),
+      rm(proofDir, { recursive: true, force: true }),
+    ]);
   }
 }
