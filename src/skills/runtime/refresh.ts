@@ -285,7 +285,11 @@ function scanDirtySources(): Promise<void> {
   return state.pending;
 }
 
-async function registerSource(selection: SkillsDiscoverySourceSelection, watch?: boolean) {
+async function registerSource(
+  selection: SkillsDiscoverySourceSelection,
+  watch?: boolean,
+  deferredEvictions?: string[],
+) {
   if (state.closing) {
     await state.closing;
   }
@@ -304,10 +308,15 @@ async function registerSource(selection: SkillsDiscoverySourceSelection, watch?:
       closeSource(oldest);
       state.sources.delete(oldestKey);
       // An evicted source has no retained fingerprint to compare on readmission.
-      bumpSkillsSnapshotVersion({
-        workspaceDir: oldest.workspaceDir,
-        reason: "watch",
-      });
+      // A sweep records its own evictions; every other admission still publishes now.
+      if (deferredEvictions) {
+        deferredEvictions.push(oldest.workspaceDir);
+      } else {
+        bumpSkillsSnapshotVersion({
+          workspaceDir: oldest.workspaceDir,
+          reason: "watch",
+        });
+      }
     }
     source = {
       selection,
@@ -434,7 +443,7 @@ export async function prepareSkillStatusFacts(
   return result.facts;
 }
 
-async function registerSkillsWatcher(params: SkillsWatcherParams) {
+async function registerSkillsWatcher(params: SkillsWatcherParams, deferredEvictions?: string[]) {
   if (state.closing) {
     await state.closing;
   }
@@ -458,6 +467,7 @@ async function registerSkillsWatcher(params: SkillsWatcherParams) {
         plan: { input: captureSkillsSourcePlanInput(params.workspaceDir, params) },
       },
       params.config?.skills?.load?.watch,
+      deferredEvictions,
     );
   }
   const prepared = params.sourcePlan
@@ -492,6 +502,7 @@ async function registerSkillsWatcher(params: SkillsWatcherParams) {
         : undefined,
     },
     params.config?.skills?.load?.watch,
+    deferredEvictions,
   );
 }
 
@@ -515,33 +526,51 @@ export async function refreshSkillsDiscovery(
   for (const source of state.sources.values()) {
     source.dirty = true;
   }
-  if (params.config) {
-    const { listAgentIds, resolveAgentWorkspaceDir } =
-      await import("../../agents/agent-scope-config.js");
-    const agentIds = listAgentIds(params.config);
-    // Register each bounded batch before dispatch; roots are selected once per source.
-    for (let offset = 0; offset < agentIds.length; offset += MAX_SOURCES) {
-      const registrations = await Promise.all(
-        agentIds.slice(offset, offset + MAX_SOURCES).map((agentId) =>
-          registerSkillsWatcher({
-            workspaceDir: resolveAgentWorkspaceDir(params.config!, agentId),
-            config: params.config,
-            pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-            agentId,
-          }),
-        ),
-      );
+  // The closing bump is global only for an all-agent sweep. That one change
+  // covers sources evicted while this call is registering them. A workspace-scoped
+  // refresh, and any registration outside this call, still publishes immediately.
+  const sweepEvictions = params.config && !params.workspaceDir ? [] : undefined;
+  try {
+    if (params.config) {
+      const { listAgentIds, resolveAgentWorkspaceDir } =
+        await import("../../agents/agent-scope-config.js");
+      const agentIds = listAgentIds(params.config);
+      // Register each bounded batch before dispatch; roots are selected once per source.
+      for (let offset = 0; offset < agentIds.length; offset += MAX_SOURCES) {
+        const registrations = await Promise.all(
+          agentIds.slice(offset, offset + MAX_SOURCES).map((agentId) =>
+            registerSkillsWatcher(
+              {
+                workspaceDir: resolveAgentWorkspaceDir(params.config!, agentId),
+                config: params.config,
+                pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+                agentId,
+              },
+              sweepEvictions,
+            ),
+          ),
+        );
+        await scanDirtySources();
+        registrations.forEach(readRegisteredSource);
+      }
+    } else {
+      if (!state.sources.size && params.workspaceDir) {
+        await registerSkillsWatcher({
+          workspaceDir: params.workspaceDir,
+          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+        });
+      }
       await scanDirtySources();
-      registrations.forEach(readRegisteredSource);
     }
-  } else {
-    if (!state.sources.size && params.workspaceDir) {
-      await registerSkillsWatcher({
-        workspaceDir: params.workspaceDir,
-        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-      });
+  } catch (error) {
+    // The closing change below does not run. Publish the evictions this sweep
+    // already performed so a failed pass still invalidates those workspaces.
+    if (sweepEvictions) {
+      for (const workspaceDir of sweepEvictions) {
+        bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      }
     }
-    await scanDirtySources();
+    throw error;
   }
   bumpSkillsSnapshotVersion({
     workspaceDir: params.workspaceDir,
