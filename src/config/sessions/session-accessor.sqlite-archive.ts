@@ -152,7 +152,10 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
     }, SQLITE_ARCHIVE_TASK_TIMEOUT_MS);
     worker.on("message", (message: { results: Result[]; type: string }) => {
       if (message.type === params.expectedMessageType) {
-        (results ??= []).push(...message.results);
+        const collected = (results ??= []);
+        for (const result of message.results) {
+          collected.push(result);
+        }
       }
     });
     worker.once("error", (error) => {

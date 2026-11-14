@@ -351,6 +351,14 @@ describe("session-store-runtime", () => {
     ).resolves.toBe(true);
   });
 
+  it("keeps the session-store backup path working with the cold embed transform", async () => {
+    const sessionKey = "agent:main:backup-before-delete";
+    await seedSessionEntry(sessionKey, { sessionId: "backup-before-delete", updatedAt: 10 });
+    const backupDir = path.join(tempDir, "before-delete");
+    await expect(deleteSessionEntry({ sessionKey, storePath, backupDir })).resolves.toBe(true);
+    expect(fs.existsSync(path.join(backupDir, "openclaw-agent.sqlite"))).toBe(true);
+  });
+
   it("guards entry deletion when the earlier snapshot had no session id", async () => {
     const sessionKey = "agent:main:delete-guarded-absent-id";
     const updatedAt = Date.now();

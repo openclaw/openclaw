@@ -535,14 +535,15 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
         SqliteArchiveOneShotWorkerData,
         { operation: "cold-embed-snapshot" }
       >;
+      let embeddedFilePaths: string[];
       {
         using database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(data.snapshotPath));
-        await embedSessionColdArchivesInSnapshotInWorker({
+        embeddedFilePaths = await embedSessionColdArchivesInSnapshotInWorker({
           database,
           sourceStorePath: data.sourceStorePath,
         });
       }
-      port.postMessage({ type: "done", results: [] }, []);
+      port.postMessage({ type: "done", results: embeddedFilePaths }, []);
       port.close();
     } else if (operation === "maintenance-size") {
       const { readSessionTranscriptJsonlBytesInDatabase } =
