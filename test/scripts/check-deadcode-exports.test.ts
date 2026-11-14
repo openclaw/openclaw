@@ -21,11 +21,20 @@ import {
 } from "../../src/infra/runtime-process-manifest.ts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
+const fullAgentCoreWorkspace = allExportsKnipConfig.workspaces["packages/agent-core"];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
 const fullUiWorkspace = allExportsKnipConfig.workspaces.ui;
 const scriptRootWorkspace = scriptExportsKnipConfig.workspaces["."];
-if (!fullRootWorkspace || !fullExtensionWorkspace || !fullUiWorkspace || !scriptRootWorkspace) {
-  throw new Error("deadcode Knip configs must define root, extension, and UI workspaces");
+if (
+  !fullRootWorkspace ||
+  !fullAgentCoreWorkspace ||
+  !fullExtensionWorkspace ||
+  !fullUiWorkspace ||
+  !scriptRootWorkspace
+) {
+  throw new Error(
+    "deadcode Knip configs must define root, agent-core, extension, and UI workspaces",
+  );
 }
 
 function expectEntries(entries: readonly string[], required: string[]) {
@@ -105,7 +114,7 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.workspaces["."].entry).not.toContain(
       "test/scripts/service-relay-artifact.test-support.mjs!",
     );
-    expectEntries(allExportsKnipConfig.workspaces["packages/agent-core"].entry, [
+    expectEntries(fullAgentCoreWorkspace.entry, [
       "src/harness/compaction/compaction-floor.retention.test-support.ts!",
     ]);
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
