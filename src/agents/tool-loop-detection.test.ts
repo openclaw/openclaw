@@ -49,17 +49,11 @@ function createLoop(toolName: string, params: unknown) {
 }
 
 function argsHash(params: unknown) {
-  const state = createState();
-  recordToolCall(state, "browser", params);
-  return state.toolCallHistory?.[0]?.argsHash;
+  return createLoop("browser", params).record(jsonResult({}))?.argsHash;
 }
 
 function outcomeHash(text: string) {
-  return recordToolCallOutcome(createState(), {
-    toolName: "browser",
-    toolParams: {},
-    result: jsonResult({ text }),
-  })?.resultHash;
+  return createLoop("browser", {}).record(jsonResult({ text }))?.resultHash;
 }
 
 function execResult(params: {
@@ -141,6 +135,7 @@ describe("tool-loop-detection", () => {
   it("warns only for history belonging to the current run", () => {
     const state = createState();
     const params = { path: "/same.txt" };
+    expect(detectToolCallLoop(state, "read", params)).toEqual({ stuck: false });
     for (let index = 0; index < WARNING_THRESHOLD; index++) {
       recordToolCall(state, "read", params, `call-${index}`, { runId: "run-1" });
     }
@@ -156,9 +151,35 @@ describe("tool-loop-detection", () => {
     expect(detectToolCallLoop(state, "read", params)).toEqual({ stuck: false });
   });
 
-  it("allows calls without history", () => {
-    expect(createLoop("read", {}).detect()).toEqual({ stuck: false });
-  });
+  it.each(["stable", "progress", "pending", "unanchored-veto"] as const)(
+    "requires repeated concrete outcomes across a three-tool rotation: %s",
+    (kind) => {
+      const state = createState();
+      for (let index = 0; index < HISTORY_SIZE; index++) {
+        const toolName = ["exec", "read", "write"][index % 3]!;
+        if (kind === "pending" && index === HISTORY_SIZE - 1) {
+          recordToolCall(state, toolName, {});
+          continue;
+        }
+        recordToolCallOutcome(state, {
+          toolName,
+          toolParams: {},
+          result:
+            kind === "unanchored-veto" && toolName === "write"
+              ? veto
+              : kind === "stable" && toolName === "exec"
+                ? execResult({ status: "completed", exitCode: 1, output: `failure pid=${index}` })
+                : jsonResult({
+                    value: kind === "progress" && toolName === "read" ? index : "same",
+                  }),
+        });
+      }
+      const result = detectToolCallLoop(state, "exec", {});
+      expect(result.stuck && result.level === "critical").toBe(kind === "stable");
+      expect(detectToolCallLoop(state, "browser", {})).toEqual({ stuck: false });
+      expect(detectToolCallLoop(state, "exec", { code: "recover" })).toEqual({ stuck: false });
+    },
+  );
 
   it.each(["thrown", "encoded"] as const)(
     "blocks repeated external %s outcomes with fresh nonces",
@@ -434,38 +455,6 @@ describe("tool-loop-detection", () => {
       stuck: true,
       level: "warning",
       detector: "generic_repeat",
-    });
-  });
-
-  it("anchors changing-argument exec vetoes until the global circuit breaker", () => {
-    const loop = createLoop("exec", { command: "python final-job.py" });
-    loop.repeat(
-      CRITICAL_THRESHOLD,
-      () => execResult({ status: "completed", exitCode: 1, output: "Traceback: missing package" }),
-      (index) => ({ command: `python job-${index}.py` }),
-    );
-    for (let index = CRITICAL_THRESHOLD; index < HISTORY_SIZE; index++) {
-      const params = { command: `python job-${index}.py` };
-      expect(loop.detect(params)).toMatchObject({
-        stuck: true,
-        level: "critical",
-        detector: "generic_repeat",
-        count: index,
-      });
-      expect(
-        recordToolCallOutcome(loop.state, {
-          toolName: "exec",
-          toolParams: params,
-          toolCallId: `veto-${index}`,
-          result: veto,
-        }),
-      ).toMatchObject({ outcomeKind: "tool-loop-veto", resultHash: undefined });
-    }
-    expect(loop.detect()).toMatchObject({
-      stuck: true,
-      level: "critical",
-      detector: "global_circuit_breaker",
-      count: HISTORY_SIZE,
     });
   });
 
@@ -839,35 +828,45 @@ describe("tool-loop-detection", () => {
     expect(first).not.toBe(second);
   });
 
-  it("counts loop vetoes until the global circuit breaker becomes reachable", () => {
-    const loop = createSendLoop();
-    for (let index = CRITICAL_THRESHOLD; index < HISTORY_SIZE; index++) {
-      expect(loop.detect()).toMatchObject({
-        stuck: true,
-        level: "critical",
-        detector: "generic_repeat",
-        count: index,
-      });
-      expect(
-        recordToolCallOutcome(loop.state, {
-          toolName: "message",
-          toolParams: sendParams,
-          toolCallId: `message-veto-${index}`,
-          result: veto,
-        }),
-      ).toMatchObject({
-        toolCallId: `message-veto-${index}`,
-        outcomeKind: "tool-loop-veto",
-        resultHash: undefined,
-      });
-    }
-    expect(loop.detect()).toMatchObject({
-      stuck: true,
-      level: "critical",
-      detector: "global_circuit_breaker",
-      count: HISTORY_SIZE,
-    });
-  });
+  it.each([
+    {
+      toolName: "exec",
+      params: (index: number) => ({ command: `python job-${index}.py` }),
+      outcome: () =>
+        execResult({ status: "completed", exitCode: 1, output: "Traceback: missing package" }),
+    },
+    {
+      toolName: "message",
+      params: () => sendParams,
+      outcome: (index: number) => jsonResult(sendPayload(index)),
+    },
+  ])(
+    "anchors $toolName vetoes until the global circuit breaker",
+    ({ toolName, params, outcome }) => {
+      const loop = createLoop(toolName, params(HISTORY_SIZE));
+      loop.repeat(CRITICAL_THRESHOLD, outcome, params);
+      for (let index = CRITICAL_THRESHOLD; index <= HISTORY_SIZE; index++) {
+        expect(loop.detect(params(index))).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: index === HISTORY_SIZE ? "global_circuit_breaker" : "generic_repeat",
+          count: index,
+        });
+        if (index === HISTORY_SIZE) {
+          break;
+        }
+        const toolCallId = `veto-${index}`;
+        expect(
+          recordToolCallOutcome(loop.state, {
+            toolName,
+            toolParams: params(index),
+            toolCallId,
+            result: veto,
+          }),
+        ).toMatchObject({ toolCallId, outcomeKind: "tool-loop-veto", resultHash: undefined });
+      }
+    },
+  );
 
   it("does not count unrelated hashless calls as no-progress outcomes", () => {
     const loop = createSendLoop();

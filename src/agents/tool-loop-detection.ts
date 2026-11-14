@@ -24,7 +24,7 @@ import {
   getArgumentChurnNoProgressStreak,
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
-import { getNoProgressStreak } from "./tool-loop-no-progress.js";
+import { getCrossToolNoProgressStreak, getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { digestToolOutcome } from "./tool-loop-outcome-hash.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isToolResultError } from "./tool-result-error.js";
@@ -571,19 +571,23 @@ export function detectToolCallLoop(
     };
   }
 
-  if (noProgressStreak >= GLOBAL_CIRCUIT_BREAKER_THRESHOLD) {
+  const globalNoProgressStreak = Math.max(
+    noProgressStreak,
+    getCrossToolNoProgressStreak(history, currentHash),
+  );
+  if (globalNoProgressStreak >= GLOBAL_CIRCUIT_BREAKER_THRESHOLD) {
     if (!isIncognitoDiagnosticSession(state)) {
       log.error(
-        `Runaway-loop limit reached: ${toolName} repeated ${noProgressStreak} times with no progress`,
+        `Runaway-loop limit reached: ${globalNoProgressStreak} tool calls with no progress`,
       );
     }
     return {
       stuck: true,
       level: "critical",
       detector: "global_circuit_breaker",
-      count: noProgressStreak,
-      message: `CRITICAL: ${toolName} repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by the runaway-loop limit to prevent runaway loops.`,
-      warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+      count: globalNoProgressStreak,
+      message: `CRITICAL: Tool calls repeated stable no-progress outcomes ${globalNoProgressStreak} times. Session execution blocked by the runaway-loop limit to prevent runaway loops.`,
+      warningKey: "global",
     };
   }
 
