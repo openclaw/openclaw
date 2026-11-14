@@ -12,7 +12,7 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { sanitizeModelHeaders } from "../embedded-agent-runner/model.inline-provider.js";
 import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../model-auth-runtime-config.js";
-import { parseModelCatalogJson } from "../model-catalog-json.js";
+import { parseGeneratedModelCatalogJson, parseModelCatalogJson } from "../model-catalog-json.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
   buildSourceModelFields,
@@ -454,7 +454,7 @@ export class ModelRegistry {
 
     try {
       const content = options.contents ?? readFileSync(modelsJsonPath, "utf-8");
-      const parsed = parseModelCatalogJson(content);
+      const parsed = parseModelCatalogJson(content, options.requireGeneratedCatalog);
       if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
         return emptyCustomModelsResult();
       }
