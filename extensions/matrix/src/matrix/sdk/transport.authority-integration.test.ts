@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { MatrixError } from "matrix-js-sdk/lib/http-api/errors.js";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { beforeEach, test, vi } from "vitest";
 import {
@@ -243,3 +244,41 @@ test("a redirect rejection cannot erase an earlier dispatch", async () => {
   await assert.rejects(send(url, init), AggregateError);
   assert.equal(boundary.dispatched.length, 1);
 });
+
+// A current rejection says nothing about an earlier ambiguous transaction attempt.
+test.each([
+  { requests: 1, previousAttempt: false, rejected: true },
+  { requests: 2, previousAttempt: false, rejected: false },
+  { requests: 1, previousAttempt: true, rejected: false },
+])(
+  "classifies forbidden sends without losing prior uncertainty: %j",
+  async ({ requests, previousAttempt, rejected }) => {
+    const guards = new MatrixMessageWireDispatchGuards();
+    const forbidden = new MatrixError(
+      { errcode: "M_FORBIDDEN", error: "Cannot send to room" },
+      403,
+    );
+    await assert.rejects(
+      guards.run({
+        transactionId: "txn-1",
+        previousAttempt,
+        run: async () => {
+          for (let request = 0; request < requests; request++) {
+            await guards.beforeRequest(url, init);
+          }
+          throw forbidden;
+        },
+      }),
+      (error: unknown) => {
+        if (rejected) {
+          assert.ok(error instanceof PlatformMessageNotDispatchedError);
+          assert.equal(error.cause, forbidden);
+        } else {
+          assert.equal(error, forbidden);
+        }
+        return true;
+      },
+    );
+    assert.equal(await guards.beforeRequest(url, init), undefined);
+  },
+);

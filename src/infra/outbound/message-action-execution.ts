@@ -28,7 +28,6 @@ import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
-import { findPlatformMessageRejectedError } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
@@ -112,14 +111,11 @@ export function projectMessageActionPartialDelivery(error: unknown) {
  * started may already have landed, so it reports as unknown rather than failed.
  * Only a held queue row can own reconciliation: a direct send that bypassed the
  * queue has no row to reconcile, so it reports unverified custody instead of
- * promising a Gateway retry. A provider-proven rejection keeps its actionable
- * error, because that classification knows more than possible-send evidence.
+ * promising a Gateway retry. A later rejected attempt cannot disprove a
+ * previous attempt recorded as possibly sent by the delivery owner.
  */
 export function projectDeliveryOutcomeResult(error: unknown) {
   if (isOutboundDeliveryError(error) && error.sentBeforeError && error.results.length === 0) {
-    if (findPlatformMessageRejectedError(error)) {
-      return undefined;
-    }
     const retainedQueueCustody = error.queueCustody === "held";
     const owner = retainedQueueCustody
       ? "The gateway owns reconciliation and the send may already have been delivered; do not resend it."

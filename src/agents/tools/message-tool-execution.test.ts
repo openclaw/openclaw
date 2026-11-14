@@ -447,19 +447,29 @@ describe("message tool unconfirmed delivery", () => {
     await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
   });
 
-  it("keeps a provider-proven rejection actionable", async () => {
-    const rejection = new PlatformMessageNotDispatchedError("MatrixError: [403] M_FORBIDDEN", {
-      cause: new Error("MatrixError: [403] M_FORBIDDEN"),
-      retryable: false,
-    });
-    const error = new OutboundDeliveryError("message failed: MatrixError: [403] M_FORBIDDEN", {
-      cause: rejection,
-      sentBeforeError: true,
-    });
-    error.queueCustody = "held";
-    const { tool } = createFailingMessageTool(error);
-    await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
-  });
+  it.each([false, true])(
+    "preserves earlier delivery uncertainty when a later attempt is rejected: %s",
+    async (sentBeforeError) => {
+      const rejection = new PlatformMessageNotDispatchedError("MatrixError: [403] M_FORBIDDEN", {
+        cause: new Error("MatrixError: [403] M_FORBIDDEN"),
+        retryable: false,
+      });
+      const error = new OutboundDeliveryError("message failed: MatrixError: [403] M_FORBIDDEN", {
+        cause: rejection,
+        sentBeforeError,
+      });
+      error.queueCustody = "held";
+      const { tool } = createFailingMessageTool(error);
+      if (!sentBeforeError) {
+        await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(
+          error,
+        );
+        return;
+      }
+      const result = await tool.execute("send", { action: "send", message: "hello" });
+      expect(result.details).toMatchObject({ status: "delivery_unconfirmed", delivered: false });
+    },
+  );
 });
 
 it.each(["read", "edit", "delete", "pin", "unpin"] as const)(

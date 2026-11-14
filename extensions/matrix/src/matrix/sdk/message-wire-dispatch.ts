@@ -1,3 +1,6 @@
+import { MatrixError } from "matrix-js-sdk/lib/http-api/errors.js";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+
 export type MatrixMessageWireDispatch = {
   roomId: string;
   eventType: "m.room.message" | "m.room.encrypted";
@@ -47,6 +50,7 @@ export class MatrixMessageWireDispatchGuards {
       guard?: MatrixMessageWireDispatchGuard;
       assertCurrent?: () => void;
       currentnessRejected?: true;
+      requestCount: number;
     }
   >();
 
@@ -82,29 +86,50 @@ export class MatrixMessageWireDispatchGuards {
 
   beforeRequest(resource: RequestInfo | URL, init?: RequestInit): Promise<void> | undefined {
     const dispatch = resolveMessageWireDispatch(resource, init);
-    return dispatch
-      ? Promise.resolve(this.guards.get(dispatch.transactionId)?.guard?.(dispatch))
-      : undefined;
+    const entry = dispatch ? this.guards.get(dispatch.transactionId) : undefined;
+    if (!dispatch || !entry) {
+      return undefined;
+    }
+    entry.requestCount++;
+    return Promise.resolve(entry.guard?.(dispatch));
   }
 
   async run<T>(params: {
     transactionId?: string;
     guard?: MatrixMessageWireDispatchGuard;
     assertCurrent?: () => void;
+    previousAttempt?: boolean;
     run: () => Promise<T>;
   }): Promise<T> {
-    if (!params.transactionId || (!params.guard && !params.assertCurrent)) {
+    if (!params.transactionId) {
       return await params.run();
     }
     if (this.guards.has(params.transactionId)) {
       throw new Error(`Matrix transaction ${params.transactionId} already has a dispatch guard`);
     }
-    this.guards.set(params.transactionId, {
+    const entry = {
       guard: params.guard,
       assertCurrent: params.assertCurrent,
-    });
+      requestCount: 0,
+    };
+    this.guards.set(params.transactionId, entry);
     try {
       return await params.run();
+    } catch (error) {
+      // Only the first wire request can prove that this new event was rejected.
+      // A retry/redirect or an existing SDK event may have reached the room.
+      if (
+        !params.previousAttempt &&
+        entry.requestCount === 1 &&
+        error instanceof MatrixError &&
+        error.httpStatus === 403
+      ) {
+        throw new PlatformMessageNotDispatchedError(error.message, {
+          cause: error,
+          retryable: false,
+        });
+      }
+      throw error;
     } finally {
       this.guards.delete(params.transactionId);
     }

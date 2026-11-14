@@ -179,6 +179,7 @@ function createMatrixJsClientMethods(client: EventEmitter) {
     getAccountDataFromServer: vi.fn(async () => null),
     setAccountData: vi.fn(async () => {}),
     getRoomIdForAlias: vi.fn(async () => ({ room_id: "!resolved:example.org" })),
+    makeTxnId: vi.fn(() => "sdk-generated-transaction"),
     sendMessage: vi.fn(async () => ({ event_id: "$sent" })),
     resendEvent: vi.fn(async () => ({ event_id: "$resent" })),
     sendEvent: vi.fn(async () => ({ event_id: "$sent-event" })),

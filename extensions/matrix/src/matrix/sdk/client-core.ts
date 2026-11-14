@@ -182,35 +182,29 @@ export abstract class MatrixClientCore extends MatrixClientBase {
   ): Promise<string> {
     // Keep ephemeral sends on the same per-wire guard as durable transaction IDs.
     const assertCurrent = captureMatrixSendCurrentness(this);
-    const wireTransactionId =
-      transactionId ?? (beforeWireDispatch || assertCurrent ? this.client.makeTxnId() : undefined);
+    const wireTransactionId = transactionId ?? this.client.makeTxnId();
     return await this.sendQueue.enqueue(roomId, async () => {
+      const room = this.client.getRoom(roomId);
+      const existing = room?.getEventForTxnId?.(wireTransactionId);
       return await this.messageWireDispatchGuards.run({
         transactionId: wireTransactionId,
+        previousAttempt: existing !== undefined,
         guard: beforeWireDispatch,
         assertCurrent,
         run: async () => {
-          if (wireTransactionId) {
-            const room = this.client.getRoom(roomId);
-            const existing = room?.getEventForTxnId?.(wireTransactionId);
-            if (existing) {
-              const existingId = existing.getId();
-              if (
-                existing.status === EventStatus.SENT &&
-                existingId &&
-                !existingId.startsWith("~")
-              ) {
-                return existingId;
-              }
-              if (existing.status === EventStatus.NOT_SENT && room) {
-                await this.prepareRoomForMessageSend(roomId, existing.getContent());
-                const resent = await this.client.resendEvent(existing, room);
-                return resent.event_id;
-              }
-              throw new Error(
-                `Matrix transaction ${wireTransactionId} is already active with status ${existing.status ?? "unknown"}`,
-              );
+          if (existing) {
+            const existingId = existing.getId();
+            if (existing.status === EventStatus.SENT && existingId && !existingId.startsWith("~")) {
+              return existingId;
             }
+            if (existing.status === EventStatus.NOT_SENT && room) {
+              await this.prepareRoomForMessageSend(roomId, existing.getContent());
+              const resent = await this.client.resendEvent(existing, room);
+              return resent.event_id;
+            }
+            throw new Error(
+              `Matrix transaction ${wireTransactionId} is already active with status ${existing.status ?? "unknown"}`,
+            );
           }
           await this.prepareRoomForMessageSend(roomId, content);
           const sent = await this.client.sendMessage(roomId, content as never, wireTransactionId);
