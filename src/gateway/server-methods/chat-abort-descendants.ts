@@ -25,6 +25,8 @@ export async function abortControlledSubagents(params: {
   sessionOrigin?: SubagentRequestSessionOrigin;
   assertCurrent?: () => void;
   beforeKill?: Parameters<typeof killAllControlledSubagentRuns>[0]["beforeKill"];
+  /** Runs synchronously once the final authority check passes, before this Stop cancels. */
+  onStopAccepted?: () => void;
   /** Accepted parent effects retain cleanup reporting after a later guard rejects. */
   parentStopAccepted?: () => boolean;
   prepareSelection?: {
@@ -127,6 +129,7 @@ export async function abortControlledSubagents(params: {
         return false;
       }
       accepted = true;
+      params.onStopAccepted?.();
       const sessionId = params.sessionId ?? sessionOrigin?.target.sessionId;
       yieldedRequesters = sessionId
         ? requestSelection.runs.flatMap((entry) => {

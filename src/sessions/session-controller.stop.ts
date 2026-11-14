@@ -153,6 +153,8 @@ type SessionStopRequestBase = {
   /** Exact external parents may decline the child cancellation they provisionally captured. */
   continueChildStop?: () => boolean;
   onCancelled?: (target: SessionControllerInput | ReplyOperation) => void;
+  /** A source passed its abortability and authority checks; its cancellation commits next. */
+  onInputCancelPrepared?: (input: SessionControllerInput) => void;
   /** Publishes only a matched run receipt; runless cancellation remains an owner fact. */
   onEffectCancelled?: (effect: SessionControllerStopRunEffect) => void;
   onError?: (
@@ -206,6 +208,7 @@ function applySessionControllerStop(
     | "cancelOperation"
     | "afterQueued"
     | "onCancelled"
+    | "onInputCancelPrepared"
     | "onEffectCancelled"
     | "onError"
   > & { phase?: "all" | "queued" | "active"; pendingInputs?: readonly SessionControllerInput[] },
@@ -295,7 +298,10 @@ function applySessionControllerStop(
     const wasRetiring = input.retirementRequested;
     const wasAborted = input.abortSignal.aborted;
     const cancel = once(
-      () => abortSessionControllerInput(input, reason, assertCurrent),
+      () =>
+        abortSessionControllerInput(input, reason, assertCurrent, () =>
+          params.onInputCancelPrepared?.(input),
+        ),
       () =>
         (!hadResult && operation?.result?.kind === "aborted") ||
         (!wasRetiring &&

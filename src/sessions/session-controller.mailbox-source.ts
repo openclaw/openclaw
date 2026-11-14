@@ -357,11 +357,15 @@ export function retireSessionControllerInput(input: SessionControllerInput): voi
   }
 }
 
-/** Requests cancellation of one exact source; actual write/adoption settlement stays owned. */
+/**
+ * Requests cancellation of one exact source; actual write/adoption settlement stays owned.
+ * `beforeCommit` runs once the source is abortable and authority holds, before any abort.
+ */
 export function abortSessionControllerInput(
   input: SessionControllerInput,
   reason?: unknown,
   assertCurrent: () => void = () => {},
+  beforeCommit?: () => void,
 ): boolean {
   assertCurrent();
   if (
@@ -384,6 +388,7 @@ export function abortSessionControllerInput(
   // The requester authorizes new cancellation effects. The original execution
   // authority may already be revoked; it cannot veto its own cleanup.
   assertCurrent();
+  beforeCommit?.();
   const wasRetiring = input.retirementRequested;
   input.retirementRequested = true;
   input.cancelling = true;
