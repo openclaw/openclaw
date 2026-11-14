@@ -229,6 +229,15 @@ describe("Template project packages", () => {
     await writeRichProject(project);
   });
 
+  it("builds a package-root BOOTSTRAP.md up to the workspace bootstrap bound", async () => {
+    // 1.5 MiB sits between the generic managed-file cap (1 MiB) and the bound the
+    // workspace bootstrap owner sets (2 MiB), which validate and add already apply.
+    await writeFile(join(project, "BOOTSTRAP.md"), Buffer.alloc(1.5 * 1024 * 1024, 0x61));
+    const validation = await validateTemplateProject(project);
+    expect(validation.ok).toBe(true);
+    await expect(buildTemplateProject(project, output)).resolves.toBeDefined();
+  });
+
   it("refuses occupied targets and package lifecycle scripts", async () => {
     const occupied = tempDirs.make("openclaw-template-occupied-");
     await writeFile(join(occupied, "keep.txt"), "keep\n");
