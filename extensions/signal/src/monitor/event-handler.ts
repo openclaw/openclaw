@@ -13,7 +13,6 @@ import {
   buildChannelInboundEventContext,
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
-  formatInboundMediaUnavailableText,
   formatInboundEnvelope,
   formatInboundFromLabel,
   logInboundDrop,
@@ -76,7 +75,7 @@ import {
   resolveSignalRecipient,
   resolveSignalSender,
 } from "../identity.js";
-import { formatSignalMediaText } from "../media-text.js";
+import { formatSignalMediaText, formatSignalUnavailableMediaText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
@@ -1092,8 +1091,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    let unavailableAttachmentCount = deps.ignoreAttachments ? attachments.length : 0;
-    if (!deps.ignoreAttachments) {
+    // View-once media must not be persisted or forwarded to the agent.
+    const skipAttachments = deps.ignoreAttachments || dataMessage.viewOnce === true;
+    let unavailableAttachmentCount = skipAttachments ? attachments.length : 0;
+    if (!skipAttachments) {
       for (const [index, attachment] of attachments.entries()) {
         if (!attachment?.id) {
           unavailableAttachmentCount += 1;
@@ -1127,14 +1128,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    let bodyText = messageText;
-    if (unavailableAttachmentCount > 0) {
-      const attachmentLabel = unavailableAttachmentCount === 1 ? "attachment" : "attachments";
-      bodyText = formatInboundMediaUnavailableText({
-        body: bodyText,
-        notice: `[signal ${unavailableAttachmentCount > 1 ? `${unavailableAttachmentCount} ` : ""}${attachmentLabel} unavailable]`,
-      });
-    }
+    const bodyText = formatSignalUnavailableMediaText({
+      body: messageText,
+      viewOnce: dataMessage.viewOnce === true,
+      unavailableAttachmentCount,
+    });
     if (!bodyText && mediaFacts.length === 0 && !visibleQuoteText) {
       return;
     }
