@@ -612,6 +612,9 @@ export async function spawnAcpDirect(
           runTimeoutSeconds,
           label: params.label,
           attachments: gatewayAttachments,
+          expectedExistingSessionId: state.initializedSession.sessionId,
+          expectedExistingSessionLifecycleRevision:
+            state.initializedSession.sessionEntry.lifecycleRevision ?? null,
           lineage: {
             enabled: isExecutionIdentityCollectionEnabled(cfg),
             backend: "acp",
