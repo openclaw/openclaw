@@ -152,9 +152,9 @@ const enUsage = {
       toolResults: "tool results",
       avgTokens: "Avg tokens / msg",
       avgCost: "Avg cost / msg",
-      avgCostHint: "Average cost per message when providers report costs.",
+      avgCostHint: "Known cost, including estimates, divided by all user and agent messages.",
       avgCostHintMissing:
-        "Average cost per message with reported pricing. Some sessions have no cost data.",
+        "Known cost, including estimates, divided by all user and agent messages. Some usage has no cost data.",
       acrossMessages: "Across {count} messages",
       sessions: "Sessions",
       sessionsInRange: "of {count} in range",
