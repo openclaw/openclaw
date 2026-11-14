@@ -44,16 +44,13 @@ afterEach(() => {
 });
 
 /** Gateway startup prepares profile authority again after database admission closes. */
-export async function preparePersonalPublicationProfileCatalog() {
+async function preparePersonalPublicationProfileCatalog() {
   const catalog = await prepareUserProfileCatalog();
   profileCatalogs.add(catalog);
   return catalog;
 }
 
-export async function preparePersonalPublicationFixtureV2(
-  fixture: PersonalClient,
-  signal?: AbortSignal,
-) {
+async function preparePersonalPublicationFixtureV2(fixture: PersonalClient, signal?: AbortSignal) {
   const owner = fixture.client.authenticatedUserProfile!.profileId;
   fixture.client.internal = {
     ...fixture.client.internal,

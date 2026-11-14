@@ -7,10 +7,6 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 export const firstReloaded = { runtime: { pluginIds: ["first"] } };
-export const reloadFailure = (phase: "prepare" | "drain" | "activate", committed = false) => ({
-  details: { phase, committed },
-});
-
 export function pluginInstance(registry: PluginRegistry, id = "first") {
   const record = registry.plugins.find((entry) => entry.id === id);
   assert(record);
@@ -32,16 +28,6 @@ export function heldWork() {
       return release.promise;
     },
   };
-}
-
-export function observeSettlement<T>(work: Promise<T>) {
-  const state: { settled: boolean; value: unknown } = { settled: false, value: undefined };
-  const record = (result: unknown) => {
-    state.settled = true;
-    state.value = result;
-    return result;
-  };
-  return { state, result: work.then(record, record) };
 }
 
 export function rejectWith(error: Error) {

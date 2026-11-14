@@ -57,7 +57,7 @@ const scopedGatewayMethodsIsolatedTestFiles = `chat-metadata-runtime.cache agent
   agent.followup-owner agent.visitor-access board.runtime-boundaries chat.reset-visible-yield
   environments.pairing-snapshot health.owner-routing sessions.send-yield-resume
   system-agent-nested-inference.integration system-agent-setup-control-ui transcripts
-  users-preferences users-role.worker usage usage.sessions-usage`
+  users-preferences users-role.worker usage`
   .split(/\s+/u)
   .map((name) => `server-methods/${name}.test.ts`);
 
