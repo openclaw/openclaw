@@ -23,7 +23,7 @@ describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (co
 
   it.each(
     command === "steer"
-      ? (["error", "rejected", "started"] as const)
+      ? (["error", "rejected", "started", "ok"] as const)
       : (["timeout", "rejected", "in_flight", "ok"] as const),
   )("settles a %s command ACK", async (status) => {
     const failed = ["timeout", "error", "rejected"].includes(status);
@@ -55,6 +55,17 @@ describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (co
       );
       expect(host.chatComposerFallbackByScope).toEqual({});
       expect(host.chatError).toBeFalsy();
+      const expectedContent =
+        command === "steer"
+          ? status === "ok"
+            ? "Steered."
+            : "Steering requested."
+          : status === "ok"
+            ? "Redirected."
+            : "Redirect requested.";
+      expect(host.chatMessages).toContainEqual(
+        expect.objectContaining({ role: "system", content: expectedContent }),
+      );
     }
   });
 
