@@ -1,0 +1,3 @@
+# PR #196869: exact 18-line regression growth for the agent command claiming its session turn
+# under a mixed-case key; without it the embedded runner queues behind its own caller.
+18
