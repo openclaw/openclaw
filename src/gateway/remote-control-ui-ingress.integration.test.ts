@@ -32,7 +32,7 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
-import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import * as operatorRunAuthority from "./operator-run-authority.js";

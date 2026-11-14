@@ -29,7 +29,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
-import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,

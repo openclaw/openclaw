@@ -332,9 +332,9 @@ describe("chat pane composer controls", () => {
 
       expect(container.textContent).not.toContain(failureLabel);
       if (retained) {
-        expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull();
-        expect(container.textContent).toContain("Refreshing models…");
-        expect(container.querySelector(".btn__spinner")).not.toBeNull();
+        expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
+        expect(container.textContent).not.toContain("Refreshing models…");
+        expect(container.querySelector(".btn__spinner")).toBeNull();
         expect(
           container
             .querySelector<HTMLElement>("[data-chat-model-option]")
@@ -342,12 +342,7 @@ describe("chat pane composer controls", () => {
         ).toBeNull();
         expect(container.textContent).toContain("Cached Model");
       } else {
-        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
-        expect(
-          container
-            .querySelector('[data-chat-model-catalog-state="loading"]')
-            ?.getAttribute("aria-label"),
-        ).toBe("Loading models…");
+        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).toBeNull();
       }
 
       checking.reject(new Error("Runtime preparation still failed"));
