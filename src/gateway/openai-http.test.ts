@@ -16,6 +16,10 @@ import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  SessionWorkStartInvalidatedError,
+  createSessionWorkStartChangedError,
+} from "../config/sessions/work-start-error.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
@@ -50,6 +54,7 @@ import {
   parseSseDataLines,
   readRawChatCompletionStream,
 } from "./http-stream.test-support.js";
+import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import { registerOpenAiHttpSamplingTests } from "./openai-http.sampling.test-support.js";
 import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -2666,4 +2671,41 @@ describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
       }
     },
   );
+});
+
+describe("resolveOpenAiCompatError session work-start conflicts", () => {
+  it("maps a changed-while-starting rejection to a retryable 409 with its stable code", () => {
+    expect(
+      resolveOpenAiCompatError(createSessionWorkStartChangedError("agent:main:conflict")),
+    ).toEqual({
+      status: 409,
+      error: {
+        message: 'Session "agent:main:conflict" changed while starting work. Retry.',
+        type: "invalid_request_error",
+        code: "SESSION_WORK_START_CHANGED",
+      },
+    });
+  });
+
+  it("maps an invalidated work-start rejection to a retryable 409 with its stable code", () => {
+    const error = new SessionWorkStartInvalidatedError(
+      'Session "agent:main:conflict" was invalidated while starting work. Retry.',
+    );
+    expect(resolveOpenAiCompatError(error)).toEqual({
+      status: 409,
+      error: {
+        message: 'Session "agent:main:conflict" was invalidated while starting work. Retry.',
+        type: "invalid_request_error",
+        code: "SESSION_WORK_START_INVALIDATED",
+      },
+    });
+  });
+
+  it("maps wrapped work-start conflicts that only carry the stable code", () => {
+    const wrapped = Object.assign(new Error("wrapped"), { code: "SESSION_WORK_START_CHANGED" });
+    expect(resolveOpenAiCompatError(wrapped)).toMatchObject({
+      status: 409,
+      error: { code: "SESSION_WORK_START_CHANGED", type: "invalid_request_error" },
+    });
+  });
 });
