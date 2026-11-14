@@ -18,8 +18,7 @@ import {
 import { waitForWorkerMemoryPort } from "./worker-memory-port.test-support.js";
 import {
   collectPostgresBridgeCounters,
-  countPostgresBridges,
-  countPostgresPoolSelfRoots,
+  summarizePostgresBridgeCounters,
 } from "./worker-postgres-bridge-census.js";
 
 it("counts four physical services across direct and deeply nested logical bridges", async () => {
@@ -145,7 +144,12 @@ it("counts a shared counter once when multiple diagnostic sources forward it", (
     { postgresBridgeCounters: [descendant] },
     { postgresBridgeCounters: [forwarded] },
   ]);
-  expect(countPostgresBridges(counters)).toBe(3);
-  expect(countPostgresPoolSelfRoots(counters)).toBe(1);
-  expect(countPostgresPoolSelfRoots([{ threadId: 9002, count: descendant.count }])).toBe(0);
+  expect(summarizePostgresBridgeCounters(counters)).toEqual({
+    postgresBridgeCount: 3,
+    postgresPoolSelfRootCount: 1,
+  });
+  expect(summarizePostgresBridgeCounters([{ threadId: 9002, count: descendant.count }])).toEqual({
+    postgresBridgeCount: 3,
+    postgresPoolSelfRootCount: 0,
+  });
 });

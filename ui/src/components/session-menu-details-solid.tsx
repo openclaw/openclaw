@@ -10,7 +10,9 @@ import type {
   SessionManagementActionKind,
   SessionMenuActionsState as MenuState,
 } from "./session-menu-actions.ts";
+import { HeaderSearch } from "./solid/header-search.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { MenuHeading } from "./solid/menu-heading.tsx";
 import type { MenuControls, MenuEntry } from "./solid/menu.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 
@@ -69,7 +71,7 @@ export function useSessionMenuDetails(
     ) {
       options.push({ ...currentOwner, type: "human", id });
     }
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return options.filter((owner) =>
       terms.every((term) =>
         [
@@ -80,6 +82,7 @@ export function useSessionMenuDetails(
         ]
           .join(" ")
           .toLocaleLowerCase()
+          .normalize("NFC")
           .includes(term),
       ),
     );
@@ -92,16 +95,12 @@ export function useSessionMenuDetails(
         class="people-menu__search"
         ref={nativeListener("click", (event) => event.stopPropagation())}
       >
-        <input
-          ref={controls?.ref()}
-          type="search"
-          data-search
-          data-form-control
-          autocomplete="off"
-          aria-label={t("sessionsView.searchPeople")}
-          placeholder={t("sessionsView.searchPeople")}
-          value={query()}
-          onInput={(event) => setQuery(event.currentTarget.value)}
+        <HeaderSearch
+          label={t("sessionsView.searchPeople")}
+          query={query()}
+          controlRef={() => controls?.ref()}
+          inputProps={{ "data-search": "", "data-form-control": "" }}
+          onQueryChange={setQuery}
         />
       </div>
     ),
@@ -159,7 +158,11 @@ export function useSessionMenuDetails(
   const reason = () => readState().actionDisabledReasons["set-communication"];
   const communicationControls = (
     <div class="session-menu__communication">
-      <h3 class="session-menu__communication-heading">{t("sessionsView.communication.title")}</h3>
+      <MenuHeading
+        as="h3"
+        class="session-menu__communication-heading"
+        label={t("sessionsView.communication.title")}
+      />
       <For each={["send", "receive"] as const}>
         {(direction) => {
           const label = () =>

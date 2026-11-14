@@ -381,6 +381,38 @@ describe("loadWebMedia", () => {
     );
   });
 
+  it.runIf(process.platform !== "win32")(
+    "hands staged files under a missing folder of a symlinked root to host readers (#194406)",
+    async () => {
+      const base = tempDirs.make("staged-host-read-", fixtureRoot);
+      const real = path.join(base, "real");
+      const alias = path.join(base, "alias");
+      await fs.mkdir(path.join(real, "workspace"), { recursive: true });
+      await fs.symlink(real, alias);
+      const root = path.join(alias, "workspace");
+      const staged = path.join(root, "outbound", "staged.png");
+      const readFile = vi.fn(async () => TINY_PNG);
+
+      const result = await media.loadWebMedia(staged, {
+        maxBytes: 1024 * 1024,
+        localRoots: [root],
+        readFile,
+      });
+      expect([result.kind, result.buffer]).toEqual(["image", TINY_PNG]);
+      expect(readFile).toHaveBeenCalledWith(staged);
+
+      readFile.mockClear();
+      await expectAccessError(
+        media.loadWebMedia(path.join(alias, "outbound", "staged.png"), {
+          maxBytes: 1024 * 1024,
+          localRoots: [root],
+          readFile,
+        }),
+      );
+      expect(readFile).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves home-relative paths through allowed local roots", async () => {
     await withEnvAsync({ OPENCLAW_HOME: fixtureRoot }, async () => {
       const result = await loadLocal("~/workspace/chart.png", { localRoots: [workspaceDir] });

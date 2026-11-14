@@ -119,7 +119,7 @@ it("forks only placed background results and keeps their payload through a manua
   expect(estimateParentForkPromptTokens(source)).toBeGreaterThan(unplacedTokens);
 
   const trimmed = selectManualCompactTranscriptLines(
-    child.map((entry) => JSON.stringify(entry)),
+    (visit) => child.forEach((entry) => visit(JSON.stringify(entry))),
     2,
   );
   const entries = trimmed.lines.map((line) => JSON.parse(line)).filter(isIndexedSessionEntry);
@@ -147,6 +147,25 @@ it.each<[string, string[], string[]]>([
   }
   expectForkContext(history.events, expected);
 });
+
+it.each(["command", "delivery-mirror"])(
+  "does not treat an out-of-band %s as completion of the active model turn",
+  (model) => {
+    const history = createHistory();
+    history.turn("completed");
+    history.turn("active", true);
+    history.events.push(
+      timedMessageEvent("notice", "active-assistant", "2026-10-07T00:00:01.000Z", {
+        ...createExactAssistantMessage({
+          text: "Local fork effect committed",
+          provider: "openclaw",
+          model,
+        }),
+      }),
+    );
+    expectForkContext(history.events, ["completed"]);
+  },
+);
 
 it("does not count retained unanswered input against an empty fork", () => {
   const history = createHistory();

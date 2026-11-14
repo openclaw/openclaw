@@ -114,9 +114,12 @@ export function renderChatModelAccountControl(params: {
   const email = (profileId: string | undefined) =>
     profiles.find((profile) => profile.profileId === profileId)?.email;
   const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
-  const selectedLabel = selectedProfile?.displayName || selection.label;
+  const selectedLabel =
+    selection.kind === "automatic"
+      ? t("chat.modelAccounts.automatic")
+      : selectedProfile?.displayName || selection.label;
   const selectedIdentity = [
-    ...new Set([selectedProfile?.email, selectedLabel].filter(Boolean)),
+    ...new Set([selectedLabel, selectedProfile?.email].filter(Boolean)),
   ].join(" · ");
   const description = (account: UserModelAccount | undefined) =>
     email(account?.authProfileId) ??

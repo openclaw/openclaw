@@ -53,8 +53,8 @@ describe("progress card refresh control", () => {
       expect(details.open).toBe(!collapsed);
       for (const [state, status, calls] of [
         ["pending", "Refreshing task progress", 1],
-        ["failed", "Previous update kept", 2],
-        ["timeout", "may still be running", 3],
+        ["failed", "Couldn’t refresh progress. Try again. Your last update is saved.", 2],
+        ["timeout", "The agent may still be working", 3],
         ["updated", "Task progress updated", 4],
       ] as const) {
         show(state);

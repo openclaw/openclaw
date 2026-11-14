@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal } from "solid-js";
 import { observeScrollState, type ScrollState } from "../../components/scroll-state-observer.ts";
-import { revealInScrollRegion } from "../../components/scroll-state.ts";
+import { revealInlineInScrollRegion, revealInScrollRegion } from "../../components/scroll-state.ts";
 import { cancelLayout, scheduleLayout } from "../layout-frame.ts";
 import { listen } from "./listener.ts";
 
@@ -88,6 +88,7 @@ export function createScrollPosition(
   options: {
     region?: () => HTMLElement;
     revealTiming?: "animation-frame";
+    revealAxis?: "block" | "inline";
   } = {},
 ) {
   let retained:
@@ -192,7 +193,10 @@ export function createScrollPosition(
       if (options.region) {
         const region = options.region();
         if (region.contains(target)) {
-          revealInScrollRegion(region, target);
+          (options.revealAxis === "inline" ? revealInlineInScrollRegion : revealInScrollRegion)(
+            region,
+            target,
+          );
         }
       } else {
         target.scrollIntoView?.({ block: "nearest" });

@@ -22,6 +22,7 @@ export type CronFormState = {
   name: string;
   description: string;
   agentId: string;
+  ownerProfileId: string;
   sessionKey: string;
   clearAgent: boolean;
   enabled: boolean;
@@ -78,6 +79,7 @@ export type CronFormState = {
   failureAlertTo: string;
   failureAlertDeliveryMode: "" | "announce" | "webhook";
   failureAlertAccountId: string;
+  failureAlertThreadId: CronDelivery["threadId"] | undefined;
   timeoutSeconds: string;
 };
 
@@ -137,6 +139,8 @@ export type CronJobsState<Row = CronJob> = {
 };
 
 export type CronState<Row = CronJob> = CronJobsState<Row> & {
+  // History reads follow the presented surface, independently of scheduler reads.
+  canRefreshRuns?: () => boolean;
   cronStatus: CronStatus | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;

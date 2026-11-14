@@ -442,6 +442,7 @@ class SidebarCatalogGroupingTest {
       }
       composeRule.onNodeWithText("Pinned").performScrollTo().performClick()
       composeRule.onNodeWithText("Pinned catalog session").performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("No sessions").assertDoesNotExist()
       composeRule.onNodeWithText("Recent").performScrollTo().performClick()
       composeRule.onNodeWithText("Catalog recent session").performScrollTo().assertIsDisplayed()
 

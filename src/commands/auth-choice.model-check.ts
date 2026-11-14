@@ -1,7 +1,7 @@
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";

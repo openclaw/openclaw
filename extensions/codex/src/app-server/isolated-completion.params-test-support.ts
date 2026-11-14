@@ -19,8 +19,8 @@ export function isolatedParams(
         modelRoute: {
           provider: "openai",
           modelId: "gpt-5.4",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
           authRequirement: "subscription",
           requestTransportOverrides: "none",
         },

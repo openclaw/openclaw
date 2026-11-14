@@ -127,6 +127,9 @@ it("keeps the retained initial turn's Retry action usable while ordinary sending
     onRetrySessionPlacementStartup,
     onQueueRetry,
   });
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-thread")?.textContent).toContain("original prompt"),
+  );
   const transcript = container.querySelector(".chat-thread")?.textContent ?? "";
   expect(transcript).toContain("original prompt");
   expect(transcript).toContain("later draft");

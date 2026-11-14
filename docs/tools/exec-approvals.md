@@ -131,7 +131,11 @@ engine anchor and contains no approval policy. The row keeps the JSON document
 shown below as its authoritative value.
 
 The macOS app reads and edits this policy through bounded operations in the
-local OpenClaw CLI on both engines. The CLI routes to the running shared-state
+local OpenClaw CLI on both engines. Packaged apps use their matching bundled CLI,
+including on remote-only Macs that have never prepared a local Gateway runtime.
+An older CLI on `PATH` does not replace this private approval operation. The
+selected profile, state directory, and explicit config path still select the
+local policy owner. The CLI routes to the running shared-state
 owner, or acquires exclusive offline custody when no owner is running. It never
 falls back to opening the shared database from Swift. Saving a policy requires
 the last observed hash; a stale save fails and must be reloaded. Gateway and
@@ -143,8 +147,9 @@ allowed do not deny it; execution does not require an unchanged policy hash.
 
 An unavailable owner or PostgreSQL database denies native execution with an
 `Exec policy unavailable` diagnostic. Inspect `openclaw gateway status` and the
-selected database, or update the app and CLI if the required operation is
-missing. Stopping the Gateway permits offline policy operations only when the
+selected database, or update the app if its bundled operation is missing.
+Unbundled development builds need a matching local CLI. Stopping the Gateway
+permits offline policy operations only when the
 selected database remains reachable. A policy snapshot shown in the UI is for
 display; it cannot authorize execution.
 
@@ -178,8 +183,16 @@ Legacy allowlist entries may contain `null` for `lastUsedAt` or
 `lastUsedCommand`. Doctor treats those two usage fields as absent during
 import, including when the config still needs repair. This does not relax
 validation of the current policy: other malformed fields or conflicting legacy
-policies remain preserved for operator recovery, and exec approvals stay
-blocked until the legacy file is resolved. After repair, verify with
+policies remain preserved for operator recovery. The Gateway and node host start
+degraded with canonical SQLite approvals still authoritative; they never import
+conflicting policy or socket credentials. Without canonical policy, exec approvals
+remain unavailable until migration succeeds. Status and Doctor report the retained
+startup warning, including the possibility that an older node host or external
+writer is still changing the legacy file. Stop those writers and reconcile the
+retained file with the intended policy, preserving SQLite policy, then run
+`openclaw doctor --fix` against the same state directory. Legacy-only valid policy
+still imports automatically at startup, and byte-identical legacy copies are removed
+by the migration owner. After repair, verify with
 `openclaw approvals get` using the same state directory.
 
 Example shared policy (socket credentials are held by the local client owner):
@@ -621,6 +634,10 @@ operation without prompting while the grant is valid. The approval card says
 so up front: automation approvals carry a scope line describing exactly what
 Always allow will mint.
 
+Card and ledger previews truncate sanitized text without splitting UTF-16 surrogate pairs.
+Those display limits do not shorten the command, working directory, or
+environment used to bind and match a grant.
+
 ### What a grant covers, and when it stops
 
 A grant is rejected and a normal prompt is required when the job is deleted or its
@@ -704,7 +721,7 @@ native approval clients), see
 
 ## Control UI editing
 
-Use the **Control UI -> Nodes -> Exec approvals** card to edit defaults,
+Use the **Control UI → Devices → Command approvals** card to edit defaults,
 per-agent overrides, and allowlists. Pick a scope (Defaults or an agent),
 tweak the policy, add/remove allowlist patterns, then **Save**. The UI
 shows last-used metadata per pattern so you can keep the list tidy.

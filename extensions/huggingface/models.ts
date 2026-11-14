@@ -5,6 +5,7 @@ import {
   readLiveModelCatalogStringField,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { resolveDefaultModelMaxTokens } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
@@ -25,7 +26,6 @@ const HUGGINGFACE_DEFAULT_COST = {
 };
 
 const HUGGINGFACE_DEFAULT_CONTEXT_WINDOW = 131072;
-const HUGGINGFACE_DEFAULT_MAX_TOKENS = 8192;
 
 type HFModelEntry = {
   id: string;
@@ -121,6 +121,8 @@ export async function discoverHuggingfaceModels(
         const providerContexts = providers
           .map((provider) => provider?.context_length)
           .filter((context): context is number => typeof context === "number" && context > 0);
+        const servedContextWindow =
+          providerContexts.length > 0 ? Math.min(...providerContexts) : undefined;
         const model: ModelDefinitionConfig = catalogById.get(id) ?? {
           id,
           name: displayNameFromApiEntry(entry),
@@ -131,12 +133,13 @@ export async function discoverHuggingfaceModels(
               : ["text"],
           cost: HUGGINGFACE_DEFAULT_COST,
           contextWindow: HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: HUGGINGFACE_DEFAULT_MAX_TOKENS,
+          maxTokens: resolveDefaultModelMaxTokens(
+            servedContextWindow ?? HUGGINGFACE_DEFAULT_CONTEXT_WINDOW,
+          ),
         };
         models.push({
           ...model,
-          contextWindow:
-            providerContexts.length > 0 ? Math.min(...providerContexts) : model.contextWindow,
+          contextWindow: servedContextWindow ?? model.contextWindow,
           ...(providers.some((provider) => provider?.supports_tools === false)
             ? { compat: { ...model.compat, supportsTools: false } }
             : {}),

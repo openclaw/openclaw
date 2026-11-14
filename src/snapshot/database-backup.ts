@@ -21,9 +21,12 @@ import {
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import type { BackupTask, Capture, Restore } from "./database-backup.operations.js";
 import type { PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
@@ -47,6 +50,8 @@ export async function runOfflineDatabaseBackup<T>(
         configSourcePath?: string;
         mapIncludePath?: (absolutePath: string) => string;
         env?: NodeJS.ProcessEnv;
+        /** Replaces only the captured `database.postgres.connection` with this env var for this run. */
+        postgresConnectionEnv?: string;
       },
   /** Archive capture reads a running owner's stores through per-store snapshots. */
   options?: { online?: true },
@@ -108,6 +113,23 @@ export async function runOfflineDatabaseBackup<T>(
             : createInvalidConfigError(snapshot.path, details);
         }
         config = snapshot.config;
+        if (capturedPaths?.postgresConnectionEnv) {
+          config = {
+            ...config,
+            database: {
+              ...config.database,
+              postgres: {
+                ...config.database?.postgres,
+                // The captured config owns its env provider alias and allowlist.
+                connection: {
+                  source: "env",
+                  provider: resolveDefaultSecretProviderAlias(config, "env"),
+                  id: capturedPaths.postgresConnectionEnv,
+                },
+              },
+            },
+          };
+        }
       }
       const selection = captured?.selection ?? (await resolveDatabaseEngineSelection(config));
       assertCurrent();
@@ -155,6 +177,42 @@ export function capturePostgresBackup(
     { operation: "capture", params: input },
     assertCurrent,
   );
+}
+
+/** Preserve the exact store and validate its captured rows before a migration can rewrite them. */
+export async function createVerifiedDatabaseMigrationBackup(params: {
+  sourcePath: string;
+  targetPath: string;
+  config: OpenClawConfig;
+  assertCurrent: () => void;
+  validate: SqliteSnapshotValidator;
+}): Promise<{ path: string }> {
+  params.assertCurrent();
+  if (readBackupEngine(params.sourcePath).engine === "sqlite") {
+    const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
+    return createVerifiedSqliteSnapshot({
+      sourcePath: params.sourcePath,
+      targetPath: params.targetPath,
+      preserveRowIds: true,
+      beforePublish: params.assertCurrent,
+      validate: params.validate,
+    });
+  }
+  await capturePostgresBackup({
+    sourcePath: params.sourcePath,
+    directory: params.targetPath,
+    profile: "exact",
+    config: params.config,
+    assertCurrent: params.assertCurrent,
+  });
+  // The exact export is a verified portable SQLite image, not the local PG anchor.
+  // Validate those captured rows rather than infer their contents from live fingerprints.
+  using database = openNodeSqliteDatabase(path.join(params.targetPath, "database.sqlite"), {
+    readOnly: true,
+  });
+  params.validate(database, params.targetPath);
+  params.assertCurrent();
+  return { path: params.targetPath };
 }
 
 export async function captureGitPostgresBackup(params: {
@@ -207,12 +265,42 @@ export function discardPostgresRestores(config: OpenClawConfig, namespaces: stri
   return runBackupTask<void>({ operation: "discard", params: { config, namespaces } }, () => {});
 }
 
+/** Drop the server copies of schema captures before their owner removes the directories. */
+export async function discardPostgresSchemaCaptures(
+  config: OpenClawConfig,
+  directories: readonly string[],
+) {
+  const { readSnapshotExportEnvelope } = await import("./export-envelope.js");
+  const namespaces: string[] = [];
+  for (const directory of directories) {
+    const envelope = await readSnapshotExportEnvelope(directory);
+    if (envelope.engine === "postgres" && envelope.manifest.schema) {
+      namespaces.push(envelope.manifest.schema);
+    }
+  }
+  if (namespaces.length > 0) {
+    await discardPostgresRestores(config, namespaces);
+  }
+}
+
 export function preparePostgresRestore({ assertCurrent, ...params }: Restore) {
   return runBackupTask<
     Awaited<
       ReturnType<typeof import("./database-backup.operations.js").preparePostgresRestoreInWorker>
     >
   >({ operation: "restore", params }, assertCurrent);
+}
+
+/** Drop this store's marked schema captures whose directory under the prefix was removed. */
+export function prunePostgresSchemaCaptures(
+  sourcePath: string,
+  config: OpenClawConfig,
+  directoryPrefix: string,
+) {
+  return runBackupTask<string[]>(
+    { operation: "prune", params: { sourcePath, config, directoryPrefix } },
+    () => {},
+  );
 }
 
 /** Resolve physical family identity through the same provider admission as capture. */

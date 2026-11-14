@@ -1,4 +1,3 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
@@ -7,6 +6,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { z } from "zod";
+import type { CodexStdioChild } from "./stdio-worker.js";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
   isDeadProcessState,
@@ -163,7 +163,7 @@ export function createCodexAppServerProcessReaperService(): OpenClawPluginServic
 
 /** Reap previous owners before spawn; commit this child's identity before initialization. */
 export async function prepareCodexAppServerProcessRegistration(): Promise<
-  (child: ChildProcessWithoutNullStreams) => Promise<void>
+  (child: CodexStdioChild) => Promise<void>
 > {
   const store =
     process.platform === "win32" ? undefined : await reapRegisteredCodexAppServerOrphans();

@@ -54,8 +54,11 @@ export async function preparePendingInputStore(
     throw new Error("Restart resume requires a durable session.");
   }
   if (memoryOwner) {
+    assertCurrent();
     const acquired = await acquireSessionActorStorage(scope, {
-      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      // The actor holds settlement custody after Stop ends execution authority.
+      // Stage, reads, and completion still use the caller's live authority.
+      lifetime: { assertCurrent() {}, assertReadable() {} },
       authority: { assertCurrent, authorize: assertCurrent },
     });
     if (!acquired) {

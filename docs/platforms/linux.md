@@ -33,7 +33,7 @@ Windows Gateway. On Linux, it:
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
 - opens custodian onboarding after automatic local setup to prepare AI access
-  and explain the selection; manual setup retains the explicit Model Setup picker
+  and explain the selection; manual setup retains the explicit Models picker
 - continues into guided onboarding after connecting a new model; onboarding can
   import detected Claude Code, Codex, or Hermes memories into the agent workspace
   (the same import stays available later under Settings → Import Memory)
@@ -248,7 +248,7 @@ With no saved OpenClaw configuration or Gateway profiles, the app starts local
 setup automatically and opens custodian onboarding in the Control UI. The
 custodian prepares available AI access and explains the selection and alternatives.
 **Use a different Gateway** opens Manage Gateways, **Review permissions** opens
-this computer's permissions, and **Open AI setup** opens Model Setup.
+this computer's permissions, and **Open AI setup** opens Models.
 The card labels the local Gateway **This computer** and saved remote Gateways
 by name; its native actions retain the selected Gateway's base path.
 
@@ -283,7 +283,7 @@ shared-store references must be resolved on their owning Gateway host.
 SSH uses your existing OpenSSH authentication and host-key verification. See
 [Remote access](/gateway/remote) for secure Gateway configuration.
 
-After a manual connection succeeds, Model Setup discovers AI access available to the
+After a manual connection succeeds, Models discovers AI access available to the
 selected Gateway and shows it as a choice. Discovery does not import or copy an
 account. On a fresh visit, the companion does not select, test, install, or save
 a provider until you choose its action. Provider sign-in or API-key entry is
@@ -297,7 +297,7 @@ An uncertain error keeps replacement setup blocked because settings may already
 have been saved. Confirmed cancellation and requests rejected before setup
 started can be retried immediately.
 
-Model Setup can resume an activation across a Gateway restart or app reopen
+Models can resume an activation across a Gateway restart or app reopen
 while its temporary recovery record is valid. Recovery stays bound to the same
 Gateway, agent, and authentication. When the known activation target still
 matches the selected model, OpenClaw verifies that exact model before continuing
@@ -420,6 +420,32 @@ requests. Manual runs build and upload the `.deb` and AppImage as the
 `openclaw-linux-companion` workflow artifact; they do not publish a release.
 See `apps/linux/README.md` in the repository for Linux build dependencies and
 development commands.
+
+### Raspberry Pi and low-memory desktops
+
+For headless Gateway hosts, see the [Raspberry Pi swap setup](/install/raspberry-pi#setup)
+and [managed service heap sizing](/platforms/linux#gateway-service-systemd).
+The settings below apply to the desktop companion's WebKitGTK WebView.
+
+If a source-built ARM64 companion shows a blank or frozen window on a Pi with
+Mesa, quit the companion fully and try launching the installed binary with:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 openclaw-desktop
+```
+
+These disable the DMA-BUF renderer and accelerated compositing. They were
+[reported to help on Pi 5 with Debian 13 and WebKitGTK 2.52](https://github.com/openclaw/openclaw/issues/138279#issuecomment-5547961043);
+results depend on the graphics stack. This does not imply official ARM64 release availability.
+
+For memory pressure in the WebView, try a separate launch with
+`JSC_useJIT=false openclaw-desktop`. Disabling JavaScriptCore's JIT may reduce
+memory use at the cost of JavaScript performance. The linked Pi measurements
+are single-host observations, not a guaranteed memory budget.
+
+Keep these variables in the companion launcher rather than a shell profile or
+Gateway service. For an AppImage, replace `openclaw-desktop` with its path.
+Remove the variables to return to the default rendering and JIT behavior.
 
 ### Quick Chat
 
@@ -657,29 +683,37 @@ arguments, and cleanup ownership do not select the cgroup. Descendants inherit
 their command's placement.
 
 On Node, the Gateway's existing spawn broker launches supported child commands
-and PTY helpers without forking the Gateway's large address space. Durable-process
+and PTY helpers without forking the Gateway's large address space. Workspace
+inventory and Git pack transfers write output files in the broker, including
+bounded output, and remain Gateway-internal work. Durable-process
 observation and cron command watchers retain that broker across detached timers
 and queues. This changes the launch process, not execution intent: durable
 `systemctl` helpers remain Gateway work, while durable commands themselves remain
 independent systemd user services.
 
-The `agent-exec` CPU weight is `10`, compared with the Gateway leaf's default `100`; these are
-relative shares during contention, not a fixed CPU cap. Aggregate `memory.high`
-reuses the host exec memory allowance: the smaller of one quarter of available
-host/container memory and half that memory remaining after Gateway RSS.
-Existing per-exec memory limits and child-first OOM policy still apply.
-`memory.high` applies reclaim pressure; it is not a hard memory limit.
+The `agent-exec` CPU weight is `10`, compared with the Gateway leaf's default `100`;
+these are relative shares during contention, not a fixed CPU cap. Memory uses the
+[shared host-exec budget](/tools/exec#host-memory-protection). Existing delegated
+I/O installations retain their hierarchy and use sampled memory enforcement.
+Before ordinary exec starts, the Gateway applies the full shared RAM allowance
+as the aggregate `memory.high` soft limit, replacing the former quarter-capacity
+throttle. This also reclaims file cache; the sampler owns command cancellation.
+Operator-supplied service resource limits remain in effect.
 
 An aggregate `io.max` ceiling covers agent-exec IO on each device backing the
-Gateway state directory. Non-rotational devices receive **160 MiB/s in each
+Gateway state directory. Non-rotational devices receive **250 MiB/s in each
 direction and 40,960 read/write operations per second**, independent of RAM or
 device count. Classification uses the logical device's `queue/rotational` value,
 including md/dm devices, rather than separately throttling their members.
 Rotational devices, or devices without that attribute, retain the conservative
-pressure budget: `memory.high / 600 / deviceCount` bytes per second in each
-direction, with that rate divided by `4096` operations per second. These are
-policy ceilings, not measured disk bandwidth. For example, a 4 GiB memory
-allowance on one SSD gives 160 MiB/s per direction; on a rotational device it
+I/O sizing basis divided by `600 * deviceCount` bytes per second in each
+direction, with that rate divided by `4096` operations per second. The I/O sizing
+basis remains the smaller of one quarter of effective host RAM and half the RAM
+remaining after Gateway RSS; it does not limit command memory. These are
+policy ceilings, not measured disk bandwidth. The non-rotational ceiling balances
+agent IO throughput against Gateway WAL commit latency on btrfs, rather than
+device utilization; the IOPS ceiling remains fixed at the measured 40,960.
+For example, a 4 GiB I/O sizing basis on one SSD gives 250 MiB/s per direction; on a rotational device it
 gives about 6.8 MiB/s. Half of any finite ancestor IO limit further caps each
 corresponding rate. Gateway IO remains outside the exec ceiling. The policy is
 applied at Gateway startup.

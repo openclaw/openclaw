@@ -24,7 +24,16 @@ export type ReplyLine = {
 
 export const NO_REPLY_LINE: ReplyLine = { state: "hidden" };
 
-type ReplyContext = Pick<MessageGroup, "replyShared" | "replyTurnSource" | "runId">;
+/** Splits a display name after its first word; names without spaces stay whole. */
+export function splitReplyName(name: string): { first: string; rest: string } {
+  const match = /^(\S+)(\s.*)$/su.exec(name);
+  return match ? { first: match[1]!, rest: match[2]! } : { first: name, rest: "" };
+}
+
+type ReplyContext = Pick<
+  MessageGroup,
+  "replyShared" | "replyTurnSource" | "replyPreviousMessageId" | "runId"
+>;
 
 function foundPreview(result: ReturnType<ReplyPreviewLookup>) {
   return result && !("pending" in result || "missing" in result || "oversized" in result)
@@ -37,6 +46,7 @@ function resolveSource(
   source: unknown,
   sender: SenderIdentity | undefined,
   lookup: ReplyPreviewLookup | undefined,
+  previousMessageId?: string,
 ): ReplyLine {
   const id = source ? (persistedMessageEntryId(source) ?? undefined) : undefined;
   const preview = id ? foundPreview(lookup?.(id)) : undefined;
@@ -46,7 +56,7 @@ function resolveSource(
     ? {
         state: "named",
         name,
-        text: preview?.text,
+        text: id && id === previousMessageId ? undefined : preview?.text,
         sender: { ...author, name },
         agentAvatar: preview?.agentAvatar,
         openId: id,
@@ -106,7 +116,7 @@ function resolveTarget(
     return {
       state: "named",
       name,
-      text: preview?.text,
+      text: id === context?.replyPreviousMessageId ? undefined : preview?.text,
       sender: { ...sender, name },
       agentAvatar: preview?.agentAvatar,
       openId: id,
@@ -183,11 +193,16 @@ export function resolveGroupReplyLine(
     return source &&
       (sender || !group.replyShared) &&
       (group.replyShared || source.key !== group.replyTurnSource?.key)
-      ? resolveSource(source.message, sender, lookup)
+      ? resolveSource(source.message, sender, lookup, group.replyPreviousMessageId)
       : NO_REPLY_LINE;
   }
   // Automatic attribution: several people share this thread.
   return group.replyToSender
-    ? resolveSource(group.replyToMessage?.message, group.replyToSender, lookup)
+    ? resolveSource(
+        group.replyToMessage?.message,
+        group.replyToSender,
+        lookup,
+        group.replyPreviousMessageId,
+      )
     : NO_REPLY_LINE;
 }

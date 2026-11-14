@@ -13,8 +13,11 @@ import { prepareGatewaySkillAuthoring } from "../gateway/skill-library-authoring
 import { registerSkillsChangeListener } from "../skills/runtime/refresh-state.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -32,6 +35,7 @@ import {
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 let root: string;
+let resetWorkshopPlugin: (() => void) | undefined;
 const skill = (name: string, body = "Run the deployment.", description = "Deploy staging builds") =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
 const text = (result: { content: Array<{ type: string; text?: string }> }) =>
@@ -44,26 +48,44 @@ beforeEach(async () => {
   });
   config = {
     agents: { entries: { main: { workspace: state.workspaceDir } } },
-    plugins: { enabled: false },
+    plugins: { enabled: true, allow: ["skill-workshop"] },
     skills: { load: { watch: false } },
   };
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
+  resetWorkshopPlugin = (await activateWorkshopPluginForTest(config)).reset;
   root = path.join(state.agentDir(), "workshop-skills");
 });
 afterEach(async () => {
+  resetWorkshopPlugin?.();
   vi.restoreAllMocks();
   await closeSkillsWatchers(true);
   await state.cleanup();
 });
 
+/** A Workshop background review: the plugin's own fork of the reviewed session. */
+function reviewFork(sourceSessionKey: string) {
+  return {
+    inputProvenance: {
+      kind: "internal_system" as const,
+      sourceTool: "session_fork",
+      sourceSessionKey,
+    },
+    runtimePluginToolOwnerId: "skill-workshop",
+  };
+}
 function tools(overrides: Partial<NonNullable<Parameters<typeof createOpenClawTools>[0]>> = {}) {
+  const runId = overrides.runId ?? randomUUID();
   return createOpenClawTools({
     config,
     agentDir: state.agentDir(),
     workspaceDir: state.workspaceDir,
     agentSessionKey: "agent:main:contract",
-    runId: randomUUID(),
+    runId,
+    // Run facts an embedded attempt gives its tools: the admitted-run guard, and the run id
+    // the tool-call wrapper attributes plugin-reported skill use to.
+    assertInvocationCurrent: () => {},
+    beforeToolCallHookContext: { runId },
     ...overrides,
   });
 }
@@ -255,7 +277,7 @@ describe("Workshop through the OpenClaw tool set", () => {
     const options = {
       runId,
       agentSessionKey: "agent:main:internal-session-effects:review",
-      skillWorkshop: { reviewOf },
+      ...reviewFork(reviewOf),
     };
     const review = workshop(options);
     const actions = [
@@ -279,7 +301,7 @@ describe("Workshop through the OpenClaw tool set", () => {
     expect((await changes()).changes).toEqual([
       expect.objectContaining({ actor: "review", sessionKey: reviewOf, runId, action: "patch" }),
     ]);
-    setRuntimeConfigSnapshot({ ...config, skills: { workshop: { autonomous: { mode: "off" } } } });
+    setRuntimeConfigSnapshot(workshopPluginConfig({ autonomous: { mode: "off" } }, config));
     await expect(retried.execute("off", { name: "deploy", ...actions[1] })).rejects.toThrow(
       "Learning is off; background reviews may not change skills.",
     );
@@ -301,14 +323,11 @@ describe("Workshop through the OpenClaw tool set", () => {
 
   it("T8: a propose-mode review saves drafts only; the foreground lists, views, and discards them", async () => {
     await seed();
-    config = {
-      ...config,
-      skills: { ...config.skills, workshop: { autonomous: { mode: "propose" } } },
-    };
+    config = workshopPluginConfig({ autonomous: { mode: "propose" } }, config);
     setRuntimeConfigSnapshot(config);
     const review = workshop({
       agentSessionKey: "agent:main:internal-session-effects:review",
-      skillWorkshop: { reviewOf: "agent:main:telegram:direct:42" },
+      ...reviewFork("agent:main:telegram:direct:42"),
     });
     await review.execute("view", { action: "view", name: "deploy" });
     await expect(
@@ -600,13 +619,10 @@ describe("Workshop through the OpenClaw tool set", () => {
     [1, 1_024],
     [999_999, 200_000],
   ] as const)("L5: enforces maxSkillBytes %s as %s bytes", async (configured, limit) => {
-    const boundedConfig: OpenClawConfig = {
-      ...config,
-      skills: {
-        ...config.skills,
-        workshop: configured === undefined ? {} : { maxSkillBytes: configured },
-      },
-    };
+    const boundedConfig = workshopPluginConfig(
+      configured === undefined ? {} : { maxSkillBytes: configured },
+      config,
+    );
     const tool = workshop({ config: boundedConfig });
     const prefix = skill("bounded", "");
     const content = prefix + "x".repeat(limit - Buffer.byteLength(prefix));
@@ -623,20 +639,41 @@ describe("Workshop through the OpenClaw tool set", () => {
   });
 
   it.each([false, true])(
-    "T2 T3: host-issued capability routes personal operations (multiple profiles: %s)",
+    "T2 T3: host-issued capability adds skill_library for personal operations (multiple profiles: %s)",
     async (multiple) => {
-      expect(tools({ sandboxed: true }).some((tool) => tool.name === "skill_workshop")).toBe(false);
+      const skillToolNames = (overrides: Parameters<typeof tools>[0]) =>
+        tools(overrides)
+          .map((tool) => tool.name)
+          .filter((name) => name === "skill_workshop" || name === "skill_library");
+      expect(skillToolNames({ sandboxed: true })).toEqual([]);
+      expect(skillToolNames({})).toEqual(["skill_workshop"]);
       const alice = ensureProfileForEmail("alice@example.test");
       if (multiple) {
         ensureProfileForEmail("bob@example.test");
       }
       const catalog = await prepareUserProfileCatalog();
+      const ownerConfig: OpenClawConfig = {
+        ...config,
+        gateway: {
+          roles: {
+            default: "administrator",
+            definitions: {
+              administrator: {
+                scopes: ["operator.admin"],
+                agents: "*",
+                sessions: { others: "view" },
+              },
+              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+            },
+          },
+        },
+      };
       const owner = {
         client: {
           authenticatedUserProfile: { profileId: alice.id },
           connect: { scopes: ["operator.admin"] },
         },
-        context: { getRuntimeConfig: () => config },
+        context: { getRuntimeConfig: () => ownerConfig },
       } as Parameters<typeof prepareGatewaySkillAuthoring>[0];
       const capability = await prepareGatewaySkillAuthoring(owner, "agent:main:contract", true);
       expect(capability?.defaultTarget).toBe(multiple ? "personal" : "workspace");
@@ -649,8 +686,16 @@ describe("Workshop through the OpenClaw tool set", () => {
       try {
         const admitted = await admission.admit("embedded");
         capability!.bind(admitted);
-        const tool = workshop({ sandboxed: true, skillWorkshop: { libraryAuthoring: capability } });
-        const invoke = (args: Record<string, unknown>) =>
+        // Documented loss: the plugin tool refuses sandboxed runs, so this library turn is not
+        // sandboxed (it was `sandboxed: true` while core admitted Workshop through the grant).
+        const run = { sandboxed: false, skillLibraryAuthoring: capability };
+        // Plugin tools follow core tools; provider requests sort tools by name, so only the set
+        // of skill tools is model-visible behavior.
+        expect(skillToolNames(run).toSorted()).toEqual(
+          multiple ? ["skill_library"] : ["skill_library", "skill_workshop"],
+        );
+        const surface = tools(run);
+        const invoke = (name: string, args: Record<string, unknown>) =>
           withGatewayToolCallerIdentity(
             {
               agentId: "main",
@@ -658,16 +703,20 @@ describe("Workshop through the OpenClaw tool set", () => {
               operationalRunInstance: admitted.operationalRunInstance,
               receiptAuthority: () => true,
             },
-            () => tool.execute("personal", args),
+            () => surface.find((tool) => tool.name === name)!.execute("personal", args),
           );
         if (!multiple) {
-          await invoke({ action: "create", name: "workspace", content: skill("workspace") });
+          await invoke("skill_workshop", {
+            action: "create",
+            name: "workspace",
+            content: skill("workspace"),
+          });
           expect(await fs.readFile(path.join(root, "workspace", "SKILL.md"), "utf8")).toBe(
             skill("workspace"),
           );
         }
         const personal = multiple ? {} : { target: "personal" };
-        const receipt = await invoke({
+        const receipt = await invoke("skill_library", {
           ...personal,
           action: "create",
           name: "personal",
@@ -678,14 +727,28 @@ describe("Workshop through the OpenClaw tool set", () => {
           target: "personal",
           entry: { ownerProfileId: alice.id },
         });
-        const listing = await invoke({ ...personal, action: "list" });
+        const listing = await invoke("skill_library", { ...personal, action: "list" });
         expect(text(listing)).toContain("personal");
         await expect(
-          invoke({ target: "personal", action: "view", name: "personal" }),
-        ).rejects.toThrow("Invalid personal Skill Workshop arguments");
+          invoke("skill_library", { target: "personal", action: "view", name: "personal" }),
+        ).rejects.toThrow("Invalid skill_library arguments");
         await expect(fs.stat(path.join(root, "personal"))).rejects.toMatchObject({
           code: "ENOENT",
         });
+        if (!multiple) {
+          // A demoted admin keeps the definition but loses workspace writes.
+          setUserProfileRole(alice.id, "reader");
+          await expect(
+            invoke("skill_workshop", {
+              action: "create",
+              name: "demoted",
+              content: skill("demoted"),
+            }),
+          ).rejects.toThrow("current administrator authority");
+          await expect(fs.stat(path.join(root, "demoted"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
       } finally {
         admission.close();
         catalog.release();

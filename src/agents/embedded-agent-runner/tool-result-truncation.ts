@@ -651,7 +651,7 @@ export function truncateOversizedToolResultsInMessages(
       if (projectionKey) {
         projectionState.frozen.add(projectionKey);
         if (
-          plan.changedIndices.size > 0 &&
+          plan.changedIndices.has(index) &&
           projectedMessage?.role === "toolResult" &&
           projectedMessage !== originalMessage
         ) {

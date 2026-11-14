@@ -13,6 +13,8 @@ import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
+import { SkillResourceDeliveryLimitError } from "../skills/runtime/resource-delivery-error.js";
+import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -30,9 +32,11 @@ import {
 } from "./failover/error.js";
 import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
+import { resolveRetryAfterMs } from "./failover/retry-evidence.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
 } from "./harness/errors.js";
@@ -180,6 +184,7 @@ function normalizeFailoverStatus(status: number | undefined, code?: string): num
 const FAILOVER_STATUS = new Map<FailoverReason, number>([
   ["billing", 402],
   ["server_error", 500],
+  ["route_unavailable", 503],
   ["rate_limit", 429],
   ["overloaded", 503],
   ["auth", 401],
@@ -311,6 +316,7 @@ function hasRuntimeCoordinationFailure(err: unknown): boolean {
   }
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
     (candidate) =>
+      candidate instanceof SkillResourceDeliveryLimitError ||
       isSessionWorkStartInvalidatedError(candidate) ||
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
       resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
@@ -486,7 +492,13 @@ export function resolveFailoverClassificationFromError(
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskFailure(err)) {
+  if (
+    isAgentHarnessPreflightError(err) ||
+    findLocalWorkerTaskFailure(err) ||
+    collectErrorGraphCandidates(err, resolveNestedErrors).some(
+      (candidate) => candidate instanceof AgentHarnessModelRequestPolicyError,
+    )
+  ) {
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.
@@ -546,6 +558,7 @@ export function describeFailoverError(err: unknown): {
   message: string;
   rawError?: string;
   rateLimitRetriesExhausted?: number;
+  rateLimitResetAt?: number;
   reason?: FailoverReason;
   status?: number;
   code?: string;
@@ -568,6 +581,7 @@ export function describeFailoverError(err: unknown): {
       message: err.message,
       rawError: err.rawError,
       rateLimitRetriesExhausted: err.rateLimitRetriesExhausted,
+      rateLimitResetAt: err.rateLimitResetAt,
       reason: err.reason,
       status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
@@ -648,10 +662,11 @@ export function coerceToFailoverError(
           timeout: err.timeout ?? context?.timeout,
           attempts: err.attempts,
           soonestCooldownExpiry: err.soonestCooldownExpiry,
+          rateLimitResetAt: err.rateLimitResetAt,
         },
       );
       copyErrorDiagnostic(err, enriched);
-      return enriched;
+      return withAgentTerminalSnapshot(enriched, readAgentTerminalSnapshot(err));
     }
     return err;
   }
@@ -664,29 +679,35 @@ export function coerceToFailoverError(
   const message = signal.message ?? String(err);
   const code = signal.code;
   const status = signal.status ?? resolveFailoverStatus(reason, code);
+  const retryAfterMs =
+    reason === "rate_limit" ? resolveRetryAfterMs(message, Date.now(), err) : undefined;
 
   // Suspend when hitting rate limits or billing issues in an attributed session
   const shouldSuspend =
     Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
 
-  return new FailoverError(
-    renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
-    {
-      reason,
-      rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
-      provider: context?.provider ?? signal.provider,
-      model: context?.model,
-      profileId: context?.profileId,
-      authMode: context?.authMode,
-      sessionId: context?.sessionId,
-      lane: context?.lane,
-      status,
-      code,
-      rawError: message,
-      cause: err instanceof Error ? err : undefined,
-      timeout: context?.timeout,
-      suspend: shouldSuspend,
-    },
+  return withAgentTerminalSnapshot(
+    new FailoverError(
+      renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+      {
+        reason,
+        rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
+        rateLimitResetAt: retryAfterMs === undefined ? undefined : Date.now() + retryAfterMs,
+        provider: context?.provider ?? signal.provider,
+        model: context?.model,
+        profileId: context?.profileId,
+        authMode: context?.authMode,
+        sessionId: context?.sessionId,
+        lane: context?.lane,
+        status,
+        code,
+        rawError: message,
+        cause: err instanceof Error ? err : undefined,
+        timeout: context?.timeout,
+        suspend: shouldSuspend,
+      },
+    ),
+    readAgentTerminalSnapshot(err),
   );
 }
 

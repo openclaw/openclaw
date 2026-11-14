@@ -14,6 +14,7 @@ import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
 import { prepareGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../gateway/session-utils-store-worker.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import type { TuiBackend } from "./tui-backend.js";
 
 export async function readEmbeddedHistorySession(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
@@ -52,18 +53,20 @@ export async function readEmbeddedPrivateHistorySessionInfo(
   entry: SessionEntry,
 ) {
   const { cfg, agentId, canonicalKey, storePath, store, readSource } = selected;
-  const [acpMeta] = await readAcpSessionMetaForEntries({
-    cfg,
-    entries: [{ agentId, sessionKey: canonicalKey, entry }],
-  });
-  const runtimeOwnership = await readSessionRuntimeOwnershipAsync({
-    config: cfg,
-    agentId,
-    sessionKey: canonicalKey,
-    storePath: readSource?.path ?? storePath,
-    sessionEntry: entry,
-    readPreparedPreviousSessionId: () => entry.previousSessionId,
-  });
+  const [[acpMeta], runtimeOwnership] = await settleCurrentReadPreparations([
+    readAcpSessionMetaForEntries({
+      cfg,
+      entries: [{ agentId, sessionKey: canonicalKey, entry }],
+    }),
+    readSessionRuntimeOwnershipAsync({
+      config: cfg,
+      agentId,
+      sessionKey: canonicalKey,
+      storePath: readSource?.path ?? storePath,
+      sessionEntry: entry,
+      readPreparedPreviousSessionId: () => entry.previousSessionId,
+    }),
+  ] as const);
   const readSourceEntry = runtimeOwnership?.modelRef
     ? (key: string) => store[key]
     : await prepareGatewaySessionEntryReader({

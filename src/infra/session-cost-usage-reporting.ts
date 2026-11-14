@@ -7,7 +7,6 @@ import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -26,6 +25,7 @@ import { captureSessionActorStorageOwner } from "../config/sessions/session-acto
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -152,16 +152,6 @@ export async function loadSessionCostSummary(params: {
   }
   const { sessionFile } = source;
   const prepared = prepareUsageCostWorker({ ...params, sessionFiles: [sessionFile] });
-  const inventory = await runUsageCostWorker(prepared, {
-    kind: "inventory",
-    sessionFiles: [sessionFile],
-  });
-  if (inventory.kind !== "inventory") {
-    throw new Error("Usage worker returned an invalid session inventory");
-  }
-  if (inventory.files.length === 0) {
-    return null;
-  }
   const result = await runUsageReportAfterRefresh(prepared, params, () =>
     loadCapturedSessionCostSummariesFromCache(
       {
@@ -188,11 +178,13 @@ export async function loadSessionUsageTimeSeries(
 
     let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
-    const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
+    let pricing: ReturnType<typeof createUsageCostResolver> | undefined;
+    const prepareCost = () =>
+      (pricing ??= createUsageCostResolver({ config: scoped.config, agentDir }));
 
     // Copied history stays charted in its source session, as in the usage rollups.
     for await (const record of readTranscriptRecords(sessionFile, { countedOnly: true })) {
-      const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
+      const entry = await parseUsageCostTranscriptEntryAsync(record, prepareCost);
       const timestamp = entry?.timestamp?.getTime();
       if (!entry?.usage || !timestamp) {
         continue;
@@ -262,7 +254,9 @@ export async function loadSessionLogs(
     const limit = scoped.limit ?? 50;
     const retentionLimit = limit * 2;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
-    const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
+    let pricing: ReturnType<typeof createUsageCostResolver> | undefined;
+    const prepareCost = () =>
+      (pricing ??= createUsageCostResolver({ config: scoped.config, agentDir }));
 
     for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
       let role: SessionLogEntry["role"];
@@ -357,7 +351,7 @@ export async function loadSessionLogs(
 
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
-      const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, scoped.config);
+      const entry = await parseUsageCostTranscriptEntryAsync(parsed, prepareCost);
       const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
@@ -417,18 +411,18 @@ async function* readTranscriptRecords(
           },
         )) ?? [];
     } else {
-      events = await loadSessionTranscriptEvents(marker);
+      events = await withSessionTranscriptHydrationCaller("usage-diagnostic", () =>
+        loadSessionTranscriptEvents(marker),
+      );
     }
     const records = events.filter(isRecord);
     const visible = selectVisibleTranscriptEvents(records);
     yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
     return;
   }
-  // Durable byte-offset scans own their checkpoint reader. Diagnostic history
-  // shares the canonical transcript stream and materializes archive bytes once.
+  // Diagnostic history and durable scans decode archives without plaintext files.
   // Legacy JSONL transcripts predate the inherited-history marker, as in their rollup scan.
-  const transcriptPath = materializeSessionArchiveForRead(filePath);
-  for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+  for await (const line of streamSessionTranscriptLines(filePath)) {
     try {
       const parsed: unknown = JSON.parse(line);
       if (isRecord(parsed)) {

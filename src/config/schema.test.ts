@@ -1,8 +1,8 @@
 // Covers canonical config schema defaults, validation, and sensitive redaction.
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
+import { forceFullGc } from "../test-utils/retention.js";
 import { buildConfigSchemaCore, lookupConfigSchema, type PluginUiMetadata } from "./schema.js";
 import { asSchemaObject } from "./schema.shared.js";
 import { validateConfigObjectRaw } from "./validation.js";
@@ -303,7 +303,7 @@ describe("config schema", () => {
     });
     const control = new WeakRef({});
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(control.deref()).toBeUndefined();
     expect(retired.deref() === undefined).toBe(true);
     expect(

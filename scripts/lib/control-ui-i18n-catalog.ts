@@ -21,21 +21,25 @@ import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-
 import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
+import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-outputs.ts";
 import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-chat-permissions.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
+import { registerChatPublicQrEnglish } from "../../ui/src/i18n/locales/en-chat-public-qr.ts";
 import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-questions.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
+import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerConnectionRecoveryEnglish } from "../../ui/src/i18n/locales/en-connection-recovery.ts";
+import { registerCronScheduleEnglish } from "../../ui/src/i18n/locales/en-cron-schedule.ts";
 import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
 import { registerDashboardsEnglish } from "../../ui/src/i18n/locales/en-dashboards.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
@@ -47,6 +51,7 @@ import { registerGitHubConnectionsEnglish } from "../../ui/src/i18n/locales/en-g
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
+import { registerLocalErrorsEnglish } from "../../ui/src/i18n/locales/en-local-errors.ts";
 import { registerLogbookEnglish } from "../../ui/src/i18n/locales/en-logbook.ts";
 import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
 import { registerLogsEnglish } from "../../ui/src/i18n/locales/en-logs.ts";
@@ -56,9 +61,13 @@ import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.t
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
 import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model-controls.ts";
+import { registerModelFavoritesEnglish } from "../../ui/src/i18n/locales/en-model-favorites.ts";
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNativeLinkMenuEnglish } from "../../ui/src/i18n/locales/en-native-link-menu.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../ui/src/i18n/locales/en-openclaw-id-dialogs.ts";
+import { registerOpenClawIdEnglish } from "../../ui/src/i18n/locales/en-openclaw-id.ts";
+import { registerPermissionErrorsEnglish } from "../../ui/src/i18n/locales/en-permission-errors.ts";
 import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
@@ -115,6 +124,8 @@ const sourceFiles = [
   "en-native-link-menu.ts",
   "en-worker-capacity.ts",
   "en.ts",
+  "en-local-errors.ts",
+  "en-permission-errors.ts",
   "en-route-subtitles.ts",
   "en-agents.ts",
   "en-about.ts",
@@ -141,18 +152,22 @@ const sourceFiles = [
   "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
+  "en-chat-failed-message-edit.ts",
   "en-chat-media.ts",
   "en-chat-provider-review.ts",
+  "en-chat-public-qr.ts",
   "en-chat-questions.ts",
   "en-chat-session.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
+  "en-chat-tool-widgets.ts",
   "en-chat-welcome.ts",
   "en-templates.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
   "en-connection-recovery.ts",
   "en-cron.ts",
+  "en-cron-schedule.ts",
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
@@ -171,6 +186,7 @@ const sourceFiles = [
   "en-model-account-list.ts",
   "en-model-accounts.ts",
   "en-model-controls.ts",
+  "en-model-favorites.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
   "en-provider-usage.ts",
@@ -183,6 +199,8 @@ const sourceFiles = [
   "en-session-placement.ts",
   "en-new-session-runtime.ts",
   "en-new-session-setup.ts",
+  "en-openclaw-id.ts",
+  "en-openclaw-id-dialogs.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
   "en-portals.ts",
@@ -266,9 +284,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   let menuIndex = 0;
   const appendSessionCopy = (key: string, value: TranslationMap[string]) => {
     sessionsView[key] = value;
-    if (key === "searchPlaceholder") {
-      Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
-    }
     if (key === "assignToMe") {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
@@ -420,8 +435,17 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   }
   const toolCards: TranslationMap = {};
   const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
+  // Deferred widget leaves retain their original translation-memory positions.
+  const { canvas, showRawDetails, hideRawDetails, widgetActions, ...widgetExports } =
+    registerChatToolWidgetsEnglish.catalog.chat.toolCards;
   for (const [key, value] of Object.entries(registerChatToolLabelsEnglish.catalog.chat.toolCards)) {
     toolCards[key] = value;
+    if (key === "patch") {
+      Object.assign(toolCards, { tool: en.chat.toolCards.tool, canvas });
+    }
+    if (key === "activity") {
+      Object.assign(toolCards, { showRawDetails, hideRawDetails });
+    }
     const contentKeys: Array<keyof typeof toolContent> =
       key === "toolOutput"
         ? [
@@ -434,16 +458,25 @@ export function loadControlUiSourceCatalog(): TranslationMap {
             "outputLoadFailed",
             "outputDownloadFailed",
             "toolError",
+            "previewMore",
+            "previewCaptured",
+            "previewTruncated",
           ]
-        : key === "hideRawDetails"
+        : key === "activity"
           ? ["viewMode", "diff", "raw"]
           : key === "openFile"
-            ? ["openDetails"]
+            ? ["openDetails", "openDetailsTooltip"]
             : key === "exitCode"
               ? ["noOutputFailed"]
               : [];
     for (const contentKey of contentKeys) {
       toolCards[contentKey] = toolContent[contentKey];
+    }
+    if (key === "openFile") {
+      toolCards.widgetActions = widgetActions;
+    }
+    if (key === "downloadFile") {
+      Object.assign(toolCards, widgetExports);
     }
   }
   const boardWidget: TranslationMap = {};
@@ -544,6 +577,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sidebar,
         clawhub: registerPluginManagementEnglish.catalog.chat.clawhub,
         ...registerChatSessionEnglish.catalog.chat,
+        ...registerChatFailedMessageEditEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
         workspaceConflict,
@@ -600,6 +634,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerTemplatesEnglish.catalog,
     registerAppsEnglish.catalog,
     registerLogbookEnglish.catalog,
+    registerPermissionErrorsEnglish.catalog,
+    registerLocalErrorsEnglish.catalog,
     registerLogsEnglish.catalog,
     registerApprovalsEnglish.catalog,
     registerSecretsStoreEnglish.catalog,
@@ -619,6 +655,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     },
     registerChatGoalsEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
+    registerChatPublicQrEnglish.catalog,
     registerCodeBlocksEnglish.catalog,
     registerConnectionRecoveryEnglish.catalog,
     registerCronEnglish.catalog,
@@ -635,12 +672,16 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerMeetingsEnglish.catalog,
     registerMemoryImportEnglish.catalog,
     registerModelAccountsEnglish.catalog,
+    registerCronScheduleEnglish.catalog,
     registerModelControlsEnglish.catalog,
+    registerModelFavoritesEnglish.catalog,
     registerModelSetupEnglish.catalog,
     registerPersonalInstructionsEnglish.catalog,
     registerSessionMachineEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
+    registerOpenClawIdEnglish.catalog,
+    registerOpenClawIdDialogsEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,

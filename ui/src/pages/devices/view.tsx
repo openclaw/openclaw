@@ -8,19 +8,34 @@ import {
   isPending,
   latest,
   Loading,
+  Show,
   omit,
   type Accessor,
 } from "solid-js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
-import { SettingsRow, SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsEmpty,
+  SettingsRow,
+  SettingsSection,
+  SettingsPage,
+  SettingsLoadingSkeleton,
+} from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import "../../styles/devices.css";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
 import { DeviceInventory } from "./view-inventory-readiness.tsx";
-import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
+import {
+  agentDisplayName,
+  PolicyActionRow,
+  PolicyFailure,
+  resolveConfigAgents,
+  resolveNodeTargets,
+} from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -32,30 +47,38 @@ export function DevicesView(props: DevicesProps) {
   );
   return (
     <SettingsPage wide={true}>
-      <>
+      {/* Inventory belongs above policy; wait for its first snapshot before painting either. */}
+      <Show when={props.initialInventoryReady} fallback={<SettingsLoadingSkeleton />}>
         {props.connected && (!props.canManagePairing || !props.canAdmin) ? (
-          <div class="callout info" role="note">
+          <InlineAlert tone="info" role="note">
             {t(
-              !props.canManagePairing && !props.canAdmin
-                ? "devices.readOnly.pairingAndAdminRequired"
-                : !props.canManagePairing
-                  ? "devices.readOnly.pairingRequired"
-                  : "devices.readOnly.adminRequired",
+              props.roleAllowsAdmin === true
+                ? "devices.readOnly.browserPairingRequired"
+                : !props.canManagePairing && !props.canAdmin
+                  ? "devices.readOnly.pairingAndAdminRequired"
+                  : !props.canManagePairing
+                    ? "devices.readOnly.pairingRequired"
+                    : "devices.readOnly.adminRequired",
             )}
-          </div>
+          </InlineAlert>
         ) : undefined}
         {props.devicesError ? (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {props.devicesError}
-          </div>
+          </InlineAlert>
         ) : undefined}
         {props.lastError ? (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {props.lastError}
-          </div>
+          </InlineAlert>
         ) : undefined}
         <DeviceInventory {...props} />
-        <PolicyRead read={props.execApprovalsRead} onRetry={() => props.onLoadExecApprovals()}>
+        <PolicyRead
+          read={props.execApprovalsRead}
+          title={t("devices.execApprovals.title")}
+          failure={t("devices.execApprovals.loadFailed")}
+          onRetry={() => props.onLoadExecApprovals()}
+        >
           {(pending) => (
             <ExecApprovals
               {...approvalsState()}
@@ -64,7 +87,12 @@ export function DevicesView(props: DevicesProps) {
             />
           )}
         </PolicyRead>
-        <PolicyRead read={props.configRead} onRetry={() => props.onLoadConfig()}>
+        <PolicyRead
+          read={props.configRead}
+          title={t("devices.binding.execNodeBinding")}
+          failure={t("devices.binding.loadFailed")}
+          onRetry={() => props.onLoadConfig()}
+        >
           {(pending) => (
             <Bindings
               {...bindingState()}
@@ -73,25 +101,28 @@ export function DevicesView(props: DevicesProps) {
             />
           )}
         </PolicyRead>
-      </>
+      </Show>
     </SettingsPage>
   );
 }
 
 function PolicyRead(props: {
   read: DevicePolicyRead;
+  title: string;
+  failure: string;
   onRetry: () => void;
   children: (pending: Accessor<boolean>) => JSX.Element;
 }) {
   return (
     <Errored
       fallback={(error) => (
-        <div class="callout danger" role="alert">
-          {String(error())}
-          <button class="btn" onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </div>
+        <SettingsSection title={props.title}>
+          <PolicyFailure
+            title={props.failure}
+            message={formatUiError(error())}
+            onRetry={props.onRetry}
+          />
+        </SettingsSection>
       )}
     >
       <Loading on={props.read.scope()} fallback={props.children(() => true)}>
@@ -120,38 +151,31 @@ function resolveBindingsState(input: DevicesProps) {
   };
 }
 
+/** Bindings autosave like the rest of config; the settings save indicator reports them. */
 function Bindings(props: BindingState) {
   const supportsBinding = () => props.nodes.length > 0;
-  const saveButton = (
-    <button
-      class="btn"
-      disabled={!props.connected || props.disabled || !props.configDirty}
-      onClick={() => props.onSaveBindings()}
+  const hasBinding = () =>
+    props.defaultBinding !== null || props.agents.some((agent) => agent.binding !== null);
+  return (
+    <SettingsSection
+      title={t("devices.binding.execNodeBinding")}
+      description={t("devices.binding.execNodeBindingSubtitle")}
     >
-      {props.configSaving ? t("common.saving") : t("common.save")}
-    </button>
-  );
-  const rows = (
-    <>
-      {props.connected && !props.canAdmin ? (
-        <SettingsRow title={t("devices.readOnly.adminRequired")} />
-      ) : undefined}
       {props.configFormMode === "raw" ? (
-        <SettingsRow title={t("devices.binding.formModeHint")} />
+        <PolicyActionRow description={t("devices.binding.formModeHint")} />
       ) : undefined}
       {!props.ready ? (
-        <SettingsRow
-          title={t("devices.binding.loadConfigHint")}
-          control={
-            <button
-              class="btn"
-              disabled={!props.connected || props.configLoading}
-              onClick={() => props.onLoadConfig()}
-            >
-              {props.configLoading ? t("common.loading") : t("common.loadConfig")}
+        props.configLoading ? (
+          <PolicyActionRow description={t("common.loading")} />
+        ) : (
+          <PolicyActionRow description={t("devices.binding.loadConfigHint")}>
+            <button class="btn" disabled={!props.connected} onClick={() => props.onLoadConfig()}>
+              {t("common.loadConfig")}
             </button>
-          }
-        />
+          </PolicyActionRow>
+        )
+      ) : !supportsBinding() && !hasBinding() ? (
+        <SettingsEmpty message={t("devices.binding.noNodes")} />
       ) : (
         <>
           <SettingsRow
@@ -172,36 +196,15 @@ function Bindings(props: BindingState) {
           </For>
         </>
       )}
-    </>
-  );
-  return (
-    <SettingsSection
-      title={t("devices.binding.execNodeBinding")}
-      description={t("devices.binding.execNodeBindingSubtitle")}
-      actions={saveButton}
-    >
-      {rows}
     </SettingsSection>
   );
 }
 
 function AgentBinding(props: BindingState & { agent: BindingAgent }) {
-  const bindingValue = () => props.agent.binding ?? "__default__";
-  const label = () =>
-    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id;
   return (
     <SettingsRow
-      title={label()}
-      description={
-        <>
-          {props.agent.isDefault ? t("devices.binding.defaultAgent") : t("devices.binding.agent")} ·
-          {bindingValue() === "__default__"
-            ? t("devices.binding.usesDefault", {
-                node: props.defaultBinding ?? t("devices.binding.any"),
-              })
-            : t("devices.binding.override", { node: props.agent.binding ?? "" })}
-        </>
-      }
+      title={agentDisplayName(props.agent)}
+      description={props.agent.isDefault ? t("devices.binding.defaultAgent") : undefined}
       control={<BindingSelect {...props} agent={props.agent} />}
     />
   );
@@ -254,7 +257,11 @@ function BindingSelect(props: BindingState & { agent: BindingAgent | null }) {
       options={[
         {
           value: sentinel(),
-          label: t(isDefault() ? "devices.binding.anyNode" : "devices.binding.useDefault"),
+          label: isDefault()
+            ? t("devices.binding.anyNode")
+            : t("devices.binding.useDefaultValue", {
+                node: props.defaultBinding ?? t("devices.binding.anyNode"),
+              }),
         },
         ...options().map((node) => ({
           value: node.id,

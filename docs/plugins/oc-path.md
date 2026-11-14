@@ -161,6 +161,8 @@ with `OC_EMIT_SENTINEL`. The CLI also scrubs the literal sentinel from any
 human or JSON output it prints, replacing it with `[REDACTED]` so terminal
 captures and pipelines never leak the marker.
 
+New JSON/JSONC keys supplied with `+key` are subject to the same guard.
+
 ## Related
 
 - [`openclaw path` CLI reference](/cli/path)

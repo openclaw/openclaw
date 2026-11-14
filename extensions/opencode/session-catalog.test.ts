@@ -596,7 +596,7 @@ describe("OpenCode session catalog", () => {
   itWithCli("memoizes the CLI database query until explicit refresh or expiry", async () => {
     await installFakeOpenCode();
     let now = 1_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
     try {
       await listLocalOpenCodeSessionPage({ limit: 20 });
       await listLocalOpenCodeSessionPage({ limit: 20 });

@@ -31,7 +31,15 @@ export type CommandQueueTaskDeadline =
   | { kind: "bounded"; deadlineAtMs: number }
   | { kind: "unlimited" };
 
-export type CommandQueueEnqueueOptions = {
+/** Borrowed queue-entry facts; the queue clears membership when admission ends. */
+export type CommandQueueWait = {
+  lane: string;
+  queued?: true;
+  queuedAheadAtEnqueue: number;
+  activeAheadAtEnqueue: number;
+};
+
+export type CommandQueueAdmissionOptions = {
   sessionTarget?: Readonly<{ agentId?: string; sessionKey?: string; sessionId: string }>;
   /** Enqueue-time provenance for diagnostics only; never used for admission. */
   taskIdentity?: Readonly<{
@@ -47,9 +55,14 @@ export type CommandQueueEnqueueOptions = {
   /** Cancels queued admission; the task owns cancellation after it starts. */
   abortSignal?: AbortSignal;
   /** Called only when this entry remains queued after immediate lane admission. */
-  onQueued?: () => void;
+  onQueued?: (wait?: Readonly<CommandQueueWait>) => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  priority?: "foreground" | "normal" | "background";
+};
+
+/** Execution deadlines belong to the embedded-run controller, not queue admission. */
+export type CommandQueueEnqueueOptions = CommandQueueAdmissionOptions & {
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   /** Replaces idle timing with an owner deadline; undefined restores idle timing. */
@@ -60,7 +73,6 @@ export type CommandQueueEnqueueOptions = {
   taskTimeoutAbortGraceMs?: number;
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */
   taskTimeoutReleaseSignal?: AbortSignal;
-  priority?: "foreground" | "normal" | "background";
 };
 
 export type CommandQueueEnqueueFn = <T>(

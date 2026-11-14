@@ -1,9 +1,9 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import {
   closeOpenClawAgentDatabaseByPath as closeAgentDb,
@@ -12,6 +12,7 @@ import {
   withOpenClawAgentDatabaseAsync as withAgentDb,
   resolveOpenClawAgentSqlitePath as agentDbPath,
 } from "./openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
 const logger = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -92,7 +93,7 @@ describe("agent database open timings", () => {
     const { options, pathname, advance } = createTimedOpen();
     openAgentDb(options);
     closeOpenClawAgentDatabasesForTest();
-    revokeSqliteDatabaseAdmissionsForPath(pathname);
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     logger.warn.mockClear();
     const nativeFinished = createDeferredCore();
     const release = createDeferredCore();
@@ -113,10 +114,10 @@ describe("agent database open timings", () => {
     const collect = (database: ReturnType<typeof openAgentDb>) => {
       databases.push(database);
     };
-    const outcomes = Promise.allSettled([
-      withAgentDb(options, collect),
-      withAgentDb(options, collect),
-    ]);
+    const scope = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+    const outcomes = scope.run(() =>
+      Promise.allSettled([withAgentDb(options, collect), withAgentDb(options, collect)]),
+    );
     try {
       await nativeFinished.promise;
       advance(1_000);
@@ -149,6 +150,7 @@ describe("agent database open timings", () => {
     } finally {
       release.resolve();
       await outcomes;
+      await scope.close();
     }
   });
 });

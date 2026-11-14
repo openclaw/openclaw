@@ -76,6 +76,13 @@ const nodeSetupFiles = ["./src/test-helpers/dom.setup.ts"];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
+// These renderer mocks require their own module graph even when a native pane ran first.
+const mockRegistryBrowserTests = [
+  "src/lib/toast-host.loading.browser.test.ts",
+  "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
+  "src/pages/chat/components/chat-tool-cards.browser.test.tsx",
+  "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
+].map((file) => resolveUiTypeScriptPath(file, here));
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
   const defaultExecutablePath = chromium.executablePath();
   const executablePath = resolvePlaywrightChromiumExecutablePath(defaultExecutablePath);
@@ -90,6 +97,7 @@ const webkitTestFiles = [
   "src/pages/apps/apps-page.browser.test.tsx",
   "src/pages/config/view.config-read.browser.test.tsx",
   "src/pages/usage/view-details.browser.test.tsx",
+  "src/pages/sessions/view.invalidation.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
   "src/components/select-picker.browser.test.tsx",
@@ -101,6 +109,7 @@ const webkitTestFiles = [
   "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/app-sidebar-session-visibility.browser.test.ts",
   "src/components/app-sidebar-owner-avatar.browser.test.ts",
+  "src/components/app-sidebar-session-filter.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
@@ -115,6 +124,7 @@ const webkitTestFiles = [
   "src/components/session-people-search.browser.test.ts",
   "src/components/control-theme.browser.test.tsx",
   "src/components/menu-surface.browser.test.tsx",
+  "src/components/solid/overlay-style.browser.test.tsx",
   "src/components/session-progress-hovercard.browser.test.ts",
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
@@ -125,7 +135,6 @@ const webkitTestFiles = [
   "src/components/hub-tabs.browser.test.tsx",
   "src/components/tooltip-title.browser.test.ts",
   "src/pages/chat/chat-composer-mobile.browser.test.tsx",
-  "src/pages/chat/chat-composer-height.browser.test.tsx",
   "src/pages/chat/chat-composer-context.browser.test.ts",
   "src/pages/chat/chat-composer-context.palette.browser.test.ts",
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",
@@ -135,8 +144,8 @@ const webkitTestFiles = [
   "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-message-reactions.browser.test.tsx",
   "src/pages/chat/components/chat-model-picker.browser.test.tsx",
+  "src/pages/chat/components/chat-model-picker-layout.browser.test.tsx",
   "src/pages/chat/components/chat-pane-header.browser.test.tsx",
-  "src/pages/chat/components/chat-pane-versions-menu.browser.test.ts",
   "src/components/overlay-anchor.browser.test.ts",
   "src/components/overlay-lifecycle.browser.test.ts",
   "src/components/overlay-shadow.browser.test.ts",
@@ -144,6 +153,7 @@ const webkitTestFiles = [
   "src/components/image-lightbox.browser.test.ts",
   "src/components/markdown-mermaid-expansion.browser.test.ts",
   "src/components/modal-dialog.browser.test.ts",
+  "src/components/solid/popover.browser.test.tsx",
   "src/components/sessions-hub-header.browser.test.ts",
   "src/components/transient-container.browser.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file, here));
@@ -158,6 +168,8 @@ export function createUiBrowserVitestConfig(
       : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
+  const mockRegistryInclude =
+    browser === "chromium" ? includeUiTests(mockRegistryBrowserTests, env) : [];
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
   const excludesBrowserFiles =
     runtimeFiles !== null &&
@@ -254,7 +266,23 @@ export function createUiBrowserVitestConfig(
         enabled: true,
         provider,
         commands: { overlayEmulateMedia },
-        instances: [{ browser, name: browser }],
+        instances: [
+          {
+            browser,
+            name: browser,
+            exclude: [...nodeDrivenBrowserLayoutTests, ...mockRegistryBrowserTests],
+          },
+          ...(mockRegistryInclude.length
+            ? [
+                {
+                  browser,
+                  name: "chromium-mock-registry",
+                  include: mockRegistryInclude,
+                  isolate: true,
+                },
+              ]
+            : []),
+        ],
         headless: true,
         ui: false,
       },
@@ -313,6 +341,7 @@ export default defineConfig({
   },
   test: {
     ...sharedUiTestConfig,
+    globalSetup: [path.join(repoRoot, "test/vitest/vitest.node-policy.global-setup.ts")],
     maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.

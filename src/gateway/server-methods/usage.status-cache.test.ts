@@ -128,6 +128,22 @@ describe("usage.status provider usage cache", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps internal quota auth profile identity out of usage.status", async () => {
+    const summary = usageSummary(now, 10);
+    summary.providers[0]!.authProfileId = "openai:quota";
+    mocks.loadSummary.mockResolvedValue(summary);
+    const reader = {
+      ...statusClient,
+      connect: { ...statusClient.connect, scopes: ["operator.read"] },
+    };
+    const admin = {
+      ...statusClient,
+      connect: { ...statusClient.connect, scopes: ["operator.admin"] },
+    };
+    expect((await settledStatus(reader)).providers[0]).not.toHaveProperty("authProfileId");
+    expect((await settledStatus(admin)).providers[0]).not.toHaveProperty("authProfileId");
+  });
+
   it("returns a cold marker only to capable clients and retains invalidated refresh work", async () => {
     const scope = new AsyncWorkScope();
     const heldRefresh = createDeferredCore<UsageSummary>();

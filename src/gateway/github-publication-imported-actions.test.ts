@@ -6,9 +6,16 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { SessionGitHubActionResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
+import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
+import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
 import {
@@ -18,6 +25,8 @@ import {
   SESSION_ID,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
+import { prepareAdmission } from "./mcp-http-request.test-support.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 
 const mocks = githubPublicationTestMocks();
 const headCommit = "a".repeat(40);
@@ -112,6 +121,7 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
   let onRead: ((endpoint: string) => Promise<void>) | undefined;
   let permission = "write";
   let loseEditResponse = false;
+  let loseReviewResponse = false;
   mocks.runCommand.mockImplementation(async (argv: string[], options) => {
     if (argv[0] !== "gh" || !argv.includes("--method")) {
       return await previous(argv, options);
@@ -146,6 +156,9 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
       state.state = "closed";
       state.merge_commit_sha = "e".repeat(40);
     } else if (endpoint.endsWith("/comments")) {
+      if (loseReviewResponse) {
+        throw new Error("Connection lost after GitHub accepted the review request");
+      }
       return commandResult(
         JSON.stringify({
           id: 123,
@@ -188,6 +201,9 @@ async function fixture(previousPublication = false, prepared = true, bound = tru
     loseEditResponse() {
       loseEditResponse = true;
     },
+    loseReviewResponse() {
+      loseReviewResponse = true;
+    },
     setPermission(value: string) {
       permission = value;
     },
@@ -199,6 +215,91 @@ describe("actions on the imported original PR", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("refuses native read-only edit of the bound PR without a selected linked account", async () => {
+    const f = await fixture();
+    const runId = randomUUID();
+    const admission = prepareAdmission(runId, "source-less-native-read-control");
+    const work = new AsyncWorkScope();
+    try {
+      const admitted = await admission.admit("gateway", runId);
+      const context = createDirectChatContext({
+        ...f.maintainerSource.context,
+        githubPublicationService: f.coordinator,
+        trackExecution: work.track.bind(work),
+      });
+      bindGatewayContextResolver(admitted, () => context);
+      const caller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: admitted,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+      });
+      expect(caller?.operatorAuthority).toBeUndefined();
+      expect(caller?.requesterOrigin).toBeUndefined();
+      await expect(
+        withGatewayToolCallerIdentity(caller, () =>
+          createGitHubPublishTool().execute("native-read-control", { action: "edit" }),
+        ),
+      ).rejects.toThrow("verified linked GitHub account");
+      expect(f.writes).toEqual([]);
+      expect(f.externalWrites).toEqual([]);
+    } finally {
+      admission.close();
+      await work.drain();
+    }
+  });
+
+  it.each(["guest", "admin"] as const)(
+    "requests re-review of an explicit verified PR without importing source (%s)",
+    async (actor) => {
+      const f = await fixture(false, false, false);
+      f.base.permissions.push = false;
+      f.state.maintainer_can_modify = false;
+      if (actor === "admin") {
+        f.state.user = { id: 999, login: "other-contributor" };
+      }
+      const worktree = structuredClone(loadSessionEntryReadOnly(f.scope)?.worktree);
+      const checkpoints = checkpoint.mock.calls.length;
+      const result = await f.invoke(actor, {
+        action: "request_review",
+        pullRequestUrl: url,
+        expectedHeadCommit: headCommit,
+      });
+      expect(result.details).toMatchObject({
+        pullRequest: { url, repository: "example/repository", branch: "topic" },
+        headCommit,
+        reviewRequest: { status: "posted", url: `${url}#issuecomment-123` },
+      });
+      if (actor === "admin") {
+        await expect(f.act("request_review", { pullRequestUrl: url })).rejects.toThrow(
+          /not authored/,
+        );
+      }
+      expect(f.writes).toEqual([
+        {
+          endpoint: "repos/example/repository/issues/7/comments",
+          input: { body: "@clawsweeper re-review" },
+        },
+      ]);
+      expect(loadSessionEntryReadOnly(f.scope)?.worktree).toEqual(worktree);
+      expect(checkpoint.mock.calls.length).toBe(checkpoints);
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
+
+  it("does not retry an explicit re-review after a lost response", async () => {
+    const f = await fixture(false, false, false);
+    f.loseReviewResponse();
+    await expect(f.act("request_review", { pullRequestUrl: url })).rejects.toThrow(
+      /may already have been posted.*Read the PR comments.*do not retry blindly/u,
+    );
+    expect(f.writes).toEqual([
+      {
+        endpoint: "repos/example/repository/issues/7/comments",
+        input: { body: "@clawsweeper re-review" },
+      },
+    ]);
   });
 
   it.each(["unbound", "publication", "binding"])(
@@ -345,40 +446,58 @@ describe("actions on the imported original PR", () => {
     },
   );
 
-  it.each(["requester", "head", "title"])(
-    "rechecks explicit-target %s before the write",
-    async (change) => {
-      const f = await fixture(false, false, false);
-      let reads = 0;
-      f.onRead(async (endpoint) => {
-        if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
-          if (change === "requester") {
-            await f.revoke();
-          }
-          if (change === "head") {
-            f.state.head.sha = "f".repeat(40);
-          }
-          if (change === "title") {
-            f.state.title = "New human title";
+  it.each([
+    ["edit", "requester"],
+    ["edit", "head"],
+    ["edit", "title"],
+    ["request_review", "requester"],
+    ["request_review", "requester and transport"],
+    ["request_review", "head"],
+    ["request_review", "closed"],
+    ["request_review", "author"],
+  ])("rechecks explicit %s target %s before the write", async (action, change) => {
+    const f = await fixture(false, false, false);
+    let reads = 0;
+    f.onRead(async (endpoint) => {
+      if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
+        if (change === "requester" || change === "requester and transport") {
+          await f.revoke();
+          if (change === "requester and transport") {
+            throw new Error("Synthetic GitHub read failure");
           }
         }
-      });
-      await expect(
-        f.act("edit", {
-          pullRequestUrl: url,
-          title: "Requested title",
-          expectedTitle: "Original title",
-        }),
-      ).rejects.toThrow(
-        change === "requester"
-          ? /role changed/
-          : change === "head"
-            ? /head changed/
-            : /metadata changed/,
-      );
-      expect(f.writes).toEqual([]);
-    },
-  );
+        if (change === "head") {
+          f.state.head.sha = "f".repeat(40);
+        }
+        if (change === "title") {
+          f.state.title = "New human title";
+        }
+        if (change === "closed") {
+          f.state.state = "closed";
+        }
+        if (change === "author") {
+          f.state.user.id = 999;
+        }
+      }
+    });
+    await expect(
+      f.act(action, {
+        pullRequestUrl: url,
+        ...(action === "edit" ? { title: "Requested title", expectedTitle: "Original title" } : {}),
+      }),
+    ).rejects.toThrow(
+      change === "requester" || change === "requester and transport"
+        ? /role changed/
+        : change === "head"
+          ? /head changed/
+          : change === "closed"
+            ? /closed/
+            : change === "author"
+              ? /not authored/
+              : /metadata changed/,
+    );
+    expect(f.writes).toEqual([]);
+  });
 
   it("reconciles an accepted explicit edit after a lost response without repeating the write", async () => {
     const f = await fixture(false, false, false);

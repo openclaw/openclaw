@@ -25,6 +25,7 @@ const CONFIG_SET_VALUE_OPTIONS = new Set([
   "--batch-file",
   "--batch-json",
   "--container",
+  "--expect-current-json",
   "--log-level",
   "--profile",
   "--provider-allowlist",
@@ -110,14 +111,12 @@ function redactConfigAuditArgv(argv: readonly string[]): string[] {
       redacted[index] = "--batch-json=***";
     }
   }
-  const positionals = findConfigPositionals(redacted, setIndex + 1, 2);
-  if (positionals.length < 2) {
+  const [pathIndex, valueIndex] = findConfigPositionals(redacted, setIndex + 1, 2);
+  if (pathIndex === undefined || valueIndex === undefined) {
     return redacted;
   }
-  const pathIndex = positionals[0]!;
-  const valueIndex = positionals[1]!;
   const configPath = redacted[pathIndex];
-  if (typeof configPath === "string" && isSensitiveConfigPath(configPath)) {
+  if (configPath !== undefined && isSensitiveConfigPath(configPath)) {
     redacted[valueIndex] = "***";
   }
   return redacted;

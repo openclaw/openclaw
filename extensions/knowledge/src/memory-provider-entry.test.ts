@@ -52,6 +52,13 @@ it("entry retains native tools, denies untrusted provider callers and prompt hon
     capability!.providerRuntime.open({ cfg: {}, agentId: "main", context: {} }),
   ).rejects.toThrow(/authority/);
   expect(capability!.promptBuilder({ availableTools: new Set() })).toStrictEqual([]);
+  // Page-State upkeep guidance appears only when the agent can edit pages.
+  const tools = ["knowledge_grep", "knowledge_remember", "knowledge_record", "knowledge_save_page"];
+  const prompt = (t: string[]) =>
+    capability!.promptBuilder({ availableTools: new Set(t) }).join("\n");
+  const stateRule = /alters what an existing page's State says, also rewrite that State/;
+  expect(prompt(tools.slice(0, 2))).not.toMatch(stateRule);
+  expect(prompt([...tools, "knowledge_status", "knowledge_ontology"])).toMatch(stateRule);
   // Writes are on by default, so the provider owns the pre-compaction flush.
   expect(capability!.providerFlushPlanResolver({}).persistenceToolNames).toStrictEqual([
     "knowledge_remember",
@@ -189,8 +196,8 @@ it("flush save follows delegated owner-private and conversation audiences", asyn
       "utf8",
     ),
   ).toMatch(/Conversation durable fact/);
-  expect((await f.service.record({ id: privateReceipt.id }, f.tool)).record).toBe(null);
-  expect((await f.service.record({ id: conversationReceipt.id }, f.tool)).record!.id).toBe(
+  expect((await f.service.record_detail({ id: privateReceipt.id }, f.tool)).record).toBe(null);
+  expect((await f.service.record_detail({ id: conversationReceipt.id }, f.tool)).record!.id).toBe(
     conversationReceipt.id,
   );
 });

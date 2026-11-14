@@ -287,7 +287,7 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
             </Loading>
             <Show when={!props.mobile}>
               <a
-                class="rail-header__action"
+                class="oc-icon-button oc-icon-button--28 rail-header__action"
                 href={props.src || undefined}
                 download={props.label}
                 target="_blank"

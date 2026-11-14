@@ -165,6 +165,18 @@ export async function completePostUpdateMaintenance(
     >;
   },
 ): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
+  const startedAt = performance.now();
+  using _ = {
+    [Symbol.dispose]() {
+      result.steps.push({
+        name: "post-update-maintenance-timing",
+        command: "openclaw update",
+        cwd: context.root,
+        durationMs: Math.round(performance.now() - startedAt),
+        exitCode: 0,
+      });
+    },
+  };
   await tryInstallShellCompletion({
     root: context.root,
     jsonMode: Boolean(params.opts.json),
@@ -235,14 +247,10 @@ export async function resumePostUpdateWindowsAutoStart(
   result: UpdateRunResult,
   readStopped: () => PreManagedServiceStop | undefined,
   callbacks?: {
-    beforeAttempt: () => void;
     onFailure: (cause: unknown) => Promise<unknown>;
   },
 ): Promise<void> {
   try {
-    if (callbacks && readStopped()?.windowsTaskAutoStartRecovery) {
-      callbacks.beforeAttempt();
-    }
     const stopped = readStopped();
     await stopped?.windowsTaskAutoStartRecovery?.restore(
       true,

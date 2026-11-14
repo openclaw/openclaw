@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { threadId } from "node:worker_threads";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { sqlPublicationAnchor, type EngineConnection } from "./sql-connection.js";
@@ -88,7 +89,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       : state.localScopeRevisions.has(database);
     if (!tracked) {
       const value = run();
-      if (value instanceof Promise) {
+      if (isPromiseLike(value)) {
         throw new Error("SQLite write scopes cannot await work");
       }
       return value;
@@ -98,7 +99,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     state.writeScopes.set(database, keys);
     try {
       const value = run();
-      if (value instanceof Promise) {
+      if (isPromiseLike(value)) {
         throw new Error("SQLite write scopes cannot await work");
       }
       return value;

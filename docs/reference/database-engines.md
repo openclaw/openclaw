@@ -573,16 +573,26 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+Migration, checkpointing, and materialization read a private local working copy,
+not the durable recovery image. The command uses the existing private cache root;
+set `XDG_CACHE_HOME` to a local filesystem if the cache is network-backed or cannot
+be classified. A verified, checkpointed working image stays with the recovery
+manifest, so resume reconstructs scratch without repeating migration. Failed
+working directories remain untouched until their workers have stopped; successful
+stages remove their scratch.
 After committing a PostgreSQL bulk copy, port and backup restore run `ANALYZE`
 only on tables in the destination namespace. Agent ports refresh statistics again
 after the memory index rebuild. The port report records the result. Statistics
 refresh uses a 10-second statement timeout and a 1-second lock timeout; a failure
 is a warning and preserves the verified data for autovacuum to analyze later.
 
-Agent and shared-state columns normally created on a feature's first use are
-completed in the private copy when absent, preserving existing rows with `NULL`
-values and leaving the original SQLite store unchanged. Unknown columns still
-refuse the port.
+Agent and shared-state columns normally created on a feature's first use, and
+agent tables explicitly allowed to be absent, are completed in the private copy.
+Existing rows retain `NULL` values for newly added nullable columns; the original
+SQLite store stays unchanged. Recognized retired pending-input recovery envelopes
+remain in that original capture, not the portable copy. Historical input migration
+still runs before retiring the column and never grants replay authority. Unknown
+columns or changed recovery-column definitions still refuse the port.
 The command replaces each store atomically, switches config last while preserving
 SecretRefs, environment references, and includes, then archives its completed
 manifest with the captures. After success, start the Gateway through its service
@@ -656,6 +666,65 @@ privilege to bootstrap namespaces, plus ownership/access to its store objects an
 `USAGE` on the extension schema. Use separate roles and schema grants when
 installations also need a PostgreSQL permission boundary; schema prefixes alone
 do not restrict a role's access.
+
+### Gateway ownership in PostgreSQL
+
+By default, Gateway state ownership is a lock file next to the state directory,
+so it only excludes processes that see the same state directory on the same
+host. When every configurable family uses PostgreSQL, you can also hold
+ownership in PostgreSQL:
+
+```json5
+{
+  database: {
+    engine: "postgres",
+    postgres: {
+      connection: { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+      ownership: "installation",
+    },
+  },
+}
+```
+
+Config validation rejects `ownership: "installation"` unless `database.engine`
+is `postgres` and no family overrides its engine to `sqlite`. The default,
+`state-directory`, keeps today's behavior. The setting only changes Gateway
+ownership: store anchors, `client/credentials.sqlite`,
+`control/services.sqlite`, the local lock files, and the local safety journals
+all stay.
+
+With `installation`, every process that takes Gateway state ownership also takes a
+session-level `pg_try_advisory_lock` on one dedicated connection outside the
+pool. The lock key is derived from `database.postgres.schemaPrefix`, and
+PostgreSQL scopes advisory locks to one database, so the database and schema
+prefix together name the installation. Nothing new is stored: no file and no
+table. Give each installation that shares a database its own schema prefix. A
+second Gateway or maintenance owner with the same database and prefix is
+refused on any host. While a Gateway waits, it logs the holder once, and the
+final error names the schema prefix and the holder's PID, host, and PostgreSQL
+backend PID, read from `pg_locks` and `pg_stat_activity`.
+
+The owner connection must reach PostgreSQL directly or through a pooler in
+session mode. Session advisory locks do not work through a transaction-mode
+pooler such as PgBouncer with `pool_mode = transaction`: the lock would stay on
+a server connection that other clients reuse. Connection startup and every
+heartbeat query time out after 10 seconds, and the connection uses TCP
+keepalive, so an unresponsive server cannot hang startup and a half-open
+session is detected within about 20 seconds.
+
+The owner loses ownership when its session ends (a crash, a terminated backend,
+or a network failure) or when a heartbeat fails. The session is closed, so
+PostgreSQL releases the lock and the next owner can start. The running Gateway
+retires its state ownership at the same moment: new and already queued state
+work is refused, and the Gateway closes (or its in-process restart waits for
+ownership again). Check the PostgreSQL connection, then restart it.
+
+When PostgreSQL ends the session itself, the Gateway is told at once. On a
+silent network failure it finds out from the next heartbeat, within about 20
+seconds. PostgreSQL keeps the lock until it ends that session, so keep
+server-side dead-connection settings (`tcp_keepalives_*`, `tcp_user_timeout`)
+above 20 seconds. Then a successor cannot start while the former Gateway still
+admits work.
 
 ## Isolation and durability
 
@@ -786,7 +855,8 @@ automatically. `openclaw backup sqlite` refuses a PostgreSQL anchor and directs
 you to `openclaw backup create`.
 
 A PostgreSQL backup contains a portable SQLite export image, the original anchor,
-and a format-2 manifest. The export reads one `REPEATABLE READ READ ONLY` snapshot,
+and a format-2 manifest. Update and Doctor recovery captures use the same format
+unless [server recovery captures](#server-recovery-captures) are enabled. The export reads one `REPEATABLE READ READ ONLY` snapshot,
 including the store's sequence allocation facts, then applies the existing user-backup sanitizer before compaction and hashing.
 The manifest records the backup profile, engine, store UUID, schema versions,
 active fragments, allocation facts, artifact sizes, and hashes. It never records
@@ -831,6 +901,44 @@ PostgreSQL into a fresh owned namespace and publishes its matched anchor; the
 migrated namespace remains available until recovery is confirmed. Changed state
 or uncertain custody prevents automatic restore and retains the captures for
 recovery. An update never silently ports a store or falls back to SQLite.
+
+### Server recovery captures
+
+By default, update rollback captures and Doctor pre-migration captures of a
+PostgreSQL store are portable: each `.postgres.bak` or `.postgres` directory holds
+`anchor.sqlite`, a `database.sqlite` export image, and `manifest.json`. You can
+copy that set to another host and restore it without the original server.
+
+Set `database.postgres.recoveryCaptures: "server"` to keep those rows on the
+server instead:
+
+- The capture copies the store into a frozen `restore_<uuid>` schema in the same
+  database and writes only `anchor.sqlite` and `manifest.json` locally. The
+  manifest records `carrier: "postgres-schema"`, the schema name, and the same
+  verification hashes and allocation facts as a portable capture.
+- Rollback copies that schema into a fresh namespace, checks it against the
+  manifest hashes, and publishes the anchor. The capture schema stays unchanged.
+- The capture depends on the server. Copying the directory off-host keeps no
+  rows, and losing the server loses the capture. For an off-server copy, run
+  `openclaw backup create`, which always writes portable images.
+- A verified update drops its capture schemas before it removes the snapshot
+  directory. If the drop fails, the directory stays and the update reports that
+  cleanup is pending. Rolled-back or refused updates keep their captures.
+- Doctor keeps its server captures like other `.bak` directories. Before each new
+  pre-migration capture of a store, Doctor drops that store's capture schemas
+  whose directory was removed. This also runs after you switch back to
+  `portable`.
+- The update rollback capture of the shared `state` family and the candidate
+  state copy stay portable, because client credential rollback and the update
+  rehearsal read their SQLite images.
+- [Original state captures](/cli/update/repair-and-recovery#original-state-captures),
+  taken before an update or a standalone `doctor --fix` writes state, also stay
+  portable: they still write local SQLite images of PostgreSQL stores.
+
+The server capture uses space on the database server and the runtime role's
+existing `CREATE` privilege. Existing portable captures stay readable and
+restorable either way. Older releases reject the setting, so remove it before
+downgrading below the release that added it.
 
 Recovery generations include the live PostgreSQL catalog, exact rows, and sequence
 allocation state (`last_value` and `is_called`). The installed driver can fingerprint
@@ -983,6 +1091,23 @@ groups plus an overflow group. Groups use the first 16 hexadecimal characters of
 the SHA-256 hash of normalized SQL, matching the statement channel's normalization;
 SQL text and bindings are omitted. Collection is scoped to this deletion callback,
 and serialization occurs only above the existing 1,000 ms slow-hold threshold.
+
+Slow or failed SQLite `BEGIN IMMEDIATE` warnings also include `holderAtWaitStart`
+when the admitted database has a known in-process writer. It contains the writer's
+bounded `operation` label, `threadId`, and `heldMs` observed before the native wait.
+The existing admission snapshot shares one 500-byte diagnostic slot per database;
+the transaction owner records it at begin and clears it after commit or rollback.
+It is best-effort attribution, never admission authority. External-process writers,
+unadmitted handles, and a writer changing during observation can remain unknown.
+
+Agent database reservation and session-write warnings include `holderAtEnqueue`
+from the existing queue owner, including the active worker operation and thread
+when known. Slow WebSocket connect responses include `pairingLockWait` for the
+longest observed pairing-lock wait, with the same enqueue-time holder fields.
+These snapshots name the holder observed at entry, not every intervening writer;
+`heldMs` is its age at that observation, not the waiter's total wait duration.
+Existing warning thresholds and transaction phase/statement fields are unchanged.
+No SQL, bindings, message content, or tool content is added to these records.
 
 See [Database schemas](/reference/database-schemas) for store ownership and schema
 contracts, and [Configuration reference](/gateway/configuration-reference) for

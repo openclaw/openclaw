@@ -10,8 +10,8 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import * as frontmatter from "./frontmatter.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
 import { loadWorkspaceSkills, prepareWorkspaceSkills } from "./workspace-skill-loader.js";
@@ -22,8 +22,10 @@ const buildWorkspaceSkillsPrompt = async (
   opts?: Parameters<typeof buildSkillSnapshot>[1],
 ): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
 
-vi.mock("./plugin-skills.js", () => ({
+vi.mock("./plugin-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-skills.js")>()),
   resolvePluginSkillRoots: () => [],
+  resolvePluginAgentSkillsDirs: () => ["workshop-skills"],
 }));
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-prompt-suite-");

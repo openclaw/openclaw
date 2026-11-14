@@ -778,12 +778,14 @@ describe("existing shared-state schema admission", () => {
     await withExistingOpenClawStateSchema(options, async () => {
       for (const run of [
         () => repairOpenClawStateDatabaseSchema(options),
-        () => repairOpenClawStateDatabaseReadabilityForDoctor(options),
         () => initializeNativeOpenClawStateDatabase(options),
         () => withOpenClawStateStartupMigrationCheckpointDatabase(() => "checkpoint", options),
       ]) {
         expect(run).toThrow(/schema repair.*owned/i);
       }
+      await expect(repairOpenClawStateDatabaseReadabilityForDoctor(options)).rejects.toThrow(
+        /schema repair.*owned/i,
+      );
       await expect(prepareOpenClawStateDatabaseSchema(options)).rejects.toThrow(
         /schema repair.*owned/i,
       );

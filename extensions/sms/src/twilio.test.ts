@@ -342,7 +342,6 @@ describe("Twilio SMS helpers", () => {
     const overrides = new URLSearchParams(callbackUrl.split("#")[1]);
 
     expect(overrides.get("rp")?.split(",")).toEqual(["ct", "rt", "5xx"]);
-    expect(overrides.get("rp")?.split(",")).not.toContain("4xx");
     expect(overrides.get("rt")).toBe("5000");
     expect(overrides.get("rc")).toBe("1");
   });

@@ -21,11 +21,10 @@ import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-a
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
-import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
-import { setConsoleSubsystemFilter } from "../logging/console.js";
+import { setConsoleSubsystemFilter, withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -465,41 +464,29 @@ export function createTuiConnectionLineage() {
   };
 }
 
-function formatActiveGatewayTuiRefusal(identity: GatewayLockIdentity): string {
-  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
-}
-
-/** Hold canonical state ownership for the complete lifetime of a local TUI. */
-export async function withEmbeddedTuiStateLock<T>(
-  run: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-    await import("../infra/embedded-state-lock.js");
-  const signalBridge = createEmbeddedStateSignalBridge();
-  let stateLock: Awaited<ReturnType<typeof acquireEmbeddedStateLock>> | undefined;
-  try {
-    stateLock = await acquireEmbeddedStateLock({
-      signal: signalBridge.signal,
-      formatActiveGatewayRefusal: formatActiveGatewayTuiRefusal,
-    });
-    return await run(signalBridge.signal);
-  } finally {
-    try {
-      await stateLock?.release();
-    } finally {
-      signalBridge.dispose();
-    }
-  }
-}
-
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
-  if (opts.local === true && opts.backend === undefined) {
-    return await withEmbeddedTuiStateLock(async () => await runTuiUnlocked(opts));
-  }
-  return await runTuiUnlocked(opts);
+  const previousConsoleSubsystemFilter = loggingState.consoleSubsystemFilter;
+  return await withConsoleSubsystemsSuppressed(async () => {
+    if (opts.local === true && opts.backend === undefined) {
+      // A local TUI holds canonical state ownership for its complete lifetime.
+      const { runWithLocalStateOwner } = await import("../cli/local-state-owner.js");
+      return await runWithLocalStateOwner({
+        method: "tui --local",
+        params: {},
+        target: "agent state",
+        onForeignOwner: "refuse",
+        onlineAlternative: "Omit --local to connect to the Gateway.",
+        runLocal: () => runTuiUnlocked(opts, previousConsoleSubsystemFilter),
+      });
+    }
+    return await runTuiUnlocked(opts, previousConsoleSubsystemFilter);
+  });
 }
 
-async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
+async function runTuiUnlocked(
+  opts: RunTuiOptions,
+  previousConsoleSubsystemFilter: string[] | null,
+): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config =
     opts.config ??
@@ -628,15 +615,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
           tlsFingerprint: opts.tlsFingerprint,
         });
   }
-  const previousConsoleSubsystemFilter = isLocalMode
-    ? loggingState.consoleSubsystemFilter
-      ? [...loggingState.consoleSubsystemFilter]
-      : null
-    : null;
-  if (isLocalMode) {
-    setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
-  }
-
   const tui = new TuiMainScreen(new TuiProcessTerminal());
   const programStatus = createTuiProgramStatusReporter(tui.terminal);
   const dedupeBackspace = createBackspaceDeduper();
@@ -997,16 +975,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
 
   const withTuiSuspended = async <T>(work: () => Promise<T>): Promise<T> => {
     await drainAndStopTuiSafely(tui);
-    if (isLocalMode) {
-      setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
-    }
+    setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
     try {
       return await work();
     } finally {
       if (!exitRequested) {
-        if (isLocalMode) {
-          setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
-        }
+        setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
         tui.start();
         tui.setFocus(editor);
         updateHeader();
@@ -1629,9 +1603,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       disposeStatus();
       disposeEventHandlers();
       promptControllers.forEach((controller) => controller.dispose());
-      if (isLocalMode) {
-        setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
-      }
       cleanupTerminalLossHandler?.();
       cleanupTerminalLossHandler = undefined;
       process.off("SIGINT", handleCtrlC);

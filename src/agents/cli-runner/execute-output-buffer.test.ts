@@ -16,7 +16,6 @@ vi.mock("../../process/supervisor/adapters/child.js", () => ({
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
-const REPLACEMENT_CHARACTER = String.fromCharCode(0xfffd);
 const MULTIBYTE_CHARACTER = String.fromCodePoint(0x1f642);
 
 afterEach(() => {
@@ -72,8 +71,6 @@ describe.each(["stdout", "stderr"] as const)("CLI %s diagnostic tail", (stream) 
         .filter((message) => message.startsWith(prefix));
       expect(messages).toHaveLength(1);
       const output = messages[0]!.slice(prefix.length);
-      expect(Buffer.byteLength(output)).toBeLessThanOrEqual(CLI_RUNNER_OUTPUT_TAIL_BYTES);
-      expect(output).not.toContain(REPLACEMENT_CHARACTER);
       expect(output).toBe(expected);
     },
   );
