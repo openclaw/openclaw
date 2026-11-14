@@ -1,0 +1,2 @@
+# Parallel backup capture (#197776): registry ordering and consistency, abort-and-join cleanup, PostgreSQL export serialization, and real-worker settlement before scratch cleanup.
+201
