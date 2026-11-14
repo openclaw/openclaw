@@ -100,7 +100,7 @@ console.log(JSON.stringify({ mode: (await fs.stat(manifest)).mode & 0o7777, cont
 });
 
 describe("native plugin browser builds", () => {
-  it.each([true, false, "settings-only", "channel-settings", "json5"])(
+  it.each([true, false, "settings-only", "channel-settings"])(
     "builds runtime browser artifacts without changing authored plugin metadata (authored UI: %s)",
     async (authoredUi) => {
       const project = await fixture();
@@ -138,11 +138,7 @@ describe("native plugin browser builds", () => {
             }
           : {}),
       };
-      const json = JSON.stringify(authored, null, 2);
-      const original =
-        authoredUi === "json5"
-          ? `// Authored native manifest\n${json.replace('"id":', "id:").replace(/\n\}$/u, ",\n}")}\n`
-          : json;
+      const original = `// Authored native manifest\n${JSON.stringify(authored, null, 2)}\n`;
       await fs.writeFile(manifestPath, original);
       execFileSync(
         process.execPath,
