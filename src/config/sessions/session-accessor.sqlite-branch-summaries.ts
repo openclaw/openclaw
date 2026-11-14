@@ -1,5 +1,6 @@
 import { iterateSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionBranchSummary } from "./session-accessor.types.js";
 import {
@@ -33,6 +34,12 @@ type SessionBranchSummaries = { branches: SessionBranchSummary[]; appendSafe: bo
 export function scanSessionTranscriptNavigationTree(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
+  /**
+   * Navigation entries the caller is about to append, scanned in file order after
+   * the stored rows. An in-place cut resolves its planned `leaf` control this way,
+   * so it publishes the branch this scan selects rather than the one it requested.
+   */
+  pending: readonly TranscriptEvent[] = [],
 ): { tree: BranchTree; appendSafe: boolean } {
   const db = getSessionKysely(database.db);
   let navigationCount = 0;
@@ -60,8 +67,13 @@ export function scanSessionTranscriptNavigationTree(
           typeof entry?.id === "string" && entry.id.length > 0 && entry.id.trim() === entry.id;
         yield entry;
       }
+      for (const [index, event] of pending.entries()) {
+        yield projectSessionBranchEntry(event, navigationCount + index);
+      }
     })(),
   );
+  navigationCount += pending.length;
+  identityCount = (identityCount ?? 0) + pending.length;
   // Missing/forward parents can change old paths when a later append supplies their ID.
   // Writers preserve identity membership; counting once also excludes legacy unindexed rows.
   appendSafe &&=

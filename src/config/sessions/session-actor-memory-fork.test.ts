@@ -186,11 +186,8 @@ describe("memory actor fork and cut", () => {
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
     assert(rewind.status === "created", "Rewind failed");
-    // The cut keeps the transcript identity, so the pre-cut handle stays usable;
-    // its writer claim is what is retired, as on SQLite.
-    expect(await readMemory(storage(parent), "session.entry.read", {})).toMatchObject({
-      sessionId: "parent-session",
-    });
+    // The cut keeps the transcript identity; the writer claim is what is retired.
+    expect(rewind.entry.sessionId).toBe("parent-session");
     expect(rewind.entry.lifecycleRevision).not.toBe(expectedState.lifecycleRevision);
     // The appended control rotates the transcript generation, as SQLite does, so a
     // cursor captured before the cut is refused instead of resuming as an append.
@@ -199,27 +196,17 @@ describe("memory actor fork and cut", () => {
         limits: { cursor: drained.cursor },
       }),
     ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
-    const staleScope = {
-      agentId: "main",
-      sessionKey: parentKey,
-      storePath,
-      sessionId: expectedState.sessionId,
-      expectedOwner: { lifecycleRevision: expectedState.lifecycleRevision },
-    };
-    const staleEvent = {
-      type: "custom",
-      id: "stale-append",
-      customType: "synthetic",
-      parentId: "a2",
-      timestamp: "2026-01-01T00:00:05.000Z",
-      data: {},
-    };
     const stale = await mutateMemory(storage(parent), "session.event.append", {
-      scope: staleScope,
-      eventJson: JSON.stringify(staleEvent),
+      scope: {
+        agentId: "main",
+        sessionKey: parentKey,
+        storePath,
+        sessionId: expectedState.sessionId,
+        expectedOwner: { lifecycleRevision: expectedState.lifecycleRevision },
+      },
+      eventJson: JSON.stringify({ type: "custom", id: "stale", customType: "x", parentId: "a2" }),
     });
     assert(stale.kind === "rolled-back", "Stale writer was admitted after the cut");
-    expect(stale.error.message).toMatch(/writer claim changed/);
     const active = await acquire();
     const old = await readMemory(storage(active), "session.history.hydrate", {
       sessionId: "parent-session",

@@ -48,11 +48,14 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
       }
     }
   };
-  addPath(tree.leafId);
   // Each leaf control names both branches of one repoint: its target became
   // active, and its raw parent is the tip that was active until then. Both were
   // billed. A sibling that was never active is not reachable this way and stays
   // unbilled, matching the retired-copy accounting this replaced.
+  //
+  // Displaced paths are emitted before the active path so that consumers folding
+  // these rows in order (the usage rollup's latency cursor) end on the active
+  // branch's newest turn instead of a rewound one.
   for (const node of tree.nodes) {
     if (!isSessionTranscriptLeafControl(node.entry)) {
       continue;
@@ -63,6 +66,7 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
       addPath(previousTip);
     }
   }
+  addPath(tree.leafId);
   // A transcript rewrite re-appends a turn as a copy carrying `supersedesEntryId`
   // and publishes its own leaf control, so both the copy and the original become
   // reachable. They are one spend, not two: drop every selected row that another

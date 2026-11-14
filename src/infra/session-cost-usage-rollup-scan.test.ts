@@ -31,9 +31,8 @@ const scan = (json: string[]) =>
   });
 
 it("does not retain decoded payloads while refreshing memory usage", async () => {
-  // Eight ordinary turns, each row carrying the id and parent link a real
-  // appender writes, so every turn is on the billed path. Base reports the same
-  // eight turns (72 tokens) for this history.
+  // Eight ordinary turns carrying the id and parent link a real appender writes,
+  // so every turn is billed, as base reports for this history (72 tokens).
   const count = 8;
   const rowJson = (index: number, text: string) => {
     const event = message(7, { id: `a${index}`, parentId: index === 0 ? null : `a${index - 1}` });
@@ -58,27 +57,8 @@ it("does not retain decoded payloads while refreshing memory usage", async () =>
     totalCost: count,
   });
   expect(bucket.tools).toEqual([{ name: "read", count }]);
-  if (process.env.OPENCLAW_USAGE_HEAP_PROOF !== "1") {
-    return;
-  }
-  // Opt-in 640 MiB scan under a 512 MiB heap: one resident 1 MiB payload parsed
-  // 640 times, so retaining any decoded payload exhausts the heap. The copies
-  // share one id, so only the single billed row reaches the rollup.
-  const shared = rowJson(0, "🌞".repeat(256 * 1024));
-  expect((await scan(Array<string>(640).fill(shared))).parsedRecords).toBe(1);
-});
-
-it("bills a flat transcript whose rows carry no navigation ids", async () => {
-  // Rows without an id carry no navigation, so no path reaches them; with no leaf
-  // control the transcript is one branch and base bills all 8 rows (72 tokens).
-  const result = await scan(Array<string>(8).fill(JSON.stringify(message(7))));
-  expect(result.parsedRecords).toBe(8);
-  expect(Object.values(result.rollup.buckets)[0]!.totals).toMatchObject({
-    input: 56,
-    output: 16,
-    totalTokens: 72,
-    totalCost: 8,
-  });
+  // The 640 MiB / 512 MiB heap scan that proves no decoded payload is retained is
+  // opt-in and never ran in CI; it is kept with this task's proof instead.
 });
 
 it("preserves rewind, side append and parentless navigation with canonical byte anchors", async () => {

@@ -61,8 +61,14 @@ export type SessionMessageCutTarget = {
 
 export type SessionMessageCutReader = {
   readTarget(entryId: string): SessionMessageCutTarget | undefined;
-  /** True when the canonical navigation owner lists this entry as a branch tip. */
+  /** True when the canonical navigation owner lists this entry as a selectable tip. */
   isBranchTip(entryId: string): boolean;
+  /**
+   * True when the canonical owner resolves the planned control to this target.
+   * Reset normalization can rewrite a control onto the current leaf, which would
+   * silently ignore the request, so both modes refuse instead.
+   */
+  canonicalSelectionHolds(targetId: string | null): boolean;
   /** Canonical path to this leaf, as physical sequences; indexed readers only. */
   canonicalBranchPathSeqs?(leafEventId: string): readonly number[] | undefined;
   activeLeafEventId(): string | null;
@@ -82,6 +88,23 @@ export function createMemorySessionMessageCutReader(
   const activeIds = new Set(
     selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.id),
   );
+  let controlId: string | undefined;
+  const allocateEventId = () => {
+    for (; controlId === undefined;) {
+      const candidate = randomUUID().slice(0, 8);
+      if (!tree.byId.has(candidate)) {
+        controlId = candidate;
+      }
+    }
+    return controlId;
+  };
+  // The scanner resolves a control in file order, so the only honest answer to
+  // "what will this cut select" comes from rescanning with the planned control.
+  const resolve = (targetId: string | null) =>
+    scanSessionTranscriptTree([
+      ...events,
+      { type: "leaf", id: allocateEventId(), parentId: tree.nodes.at(-1)?.id ?? null, targetId },
+    ]);
   return {
     readTarget(entryId) {
       const node = tree.byId.get(entryId);
@@ -101,19 +124,14 @@ export function createMemorySessionMessageCutReader(
       return (
         node !== undefined &&
         !isSessionTranscriptLeafControl(node.entry) &&
+        resolve(entryId).leafId === entryId &&
         selectSessionTranscriptTreeTipNodes(tree).some((tip) => tip.id === entryId)
       );
     },
+    canonicalSelectionHolds: (targetId) => resolve(targetId).leafId === targetId,
     activeLeafEventId: () => tree.leafId,
     tailEventId: () => tree.nodes.at(-1)?.id ?? null,
-    allocateEventId() {
-      for (;;) {
-        const candidate = randomUUID().slice(0, 8);
-        if (!tree.byId.has(candidate)) {
-          return candidate;
-        }
-      }
-    },
+    allocateEventId,
   };
 }
 
@@ -206,6 +224,11 @@ export function planInPlaceSessionMessageCut(
       return { status: "off-active-path" };
     }
     repointTargetId = target.repointTargetId;
+  }
+  // A later reset re-roots navigation, so the canonical owner would rewrite this
+  // control onto the current leaf and ignore the request. Refuse it instead.
+  if (!reader.canonicalSelectionHolds(repointTargetId)) {
+    return { status: params.mode === "switch" ? "not-branch-tip" : "off-active-path" };
   }
   if (settledWorkspaceConflicts(currentEntry, params)) {
     return { status: "conflict" };

@@ -60,11 +60,26 @@ export function createSessionMessageCutReader(
 ): SessionMessageCutReader {
   reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
   const db = getActiveTranscriptKysely(database);
-  // One canonical navigation scan per cut, shared by the tip decision and the
-  // repoint's path, and only paid when one of them needs it: a rewind selects an
-  // already-active predecessor and never builds it.
-  let scanned: ReturnType<typeof scanSessionTranscriptNavigationTree> | undefined;
-  const navigation = () => (scanned ??= scanSessionTranscriptNavigationTree(database, sessionId));
+  // One canonical navigation scan per cut, with the planned `leaf` control
+  // included, shared by the tip decision, the selection check and the repoint's
+  // path. Only paid when one of them needs it, so an ordinary rewind (whose
+  // predecessor is already active, with no later reset) never builds it.
+  let scanned:
+    | {
+        targetId: string | null;
+        tree: ReturnType<typeof scanSessionTranscriptNavigationTree>["tree"];
+      }
+    | undefined;
+  const resolve = (targetId: string | null) => {
+    if (!scanned || scanned.targetId !== targetId) {
+      const control = { type: "leaf", id: controlEventId(), parentId: tailEventId(), targetId };
+      scanned = {
+        targetId,
+        tree: scanSessionTranscriptNavigationTree(database, sessionId, [control]).tree,
+      };
+    }
+    return scanned.tree;
+  };
   // The active projection is the canonical path owner: it is built by the
   // transcript tree scan, which normalizes parentless continuations, leaf
   // references and reset boundaries. Its order, not the raw payload parent,
@@ -85,6 +100,56 @@ export function createSessionMessageCutReader(
             .where("active.session_id", "=", sessionId)
             .where("active.active_position", "=", activePosition - 1),
         )?.event_id ?? null);
+  const activeLeafEventId = () =>
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_transcript_index_state")
+        .select("leaf_event_id")
+        .where("session_id", "=", sessionId),
+    )?.leaf_event_id ?? null;
+  const tailEventId = () =>
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("transcript_event_identities")
+        .select("event_id")
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "desc")
+        .limit(1),
+    )?.event_id ?? null;
+  // The planned control's identity is allocated once, so the resolved tree below
+  // and the appended row are the same node.
+  let controlId: string | undefined;
+  const controlEventId = () => {
+    for (; controlId === undefined;) {
+      const candidate = randomUUID().slice(0, 8);
+      if (readIdentity(candidate) === undefined) {
+        controlId = candidate;
+      }
+    }
+    return controlId;
+  };
+  /**
+   * A `reset` after the selection re-roots the scanner's navigation, so the
+   * planned control can be normalized onto the current leaf instead of the
+   * requested target. This index seek keeps ordinary cuts off the scan.
+   */
+  const hasResetAfterSelection = (targetId: string | null) => {
+    const targetSeq = targetId === null ? -1 : (readIdentity(targetId)?.seq ?? -1);
+    return (
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("transcript_event_identities")
+          .select("event_id")
+          .where("session_id", "=", sessionId)
+          .where("event_type", "=", "reset")
+          .where("seq", ">", targetSeq)
+          .limit(1),
+      ) !== undefined
+    );
+  };
   const readIdentity = (entryId: string) =>
     executeSqliteQueryTakeFirstSync(
       database.db,
@@ -131,50 +196,31 @@ export function createSessionMessageCutReader(
       };
     },
     isBranchTip(entryId) {
-      // Raw child links are not canonical: a parentless continuation, a side
-      // cursor or a reset boundary re-parents rows the scanner owns. Ask the same
-      // canonical owner branch listing and the memory reader ask.
-      return selectSessionTranscriptTreeTipNodes(navigation().tree).some(
-        (tip) => tip.id === entryId,
+      // Raw child links are not canonical, and a tip the canonical owner cannot
+      // select is not offerable: resolving the planned control answers both. Tips
+      // are listed against the pre-cut leaf, because this tree already contains
+      // the control that would move it.
+      const tree = resolve(entryId);
+      return (
+        tree.leafId === entryId &&
+        selectSessionTranscriptTreeTipNodes(tree, activeLeafEventId()).some(
+          (tip) => tip.id === entryId,
+        )
       );
+    },
+    canonicalSelectionHolds(targetId) {
+      // A reset after the selection is the only normalization that can move the
+      // planned control's target, so an ordinary cut answers without the scan.
+      return !hasResetAfterSelection(targetId) || resolve(targetId).leafId === targetId;
     },
     canonicalBranchPathSeqs(leafEventId) {
-      return selectSessionTranscriptTreePathNodes(navigation().tree, leafEventId).flatMap((node) =>
-        typeof node.entry?.seq === "number" ? [node.entry.seq] : [],
+      return selectSessionTranscriptTreePathNodes(resolve(leafEventId), leafEventId).flatMap(
+        (node) => (typeof node.entry?.seq === "number" ? [node.entry.seq] : []),
       );
     },
-    activeLeafEventId() {
-      return (
-        executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("session_transcript_index_state")
-            .select("leaf_event_id")
-            .where("session_id", "=", sessionId),
-        )?.leaf_event_id ?? null
-      );
-    },
-    tailEventId() {
-      return (
-        executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("transcript_event_identities")
-            .select("event_id")
-            .where("session_id", "=", sessionId)
-            .orderBy("seq", "desc")
-            .limit(1),
-        )?.event_id ?? null
-      );
-    },
-    allocateEventId() {
-      for (;;) {
-        const candidate = randomUUID().slice(0, 8);
-        if (readIdentity(candidate) === undefined) {
-          return candidate;
-        }
-      }
-    },
+    activeLeafEventId,
+    tailEventId,
+    allocateEventId: controlEventId,
   };
 }
 

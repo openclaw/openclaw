@@ -401,7 +401,18 @@ export function* selectSessionTranscriptActiveEntryIndexes<T>(params: {
   }
 }
 
-export function selectSessionTranscriptTreeTipNodes<T>(tree: SessionTranscriptTree<T>) {
+/**
+ * Branch tips: every non-control node no other node continues, plus the current
+ * leaf, which stays offerable even once a cut gave it descendants.
+ *
+ * `leafId` names which node counts as current. Callers that scanned a tree with
+ * their own pending control appended pass the leaf from before it, so the tips
+ * they see are the ones the owner would list now.
+ */
+export function selectSessionTranscriptTreeTipNodes<T>(
+  tree: SessionTranscriptTree<T>,
+  leafId: string | null = tree.leafId,
+) {
   const referencedParents = new Set(
     tree.nodes.flatMap((node) =>
       isSessionTranscriptLeafControl(node.entry) || node.parentId === null ? [] : [node.parentId],
@@ -410,7 +421,7 @@ export function selectSessionTranscriptTreeTipNodes<T>(tree: SessionTranscriptTr
   return tree.nodes.filter(
     (node) =>
       !isSessionTranscriptLeafControl(node.entry) &&
-      (node.id === tree.leafId || !referencedParents.has(node.id)),
+      (node.id === leafId || !referencedParents.has(node.id)),
   );
 }
 

@@ -28,7 +28,6 @@ import {
   updateSessionEntry as updateEntry,
   upsertSessionEntryCore as upsertEntry,
 } from "./session-accessor.js";
-import { scanSessionTranscriptNavigationTree as scanNavigationTree } from "./session-accessor.sqlite-branch-summaries.js";
 import {
   agentId,
   sessionKey,
@@ -39,10 +38,10 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { createSessionMessageCutReader as createMessageCutReader } from "./session-message-cut-in-place.kernel.js";
 import { prepareSessionTranscriptActivePathRepoint as prepareRepoint } from "./session-transcript-active-path-repoint.js";
 import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
-import { selectSessionTranscriptTreePathNodes } from "./transcript-tree.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const { createSession, tempDirs } = useSessionMessageCutFixtures();
@@ -67,60 +66,69 @@ const activeMessageIds = (scope: Parameters<typeof readMessages>[0]) =>
   );
 
 /**
- * Seed `u1 -> a1` plus one legacy shape whose canonical ancestry is not its raw
- * `parentId` chain: a parentless continuation, or an ordinary turn written behind
- * a side cursor. Both are canonically active, which is what the scanner owns.
+ * Install one stored shape whose canonical navigation is not its raw chain, through
+ * the append owner: no async writer produces these shapes today.
  */
-async function seedLegacyNavigation(kind: "parentless" | "side-cursor") {
+async function seedLegacyNavigation(kind: "parentless" | "side-cursor" | "reset-boundary") {
   const stateDir = tempDirs.make(`openclaw-message-cut-${kind}-`);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const sessionId = `${kind}-source`;
   const key = `agent:main:${kind}`;
   const scope = { agentId, env, sessionId, sessionKey: key };
-  const startedAt = Date.parse("2026-07-19T00:00:00.000Z");
   const revision = `${kind}-revision`;
-  await upsertEntry(scope, { sessionId, lifecycleRevision: revision, updatedAt: startedAt });
-  const add = async (eventId: string, parentId: string | null, role: "user" | "assistant") =>
-    appendMessage(scope, {
-      eventId,
-      parentId,
-      message: { role, content: eventId },
-      now: startedAt + 1_000,
-    });
-  await add("u1", null, "user");
-  await add("a1", "u1", "assistant");
-  if (kind === "side-cursor") {
-    // A side append advances the physical cursor without moving the active leaf,
-    // so the scanner re-parents the next ordinary row onto a1.
-    await appendEvent(scope, {
-      type: "custom",
-      id: "s",
-      customType: "synthetic",
-      appendMode: "side",
-      parentId: "u1",
-      timestamp: new Date(startedAt + 2_000).toISOString(),
-      data: {},
-    });
-    await add("u2", "s", "user");
-    await add("a2", "u2", "assistant");
-  } else {
-    // Only an older appender wrote a canonical row with no `parentId` key.
-    runOpenClawAgentWriteTransaction(
-      (database) =>
-        appendTranscriptEventsInTransaction(database, { ...resolveSqliteScope(scope), sessionId }, [
-          {
-            type: "message",
-            id: "u2",
-            timestamp: new Date(startedAt + 3_000).toISOString(),
-            message: { role: "user", content: "u2" },
-          },
-        ]),
-      toDatabaseOptions(resolveSqliteScope(scope)),
-    );
-  }
+  await upsertEntry(scope, { sessionId, lifecycleRevision: revision, updatedAt: 1 });
+  const at = (second: number) =>
+    new Date(Date.parse("2026-07-19T00:00:00Z") + second).toISOString();
+  const message = (id: string, parentId: string | null | undefined, second: number) => ({
+    type: "message",
+    ...(parentId === undefined ? {} : { parentId }),
+    id,
+    timestamp: at(second),
+    message: { role: id.startsWith("u") ? "user" : "assistant", content: id },
+  });
+  const shapes = {
+    // u2 has no `parentId` key, so the scanner continues it from the leaf a1.
+    parentless: [message("u2", undefined, 3)],
+    // A side append moves the cursor, not the leaf: u2 re-parents onto a1.
+    "side-cursor": [
+      {
+        type: "custom",
+        id: "s",
+        customType: "synthetic",
+        appendMode: "side",
+        parentId: "u1",
+        timestamp: at(2),
+        data: {},
+      },
+      message("u2", "s", 3),
+      message("a2", "u2", 4),
+    ],
+    // A reset taken while sibling b1 was active re-roots later navigation, so a1
+    // predates the boundary.
+    "reset-boundary": [
+      message("b1", "u1", 2),
+      { type: "reset", id: "r1", parentId: "b1", firstKeptEntryId: "b1", timestamp: at(3) },
+      message("u2", "r1", 4),
+      message("a2", "u2", 5),
+    ],
+  }[kind];
+  const resolved = resolveSqliteScope(scope);
+  runOpenClawAgentWriteTransaction(
+    (database) =>
+      appendTranscriptEventsInTransaction(database, { ...resolved, sessionId }, [
+        message("u1", null, 0),
+        message("a1", "u1", 1),
+        ...shapes,
+      ]),
+    toDatabaseOptions(resolved),
+  );
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
   const canonical = activeMessageIds(scope);
-  expect(canonical).toEqual(kind === "side-cursor" ? ["u1", "a1", "u2", "a2"] : ["u1", "a1", "u2"]);
+  expect(canonical).toEqual(
+    kind === "parentless"
+      ? ["u1", "a1", "u2"]
+      : [...(kind === "side-cursor" ? ["u1", "a1"] : ["b1"]), "u2", "a2"],
+  );
   return { env, scope, key, sessionId, revision, stateDir, canonical };
 }
 
@@ -377,14 +385,14 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
   });
 });
 
-// Canonical ancestry is not the raw parent chain. With a side cursor
-// (`u1 -> a1`, side `s` off u1, then ordinary `u2 -> s`), the scanner normalizes
-// u2 onto the active leaf a1, so the canonical branch is [u1,a1,u2,a2]; walking
-// raw parents published [u1,s,u2,a2] as clean and lost a1. Canonical tips are not
-// raw child links either: `u2` continues a1, so a1 is not a tip and selecting it
-// must refuse before anything is retired.
-it.each(["parentless", "side-cursor"] as const)(
-  "keeps canonical ancestry and tips for a %s history",
+// Canonical navigation is neither the raw parent chain nor raw child links, and a
+// control resolves in file order: a side cursor re-parents u2 onto a1 ([u1,a1,u2,a2],
+// not [u1,s,u2,a2]); a parentless u2 continues a1, so a1 is not a tip; after a reset
+// a1 predates the boundary, so a control targeting it is rewritten onto the current
+// leaf. Selecting a1 must refuse, and the projection must keep agreeing with a full
+// canonical rebuild.
+it.each(["parentless", "side-cursor", "reset-boundary"] as const)(
+  "keeps canonical navigation for a %s history",
   async (kind) => {
     const { env, scope, key, sessionId, revision, stateDir, canonical } =
       await seedLegacyNavigation(kind);
@@ -398,8 +406,7 @@ it.each(["parentless", "side-cursor"] as const)(
     );
 
     assert(rewound.status === "created", `rewind refused: ${rewound.status}`);
-    expect(rewound.entry.sessionId).toBe(sessionId);
-    expect(activeMessageIds(scope)).toEqual(["u1", "a1"]);
+    expect(activeMessageIds(scope)).toEqual(kind === "reset-boundary" ? ["b1"] : ["u1", "a1"]);
     if (kind === "side-cursor") {
       // Switching back must publish what a full canonical rebuild publishes.
       const switched = await switchBranch({ agentId, env, sessionKey: key, leafEntryId: "a2" });
@@ -410,11 +417,10 @@ it.each(["parentless", "side-cursor"] as const)(
   },
 );
 
-// A rewind repoints the projection incrementally, so oversized history must not
-// send history readers through a full rebuild (which failed reads with
-// "rebuilding"). The repoint also refuses by retained bytes, not only row count,
-// so a branch of large events cannot materialize in the shared worker: the
-// streaming reconcile owner publishes that one instead.
+// A rewind repoints incrementally, so oversized history must not send readers
+// through a full rebuild (which failed reads with "rebuilding"). The repoint also
+// refuses by retained bytes, so a large branch cannot materialize in the shared
+// worker: the streaming reconcile owner publishes that one.
 it("repoints oversized history without hydrating it in one transaction", async () => {
   const { env, scope, params } = await createSession();
   await appendEvent(scope, {
@@ -426,8 +432,8 @@ it("repoints oversized history without hydrating it in one transaction", async (
     data: { padding: "x".repeat(SYNC_REBUILD_MAX_BYTES) },
   });
 
-  // The append made the oversized row the active leaf; leave it, then select it
-  // again so the repoint has to plan that whole branch back onto the active path.
+  // The append made the oversized row the active leaf; leave it, then select it so
+  // the repoint must plan that whole branch back onto the active path.
   const select = (leafEntryId: string) => switchBranch({ agentId, env, sessionKey, leafEntryId });
   const stateDir = env.OPENCLAW_STATE_DIR as string;
   expect(await select("assistant-2")).toMatchObject({ status: "created" });
@@ -437,18 +443,14 @@ it("repoints oversized history without hydrating it in one transaction", async (
   expect(readPage(target, { maxMessages: 0, offset: 0 }).totalMessages).toBe(2);
   expect(await select("assistant-2")).toMatchObject({ status: "created" });
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-  const planned = (leafEventId: string) => {
-    const database = openOpenClawAgentDatabase({ agentId, env });
-    // The same canonical path the production repoint consumes, from its one owner.
-    const path = (leafId: string) =>
-      selectSessionTranscriptTreePathNodes(
-        scanNavigationTree(database, scope.sessionId).tree,
-        leafId,
-      ).flatMap((node) => (typeof node.entry?.seq === "number" ? [node.entry.seq] : []));
-    return prepareRepoint(database.db, scope.sessionId, leafEventId, path);
-  };
-  // The clean projection does plan a small divergence, so the refusal below is
-  // the retained-byte bound and not a lagging projection.
+  // Through the production reader: the clean projection plans a small divergence,
+  // so the oversized refusal below is the byte bound, not a lagging projection.
+  const database = openOpenClawAgentDatabase({ agentId, env });
+  const reader = createMessageCutReader(database, scope.sessionId);
+  const planned = (leafEventId: string) =>
+    prepareRepoint(database.db, scope.sessionId, leafEventId, (leafId) =>
+      reader.canonicalBranchPathSeqs?.(leafId),
+    );
   expect(planned("assistant-2")).toBeDefined();
   expect(planned("oversized-branch-tip")).toBeUndefined();
 
@@ -457,18 +459,14 @@ it("repoints oversized history without hydrating it in one transaction", async (
   expect(activeMessageIds(scope)).toEqual(["user-1", "off-path-user"]);
 });
 
-// An in-place rewind keeps the transcript identity, so the lifecycle revision is
-// the fence that retires a live writer holding pre-rewind state: without it an
-// owner-fenced append lands on the pre-cut tail and resurrects the left branch.
+// The lifecycle revision is the fence that retires a live writer holding pre-rewind
+// state: without it an owner-fenced append resurrects the branch the cut left.
 it("fences a live writer that holds the pre-rewind incarnation", async () => {
   const { scope, params } = await createSession();
   const before = readEntry(scope);
   assert(before);
   // Captured by a live SessionManager before the cut.
-  const staleOwner = {
-    lifecycleRevision: before.lifecycleRevision,
-    activeWriterRunId: before.activeWriterRunId,
-  };
+  const staleOwner = { lifecycleRevision: before.lifecycleRevision };
 
   const result = await rewind(params);
   assert(result.status === "created");

@@ -176,6 +176,37 @@ it.each<[string, Row[], [number, number, string], string?]>([
   }
 });
 
+// Billing a rewound turn must not move the latency cursor off the active branch:
+// the next append-only assistant event measures from the newest active user turn,
+// exactly as base does for the same continuation without the rewind.
+it("keeps the rewound branch's timing cursor on its active turn", async () => {
+  const at = (second: number) => new Date(timestamp + second * 1_000).toISOString();
+  const stamp = <T extends Record<string, unknown>>(event: T, second: number) => ({
+    ...event,
+    timestamp: at(second),
+  });
+  // u2 at 12:00:02 is displaced by a rewind; u3 lands at 12:00:04 with its reply
+  // at 12:00:05, then an append-only assistant event arrives at 12:00:06.
+  const events = [
+    stamp(userEvent("u1", null), 0),
+    stamp(answerEvent("a1", "u1", 1), 1),
+    stamp(userEvent("u2", "a1"), 2),
+    { type: "leaf", id: "cut", parentId: "u2", targetId: "a1" },
+    stamp(userEvent("u3", "a1"), 4),
+    stamp(answerEvent("a3", "u3", 1), 5),
+    stamp(answerEvent("a4", "a3", 1), 6),
+  ];
+  const result = await scan(events.map((event, seq) => ({ seq, event: event as Row["event"] })));
+
+  expect(result.rollup.lastUserTimestamp).toBe(timestamp + 4_000);
+  // a1 and a3 measure 1,000 ms from their own user turn; a4 measures 2,000 ms from u3.
+  const latency = Object.values(result.rollup.buckets).reduce(
+    (total, b) => ({ count: total.count + b.latency.count, sum: total.sum + b.latency.sum }),
+    { count: 0, sum: 0 },
+  );
+  expect(latency).toEqual({ count: 3, sum: 4_000 });
+});
+
 it("aggregates duplicate-ID paths in selected ancestry order when sequence numbers go backward", async () => {
   const user = (at: number) => ({
     type: "message",
@@ -273,7 +304,7 @@ it.each([
 // A maintenance rewrite re-appends one turn as a copy carrying `supersedesEntryId`
 // and publishes its own leaf control, so the original and every copy become
 // reachable billed paths. They are one spend: no model call happened.
-it("bills a rewritten turn once and a regenerated turn twice", async () => {
+it("bills each real turn once across rewrites, copies and displaced paths", async () => {
   const turn: TranscriptEvent[] = [
     createSessionTranscriptHeader({ sessionId: "source" }),
     userEvent("u1", null),
@@ -294,7 +325,7 @@ it("bills a rewritten turn once and a regenerated turn twice", async () => {
     );
     superseded = copy;
   }
-  // Two rewrites of one 10-token turn: one spend, no model call.
+  // Two rewrites of one 10-token turn: one spend, because no model call happened.
   expect(
     billedTokens(
       await scan(rewritten.map((event, seq) => ({ seq, event: event as Row["event"] }))),
@@ -302,13 +333,13 @@ it("bills a rewritten turn once and a regenerated turn twice", async () => {
   ).toBe(10);
   // A rewind and regenerate is two real turns: 10 displaced + 5 new.
   expect(billedTokens(await scanWithNewTurn(applyInPlaceCut(turn, "rewind", "u1"), "u1"))).toBe(15);
-});
-
-// Rows produced by switch-then-rewind on the merge base, where each cut copied the
-// whole tree: entry ids are copied verbatim, so one billed turn appears in all three
-// windows and `inheritedThrough` names the paths each source counted. The merge base
-// reported 70 tokens (10 + 40 + 20, each turn once) for this family.
-it("bills a legacy copied family exactly once per turn", () => {
+  // Rows without an id carry no navigation: with no leaf control the transcript is
+  // one branch and every row is billed, as on base.
+  const flat = Array.from({ length: 8 }, () => ({ message: answerEvent("f", "u1", 9).message }));
+  expect(selectBilledTranscriptEvents(flat)).toHaveLength(8);
+  // Three windows the merge base produced by copying on every cut: ids are copied
+  // verbatim and `inheritedThrough` names the paths each source already counted,
+  // so the family still reports its 70 tokens (10 + 40 + 20), each turn once.
   const window = (sessionId: string, inheritedThrough: string[], leaves: TranscriptEvent[]) => [
     createSessionTranscriptHeader({
       sessionId,
@@ -319,18 +350,19 @@ it("bills a legacy copied family exactly once per turn", () => {
   ];
   const switchLeaf = { type: "leaf", id: "97c81933", parentId: "a2", targetId: "a2b" };
   const rewindLeaf = { type: "leaf", id: "7d3f38f6", parentId: "97c81933", targetId: "a1" };
-  const family = [
-    window("legacy-source", [], []),
-    window("legacy-after-switch", ["a2"], [switchLeaf]),
-    window("legacy-after-rewind", ["a2", "a2b"], [switchLeaf, rewindLeaf]),
-  ];
   const tokensOf = (rows: TranscriptEvent[]) =>
     selectBilledTranscriptEvents(rows.filter(isRecord)).reduce((total, row) => {
       const usage = isRecord(row.message) ? row.message.usage : undefined;
       const tokens = isRecord(usage) ? usage.totalTokens : undefined;
       return total + (typeof tokens === "number" ? tokens : 0);
     }, 0);
-  expect(family.reduce((sum, rows) => sum + tokensOf(rows), 0)).toBe(70);
+  expect(
+    [
+      window("legacy-source", [], []),
+      window("legacy-after-switch", ["a2"], [switchLeaf]),
+      window("legacy-after-rewind", ["a2", "a2b"], [switchLeaf, rewindLeaf]),
+    ].reduce((sum, rows) => sum + tokensOf(rows), 0),
+  ).toBe(70);
 });
 
 /** The real in-place install: one appended leaf control on the same transcript. */

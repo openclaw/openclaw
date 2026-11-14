@@ -55,7 +55,6 @@ it.each([
   { method: "sessions.rewind", failure: "invalid worker" },
   { method: "sessions.rewind", failure: "invalid native" },
   { method: "sessions.rewind", failure: "invalid memory" },
-  { method: "sessions.rewind", failure: "invalid lagging projection" },
   { method: "sessions.branches.switch", failure: "none" },
   { method: "sessions.rewind", failure: "conflict" },
   { method: "sessions.rewind", failure: "revoked commit" },
@@ -115,16 +114,17 @@ it.each([
                   .mockReturnValue(false)
               : undefined;
           try {
-            // A lagging active-path projection must not turn an invalid selection into a
-            // retired runtime: the preflight reconciles through the projection owner and
-            // still refuses before the workspace is touched.
-            const lag = () =>
-              failure === "invalid lagging projection" &&
+            // A lagging active-path projection must not turn an invalid selection into
+            // a retired runtime: the preflight reconciles through the projection owner
+            // and still refuses before the workspace is touched. The first selection
+            // below runs against the dirty projection; the preflight cleans it.
+            if (failure === "invalid worker") {
               runOpenClawAgentWriteTransaction(
                 (current) =>
                   markSessionTranscriptIndexDirtyInTransaction(current.db, scope.sessionId),
                 toDatabaseOptions(resolveSqliteScope(scope)),
               );
+            }
             for (const [invalidMethod, entryId, message] of [
               ["sessions.rewind", "missing", "message entry not found"],
               ["sessions.rewind", "assistant-1", "entry is not a user message"],
@@ -132,7 +132,6 @@ it.each([
               ["sessions.branches.switch", "user-2", "branch is already active"],
               ["sessions.branches.switch", "user-1", "entry is not a branch tip"],
             ] as const) {
-              lag();
               const params = messageCutParams(invalidMethod, scope.sessionKey, entryId);
               const reply = await invokeHandler(invalidMethod, entryId, {
                 params,
