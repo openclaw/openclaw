@@ -28,7 +28,7 @@ export function startTemplateAddStage(stage: string, counts: Record<string, numb
     if (!context) {
       return;
     }
-    log.info("Template Add timing", {
+    log.debug("Template Add timing", {
       requestId: context.requestId,
       spanId,
       stage,
