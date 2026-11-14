@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { vi, type Mock } from "vitest";
+import { configureAiTransportHost, getDefaultAiTransportHost } from "@openclaw/ai";
+import { afterAll, vi, type Mock } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -38,6 +39,11 @@ import {
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
+
+// Runtime imports under this harness install mock-backed callbacks in the process-wide host.
+// Module resets do not retire those callbacks; restore the host before another file streams.
+const originalTransportHost = getDefaultAiTransportHost();
+afterAll(() => configureAiTransportHost(originalTransportHost));
 
 type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
