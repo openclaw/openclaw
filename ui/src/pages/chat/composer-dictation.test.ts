@@ -4,6 +4,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -650,6 +651,46 @@ describe("ComposerDictationOwner", () => {
     unsubscribe();
   });
 
+  it("publishes the pending final drain while the composer stays unlocked", async () => {
+    const { controller, onCommit } = createHarness();
+    const states: boolean[] = [];
+    const unsubscribe = controller.subscribe(() => states.push(controller.transcribing));
+    await startDirect(controller);
+    emit({ type: "partial", text: "still transcribing" });
+    const finished = controller.finishActive();
+    expect(controller).toMatchObject({ transcribing: true, locksComposer: false });
+    expect(states.at(-1)).toBe(true);
+    transcript("still transcribing");
+    emit({ type: "close", reason: "completed" });
+    await expect(finished).resolves.toBe(true);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("still transcribing", true);
+    expect(controller.transcribing).toBe(false);
+    expect(states.at(-1)).toBe(false);
+    unsubscribe();
+  });
+
+  it.each([
+    ["timeout", "chat.composer.dictationFailed"],
+    ["disconnect", "chat.composer.dictationDisconnected"],
+  ])("reports why an empty final drain ended through %s", async (outcome, key) => {
+    const { controller, options, onCommit, onError } = createHarness();
+    await startDirect(controller);
+    const finished = controller.finishActive();
+    await vi.advanceTimersByTimeAsync(0);
+    if (outcome === "disconnect") {
+      controller.update({ ...options, connected: false });
+    } else {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    await expect(finished).resolves.toBe(false);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledExactlyOnceWith(t(key), {
+      kind: "interrupted",
+      preservesText: false,
+    });
+    expect(controller.transcribing).toBe(false);
+  });
+
   it("buffers microphone audio while the transcription session is being created", async () => {
     const { promise: createResult, resolve: resolveCreate } =
       createDeferred<ReturnType<typeof sessionResult>>();
@@ -688,22 +729,23 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed("late-session"));
   });
 
-  it("commits final text promptly when the Gateway disconnects during a partial drain", async () => {
+  it.each(["keep this", ""])("reports active disconnect once for %j", async (text) => {
     const harness = createHarness();
     await startHold(harness.target);
-    transcript("keep this");
-    emit({ type: "partial", text: "unfinished" });
+    if (text) {
+      transcript(text);
+      emit({ type: "partial", text: "unfinished" });
+    }
 
     const disconnectedAt = Date.now();
     harness.controller.update({ ...harness.options, connected: false });
     await waitForFast(() => expectClosed());
-    await waitForFast(() =>
-      expect(harness.onCommit).toHaveBeenCalledWith("keep this unfinished", true),
-    );
+    await waitForFast(() => expect(harness.onError).toHaveBeenCalledTimes(1));
+    expectCommit(harness.onCommit, text ? "keep this unfinished" : "");
     expect(Date.now() - disconnectedAt).toBeLessThan(1000);
     expect(harness.onError).toHaveBeenCalledWith(
       "Dictation stopped because the Gateway disconnected.",
-      { kind: "interrupted", preservesText: true },
+      { kind: "interrupted", preservesText: Boolean(text) },
     );
     expect(harness.onError).toHaveBeenCalledTimes(1);
     expect(harness.controller).toMatchObject({ finalizing: false, locksComposer: false });

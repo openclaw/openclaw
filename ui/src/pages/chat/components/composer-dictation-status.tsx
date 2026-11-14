@@ -27,10 +27,15 @@ export function ActiveDictationStatus(props: {
 }) {
   const phase = createMemo((): MicrophoneMeterStatus | null => {
     const dictation = props.readDictation();
-    if (!dictation?.active) {
+    if (!dictation?.active && !dictation?.transcribing) {
       return null;
     }
-    return dictation.connecting ? "connecting" : dictation.finalizing ? "thinking" : "listening";
+    // The final drain outlives the active phase because the composer unlocks on Stop.
+    return dictation.connecting
+      ? "connecting"
+      : dictation.finalizing || !dictation.active
+        ? "thinking"
+        : "listening";
   });
   return (
     <Show when={phase()} keyed>

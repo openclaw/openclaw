@@ -101,6 +101,11 @@ export class ComposerDictationOwner extends EventTarget {
     return this.phase !== "idle";
   }
 
+  // The composer unlocks before the final drain settles; this keeps that wait visible.
+  get transcribing(): boolean {
+    return this.pendingCommitSession !== null;
+  }
+
   get inputLevel(): RealtimeTalkLevelSignal | undefined {
     return this.session?.inputLevel;
   }
@@ -145,7 +150,8 @@ export class ComposerDictationOwner extends EventTarget {
       const keepFinal = this.active && !options.connected;
       const preservesText = keepFinal ? (this.session?.markGatewayDisconnected() ?? false) : false;
       void this.stop({ commit: keepFinal });
-      if (keepFinal) {
+      // Empty drains report their failure through the session; retained text needs this notice.
+      if (keepFinal && preservesText) {
         options.onError(t("chat.composer.dictationDisconnected"), {
           kind: "interrupted",
           preservesText,
@@ -401,17 +407,15 @@ export class ComposerDictationOwner extends EventTarget {
     }
     // The composer unlocks immediately, while this exact stopped session keeps
     // its final accumulator and voice claim until another voice action supersedes it.
-    this.pendingCommitSession = session;
-    this.syncCancellationListeners();
+    this.setPendingCommit(session);
     return session
       .finish()
       .catch(() => "")
       .then((lateTranscript) => {
         const ownsPendingCommit = this.pendingCommitSession === session;
         if (ownsPendingCommit) {
-          this.pendingCommitSession = null;
           this.playback.stop();
-          this.syncCancellationListeners();
+          this.setPendingCommit(null);
         }
         if (
           !ownsPendingCommit ||
@@ -432,10 +436,18 @@ export class ComposerDictationOwner extends EventTarget {
 
   private retirePendingCommit(): void {
     const session = this.pendingCommitSession;
-    this.pendingCommitSession = null;
     this.playback.stop();
-    this.syncCancellationListeners();
+    this.setPendingCommit(null);
     void session?.cancel().catch(() => undefined);
+  }
+
+  private setPendingCommit(session: ComposerDictationSession | null): void {
+    if (this.pendingCommitSession === session) {
+      return;
+    }
+    this.pendingCommitSession = session;
+    this.syncCancellationListeners();
+    this.dispatchEvent(new Event("change"));
   }
 
   private clearPointerGesture(): void {
