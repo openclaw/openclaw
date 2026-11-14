@@ -3269,6 +3269,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.11.4",
                   "releases/2026.11.3",
                   "releases/2026.11.2",
                   "releases/2026.11.1",
