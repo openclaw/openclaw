@@ -87,9 +87,25 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.getByText(/^Answer 190\./).waitFor();
-        // Read up to the boundary until the older page lands, then read on through it.
-        // Programmatic scrollTop steps stand in for touch and momentum movement.
-        const frames = await thread.evaluate(async (element, loaded) => {
+        // Native input retires end-follow ownership; raw offsets can be layout maintenance.
+        await thread.hover();
+        await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+        await expect
+          .poll(() =>
+            thread.evaluate((element, loaded) => {
+              const pane = element.closest(".chat-pane-cache__pane--active") as HTMLElement & {
+                state: { chatMessages: unknown[] };
+              };
+              // The prepended prefix must own real scroll space before reading through it.
+              return (
+                pane.state.chatMessages.length === loaded &&
+                element.scrollTop > element.clientHeight
+              );
+            }, LOADED),
+          )
+          .toBe(true);
+        // Programmatic steps now sample reading through the loaded history.
+        const frames = await thread.evaluate(async (element) => {
           const pane = element.closest(".chat-pane-cache__pane--active") as HTMLElement & {
             state: { chatMessages: unknown[] };
           };
@@ -144,21 +160,7 @@ suite.define(() => {
               fonts: document.fonts.status,
             };
           };
-          const boundaries = [{ stage: "before-loading", geometry: snapshot() }];
-          for (let round = 0; round < 20 && pane.state.chatMessages.length < loaded; round++) {
-            for (
-              let step = 0;
-              step < 400 && element.scrollTop > 0 && pane.state.chatMessages.length < loaded;
-              step++
-            ) {
-              element.scrollTop -= 400;
-              await nextFrame();
-            }
-            await wait(400);
-          }
-          boundaries.push({ stage: "model-loaded", geometry: snapshot() });
-          await wait(600);
-          boundaries.push({ stage: "measurement-entry", geometry: snapshot() });
+          const boundaries = [{ stage: "measurement-entry", geometry: snapshot() }];
           const tops = () =>
             new Map(
               [...element.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]")].map(
@@ -217,7 +219,7 @@ suite.define(() => {
             residuals,
             diagnostic: { boundaries, samples },
           };
-        }, LOADED);
+        });
         console.info(
           "history-reading-geometry",
           JSON.stringify({ engine, width, ...frames.diagnostic }),

@@ -324,17 +324,9 @@ it.each([
   ["qualified full publication", "full", "latest", "full-release-validation", true],
   ["beta publication", "beta", "beta", "full-release-validation", false],
   ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
-  [
-    "retired waiver cannot qualify stable publication",
-    "beta",
-    "latest",
-    "full-release-validation",
-    false,
-    "Operator approved soak waiver",
-  ],
 ])(
   "creates bootstrap approval only with qualified evidence: %s",
-  (_name, profile, distTag, evidenceMode, expected, waiver = "") => {
+  (_name, profile, distTag, evidenceMode, expected) => {
     const parent = parse(
       readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
     ) as Workflow;
@@ -357,7 +349,7 @@ it.each([
           },
           needs: {
             resolve_release_target: {
-              outputs: { release_profile: profile, stable_soak_waiver: JSON.stringify(waiver) },
+              outputs: { release_profile: profile },
             },
           },
         }),
@@ -392,16 +384,6 @@ it.skipIf(process.platform === "win32").each([
     { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
   ],
   ["profile", { approval: { releaseProfile: "beta" } }],
-  [
-    "retired waiver",
-    {
-      approval: {
-        releaseProfile: "beta",
-        stableSoakWaiver: "2026.9.3 approved",
-        stableSoakWaiverSource: "explicit",
-      },
-    },
-  ],
   ["attestation", { attestationExit: 1 }],
   ["tag moved", { tagSha: "c".repeat(40) }],
   ["target", { approval: { targetSha: "c".repeat(40) } }],

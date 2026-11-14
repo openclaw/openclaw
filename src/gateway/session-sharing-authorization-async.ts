@@ -29,6 +29,7 @@ import {
 } from "../state/user-profile-list.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import {
   captureGatewayOperatorRunAuthority,
@@ -161,7 +162,9 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Without roles a profile carries no authority of its own; only the person's recorded
     // authenticated source for this session, revalidated on every use, supplies it.
     const scopes =
-      !cfg.gateway?.roles && recorded
+      recorded &&
+      (recorded.authority.openclawIdPrincipal?.kind === "member" ||
+        !isNamedOperatorRoleEnforcementEnabled(cfg))
         ? currentRecordedScopes(recorded.authority)
         : resolveOperatorRolePolicyForAssignment(
             params.profileId,
@@ -178,22 +181,22 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Fresh role-based principals keep their existing admission semantics. A
     // restart may additionally transfer the original authenticated custody;
     // source-less legacy sessions remain non-durable when roles authorize them.
-    if (
-      params.profileId !== GATEWAY_OWNER_PROFILE_ID &&
-      (params.preserveRecordedSource || !getConfig().gateway?.roles)
-    ) {
+    if (params.profileId !== GATEWAY_OWNER_PROFILE_ID) {
       recorded = await restoreSessionOperatorSource({
         context: params.context,
         profileId: params.profileId,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        memberOnly:
+          !params.preserveRecordedSource && isNamedOperatorRoleEnforcementEnabled(getConfig()),
         assertCurrent: () => params.assertCurrent?.(),
       });
     }
     const scopes = readScopes();
     const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
       requireLivePolicySet: true,
+      openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
     });
     // A policy adapter identifies the resolved person without manufacturing a transport grant.
     const client: GatewayClient = {
@@ -207,6 +210,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       internal: {
         syntheticClient: true,
         operatorRoleActor: { kind: "operator", profileId: params.profileId },
+        openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
       },
     };
     const assertPrincipalCurrent = () => {
@@ -409,6 +413,8 @@ export async function resolveSessionMutationAuthorizationAsync(
         }
       };
       const readSource = initialFacts.readSource;
+      let previousFacts: typeof initialFacts | undefined;
+      let preparedRead: import("./session-sharing-read.js").PreparedMutationSharing;
       preparedTargets.push({
         ...target,
         storageTarget: retained.storageTarget,
@@ -418,7 +424,11 @@ export async function resolveSessionMutationAuthorizationAsync(
         prepareRead: retained.prepareRead,
         read: () => {
           const facts = readCurrent();
-          return {
+          if (facts === previousFacts) {
+            return preparedRead;
+          }
+          previousFacts = facts;
+          return (preparedRead = {
             target: facts.target && { ...facts.target, readSource },
             storageTarget: retained.storageTarget,
             members: [],
@@ -426,7 +436,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             assertCurrent: () => {
               readCurrent();
             },
-          };
+          });
         },
       });
     }

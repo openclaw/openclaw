@@ -112,6 +112,7 @@ type ClawRows = {
   current: StoredClawCore;
   "owner-devices": AuthorityState["owner_devices"];
   members: AuthorityState["members"];
+  [key: `members:${number}`]: AuthorityState["members"];
   invites: AuthorityState["invites"];
   "invite-reports": NonNullable<StoredClaw["invite_reports"]>;
   "member-approvals": NonNullable<StoredClaw["member_approved_at"]>;
@@ -139,10 +140,20 @@ export function clawStoreRows(record: StoredClaw): ClawRows {
     const { owner_devices: _owners, members: _members, invites: _invites, ...rest } = authority;
     anchor = rest;
   }
+  // Thirty-two accounts with ten maximum-length device labels fit the 1 MiB row limit.
+  // All chunks keep the same member-record shape and are replaced in one transaction.
+  const memberEntries = Object.entries(authority?.members ?? {});
+  const memberRows: Record<string, AuthorityState["members"]> = {};
+  for (let offset = 32; offset < memberEntries.length; offset += 32) {
+    memberRows[`members:${offset / 32}`] = Object.fromEntries(
+      memberEntries.slice(offset, offset + 32),
+    );
+  }
   return {
     current: { ...core, v: 2, authority: anchor },
     "owner-devices": authority?.owner_devices ?? {},
-    members: authority?.members ?? {},
+    members: Object.fromEntries(memberEntries.slice(0, 32)),
+    ...memberRows,
     invites: authority?.invites ?? {},
     "invite-reports": invite_reports ?? {},
     "member-approvals": member_approved_at ?? {},
@@ -178,7 +189,14 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
       ? {
           ...record.authority,
           owner_devices: section("owner-devices"),
-          members: section("members"),
+          members: Object.assign(
+            {},
+            section("members"),
+            ...[...entries]
+              .filter(([key]) => key.startsWith("members:"))
+              // SAFETY: the claw writer stores member records in every members chunk.
+              .map(([, value]) => value as AuthorityState["members"]),
+          ),
           invites: section("invites"),
         }
       : null,

@@ -44,6 +44,7 @@ import {
   requireResolvedUserProfileMetadataById,
   userProfilesDb,
   toUserProfile,
+  isUserProfileEmailAddress,
   selectUserProfileEmails,
   userProfileAvatarPresence,
   type UserProfileRow,
@@ -112,7 +113,7 @@ function selectUserProfileListItemById(
   }
   return {
     ...toUserProfile(profile),
-    emails: selectUserProfileEmails(db, profileId),
+    emails: selectUserProfileEmails(db, profileId).filter(isUserProfileEmailAddress),
     githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
     hasAvatar: profile.has_avatar === 1,
   };

@@ -831,7 +831,7 @@ describe("runReplyAgent active steering", () => {
       reason: "tool_authority_mismatch",
       disposition: "followup-policy",
       channel: "whatsapp",
-      sessionId: provided.sessionId,
+      sessionKey: provided.key,
       runId: undefined,
       activeRunId: undefined,
     });

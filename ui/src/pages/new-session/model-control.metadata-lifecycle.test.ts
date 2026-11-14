@@ -115,17 +115,28 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     neutral.models.push(extra);
     connected.models.push(extra);
   }
-  const select = (value: string) => {
-    if (!find("account-option", value)) {
-      find("account-group-toggle")!.click();
+  const accountToggle = () =>
+    draw().querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!;
+  const openAccounts = () => {
+    const picker = draw().querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
+    if (!picker.open) {
+      picker.querySelector<HTMLElement>("summary")!.click();
       flush();
     }
+    if (accountToggle().getAttribute("aria-expanded") !== "true") {
+      accountToggle().click();
+      flush();
+    }
+  };
+  const select = (value: string) => {
+    openAccounts();
     find("account-option", value)!.click();
   };
   const chooseAccount = async () => {
     await vi.waitFor(() => expect(blocked()).toContain("No account is available for this model."));
     await waitForModelControl(control, context, "main", agent);
-    find("account-group-toggle")!.click();
+    await vi.waitFor(() => expect(accountToggle()).not.toBeNull());
+    openAccounts();
     await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
     select(`account:${account.authProfileId}`);
     return {
@@ -140,6 +151,8 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     connected,
     select,
     chooseAccount,
+    accountToggle,
+    openAccounts,
     connect: async () => {
       const { completion } = await chooseAccount();
       preview.resolve(connected);
@@ -155,7 +168,7 @@ it("retires a consumed personal-account model before the next configured draft",
   expect(f.model()).toContain("anthropic/alternate@");
   f.control.retireDraftSelection();
   expect(f.model()).toBe("");
-  expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
 });
 
 it("keeps a personal account when Default uses the role-permitted provider rather than the agent default", async () => {
@@ -172,6 +185,8 @@ it("keeps a deliberate provider switch when leaving a personal account for a cac
   const f = retainedAccountDraft("provider-switch");
   await f.connect();
   const reads = f.request.mock.calls.filter(([method]) => method === "models.list").length;
+  f.find("model-provider-toggle", "openai")!.click();
+  flush();
   f.find("model-option", "openai/other")!.click();
   expect(f.model()).toBe("openai/other");
   expect(f.savePreference).toHaveBeenLastCalledWith(
@@ -254,7 +269,7 @@ it("does not complete a retained account preview before its replacement is accep
       : Promise.resolve({ profileId: "person-a", accounts: [f.account], links: [] }),
   );
 
-  f.find("account-group-toggle")!.click();
+  f.openAccounts();
   await vi.waitFor(() => expect(f.draw().textContent).toContain(f.account.label));
   f.select(`account:${f.account.authProfileId}`);
   expect(modelOption(f.draw(), "anthropic/model")).not.toBeNull();
@@ -329,7 +344,7 @@ it("enables a cooled-down model on reopen without a catalog event", async () => 
   const option = () => find("model-option", "example/model");
   onTestFinished(() => clock.mockRestore());
   load();
-  await vi.waitFor(() => expect(option()?.disabled).toBe(true));
+  await vi.waitFor(() => expect(option()?.getAttribute("aria-disabled")).toBe("true"));
   request.mockResolvedValueOnce({
     models: [
       { ...model, available: true, unavailableReason: undefined, unavailableUntil: undefined },
@@ -337,7 +352,7 @@ it("enables a cooled-down model on reopen without a catalog event", async () => 
   });
   clock.mockReturnValue(12_000);
   find("model-select", "true")!.click();
-  await vi.waitFor(() => expect(option()?.disabled).toBe(false));
+  await vi.waitFor(() => expect(option()?.getAttribute("aria-disabled")).toBeNull());
 });
 
 it("selects a usable retained account after refresh failure without changing saved preferences", async () => {
@@ -349,13 +364,13 @@ it("selects a usable retained account after refresh failure without changing sav
   expect(f.blocked()).toBeUndefined();
   expect(f.ready()).toBe(true);
   expect(f.find("model-catalog-state")).toBeNull();
-  expect(f.find("account-group-toggle")?.textContent).toContain(f.account.label);
+  expect(f.accountToggle()?.textContent).toContain(f.account.label);
   expect(f.model()).toBe(`anthropic/model@${f.account.authProfileId}`);
   expect(f.control.selected).toBe("");
   f.select("automatic");
   await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
-  expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
   expect(f.savePreference).not.toHaveBeenCalled();
   expect(
     f.request.mock.calls.some(([method]) => /users\.(selectModelAccount|prefs\.set)/.test(method)),
@@ -388,7 +403,7 @@ it("retires a pending personal-account preview when the user identity changes", 
   await completion;
   await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
-  expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
 });
 
 it("retains its neutral auth gate through pending, rejected and failed refreshes, isolated from a session projection", async () => {
@@ -422,7 +437,9 @@ it("retains its neutral auth gate through pending, rejected and failed refreshes
   await vi.waitFor(() => {
     const container = draw();
     expect(find("model-select", "true")?.getAttribute("aria-busy")).toBe("false");
-    expect(container.textContent).toContain("No models available");
+    expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
+      "Authentication failed",
+    );
   });
   expect(blocked()).toContain("Authentication failed");
   request.mockResolvedValueOnce({
@@ -517,7 +534,15 @@ describe("model selection policy", () => {
         }
         if (attempt === 1) {
           expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
-          expect(checking.querySelector(".btn__spinner")).not.toBeNull();
+          if (clearsChoices) {
+            expect(
+              checking
+                .querySelector('[data-chat-model-catalog-state="loading"]')
+                ?.getAttribute("aria-label"),
+            ).toBe("Loading models…");
+          } else {
+            expect(checking.querySelector(".btn__spinner")).not.toBeNull();
+          }
         }
         if (clearsChoices) {
           expect(blocked()).toBe("Loading models…");

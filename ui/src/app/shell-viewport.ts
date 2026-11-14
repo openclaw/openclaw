@@ -188,12 +188,14 @@ export function connectShellViewport(): () => void {
     if (nativeScale) {
       // A panned caret uses layout coordinates: height alone lifts the footer
       // twice. Insets are consumed by the app's CSS, not subtracted here too.
+      root.style.setProperty("--shell-visible-height", `${Math.max(0, viewport.height)}px`);
       root.style.setProperty(
         "--shell-viewport-height",
         String(Math.max(0, viewport.height + viewport.offsetTop)) + "px",
       );
     } else {
       root.style.removeProperty("--shell-viewport-height");
+      root.style.removeProperty("--shell-visible-height");
     }
     publish({
       width,
@@ -229,6 +231,7 @@ export function connectShellViewport(): () => void {
       cancelAnimationFrame(frame);
     }
     root.style.removeProperty("--shell-viewport-height");
+    root.style.removeProperty("--shell-visible-height");
     root.style.removeProperty("--shell-safe-area-bottom");
     root.removeAttribute("data-shell-keyboard");
     publish(undefined);

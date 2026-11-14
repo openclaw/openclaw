@@ -33,6 +33,25 @@
  * timing. Report both flush durations; bulk fixture writeback is not cleanup IO.
  * Warm the removal runtime's imports before timing so source-mode compilation is not
  * mistaken for steady-state Gateway latency. Cold-process figures remain separate.
+ * Restart-order mode: --scratch-order --scratch-clones 6. Each old clone contains
+ * the full source file count, alongside 250 old scratch files; the newest checkout
+ * contains 256 fresh entries. Measures through scratch completion at GC entry with
+ * virtualized pacing and hardlinked immutable fixture files, not storage throughput.
+ * Recurring minute-scale maintenance is parked in this scratch-only measurement.
+ * Baseline overlays the custody owner. --reuse-scratch-order reuses only a completed
+ * synthetic fixture between serial arms, rebuilding removed clones outside timing.
+ * Acceptance: 0 -> 6 clone removals, 256 total entries, fresh scratch unchanged.
+ * Binding-starvation mode: --scratch-binding missing|stale with --scratch-order.
+ * Keep one real execution live without a session key, or continuously publish
+ * binding invalidations for the newest (fresh) checkout. Acceptance: the parent
+ * reclaims zero, the candidate completes its 256-entry scratch budget while
+ * preserving the live/fresh checkout. Report CPU/allocation and loop tails for
+ * the complete phase; zero-work failures are not per-removal performance controls.
+ * Worker offload comparisons include worker startup in the whole-pass measurements.
+ * Overlay scratch-cleanup.ts for the baseline: both arms must remove all six
+ * clones, and main CPU/allocation must fall without worsening loop tails.
+ * Reuse the prior physical pressure qualification; do not interpret accelerated
+ * scheduler time or these clone-shaped trees as Git or btrfs throughput evidence.
  * Seed a large isolated DB with generateTeamShapeFixture from team-shape-fixture.ts,
  * using session keys agent:main:synthetic-0 through agent:main:synthetic-4999, then
  * reuse its closed agent database with --agent-db-fixture for every measured arm.
@@ -68,6 +87,9 @@ const { values } = parseArgs({
     worktrees: { type: "string", default: "3" },
     profile: { type: "boolean", default: false },
     "scratch-clones": { type: "string", default: "0" },
+    "scratch-order": { type: "boolean", default: false },
+    "scratch-binding": { type: "string" },
+    "reuse-scratch-order": { type: "boolean", default: false },
     "observe-ms": { type: "string", default: "0" },
     "psi-trace": { type: "boolean", default: false },
     "agent-db-fixture": { type: "string" },
@@ -120,13 +142,28 @@ assert(values.output && global.gc, "--output and --expose-gc are required");
 const output = path.resolve(values.output);
 const worktrees = Number(values.worktrees);
 const scratchClones = Number(values["scratch-clones"]);
+const scratchOrder = values["scratch-order"];
 const observeMs = Number(values["observe-ms"]);
 assert(Number.isSafeInteger(worktrees) && worktrees >= 2);
 assert(Number.isSafeInteger(scratchClones) && scratchClones >= 0);
 assert(Number.isSafeInteger(observeMs) && observeMs >= 0);
-fs.mkdirSync(output);
+const scratchBinding = values["scratch-binding"];
+assert(!scratchBinding || (scratchOrder && ["missing", "stale"].includes(scratchBinding)));
+const reused = values["reuse-scratch-order"]
+  ? JSON.parse(fs.readFileSync(path.join(output, "report.json"), "utf8"))
+  : undefined;
+if (reused) {
+  assert(scratchOrder && reused.scratchOrder && reused.worktrees === worktrees);
+  assert.equal(reused.scratchClones, scratchClones);
+  assert(
+    reused.scratchRemaining === 0 ||
+      (reused.scratchRemaining === scratchClones &&
+        (reused.result.scratch?.filesRemoved ?? 0) === 0),
+  );
+}
+fs.mkdirSync(output, { recursive: Boolean(reused) });
 for (const directory of ["home", "tmp", "state"]) {
-  fs.mkdirSync(path.join(output, directory));
+  fs.mkdirSync(path.join(output, directory), { recursive: Boolean(reused) });
 }
 const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
 if (baseline) {
@@ -168,6 +205,9 @@ const { startWorktreeMaintenance } = await import("../../src/gateway/worktree-ma
 const { getSpawnBroker, runWithSpawnBroker } =
   await import("../../src/process/spawn-broker/context.js");
 const { createSpawnBrokerHost } = await import("../../src/process/spawn-broker/host.js");
+const { claimAgentRunContext, releaseAgentRunContext } =
+  await import("../../src/infra/agent-run-registry.js");
+const { sessionChanges } = await import("../../src/sessions/session-row-changes.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as {
   files: number;
@@ -176,11 +216,21 @@ const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as {
   paths: string[];
 };
 const repo = path.join(output, "repo");
-git(output, "clone", "--quiet", "--shared", "--no-checkout", source, repo);
+if (!reused) {
+  git(output, "clone", "--quiet", "--shared", "--no-checkout", source, repo);
+}
 git(repo, "config", "maintenance.auto", "false");
 const { fingerprint } = await managedWorktrees.resolveRepositoryIdentity(repo);
-const records: ManagedWorktreeRecord[] = [];
-for (let index = 0; index < worktrees; index++) {
+const records: ManagedWorktreeRecord[] = reused
+  ? (await managedWorktrees.listRegistryRecords()).toSorted((a, b) => a.createdAt - b.createdAt)
+  : [];
+if (reused) {
+  assert.equal(reused.filesPerWorktree, fixture.files);
+  assert.equal(reused.bytesPerWorktree, fixture.files * fixture.fileBytes);
+  assert.equal(records.length, worktrees);
+  assert(records.every((record) => record.removedAt === undefined));
+}
+for (let index = records.length; index < worktrees; index++) {
   const id = `21882188-2188-4188-8188-${String(index).padStart(12, "0")}`;
   const checkout = path.join(output, "state", "worktrees", fingerprint, id);
   const branch = `openclaw/synthetic-${index}`;
@@ -219,7 +269,7 @@ for (let index = 0; index < worktrees; index++) {
     baseRef: "main",
     ownerKind: "session",
     ownerId: `agent:main:synthetic-${index}`,
-    createdAt: 1,
+    createdAt: scratchOrder ? index + 1 : 1,
     lastActiveAt: 1,
   };
   await insertRegistryWorktree(process.env, record, { provisionedPaths: [] });
@@ -227,22 +277,55 @@ for (let index = 0; index < worktrees; index++) {
   console.error(JSON.stringify({ prepared: records.length, worktrees, files: fixture.files }));
 }
 // Put scratch last so the old owner must traverse the ordinary removal backlog first.
-const scratchRoot = path.join(records.at(-1)!.path, ".openclaw/tmp");
+const scratchRoot = path.join(
+  records[scratchOrder ? 0 : records.length - 1]!.path,
+  ".openclaw/tmp",
+);
 const expired = new Date(Date.now() - 25 * 60 * 60_000);
 for (let index = 0; index < scratchClones; index++) {
   const clone = path.join(scratchRoot, `clone-${index}`);
+  if (reused?.scratchRemaining === scratchClones) {
+    continue;
+  }
   fs.mkdirSync(path.join(clone, ".git/objects"), { recursive: true });
   fs.writeFileSync(path.join(clone, ".git/HEAD"), "ref: refs/heads/main\n");
   fs.utimesSync(path.join(clone, ".git/HEAD"), expired, expired);
-  for (let entry = index; entry < fixture.paths.length; entry += scratchClones) {
+  for (
+    let entry = scratchOrder ? 0 : index;
+    entry < fixture.paths.length;
+    entry += scratchOrder ? 1 : scratchClones
+  ) {
     const file = path.join(clone, `${entry}.ts`);
-    fs.copyFileSync(path.join(source, fixture.paths[entry]!), file, fs.constants.COPYFILE_FICLONE);
-    fs.utimesSync(file, expired, expired);
+    if (scratchOrder) {
+      fs.linkSync(path.join(source, fixture.paths[entry]!), file);
+    } else {
+      fs.copyFileSync(
+        path.join(source, fixture.paths[entry]!),
+        file,
+        fs.constants.COPYFILE_FICLONE,
+      );
+    }
+    if (!scratchOrder || index === 0) {
+      fs.utimesSync(file, expired, expired);
+    }
   }
   fs.utimesSync(path.join(clone, ".git/objects"), expired, expired);
 }
+if (scratchOrder) {
+  assert(scratchClones > 0 && scratchClones < 256 && !observeMs);
+  const freshRoot = path.join(records.at(-1)!.path, ".openclaw/tmp");
+  fs.mkdirSync(freshRoot, { recursive: true });
+  for (let index = 0; index < 256; index++) {
+    fs.writeFileSync(path.join(freshRoot, `fresh-${index}`), "fresh scratch");
+    if (index < 256 - scratchClones) {
+      const file = path.join(scratchRoot, `expired-${index}`);
+      fs.writeFileSync(file, "expired scratch");
+      fs.utimesSync(file, expired, expired);
+    }
+  }
+}
 const sessions = 5_000;
-if (values["agent-db-fixture"]) {
+if (values["agent-db-fixture"] && !reused) {
   const destination = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.copyFileSync(
@@ -309,7 +392,7 @@ const scheduler = new GatewayScheduler({
         return () => clearTimeout(timer);
       }
       // Park the unrelated hourly recurrence; only cleanup continuation timers advance.
-      if (delayMs > 10 * 60_000) {
+      if (delayMs > 10 * 60_000 || (scratchOrder && delayMs >= 60_000)) {
         return () => {};
       }
       const timer = setTimeout(() => {
@@ -322,8 +405,10 @@ const scheduler = new GatewayScheduler({
 });
 const removals: Array<{ id: string; atMs: number; wallMs: number }> = [];
 const admissions: number[] = [];
+let scratchCompleted: (() => void) | undefined;
 const gc = managedWorktrees.gc.bind(managedWorktrees);
 managedWorktrees.gc = async (params) => {
+  scratchCompleted?.();
   assert.equal(getSpawnBroker(), broker, "Maintenance must retain the Gateway spawn broker");
   if (params?.beforeRemoval) {
     const beforeRemoval = params.beforeRemoval;
@@ -378,6 +463,19 @@ const loop = monitorEventLoopDelay({ resolution: 10 });
 let owner: ReturnType<typeof startWorktreeMaintenance> | undefined;
 let observationTimer: ReturnType<typeof setTimeout> | undefined;
 const broker = process.platform === "linux" ? createSpawnBrokerHost() : undefined;
+let bindingTimer: ReturnType<typeof setInterval> | undefined;
+let bindingPublications = 0;
+const bindingKey = records.at(-1)!.ownerId!;
+const bindingClaim = scratchBinding
+  ? claimAgentRunContext(
+      "synthetic-scratch-binding",
+      {
+        registeredAt: Date.now(),
+        ...(scratchBinding === "stale" ? { sessionKey: bindingKey } : {}),
+      },
+      { trackOwner: true },
+    )
+  : undefined;
 try {
   await broker?.ready();
   const runtimeImportStarted = performance.now();
@@ -391,6 +489,11 @@ try {
     inspector.connect();
     await inspector.post("Profiler.enable");
     await inspector.post("Profiler.start");
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
   }
   sampleKernel();
   kernelTimer = setInterval(sampleKernel, 1_000);
@@ -401,6 +504,12 @@ try {
   const cpuBefore = process.cpuUsage();
   const mainCpuBefore = process.threadCpuUsage();
   const started = performance.now();
+  if (scratchBinding === "stale") {
+    bindingTimer = setInterval(() => {
+      bindingPublications++;
+      sessionChanges.emit({ sessionKey: bindingKey, scope: "session-entry" });
+    }, 1);
+  }
   const result = await runWithSpawnBroker(
     broker,
     () =>
@@ -415,12 +524,21 @@ try {
           },
           onError: (message) => {
             maintenanceErrors.push(message);
-            if (!observeMs) {
+            if (
+              !observeMs &&
+              !(
+                scratchBinding === "missing" &&
+                message.includes("a live run has no checkout binding yet")
+              )
+            ) {
               reject(new Error(message));
             }
           },
         });
         const receipt = owner.request();
+        if (scratchOrder) {
+          scratchCompleted = () => resolve(owner!.request({ jobId: receipt.jobId }));
+        }
         if (observeMs) {
           observationTimer = setTimeout(
             () => resolve(owner!.request({ jobId: receipt.jobId })),
@@ -430,6 +548,7 @@ try {
       }),
   );
   const wallMs = performance.now() - started;
+  clearInterval(bindingTimer);
   const processCpu = process.cpuUsage(cpuBefore);
   const mainCpu = process.threadCpuUsage(mainCpuBefore);
   const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
@@ -440,16 +559,28 @@ try {
       path.join(output, "cpu.cpuprofile"),
       JSON.stringify((await inspector.post("Profiler.stop")).profile),
     );
+    fs.writeFileSync(
+      path.join(output, "allocation.heapprofile"),
+      JSON.stringify((await inspector.post("HeapProfiler.stopSampling")).profile),
+    );
     inspector.disconnect();
   }
-  if (!observeMs) {
+  if (!observeMs && !scratchOrder) {
     assert.equal(removals.length, worktrees);
+  }
+  if (scratchOrder) {
+    await owner?.stop();
+    const freshRoot = path.join(records.at(-1)!.path, ".openclaw/tmp");
+    assert.equal(fs.readdirSync(freshRoot).length, 256);
+    for (const name of fs.readdirSync(freshRoot)) {
+      assert.equal(fs.readFileSync(path.join(freshRoot, name), "utf8"), "fresh scratch");
+    }
   }
   const archived = new Map(
     (await managedWorktrees.listRegistryRecords()).map((record) => [record.id, record]),
   );
   const trees: string[] = [];
-  for (const record of observeMs ? [] : records) {
+  for (const record of observeMs || scratchOrder ? [] : records) {
     const current = archived.get(record.id);
     assert(current?.removedAt !== undefined && current.snapshotRef);
     assert(!fs.existsSync(record.path));
@@ -463,7 +594,7 @@ try {
     );
     trees.push(git(repo, "rev-parse", `${current.snapshotRef}^{tree}`));
   }
-  if (!observeMs) {
+  if (!observeMs && !scratchOrder) {
     assert.equal(new Set(trees).size, 1);
   }
   const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -474,7 +605,12 @@ try {
     "src/agents/worktrees/registry-read.kernel.ts",
     "src/agents/worktrees/registry-retirement.ts",
     "src/gateway/worktree-maintenance.ts",
+    "src/gateway/scratch-maintenance-custody.ts",
+    "src/sessions/session-controller.queries.ts",
     "src/infra/host-io-pressure.ts",
+    "src/infra/scratch-cleanup.ts",
+    "src/infra/scratch-cleanup-tree.ts",
+    "src/infra/fs-safe-copy.worker.ts",
   ]) {
     const original = baseline && path.join(baseline, relative);
     digest.update(
@@ -499,8 +635,19 @@ try {
     preparationFlushMs,
     agentDatabasePath: agentDatabase.path,
     scratchClones,
+    scratchOrder,
+    scratchBinding,
+    bindingPublications,
+    scratchFilesPerClone: scratchOrder ? fixture.files : fixture.files / scratchClones,
+    freshScratchRemaining: scratchOrder
+      ? fs.readdirSync(path.join(records.at(-1)!.path, ".openclaw/tmp")).length
+      : undefined,
     scratchRemaining:
-      scratchClones && fs.existsSync(scratchRoot) ? fs.readdirSync(scratchRoot).length : 0,
+      scratchClones && fs.existsSync(scratchRoot)
+        ? fs
+            .readdirSync(scratchRoot, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory()).length
+        : 0,
     injectedPsiTrace: values["psi-trace"],
     pressureProbeReads,
     maintenanceErrors,
@@ -527,6 +674,8 @@ try {
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {
+  clearInterval(bindingTimer);
+  releaseAgentRunContext("synthetic-scratch-binding", bindingClaim);
   clearTimeout(observationTimer);
   clearInterval(kernelTimer);
   loop.disable();

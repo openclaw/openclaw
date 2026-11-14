@@ -6,6 +6,7 @@ import type { SignedStatement } from "../statements/types.js";
 import {
   approvalDescendants,
   memberPeerListedSeq,
+  memberDeviceDescendants,
   ownerDeviceListedSeq,
   ownerPeerListedSeq,
   withoutMemberBrowsers,
@@ -63,8 +64,26 @@ export async function applyRevocation(
     ),
   );
   const owners = withoutOwnerDevices(state, [...devices]);
-  const browsers = covered.flatMap((match) => (match.kind === "member_browser" ? [match] : []));
-  const nodes = covered.flatMap((match) => (match.kind === "node" ? [match.key] : []));
+  const browsers = (
+    await Promise.all(
+      covered.flatMap((match) =>
+        match.kind === "member_browser"
+          ? [
+              memberDeviceDescendants(state.members[match.account]!, match.key).then((keys) =>
+                keys.map((key) => ({ account: match.account, key })),
+              ),
+            ]
+          : [],
+      ),
+    )
+  ).flat();
+  // Nodes named directly, and the nodes bound to every removed owner device.
+  const nodes = [
+    ...new Set([
+      ...covered.flatMap((match) => (match.kind === "node" ? [match.key] : [])),
+      ...owners.nodes,
+    ]),
+  ];
   const next = withoutMemberBrowsers(owners.state, (account, key) =>
     browsers.some((browser) => browser.account === account && browser.key === key),
   );

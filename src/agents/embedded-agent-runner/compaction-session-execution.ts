@@ -158,7 +158,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       contextWindowTokens: contextTokenBudget,
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: responsesApi ? "aborted" : undefined,
-      allowedToolNames,
       withCompactionPersistenceAsync:
         params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });

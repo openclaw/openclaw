@@ -241,22 +241,71 @@ struct OpenClawIDNodeTunnelTests {
         await tunnel.shutdown()
     }
 
-    @Test func `terminal admission close prevents redial but shutdown is retryable`() async throws {
-        for code in [Int64(0), 1, 2] {
+    @Test(arguments: [Int64(0), 1, 2])
+    func `admission closure verifies membership before terminal removal`(code: Int64) async throws {
+        for verdict in ["removed", "member", "offline"] {
+            let checks = NodeTestCounter()
             let endpoint = NodeClosedEndpoint(code: code)
             let tunnel = try OpenClawIDNodeTunnel(
                 endpoint: endpoint,
-                verifiedServerKey: { String(
-                    repeating: "a",
-                    count: 64) },
+                verifiedServerKey: {
+                    let count = checks.next()
+                    if count > 1, verdict == "removed" { throw OpenClawIDNodeEnrollmentError.notAdmitted }
+                    if count > 1, verdict == "offline" { throw URLError(.notConnectedToInternet) }
+                    return String(repeating: "a", count: 64)
+                },
                 relayURL: #require(URL(string: "https://relay.example/")),
                 clock: OpenClawIDNodeClock(now: { 0 }, sleep: { _ in try await NodeTestWaiter<Void>().wait() }))
-            let expected = code == 0 ? OpenClawIDNodeTransportError.closed : .removed
-            await #expect(throws: expected) { try await tunnel.openStream() }
-            await #expect(throws: expected) { try await tunnel.openStream() }
-            #expect(await endpoint.dials == (code == 0 ? 2 : 1))
+            let removed = code != 0 && verdict == "removed"
+            await #expect(throws: removed ? OpenClawIDNodeTransportError.removed : .closed) {
+                try await tunnel.openStream()
+            }
+            #expect(checks.count == (code == 0 ? 1 : 2))
+            if removed {
+                await #expect(throws: OpenClawIDNodeTransportError.removed) { try await tunnel.openStream() }
+                #expect(await endpoint.dials == 1)
+                #expect(checks.count == 2)
+            } else if code != 0, verdict == "member" {
+                await #expect(throws: OpenClawIDNodeTransportError.closed) { try await tunnel.openStream() }
+                #expect(await endpoint.dials == 2)
+                #expect(checks.count == 4)
+            } else if code != 0, verdict == "offline" {
+                await #expect(throws: URLError(.notConnectedToInternet)) { try await tunnel.openStream() }
+                #expect(await endpoint.dials == 1)
+                #expect(checks.count == 3)
+            }
             await tunnel.shutdown()
         }
+    }
+
+    @Test func `live revocation reaches the enrollment verifier before stopping`() async throws {
+        let endpoint = NodeRevokedEndpoint()
+        let checks = NodeTestCounter()
+        let tunnel = try OpenClawIDNodeTunnel(
+            endpoint: endpoint,
+            verifiedServerKey: {
+                if checks.next() > 1 { throw OpenClawIDNodeEnrollmentError.notAdmitted }
+                return String(repeating: "a", count: 64)
+            },
+            relayURL: #require(URL(string: "https://relay.example/")),
+            clock: OpenClawIDNodeClock(now: { 0 }, sleep: { duration in
+                if duration != .milliseconds(500) { try await NodeTestWaiter<Void>().wait() }
+            }))
+        _ = try await tunnel.openStream()
+        try await endpoint.connection.watching.wait()
+        endpoint.connection.revoke.resolve(())
+        try await endpoint.stopped.wait()
+        #expect(checks.count == 2)
+        await #expect(throws: OpenClawIDNodeTransportError.removed) { try await tunnel.openStream() }
+    }
+
+    @Test func `transport failures have readable copy without claiming verified removal`() {
+        #expect((OpenClawIDNodeTransportError.removed as NSError).localizedDescription ==
+            "This device no longer has access to the claw. Sign in to connect again.")
+        #expect((OpenClawIDNodeTransportError.closed as NSError).localizedDescription ==
+            "The connection to the claw closed. Reconnecting…")
+        print("transport NSError codes: removed=\((OpenClawIDNodeTransportError.removed as NSError).code) " +
+            "closed=\((OpenClawIDNodeTransportError.closed as NSError).code)")
     }
 
     @Test func `every redial reverifies the server key and A refusal never dials`() async throws {
@@ -535,6 +584,10 @@ private struct NodeTestConnection: OpenClawIDNodeConnection {
 /// A cancellable suspension without real timers, used for the losing deadline/close waits.
 private final class NodeTestCounter: Sendable {
     private let value = Mutex(0)
+    var count: Int {
+        self.value.withLock { $0 }
+    }
+
     func next() -> Int {
         self.value.withLock { value in
             value += 1
@@ -725,4 +778,41 @@ private actor NodeOverlappingEndpoint: OpenClawIDNodeEndpoint {
     }
 
     func shutdown() async {}
+}
+
+private struct NodeRevokedEndpoint: OpenClawIDNodeEndpoint {
+    let connection = NodeRevokedConnection()
+    let stopped = NodeTestWaiter<Void>()
+
+    func connect(serverKey: String, relayURL: URL, alpn: Data) -> any OpenClawIDNodeConnection {
+        self.connection
+    }
+
+    func relayStatus() -> [OpenClawIDNodeRelayStatus] {
+        []
+    }
+
+    func shutdown() {
+        self.stopped.resolve(())
+    }
+}
+
+private actor NodeRevokedConnection: OpenClawIDNodeConnection {
+    nonisolated let watching = NodeTestWaiter<Void>()
+    nonisolated let revoke = NodeTestWaiter<Void>()
+    private var waits = 0
+
+    func openBi() -> any OpenClawIDNodeStream {
+        NodeTestStream(input: Data())
+    }
+
+    func closed() async throws -> OpenClawIDNodeClose {
+        self.waits += 1
+        if self.waits == 1 { return try await NodeTestWaiter<OpenClawIDNodeClose>().wait() }
+        self.watching.resolve(())
+        try await self.revoke.wait()
+        return .init(code: 2, kind: .application)
+    }
+
+    func close(code: Int64) {}
 }

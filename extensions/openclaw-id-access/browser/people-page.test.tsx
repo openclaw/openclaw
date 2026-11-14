@@ -349,43 +349,46 @@ describe("Access page", () => {
     expect(button(container, "Add node")?.disabled).toBe(false);
   });
 
-  it("approves a pending request with an owner-signed change", async () => {
-    const { container, request } = await mountPage([
-      linked(),
-      linked({
-        invites: [],
-        members: [
-          {
-            accountId: "acct-member",
-            role: "operator",
-            peerKeys: ["iroh:member"],
-            email: "member@example.test",
+  it.each(["operator", "viewer", "guest"])(
+    "approves a pending %s request with its exact owner-signed role",
+    async (role) => {
+      const { container, request } = await mountPage([
+        linked({ invites: [{ ...pendingInvite, role }] }),
+        linked({
+          invites: [],
+          members: [
+            {
+              accountId: "acct-member",
+              role,
+              peerKeys: ["iroh:member"],
+              email: "member@example.test",
+            },
+          ],
+        }),
+      ]);
+      await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
+      await vi.waitFor(() => expect(button(container, "Approve")?.disabled).toBe(false));
+      button(container, "Approve")!.click();
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("openclawId.authority", {
+          action: "submit",
+          statement: {
+            signed: {
+              op: "add",
+              account_id: "acct-member",
+              role,
+              peer_keys: ["iroh:member"],
+              invite_id: "inv-1",
+            },
           },
-        ],
-      }),
-    ]);
-    await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
-    await vi.waitFor(() => expect(button(container, "Approve")?.disabled).toBe(false));
-    button(container, "Approve")!.click();
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("openclawId.authority", {
-        action: "submit",
-        statement: {
-          signed: {
-            op: "add",
-            account_id: "acct-member",
-            role: "operator",
-            peer_keys: ["iroh:member"],
-            invite_id: "inv-1",
-          },
-        },
-      }),
-    );
-    await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("No one is waiting for approval."),
-    );
-  });
+        }),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
+      await vi.waitFor(() =>
+        expect(container.textContent).toContain("No one is waiting for approval."),
+      );
+    },
+  );
 
   it.each([false, true])(
     "finishes a decided row's exit before replacing it (reduced=%s)",
@@ -422,6 +425,10 @@ describe("Access page", () => {
       devices: [
         {
           peerKey: "iroh:bob",
+          deviceFp: null,
+          label: "Chrome on Linux (11111111)",
+          approvedBy: null,
+          lastSeen: null,
           connections: 1,
           lastSeenAt: Date.now(),
           runs: [{ runId: "r1", sessionKey: "agent:main:trip" }],
@@ -440,7 +447,9 @@ describe("Access page", () => {
         "bob@example.test · 1 device · active now · running “Trip ideas”",
       ),
     );
-    const rows = [...container.querySelectorAll('[aria-labelledby="ocid-access-members"] li')];
+    const rows = [
+      ...container.querySelectorAll('[aria-labelledby="ocid-access-members"] > ul > li'),
+    ];
     expect(rows.map((row) => row.querySelector(".ocid-access__title")?.textContent)).toEqual([
       "You",
       "member@example.test",
@@ -468,6 +477,93 @@ describe("Access page", () => {
     await vi.waitFor(() =>
       expect(container.textContent).toContain("Bob removed · 1 connection closed · 1 task stopped"),
     );
+  });
+
+  it("shows device provenance, persisted last seen and confirms the full cascade before signing", async () => {
+    const devices = [
+      {
+        peerKey: "iroh:a",
+        deviceFp: "fp:a" as const,
+        label: "Chrome on Linux (11111111)",
+        approvedBy: { kind: "invite" as const, invite_id: "inv-1" },
+      },
+      {
+        peerKey: "iroh:c",
+        deviceFp: "fp:c" as const,
+        label: "Chrome on Linux (33333333)",
+        approvedBy: { kind: "member_device" as const, device_fp: "fp:b" as const },
+      },
+      {
+        peerKey: "iroh:b",
+        deviceFp: "fp:b" as const,
+        label: "Chrome on Linux (22222222)",
+        approvedBy: { kind: "member_device" as const, device_fp: "fp:a" as const },
+      },
+      {
+        peerKey: "iroh:d",
+        deviceFp: "fp:d" as const,
+        label: "Device (44444444)",
+        approvedBy: { kind: "owner" as const, by: "root" as const },
+      },
+    ].map((device) =>
+      Object.assign(device, {
+        connections: 0,
+        lastSeenAt: null,
+        lastSeen: Math.floor(Date.now() / 1000) - 300,
+        runs: [],
+      }),
+    );
+    const member = {
+      accountId: "acct-mira",
+      role: "operator",
+      peerKeys: devices.map((device) => device.peerKey),
+      displayName: "Mira",
+      devices,
+    };
+    const harness = await mountPage(
+      [
+        linked({ invites: [], members: [member] }),
+        linked({
+          invites: [],
+          members: [{ ...member, peerKeys: ["iroh:d"], devices: devices.slice(3) }],
+        }),
+      ],
+      { removal: { devices: 3, connectionsClosed: 2, runsCancelled: 1 } },
+    );
+    const { container, request } = harness;
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Approved by Chrome on Linux (22222222)"),
+    );
+    expect(container.textContent).toContain("Approved via invite inv-1");
+    expect(container.textContent).toContain("Approved with the recovery key");
+    expect(container.textContent).toContain("last seen 5 min ago");
+    const first = container.querySelector<HTMLElement>(".ocid-access__device")!;
+    button(first, "Remove device")!.click();
+    flush();
+    expect(first.textContent).toContain(
+      "3 devices will be removed: this device and 2 devices it approved, directly or indirectly.",
+    );
+    expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
+    button(first, "Cancel")!.click();
+    flush();
+    expect(first.querySelector('[role="note"]')).toBeNull();
+    button(first, "Remove device")!.click();
+    flush();
+    button(first, "Remove Chrome on Linux (11111111)")!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("openclawId.authority", {
+        action: "submit",
+        statement: { signed: { op: "revoke_device", peer_key: "iroh:a" } },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "Chrome on Linux (11111111) removed · 2 connections closed · 1 task stopped",
+      ),
+    );
+    expect(container.querySelectorAll(".ocid-access__device")).toHaveLength(1);
+    expect(container.textContent).toContain("Device (44444444)");
+    expect(container.textContent).toContain("Mira");
   });
 
   it("signs a removal at the claw's current seq, not the one the page last read", async () => {

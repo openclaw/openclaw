@@ -12,9 +12,13 @@ import { withSessionState } from "../../agents/sessions/session-manager-fixtures
 import { withSelectedTranscriptReader } from "../../agents/sessions/session-manager-reader.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { ToolSearchCatalogRef } from "../../agents/tool-search-types.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as hydration from "./session-transcript-hydration.js";
 import type {
   SessionTranscriptMaintenanceCheckpoint,
@@ -22,6 +26,8 @@ import type {
 } from "./session-transcript-hydration.types.js";
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { messageEvent } from "./transcript-message.test-support.js";
+import { createTranscriptPayloadUpdater, prepareTranscriptPayload } from "./transcript-payload.js";
 
 const customType = "openclaw.code-mode-store";
 const storeWrite = (value: unknown) => ({
@@ -29,6 +35,123 @@ const storeWrite = (value: unknown) => ({
   delete: [],
   networkContent: { key: true },
 });
+
+function nestedActivity(id: string, scopeId = "attempt") {
+  return messageEvent(
+    id,
+    null,
+    createNestedToolActivity({
+      runId: "run",
+      scopeId,
+      afterEntryId: null,
+      startOrder: 0,
+      toolCallId: id,
+      toolName: "lookup",
+      input: {},
+      result: { content: [{ type: "text", text: "accepted evidence ".repeat(256) }] },
+      isError: false,
+      startedAt: 1,
+      timestamp: 2,
+    }),
+  );
+}
+
+it("reads only nested activity candidates while preserving selected corruption failures", () =>
+  withSessionState("nested-maintenance-selection", async ({ scope }) => {
+    const first = nestedActivity("first");
+    const last = nestedActivity("last");
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      first,
+      messageEvent("unrelated", "first", {
+        role: "toolResult",
+        content: [{ type: "text", text: "unrelated body ".repeat(16 * 1024) }],
+      }),
+      nestedActivity("other-scope", "other"),
+      last,
+    ]);
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+    const db = getSessionKysely(database.db);
+    const read = () =>
+      readSessionTranscriptMaintenance(database, scope, {
+        operation: "nested-activity",
+        scopeId: "attempt",
+        firstEntryId: "first",
+        lastEntryId: "last",
+      }).events;
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["transcript"],
+      (sql) => (/\btranscript_events\b/i.test(sql) ? "transcript" : null),
+    );
+    try {
+      expect(read()).toEqual([first, last]);
+      expect(reads.textBytes.transcript).toBeLessThan(32 * 1024);
+      const corrupt = (seq: number) =>
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("transcript_events")
+            .set({ event_zstd: Buffer.from([1, 2, 3]) })
+            .where("session_id", "=", scope.sessionId)
+            .where("seq", "=", seq)
+            .where("event_json", "is", null)
+            .returning("seq"),
+        ).rows;
+      expect(corrupt(2)).toEqual([{ seq: 2 }]);
+      expect(read()).toEqual([first, last]);
+      expect(corrupt(4)).toEqual([{ seq: 4 }]);
+      expect(read).toThrow();
+    } finally {
+      reads.restore();
+    }
+  }));
+
+it.each(["message", "type", "customType", "inline", "role"] as const)(
+  "preserves nested evidence across %s envelopes",
+  (kind) =>
+    withSessionState(`nested-maintenance-${kind}`, async ({ scope }) => {
+      const first = nestedActivity("first");
+      const middle = nestedActivity("middle");
+      const last = nestedActivity("last");
+      await replaceTranscriptEvents(scope, [
+        { type: "session", id: scope.sessionId, version: 3 },
+        first,
+        middle,
+        last,
+      ]);
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+      let raw = JSON.stringify(middle);
+      if (kind === "message") {
+        raw = raw.replace(
+          '"message":',
+          '"message":{"role":"user","customType":"other"},"message":',
+        );
+      } else if (kind === "type") {
+        raw = raw.replace('"type":"message"', '"type":"custom","type":"message"');
+      } else if (kind === "customType") {
+        raw = raw.replace('"customType":', '"customType":"other","customType":');
+      } else if (kind === "role") {
+        raw = raw.replace('"role":"custom"', '"role":"user"');
+      }
+      const payload = prepareTranscriptPayload(database.db, raw);
+      if (kind === "inline") {
+        payload.event_json = raw;
+        payload.event_zstd = null;
+        payload.navigation_json = null;
+      } else {
+        expect(payload.event_json).toBeNull();
+      }
+      createTranscriptPayloadUpdater(database.db, scope.sessionId)({ ...payload, seq: 2 });
+      const result = readSessionTranscriptMaintenance(database, scope, {
+        operation: "nested-activity",
+        scopeId: "attempt",
+        firstEntryId: "first",
+        lastEntryId: "last",
+      });
+      expect(result.events).toEqual([first, JSON.parse(raw), last]);
+    }),
+);
 
 function checkpoint(result: SessionTranscriptMaintenanceFacts, leafEntryId: string | null) {
   assert(result.version?.generation && result.version.rawSeq !== null);

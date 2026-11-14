@@ -263,11 +263,22 @@ openclaw-modal-dialog.palette {
   --openclaw-modal-backdrop-color: var(--overlay-palette-backdrop);
   --openclaw-modal-show-duration: 0ms;
   --openclaw-modal-hide-duration: 0ms;
+  --cmd-palette-dock-height: 52px;
+  --cmd-palette-top: min(20dvh, 160px);
+}
+
+@media (max-width: 560px) {
+  openclaw-modal-dialog.palette {
+    --cmd-palette-dock-height: 56px;
+  }
 }
 
 openclaw-modal-dialog.palette > .oc-modal-dialog {
-  margin-block-start: min(20dvh, 160px);
+  margin-block-start: var(--cmd-palette-top);
   margin-block-end: auto;
+  /* The card itself is the composer surface and carries its own lift. */
+  background: transparent;
+  box-shadow: none;
 }
 
 openclaw-modal-dialog.drawer {

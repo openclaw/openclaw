@@ -90,13 +90,13 @@ export async function runSessionAction(
         ? runBatchSessionAction(organizer, action, [session], true)
         : organizer.patchSession(session, { unread: !session.unread }, { sessionScope: true });
     case "set-color":
-      return organizer.patchSession(session, { color: action.color });
+      return organizer.patchSession(session, { color: action.color }, { sessionScope: true });
     case "set-icon":
-      return organizer.patchSession(session, { icon: action.icon });
+      return organizer.patchSession(session, { icon: action.icon }, { sessionScope: true });
     case "set-communication":
       return organizer.patchSession(session, { communication: action.communication });
     case "reset-appearance":
-      return organizer.patchSession(session, { icon: null, color: null });
+      return organizer.patchSession(session, { icon: null, color: null }, { sessionScope: true });
     case "toggle-involving-me": {
       const hidden = !session.hiddenFromInvolvingMe;
       return organizer.runOperation((operations, scope) =>

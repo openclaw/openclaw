@@ -4,7 +4,20 @@ import { compareAscii } from "./canonical-json.mjs";
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
-export const RELEASE_VALIDATION_WAIVERS = [
+const RELEASE_VALIDATION_WAIVERS = [
+  {
+    targetVersion: "2026.11.5-beta.3",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized a release-wide 2026.11.5-beta.3 " +
+      "performance waiver on 2026-11-13 at 20:19 UTC, including CPU, latency " +
+      "and RSS, superseding the prior RSS-only scope. This matches only the " +
+      "exact release version, productPerformance role and failed Kova job. " +
+      "Retain raw failures and reports; there is no not-run exemption. " +
+      "Other jobs, missing or cancelled evidence, build/setup, crash, " +
+      "correctness, isolation, data-integrity and install/update gates remain blocking.",
+  },
   {
     targetVersion: "2026.9.37",
     childRole: "productPerformance",
@@ -33,6 +46,20 @@ export const RELEASE_VALIDATION_WAIVERS = [
       "the operator additionally authorized a new candidate qualification " +
       "with performance explicitly waived-not-run. The old receipt supports " +
       "that exception only; it does not measure or qualify the new candidate.",
+  },
+  {
+    targetVersion: "2026.11.4",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized a release-wide 2026.11.4 performance " +
+      "waiver on 2026-11-13 at 13:06 UTC, superseding the prior run-specific grant. " +
+      "Like 2026.11.2 and 2026.11.3, this matches the exact version, child role, " +
+      "and failed Kova job across all runs, attempts, and candidates for this release; " +
+      "it does not classify individual performance metrics within that job. " +
+      "Retain raw failures and reports. There is no not-run exemption. Other failed " +
+      "jobs, missing or cancelled evidence, and crash, correctness, isolation, " +
+      "data-integrity, and install/update gates remain blocking.",
   },
   {
     targetVersion: "2026.11.3",
