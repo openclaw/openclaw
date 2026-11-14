@@ -15,6 +15,7 @@ import {
   createChannelMessageAdapterFromOutbound,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   PAIRING_APPROVED_MESSAGE,
   buildTokenChannelStatusSummary,
@@ -219,16 +220,14 @@ function normalizeTelegramAcpConversationId(conversationId: string, parentConver
   };
 }
 
-function targetsMatchTelegramReplySuppression(params: {
-  originTarget: string;
-  targetKey: string;
-  targetThreadId?: string;
-}): boolean {
+function targetsMatchTelegramReplySuppression(
+  params: Parameters<NonNullable<ChannelOutboundAdapter["targetsMatchForReplySuppression"]>>[0],
+): boolean {
   const origin = parseTelegramTarget(params.originTarget);
   const target = parseTelegramTarget(params.targetKey);
   const originConversation = buildTelegramConversationId({
     chatId: origin.chatId,
-    thread: resolveTelegramTargetThread(origin),
+    thread: resolveTelegramTargetThread(origin, normalizeOptionalString(params.originThreadId)),
   });
   const targetConversation = buildTelegramConversationId({
     chatId: target.chatId,
