@@ -197,6 +197,98 @@ private func makeViewModel(
 }
 
 struct ChatViewModelTranscriptCacheTests {
+    @Test(arguments: ["agent:main:main", "agent:other:main"])
+    @MainActor
+    func `canonical alias retains display but not live authority while fresh history waits`(
+        destination: String) async throws
+    {
+        let (historyGate, releaseHistory) = AsyncStream<Void>.makeStream()
+        defer { releaseHistory.finish() }
+        let transport = GatedHistoryChatTransport { key, request in
+            if request > 1 {
+                var iterator = historyGate.makeAsyncIterator()
+                _ = await iterator.next()
+            }
+            return OpenClawChatHistoryPayload(
+                sessionKey: key, sessionId: "canonical-session",
+                messages: request == 1
+                    ? [liveHistoryMessage(role: "assistant", text: "Keep this answer", timestamp: 1)] : [],
+                thinkingLevel: nil,
+                sessionInfo: .init(hasActiveRun: false, key: "agent:main:main", agentId: "main"),
+                deltaCursor: request == 1 ? "accepted-cursor" : nil)
+        }
+        let vm = OpenClawChatViewModel(
+            sessionKey: "main", transport: transport, activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main")
+        defer { vm.detachTransport() }
+        vm.load()
+        await vm.bootstrapTask?.value
+        let rows = vm.messages.map(\.id)
+        let generation = vm.sessionGeneration
+        #expect(!rows.isEmpty && vm.hasAppliedLiveHistory && vm.healthOK)
+        vm.input = "Unsent text"
+
+        vm.switchSession(to: destination)
+        let bootstrap = try #require(vm.bootstrapTask)
+        await transport.waitForHistoryRequests(atLeast: 2)
+        #expect(vm.messages.map(\.id) == (destination == "agent:main:main" ? rows : []))
+        #expect(vm.sessionGeneration > generation)
+        #expect(!vm.hasAppliedLiveHistory && !vm.healthOK)
+        #expect(vm.historyDeltaCursor == nil)
+        #expect(vm.pendingRunCount == 0)
+        if destination == "agent:main:main" { #expect(vm.input == "Unsent text") }
+
+        releaseHistory.yield(())
+        await bootstrap.value
+        #expect(vm.messages.isEmpty)
+        #expect(!vm.isShowingCachedTranscript)
+    }
+
+    @Test(arguments: ["per-sender|main|main", "global|main|main"])
+    @MainActor
+    func `routing hydration retains only the accepted canonical destination`(contract: String) async throws {
+        let (historyGate, releaseHistory) = AsyncStream<Void>.makeStream()
+        defer { releaseHistory.finish() }
+        let transport = GatedHistoryChatTransport { key, request in
+            if request > 1 {
+                var iterator = historyGate.makeAsyncIterator()
+                _ = await iterator.next()
+            }
+            return OpenClawChatHistoryPayload(
+                sessionKey: key, sessionId: "initial-session",
+                messages: [liveHistoryMessage(role: "assistant", text: "Known owner", timestamp: 1)],
+                thinkingLevel: nil,
+                sessionInfo: .init(hasActiveRun: false, key: "agent:main:main", agentId: "main"))
+        }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { vm.detachTransport() }
+        vm.load()
+        await vm.bootstrapTask?.value
+        vm.syncDeliveryIdentity(activeAgentId: "main", sessionRoutingContract: contract)
+        await transport.waitForHistoryRequests(atLeast: 2)
+        #expect(vm.messages.flatMap { $0.content.compactMap(\.text) } ==
+            (contract == "per-sender|main|main" ? ["Known owner"] : []))
+        releaseHistory.yield(())
+        await vm.bootstrapTask?.value
+    }
+
+    @Test @MainActor
+    func `retained presentation cannot keep a deleted answer on a foreground refresh`() async throws {
+        let transport = GatedHistoryChatTransport { key, _ in
+            OpenClawChatHistoryPayload(
+                sessionKey: key, sessionId: "empty-session", messages: [], thinkingLevel: nil)
+        }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { vm.detachTransport() }
+        vm.replaceMessages([
+            cacheMessage(role: "user", text: "Earlier question", timestamp: 1),
+            cacheMessage(role: "assistant", text: "Deleted answer", timestamp: 2),
+        ])
+        vm.isShowingCachedTranscript = true
+        await vm.resumeFromForeground().value
+        #expect(vm.messages.isEmpty)
+    }
+
     @Test func `cold open paints cached transcript then live history replaces it`() async throws {
         let cache = TestTranscriptCache(
             transcripts: [
