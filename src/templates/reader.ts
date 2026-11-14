@@ -11,6 +11,7 @@ import { inspectTemplateBundledSkill } from "./bundled-skill-metadata.js";
 import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes } from "./digest.js";
+import { templateHeartbeatContentFailure, templateHeartbeatSources } from "./heartbeat-content.js";
 import {
   isCanonicalClawHubPackageName,
   isExactSemVer,
@@ -370,6 +371,7 @@ export async function readTemplateManifestFile(path: string): Promise<TemplateRe
     }
   }
 
+  const heartbeatSources = templateHeartbeatSources(parsed.manifest);
   const declaredSources = [
     ...Object.values(parsed.manifest.workspace.bootstrapFiles)
       .filter((entry): entry is { source: string } => entry !== undefined)
@@ -433,6 +435,13 @@ export async function readTemplateManifestFile(path: string): Promise<TemplateRe
           `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
           "$.workspace",
         );
+      }
+      const heartbeatManifestPath = heartbeatSources.get(sourcePath);
+      if (heartbeatManifestPath) {
+        const failure = templateHeartbeatContentFailure(bytes);
+        if (failure) {
+          return fileFailure(failure.code, failure.message, heartbeatManifestPath);
+        }
       }
       const digest = digestTemplateBytes(bytes);
       add(`workspace:${sourcePath}`, bytes);

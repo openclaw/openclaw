@@ -14,6 +14,7 @@ import { templateAddCapabilityChange, templateAgentCapabilityChange } from "./ap
 import { planBundledTemplateDependency } from "./bundled-dependency-plan.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
+import { isTemplateHeartbeatAction, templateHeartbeatContentFailure } from "./heartbeat-content.js";
 import { digestTemplateMcpServer } from "./mcp.js";
 import { planTemplatePortableAutomation } from "./portable-automation.js";
 import { templateManifestWorkspaceConflictsWithPath } from "./schema.js";
@@ -392,8 +393,18 @@ export async function buildTemplateAddPlan(params: {
         });
         pending.action.source = planSourcePath(pending.sourcePath, read.realPath);
         pending.action.digest = digestTemplateBytes(read.buffer);
-        if (pending.action.id === "HEARTBEAT.md") {
-          pending.content = read.buffer;
+        if (isTemplateHeartbeatAction(pending.action)) {
+          // Add stores this file as bounded cron scratch; keep unusable content a plan blocker
+          // instead of an exception that hides the plan envelope.
+          const failure = templateHeartbeatContentFailure(read.buffer);
+          if (failure) {
+            const diagnostic = blocker(failure.code, pending.manifestPath, failure.message);
+            pending.action.blocked = true;
+            pending.action.reason = diagnostic.message;
+            blockers.push(diagnostic);
+          } else {
+            pending.content = read.buffer;
+          }
         }
       } catch (error) {
         const { code, message } = templateWorkspaceSourceFailure(
@@ -625,7 +636,8 @@ export async function buildTemplateAddPlan(params: {
   planTemplatePortableAutomation({
     actions,
     heartbeat: openClawAgentSettings.heartbeat,
-    content: pendingWorkspaceFiles.find((pending) => pending.action.id === "HEARTBEAT.md")?.content,
+    content: pendingWorkspaceFiles.find((pending) => isTemplateHeartbeatAction(pending.action))
+      ?.content,
     config: context.config ?? {},
     agentId: finalId,
   });
