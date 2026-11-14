@@ -425,6 +425,25 @@ unsupported request format is intentionally not advertised as an OpenClaw
 text model. Normalize those providers to one of the supported contracts in
 ClawRouter rather than sending an incompatible payload.
 
+## Native DeepSeek web search
+
+The managed `web_search` consumer can use a model-less `deepseek.search` offer
+only when your deployment advertises the qualified `POST /v1/tools/search`
+operation. It supports the advertised native route or manifest endpoint, requires
+a fresh proxy-key catalog, and sends an explicit count from 1 to 10 (default 5)
+with `need_content: false`. Queries are limited to 128 Unicode characters;
+filters and full-page content are unsupported.
+
+The consumer shares DeepSeek's native result formatter and passes results through
+OpenClaw's normal untrusted-content boundary. It never fetches result URLs, borrows
+a DeepSeek key, or falls back to Chat. Responses must be complete bounded JSON;
+partial, redirected, oversized and unsafe results fail without replay.
+
+Client support does not activate the router operation. The deployment must first
+qualify its catalog/compiler and native dispatch contracts. Search fees remain
+router-owned and unknown unless separately qualified; Chat token prices do not
+apply to this operation.
+
 ## Hosted web search
 
 OpenClaw can use OpenAI's hosted `web_search` on a ClawRouter Responses route
