@@ -297,9 +297,13 @@ describe("Responses retained-user compaction replay", () => {
       const callId = `call_${round}`;
       const itemId = `fc_${round}`;
       messages.push(
-        createAssistant([
-          { type: "toolCall", id: `${callId}|${itemId}`, name: "lookup", arguments: {} },
-        ]),
+        {
+          ...createAssistant([
+            { type: "toolCall", id: `${callId}|${itemId}`, name: "lookup", arguments: {} },
+          ]),
+          // Each tool round happens after the current request's context was created.
+          timestamp: round + 3,
+        },
         makeTextToolResult(`${callId}|${itemId}`, "lookup", `result ${round}`, false, round + 3),
       );
       const nextInput = convert({ messages: [...messages, carrier] });

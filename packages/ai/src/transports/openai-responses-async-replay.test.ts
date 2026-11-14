@@ -155,9 +155,51 @@ it.each([
 it.each([
   ["provider", convertProviderResponsesMessages],
   ["transport", convertResponsesMessages],
+] as const)("%s keeps a steering carrier after the tool round it followed", (_name, convert) => {
+  const round = (id: string, called: number, finished: number) => [
+    {
+      ...createAssistant(
+        model,
+        [{ type: "toolCall", id: `call_${id}|fc_${id}`, name: "lookup", arguments: {} }],
+        { stopReason: "toolUse" },
+      ),
+      timestamp: called,
+    },
+    makeTextToolResult(`call_${id}|fc_${id}`, "lookup", "found", false, finished),
+  ];
+  const sent = [user("look up", 1), ...round("a", 2, 4)];
+  // The steering message (and its context) was queued while tool a was still running.
+  const carrier = {
+    role: "user" as const,
+    content: "OpenClaw runtime context:\nsender facts",
+    timestamp: 3,
+    runtimeContext: {},
+  };
+  const first = convert(model, { messages: sent }, new Set(["openai"]));
+  const next = convert(
+    model,
+    { messages: [...sent, carrier, user("steering", 3), ...round("b", 5, 6)] },
+    new Set(["openai"]),
+  );
+  expect(next.slice(0, first.length)).toEqual(first);
+  expectTypes(next, [
+    "message",
+    "function_call",
+    "function_call_output",
+    "message",
+    "message",
+    "function_call",
+    "function_call_output",
+  ]);
+});
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
 ] as const)("%s anchors mixed-media shipped carriers before async replay", (_name, convert) => {
-  const prefix = asyncPrefix("resp_async");
-  const tail = answer("answer", "resp_async", "msg_tail");
+  // The carrier was shipped before the response it now follows in the transcript.
+  const prefix = { ...asyncPrefix("resp_async"), timestamp: 3 };
+  const tail = { ...answer("answer", "resp_async", "msg_tail"), timestamp: 3 };
   const carrier = {
     role: "user" as const,
     content: [

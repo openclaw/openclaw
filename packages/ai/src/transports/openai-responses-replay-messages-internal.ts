@@ -25,6 +25,7 @@ import {
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
+import { orderResponsesRuntimeContextCarriers } from "./openai-responses-carrier-order.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   isSafeResponsesReplayItemId,
@@ -384,33 +385,10 @@ function convertResponsesMessagesWithStyle(
     });
     messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook(window) : window));
   }
-  let replayMessages = replayPlan.compaction
-    ? [replayPlan.compaction, ...transformedMessages]
-    : transformedMessages;
-  // Responses continuation requires the complete prior input before tool output.
-  // Each carrier stays with its preceding user/checkpoint; moving it past an
-  // appended steering user would rewrite the already admitted request prefix.
-  const isCarrier = (message: (typeof replayMessages)[number]) =>
-    "role" in message && hasRuntimeContextMarker(message);
-  if (replayMessages.some(isCarrier)) {
-    const anchored: typeof replayMessages = [];
-    // A canonical window is already emitted above; its checkpoint anchors an otherwise userless tail.
-    let insertionIndex = replayPlan.compactedWindow ? 0 : undefined;
-    for (const message of replayMessages) {
-      if (isCarrier(message) && insertionIndex !== undefined) {
-        anchored.splice(insertionIndex++, 0, message);
-        continue;
-      }
-      anchored.push(message);
-      if (
-        !isCarrier(message) &&
-        ("role" in message ? message.role === "user" : message.type === "compaction")
-      ) {
-        insertionIndex = anchored.length;
-      }
-    }
-    replayMessages = anchored;
-  }
+  const replayMessages = orderResponsesRuntimeContextCarriers(
+    replayPlan.compaction ? [replayPlan.compaction, ...transformedMessages] : transformedMessages,
+    { anchoredAtStart: Boolean(replayPlan.compactedWindow) },
+  );
   let msgIndex = 0;
   const appendAssistant = createResponsesInputReplay(model);
   const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
