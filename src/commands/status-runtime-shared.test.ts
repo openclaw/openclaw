@@ -352,6 +352,6 @@ describe("status-runtime-shared", () => {
       queueMicrotask(() => scope.beginClose(reason));
       return promise;
     });
-    await expect(scope.run(resolve)).rejects.toBe(reason);
+    await expect(scope.run(() => resolve())).rejects.toBe(reason);
   });
 });
