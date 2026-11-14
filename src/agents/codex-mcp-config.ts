@@ -25,6 +25,7 @@ import type {
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { requiresMcpBearerProjection, resolveMcpBearerBundleConfig } from "./mcp-auth-profile.js";
 import { resolveProjectedMcpCodexToolApprovalMode } from "./mcp-codex-tool-approval.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
@@ -290,8 +291,59 @@ export async function loadCodexBundleMcpThreadConfigCore(
       "Native fork preparation cannot provision plugin data directories. Complete plugin setup before retrying.",
     );
   }
+  // Requester-scoped servers never reach the native projection, and a same-named owner
+  // server is merged over this patch, so neither may receive the plugin's bearer.
+  const oauthServers = Object.fromEntries(
+    Object.entries(
+      partitionMcpServersByConnectionScope(effectiveConfig.mcpServers).staticServers,
+    ).filter(
+      ([name, server]) =>
+        !Object.hasOwn(enabledConfiguredMcp, name) && requiresMcpBearerProjection(server),
+    ),
+  );
+  if (params.preparationOnly && Object.keys(oauthServers).length > 0) {
+    throw new Error(
+      "Native fork preparation cannot resolve MCP bearer credentials. Fork an original imported message instead.",
+    );
+  }
+  let projectableConfig = effectiveConfig;
+  if (Object.keys(oauthServers).length > 0) {
+    let resolvedOAuthServers: BundleMcpConfig["mcpServers"] = {};
+    if (params.allowLiteralOAuthProjection === false) {
+      // Remote app servers cannot receive OpenClaw-managed bearer credentials.
+      for (const name of Object.keys(oauthServers)) {
+        params.onServerUnavailable?.(
+          name,
+          new Error(
+            "MCP OAuth bearer projection is only supported for local app-server connections.",
+          ),
+        );
+      }
+    } else {
+      resolvedOAuthServers = (
+        await resolveMcpBearerBundleConfig({
+          config: { mcpServers: oauthServers },
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          tokenProjection: "literal",
+          omitUnavailableOAuthServers: true,
+          onServerUnavailable: params.onServerUnavailable,
+          signal: params.signal,
+        })
+      ).config.mcpServers;
+    }
+    // Rebuild with data-property semantics so literal keys such as __proto__ survive.
+    projectableConfig = {
+      mcpServers: Object.fromEntries([
+        ...Object.entries(effectiveConfig.mcpServers).filter(
+          ([name]) => !Object.hasOwn(oauthServers, name),
+        ),
+        ...Object.entries(resolvedOAuthServers),
+      ]),
+    };
+  }
   const preparedDataDirs = await prepareOwnedBundleMcpDataDirs({
-    config: effectiveConfig,
+    config: projectableConfig,
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
   });
   const diagnostics = [...bundleMcp.diagnostics, ...preparedDataDirs.diagnostics];

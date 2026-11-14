@@ -11,6 +11,9 @@ import {
   loadCodexBundleMcpThreadConfigCore,
 } from "./codex-mcp-config.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { withMcpOAuthTempHome } from "./mcp-oauth.test-harness.js";
+import { saveMcpOAuthAccessTokenForTest } from "./mcp-oauth.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   loadExecApprovalsReadOnlyAsync: vi.fn(),
@@ -269,6 +272,67 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       expect(loaded.evaluated).toBe(true);
       expect(loaded.staticServerNames).toEqual([]);
     }
+  });
+
+  it("projects saved OpenClaw OAuth bearers for plugin-declared servers on local app servers", async () => {
+    await withMcpOAuthTempHome(async () => {
+      const url = "https://mcp.atlassian.example/v1/mcp";
+      setServers({ atlassian: http(url, { auth: "oauth" }) });
+      await saveMcpOAuthAccessTokenForTest(
+        operatorMcpOAuthIdentity("atlassian", url),
+        "saved-access-token",
+      );
+
+      expectServers(await load({ cfg: {} }), {
+        atlassian: { url, http_headers: { Authorization: "Bearer saved-access-token" } },
+      });
+
+      const unavailable = vi.fn();
+      const remote = await load({
+        cfg: {},
+        allowLiteralOAuthProjection: false,
+        onServerUnavailable: unavailable,
+      });
+      expect(remote.configPatch).toBeUndefined();
+      expect(unavailable).toHaveBeenCalledWith("atlassian", expect.any(Error));
+      await expect(load({ cfg: {}, preparationOnly: true })).rejects.toThrow(
+        "cannot resolve MCP bearer credentials",
+      );
+
+      // Cancellation rejects the projection instead of silently dropping the server.
+      const aborted = new AbortController();
+      aborted.abort(new Error("run cancelled"));
+      const cancelledUnavailable = vi.fn();
+      await expect(
+        load({ cfg: {}, signal: aborted.signal, onServerUnavailable: cancelledUnavailable }),
+      ).rejects.toThrow("run cancelled");
+      expect(cancelledUnavailable).not.toHaveBeenCalled();
+
+      // A same-named owner server is merged over the bundle patch; it must not inherit the bearer.
+      const shadowed = await load({
+        cfg: configured({ atlassian: { url: "https://other.example/mcp" } }),
+      });
+      expect(shadowed.configPatch?.mcp_servers.atlassian).toEqual({ url });
+    }, "openclaw-codex-bundle-oauth-");
+  });
+
+  it("keeps a plugin OAuth server literally named __proto__", async () => {
+    await withMcpOAuthTempHome(async () => {
+      const url = "https://mcp.proto.example/mcp";
+      setServers(Object.fromEntries([["__proto__", http(url, { auth: "oauth" })]]));
+      await saveMcpOAuthAccessTokenForTest(
+        operatorMcpOAuthIdentity("__proto__", url),
+        "proto-token",
+      );
+
+      const loaded = await load({ cfg: {} });
+
+      expect(Object.hasOwn(loaded.configPatch?.mcp_servers ?? {}, "__proto__")).toBe(true);
+      expect(Object.getPrototypeOf(loaded.configPatch?.mcp_servers)).toBe(Object.prototype);
+      expect(
+        Object.getOwnPropertyDescriptor(loaded.configPatch?.mcp_servers, "__proto__")?.value,
+      ).toEqual({ url, http_headers: { Authorization: "Bearer proto-token" } });
+    }, "openclaw-codex-bundle-oauth-proto-");
   });
 
   it("excludes requester-scoped servers from projection and fingerprint", async () => {

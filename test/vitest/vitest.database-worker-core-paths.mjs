@@ -36,6 +36,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/message/ingress-queue.authority.test.ts",
   "src/agents/mcp-oauth-authorization.test.ts",
   "src/agents/agent-bundle-mcp-start-backoff.test.ts",
+  "src/agents/codex-mcp-config.test.ts",
   "src/agents/mcp-oauth-refresh-boundary.test.ts",
   "src/agents/mcp-auth-profile-authorization.test.ts",
   "src/agents/auth-profiles/authorization-observation.test.ts",
