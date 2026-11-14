@@ -29,6 +29,9 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { projectControllerDiagnosticActivity } from "../../logging/diagnostic-controller-projection.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -258,6 +261,50 @@ describe("AgentSession compaction", () => {
       type: "compaction_end",
       reason: "threshold",
       outcome: { status: "skipped", reason: expect.stringContaining("No API key found") },
+    });
+  });
+
+  it("registers the compaction allowance on the controller watchdog during automatic compaction", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:compaction-watchdog-allowance",
+      sessionId: "compaction-watchdog-allowance",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "compaction-watchdog-allowance-run",
+      cancel: vi.fn(() => operation.complete()),
+    });
+    await withSessionControllerOwner(operation, async () => {
+      const { session } = await createTestSession({
+        settingsManager: createAutoCompactionSettings(),
+      });
+      const observedDeadlines: Array<number | undefined> = [];
+      streamMocks.streamSimple.mockImplementationOnce((activeModel: Model) =>
+        // The main turn's answer carries full-window usage so the threshold
+        // check hands the turn to automatic compaction.
+        createAssistantResultStream(
+          createAssistant(activeModel, "complete answer", "stop", activeModel.contextWindow),
+        ),
+      );
+      streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
+        // The summary request runs inside the compaction allowance: the watchdog
+        // must project its bounded wait while the automatic lifecycle owns work.
+        observedDeadlines.push(
+          projectControllerDiagnosticActivity(operation.watchdog.snapshot(), Date.now())
+            .activeCompactionDeadlineAtMs,
+        );
+        return textStream(activeModel, "compacted summary");
+      });
+
+      await session.prompt("continue");
+
+      expect(observedDeadlines.length).toBeGreaterThan(0);
+      expect(observedDeadlines.at(0)).toBeTypeOf("number");
+      expect(operation.watchdog.snapshot().waits.some((wait) => wait.kind === "compaction")).toBe(
+        false,
+      );
     });
   });
 

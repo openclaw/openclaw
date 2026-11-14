@@ -44,7 +44,7 @@ export function projectControllerDiagnosticActivity(
     (oldest, tool) => (!oldest || tool.startedAtMs < oldest.startedAtMs ? tool : oldest),
     undefined,
   );
-  const deadline = (kind: "backend" | "retry") => {
+  const deadline = (kind: "backend" | "retry" | "compaction") => {
     const values = state.waits
       .filter((wait) => wait.kind === kind && wait.deadlineAtMs !== undefined)
       .map((wait) => wait.deadlineAtMs!);
@@ -79,5 +79,6 @@ export function projectControllerDiagnosticActivity(
       : undefined,
     activeBackendLivenessDeadlineAtMs: deadline("backend"),
     activeRetryWaitDeadlineAtMs: deadline("retry"),
+    activeCompactionDeadlineAtMs: deadline("compaction"),
   };
 }

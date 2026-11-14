@@ -14,7 +14,8 @@ export type OwnedWait = {
     | "approval"
     | "runtime_owned"
     | "retry"
-    | "backend";
+    | "backend"
+    | "compaction";
   deadlineAtMs?: number;
   rateLimitStopMessage?: string;
   /** A runtime-owned wait whose release hands a finished turn back to its run. */

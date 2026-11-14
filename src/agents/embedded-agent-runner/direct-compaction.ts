@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withCompactionWatchdogAllowance } from "../../sessions/session-controller.watchdog-allowance.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
@@ -7,6 +8,10 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hasModelFallbackStop } from "../failover-error.js";
+import {
+  COMPACTION_CEILING_WINDOWS,
+  resolveCompactionTimeoutMs,
+} from "./compaction-safety-timeout.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,
@@ -19,6 +24,18 @@ import {
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export async function compactEmbeddedAgentSessionDirectOnce(
+  params: PreparedCompactEmbeddedAgentSessionParams,
+): Promise<EmbeddedAgentCompactResult> {
+  return withCompactionWatchdogAllowance(
+    {
+      deadlineAtMs:
+        Date.now() + resolveCompactionTimeoutMs(params.config) * COMPACTION_CEILING_WINDOWS,
+    },
+    () => runDirectCompactionAttempt(params),
+  );
+}
+
+async function runDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
   const callerResult = createDeferredCore<EmbeddedAgentCompactResult>();

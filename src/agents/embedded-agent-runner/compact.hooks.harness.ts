@@ -744,7 +744,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       "./compaction-safety-timeout.js",
     );
     return {
-      compactWithSafetyTimeout: actual.compactWithSafetyTimeout,
+      ...actual,
       resolveCompactionTimeoutMs: vi.fn(() => 30_000),
       // Exercise delegate tagging, progress resets, and caller cancellation at their real owner.
       compactContextEngineWithSafetyTimeout: vi.fn(actual.compactContextEngineWithSafetyTimeout),

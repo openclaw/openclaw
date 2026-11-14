@@ -6,6 +6,7 @@ import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { projectControllerDiagnosticActivity } from "../logging/diagnostic-controller-projection.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withSessionTurn } from "./session-controller.admission.js";
 import { createReplyOperation } from "./session-controller.operation.js";
@@ -496,6 +497,27 @@ describe("operation-owned watchdog through controller admission", () => {
     expect(cancel).not.toHaveBeenCalled();
     await tickAt(operation.watchdog, expiry);
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("observes a compaction wait within its safety deadline and projects it into diagnostics", async () => {
+    const { operation, cancel } = running();
+    const expiry = abortMs * 3;
+    const wait = operation.watchdog.beginWait({
+      kind: "compaction",
+      deadlineAtMs: expiry,
+      isCurrent: () => true,
+    });
+    await tickAt(operation.watchdog, expiry - 1);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(operation.watchdog.decide()).toMatchObject({ action: "observe", reason: "compaction" });
+    expect(
+      projectControllerDiagnosticActivity(operation.watchdog.snapshot(), expiry - 1),
+    ).toMatchObject({ activeCompactionDeadlineAtMs: expiry });
+    wait.close();
+    expect(
+      projectControllerDiagnosticActivity(operation.watchdog.snapshot(), expiry - 1)
+        .activeCompactionDeadlineAtMs,
+    ).toBeUndefined();
   });
 
   it.each(["expires", "ends", "retires"] as const)(

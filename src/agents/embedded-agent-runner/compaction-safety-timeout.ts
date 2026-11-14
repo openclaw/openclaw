@@ -10,7 +10,7 @@ const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 // Progress resets keep a streaming request alive, so the whole operation also has a
 // hard ceiling. Ten windows leaves several times the headroom a near-full-context
 // staged compaction needs, while still stopping a stream that trickles forever.
-const COMPACTION_CEILING_WINDOWS = 10;
+export const COMPACTION_CEILING_WINDOWS = 10;
 
 export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
   return (

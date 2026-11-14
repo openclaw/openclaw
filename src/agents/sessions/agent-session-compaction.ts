@@ -3,6 +3,7 @@ import { parseCompactionDetails } from "../../../packages/agent-core/src/harness
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
+import { withCompactionWatchdogAllowance } from "../../sessions/session-controller.watchdog-allowance.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { buildCoreCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
@@ -13,6 +14,10 @@ import {
   settleCompactionSummary,
   withCompactionSummaryRoute,
 } from "../compaction-summary-refusal.js";
+import {
+  COMPACTION_CEILING_WINDOWS,
+  resolveCompactionTimeoutMs,
+} from "../embedded-agent-runner/compaction-safety-timeout.js";
 import {
   calculateContextTokens,
   buildSessionContext,
@@ -272,6 +277,29 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     requestFromEntryId?: string;
     pendingUserEntryId?: string;
     requestRequiresCompaction?: true;
+    onSummaryReady?: () => void;
+  }): Promise<CompactionWorkOutcome> {
+    // Manual and automatic compaction both own semantic progress while they run;
+    // the controller watchdog observes within the compaction safety ceiling.
+    return await withCompactionWatchdogAllowance(
+      {
+        deadlineAtMs: Date.now() + resolveCompactionTimeoutMs() * COMPACTION_CEILING_WINDOWS,
+      },
+      () => this.runCompactionWorkInner(options),
+    );
+  }
+
+  private async runCompactionWorkInner(options: {
+    itemId: string;
+    settings: ReturnType<SettingsManager["getCompactionSettings"]>;
+    signal: AbortSignal;
+    customInstructions?: string;
+    mode: "manual" | "auto";
+    requestState?: "unresolved";
+    summaryOutputPolicy: SummaryOutputPolicy;
+    requestBudget?: CompactionRequestBudget;
+    requestFromEntryId?: string;
+    pendingUserEntryId?: string;
     onSummaryReady?: () => void;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
