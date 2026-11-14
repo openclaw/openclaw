@@ -262,8 +262,12 @@ async function resolveCliProgramArguments(params: {
   }
 
   // A runtime slot layout's Gateway service always runs the frozen launcher, so
-  // updates never rewrite the service definition.
-  const launcher = params.service === "node" ? undefined : resolveRuntimeLauncher();
+  // updates never rewrite the service definition. The Windows task supervisor
+  // runs the origin entry, and its Gateway children reach the launcher from there.
+  const launcher =
+    params.service === "node" || process.platform === "win32"
+      ? undefined
+      : resolveRuntimeLauncher();
   if (launcher && params.runtime === "node") {
     return { programArguments: [runtimePath, launcher, ...params.args] };
   }

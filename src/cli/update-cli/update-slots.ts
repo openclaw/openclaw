@@ -8,6 +8,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
 import { readLaunchAgentProgramArgumentsFromFile } from "../../daemon/launchd-plist.js";
 import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.js";
@@ -136,6 +137,11 @@ export async function resolveUpdateOwner(root: string, tag: string): Promise<Upd
 
 /** The installed service's argv, read from its definition file without D-Bus or launchctl. */
 async function readServiceArgs(env: NodeJS.ProcessEnv): Promise<string[] | undefined> {
+  if (process.platform === "win32") {
+    const { readScheduledTaskCommand } = await import("../../daemon/schtasks-layout.js");
+    const task = await readScheduledTaskCommand(env).catch(() => null);
+    return task?.programArguments;
+  }
   if (process.platform === "darwin") {
     const plist = await readLaunchAgentProgramArgumentsFromFile(
       resolveLaunchAgentPlistPath(env),
@@ -173,7 +179,11 @@ async function moveServiceToLauncher(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<boolean> {
   const launcher = path.join(params.dir, "launcher.mjs");
-  if (!params.args || params.args.some((arg) => sameRuntimeRoot(arg, launcher))) {
+  if (
+    process.platform === "win32" ||
+    !params.args ||
+    params.args.some((arg) => sameRuntimeRoot(arg, launcher))
+  ) {
     return false;
   }
   const entry = path.join(params.staged, "openclaw.mjs");
@@ -207,19 +217,21 @@ async function restartGateway(
     // An unreachable Gateway may still have a stopped or wedged service.
   }
   const argv =
-    process.platform === "darwin"
-      ? [
-          "launchctl",
-          "kickstart",
-          "-k",
-          `gui/${process.getuid?.()}/${resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE)}`,
-        ]
-      : [
-          "systemctl",
-          "--user",
-          "restart",
-          `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`,
-        ];
+    process.platform === "win32"
+      ? ["schtasks", "/Run", "/TN", resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE)]
+      : process.platform === "darwin"
+        ? [
+            "launchctl",
+            "kickstart",
+            "-k",
+            `gui/${process.getuid?.()}/${resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE)}`,
+          ]
+        : [
+            "systemctl",
+            "--user",
+            "restart",
+            `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`,
+          ];
   const result = await runCommandWithTimeout(argv, { timeoutMs: 30_000 }).catch(() => null);
   return result?.code === 0 ? "service" : null;
 }

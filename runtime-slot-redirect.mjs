@@ -53,7 +53,9 @@ const realpath = (file) => {
  * launcher replaces this process, or owns it until its child exits.
  */
 export async function redirectToCurrentRuntimeSlot(packageRoot, { gatewayRun }) {
-  if (process.platform === "win32") {
+  // The Windows task supervisor stays on the origin install; each Gateway child
+  // it starts passes through here and the launcher.
+  if (process.argv.includes("--task-supervisor")) {
     return;
   }
   const own = realpath(packageRoot);
