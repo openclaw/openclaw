@@ -255,44 +255,44 @@ describe("node_inference agent tool", () => {
     expect(action).not.toHaveProperty("oneOf");
   });
 
-  it.each(["discover", "run"] as const)("routes %s only to authorized nodes", async (action) => {
+  it.each(["discover", "run"] as const)("resolves %s node names", async (action) => {
     const discovery = action === "discover";
-    const command = discovery ? MODELS : CHAT;
     const timeoutMs = discovery ? 90_000 : 120_000;
     const payload = discovery
       ? { provider: "ollama", models: [{ name: "chat:small", loaded: true }] }
       : { provider: "ollama", model: "chat:small", response: "done" };
     const params = discovery ? {} : { model: "chat:small", prompt: "answer fast", maxTokens: 32 };
-    const invoke = vi.fn(async () => ({ payload }));
-    const api = nodeApi(
-      [
-        nodeRow("denied-node", discovery ? [] : [MODELS]),
-        nodeRow(
-          "allowed-node",
-          discovery ? [command] : [MODELS, command],
-          discovery ? "Desk" : undefined,
-        ),
-      ],
-      invoke,
-    );
-    const result = await createOllamaNodeInferenceTool(api).execute("call-authorized", {
-      action,
-      ...params,
-    });
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(invoke).toHaveBeenCalledWith({
-      nodeId: "allowed-node",
-      command,
-      params: discovery ? params : { ...params, timeoutMs },
-      timeoutMs,
-      scopes: ["operator.write"],
-    });
-    if (discovery) {
-      expect(result.details).toEqual({
-        nodes: [{ nodeId: "allowed-node", displayName: "Desk", ok: true, ...payload }],
+    for (const [displayName, query, nodeId = "allowed-node"] of [
+      [discovery ? "Desk" : undefined, undefined],
+      ["Cafe\u0301 desk", " CAFÉ DESK "],
+      ["Dépôt desk", "De\u0301po\u0302t desk"],
+      ["ǰ desk", "J\u030c desk"],
+      ["Café desk", "node-e\u0301", "node-e\u0301"],
+    ] as const) {
+      const invoke = vi.fn(async () => ({ payload }));
+      const nodes = [
+        nodeRow("denied-node", discovery ? [] : [MODELS], displayName),
+        nodeRow(nodeId, [MODELS, CHAT], displayName),
+      ];
+      const tool = createOllamaNodeInferenceTool(nodeApi(nodes, invoke));
+      const execute = (node?: string) =>
+        tool.execute("call-authorized", { action, ...params, node });
+      const result = await execute(query);
+      expect(invoke).toHaveBeenCalledExactlyOnceWith({
+        nodeId,
+        command: discovery ? MODELS : CHAT,
+        params: discovery ? params : { ...params, timeoutMs },
+        timeoutMs,
+        scopes: ["operator.write"],
       });
-    } else {
-      expect(result.details).toMatchObject({ nodeId: "allowed-node", ...payload });
+      const row = { nodeId, ...(displayName && { displayName }), ...payload };
+      expect(result.details).toEqual(discovery ? { nodes: [{ ...row, ok: true }] } : row);
+      if (displayName) {
+        nodes.push(nodeRow("duplicate-node", [MODELS, CHAT], displayName.normalize("NFC")));
+        await expect(execute(displayName)).rejects.toThrow("ambiguous");
+        await expect(execute("Cafe desk")).rejects.toThrow("not connected");
+        expect(invoke).toHaveBeenCalledOnce();
+      }
     }
   });
 });
