@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -55,6 +54,7 @@ import { createSteeredCliMessageInjection } from "./execute-plugin.steered-trans
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
+import { executeWithBoundHostCallbacks } from "./plugin-host-callbacks.js";
 import { isCliNativeToolCallable, normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -561,7 +561,7 @@ export async function executePluginOwnedProcess(params: {
     assertCurrent();
     const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
       assertCurrent();
-      const execution = params.execute({
+      const execution = executeWithBoundHostCallbacks(params.execute, {
         command,
         argv0: params.executionArgv0,
         args: executionArgs,
@@ -621,8 +621,7 @@ export async function executePluginOwnedProcess(params: {
               },
             }
           : {}),
-        // Warm transports retain their first turn's async context across plugin refreshes.
-        requestToolPermission: AsyncLocalStorage.bind(requestToolPermission),
+        requestToolPermission,
         requestUserInput: createPluginUserInputHandler({
           context: params.context,
           abortSignal: signal,
