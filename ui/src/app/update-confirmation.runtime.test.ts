@@ -343,6 +343,71 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
 });
 
+it("waits for owner-reported progress through config drain, request and run lookup", async () => {
+  const drain = createDeferred();
+  const accepted = createDeferred<{ runId: string }>();
+  const progress = createDeferred<{ run: ReturnType<typeof createUpdateRunFixture> }>();
+  const run = createUpdateRunFixture({ phase: "staging" });
+  const request = vi.fn<RequestFn>(async (method) =>
+    method === "update.run"
+      ? accepted.promise
+      : method === "update.runs.get"
+        ? progress.promise
+        : {},
+  );
+  const harness = updateRunHarness(request);
+  const overlays = createApplicationOverlays(harness.gateway, {
+    drainConfigWrites: () => drain.promise,
+  });
+  let operation: Promise<void> | undefined;
+  const settled = confirmAndStartUpdateRuntime({
+    isCurrentTarget: overlays.captureUpdateTarget(),
+    startGatewayUpdate: () => {
+      operation = overlays.runUpdate();
+    },
+    watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
+    updateAvailable: UPDATE_AVAILABLE,
+    updateSchedule: null,
+    viaNativeApp: false,
+  });
+  try {
+    const { modal } = await getRenderedModalDialog(document.body);
+    findButton("Update and restart").click();
+    await flushMicrotasks();
+    flush();
+    const waiting = "Waiting for the Gateway to confirm update progress…";
+    expect.soft(modal.textContent).toContain(waiting);
+    expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
+    drain.resolve();
+    await waitForSolid(() =>
+      expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1),
+    );
+    expect.soft(modal.textContent).toContain(waiting);
+    accepted.resolve({ runId: run.runId });
+    await waitForSolid(() =>
+      expect(request.mock.calls.some(([method]) => method === "update.runs.get")).toBe(true),
+    );
+    expect.soft(modal.textContent).toContain(waiting);
+    progress.resolve({ run });
+    await operation;
+    await waitForSolid(() =>
+      expect(modal.querySelector("openclaw-update-run-view")).not.toBeNull(),
+    );
+    expect(modal.textContent).not.toContain(waiting);
+    expect(modal.querySelector(".update-run-view")?.getAttribute("data-run-id")).toBe(run.runId);
+    findButton("Close").click();
+    await settled;
+  } finally {
+    drain.resolve();
+    accepted.resolve({ runId: run.runId });
+    progress.resolve({ run });
+    await operation;
+    document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
+    await settled;
+    overlays.dispose();
+  }
+});
+
 it.each([
   {
     action: "Close",
@@ -363,12 +428,13 @@ it.each([
   expect(startGatewayUpdate).toHaveBeenCalledOnce();
   const updating = findButton("Updating…");
   expect(updating.disabled).toBe(true);
-  expect(modal.textContent).toContain("Installing the update on the Gateway");
+  expect(modal.textContent).toContain("Waiting for the Gateway to confirm update progress…");
 
-  // The Gateway goes away mid-install; the dialog is mounted outside the shell
-  // precisely so it can keep reporting through the disconnect.
+  // No run is confirmed yet. The dialog survives disconnect without inventing progress.
   await stream.push({ busy: true, connected: false });
-  expect(modal.textContent).toContain("The Gateway disconnected during the update");
+  expect(modal.textContent).toContain(
+    "The Gateway disconnected before update progress was confirmed",
+  );
   expect(modal.textContent).toContain("openclaw triage");
   expect(modal.textContent).toContain("on the computer running OpenClaw");
   expect(modal.textContent).toContain("local coding agent");
