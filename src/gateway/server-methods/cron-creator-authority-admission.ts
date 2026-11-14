@@ -239,3 +239,30 @@ export function resolveGatewayChatCronCreatorAuthorityAdmission(
       params.isIncognito || params.isReconnectResume || !isDirectGatewayChatUserTurn(params),
   });
 }
+
+/** Template Add is an administrator action; its hidden continuation is not fresh user ingress. */
+export function resolveGatewayTemplateSetupCronAuthorityAdmission(
+  params: Omit<GatewayChatUserTurn, "isIncognito" | "isDirectExternalUser"> & {
+    isIncognitoEntry: boolean;
+  },
+): GatewayCronCreatorAuthorityAdmission | undefined {
+  if (
+    params.inputProvenance?.kind !== "internal_system" ||
+    params.inputProvenance.sourceTool !== "template_add_setup" ||
+    params.client?.internal?.controlUiAdmin !== true ||
+    !hasGatewayAdminScope(params.client)
+  ) {
+    return undefined;
+  }
+  return resolveDirectOperatorAuthority({
+    ...params,
+    // Explicit owner-only internal route above, not authority inferred from provenance.
+    inputProvenance: undefined,
+    disallowed:
+      params.isIncognitoEntry ||
+      params.isReconnectResume ||
+      params.hasExplicitOrigin ||
+      params.hasRestoredCronContinuation ||
+      params.turnKind !== "main",
+  });
+}

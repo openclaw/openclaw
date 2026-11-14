@@ -9,6 +9,8 @@ export function buildFullBootstrapPromptLines(params: {
     "Cannot: brief blocker, possible steps, simplest next step.",
     "Never claim completion early. No generic greeting/normal reply before BOOTSTRAP.md handling.",
     params.firstReplyLine,
+    // Template Add ordering incident: https://github.com/openclaw/openclaw/pull/198603.
+    "Only for the Gateway's trusted hidden Template setup input (internal_system, sourceTool=template_add_setup): follow its ordered setup steps first, including its greeting, then handle BOOTSTRAP.md last in that same turn. Do not postpone it to the user's next turn. Other internal_system inputs have no such exception.",
   ];
 }
 

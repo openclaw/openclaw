@@ -184,10 +184,10 @@ it("retries retained Template setup only on click in the same chat and composer"
   );
   const applies = request.mock.calls.filter(([method]) => method === "templates.add.apply");
   expect(applies).toHaveLength(2);
-  expect(applies[1]?.[1]).toEqual(applies[0]?.[1]);
   expect(applies[1]?.[1]).toEqual({
     mode: "chat",
     agentId: saved.agentId,
+    resume: true,
     source,
     acknowledgeClawHubRisk: true,
   });
@@ -287,7 +287,7 @@ it("recovers admitted Template A after creating B while A fails in the backgroun
   view.getByRole("button", { name: "Retry setup" }).click();
   expect(attempts).toBe(3);
   const applies = request.mock.calls.filter(([method]) => method === "templates.add.apply");
-  expect(applies[2]?.[1]).toEqual(applies[0]?.[1]);
+  expect(applies[2]?.[1]).toEqual({ mode: "chat", source, agentId: saved.agentId, resume: true });
   retry.resolve({ ...saved, status: "complete", readiness: { ready: true } });
   await waitForSolid(() => expect(context.chatSubmissions.creating).toBe(false));
   expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined();
@@ -381,5 +381,5 @@ it("asks for an id its roster does not use and retries the id the Gateway admitt
   const pendingChat = context.chatSubmissions.readCreateFor("agent:harbor-2:team-room")!;
   expect(pendingChat.displayName).toBe("Workflow Operator 2");
   pendingChat.composer!.recovery!.retry();
-  expect(applies()[1]?.[1]).toEqual({ mode: "chat", source, agentId: "harbor-3" });
+  expect(applies()[1]?.[1]).toEqual({ mode: "chat", source, agentId: "harbor-3", resume: true });
 });

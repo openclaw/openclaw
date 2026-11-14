@@ -110,6 +110,7 @@ export async function applyTemplateAdd(
   source: TemplateCatalogSource,
   options: {
     agentId: string;
+    resume?: true;
     acknowledgeClawHubRisk?: boolean;
     onSent?: (requestId: string) => void;
   },
@@ -120,6 +121,7 @@ export async function applyTemplateAdd(
       mode: "chat",
       source,
       agentId: options.agentId,
+      ...(options.resume ? { resume: true } : {}),
       ...(options.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     },
     { onSent: options.onSent },

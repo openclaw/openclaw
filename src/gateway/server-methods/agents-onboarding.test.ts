@@ -242,6 +242,48 @@ it("starts one normal Template personality greeting without the four-role questi
   expect(release).toHaveBeenCalledOnce();
 });
 
+it("runs a chat-based Template opening hidden, under the agent's own tool policy", async () => {
+  sendInternalChat.mockReset().mockImplementation(async (request: GatewayRequestHandlerOptions) => {
+    request.respond(true, { status: "started" });
+  });
+  await startAgentOnboardingConversation(
+    invocation(),
+    "scout",
+    "agent:scout:home",
+    "template",
+    "Fixture setup prompt",
+  );
+  const [request] = sendInternalChat.mock.calls[0]!;
+  expect(request.params.message).toBe("Fixture setup prompt");
+  expect(request.params.systemInputProvenance).toEqual({
+    kind: "internal_system",
+    sourceTool: "template_add_setup",
+  });
+  expect(request.params.idempotencyKey).toMatch(/^agents.create:scout:template-setup:/);
+  expect(waitForAgentJob).toHaveBeenLastCalledWith({
+    runId: request.params.idempotencyKey,
+    source: "chat",
+    timeoutMs: 172_860_000,
+  });
+  const internal = sendInternalChat.mock.calls[0]![2];
+  // No runtime allowlist: an empty one would remove automations, plugins and message.
+  expect(internal).toEqual({
+    transcript: { display: false },
+    deferWorkspaceBootstrap: true,
+    templateSetup: true,
+  });
+  await startAgentOnboardingConversation(
+    invocation(),
+    "scout",
+    "agent:scout:home",
+    "template",
+    "Fixture setup prompt",
+  );
+  expect(sendInternalChat.mock.calls[1]![0].params.idempotencyKey).not.toBe(
+    request.params.idempotencyKey,
+  );
+});
+
 it("reports failed transcript admission without changing the already-created agent receipt", async () => {
   const options = invocation();
   options.hasCurrentClientAuthority = () => false;

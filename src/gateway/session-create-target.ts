@@ -281,6 +281,7 @@ export async function finalizeSessionCreateTarget(
   target: Pick<CreatedGatewaySession, "key" | "storePath">,
   expectedEntry: InternalSessionEntry,
   commitGuard: CreateGatewaySessionParams["commitGuard"],
+  templateSetup?: InternalSessionEntry["templateSetup"],
 ): Promise<InternalSessionEntry> {
   const finalized = await patchSessionEntryCore(
     { sessionKey: target.key, storePath: target.storePath },
@@ -288,7 +289,11 @@ export async function finalizeSessionCreateTarget(
       if (!isDeepStrictEqual(current, expectedEntry)) {
         throw new Error(`created session ${target.key} changed before finalization`);
       }
-      return { initializationPending: undefined, templateInitialization: undefined };
+      return {
+        initializationPending: undefined,
+        templateInitialization: undefined,
+        ...(templateSetup ? { templateSetup } : {}),
+      };
     },
     {
       preserveActivity: true,
