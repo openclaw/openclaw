@@ -38,8 +38,8 @@ const HEX_COLOR_RE = /#[\da-f]{6}(?![\da-f])/gi;
 
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // Raw CJK suffixes delimit autolinks; percent-encoded URL content stays intact.
-const CJK_SUFFIX_RE =
-  /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]+$/;
+const CJK_CHARACTER_RE =
+  /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]/;
 
 // CSS paints the decorative mark outside the accessibility tree and copied text.
 const GITHUB_LINK_CLASS = "markdown-github-link";
@@ -220,12 +220,8 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         // GFM entity reference rule: strip trailing &entity; sequences.
         if (character === ";") {
-          let index = length - 2;
-          while (index >= 0 && /[a-zA-Z0-9]/.test(tail.charAt(index))) {
-            index--;
-          }
-          // index < length - 2 ensures at least one alphanumeric between & and ;
-          if (index >= 0 && tail.charAt(index) === "&" && index < length - 2) {
+          const index = tail.lastIndexOf("&", length - 1);
+          if (/^&[a-zA-Z0-9]+;$/.test(tail.slice(index, length))) {
             length = index;
             continue;
           }
@@ -281,8 +277,8 @@ export function createMarkdownParser(): MarkdownItParser {
       return [open, label, close];
     };
     for (const children of markdownInlineChildren(state.tokens)) {
-      let linkDepth = 0;
-      let hideClose = false;
+      // Markdown links cannot nest; the opening token owns both wrapper states.
+      let openLink: Token | undefined;
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
         if (!token) {
@@ -333,18 +329,16 @@ export function createMarkdownParser(): MarkdownItParser {
             }
           }
           // Local file decoration removes hrefs such as C:/notes.md before scheme rejection.
-          hideClose = DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""));
-          token.hidden = hideClose;
-          linkDepth += 1;
+          token.hidden = DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""));
+          openLink = token;
           continue;
         }
         if (token.type === "link_close") {
-          token.hidden = hideClose;
-          hideClose = false;
-          linkDepth = Math.max(0, linkDepth - 1);
+          token.hidden = openLink?.hidden ?? false;
+          openLink = undefined;
           continue;
         }
-        if (linkDepth > 0 || !env.fileLinks) {
+        if (openLink || !env.fileLinks) {
           continue;
         }
         if (token.type === "code_inline") {
@@ -526,17 +520,20 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         const textToken = children[index + 1]!;
         const displayText = textToken.content;
-        const suffix = CJK_SUFFIX_RE.exec(displayText);
-        if (!suffix?.index) {
+        let end = displayText.length;
+        while (end > 0 && CJK_CHARACTER_RE.test(displayText[end - 1]!)) {
+          end--;
+        }
+        if (end === 0 || end === displayText.length) {
           continue;
         }
-        const trimmed = displayText.slice(0, suffix.index);
+        const trimmed = displayText.slice(0, end);
         const href = String(token.attrGet("href") ?? "");
         const prefix = href.indexOf(displayText);
         token.attrSet("href", (prefix > 0 ? href.slice(0, prefix) : "") + trimmed);
         textToken.content = trimmed;
         const suffixToken = new state.Token("text", "", 0);
-        suffixToken.content = suffix[0];
+        suffixToken.content = displayText.slice(end);
         children.splice(index + 3, 0, suffixToken);
       }
     }
