@@ -3,7 +3,7 @@ import { listen } from "./reactive/listener.ts";
 
 type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
-/** One signal per variant: the leading icon's color. Neutral toasts explicitly use undefined. */
+/** Severity colors the leading icon, or the status line when an avatar occupies that slot. */
 export type ToastSeverity = "success" | "info" | "warning" | "error" | "progress";
 
 export type ToastOptions = {
@@ -12,7 +12,7 @@ export type ToastOptions = {
   message: string | Node;
   /** Distinguishes actionable notices that share copy; repeats of the same key replace each other. */
   dedupeKey?: string;
-  /** Muted second line, for the sentence that follows the title. */
+  /** Second line: muted feedback, or severity-colored status beside an avatar. */
   description?: string;
   /** Raw error shown only when expanded; redacted by the shared error renderer. */
   detail?: unknown;

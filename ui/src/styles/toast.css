@@ -168,20 +168,29 @@
   border-radius: var(--radius-full);
 }
 
-.app-toast--success .app-toast__icon {
+.app-toast--success .app-toast__icon,
+.app-toast--success.app-toast--avatar .app-toast__description {
   color: var(--ok);
 }
 
-.app-toast--info .app-toast__icon {
+.app-toast--info .app-toast__icon,
+.app-toast--info.app-toast--avatar .app-toast__description {
   color: var(--info);
 }
 
-.app-toast--warning .app-toast__icon {
+.app-toast--warning .app-toast__icon,
+.app-toast--warning.app-toast--avatar .app-toast__description {
   color: var(--warn);
 }
 
-.app-toast--error .app-toast__icon {
+.app-toast--error .app-toast__icon,
+.app-toast--error.app-toast--avatar .app-toast__description {
   color: var(--danger);
+}
+
+.app-toast--progress .app-toast__icon,
+.app-toast--progress.app-toast--avatar .app-toast__description {
+  color: var(--status-running);
 }
 
 .app-toast--progress .app-toast__icon svg {

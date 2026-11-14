@@ -446,12 +446,13 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("agent.wait", { endedAt: Date.now(), runId, status: "ok" });
       const toast = page.locator(".app-toast");
-      // A finished run shows only the session name and Open session.
+      // A finished run names its outcome without replacing the next draft.
       await toast
         .getByRole("link", { name: "Open session", exact: true })
         .waitFor({ timeout: 10_000 });
       expect(await page.locator(".new-session-page__starting").count()).toBe(0);
       await expectValue(composer, "Plan the next task");
+      expect(await toast.locator(".app-toast__description").textContent()).toBe("Completed");
       await captureProof(page, `background-${label}-complete.png`);
       if (captureProofEnabled) {
         await page.waitForTimeout(800);
