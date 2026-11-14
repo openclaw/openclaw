@@ -175,6 +175,11 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     const notice = page.querySelector(".channels-detail__feedback .settings-save-indicator");
     return notice?.querySelector("span")?.textContent ?? null;
   };
+  /** Only a completed failure paints red; interrupted stays a plain notice. */
+  const alertFailure = (page: HTMLElement) =>
+    page
+      .querySelector(".channels-detail__feedback .settings-save-indicator span")
+      ?.classList.contains("settings-save-indicator__failure") ?? false;
 
   it("writes nothing over fields changed elsewhere, then lets the newer values win", async () => {
     const { page, source, patches, changeElsewhere } = await openTelegram();
@@ -201,6 +206,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     await waitForSolid(() =>
       expect(alertText(page)).toBe("Settings changed elsewhere: DM policy, Allow from, Groups"),
     );
+    expect(alertFailure(page)).toBe(true);
     expect(patches()).toHaveLength(0);
     expect(source.channels.state.configEdits.telegram).toHaveLength(3);
     expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Unsaved changes");
@@ -287,6 +293,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       await waitForSolid(() =>
         expect(alertText(page)).toBe("Disconnected while saving. Reconnect to check your changes."),
       );
+      expect(alertFailure(page)).toBe(false);
 
       if (outcome === "landed") {
         await setFile(telegram({ ...before.channels.telegram, dmPolicy: "pairing" }), "h1");
@@ -295,6 +302,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       await waitForSolid(() => {
         expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe(status);
         expect(alertText(page)).toBe(alert);
+        expect(alertFailure(page)).toBe(alert !== null);
       });
       expect(patches()).toHaveLength(1);
     },
