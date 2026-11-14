@@ -35,13 +35,17 @@ describe("doctor allowlist-policy repair", () => {
     ["inherited allowlist", ["root-sender"], { dmPolicy: "allowlist" }, false],
     ["explicit empty allowlist", ["root-sender"], { allowFrom: [] }, true],
     ["explicit pairing override", [], { dmPolicy: "pairing" }, false],
-  ] satisfies Array<[string, string[], SignalAccountConfig, boolean]>)(
+    ["pairing store read failure", [], {}, false, "pairing store unavailable"],
+  ] satisfies Array<[string, string[], SignalAccountConfig, boolean, string?]>)(
     "resolves %s before recovering account senders",
-    async (_name, rootAllowFrom, account, recovered) => {
+    async (_name, rootAllowFrom, account, recovered, storeError) => {
       readChannelAllowFromStoreMock.mockImplementation(
         async (_channel: string, _env: NodeJS.ProcessEnv, accountId: string) =>
           accountId === "work" ? ["account-sender"] : [],
       );
+      if (storeError) {
+        readChannelAllowFromStoreMock.mockRejectedValue(new Error(storeError));
+      }
       const cfg: OpenClawConfig = {
         channels: {
           signal: {
@@ -66,6 +70,9 @@ describe("doctor allowlist-policy repair", () => {
             ]
           : [],
       );
+      expect(
+        (result.warnings ?? []).join("\n").includes("skipped. Retry openclaw doctor --fix"),
+      ).toBe(Boolean(storeError));
     },
   );
 

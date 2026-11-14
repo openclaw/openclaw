@@ -7,6 +7,7 @@ import {
   setCanonicalDmAllowFrom,
 } from "../../../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
@@ -15,6 +16,7 @@ import { hasAllowFromEntries, iterateDoctorChannelAccounts } from "./allowlist.j
 export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 }> {
   const channels = cfg.channels;
   if (!channels || typeof channels !== "object") {
@@ -23,6 +25,7 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
 
   const next = structuredClone(cfg);
   const changes: string[] = [];
+  const warnings: string[] = [];
 
   for (const [channelName, value] of Object.entries(next.channels ?? {})) {
     const channelConfig = asOptionalObjectRecord(value);
@@ -56,7 +59,12 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
         normalizedChannelId,
         process.env,
         normalizedAccountId,
-      ).catch(() => []);
+      ).catch((err: unknown) => {
+        warnings.push(
+          `Could not read the pairing store for channel ${normalizedChannelId}, account ${normalizedAccountId}: ${formatErrorMessage(err)}. Allowlist sender recovery was skipped. Retry openclaw doctor --fix; if it still fails, run openclaw doctor to repair the state database.`,
+        );
+        return [];
+      });
       const recovered = normalizeUniqueStringEntries(fromStore);
       if (recovered.length === 0) {
         return;
@@ -82,5 +90,9 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     }
   }
 
-  return { config: changes.length > 0 ? next : cfg, changes };
+  return {
+    config: changes.length > 0 ? next : cfg,
+    changes,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
