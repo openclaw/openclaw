@@ -102,25 +102,25 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
   try {
     await mkdir(stagingRoot, { mode: 0o755 });
     const staging = await fsSafeRoot(stagingRoot, { mkdir: false, mode: 0o644, durable: false });
-    const files = new Map<string, Buffer | string>();
-    files.set("package.json", `${JSON.stringify(project.packageJson, null, 2)}\n`);
+    const files = new Map<string, { bytes: Buffer | string; mode?: number }>();
+    files.set("package.json", { bytes: `${JSON.stringify(project.packageJson, null, 2)}\n` });
     const templateMarkdown = await readSelectedProjectFile(project.root, "CLAW.md");
     assertValidatedBytes("CLAW.md", templateMarkdown, project.template.snapshot.manifest);
-    files.set("CLAW.md", templateMarkdown);
+    files.set("CLAW.md", { bytes: templateMarkdown });
     if (project.license) {
       const license = await readSelectedProjectFile(project.root, "LICENSE");
       assertValidatedBytes("LICENSE", license, project.license);
-      files.set("LICENSE", license);
+      files.set("LICENSE", { bytes: license });
     }
     if (project.template.packageBootstrap) {
       const bootstrap = await readSelectedProjectFile(project.root, "BOOTSTRAP.md");
       assertValidatedBytes("BOOTSTRAP.md", bootstrap, project.template.packageBootstrap);
-      files.set("BOOTSTRAP.md", bootstrap);
+      files.set("BOOTSTRAP.md", { bytes: bootstrap });
     }
     for (const source of project.template.snapshot.workspaceSources) {
       const bytes = await readSelectedProjectFile(project.root, source.sourcePath);
       assertValidatedBytes(source.sourcePath, bytes, source);
-      files.set(source.sourcePath, bytes);
+      files.set(source.sourcePath, { bytes });
     }
 
     for (const source of project.template.snapshot.bundledSources ?? []) {
@@ -138,7 +138,7 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
         const path = `${source.path}/${file.path}`;
         const bytes = await readSelectedProjectFile(project.root, path);
         assertValidatedBytes(path, bytes, file);
-        files.set(path, bytes);
+        files.set(path, { bytes, mode: file.executable ? 0o755 : 0o644 });
       }
     }
 
@@ -147,7 +147,8 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
     );
     for (const fileName of fileNames) {
       await mkdir(join(stagingRoot, dirname(fileName)), { recursive: true, mode: 0o755 });
-      await staging.create(fileName, files.get(fileName) as Buffer | string);
+      const file = files.get(fileName)!;
+      await staging.create(fileName, file.bytes, { mode: file.mode ?? 0o644 });
     }
     const tarInputNames = fileNames.map((fileName) =>
       fileName.startsWith("@") ? `./${fileName}` : fileName,
