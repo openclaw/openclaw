@@ -1,5 +1,10 @@
+import type { FsSafeNativeMode } from "@openclaw/fs-safe/config";
 import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import type { WorkspaceSkillStatusFacts } from "../discovery/status.types.js";
+import type {
+  SkillLibraryFilesystemInput,
+  SkillLibraryFilesystemOutput,
+} from "../library/filesystem.contract.js";
 import type { PluginSkillContribution } from "../loading/plugin-skills.js";
 import type { SkillSnapshotProjectionInput } from "../loading/skill-snapshot-projection.js";
 import type { WorkspaceSkillSourcePlanOptions } from "../loading/workspace-skill-sources.js";
@@ -53,6 +58,7 @@ export type SkillsDiscoverySourceSelection =
     };
 
 export type SkillsDiscoveryInput =
+  | { kind: "library"; input: SkillLibraryFilesystemInput; nativeMode: FsSafeNativeMode }
   | { kind: "plan"; input: SkillsSourcePlanInput }
   | {
       kind: "scan";
@@ -83,6 +89,7 @@ export type SkillsDiscoveryResult = {
 };
 
 export type SkillsDiscoveryOutput =
+  | { kind: "library"; result: SkillLibraryFilesystemOutput }
   | { kind: "plan"; plan: WorkspaceSkillSourcePlan }
   | { kind: "scan"; results: SkillsDiscoveryResult[] }
   | {

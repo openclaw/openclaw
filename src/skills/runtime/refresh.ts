@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
+import { restoreNativeErrorResponse } from "../../infra/native-error-response.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -14,6 +16,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
+import type { SkillLibraryFilesystemInput } from "../library/filesystem.contract.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { SkillSnapshotProjectionInput } from "../loading/skill-snapshot-projection.js";
@@ -26,6 +29,7 @@ import type {
   WorkspaceSkillSourceRequest,
   WorkspaceSkillSources,
 } from "../loading/workspace-skill-sources.types.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import { SKILLS_DISCOVERY_KEY, type SkillSnapshot } from "../types.js";
 import {
   captureSkillsDiscoveryEnvironment,
@@ -122,6 +126,30 @@ function pool() {
         workerClass: "singleton",
       }),
   ));
+}
+
+export async function runSkillLibraryFilesystemTask(
+  input: SkillLibraryFilesystemInput,
+  nativeMode = getFsSafeNativeConfig().mode,
+) {
+  if (state.closing) {
+    await state.closing;
+  }
+  const worker = pool();
+  const result = await worker.run({ kind: "library", input, nativeMode }, { timeoutMs: 120_000 });
+  if (result.kind !== "library") {
+    throw new Error("Unexpected skill library filesystem response");
+  }
+  if (result.result.kind === "error") {
+    const { error, libraryCode } = result.result;
+    if (libraryCode) {
+      throw new SkillLibraryError(libraryCode, error.message, undefined, {
+        cause: restoreNativeErrorResponse(error).cause,
+      });
+    }
+    throw restoreNativeErrorResponse(error);
+  }
+  return result.result;
 }
 
 function observeSource(source: Source) {
