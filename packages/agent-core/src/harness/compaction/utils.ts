@@ -4,6 +4,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
 import { createToolCallOccurrenceQueue } from "../session/tool-result-pairing.js";
+import { ELISION_MARKER_RESERVE_CHARS, truncateForSummary } from "./summary-truncation.js";
 export type { FileOperations } from "../types.js";
 
 export {
@@ -27,8 +28,9 @@ export function extractSummaryText(response: AssistantMessage): string | undefin
 }
 
 const TOOL_RESULT_MAX_CHARS = 2000;
-const IMPORTANT_TOOL_RESULT_TAIL =
-  /(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)/i;
+// Tool output fills most of a long history; when the summary input is sampled,
+// results older than the newest entries keep this much of their head and tail.
+const SAMPLED_TOOL_RESULT_MAX_CHARS = 500;
 
 export function stringifyCompactionValue(value: unknown): string {
   try {
@@ -36,49 +38,6 @@ export function stringifyCompactionValue(value: unknown): string {
   } catch {
     return "[unserializable]";
   }
-}
-
-function truncateForSummary(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  const tailChars = Math.min(Math.floor(maxChars * 0.3), 600);
-  const diagnosticSearch = sliceUtf16Safe(text, -maxChars);
-  const diagnosticMatches = [
-    ...diagnosticSearch.matchAll(new RegExp(IMPORTANT_TOOL_RESULT_TAIL.source, "gi")),
-  ];
-  const diagnosticMatch =
-    diagnosticMatches.findLast((match) =>
-      /^(error|exception|fatal|panic|errno)$/i.test(match[0]),
-    ) ?? diagnosticMatches.at(-1);
-  if (diagnosticMatch) {
-    const head = truncateUtf16Safe(text, maxChars - tailChars);
-    const displacedHead = sliceUtf16Safe(text, Math.max(0, head.length - 32), maxChars);
-    // A routine footer can match failure words. Never shorten the original
-    // retained head when doing so would discard an existing diagnostic.
-    if (!IMPORTANT_TOOL_RESULT_TAIL.test(displacedHead)) {
-      const diagnosticOffset = text.length - diagnosticSearch.length + (diagnosticMatch.index ?? 0);
-      const tailStart = Math.min(diagnosticOffset, text.length - tailChars);
-      // An early diagnostic already lives in the retained prefix; reusing it
-      // as a tail would overlap the head and miscount omitted characters.
-      if (tailStart >= head.length) {
-        const tail = sliceUtf16Safe(text, tailStart, tailStart + tailChars);
-        const truncatedChars = text.length - head.length - tail.length;
-        const omissionPosition = tailStart + tail.length < text.length ? "middle/trailing" : "more";
-        // Commands usually report their actual failure last; preserve that tail
-        // so branch and ordinary compaction summaries can explain what failed.
-        return `${head}\n\n[... ${truncatedChars} ${omissionPosition} characters truncated]\n\n${tail}`;
-      }
-    }
-  }
-  const headBudget = maxChars - tailChars - ELISION_MARKER_RESERVE_CHARS;
-  const prefix = truncateUtf16Safe(text, maxChars);
-  // Preserve diagnostics the old prefix already held; ordinary results also
-  // need their terminal facts, with the marker inside the same budget.
-  const tail = IMPORTANT_TOOL_RESULT_TAIL.test(prefix) ? "" : sliceUtf16Safe(text, -tailChars);
-  const head = tail ? truncateUtf16Safe(prefix, headBudget) : prefix;
-  const truncatedChars = text.length - head.length - tail.length;
-  return `${head}\n\n[... ${truncatedChars} more characters truncated]${tail ? `\n\n${tail}` : ""}`;
 }
 
 /** Project summary content once so rendering and token accounting share omission facts. */
@@ -214,19 +173,33 @@ export function findLatestCompactionUserMessage(
   );
 }
 
+const CREDENTIAL_PATTERNS = [
+  /\b(?:sk|pk|rk|ghp|gho|ghu|ghs|github_pat|xox[abprs]|glpat|AKIA|AIza)[-_A-Za-z0-9]{16,}/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g,
+  /\b(?:api[_-]?key|token|secret|password|passwd|authorization|bearer)\b\s*[:=]\s*["']?[^\s"']{8,}/gi,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+];
+
+/**
+ * Text quoted verbatim into compaction artifacts. Summaries are persisted and replayed
+ * on every later request, so credential shapes are redacted here, before any caller
+ * clips an excerpt that could leave a fragment. The transcript itself stays raw.
+ */
 export function extractCompactionMessageText(message: AgentMessage): string {
   const content = Reflect.get(message, "content");
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  return Array.isArray(content)
-    ? content
-        .flatMap((block) => {
-          const text = block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
-          return typeof text === "string" && text.trim() ? [text.trim()] : [];
-        })
-        .join("\n")
-    : "";
+  const text =
+    typeof content === "string"
+      ? content.trim()
+      : Array.isArray(content)
+        ? content
+            .flatMap((block) => {
+              const value =
+                block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
+              return typeof value === "string" && value.trim() ? [value.trim()] : [];
+            })
+            .join("\n")
+        : "";
+  return CREDENTIAL_PATTERNS.reduce((value, pattern) => value.replace(pattern, "[redacted]"), text);
 }
 
 /** Legacy producers cannot search past an independent input for a pending ask. */
@@ -314,7 +287,12 @@ type SerializedEntry = {
   callLabel?: string;
 };
 
-function renderSerializedEntry(entry: SerializedEntry, message: Message, sampled: boolean): string {
+function renderSerializedEntry(
+  entry: SerializedEntry,
+  message: Message,
+  sampled: boolean,
+  short = false,
+): string {
   if (entry.kind === "overflow") {
     return OMISSION_OVERFLOW;
   }
@@ -322,7 +300,9 @@ function renderSerializedEntry(entry: SerializedEntry, message: Message, sampled
     const { text, omissionText } = getCompactionContent(message.content);
     const content = [
       entry.includeOmission ? omissionText : "",
-      message.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text,
+      message.role === "toolResult"
+        ? truncateForSummary(text, short ? SAMPLED_TOOL_RESULT_MAX_CHARS : TOOL_RESULT_MAX_CHARS)
+        : text,
     ]
       .filter(Boolean)
       .join("\n");
@@ -380,6 +360,7 @@ export type PreparedConversationMessage =
   | {
       kind: "content";
       chars: number;
+      shortChars: number;
       hasText: boolean;
       omissionChars: number;
       user: boolean;
@@ -412,6 +393,9 @@ function prepareMessage(
     return {
       kind: "content",
       chars: estimateStringChars(`[${label}]: ${content}`),
+      shortChars: estimateStringChars(
+        `[${label}]: ${message.role === "toolResult" ? truncateForSummary(text, SAMPLED_TOOL_RESULT_MAX_CHARS) : text}`,
+      ),
       hasText: Boolean(text),
       omissionChars: estimateStringChars(omissionText),
       user: isCompactionUserRequest(message),
@@ -458,6 +442,7 @@ export function createConversationSerializationIndex(
 ) {
   const entries: SerializedEntry[] = [];
   const weights: number[] = [];
+  const shortWeights: number[] = [];
   const userEntries: number[] = [];
   const callLabels = createToolCallOccurrenceQueue<string>();
   let omissionMessages = 0;
@@ -468,7 +453,7 @@ export function createConversationSerializationIndex(
     message?: Message,
     renderedCalls?: string,
   ) => {
-    const add = (entry: SerializedEntry, chars: number) => {
+    const add = (entry: SerializedEntry, chars: number, shortChars = chars) => {
       if (consume) {
         const payload = message ?? messages.get(messageIndex);
         if (!payload) {
@@ -482,6 +467,9 @@ export function createConversationSerializationIndex(
       }
       totalChars += chars + (entries.length > 0 ? ENTRY_SEPARATOR.length : 0);
       weights.push(chars + (entry.callLabel ? estimateStringChars(` of ${entry.callLabel}`) : 0));
+      shortWeights.push(
+        shortChars + (entry.callLabel ? estimateStringChars(` of ${entry.callLabel}`) : 0),
+      );
       entries.push(entry);
     };
     if (fact.kind === "content") {
@@ -502,6 +490,8 @@ export function createConversationSerializationIndex(
       add(
         { messageIndex, kind: "content", includeOmission, callLabel },
         fact.chars +
+          (includeOmission && fact.omissionChars ? fact.omissionChars + (fact.hasText ? 1 : 0) : 0),
+        fact.shortChars +
           (includeOmission && fact.omissionChars ? fact.omissionChars + (fact.hasText ? 1 : 0) : 0),
       );
     } else if (fact.kind === "assistant") {
@@ -525,14 +515,15 @@ export function createConversationSerializationIndex(
       return totalChars;
     },
     weights,
+    shortWeights,
     userEntries,
-    render(index, sampled) {
+    render(index, sampled, short) {
       const entry = entries[index];
       const message = entry && messages.get(entry.messageIndex);
       if (!entry || !message) {
         throw new Error("Compaction serialization source is missing a selected message");
       }
-      return renderSerializedEntry(entry, message, sampled);
+      return renderSerializedEntry(entry, message, sampled, short);
     },
   };
   return {
@@ -564,8 +555,6 @@ export const MAX_SUMMARY_INPUT_CHARS = 160_000;
 const MAX_SAMPLED_ENTRY_CHARS = 6_000;
 const MIN_TRIMMED_ENTRY_CHARS = 200;
 const TRIMMED_ENTRY_HEAD_SHARE = 0.7;
-// Covers truncation and elision markers for any UTF-16 length.
-const ELISION_MARKER_RESERVE_CHARS = 64;
 const SUMMARY_INPUT_TAIL_SHARE = 0.5;
 const SUMMARY_INPUT_USER_SHARE = 0.25;
 const SUMMARY_INPUT_HEAD_SHARE = 0.1;
@@ -629,9 +618,10 @@ export interface SerializedConversationSource {
   totalChars: number;
   /** CJK-weighted entry sizes with tool-call labels, used when sampling. */
   weights: readonly number[];
+  shortWeights?: readonly number[];
   userEntries: readonly number[];
   /** Render from the same snapshot used to compute the selection facts. */
-  render(index: number, sampled: boolean): string;
+  render(index: number, sampled: boolean, short?: boolean): string;
 }
 
 /**
@@ -640,7 +630,8 @@ export interface SerializedConversationSource {
  * the newest entries verbatim (half the budget); older user messages, which
  * carry the asks, decisions and corrections (a quarter, newest first, each up
  * to 2,000 characters); the oldest entries (a tenth); and eight evenly spaced
- * runs of what remains. Sampled entries are trimmed to 6,000 characters, every
+ * runs of what remains. Older tool results keep 500 characters of their head
+ * and tail instead of 2,000. Sampled entries are trimmed to 6,000 characters, every
  * gap is marked with its entry count, and each tool result names its call,
  * because sampling can separate the two. The transcript itself is not changed.
  */
@@ -681,7 +672,7 @@ export function serializeConversationSourceWithinBudget(
 
   // Keeps the entry within `limit`, eliding its middle when needed. The cost
   // includes the change in gap markers: taking an entry inside a gap splits it.
-  const take = (index: number, limit: number, maxEntryChars = limit): boolean => {
+  const take = (index: number, limit: number, maxEntryChars = limit, short = false): boolean => {
     if (selected.has(index)) {
       return true;
     }
@@ -690,7 +681,8 @@ export function serializeConversationSourceWithinBudget(
     const markerDelta = leftOpen && rightOpen ? 1 : !leftOpen && !rightOpen ? -1 : 0;
     const markerCost = markerDelta * OMISSION_MARKER_CHARS;
     const entryLimit = Math.min(limit - markerCost, maxEntryChars + separatorChars);
-    let chars = (weights[index] ?? 0) + separatorChars;
+    let chars =
+      ((short ? source.shortWeights?.[index] : undefined) ?? weights[index] ?? 0) + separatorChars;
     // Reject an unaffordable entry before acquiring its payload. The trimming
     // helper requires this minimum room independent of the entry's contents.
     if (
@@ -702,7 +694,7 @@ export function serializeConversationSourceWithinBudget(
     if (chars <= entryLimit && usedChars + chars + markerCost > maxChars) {
       return false;
     }
-    const entry = source.render(index, true);
+    const entry = source.render(index, true, short);
     let text = entry;
     if (chars > entryLimit) {
       const trimmed = elideMiddleWithinWeight(entry, entryLimit - separatorChars);
@@ -761,7 +753,7 @@ export function serializeConversationSourceWithinBudget(
     const stride = Math.max(1, userCosts / userBudget);
     for (let position = olderUsers.length - 1; position >= 0; position -= stride) {
       const index = olderUsers[Math.round(position)];
-      if (index === undefined || !take(index, userLimit - usedChars, userEntryChars)) {
+      if (index === undefined || !take(index, userLimit - usedChars, userEntryChars, true)) {
         break;
       }
     }
@@ -770,7 +762,10 @@ export function serializeConversationSourceWithinBudget(
   // The oldest entries usually state the goal and the constraints of the session.
   let headEnd = 0;
   const headLimit = usedChars + Math.floor(maxChars * SUMMARY_INPUT_HEAD_SHARE);
-  while (headEnd < tailStart && take(headEnd, headLimit - usedChars, MAX_SAMPLED_ENTRY_CHARS)) {
+  while (
+    headEnd < tailStart &&
+    take(headEnd, headLimit - usedChars, MAX_SAMPLED_ENTRY_CHARS, true)
+  ) {
     headEnd += 1;
   }
 
@@ -785,7 +780,10 @@ export function serializeConversationSourceWithinBudget(
         headEnd + Math.floor((slice * middleCount) / SUMMARY_INPUT_MIDDLE_SLICES),
       );
       const sliceEnd = usedChars + sliceLimit;
-      while (index < tailStart && take(index, sliceEnd - usedChars, MAX_SAMPLED_ENTRY_CHARS)) {
+      while (
+        index < tailStart &&
+        take(index, sliceEnd - usedChars, MAX_SAMPLED_ENTRY_CHARS, true)
+      ) {
         index += 1;
       }
       nextFree = index;

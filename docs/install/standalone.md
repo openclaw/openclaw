@@ -329,8 +329,10 @@ this same option.
 
 Omitted plugins contribute no entrypoints, plugin assets, or sidecar metadata.
 Their exclusively owned chunks and dependencies are removed; dependencies needed
-by retained code stay. Discovery sees only the selected set as bundled. Official
-channel and provider catalogs keep offering omitted plugins for installation,
+by retained code stay. Discovery sees only the selected set as bundled.
+Chunk selection resolves relative references against the declared package files,
+so unrelated files on the build host do not change the selected graph.
+Official channel and provider catalogs keep offering omitted plugins for installation,
 and configuration references receive the normal `openclaw plugins install`
 guidance. On-demand installs use the normal plugin installer and configured state
 directory; they do not modify the executable or its sidecar. Cached help for the

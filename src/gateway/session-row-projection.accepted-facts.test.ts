@@ -372,7 +372,7 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
         const transcriptOnly = mode === "transcript-only invalidation";
         const cfg = {
           agents: {
-            entries: { main: {}, ...(!transcriptOnly && { "archive-pin": {} }) },
+            entries: { main: {}, ...(!transcriptOnly && { "zz-archive-pin": {} }) },
             defaults: { utilityModel: "unit-test/small" },
           },
         };
@@ -393,7 +393,11 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
             entries[index]!,
           );
         }
-        const pinnedQuery = { agentId: "archive-pin", key: "agent:archive-pin:awaiting-page" };
+        // Keep the held store after main when the owner groups reads by store identity.
+        const pinnedQuery = {
+          agentId: "zz-archive-pin",
+          key: "agent:zz-archive-pin:awaiting-page",
+        };
         if (!transcriptOnly) {
           replaceSessionEntrySync(
             { agentId: pinnedQuery.agentId, sessionKey: pinnedQuery.key },

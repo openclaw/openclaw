@@ -94,3 +94,25 @@ it.each(["ordinary", "historical", "recovery", "wrong producer", "unbound produc
     }
   },
 );
+
+// The production owner test counts full authentications; this guards the Actions
+// boundary that previously discarded its result and invoked a second process.
+it("checks npm lineage in the full authentication process after selecting its producer", () => {
+  const workflow = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
+  const steps = workflow.jobs.resolve_release_target.steps;
+  const download = steps.findIndex((entry: { id: string }) => entry.id === "preflight_artifact");
+  const authenticate = steps.findIndex((entry: { id: string }) => entry.id === "full_manifest");
+  const npm = steps.findIndex((entry: { id: string }) => entry.id === "manifest");
+  expect(download).toBeLessThan(authenticate);
+  expect(authenticate).toBeLessThan(npm);
+  expect(steps[authenticate].env).toMatchObject({
+    VERIFY_NPM_PREFLIGHT_LINEAGE:
+      "${{ steps.preflight_artifact.outputs.workflow_path == '.github/workflows/full-release-validation.yml' || steps.preflight_artifact.outputs.workflow_path == '.github/workflows/full-release-artifacts.yml' }}",
+    PREFLIGHT_WORKFLOW_SHA: "${{ steps.preflight_artifact.outputs.head_sha }}",
+    PREFLIGHT_RUN_ID: "${{ steps.preflight_artifact.outputs.run_id }}",
+    PREFLIGHT_RUN_ATTEMPT: "${{ steps.preflight_artifact.outputs.run_attempt }}",
+  });
+  expect(steps[npm].run).toContain(
+    '"$PREFLIGHT_WORKFLOW_PATH" != ".github/workflows/full-release-validation.yml" && "$PREFLIGHT_WORKFLOW_PATH" != ".github/workflows/full-release-artifacts.yml"',
+  );
+});

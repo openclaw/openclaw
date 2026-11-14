@@ -88,7 +88,11 @@ it.each([true, false])("uses the latest queued visibility from presented=%s", as
   try {
     rerender();
     transcript.start();
-    const initialRow = container.querySelector(".chat-virtual-row");
+    const initialRow = await waitForSolid(() => {
+      const row = container.querySelector(".chat-virtual-row");
+      expect(row).not.toBeNull();
+      return row;
+    });
     if (!presented) {
       flush();
       expect(contexts).toHaveLength(0);

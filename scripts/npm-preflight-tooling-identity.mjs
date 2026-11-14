@@ -345,6 +345,32 @@ export function validateReleasePreflightTagIdentity({ branches, ...identity }) {
   return validated;
 }
 
+// Structural binding only; the caller must authenticate the full qualification.
+export function validateNpmPreflightQualification({
+  manifest,
+  repository,
+  sourceSha,
+  toolingSha,
+  producerRunId,
+  producerRunAttempt,
+}) {
+  const qualified = validateFullReleaseNpmPreflight({
+    manifest,
+    repository,
+    runId: manifest.runId,
+    runAttempt: manifest.runAttempt,
+    sourceSha,
+    toolingSha,
+  });
+  if (
+    qualified.producer.runId !== String(producerRunId) ||
+    qualified.producer.runAttempt !== String(producerRunAttempt)
+  ) {
+    throw new Error("Npm producer differs from the authenticated frozen qualification");
+  }
+  return qualified;
+}
+
 /**
  * @param {{ manifest?: unknown, repository: string, sourceSha: string, toolingSha: string,
  *   publisherSha: string, producerRunId: string | number, producerRunAttempt: string | number,
@@ -380,20 +406,14 @@ export async function verifyNpmPreflightPublicationLineage({
     if (!authenticated) {
       throw new Error("Candidate publication requires authenticated qualification authority");
     }
-    const qualified = validateFullReleaseNpmPreflight({
+    const qualified = validateNpmPreflightQualification({
       manifest,
       repository,
-      runId: manifest.runId,
-      runAttempt: manifest.runAttempt,
       sourceSha,
       toolingSha,
+      producerRunId,
+      producerRunAttempt,
     });
-    if (
-      qualified.producer.runId !== String(producerRunId) ||
-      qualified.producer.runAttempt !== String(producerRunAttempt)
-    ) {
-      throw new Error("Npm producer differs from the authenticated frozen qualification");
-    }
     if (publicationAuthority) {
       verifyReleaseToolingIdentity(publicationAuthority);
     }

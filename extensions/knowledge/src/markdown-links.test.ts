@@ -197,6 +197,7 @@ it("derived backlinks deduplicate passages, reflect edits, exclude unavailable r
   };
   const hidden = record("h", "Hidden", "people/hidden.md", "[[Alex]]", { record_class: "fixture" });
   const data: ScanResult = {
+    recall: new Map(),
     records: [a, s, edge, hidden],
     ontology: null,
     sources: [],
@@ -206,7 +207,9 @@ it("derived backlinks deduplicate passages, reflect edits, exclude unavailable r
   const c = connections(data, { id: "a" });
   expect(c.connections.filter((r) => r.direction === "backlinks").length).toBe(1);
   expect(c.connections.filter((r) => r.direction === "outgoing").length).toBe(1);
-  expect(connections(data, { id: "s", direction: "links" }).connections[0]!.record.id).toBe("a");
+  expect(connections(data, { id: "s", direction: "links" }).connections[0]).toMatchObject({
+    id: "a",
+  });
   expect(connections(data, { id: "a" }, new Set(["s"])).total).toBe(0);
   s.body = "No longer linked.";
   expect(connections(data, { id: "a", direction: "backlinks" }).total).toBe(0);

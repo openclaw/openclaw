@@ -719,8 +719,33 @@ describe("authorized beta focused evidence", () => {
     );
   });
 
-  it("binds the direct-child tree, exact diff, and unchanged published projection", () => {
+  it("negotiates a missing reviewed commit and binds its tree, diff, and published projection", () => {
     const { policy, root } = fixturePolicy();
+    git(root, ["config", "uploadpack.allowFilter", "true"]);
+    const clone = join(tempDirs.make("authorized-beta-partial-"), "clone");
+    git(root, ["clone", "--filter=blob:none", pathToFileURL(root).href, clone]);
+    policy.reviewedHeadSha = git(root, [
+      "commit-tree",
+      policy.candidateTreeSha,
+      "-p",
+      policy.candidateSha,
+      "-m",
+      "reviewed",
+    ]);
+    git(root, ["update-ref", "refs/heads/reviewed", policy.reviewedHeadSha]);
+    const packets = join(root, "packets");
+    const traceBefore = process.env.GIT_TRACE_PACKET;
+    process.env.GIT_TRACE_PACKET = packets;
+    try {
+      expect(() => assertAuthorizedBetaFocusedCandidate(policy, clone)).not.toThrow();
+    } finally {
+      if (traceBefore === undefined) {
+        delete process.env.GIT_TRACE_PACKET;
+      } else {
+        process.env.GIT_TRACE_PACKET = traceBefore;
+      }
+    }
+    expect(readFileSync(packets, "utf8")).toMatch(/fetch> have /u);
     const changedPath = policy.changedPaths[0];
     if (!changedPath) {
       throw new Error("fixture policy must include one changed path");

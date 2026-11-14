@@ -14,6 +14,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
+import { loadAgentToolUsageOperations } from "./openclaw-agent-execution-tool-usage.worker.js";
 import {
   initializeReplacementTranscript,
   loadAgentTranscriptOperations,
@@ -524,6 +525,7 @@ export function createAgentWorkerOperationLoaders(
     "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
     "session.transcript.watermark.read": loadAgentTranscriptReadOperations,
     "session.transcript.visibleDelta.read": loadAgentTranscriptReadOperations,
+    "session.transcript.replayGroups.read": loadAgentTranscriptReadOperations,
     "session.transcript.memoryCapture.read": loadAgentTranscriptReadOperations,
     "session.transcript.anchors.read": loadAgentTranscriptReadOperations,
     "session.transcript.coldMetadata.read": loadAgentTranscriptReadOperations,
@@ -544,6 +546,10 @@ export function createAgentWorkerOperationLoaders(
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
+    "toolUsage.prune": loadAgentToolUsageOperations,
+    "toolUsage.flush": loadAgentToolUsageOperations,
+    "toolUsage.reset": loadAgentToolUsageOperations,
+    "toolUsage.import": loadAgentToolUsageOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.writeQuarters": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,

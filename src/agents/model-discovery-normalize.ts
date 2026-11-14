@@ -3,10 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
-import {
-  applyProviderResolvedTransportWithPlugin,
-  normalizeProviderResolvedModelWithPlugin,
-} from "../plugins/provider-runtime.js";
+import { createProviderModelNormalizer } from "../plugins/provider-model-normalization.js";
 
 type NormalizeDiscoveredModelOptions = {
   config?: OpenClawConfig;
@@ -14,37 +11,23 @@ type NormalizeDiscoveredModelOptions = {
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 };
 
-/** Applies plugin model normalization and transport hooks to discovered agent models. */
-export function normalizeDiscoveredAgentModel(
-  model: Model,
+/** The caller owns one synchronous catalog pass; no provider selection survives it. */
+export function createDiscoveredAgentModelNormalizer(
   agentDir: string,
   options?: NormalizeDiscoveredModelOptions,
-): Model {
-  const runtimeContext = {
+): (model: Model) => Model {
+  const normalize = createProviderModelNormalizer({
     ...(options?.config !== undefined ? { config: options.config } : {}),
     ...(options?.workspaceDir !== undefined ? { workspaceDir: options.workspaceDir } : {}),
-  };
-  const pluginNormalized =
-    normalizeProviderResolvedModelWithPlugin({
-      provider: model.provider,
-      ...runtimeContext,
-      context: {
+  });
+  return (model) =>
+    normalizeModelCompat(
+      normalize({
         provider: model.provider,
         modelId: model.id,
         model,
         agentDir,
-      },
-    }) ?? model;
-  const transportNormalized =
-    applyProviderResolvedTransportWithPlugin({
-      provider: model.provider,
-      ...runtimeContext,
-      context: {
-        provider: model.provider,
-        modelId: model.id,
-        model: pluginNormalized,
-        agentDir,
-      },
-    }) ?? pluginNormalized;
-  return normalizeModelCompat(transportNormalized, options?.providerMetadataOwners);
+      }),
+      options?.providerMetadataOwners,
+    );
 }

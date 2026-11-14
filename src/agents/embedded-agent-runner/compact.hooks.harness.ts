@@ -24,6 +24,7 @@ import {
 import {
   acquireCompactHooksPreparedModelRuntime,
   createCompactHooksResolvedModel,
+  createDefaultCompactionAuthStore,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksContextEngine,
   mockCompactHooksPluginMetadata,
@@ -270,19 +271,6 @@ export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown>
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
 const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
-function createDefaultCompactionAuthStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:test": {
-        type: "api_key",
-        provider: "openai",
-        key: "test",
-      },
-    },
-    order: { openai: ["openai:test"] },
-  };
-}
 
 export const ensureAuthProfileStoreMock: Mock<() => AuthProfileStore> = vi.fn(
   createDefaultCompactionAuthStore,

@@ -86,9 +86,11 @@ function measureTableOverflow(shell: HTMLElement, bounds: TableBounds): (() => v
     return undefined;
   }
   const { viewport, table, offset } = bounds;
-  const position =
-    getComputedStyle(bounds.element).direction === "rtl" ? table - viewport + offset : offset;
   const overflows = table - viewport > 1;
+  const position =
+    overflows && getComputedStyle(bounds.element).direction === "rtl"
+      ? table - viewport + offset
+      : offset;
   return () => {
     shell.classList.toggle("markdown-table--can-scroll-left", overflows && position > 1);
     shell.classList.toggle(

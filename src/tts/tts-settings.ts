@@ -341,6 +341,7 @@ function renderTtsSystemPromptHint(
     return undefined;
   }
   const structured = messageToolOnly === true;
+  const overrides = settings.config.modelOverrides.enabled;
   const autoHint =
     settings.autoMode === "inbound"
       ? "Only use TTS when the user's last message includes audio/voice."
@@ -358,10 +359,14 @@ function renderTtsSystemPromptHint(
     `Keep spoken text ≤${settings.maxLength} chars to avoid auto-summary (summary ${settings.summarize ? "on" : "off"}).`,
     structured
       ? "If workspace context (especially MEMORY.md) tells you not to use TTS or to use a local voice workflow, follow that workspace instruction instead."
-      : "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
+      : overrides || settings.autoMode === "tagged"
+        ? "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead."
+        : undefined,
     structured
       ? "Use message(action=send) with voiceText and optional voiceProvider/voiceId."
-      : "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+      : overrides
+        ? "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness."
+        : undefined,
   ]
     .filter(Boolean)
     .join("\n");

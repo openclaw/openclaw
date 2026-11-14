@@ -792,7 +792,20 @@ describe("gateway agent handler chat.abort integration", () => {
     }
   });
 
-  it("does not recreate a session deleted during slow attachment setup", async () => {
+  it.each([
+    {
+      name: "does not recreate a session deleted during slow attachment setup",
+      runId: "idem-delete-during-attachment-setup",
+      reset: false,
+      expectedMessage: 'Session "agent:main:main" was deleted while starting work. Retry.',
+    },
+    {
+      name: "does not dispatch into a session reset during slow attachment setup",
+      runId: "idem-reset-during-attachment-setup",
+      reset: true,
+      expectedMessage: 'Session "agent:main:main" changed while starting work. Retry.',
+    },
+  ])("$name", async ({ runId, reset, expectedMessage }) => {
     const sessionKey = "agent:main:main";
     const persistedEntry = {
       sessionId: "existing-session-id",
@@ -802,53 +815,7 @@ describe("gateway agent handler chat.abort integration", () => {
       providerOverride: "test",
       modelOverride: "vision-model",
     };
-    let deleted = false;
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      entry: deleted ? undefined : persistedEntry,
-      canonicalKey: sessionKey,
-    }));
-    mocks.updateSessionStore.mockClear();
-    mocks.agentCommand.mockClear();
-
-    const { context, releaseCatalog } = createHeldVisionCatalog();
-    const respond = vi.fn();
-    const runId = "idem-delete-during-attachment-setup";
-    const pending = invokeAgent(
-      {
-        message: "inspect this",
-        agentId: "main",
-        sessionKey,
-        idempotencyKey: runId,
-        attachments: pixelAttachments(),
-      },
-      { context, respond, reqId: runId, flushDispatch: false },
-    );
-
-    await waitForAssertion(() => expect(context.loadGatewayModelCatalog).toHaveBeenCalled());
-    deleted = true;
-    releaseCatalog();
-    await pending;
-
-    expectRespondError(respond, {
-      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
-    });
-    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-  });
-
-  it("does not dispatch into a session reset during slow attachment setup", async () => {
-    const sessionKey = "agent:main:main";
-    const persistedEntry = {
-      sessionId: "existing-session-id",
-      updatedAt: Date.now(),
-      model: "vision-model",
-      modelProvider: "test",
-      providerOverride: "test",
-      modelOverride: "vision-model",
-    };
-    let currentEntry = persistedEntry;
+    let currentEntry: typeof persistedEntry | undefined = persistedEntry;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
       storePath: getAgentTestStorePath(),
@@ -860,7 +827,6 @@ describe("gateway agent handler chat.abort integration", () => {
 
     const { context, releaseCatalog } = createHeldVisionCatalog();
     const respond = vi.fn();
-    const runId = "idem-reset-during-attachment-setup";
     const pending = invokeAgent(
       {
         message: "inspect this",
@@ -873,12 +839,12 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     await waitForAssertion(() => expect(context.loadGatewayModelCatalog).toHaveBeenCalled());
-    currentEntry = { ...persistedEntry, sessionId: "reset-session-id" };
+    currentEntry = reset ? { ...persistedEntry, sessionId: "reset-session-id" } : undefined;
     releaseCatalog();
     await pending;
 
     expectRespondError(respond, {
-      message: `Session "${sessionKey}" changed while starting work. Retry.`,
+      message: expectedMessage,
     });
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(mocks.agentCommand).not.toHaveBeenCalled();

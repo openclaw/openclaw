@@ -76,16 +76,19 @@ later. This is recommended bookkeeping, not another release gate.
 
 FRV must conclude **success** under pinned P's
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
-Only exact failed live-provider or Telegram leaves may be waived, without
-skipping tests or changing C/Q. All other required lanes must succeed: Windows
+Apply only the exact exceptions in that policy, including its operator-authorized
+Kova grants; preserve each grant’s version, job, and optional attempt restrictions.
+A failed-job grant is not permission to skip the job or change C/Q. All other
+required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
 and Linux/Windows/macOS Gateway checks, including Windows packaged
 install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
 first failures and classify each one as below before recovery. Stable
 publication requires stable/full evidence, soak, and blocking performance.
-Beta-profile evidence cannot authorize stable publication. None of those hard
-gates, soak, or performance can be waived. All nine Gateway install/upgrade
+Beta-profile evidence cannot authorize stable publication. Hard gates and soak
+remain mandatory; performance exceptions are limited to the checked-in policy.
+All nine Gateway install/upgrade
 combinations across Linux, Windows, and macOS are required for all-group
 qualification. Preserve identity, provenance, complete evidence, and existing
 publication approvals.
@@ -218,7 +221,7 @@ an unresolved repair. List every PR created during the release (`gh pr list --au
 each repair PR with a reason; confirm its fix is on `main` and, when it is release
 tooling, on the release branch. Also remove the release's temporary worktrees,
 abandoned local cut branches, and stale `scripts/pr` worktrees. Then write the
-[retrospective](references/retrospective.md) and open its `openclaw/maintainers`
+[retrospective](references/retrospective.md) and open its `openclaw/tideclaw`
 PR with the issue-ledger update; keep a findings notes file from the start of the
 release so it can be written from evidence.
 
@@ -229,9 +232,15 @@ failures, repair their owner, retry the affected surface, then reassess rather
 than repeating the full release.
 
 Required publication proofs and enforced environment approvals remain required.
-A passing sibling cannot replace missing required evidence. npm + ClawHub is the
-priority path. macOS, Windows, Linux, and Android native publication runs in
-parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
+A passing sibling cannot replace missing required evidence. Successfully publish
+selected npm plugins before core npm. ClawHub publication starts at its existing
+dispatch point but runs independently from then on: planning, authorization,
+dispatch, publication, verification, and recovery never gate core npm, GitHub
+release finalization, main closeout, or the retrospective PR. Retain a separate
+owner, run/attempt, status, and follow-up for pending or failed ClawHub work; do
+not report it as complete. macOS, Windows, Linux, and Android native publication
+also runs in parallel and never gates npm/ClawHub, GitHub release finalization,
+or main closeout.
 Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
 block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.

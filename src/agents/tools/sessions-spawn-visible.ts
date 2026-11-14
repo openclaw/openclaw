@@ -92,13 +92,16 @@ export async function maybeSpawnVisibleSession(
   ) {
     throw new ToolInputError(
       'Omit placement for local execution or use {kind: "local"} with no cloud selectors. ' +
-        'For a configured cloud profile, use {kind: "profile", profileId, os?, machineClass?} with non-empty selectors, visible=true, and worktree=true.',
+        'For a configured cloud profile, use {kind: "profile", profileId, os?, machineClass?} with non-empty selectors; for a paired device, use {kind: "device", deviceId}. Both need visible=true and worktree=true.',
     );
   }
-  const placement = requestedPlacement?.kind === "profile" ? requestedPlacement : undefined;
+  const placement =
+    requestedPlacement?.kind === "profile" || requestedPlacement?.kind === "device"
+      ? requestedPlacement
+      : undefined;
   if (placement && (params.raw.visible !== true || !worktree)) {
     throw new ToolInputError(
-      `Cloud placement requires visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
+      `Cloud and device placement require visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
     );
   }
   // Hidden native checkout selectors only apply when worktree is explicitly enabled.
@@ -532,9 +535,14 @@ export async function maybeSpawnVisibleSession(
           cfg,
           key: childSessionKey,
           sessionId,
-          profileId: placement.profileId,
-          os: placement.os,
-          machineClass: placement.machineClass,
+          target:
+            placement.kind === "device"
+              ? { deviceId: placement.deviceId }
+              : {
+                  profileId: placement.profileId,
+                  ...(placement.os ? { os: placement.os } : {}),
+                  ...(placement.machineClass ? { machineClass: placement.machineClass } : {}),
+                },
           task: taskMessage,
           runTimeoutSeconds,
           callGateway: cloudGatewayCall,

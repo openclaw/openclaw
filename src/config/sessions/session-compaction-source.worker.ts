@@ -14,14 +14,17 @@ import {
   prepareCompactionSafeguardSource,
   type SafeguardMessageSource,
 } from "../../agents/agent-hooks/compaction-safeguard-source.js";
-import { SAFETY_MARGIN, sanitizeCompactionMessages } from "../../agents/compaction-planning.js";
+import { sanitizeCompactionMessages } from "../../agents/compaction-planning.js";
 import { createRealConversationClassifier } from "../../agents/compaction-real-conversation.js";
 import {
   assertCompactionRequestCanFit,
   resolveCompactionRetentionBudget,
-  estimateCompactionHistoryTokens,
   estimateCompactedRequestTokens,
 } from "../../agents/sessions/compaction/request-budget.js";
+import {
+  SAFETY_MARGIN,
+  estimateCompactionHistoryTokens,
+} from "../../agents/sessions/context-token-pressure.js";
 import { beginEngineStoreReadSnapshot } from "../../infra/database-engine/adapters.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";

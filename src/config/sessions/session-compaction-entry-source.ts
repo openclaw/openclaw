@@ -3,6 +3,7 @@ import {
   getMessageFromEntryForCompaction,
 } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import type { CompactionEntrySource } from "../../../packages/agent-core/src/harness/compaction/compaction-entry-source.js";
+import { prepareCompactionFloorMessage } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import type { CompactionContextProjection } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
   prepareFileOperationMessage,
@@ -14,8 +15,8 @@ import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { prepareSafeguardMessage } from "../../agents/agent-hooks/compaction-safeguard-source.js";
 import { sanitizeCompactionMessages } from "../../agents/compaction-planning.js";
-import { estimateCompactionHistoryTokens } from "../../agents/sessions/compaction/request-budget.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.types.js";
+import { estimateCompactionHistoryTokens } from "../../agents/sessions/context-token-pressure.js";
 import type { TranscriptContextSnapshot } from "./session-accessor.sqlite-model-context.js";
 
 /** Compaction consumes the replay owner's navigation and full-fidelity lazy reads. */
@@ -33,6 +34,7 @@ export function createSessionCompactionEntrySource(
     return {
       tokens: budget ? estimateCompactionHistoryTokens([message], budget) : tokens,
       fileOperations: prepareFileOperationMessage(message),
+      floor: prepareCompactionFloorMessage(message),
       safeguard: prepareSafeguardMessage(
         message,
         llm ? prepareConversationMessage(llm) : undefined,
@@ -64,6 +66,7 @@ export function createSessionCompactionEntrySource(
   const source: CompactionEntrySource = {
     length: entries.length,
     metadata: (index) => entries[index],
+    floor: (index) => getFacts(entries[index]?.id)?.floor,
     tokens: (index) => getFacts(entries[index]?.id)?.tokens ?? 0,
     fileOperations: (index) => getFacts(entries[index]?.id)?.fileOperations,
     get(index) {

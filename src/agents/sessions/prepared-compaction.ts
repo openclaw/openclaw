@@ -1,7 +1,10 @@
 import {
   compactWithoutSummary,
   type CompactionPreparation,
+  type CompactionResult,
+  type CompactionDetails,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { err, ok, type Result } from "../../../packages/agent-core/src/harness/types.js";
 import { createSessionManagerRuntimeRegistry } from "../agent-hooks/session-manager-runtime-registry.js";
 import type { PreparedCompaction } from "./prepared-compaction.types.js";
 
@@ -12,18 +15,13 @@ export const getPreparedCompaction = registry.get;
 export function resolveCompactionFallback(
   preparation: CompactionPreparation,
   prepared: PreparedCompaction | null,
-) {
+): Result<CompactionResult<CompactionDetails>, Error> {
   if (!prepared) {
-    const fallback = compactWithoutSummary(preparation);
-    if (!fallback.ok) {
-      throw fallback.error;
-    }
-    return fallback.value;
+    return compactWithoutSummary(preparation);
   }
-  if (!prepared.fallback) {
-    throw new Error(
-      prepared.fallbackError ?? "Prepared compaction cannot fit its fallback summary",
-    );
-  }
-  return prepared.fallback;
+  return prepared.fallback
+    ? ok(prepared.fallback)
+    : err(
+        new Error(prepared.fallbackError ?? "Prepared compaction cannot fit its fallback summary"),
+      );
 }

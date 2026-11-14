@@ -1,14 +1,8 @@
-import {
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-  appendFileSync,
-  readFileSync,
-  existsSync,
-} from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import packageJson from "../package.json" with { type: "json" };
+import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
 import {
   commitArgs,
   createContentGuardFixture,
@@ -21,9 +15,10 @@ import { cleanupTempDirs } from "./helpers/temp-dir.js";
 import { installLineCapToolingFixture } from "./scripts/tooling-dependencies.test-support.mts";
 
 const tempDirs: string[] = [];
+const { environment } = pnpmLockfileDocuments(fs.readFileSync("pnpm-lock.yaml", "utf8"));
 afterEach(() => cleanupTempDirs(tempDirs));
 let dir: string;
-const write = (name: string, text: string) => writeFileSync(path.join(dir, name), text);
+const write = (name: string, text: string) => fs.writeFileSync(path.join(dir, name), text);
 const writeScripts = (scripts: Record<string, string>) =>
   write("package.json", JSON.stringify({ packageManager: packageJson.packageManager, scripts }));
 
@@ -31,9 +26,12 @@ const writeScripts = (scripts: Record<string, string>) =>
 // checker is a fixture that echoes working-tree bytes like markdownlint's MD051 context.
 beforeEach(() => {
   dir = createContentGuardFixture(tempDirs);
+  // pnpm resolves its own pin even for `run`; reuse its locked metadata without registry access.
+  write("pnpm-workspace.yaml", "offline: true\nfrozenLockfile: true\n");
+  write("pnpm-lock.yaml", `---\n${environment}\n---\nlockfileVersion: '9.0'\nimporters: {}\n`);
   const script = path.join(dir, "scripts/pre-commit/check-staged-freshness.mts");
-  rmSync(script);
-  symlinkSync(path.join(process.cwd(), "scripts/pre-commit/check-staged-freshness.mts"), script);
+  fs.rmSync(script);
+  fs.symlinkSync(path.join(process.cwd(), "scripts/pre-commit/check-staged-freshness.mts"), script);
   writeScripts({
     "lint:docs": "node lint-docs.cjs",
     "protocol:check": "node protocol-check.cjs",
@@ -60,9 +58,9 @@ process.exit(1);
 
 describe("pre-commit freshness checks", () => {
   it("runs the real code-only ratchet and rejects staged growth despite an under-cap worktree", () => {
-    rmSync(path.join(dir, "node_modules"), { recursive: true });
+    fs.rmSync(path.join(dir, "node_modules"), { recursive: true });
     const { env } = installLineCapToolingFixture(dir);
-    stage(dir, "package.json", readFileSync(path.join(dir, "package.json")));
+    stage(dir, "package.json", fs.readFileSync(path.join(dir, "package.json")));
     stage(
       dir,
       ".oxlintrc.json",
@@ -71,7 +69,7 @@ describe("pre-commit freshness checks", () => {
     const underCap = "export const a = 1;\nexport const b = 2;\n";
     stage(dir, "src/line-cap.ts", underCap);
     run(dir, "/bin/bash", ["git-hooks/pre-commit"], env);
-    expect(existsSync(path.join(dir, "node_modules"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, "node_modules"))).toBe(false);
 
     stage(dir, "src/line-cap.ts", underCap + "export const c = 3;\nexport const d = 4;\n");
     write("src/line-cap.ts", underCap);
@@ -79,8 +77,8 @@ describe("pre-commit freshness checks", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("src/line-cap.ts: 3 -> 4 counted lines (cap 3)");
     expect(result.stderr).toContain("line-cap growth ratchet failed");
-    expect(readFileSync(path.join(dir, "src/line-cap.ts"), "utf8")).toBe(underCap);
-    expect(existsSync(path.join(dir, "node_modules"))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, "src/line-cap.ts"), "utf8")).toBe(underCap);
+    expect(fs.existsSync(path.join(dir, "node_modules"))).toBe(false);
   });
 
   it("runs compound package scripts through the pinned pnpm CLI", () => {
@@ -115,14 +113,14 @@ process.exit(${exitCode});`,
       expect(result.stderr).toContain("package-script checker ran");
       expect(result.stderr).toContain("docs markdown lint failed (pnpm lint:docs)");
     }
-    expect(JSON.parse(readFileSync(path.join(dir, "checker-args.json"), "utf8"))).toEqual([
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "checker-args.json"), "utf8"))).toEqual([
       "--no-globs",
       "docs/page with spaces.md",
     ]);
   });
   it("skips a check whose staged input also has unstaged edits", () => {
     stage(dir, "docs/page.md", "# Page\n\nClean line.\n");
-    appendFileSync(path.join(dir, "docs/page.md"), `[link](#${literals[0]})\n`);
+    fs.appendFileSync(path.join(dir, "docs/page.md"), `[link](#${literals[0]})\n`);
 
     const output = run(dir, "bash", ["git-hooks/pre-commit"]);
 
@@ -140,7 +138,7 @@ process.exit(${exitCode});`,
     );
 
     // protocol-gen imports this owner, but it is not a protocol trigger path.
-    appendFileSync(
+    fs.appendFileSync(
       path.join(dir, "src/gateway/methods/core-method-policy.ts"),
       "export const = ;\n",
     );

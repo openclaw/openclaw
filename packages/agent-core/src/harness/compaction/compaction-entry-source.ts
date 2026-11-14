@@ -1,4 +1,5 @@
 import type { SessionTreeEntry } from "../types.js";
+import type { CompactionFloorMessage } from "./compaction-floor.js";
 import type { FileOperationMessage } from "./utils.js";
 
 /** Stable indexed transcript snapshot; callers need not retain hydrated payloads. */
@@ -13,6 +14,7 @@ export interface CompactionEntrySource {
   get(index: number): SessionTreeEntry | undefined;
   /** Prepared cost in the active retention estimator's units. */
   tokens?(index: number): number;
+  floor?(index: number): CompactionFloorMessage | undefined;
   /** Prepared file-operation inputs; no transcript text or replay payloads. */
   fileOperations?(index: number): FileOperationMessage | undefined;
 }

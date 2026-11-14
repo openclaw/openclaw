@@ -26,6 +26,7 @@ const enNewSessionRuntime = {
     followUpsAdmissionFailed:
       "Your follow-up messages are held. Retry them after checking browser storage.",
     createFailed: "Couldn't create the session.",
+    retrySetup: "Retry setup",
     preferenceSaveUnconfirmed:
       "Saving your new-session choices could not be confirmed. Check them before starting a session.",
     worktreeNameClearUnconfirmed:

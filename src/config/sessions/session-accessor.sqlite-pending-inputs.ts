@@ -29,6 +29,7 @@ import { SessionPendingInputCustodyError } from "./session-pending-input-custody
 import {
   collectForeignLiveSessionPendingInputEntries,
   copySessionPendingInputWorkerFacts,
+  hydratePendingInputWorkerOwner,
   publishConsumedSessionPendingInputSources,
   publishSessionPendingInputWorkerReceipt,
 } from "./session-pending-input-live-owner.js";
@@ -85,16 +86,7 @@ export function runWithSessionPendingInputWorkerCustody<T>(
   assertCurrent: () => void,
   run: () => T,
 ): { value: T; receipt: SessionPendingInputWorkerReceipt } {
-  const hydrate = (current: SessionPendingInputWorkerFacts): SessionPendingInputOwner => ({
-    ...current,
-    workerDatabasePath: current.databasePath,
-    sources: current.sources?.map(hydrate),
-    assertCurrent,
-    finish: () => {
-      throw new Error("Worker custody cannot finish its host owner");
-    },
-  });
-  const owner = hydrate(facts);
+  const owner = hydratePendingInputWorkerOwner(facts, assertCurrent);
   const value = workerCustody.run({ owner, assertCurrent, consumed: new Set() }, () =>
     owners.current.run(owner, () =>
       relocation === undefined
@@ -169,6 +161,7 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   // Timers can retain this owner through their async frame after settlement.
   // Keep replay facts, but release the admission and staging closures.
   owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
+  owner.assertMentionInvitationCurrent = undefined;
   owner.finish = () => {};
   owner.authority = undefined;
   owner.promotedOwner = undefined;
@@ -216,6 +209,9 @@ function assertPendingInputOwnerCurrent(
     owner.authority.withPreparedCurrent(facts, owner.assertCurrent, assertSourceCurrent);
   } else {
     owner.assertCurrent();
+  }
+  if (!owner.consumed) {
+    owner.assertMentionInvitationCurrent?.();
   }
 }
 
@@ -298,12 +294,12 @@ export function hasRegisteredSessionPendingInputOwner(
 }
 
 /** Durable queued text is visible only while its ordinary input owner is live. */
-export function listLiveSessionPendingInputIds(
+export function listLiveSessionPendingInputs(
   databasePath: string,
   sessionKey: string,
   sessionId: string,
   queuedOnly = false,
-): string[] {
+): Pick<SessionPendingInputOwner, "inputId" | "runId" | "recoverySource">[] {
   return [...owners.live.values()]
     .filter(
       (owner) =>
@@ -313,7 +309,11 @@ export function listLiveSessionPendingInputIds(
         (!queuedOnly || (!owner.consumed && !owner.settling)) &&
         (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)),
     )
-    .map((owner) => owner.inputId);
+    .map((owner) => ({
+      inputId: owner.inputId,
+      runId: owner.runId,
+      recoverySource: owner.recoverySource,
+    }));
 }
 
 /** Called after the exact IDs commit in the session marker, before shutdown cancellation. */
@@ -375,11 +375,10 @@ export function writeSessionInputCompletion(
   if (retained && isFinalInputCompletion(retained.outcome)) {
     return retained.outcome;
   }
-  const succeeded = classifyAgentRunTerminalOutcome(outcome) === "success";
   const completedAt = Date.now();
   const completionState = {
     outcome_json: JSON.stringify(outcome),
-    succeeded: succeeded ? 1 : 0,
+    succeeded: classifyAgentRunTerminalOutcome(outcome) === "success" ? 1 : 0,
     completed_at: completedAt,
   };
   executeSqliteQuerySync(
@@ -640,6 +639,13 @@ export function resolveSessionPendingInputAppend(
       inputId: transcriptInputId,
       message: parseSessionPendingInputMessage(owner.messageJson),
       alreadyPromoted,
+      ...(!alreadyPromoted
+        ? {
+            mentionInvitations: owner.sources.flatMap((source) =>
+              source.mentionInvitation ? [source.mentionInvitation] : [],
+            ),
+          }
+        : {}),
       sourceInputIds: sources.map((source) => source.input_id),
       ...(alreadyPromoted && stageRelocation ? { stageRelocation } : {}),
     };
@@ -653,6 +659,7 @@ export function resolveSessionPendingInputAppend(
     inputId: transcriptInputId,
     message: parseSessionPendingInputMessage(row?.message_json ?? owner.messageJson),
     alreadyPromoted: !row,
+    ...(row && owner.mentionInvitation ? { mentionInvitations: [owner.mentionInvitation] } : {}),
     ...(!row && stageRelocation ? { stageRelocation } : {}),
   };
 }

@@ -4,6 +4,11 @@ import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { CompactionError, err, ok, type Result } from "../types.js";
 import type { CompactionDetails } from "./compaction-details.js";
+import {
+  buildCompactionFloor,
+  renderCompactionFloor,
+  type PreparedCompactionFloor,
+} from "./compaction-floor.js";
 import type { IndexedCompactionPreparation } from "./compaction-preparation.js";
 import {
   capCompactionSummary,
@@ -22,7 +27,7 @@ import {
   type FileOperations,
   formatCompactionUserLabel,
   formatFileOperations,
-  getCompactionContent,
+  extractCompactionMessageText,
   removeGeneratedCompactionSection,
 } from "./utils.js";
 
@@ -208,6 +213,8 @@ export async function generateSummary(
 }
 
 export interface CompactionPreparation {
+  /** Bounded deterministic record prepared while the worker owns the payloads. */
+  floor?: PreparedCompactionFloor;
   /** Remaining foreground summary tokens, independent of the summarizer's context window. */
   summaryTokenBudget?: number;
   /** Entry id where retained history starts. */
@@ -344,13 +351,13 @@ export function compactWithoutSummary(
         : prefix.length - 1;
     for (let index = lastUserIndex; index >= 0; index--) {
       const message = Array.isArray(prefix) ? prefix[index] : prefix.get(index);
-      if (message?.role === "user" && getCompactionContent(message.content).text.trim()) {
+      if (message?.role === "user" && extractCompactionMessageText(message)) {
         sourceMessage = message;
         break;
       }
     }
   }
-  const sourceText = sourceMessage ? getCompactionContent(sourceMessage.content).text : "";
+  const sourceText = sourceMessage ? extractCompactionMessageText(sourceMessage) : "";
   const sourceLabel = sourceMessage ? formatCompactionUserLabel(sourceMessage) : "User";
   const sourceAsk = sourceMessage
     ? formatRequiredAskContext(
@@ -359,11 +366,19 @@ export function compactWithoutSummary(
     : "";
   // Keep the notice and bounded source ask; shrink only the carried summary.
   const requiredContext =
-    `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; ask the user if older details matter.]\n\n` +
+    `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; the removed messages remain in this session's stored transcript. When session history tools are available, read them there before asking the user to repeat earlier details.]\n\n` +
     (sourceAsk ? `## Original request of the current turn\n${JSON.stringify(sourceAsk)}\n\n` : "");
+  // The floor leads the shrinkable body, so a constrained budget trims the carried summary first.
+  const floor = preparation.floor
+    ? renderCompactionFloor(preparation.floor)
+    : buildCompactionFloor([
+        ...(Array.isArray(preparation.messagesToSummarize) ? preparation.messagesToSummarize : []),
+        ...(Array.isArray(preparation.turnPrefixMessages) ? preparation.turnPrefixMessages : []),
+      ]);
+  const carriedSummary = previousSummaryWithoutFileOperations(preparation) ?? "";
   return finalizeCompaction(
     preparation,
-    previousSummaryWithoutFileOperations(preparation) ?? "",
+    [floor, carriedSummary].filter(Boolean).join("\n\n"),
     "",
     requiredContext,
   );

@@ -16,6 +16,7 @@ import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
+import type { ReplyMessageInjectionOutcome } from "./reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "./reply/queue-policy.js";
 import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
@@ -260,6 +261,8 @@ export type GetReplyOptions = {
     | "accepted"
     | "rejected"
     | "collaborative-steering-disabled";
+  /** Original owner refusal retained through Gateway followup dispatch. */
+  messageInjectionRejection?: Extract<ReplyMessageInjectionOutcome, { status: "rejected" }>;
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -284,6 +287,8 @@ export type GetReplyOptions = {
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
+  /** Trusted installer conversation only; instruction loading still uses the workspace. */
+  deferWorkspaceBootstrap?: true;
   /**
    * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
    * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that

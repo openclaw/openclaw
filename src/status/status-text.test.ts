@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
+import * as modelsConfig from "../agents/models-config-state.js";
 import * as preparedCatalog from "../agents/prepared-model-catalog.js";
 import {
   seedSubagentRunForReadTest,
@@ -151,6 +152,33 @@ describe("prepared status", () => {
     await state.cleanup();
   });
 
+  it.each([
+    {
+      name: "recorded zero",
+      usage: { inputTokens: 100, estimatedCostUsd: 0 },
+      cost: "Cost: $0.0000",
+    },
+    {
+      name: "unavailable usage",
+      usage: { usageReport: { state: "unavailable" as const } },
+      cost: undefined,
+    },
+    { name: "no token usage", usage: {}, cost: undefined },
+  ])("renders $name without optional pricing preparation", async ({ usage, cost }) => {
+    using preparation = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
+    const text = await render({
+      ...selected,
+      thinkingCatalog: catalog,
+      sessionEntry: entry({ ...modelEntry(selected), ...usage }),
+    });
+    expect(preparation).not.toHaveBeenCalled();
+    if (cost) {
+      expect(text).toContain(cost);
+    } else {
+      expect(text).not.toContain("Cost:");
+    }
+  });
+
   it("bounds catalog identity work per status reply and renews changed provider policies", async () => {
     const entries = Array.from({ length: 24 }, (_, index) => ({
       provider: "fixture",
@@ -227,6 +255,20 @@ describe("prepared status", () => {
       );
     },
   );
+
+  it.each([
+    [undefined, "off", "channels.telegram.widgets=true"],
+    [true, "on", "Bot API 10.4 message widgets"],
+  ] as const)("renders the Telegram widgets setting (%s)", async (widgets, enabled, hint) => {
+    await expectText(
+      render({
+        cfg: { channels: { telegram: { widgets } } },
+        statusChannel: "telegram",
+        sessionEntry: entry({}),
+      }),
+      [`Telegram widgets: ${enabled}`, hint],
+    );
+  });
 
   it("shows the selected global agent's children instead of the default agent's", async () => {
     const cfg: Params["cfg"] = {

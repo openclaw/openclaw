@@ -52,7 +52,6 @@ const enLogin = {
       getCode: "Get a code",
       starting: "Requesting a pairing code…",
       waiting: "Waiting for approval. Keep this page open.",
-      identity: "Code {code} · Browser ID {id}",
       failure: {
         identityRequired:
           "This Gateway requires a verified identity. Use its normal identity-aware sign-in instead of browser code pairing.",
@@ -70,8 +69,6 @@ const enLogin = {
       noSecret: "no secret",
       change: "Change",
     },
-    showSecret: "Show Gateway secret",
-    hideSecret: "Hide Gateway secret",
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Show details",
@@ -153,6 +150,13 @@ const enLogin = {
         scopeTitle: "Approve the new access level",
         roleTitle: "Approve the new role",
         metadataTitle: "Re-approve this browser",
+        restoreTitle: "Approve this browser again",
+        restoreSummary:
+          "Couldn’t connect to {host} because this browser’s {role} access is no longer active. The request asks for the same access it had before, nothing new. Approve it on the computer running OpenClaw.",
+        roleSummary:
+          "Couldn’t connect to {host} because this browser is asking for the {role} role, which it doesn’t have yet. Approve the request on the computer running OpenClaw.",
+        scopeSummary:
+          "Couldn’t connect to {host} because this browser is asking for more access: {scopes}. Approve the request on the computer running OpenClaw.",
         summary:
           "Couldn’t connect to {host} until this browser is approved. Approve it on the computer running OpenClaw.",
         upgradeSummary:

@@ -1,8 +1,11 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
+import { commitCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
+import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
+import { settleCompactionSafeguardCancellation } from "../compaction-summary-refusal.js";
 import { textStream } from "./agent-session-boundary.test-support.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
@@ -71,6 +74,16 @@ it("keeps old payloads in the worker while serving different summary budgets and
             ]);
             expect(JSON.stringify(plan).length).toBeLessThan(30_000);
             expect(plan.facts.preparation.settings.maxSummaryChars).toBe(maxSummaryChars);
+            // The host has no removed payloads; worker facts must preserve the deterministic floor.
+            const committed = commitCompactionSummary(
+              { summary: "Archive summary" },
+              { ...plan.facts.preparation, messagesToSummarize: [], turnPrefixMessages: [] },
+              false,
+            );
+            expect(committed).toContain("Summarize the archive");
+            if (maxSummaryChars !== 1_000) {
+              expect(committed).toContain("Archive item 23");
+            }
             const preserved = plan.facts.safeguard.preservedTurnsSection.text;
             expect(preserved.length).toBeLessThanOrEqual((maxSummaryChars ?? 16_000) / 2);
             if (maxSummaryChars === 48_000) {
@@ -240,6 +253,53 @@ it("fits a worker-prepared manual summary to the foreground budget created after
               .getBranch()
               .findLast((entry) => entry.type === "compaction"),
           ).toMatchObject({ summary: result.summary });
+        },
+      );
+    });
+  }));
+
+it("records a failed required fallback after releasing the worker read", () =>
+  withTranscriptState("bounded-compaction-failed-fallback", async ({ scope }) => {
+    const manager = await SessionManager.openAsync(scope);
+    await manager.appendMessageAsync(makeUserMessage("Archive project decisions", 1));
+    await manager.appendMessageAsync(assistantText("Archived decisions. ".repeat(1000)));
+    await manager.appendMessageAsync(makeUserMessage("Continue", 3));
+    await withSessionTranscriptReadSource(scope, async (read) => {
+      await read.owner.withCompactionSource(
+        {
+          target: scope,
+          resolvedScope: read.resolved,
+          expectedIdentity: read.expectedIdentity,
+          settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+          manual: true,
+          safeguard: { recentTurnsPreserve: 3, qualityGuardEnabled: false },
+        },
+        async (plan, source) => {
+          const tail = SessionManager[sessionManagerFromCompactionSource](
+            scope,
+            [plan.header, ...plan.retained],
+            plan.version,
+            process.cwd(),
+          );
+          // A valid worker failure reply must not throw before read release and attempt recording.
+          setPreparedCompaction(tail, {
+            ...source,
+            fallback: undefined,
+            fallbackError: "No room for floor",
+          });
+          setCompactionSafeguardCancellation(tail, "Summary failed", new Error("Summary failed"));
+          await expect(
+            settleCompactionSafeguardCancellation(
+              tail,
+              { ...plan.facts.preparation, messagesToSummarize: [], turnPrefixMessages: [] },
+              { signal: new AbortController().signal, requestRequiresCompaction: true },
+            ),
+          ).resolves.toBeUndefined();
+          const reopened = await SessionManager.openAsync(scope);
+          expect(reopened.getBranch().at(-1)).toMatchObject({
+            type: "custom",
+            data: { required: true, outcome: "cancelled" },
+          });
         },
       );
     });

@@ -21,7 +21,7 @@ every spec test has protocol coverage or a named integration test.
 | 8   | Kit enrollment                                | kit decode -> R; new device recorded as approved by `root`; `kit_used` notice event; new device admitted                                                                                                           | `id-e2e: kit enrollment notifies every online owner device` (control-ui)                                       |
 | 9   | Root changes only by owner reset              | another root's binding -> `root_mismatch`; `root_epoch` other than 1 or `RootRotation` -> `malformed`; another root's signature -> `not_an_owner`; K_gw-vouched reset -> `owner_reset` (`reset.test.ts`)           | `id-e2e: a descriptor naming a new root is refused by the loader` (loader)                                     |
 | 10  | Invite link                                   | secret is only in the fragment (request target is `/join`); second redemption -> `invite_used`                                                                                                                     | `id-e2e: invite fragment never appears in Gateway, tunnel child, Discovery or relay logs` (discovery)          |
-| 11  | Redemption without approval                   | pending admits nothing; approval via mailbox -> `not_direct`; mismatched approval -> `target_mismatch`; wrong audience -> `audience_mismatch`; deny consumes                                                       | `id-e2e: approval injected through the real mailbox is refused; pending expires after 7 days` (gateway)        |
+| 11  | Redemption without approval                   | pending admits nothing; approval via mailbox -> `not_direct`; mismatched account, peer or exact role (either direction) -> `target_mismatch`; wrong audience -> `audience_mismatch`; deny consumes                 | `id-e2e: approval injected through the real mailbox is refused; pending expires after 7 days` (gateway)        |
 | 12  | Removing a member mid-run                     | removal emits `cancel_runs` for the account                                                                                                                                                                        | `id-e2e: removing a member mid-run cancels the run and keeps the transcript` (gateway)                         |
 
 The protocol tests prove the rules; they do not prove that the Gateway, tunnel child, loader
@@ -57,3 +57,12 @@ proof belongs to the consuming stack:
   leaving the dialog open must never trigger approval.
 - Node host: `openclaw node join` through the real mailbox and owner approval, pin/freshness
   verification before dialing, reconnect and WebSocket/HTTP worker traffic over the tunnel.
+
+## Opaque member roles
+
+`statements/statements.test.ts` validates arbitrary role names in invites, `add`, `set_role`
+and snapshots, and refuses malformed names at each field. Deterministic signed vectors carry
+`guest` and `support_team-2`. `acceptance/membership.test.ts` approves an exact `guest` invite,
+changes its role and mirrors the name in a snapshot; different invite/approval roles fail in
+both directions without mutating membership or consuming the invite. Role meaning belongs to
+the consuming Gateway, which must deny names it cannot resolve.

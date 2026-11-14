@@ -154,17 +154,16 @@ describe("startProxy", () => {
 
   it("redacts proxy credentials before logging the active proxy URL", async () => {
     const authenticatedUrl = new URL(proxyUrl);
-    authenticatedUrl.username = "user";
-    authenticatedUrl.password = "pass";
+    authenticatedUrl.username = "fixture-proxy-user";
+    authenticatedUrl.password = "fixture-proxy-password";
     await startProxy({ proxyUrl: authenticatedUrl.href });
     expect(logInfo).toHaveBeenCalledWith(expect.stringContaining(proxyUrl));
-    expect(
-      vi
-        .mocked(logInfo)
-        .mock.calls.some((call) =>
-          call.some((value) => typeof value === "string" && value.includes("user:pass")),
-        ),
-    ).toBe(false);
+    const loggedMessages = vi
+      .mocked(logInfo)
+      .mock.calls.map(([message]) => message)
+      .join("\n");
+    expect(loggedMessages).not.toContain(authenticatedUrl.username);
+    expect(loggedMessages).not.toContain(authenticatedUrl.password);
   });
 
   it("replaces ambient NO_PROXY with only runtime loopback destinations", async () => {
