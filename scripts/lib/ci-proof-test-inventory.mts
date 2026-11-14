@@ -397,6 +397,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/codex/src/app-server/run-attempt.configured-mcp.test.ts",
   "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
   "extensions/codex/src/app-server/run-attempt.restricted-context-continuity.test.ts",
+  "extensions/codex/src/app-server/run-attempt.startup-bootstrap.test.ts",
   "extensions/codex/src/app-server/run-attempt.durable-context.test.ts",
   "extensions/codex/src/app-server/run-attempt.dynamic-tools.test.ts",
   "extensions/codex/src/app-server/run-attempt.generation-finalization.test.ts",
