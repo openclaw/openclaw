@@ -351,7 +351,7 @@ const catalog = {
     scope: "per-sender" as const,
     agents: [
       { id: "main", name: "Assistant" },
-      { id: "research", name: "Research" },
+      { id: "research", identity: { name: "Research" } },
       { id: "support-eu", name: "Support" },
       { id: "support-us", name: "Support" },
     ],

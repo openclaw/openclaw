@@ -5,6 +5,7 @@ import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
+import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -41,10 +42,11 @@ export function NotificationAgentsRow(props: AgentRowProps) {
     const agents = props.agentCatalog?.agentsList?.agents;
     return ids
       .map((id) => {
-        const name = agents?.find((agent) => agent.id === id)?.name;
-        return name && agents?.filter((agent) => agent.name === name).length > 1
+        const agent = agents?.find((entry) => entry.id === id);
+        const name = agent ? normalizeAgentLabel(agent) : id;
+        return (agents?.filter((entry) => normalizeAgentLabel(entry) === name).length ?? 0) > 1
           ? `${name} (${id})`
-          : name || id;
+          : name;
       })
       .join(", ");
   };
@@ -117,7 +119,7 @@ function AgentSelectionDialog(
     const agents = props.agentCatalog?.agentsList?.agents ?? [];
     const options = agents.map((agent) => ({
       id: agent.id,
-      name: agent.name || agent.id,
+      name: normalizeAgentLabel(agent),
       available: true,
     }));
     for (const id of new Set([...(props.agentIds ?? []), ...props.selection.ids])) {
