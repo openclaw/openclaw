@@ -21,7 +21,9 @@ import { getUserProfileListItem } from "../state/user-profile-list-item.test-sup
 import * as userProfileList from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
+  ensureCanonicalUserProfileForOpenClawIdIdentity,
   linkCanonicalUserProfileEmail,
+  mergeCanonicalUserProfiles,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
 import {
@@ -572,7 +574,7 @@ it.each([{}, { kind: "unknown" }, { kind: "member", peerKey: "invalid" }])(
   },
 );
 
-it.each(forBackends(["live grant", "revoked grant"] as const))(
+it.each(forBackends(["live grant", "revoked grant", "linked profile"] as const))(
   "retries a historical non-null-grant $backend request as a member with $change",
   async ({ backend, change }) => {
     const f = configurePublicationMember(await fixture(backend));
@@ -581,6 +583,14 @@ it.each(forBackends(["live grant", "revoked grant"] as const))(
     const { original, claim, input, queued } = await queueGuest(f, "historical-member-retry");
     expect(original.requester.snapshot.openclawIdPrincipal).toBeUndefined();
     expect(original.requester.snapshot.grant?.pluginId).toBe("visitor-access");
+    const historical = { ...original.requester.snapshot, authenticationSource: undefined };
+    f.replaceRequesterSnapshot(queued.requestId, encodeGitHubPublicationRequester(historical));
+    if (change === "linked profile") {
+      const linked = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+        accountId: f.principal.accountId,
+      });
+      await mergeCanonicalUserProfiles(linked.id, f.guestProfile);
+    }
     const retry = await f.capture();
     expect(retry.requester.snapshot.openclawIdPrincipal).toEqual(f.principal);
     expect(retry.requester.snapshot.grant).toBeNull();
@@ -589,10 +599,8 @@ it.each(forBackends(["live grant", "revoked grant"] as const))(
       requester: retry.requester,
     });
     expect(retried.requestId).toBe(queued.requestId);
-    expect(f.readRequester(queued.requestId)).toEqual(original.requester.snapshot);
-    expect(
-      matchesGitHubPublicationRequester(original.requester.snapshot, retry.requester.snapshot),
-    ).toBe(true);
+    expect(f.readRequester(queued.requestId)).toEqual(historical);
+    expect(matchesGitHubPublicationRequester(historical, retry.requester.snapshot)).toBe(true);
     if (change === "revoked grant") {
       await visitors.execute("visitor_revoke", { email });
       expect(retry.requester.assertCurrent).not.toThrow();
@@ -604,9 +612,14 @@ it.each(forBackends(["live grant", "revoked grant"] as const))(
     expect(await restarted.readAsync(queued.requestId)).toMatchObject({
       status: change === "live grant" ? "published" : "failed",
     });
-    expect(f.readRequester(queued.requestId)).toEqual(original.requester.snapshot);
+    if (change === "linked profile") {
+      expect(await restarted.readAsync(queued.requestId)).toMatchObject({
+        code: "identity_changed",
+      });
+    }
+    expect(f.readRequester(queued.requestId)).toEqual(historical);
     expect(f.publishedTitles).toEqual(change === "live grant" ? [input.title] : []);
-    if (change === "revoked grant") {
+    if (change !== "live grant") {
       expect(f.externalWrites).toEqual([]);
     }
   },
