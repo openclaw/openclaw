@@ -7,7 +7,6 @@ import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-c
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { WORKSHOP_PUBLISH_TIMEOUT_MS } from "./plugin-availability.ts";
 import { createContext, createRuntimeConfigStub } from "./skill-workshop-page.test-support.ts";
 import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
 
@@ -268,7 +267,7 @@ describe("without the skill-workshop plugin", () => {
     const timers: Array<{ run: () => void; delay?: number }> = [];
     const realSetTimeout = globalThis.setTimeout;
     vi.spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay?: number) => {
-      if (delay === WORKSHOP_PUBLISH_TIMEOUT_MS) {
+      if (delay === 15_000) {
         timers.push({ run, delay });
         return 0 as unknown as ReturnType<typeof setTimeout>;
       }
