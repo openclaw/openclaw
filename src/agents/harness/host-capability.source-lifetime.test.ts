@@ -12,8 +12,11 @@ import {
 } from "../../infra/exec-request-context.js";
 import {
   createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -22,6 +25,7 @@ import {
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { testTool } from "./host-capability.shard.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
+import { bindHarnessHostSourceAuthority } from "./host-source-authority.js";
 
 const cleanup: Array<() => void> = [];
 
@@ -54,11 +58,86 @@ function bindModel(retained: ReturnType<typeof retain>) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const release of cleanup.splice(0).toReversed()) {
     release();
   }
   resetAgentRunRegistryForTest();
 });
+
+it.each([
+  ["host closed", "host_closed"],
+  ["admission closed", "admitted_source_refused"],
+  ["operator revoked", "admitted_source_refused"],
+] as const)(
+  "diagnoses %s once while blocking repeated host effects",
+  async (revocation, reason) => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    let active = true;
+    const source = createAdmittedRunOperatorAuthority({
+      profileId: "synthetic-private-profile",
+      scopes: ["operator.write"],
+      assertCurrent: () => {
+        if (!active) {
+          throw new Error("synthetic-private-token https://private.invalid");
+        }
+      },
+    });
+    const host = await createSourceHost(source);
+    expect(() => host.hostCapabilities.assertActive()).not.toThrow();
+    expect(warn).not.toHaveBeenCalled();
+    if (revocation === "host closed") {
+      host.closeHost();
+    } else if (revocation === "admission closed") {
+      host.closeAdmission();
+    } else {
+      active = false;
+    }
+    for (let i = 0; i < 2; i++) {
+      expect(() => host.hostCapabilities.assertActive()).toThrow("no longer active");
+    }
+    expect(warn.mock.calls).toEqual([
+      ["agent harness host source denied", { reason, runId: "retained-source" }],
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/synthetic-private|private.invalid/);
+  },
+);
+
+it.each(["admitted_source_missing", "operational_run_replaced", "gateway_stale"] as const)(
+  "keeps the exact host guard branch for %s",
+  async (reason) => {
+    const host = await createSourceHost();
+    const delegatedAuthority = getAdmittedRunDelegatedAuthority(host.admittedRunContext);
+    assert(delegatedAuthority);
+    const attempt = { ...host.attempt };
+    let gatewayCurrent = true;
+    if (reason === "admitted_source_missing") {
+      host.closeAdmission();
+    }
+    const check = bindHarnessHostSourceAuthority({
+      attempt,
+      delegatedAuthority,
+      sourceCaller: undefined,
+      isActive: () => true,
+      isGatewayCurrent: () => gatewayCurrent,
+      inactiveError: (message) => new Error(message),
+    });
+    if (reason === "operational_run_replaced") {
+      attempt.admittedRunContext = {
+        ...attempt.admittedRunContext,
+        operationalRunInstance: createOperationalRunInstanceRef("replacement"),
+      };
+    } else if (reason === "gateway_stale") {
+      gatewayCurrent = false;
+    }
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    expect(check).toThrow("no longer active");
+    expect(check.assertScopeCurrent).toThrow("no longer active");
+    expect(warn.mock.calls).toEqual([
+      ["agent harness host source denied", { reason, runId: "retained-source" }],
+    ]);
+  },
+);
 
 it("returns no retained source authority without an operator", async () => {
   const host = await createSourceHost();
