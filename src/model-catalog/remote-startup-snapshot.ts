@@ -1,5 +1,5 @@
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
-import type { ActiveRemoteModelCatalog } from "./remote-overlay.js";
+import type { ActiveRemoteModelCatalog } from "./remote-overlay.types.js";
 
 const STARTUP_SNAPSHOT_KEY = "openclaw.remoteModelCatalogStartupSnapshot";
 

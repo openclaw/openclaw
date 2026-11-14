@@ -11,14 +11,13 @@ import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
 import {
   parseRemoteModelCatalogWireBundle,
   projectRemoteModelCatalog,
-  type RemoteModelCatalogPrice,
-  type RemoteModelCatalogUpstreamPrice,
   type RemoteModelCatalogWireBundle,
 } from "./remote-bundle.js";
 import {
   isRemoteCatalogSourceActive,
   isRemoteModelCatalogRefreshEnabled,
 } from "./remote-config.js";
+import type { ActiveRemoteModelCatalog } from "./remote-overlay.types.js";
 import {
   publishRemoteModelCatalogStartupPublication,
   readRemoteModelCatalogStartupPublication,
@@ -26,19 +25,7 @@ import {
 import { readRemoteModelCatalogAsync } from "./remote-store.js";
 
 export type RemoteCatalogPublicationResult = "published" | "unchanged" | "superseded";
-
-type RemoteModelCatalogOverlay = Readonly<Record<string, ModelCatalogProvider>>;
-type RemoteModelCatalogMetadata = {
-  sourceUrl: string;
-  generatedAt: number;
-};
-export type ActiveRemoteModelCatalog = RemoteModelCatalogMetadata & {
-  revision: string;
-  providers: RemoteModelCatalogOverlay;
-  recommendations: Readonly<Record<string, readonly string[]>>;
-  pricing: Readonly<Record<string, RemoteModelCatalogPrice>>;
-  upstreamPricing: Readonly<Record<string, RemoteModelCatalogUpstreamPrice>>;
-};
+export type { ActiveRemoteModelCatalog } from "./remote-overlay.types.js";
 
 const remoteCatalogScope = new AsyncContext<{ catalog: ActiveRemoteModelCatalog | null }>(
   Symbol.for("openclaw.remoteModelCatalogScope"),
