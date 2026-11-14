@@ -219,21 +219,22 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       throw new Error("Config plugin metadata unavailable; refusing to display config values.");
     }
     const { redactConfigObject } = await import("../config/redact-snapshot.js");
-    const runtimeSchema =
-      needsPluginSchema && pluginMetadataSnapshot
-        ? (await import("../config/runtime-schema.js")).buildRuntimeConfigSchemaFromRegistry(
-            pluginMetadataSnapshot.manifestRegistry,
-            snapshot.sourceConfig,
-          )
-        : undefined;
-    const uiHints =
-      runtimeSchema?.uiHints ??
-      (await import("../config/schema-base.js")).computeBaseConfigUiHints();
+    const registry = needsPluginSchema ? pluginMetadataSnapshot?.manifestRegistry : undefined;
+    const uiHints = registry
+      ? (await import("../config/runtime-schema.js")).buildRuntimeConfigRedactionHintsFromRegistry(
+          registry,
+          snapshot.sourceConfig,
+        )
+      : (await import("../config/schema-base.js")).computeBaseConfigUiHints();
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found || res.value === undefined) {
-      const schema =
-        runtimeSchema?.schema ??
-        (await import("../config/schema.js")).buildConfigSchemaCore().schema;
+      // Only the not-found message reads schema structure; found values skip the form schema.
+      const schema = registry
+        ? (await import("../config/runtime-schema.js")).buildRuntimeConfigSchemaFromRegistry(
+            registry,
+            snapshot.sourceConfig,
+          ).schema
+        : (await import("../config/schema.js")).buildConfigSchemaCore().schema;
       const autoManaged = AUTO_MANAGED_CONFIG_META_PATHS.some(
         (managedPath) =>
           parsedPath.every((segment, index) => managedPath[index] === segment) ||
