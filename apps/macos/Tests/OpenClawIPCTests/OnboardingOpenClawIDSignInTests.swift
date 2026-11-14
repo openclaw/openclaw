@@ -67,8 +67,8 @@ struct OnboardingOpenClawIDSignInTests {
             claw: "studio-k7x2q.crabd.me", device: "Fixture Mac"))
         #expect(try await service.perform(.selectClaw(Discovery.lab)) == .problem(.clawOffline(
             claw: "lab-k7x2q.crabd.me")))
-        #expect(try await service.perform(.selectClaw(Discovery.team)) == .problem(.memberNeedsInvite(
-            claw: "team-k7x2q.crabd.me")))
+        // Each of a member's devices joins with its own invite.
+        #expect(try await service.perform(.selectClaw(Discovery.team)) == .inviteEntry(claw: "team-k7x2q.crabd.me"))
     }
 
     @Test func `an account without claws and a cancelled sign in`() async throws {
@@ -342,6 +342,13 @@ struct OnboardingOpenClawIDSignInTests {
             deviceName: { "Fixture Mac" },
             keyStore: { _, _ in MemoryKey() },
             readKitFile: { nil },
+            readInviteLink: { nil },
+            store: MacOpenClawIDDeviceStore(
+                defaults: UserDefaults(suiteName: "ocid-sign-in-\(UUID().uuidString)") ?? .standard,
+                databaseURL: self.database()),
+            savedSession: { nil },
+            saveSession: { _ in },
+            forgetKeys: { _ in },
             install: { _, _ in Issue.record("nothing in these tests is admitted") })
     }
 

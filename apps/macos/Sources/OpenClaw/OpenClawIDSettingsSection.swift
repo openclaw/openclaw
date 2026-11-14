@@ -9,6 +9,10 @@ enum OpenClawIDSettingsPresentation: Equatable {
     /// `needsSignIn`: without a node, the route re-reads the claw with the person's Discovery
     /// session, and that session has ended.
     case owner(claw: String, device: String, runsTools: Bool, approvedWith: String, needsSignIn: Bool)
+    /// Joined with an invite: the owner's device actions (tools, removal, approvals) are not offered.
+    case member(claw: String, device: String, role: String, needsSignIn: Bool)
+    /// A member request is waiting for an owner's approval.
+    case pendingJoin(claw: String)
 }
 
 /// Settings' owner of this Mac's OpenClaw ID device actions. Every write is signed with D in this
@@ -50,6 +54,13 @@ final class OpenClawIDSettingsModel {
     func presentation(state: AppState) -> OpenClawIDSettingsPresentation? {
         _ = self.revision
         let device = InstanceIdentity.displayName
+        if let enrolled = self.store.load(), let role = enrolled.memberRole {
+            return .member(
+                claw: enrolled.hostname,
+                device: device,
+                role: role.capitalized,
+                needsSignIn: self.store.session(for: enrolled) == nil)
+        }
         if let enrolled = self.store.load() {
             return .owner(
                 claw: enrolled.hostname,
@@ -58,6 +69,9 @@ final class OpenClawIDSettingsModel {
                 approvedWith: enrolled.approvedWith == .recoveryKit
                     ? "Approved with your recovery kit" : "Approved from your other device",
                 needsSignIn: enrolled.nodeEnrollmentID == nil && self.store.session() == nil)
+        }
+        if let join = self.store.pendingJoin() {
+            return .pendingJoin(claw: join.hostname)
         }
         return Self.unenrolledPresentation(
             available: MacOpenClawIDConfiguration.current() != nil,
@@ -293,13 +307,29 @@ struct OpenClawIDSettingsSection: View {
                     }
                 }
                 .disabled(self.model.busy)
-                if needsSignIn {
-                    HStack {
-                        self.plain("Sign in to OpenClaw ID again to keep reaching \(claw) from this Mac.")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Sign in again…") { self.model.signInAgain() }.disabled(self.model.busy)
-                    }
+                if needsSignIn { self.signInAgain(claw) }
+            case let .member(claw, device, role, needsSignIn):
+                self.header(
+                    "\(device) · \(role) on \(claw)",
+                    detail: "Joined with an invite. Chat and the dashboard, with the access an owner chose.",
+                    icon: "person.crop.circle.badge.checkmark")
+                Text("Your assistant can’t use this Mac’s commands, screen or camera.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    self.plain("To remove this Mac, ask an owner of \(claw) to remove it under People.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Open Dashboard") { self.model.retryPrimarySelection() }.disabled(self.model.busy)
+                }
+                if needsSignIn { self.signInAgain(claw) }
+            case let .pendingJoin(claw):
+                HStack {
+                    self.header(
+                        "Waiting to join \(claw)",
+                        detail: "An owner needs to approve this Mac. Open the request to check or cancel it.",
+                        icon: "hourglass")
+                    Spacer()
+                    Button("Open…") { MacOpenClawIDSignInPresenter.shared.present() }
                 }
             }
             if let error = self.model.error {
@@ -314,6 +344,15 @@ struct OpenClawIDSettingsSection: View {
     /// Runtime text built from claw and device names (rendered as given).
     private func plain(_ text: String) -> Text {
         Text(text)
+    }
+
+    private func signInAgain(_ claw: String) -> some View {
+        HStack {
+            self.plain("Sign in to OpenClaw ID again to keep reaching \(claw) from this Mac.")
+                .font(.callout).foregroundStyle(.secondary)
+            Spacer()
+            Button("Sign in again…") { self.model.signInAgain() }.disabled(self.model.busy)
+        }
     }
 
     private func header(_ title: String, detail: String, icon: String) -> some View {
