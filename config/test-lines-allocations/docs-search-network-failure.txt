@@ -1,0 +1,2 @@
+12
+# docs search names the network failure when the search request cannot connect.
