@@ -24,6 +24,8 @@ export async function planBundledTemplateDependency(params: {
   skillNames: Set<string>;
   skillTargets: Set<string>;
   referencedSkillTargets: ReadonlySet<string>;
+  /** Bundled plugin install ID to the first folder that declared it. */
+  pluginTargets: Map<string, string>;
 }) {
   const { dependency, workspace, packageRoot, snapshot } = params;
   const preflight = params.packagePreflight
@@ -40,6 +42,10 @@ export async function planBundledTemplateDependency(params: {
       params.skillTargets.has(preflight.installId.toLowerCase()) ||
       (preflight.name && params.skillNames.has(preflight.name.normalize("NFC").toLowerCase())) ||
       templateManifestWorkspaceConflictsWithPath(params.manifest, `skills/${preflight.installId}`));
+  const pluginCollision =
+    dependency.kind === "plugin" && preflight.installId
+      ? params.pluginTargets.get(preflight.installId)
+      : undefined;
   const incompletePlugin =
     dependency.kind === "plugin" &&
     (!preflight.detectedFormat ||
@@ -54,6 +60,7 @@ export async function planBundledTemplateDependency(params: {
     !preflight.name ||
     !preflight.installId ||
     Boolean(collision) ||
+    pluginCollision !== undefined ||
     incompletePlugin;
   if (dependency.kind === "skill") {
     if (preflight.name) {
@@ -62,6 +69,8 @@ export async function planBundledTemplateDependency(params: {
     if (preflight.installId) {
       params.skillTargets.add(preflight.installId.toLowerCase());
     }
+  } else if (preflight.installId && pluginCollision === undefined) {
+    params.pluginTargets.set(preflight.installId, dependency.path);
   }
   const diagnostic: TemplateDiagnostic | undefined = blocked
     ? {
@@ -70,13 +79,17 @@ export async function planBundledTemplateDependency(params: {
         path: params.declarationPath,
         code: collision
           ? "bundled_skill_collision"
-          : (preflight.code ??
-            (incompletePlugin
-              ? "plugin_capability_provenance_incomplete"
-              : "bundled_dependency_invalid")),
+          : pluginCollision !== undefined
+            ? "bundled_plugin_collision"
+            : (preflight.code ??
+              (incompletePlugin
+                ? "plugin_capability_provenance_incomplete"
+                : "bundled_dependency_invalid")),
         message: collision
           ? "Bundled skill identity or destination conflicts with another declaration."
-          : (preflight.message ?? "Bundled dependency identity is incomplete."),
+          : pluginCollision !== undefined
+            ? `Bundled plugins ${pluginCollision} and ${dependency.path} both have plugin id ${JSON.stringify(preflight.installId)}; keep one of them.`
+            : (preflight.message ?? "Bundled dependency identity is incomplete."),
       }
     : undefined;
   const action: TemplateAddPlanAction = {
