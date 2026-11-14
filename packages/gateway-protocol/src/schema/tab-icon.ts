@@ -6,17 +6,11 @@ export type TabIconPreference =
   | "agent:circle"
   | `lobster:${string}`;
 
-export function agentTabIconShape(value: TabIconPreference | undefined): AgentTabIconShape | null {
-  if (value === "agent") {
-    return "square";
-  }
-  if (value === "agent:rounded") {
-    return "rounded";
-  }
-  if (value === "agent:circle") {
-    return "circle";
-  }
-  return null;
+/** Saved source preferences stay valid; agent artwork now has one circular crop. */
+export function agentTabIconShape(value: TabIconPreference | undefined): "circle" | null {
+  return value === "agent" || value === "agent:rounded" || value === "agent:circle"
+    ? "circle"
+    : null;
 }
 
 export function normalizeTabIconPreference(value: unknown): TabIconPreference | undefined {

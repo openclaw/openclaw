@@ -252,10 +252,9 @@ page in your default browser. Update the browser or operating system if that
 browser also shows the update screen.
 
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
-the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
-and **Circle**. Square preserves the full image; rounded and circular icons use a
-centered crop. The choice is saved with your tab-icon preference, and activity
-badges remain visible on every shape.
+the selected agent’s image with a centered circular crop. Activity badges remain
+visible. Earlier saved square or rounded-avatar choices now use the same circle;
+you do not need to reset your preference.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 
