@@ -23,7 +23,8 @@ export const CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly ConfiguredRu
       npmSpec: "@openclaw/codex",
       trustedSourceLinkedOfficialInstall: true,
       versionBoundToOpenClaw: true,
-      // Bump this floor when a Plugin SDK subpath used by this runtime is removed.
+      // Bump this floor when an SDK subpath, export or required argument used by this runtime changes;
+      // release-check (`scripts/check-official-runtime-floor.mts`) type-checks this release's source here.
       minimumCompatibleVersion: "2026.11.5-beta.1",
     },
   ];
