@@ -8,6 +8,7 @@ import {
   decodeNativeWorkerFailure,
   type NativeWorkerFailure,
 } from "../../infra/worker-native-error.js";
+import { resolveWorkerHeapLimitMb } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -68,7 +69,7 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
     >({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive),
       workerOptions: {
-        resourceLimits: { maxOldGenerationSizeMb: 512 },
+        resourceLimits: { maxOldGenerationSizeMb: resolveWorkerHeapLimitMb() },
         workerData: {
           type: "sqlite-transcript-archive-v2",
           operation: "canonical-validation-pool",

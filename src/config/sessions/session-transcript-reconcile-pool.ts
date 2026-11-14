@@ -8,7 +8,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { recordWorkerMessage, observeWorkerMessage } from "../../infra/worker-message-metrics.js";
-import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
+import { resolveWorkerHeapLimitMb, resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -264,7 +264,7 @@ async function startReconcileWorkerTask(
   signal?.throwIfAborted();
   const pool = (runtime.pool ??= new WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: resolveWorkerHeapLimitMb() } },
     maxWorkers: MAX_WORKERS,
   }));
   const { port1: port, port2 } = new MessageChannel();
