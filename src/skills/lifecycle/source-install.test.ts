@@ -377,6 +377,27 @@ describe("installSkillFromSource", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32").each(["file", "dir"] as const)(
+    "keeps a relative %s link readable after Git skill staging is removed",
+    async (kind) => {
+      const repoDir = path.join(root, "repo");
+      await initGitSkillRepo(repoDir);
+      await fs.mkdir(path.join(repoDir, "references"));
+      await fs.writeFile(path.join(repoDir, "references", "source.md"), "Companion guide 日本語\n");
+      const target = kind === "file" ? "references/source.md" : "references";
+      const alias = kind === "file" ? "guide.md" : "guide";
+      await fs.symlink(target, path.join(repoDir, alias), kind);
+      await runGitOk(repoDir, ["add", "."]);
+      await commitGitSkill(repoDir, "add companion link");
+      const result = await install({ spec: `git:file://${repoDir}` });
+      const installedLink = path.join(result.targetDir, alias);
+      expect(await fs.readlink(installedLink)).toBe(target);
+      expect(await fs.realpath(installedLink)).toBe(path.join(result.targetDir, target));
+      const companion = kind === "file" ? installedLink : path.join(installedLink, "source.md");
+      expect(await fs.readFile(companion, "utf8")).toBe("Companion guide 日本語\n");
+    },
+  );
+
   it("removes stale ClawHub lock tracking after source installs", async () => {
     await writeSkill(sourceDir, { name: "frontmatter-skill" });
     await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });

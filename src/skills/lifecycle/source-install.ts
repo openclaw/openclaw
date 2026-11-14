@@ -201,6 +201,8 @@ async function installGitSkill(params: SkillSourceInstallParams): Promise<Instal
     try {
       await fs.cp(repoDir, exportDir, {
         recursive: true,
+        // Relative links must survive removal of the temporary clone after installation.
+        verbatimSymlinks: true,
         filter: (source) => !path.relative(repoDir, source).split(path.sep).includes(".git"),
       });
     } catch (err) {
