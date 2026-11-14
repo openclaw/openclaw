@@ -48,6 +48,7 @@ struct RootTabs: View {
         Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var sidebarModel = RootSidebarModel()
+    @State private var isSidebarRefreshAdmitted = false
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
@@ -207,10 +208,19 @@ struct RootTabs: View {
                 .onChange(of: layoutMode, initial: true) { _, mode in
                     self.updateSidebarLayout(mode)
                 }
-                // Single refresh owner: identity/session changes, scene activation,
+                .onChange(of: self.scenePhase, initial: true) { _, phase in
+                    // Inactive also covers Control Center and permission prompts. Keep an
+                    // admitted foreground lifetime, but never start on cold/background -> inactive.
+                    if phase == .active {
+                        self.isSidebarRefreshAdmitted = true
+                    } else if phase == .background {
+                        self.isSidebarRefreshAdmitted = false
+                    }
+                }
+                // Single refresh owner: gateway/agent changes, foreground admission,
                 // and the periodic attention refresh all land here.
                 .task(id: self.sidebarRefreshID) {
-                    guard self.scenePhase == .active else { return }
+                    guard self.isSidebarRefreshAdmitted else { return }
                     repeat {
                         await self.sidebarModel.refresh(appModel: self.appModel)
                         await self.appModel.refreshPendingApprovalInbox()
@@ -219,7 +229,7 @@ struct RootTabs: View {
                     } while !Task.isCancelled
                 }
                 .task(id: "\(self.sidebarRefreshID):events") {
-                    guard self.scenePhase == .active else { return }
+                    guard self.isSidebarRefreshAdmitted else { return }
                     await self.sidebarModel.observeSessionEvents(appModel: self.appModel)
                 }
                 .task(id: self.sessionObserverTaskIdentity) {
@@ -238,11 +248,12 @@ struct RootTabs: View {
     }
 
     private var sidebarRefreshID: String {
+        // Roster, dashboard, and approval reads are not scoped to the selected chat.
+        // RootSidebar observes selection directly; keep its shared tasks alive when only that changes.
         [
             self.appModel.chatViewModelIdentityID,
-            self.appModel.chatSessionKey,
             String(self.appModel.operatorAuthorityGeneration),
-            self.scenePhase == .active ? "active" : "inactive",
+            self.isSidebarRefreshAdmitted ? "foreground" : "suspended",
         ].joined(separator: ":")
     }
 
