@@ -215,7 +215,10 @@ export function prepareClaudeCacheProbeBackend(params: {
   };
 }
 
-async function waitFor<T>(resolve: () => T | undefined | Promise<T | undefined>): Promise<T> {
+async function waitFor<T>(
+  phase: "child-completion" | "delivery-receipt" | "canonical-history",
+  resolve: () => T | undefined | Promise<T | undefined>,
+): Promise<T> {
   for (let attempt = 0; attempt < 480; attempt += 1) {
     const value = await resolve();
     if (value !== undefined) {
@@ -223,7 +226,7 @@ async function waitFor<T>(resolve: () => T | undefined | Promise<T | undefined>)
     }
     await sleep(1_000);
   }
-  throw new Error("timed out waiting for live CLI announce proof");
+  throw new Error(`timed out waiting for live CLI announce proof: ${phase}`);
 }
 
 export async function verifyCliBackendAnnounceOrdering({
@@ -267,7 +270,7 @@ export async function verifyCliBackendAnnounceOrdering({
     (error: unknown) => (requestError = error),
   );
 
-  const completedChild = await waitFor(() => {
+  const completedChild = await waitFor("child-completion", () => {
     if (requestError) {
       throw new Error("CLI announce parent failed", { cause: requestError });
     }
@@ -296,7 +299,7 @@ export async function verifyCliBackendAnnounceOrdering({
   parentObservedAt ??= Date.now();
   expect(extractPayloadText(parent.result)).toContain(parentToken);
 
-  const deliveredChild = await waitFor(() =>
+  const deliveredChild = await waitFor("delivery-receipt", () =>
     listSubagentRunsForRequester(sessionKey).find(
       (run) =>
         run.runId === completedChild.runId &&
@@ -318,22 +321,25 @@ export async function verifyCliBackendAnnounceOrdering({
     sessionKey,
   });
   let assistantUsage: Array<CliCacheUsage | undefined> = [];
-  const { parentReplyIndex, completionReplyIndex } = await waitFor(async () => {
-    const history = await loadCliSessionHistoryMessages({ sessionTarget });
-    const assistantMessages = history.flatMap((message) => {
-      const record = message as { role?: unknown; content?: unknown; usage?: CliCacheUsage };
-      return record.role === "assistant" ? [record] : [];
-    });
-    assistantUsage = assistantMessages.map((record) => record.usage);
-    const replies = assistantMessages.map(
-      (record) => extractTextFromChatContent(record.content, { joinWith: "" }) ?? "",
-    );
-    const parentIndex = replies.findIndex((reply) => reply.includes(parentToken));
-    const completionIndex = replies.findIndex((reply) => reply.includes(childToken));
-    return parentIndex >= 0 && completionIndex >= 0
-      ? { parentReplyIndex: parentIndex, completionReplyIndex: completionIndex }
-      : undefined;
-  });
+  const { parentReplyIndex, completionReplyIndex } = await waitFor(
+    "canonical-history",
+    async () => {
+      const history = await loadCliSessionHistoryMessages({ sessionTarget });
+      const assistantMessages = history.flatMap((message) => {
+        const record = message as { role?: unknown; content?: unknown; usage?: CliCacheUsage };
+        return record.role === "assistant" ? [record] : [];
+      });
+      assistantUsage = assistantMessages.map((record) => record.usage);
+      const replies = assistantMessages.map(
+        (record) => extractTextFromChatContent(record.content, { joinWith: "" }) ?? "",
+      );
+      const parentIndex = replies.findIndex((reply) => reply.includes(parentToken));
+      const completionIndex = replies.findIndex((reply) => reply.includes(childToken));
+      return parentIndex >= 0 && completionIndex >= 0
+        ? { parentReplyIndex: parentIndex, completionReplyIndex: completionIndex }
+        : undefined;
+    },
+  );
   logStep("announce-child:transcript-results", {
     runId: deliveredChild.runId,
     parentObservedAt,
