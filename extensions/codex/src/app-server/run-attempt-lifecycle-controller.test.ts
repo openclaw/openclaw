@@ -111,7 +111,7 @@ describe("Codex terminal dynamic-tool release", () => {
       expect(interrupt).toHaveBeenCalledOnce();
       const nativeCleanup = interrupt.mock.results[0]?.value;
       const settled = vi.fn();
-      void nativeCleanup?.then(settled, settled);
+      void runtime.state.abortCleanup.then(settled, settled);
 
       route.release();
       await yieldImmediate();
@@ -125,8 +125,16 @@ describe("Codex terminal dynamic-tool release", () => {
           turn: { id: "peer-turn", status: "completed", items: [] },
         },
       });
+      physical.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "previous-turn", status: "interrupted", items: [] },
+        },
+      });
       await yieldImmediate();
       expect(settled).not.toHaveBeenCalled();
+      expect(runtime.state.nativeCancellationConfirmed).toBe(false);
       physical.send({
         method: "turn/completed",
         params: {
@@ -135,6 +143,9 @@ describe("Codex terminal dynamic-tool release", () => {
         },
       });
       await expect(nativeCleanup).resolves.toBe(true);
+      await runtime.state.abortCleanup;
+      expect(settled).toHaveBeenCalledOnce();
+      expect(runtime.state.nativeCancellationConfirmed).toBe(true);
       expect(physical.stdinDestroyed).toBe(false);
       expect(peerRoute.signal.aborted).toBe(false);
     } finally {

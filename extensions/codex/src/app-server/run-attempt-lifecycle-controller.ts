@@ -148,7 +148,11 @@ export function createCodexAttemptLifecycleController(
         tool: value.call.tool,
         durationMs: value.durationMs,
       });
-      void turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
+      // Foreground yield may complete immediately, but subscription transfer must
+      // join the exact native turn's stop before another parent turn can start.
+      state.abortCleanup = turnRuntime
+        .interruptTurn(value.call.turnId, { locallyCompleted: true })
+        .then(() => {});
       turnRuntime.completeTurn();
     });
     immediate.unref?.();
