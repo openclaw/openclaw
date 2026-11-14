@@ -14,6 +14,10 @@ Each one runs in its own session (`agent:<agentId>:subagent:<uuid>`) and,
 by default, **announces** its result back to the requester for review.
 Subagent runs are tracked by the native subagent lifecycle owner.
 
+For an explicit opt-in workflow that chooses among authorized models and installed
+harness routes, try [Cross-harness delegation (Labs)](/experiments/cross-harness-delegation).
+It reuses the existing runtimes and adds a shared task contract and routing receipt.
+
 Goals:
 
 - Parallelize research, long tasks, and slow tool work without blocking the main run.
