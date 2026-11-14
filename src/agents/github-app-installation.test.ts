@@ -18,6 +18,18 @@ import {
   prepareGitHubToolEnvironment,
 } from "./github-tool-identity.js";
 
+const { installationWarn } = vi.hoisted(() => ({ installationWarn: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "github-app-identity" ? { ...logger, warn: installationWarn } : logger;
+    },
+  };
+});
+
 const key = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
   type: "pkcs8",
   format: "pem",
@@ -58,6 +70,7 @@ function prepareRead(options: Partial<Parameters<typeof prepareGitHubReadIdentit
 let overrides: Record<string, unknown>;
 let fetcher: ReturnType<typeof vi.fn<(url: string, init: RequestInit) => Promise<Response>>>;
 beforeEach(() => {
+  installationWarn.mockReset();
   selected = {
     profileId: "ghp_00000000000000000000000000000001",
     kind: "app-installation",
@@ -308,3 +321,67 @@ it.each(["allowed", "forbidden", "revoked-after-seed"] as const)(
     }
   },
 );
+
+it("keeps slow App verification within each request's deadline", async () => {
+  const original = fetcher.getMockImplementation();
+  if (!original) {
+    throw new Error("Expected the fixture fetch implementation");
+  }
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("request deadline")), delay);
+    return controller.signal;
+  });
+  fetcher.mockImplementation(async (url, init) => {
+    const signal = init.signal;
+    signal?.throwIfAborted();
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", aborted);
+        resolve();
+      }, 6_000);
+      function aborted() {
+        clearTimeout(timer);
+        reject(new Error("request aborted", { cause: signal?.reason }));
+      }
+      signal?.addEventListener("abort", aborted, { once: true });
+    });
+    return original(url, init);
+  });
+  try {
+    const result = prepare().then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    for (let i = 0; i < 5; i += 1) {
+      await vi.advanceTimersByTimeAsync(6_000);
+    }
+    expect(await result).toMatchObject({ value: { account: { login: "factory[bot]" } } });
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  } finally {
+    timeout.mockRestore();
+  }
+});
+
+it("warns when a successful mint response loses its unread token body", async () => {
+  const original = fetcher.getMockImplementation();
+  if (!original) {
+    throw new Error("Expected the fixture fetch implementation");
+  }
+  fetcher.mockImplementation(async (url, init) =>
+    url.endsWith("/access_tokens")
+      ? new Response(
+          new ReadableStream({
+            start(stream) {
+              stream.error(new Error("truncated mint"));
+            },
+          }),
+        )
+      : original(url, init),
+  );
+  await expect(prepare()).rejects.toThrow("could not be verified");
+  expect(fetcher.mock.calls.some(([, init]) => init.method === "DELETE")).toBe(false);
+  expect(installationWarn).toHaveBeenCalledWith(
+    "GitHub App installation token response ended before the token could be read; it may remain valid until expiry",
+  );
+});

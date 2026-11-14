@@ -5,11 +5,14 @@ import type { GitHubIdentityFacts } from "../../packages/gateway-protocol/src/in
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseWithLimit } from "../infra/http-response-body.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import type { GitHubAppSelection, GitHubCredentialReader } from "./github-credential-reader.js";
 import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "./github-host-runtime.js";
 import { GitHubIdentityError, type GitHubIdentityPreparation } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
+
+const log = createSubsystemLogger("github-app-identity");
 
 const id = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const permissions = z.record(z.string(), z.enum(["read", "write", "admin"]));
@@ -192,7 +195,7 @@ export async function prepareAppGitHubIdentity(
       }
       registerSecretValueForRedaction(key);
       let issuedToken: string | undefined;
-      const signal = AbortSignal.timeout(10_000);
+      let mintAcceptedWithoutToken = false;
       const request = async <T>(
         endpoint: string,
         bearer: string,
@@ -200,6 +203,7 @@ export async function prepareAppGitHubIdentity(
         body?: unknown,
       ): Promise<T> => {
         assertIssuanceCurrent();
+        const signal = AbortSignal.timeout(10_000);
         const response = await fetch(`${apiBaseUrl}${endpoint}`, {
           method: body === undefined ? "GET" : "POST",
           redirect: "error",
@@ -216,12 +220,16 @@ export async function prepareAppGitHubIdentity(
           void response.body?.cancel().catch(() => {});
           throw failure();
         }
+        if (body !== undefined) {
+          mintAcceptedWithoutToken = true;
+        }
         const bytes = await readResponseWithLimit(response, 256 * 1024, { signal });
         const raw: unknown = JSON.parse(bytes.toString("utf8"));
         if (body !== undefined) {
           const token = z.object({ token: tokenSchema.shape.token }).safeParse(raw);
           if (token.success) {
             issuedToken = token.data.token;
+            mintAcceptedWithoutToken = false;
             registerSecretValueForRedaction(issuedToken);
           }
         }
@@ -340,6 +348,10 @@ export async function prepareAppGitHubIdentity(
               void response.body?.cancel().catch(() => {});
             },
             () => {},
+          );
+        } else if (mintAcceptedWithoutToken) {
+          log.warn(
+            "GitHub App installation token response ended before the token could be read; it may remain valid until expiry",
           );
         }
         assertIssuanceCurrent();
