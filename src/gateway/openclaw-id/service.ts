@@ -33,7 +33,9 @@ import type { PublishOutcome } from "./publisher.js";
 import { createRebindPublication } from "./rebind-publication.js";
 import { signOutTunnelPeer } from "./remote-signout.js";
 import { createServiceGatewayKey } from "./service-gateway-key.js";
+import { createServiceOwnerNotices } from "./service-owner-notices.js";
 import { createServiceRebindOwner } from "./service-rebind-owner.js";
+import { createServiceReset } from "./service-reset.js";
 import { appliedConfigKey, resolveSettings, sameSettings } from "./service-settings.js";
 import type { OpenClawIdStatus } from "./service-status.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
@@ -361,7 +363,7 @@ export function createOpenClawIdService(params: {
     peopleChanged();
     if (outcome.state === "published") {
       const bindingSeq = record.binding?.body.binding_seq ?? 0;
-      if (rebindPublication.published(bindingSeq, record.discovery.published_binding_seq)) {
+      if (rebindPublication.published(record)) {
         const event = { type: "notify_owners", event: "rebind", ref: `${bindingSeq}` } as const;
         void notifyOwners([event]).catch((error: unknown) => params.log.warn(String(error)));
       }
@@ -387,6 +389,17 @@ export function createOpenClawIdService(params: {
     }
     return outcome;
   };
+
+  // Publishes now for a caller that reports the outcome; a failure stays pending for the retrier.
+  const publishReported = async (enrollmentCode?: string) =>
+    await publicationRetry.adopt(
+      await publicationRetry
+        .publishDirect(() => publish(enrollmentCode))
+        .catch((error: unknown) => {
+          params.log.warn(`openclaw-id: publication failed: ${String(error)}`);
+          return undefined;
+        }),
+    );
 
   // Revokes tokens, then drops only the confirmed bindings: a token whose revocation
   // failed stays bound to its removed key, so no ingress accepts it, and is retried
@@ -464,35 +477,12 @@ export function createOpenClawIdService(params: {
   };
 
   // Mails owner notices through Discovery once the claw is registered there.
-  const notifyOwners = async (events: AuthorityEvent[]) => {
-    // The admitting lifetime is captured before any await, so a stop during import ends the notice.
-    const signal = lifecycle.signal;
-    const { sendOwnerNotices } = await import("./owner-notices.js");
-    if (signal.aborted) {
-      return;
-    }
-    await sendOwnerNotices({
-      events,
-      log: params.log,
-      target: async () => {
-        const config = params.getConfig();
-        const record = (await getAuthority()).current();
-        if (!config?.discoveryUrl || !record?.discovery.owner_account_id) {
-          return undefined;
-        }
-        const { createDiscoveryClient } = await import("./discovery-client.js");
-        const key = await gatewayKey.tryLoad();
-        if (signal.aborted || !key.ok) {
-          return undefined;
-        }
-        const { signer } = key;
-        return {
-          clawId: record.claw_id,
-          client: createDiscoveryClient({ baseUrl: config.discoveryUrl, signer, signal }),
-        };
-      },
-    });
-  };
+  const notifyOwners = createServiceOwnerNotices({
+    ...params,
+    signal: () => lifecycle.signal,
+    getAuthority,
+    gatewayKey,
+  });
 
   const tokenBindings = createTokenBindingPublisher({
     authority: createdAuthority,
@@ -775,17 +765,19 @@ export function createOpenClawIdService(params: {
         return result;
       }
       await pushMembership();
-      const publication = await publicationRetry
-        .publishDirect(() => publish(enrollmentCode))
-        .catch((error: unknown) => {
-          params.log.warn(`openclaw-id: publication failed: ${String(error)}`);
-          return undefined;
-        });
-      await publicationRetry.adopt(publication);
+      const publication = await publishReported(enrollmentCode);
       return { ...result, ...(publication ? { publication } : {}) };
     },
 
     rebind: rebindOwner.run,
+
+    resetOwner: createServiceReset({
+      getAuthority,
+      gatewayKey,
+      applyEvents,
+      publish: publishReported,
+      log: params.log,
+    }),
 
     /** Retries publication with a code (after linking, or `needs_link_code`) held until success. */
     async publish(enrollmentCode?: string): Promise<PublishOutcome | undefined> {

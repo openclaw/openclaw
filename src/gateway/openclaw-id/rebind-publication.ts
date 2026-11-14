@@ -1,3 +1,5 @@
+import type { StoredClaw } from "./claw-store.js";
+
 // What the Gateway keeps in memory about publishing a re-bind: the owner account's one-time
 // code (held for this process's retries until a publication succeeds; a restart asks for
 // `openclaw id publish --code`, whose code is then held the same way) and
@@ -18,12 +20,17 @@ export function createRebindPublication() {
       return code;
     },
     /**
-     * Records a confirmed publication of `bindingSeq` (Discovery had `publishedSeq` before) and
-     * returns whether this is a re-bind's first one, whose owners get the notice.
+     * Records a confirmed publication of `record`'s binding (Discovery had its published binding
+     * before) and returns whether this is a re-bind's first one, whose owners get the notice. An
+     * owner reset's binding keeps the keys and gets none.
      */
-    published(bindingSeq: number, publishedSeq: number): boolean {
+    published(record: StoredClaw): boolean {
       code = undefined;
-      if (bindingSeq <= Math.max(1, publishedSeq, noticeSeq)) {
+      const bindingSeq = record.binding?.body.binding_seq ?? 0;
+      if (
+        bindingSeq <= Math.max(1, record.discovery.published_binding_seq, noticeSeq) ||
+        record.reset?.statement.body.binding_seq === bindingSeq
+      ) {
         return false;
       }
       noticeSeq = bindingSeq;
