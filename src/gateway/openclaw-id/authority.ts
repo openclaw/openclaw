@@ -533,13 +533,14 @@ export function createOpenClawIdAuthority(
           { ...stored, authority: stored.authority },
           now,
         );
-        const identity = { account_id: sender.account_id, email: sender.email };
-        const result = await submitRedemption(current.authority, input, identity, now);
-        if (!result.ok) {
+        const result = await submitRedemption(current.authority, input, sender, now);
+        if (!result.ok || result.state === current.authority) {
           if (events.length > 0) {
             await commit(current);
           }
-          return { ok: false, code: result.code, detail: result.detail };
+          return result.ok
+            ? { ok: true, status: result.status, events }
+            : { ok: false, code: result.code, detail: result.detail };
         }
         const inviteId = parseStatement(input, "InviteRedemption");
         const display = (value: string | null | undefined) =>
