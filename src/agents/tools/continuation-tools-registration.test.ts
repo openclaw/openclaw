@@ -188,7 +188,9 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
     expect(params.required).toContain("task");
 
     const delaySecondsProp = properties.delaySeconds as { description?: string };
-    expect(delaySecondsProp.description).toContain("0 or omitted = immediate");
+    expect(delaySecondsProp.description).toContain(
+      "0 or omitted = dispatch after this response ends",
+    );
     expect(delaySecondsProp.description).not.toContain("omitted = default delay");
 
     // mode enum must include the four canonical values.
