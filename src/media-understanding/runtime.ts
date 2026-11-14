@@ -366,7 +366,11 @@ export async function describeVideoFile(
   params: DescribeVideoFileParams,
   execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return await runFile({ ...params, capability: "video" }, {}, execution);
+  return await runFile(
+    { ...params, capability: "video" },
+    { modelOverride: params.modelOverride },
+    execution,
+  );
 }
 
 /** Prepares the largest input that any configured transcription fallback can accept. */
@@ -404,6 +408,7 @@ export async function transcribeAudioFile(
     {
       prompt: params.prompt?.trim() || params.prompt || undefined,
       language: params.language || undefined,
+      modelOverride: params.modelOverride,
     },
     execution,
   );

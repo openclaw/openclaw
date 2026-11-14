@@ -32,6 +32,97 @@ describe("media timeout resolution", () => {
 });
 
 describe("resolveModelEntries", () => {
+  it.each(["audio", "video"] as const)(
+    "tries an explicit %s model before configured fallbacks without borrowing their transport",
+    (capability) => {
+      const fallback: MediaUnderstandingModelConfig = {
+        provider: "openai",
+        model: "configured",
+        capabilities: [capability],
+        baseUrl: "https://configured.example/v1",
+        headers: { "x-fixture-route": "configured-only" },
+      };
+      const cfg: OpenClawConfig = { tools: { media: { models: [fallback] } } };
+      expect(
+        resolveModelEntries({
+          cfg,
+          capability,
+          providerRegistry,
+          modelOverride: { provider: "openai", model: "requested" },
+        }),
+      ).toEqual([
+        { entry: { provider: "openai", model: "requested" } },
+        { entry: fallback, secretOwnerId: "media-model:shared:0" },
+      ]);
+    },
+  );
+
+  it("moves an exact explicit entry first with its original credential owner", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          models: [
+            { provider: "openai", model: "fallback", capabilities: ["audio"] },
+            { provider: "openai", model: "requested", capabilities: ["audio"], profile: "pinned" },
+          ],
+        },
+      },
+    };
+    expect(
+      resolveModelEntries({
+        cfg,
+        capability: "audio",
+        providerRegistry,
+        modelOverride: { provider: "openai", model: "requested" },
+      }),
+    ).toMatchObject([
+      { entry: { model: "requested", profile: "pinned" }, secretOwnerId: "media-model:shared:1" },
+      { entry: { model: "fallback" }, secretOwnerId: "media-model:shared:0" },
+    ]);
+  });
+
+  it("keeps provider-wide settings and the original default-model fallback", () => {
+    const entry: MediaUnderstandingModelConfig = {
+      provider: "openai",
+      capabilities: ["audio"],
+      baseUrl: "https://provider.example/v1",
+      headers: { "x-fixture-route": "provider-wide" },
+    };
+    const cfg: OpenClawConfig = { tools: { media: { models: [entry] } } };
+    expect(
+      resolveModelEntries({
+        cfg,
+        capability: "audio",
+        providerRegistry,
+        modelOverride: { provider: "openai", model: "requested" },
+      }),
+    ).toEqual([
+      { entry: { ...entry, model: "requested" }, secretOwnerId: "media-model:shared:0" },
+      { entry, secretOwnerId: "media-model:shared:0" },
+    ]);
+  });
+
+  it("does not borrow another execution region's model transport", () => {
+    const entry: MediaUnderstandingModelConfig = {
+      provider: "minimax",
+      model: "requested",
+      capabilities: ["audio"],
+      baseUrl: "https://other-region.example/v1",
+    };
+    const cfg: OpenClawConfig = { tools: { media: { models: [entry] } } };
+    expect(
+      resolveModelEntries({
+        cfg,
+        capability: "audio",
+        providerRegistry,
+        modelOverride: { provider: "minimax-cn", model: "requested" },
+      }),
+    ).toEqual([
+      { entry: { provider: "minimax-cn", model: "requested" } },
+      { entry, secretOwnerId: "media-model:shared:0" },
+    ]);
+  });
+
   it("uses provider capabilities for shared entries without explicit caps", () => {
     const models = [{ provider: "openai", model: "gpt-5.4" }];
     const imageEntries = resolve(models, "image");
