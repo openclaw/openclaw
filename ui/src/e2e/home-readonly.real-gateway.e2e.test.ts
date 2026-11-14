@@ -18,7 +18,11 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
-import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
+import {
+  createGatewayProxy,
+  createPermissionGatewayConfig,
+  gatewayProxyRoute,
+} from "./gateway-proxy.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Read-only Home real Gateway",
@@ -78,56 +82,29 @@ suite.define(() => {
           setDisplayName(profile.id, person.name);
         }
         const port = await getFreePort();
-        const trustedProxy = {
-          allowLoopback: true,
-          allowUsers: people.map((person) => person.email),
-          deviceAutoApprove: { enabled: true, scopes: people.flatMap((person) => person.scopes) },
-          requiredHeaders: ["x-forwarded-proto"],
-          userHeader: "x-forwarded-user",
-        };
-        await state.writeConfig({
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              workspace: state.workspaceDir,
-              model: "fixture/echo",
-              modelPolicy: { allow: ["fixture/echo"] },
-            },
-            entries: { main: {} },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              fixture: {
-                api: "openai-responses",
-                baseUrl: "http://127.0.0.1:9/v1",
-                apiKey: "synthetic-fixture-key",
-                models: [{ id: "echo", name: "Fixture model" }],
+        const { config, trustedProxy } = createPermissionGatewayConfig({
+          port,
+          workspaceDir: state.workspaceDir,
+          uiBaseUrl: suite.server.baseUrl,
+          users: people.map((person) => person.email),
+          scopes: people.flatMap((person) => person.scopes),
+          roles: {
+            default: "reader",
+            definitions: {
+              owner: {
+                agents: ["main"],
+                sessions: { others: "write" },
+                scopes: people[0]!.scopes,
               },
-            },
-          },
-          gateway: {
-            port,
-            auth: { mode: "trusted-proxy", trustedProxy },
-            trustedProxies: ["127.0.0.1", "::1"],
-            controlUi: { enabled: false, allowedOrigins: [new URL(suite.server.baseUrl).origin] },
-            roles: {
-              default: "reader",
-              definitions: {
-                owner: {
-                  agents: ["main"],
-                  sessions: { others: "write" },
-                  scopes: people[0]!.scopes,
-                },
-                reader: {
-                  agents: ["main"],
-                  sessions: { others: "view" },
-                  scopes: people[1]!.scopes,
-                },
+              reader: {
+                agents: ["main"],
+                sessions: { others: "view" },
+                scopes: people[1]!.scopes,
               },
             },
           },
         });
+        await state.writeConfig(config);
         const { startGatewayServer } = await import("../../../src/gateway/server.js");
         gateway = await startGatewayServer(port, {
           auth: { mode: "trusted-proxy", trustedProxy },

@@ -28,35 +28,18 @@ describe("resolveSandboxDockerUser", () => {
     expect(resolved.user).toBe("2000:2000");
   });
 
-  it("falls back to workspace ownership when docker.user is unset", async () => {
-    stat.mockResolvedValue({ uid: 1001, gid: 1002 });
-    const resolved = await resolveSandboxDockerUser({
-      backend: "docker",
-      docker: baseDocker,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(resolved.user).toBe("1001:1002");
-  });
-
-  it("falls back to workspace ownership for mixed-case Docker backend ids", async () => {
-    stat.mockResolvedValue({ uid: 1001, gid: 1002 });
-    const resolved = await resolveSandboxDockerUser({
-      backend: "Docker",
-      docker: baseDocker,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(resolved.user).toBe("1001:1002");
-  });
-
-  it("falls back to workspace ownership for rootless Podman", async () => {
-    stat.mockResolvedValue({ uid: 1001, gid: 1002 });
-    const resolved = await resolveSandboxDockerUser({
-      backend: "podman",
-      docker: baseDocker,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(resolved.user).toBe("1001:1002");
-  });
+  it.each(["docker", "Docker", "podman"])(
+    "falls back to workspace ownership for %s",
+    async (backend) => {
+      stat.mockResolvedValue({ uid: 1001, gid: 1002 });
+      const resolved = await resolveSandboxDockerUser({
+        backend,
+        docker: baseDocker,
+        workspaceDir: "/tmp/workspace",
+      });
+      expect(resolved.user).toBe("1001:1002");
+    },
+  );
 
   it("leaves Podman user unset when host ownership IDs are zero", async () => {
     stat.mockResolvedValue({ uid: 0, gid: 0 });

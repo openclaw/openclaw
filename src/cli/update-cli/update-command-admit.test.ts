@@ -136,6 +136,37 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  // Admission previews core Doctor migrations without applying Workshop's settings move.
+  it.each([
+    ["alone", {}],
+    ["with a retired heartbeat", { agents: { defaults: { heartbeat: { every: "0m" } } } }],
+  ])(
+    "admits retired skills.workshop settings %s without rewriting config",
+    async (_name, extra) => {
+      writeFixtureJsonSync(path.join(root, "package.json"), {
+        name: "openclaw",
+        version: "2026.10.9",
+      });
+      context.installation.version = "2026.10.9";
+      context.supervisor.version = "2026.10.9";
+      context.run.id = "workshop-admission-fixture";
+      writeFixtureJsonSync(contextPath, context);
+      writeConfig({
+        ...extra,
+        skills: { workshop: { autonomous: { mode: "off" }, maxSkillBytes: 8000 } },
+      });
+      const before = snapshotFiles();
+      await updateAdmitCommand(contextPath);
+      expect(process.exitCode).toBe(0);
+      expect(readVerdict()).toMatchObject({
+        verdict: "admit",
+        reasons: [],
+        facts: { checks: expect.arrayContaining([{ name: "config", status: "warn" }]) },
+      });
+      expect(snapshotFiles()).toEqual(before);
+    },
+  );
+
   it("admits the legacy Claws preference for candidate Doctor without rewriting config", async () => {
     writeConfig({
       gateway: {

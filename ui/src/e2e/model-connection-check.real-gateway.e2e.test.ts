@@ -1,11 +1,6 @@
 import { expect, it } from "vitest";
-import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
+import { createModelGatewayFixture } from "./model-gateway.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
 import {
   createReasoningUpstream,
@@ -16,7 +11,6 @@ import {
 // thinking and return no visible text. 300 reasoning tokens exceeds the 8-token cap
 // Test access used to send, so a capped check reports a working provider as broken.
 const REASONING_TOKENS = 300;
-let instance: OpenClawTestInstance;
 let upstream: ReasoningUpstream;
 const model = (id: string) => ({
   id,
@@ -25,91 +19,49 @@ const model = (id: string) => ({
   contextWindow: 128000,
   maxTokens: 8192,
 });
-const suite = createControlUiE2eSuite({
+const fixture = createModelGatewayFixture({
   name: "Connection checks against a reasoning provider in each API family",
-  startServerBeforeBrowser: true,
-  async startServer() {
+  instanceName: "model-connection-check",
+  createUpstream() {
     upstream = createReasoningUpstream(REASONING_TOKENS);
-    const listener = await reserveTestPortListener({
-      offsets: [0],
-      createListener: () => upstream.server,
-    });
-    const base = `http://127.0.0.1:${listener.claim.port}`;
-    instance = await createOpenClawTestInstance({
-      name: "model-connection-check",
-      reserveIdlePort: false,
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        VITEST: undefined,
-        NODE_ENV: undefined,
-        // Host provider keys would satisfy first-run setup and skip the check under test.
-        ...Object.fromEntries(
-          Object.keys(process.env)
-            .filter((key) => key.endsWith("_API_KEY"))
-            .map((key) => [key, undefined]),
-        ),
-      },
-      config: {
-        gateway: { controlUi: { enabled: true } },
-        agents: { entries: { main: {} } },
-        models: {
-          providers: {
-            "fixture-completions": {
-              baseUrl: `${base}/v1`,
-              api: "openai-completions",
-              apiKey: "sk-synthetic-completions",
-              models: [model("fixture-thinker")],
-            },
-            "fixture-messages": {
-              baseUrl: base,
-              api: "anthropic-messages",
-              apiKey: "sk-synthetic-messages",
-              models: [model("fixture-thinker")],
-            },
-            // Same endpoint and model, plus a header rewrite the provider rejects.
-            "fixture-broken": {
-              baseUrl: `${base}/v1`,
-              api: "openai-completions",
-              apiKey: "sk-synthetic-broken",
-              headers: { "x-fixture-break": "1" },
-              models: [model("fixture-thinker")],
-            },
-            "fixture-responses": {
-              baseUrl: `${base}/v1`,
-              api: "openai-responses",
-              apiKey: "sk-synthetic-responses",
-              models: [model("fixture-thinker")],
-            },
-          },
+    return upstream.server;
+  },
+  config: (base) => ({
+    gateway: { controlUi: { enabled: true } },
+    agents: { entries: { main: {} } },
+    models: {
+      providers: {
+        "fixture-completions": {
+          baseUrl: `${base}/v1`,
+          api: "openai-completions",
+          apiKey: "sk-synthetic-completions",
+          models: [model("fixture-thinker")],
+        },
+        "fixture-messages": {
+          baseUrl: base,
+          api: "anthropic-messages",
+          apiKey: "sk-synthetic-messages",
+          models: [model("fixture-thinker")],
+        },
+        // Same endpoint and model, plus a header rewrite the provider rejects.
+        "fixture-broken": {
+          baseUrl: `${base}/v1`,
+          api: "openai-completions",
+          apiKey: "sk-synthetic-broken",
+          headers: { "x-fixture-break": "1" },
+          models: [model("fixture-thinker")],
+        },
+        "fixture-responses": {
+          baseUrl: `${base}/v1`,
+          api: "openai-responses",
+          apiKey: "sk-synthetic-responses",
+          models: [model("fixture-thinker")],
         },
       },
-    });
-    const close = async () => {
-      try {
-        await instance.cleanup();
-      } finally {
-        listener.listener.closeAllConnections();
-        await listener.releaseListener();
-        await listener.claim.release();
-      }
-    };
-    await instance.startGateway().catch(async (error: unknown) => {
-      await close();
-      throw error;
-    });
-    return { baseUrl: `http://127.0.0.1:${instance.port}/`, close };
-  },
+    },
+  }),
 });
-
-// Pairing links are single-use, so each page load gets its own handoff.
-async function open(route: string) {
-  const handoff = await instance.cli(["dashboard", "--json"]);
-  expect(handoff.code, handoff.stderr).toBe(0);
-  const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
-  const url = new URL(route, browserUrl);
-  url.hash = new URL(browserUrl).hash;
-  return url.href;
-}
+const { suite, open } = fixture;
 
 const options = {
   locale: "en-US",

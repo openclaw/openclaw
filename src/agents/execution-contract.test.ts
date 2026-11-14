@@ -4,85 +4,28 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 
 describe("isStrictAgenticExecutionContractActive", () => {
-  const supportedProvider = "openai";
-  const unsupportedProvider = "anthropic";
   const emptyConfig: OpenClawConfig = {
     agents: { entries: { main: {} } },
   };
 
-  describe("supported provider + model detection", () => {
-    it("auto-activates on the mock-openai qa lane", () => {
-      expect(
-        isStrictAgenticExecutionContractActive({
-          config: emptyConfig,
-          provider: "mock-openai",
-          modelId: "mock-openai/gpt-5.4",
-        }),
-      ).toBe(true);
-    });
-
-    it("auto-activates on normalized provider-prefixed model ids", () => {
-      // Regression for the adversarial review finding: prefixed model ids
-      // must strip the provider prefix before matching the regex.
-      expect(
-        isStrictAgenticExecutionContractActive({
-          config: emptyConfig,
-          provider: supportedProvider,
-          modelId: " OPENAI:GPT-5.4 ",
-        }),
-      ).toBe(true);
-    });
-
-    it("does not match non-gpt-5 family ids", () => {
-      expect(
-        isStrictAgenticExecutionContractActive({
-          config: emptyConfig,
-          provider: supportedProvider,
-          modelId: "gpt-50",
-        }),
-      ).toBe(false);
-    });
-  });
-
-  describe("explicit override behavior", () => {
-    it("honors explicit default opt-out even on the supported lane", () => {
-      const config: OpenClawConfig = {
-        agents: {
-          entries: { main: {} },
-          defaults: {
-            embeddedAgent: {
-              executionContract: "default",
+  it.each([
+    ["mock-openai qa", "mock-openai", "mock-openai/gpt-5.4", undefined, true],
+    ["normalized provider prefix", "openai", " OPENAI:GPT-5.4 ", undefined, true],
+    ["non-gpt-5 family", "openai", "gpt-50", undefined, false],
+    ["explicit opt-out", "openai", "gpt-5.4", "default", false],
+    ["unsupported strict override", "anthropic", "claude-opus-4-6", "strict-agentic", false],
+  ] as const)(
+    "resolves activation for %s",
+    (_label, provider, modelId, executionContract, expected) => {
+      const config: OpenClawConfig = executionContract
+        ? {
+            agents: {
+              ...emptyConfig.agents,
+              defaults: { embeddedAgent: { executionContract } },
             },
-          },
-        },
-      };
-      expect(
-        isStrictAgenticExecutionContractActive({
-          config,
-          provider: supportedProvider,
-          modelId: "gpt-5.4",
-        }),
-      ).toBe(false);
-    });
-
-    it("collapses explicit strict-agentic to default on an unsupported lane", () => {
-      const config: OpenClawConfig = {
-        agents: {
-          entries: { main: {} },
-          defaults: {
-            embeddedAgent: {
-              executionContract: "strict-agentic",
-            },
-          },
-        },
-      };
-      expect(
-        isStrictAgenticExecutionContractActive({
-          config,
-          provider: unsupportedProvider,
-          modelId: "claude-opus-4-6",
-        }),
-      ).toBe(false);
-    });
-  });
+          }
+        : emptyConfig;
+      expect(isStrictAgenticExecutionContractActive({ config, provider, modelId })).toBe(expected);
+    },
+  );
 });

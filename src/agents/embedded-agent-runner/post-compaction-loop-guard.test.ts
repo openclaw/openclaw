@@ -48,22 +48,17 @@ describe("createPostCompactionLoopGuard", () => {
     }
   });
 
-  it("does NOT abort when the result hash changes (progress was made)", () => {
+  it.each([
+    ["result", ["/x", "/x", "/x"], ["r1", "r2", "r3"]],
+    ["args", ["/a", "/b", "/c"], ["r1", "r1", "r1"]],
+  ] as const)("does NOT abort when the %s hash changes", (_field, paths, results) => {
     const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
-    guard.observe(callOutcome("read", { path: "/x" }, "r1"));
-    guard.observe(callOutcome("read", { path: "/x" }, "r2"));
-    const third = guard.observe(callOutcome("read", { path: "/x" }, "r3"));
-    expect(third.shouldAbort).toBe(false);
-  });
-
-  it("does NOT abort when the args hash changes", () => {
-    const guard = createPostCompactionLoopGuard();
-    guard.armPostCompaction();
-    guard.observe(callOutcome("read", { path: "/a" }, "r1"));
-    guard.observe(callOutcome("read", { path: "/b" }, "r1"));
-    const third = guard.observe(callOutcome("read", { path: "/c" }, "r1"));
-    expect(third.shouldAbort).toBe(false);
+    for (let index = 0; index < paths.length; index += 1) {
+      expect(guard.observe(callOutcome("read", { path: paths[index] }, results[index]!))).toEqual({
+        shouldAbort: false,
+      });
+    }
   });
 
   it("does NOT abort outside the window", () => {

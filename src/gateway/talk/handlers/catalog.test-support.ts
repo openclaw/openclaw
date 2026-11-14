@@ -73,6 +73,8 @@ vi.mock("../../../tts/tts.js", async () => ({
   synthesizeSpeech: mocks.synthesizeSpeech,
 }));
 
+vi.mock("../../../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: mocks.synthesizeSpeech }));
+
 vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../talk/provider-registry.js")>()),
   canonicalizeRealtimeVoiceProviderId: mocks.canonicalizeRealtimeVoiceProviderId,
