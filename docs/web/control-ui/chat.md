@@ -563,9 +563,12 @@ an invalid source folder.
 
 ## Mobile composer
 
-On phones, tapping the compact composer focuses the text field and opens the
-keyboard in the same gesture. The expanded editor keeps your draft and selection
-while you use its controls.
+Only phone-sized layouts collapse an empty, unfocused composer to one line.
+Wider windows keep the editor and its controls expanded, even when navigation
+uses a drawer. Clicking or focusing the compact composer expands it; on phones,
+tapping also opens the keyboard in the same gesture. The expanded editor keeps
+your draft and selection while you use its controls, and stays open when you
+leave a typed draft.
 
 ## Composer predictions
 

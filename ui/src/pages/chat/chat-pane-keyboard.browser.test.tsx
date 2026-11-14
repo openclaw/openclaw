@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { userEvent } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import "../../styles.css";
 import "../../styles/chat.ts";
 import { connectShellViewport, shellViewport } from "../../app/shell-viewport.ts";
@@ -64,6 +64,9 @@ it("publishes keyboard transitions to the mobile composer without transcript geo
 });
 
 it("keeps the mobile composer open while a typed draft waits", async () => {
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(430, 800);
+  onTestFinished(() => page.viewport(viewport.width, viewport.height));
   const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   const runtime = getPaneTestRuntime(pane);
   runtime.mergedChrome = true;
