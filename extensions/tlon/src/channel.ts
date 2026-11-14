@@ -12,14 +12,12 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import {
-  chunkTextForOutbound,
-  sanitizeAssistantVisibleText,
-} from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { createTlonSetupWizardBase, tlonSetupContract } from "./setup-core.js";
@@ -77,7 +75,7 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
 
 const tlonChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
+  chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
   chunkerMode: "markdown",
   textChunkLimit: 10000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
