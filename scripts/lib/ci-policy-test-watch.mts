@@ -1624,7 +1624,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "extensions/memory-core/src/memory/index.test.ts",
     "extensions/memory-core/src/memory/manager-search-provenance.test.ts",
     "extensions/memory-core/src/memory/manager-temporal-ranking.test.ts",
     "extensions/memory-core/src/memory/manager.watcher-filesystem.test.ts",

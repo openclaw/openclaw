@@ -13,7 +13,6 @@ extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/codex/src/app-server/approval-bridge.ts
 extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
-extensions/codex/src/app-server/compact.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/dynamic-tool-build.test.ts
 extensions/codex/src/app-server/dynamic-tools.test.ts
@@ -110,7 +109,6 @@ extensions/qa-lab/src/scorecard-taxonomy.ts
 extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
 extensions/qa-lab/web/src/app.ts
-extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
 extensions/slack/src/action-runtime.ts
 extensions/slack/src/channel.ts
@@ -193,13 +191,11 @@ src/agents/tool-search.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/message-tool.test.ts
-src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/web-fetch.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
-src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/directive-handling.model.test.ts
 src/auto-reply/reply/dispatch-acp.test.ts
@@ -214,7 +210,6 @@ src/auto-reply/reply/dispatch-from-config.send-policy-routing.test-utils.ts
 src/auto-reply/reply/get-reply-run.media-only.test.ts
 src/auto-reply/reply/get-reply.ts
 src/auto-reply/reply/queue.collect.test.ts
-src/auto-reply/reply/reply-run-registry.test.ts
 src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
 src/channels/plugins/setup-wizard-helpers.ts
@@ -232,7 +227,6 @@ src/cli/mcp-cli.ts
 src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/run-main.ts
-src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/doctor-auth-flat-profiles.test.ts
@@ -244,7 +238,6 @@ src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.probe.ts
 src/commands/models/list.status-command.ts
-src/commands/onboarding-plugin-install.test.ts
 src/commands/onboarding-plugin-install.ts
 src/config/io.write-config.test.ts
 src/config/io.write-prepare.ts
@@ -373,7 +366,6 @@ src/trajectory/export.test.ts
 src/trajectory/export.ts
 src/tui/embedded-backend.test.ts
 src/tui/embedded-backend.ts
-src/tui/tui-command-handlers.test.ts
 src/tui/tui-command-handlers.ts
 src/tui/tui-event-handlers.test.ts
 src/tui/tui-pty-local.e2e.test.ts
@@ -381,7 +373,6 @@ src/tui/tui-session-actions.test.ts
 src/tui/tui.ts
 src/wizard/setup.finalize.test.ts
 src/wizard/setup.finalize.ts
-src/wizard/setup.test.ts
 src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/pages/chat/chat-gateway.test.ts

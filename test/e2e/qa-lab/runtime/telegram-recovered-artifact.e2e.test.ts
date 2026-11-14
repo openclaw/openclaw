@@ -10,6 +10,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import {
   createQaGatewayChild,
+  type MockOpenAiRequestSnapshot,
   type QaGatewayChild,
   startQaMockOpenAiServer,
   writeJson,
@@ -346,7 +347,60 @@ test("delivers a recovered artifact once while preserving its inter-session tran
       { timeoutMs: 35_000 },
     );
     expect(waited).toMatchObject({ status: "ok" });
-    await expect.poll(() => documents.length, { timeout: 30_000 }).toBe(1);
+    try {
+      await expect.poll(() => documents.length, { timeout: 30_000 }).toBe(1);
+    } catch (error) {
+      process.stderr.write(
+        JSON.stringify({
+          writeCalls: writeCalls.length,
+          completedWrites: completedWrites.length,
+          overloads,
+          finalizers: finalizers.length,
+          markerResponses: markerResponses.length,
+          markerResponseObserved: markerResponses.includes(true),
+          documents: documents.length,
+        }) + "\n",
+      );
+      try {
+        const response = await fetch(`${mock.baseUrl}/debug/requests`, {
+          signal: AbortSignal.timeout(2_000),
+        });
+        if (response.ok) {
+          const requests: MockOpenAiRequestSnapshot[] = await response.json();
+          const scenarioPattern = /empty response after write (recovery|exhaustion) qa check/i;
+          process.stderr.write(
+            JSON.stringify({
+              requests: requests.slice(-6).map((request) => {
+                const projection =
+                  /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(
+                    request.prompt,
+                  );
+                const currentPrompt = projection?.[2] ?? request.prompt;
+                return {
+                  scenarioInPrompt: scenarioPattern.test(request.prompt),
+                  scenarioInCurrentPrompt: scenarioPattern.test(currentPrompt),
+                  scenarioInAllInput: scenarioPattern.test(request.allInputText),
+                  settledContinuation: currentPrompt.includes(
+                    "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step.",
+                  ),
+                  plannedTool:
+                    request.plannedToolName === "write" ||
+                    request.plannedToolName === "exec" ||
+                    request.plannedToolName === "dispatch_action"
+                      ? request.plannedToolName
+                      : request.plannedToolName
+                        ? "other"
+                        : "none",
+                };
+              }),
+            }) + "\n",
+          );
+        }
+      } catch {
+        // Diagnostic collection must not replace the original poll failure.
+      }
+      throw error;
+    }
     const history = (await gateway.call("chat.history", { sessionKey, limit: 30 })) as {
       messages: Array<{ role: string; content: unknown }>;
     };

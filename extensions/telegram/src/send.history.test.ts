@@ -228,7 +228,10 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
   });
 
   it("refreshes authoritative edited captions without hiding later group history", async () => {
-    const original = providerMessage(-100123, "original response", { message_thread_id: 77 });
+    const original = providerMessage(-100123, "original response", {
+      message_thread_id: 77,
+      is_topic_message: true,
+    });
     fixture.responseFor = () => original;
     await sendMessageTelegram("-100123:topic:77", "original response", sendOptions());
     await cache().record({
