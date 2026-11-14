@@ -1,14 +1,34 @@
-import fs from "node:fs";
+import fs, { type BigIntStats } from "node:fs";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
 import { hashPublishedFileSync, sameFileStatFingerprint } from "./sqlite-snapshot-file.js";
+import { assertDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export function readSqliteIntegrityFileIdentity(
   pathname: string,
   expected?: FileIdentityStat,
 ): FileIdentityStat & { size: bigint } {
-  const current = fs.statSync(pathname, { bigint: true });
+  return sqliteIntegrityFileIdentity(pathname, fs.statSync(pathname, { bigint: true }), expected);
+}
+
+export async function readSqliteIntegrityFileIdentityAsync(
+  pathname: string,
+  expected?: FileIdentityStat,
+  expectedSource?: DatabaseFileIdentity,
+): Promise<FileIdentityStat & { size: bigint }> {
+  const current = await fs.promises.stat(pathname, { bigint: true });
+  if (expectedSource) {
+    assertDatabaseFileIdentity(current, expectedSource);
+  }
+  return sqliteIntegrityFileIdentity(pathname, current, expected);
+}
+
+function sqliteIntegrityFileIdentity(
+  pathname: string,
+  current: BigIntStats,
+  expected?: FileIdentityStat,
+): FileIdentityStat & { size: bigint } {
   if (!current.isFile() || (expected && !sameFileIdentity(expected, current))) {
     throw new Error(`SQLite source changed during integrity admission: ${pathname}`);
   }

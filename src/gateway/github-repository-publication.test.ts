@@ -491,7 +491,7 @@ it.each([
       },
     },
   });
-  let now = performance.now();
+  let now = Math.floor(performance.now());
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
   onTestFinished(() => clock.mockRestore());
   const error = failure === "unattached disk" ? "must be attached" : "capture tunnel failure";

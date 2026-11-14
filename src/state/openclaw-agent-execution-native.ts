@@ -180,7 +180,11 @@ export function createAgentDatabaseNativeGeneration(
         env: context.environment,
       });
       const assertBackgroundIntegrity = assertPreparationJournal
-        ? captureAgentDatabaseStartupVerification(pathname, context.environment)
+        ? captureAgentDatabaseStartupVerification(
+            pathname,
+            context.environment,
+            nativeIdentity ?? expectedIdentity,
+          )
         : undefined;
       const nativeLocations = [
         pathname,

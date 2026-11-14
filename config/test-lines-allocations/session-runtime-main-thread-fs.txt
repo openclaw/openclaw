@@ -1,4 +1,4 @@
-# 12,820 net test LF against main 9f1dce8b minus the single 400-line PR allowance.
+# 12,902 net test LF against main 9f1dce8b minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -12,4 +12,5 @@
 # Output-cap settlement, revoked-admission no-effect, and fresh-process schema reuse proof.
 # Startup backfill preserves same-file reopen and worker refusal of physical replacement.
 # CI fixtures retain original assertions with native worker/watch admission and physical roots.
-12420
+# Calibrated startup fs counts and real held-commit replacement quarantine regression.
+12502
