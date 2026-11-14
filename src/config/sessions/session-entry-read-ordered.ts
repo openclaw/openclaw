@@ -96,11 +96,18 @@ export function createAdmittedSessionEntryCohortReader(params: {
     ]),
     assertCurrent: assertOwnerCurrent,
     async readEntry(assertCallerCurrent, projection) {
+      assertOwnerCurrent();
+      assertCallerCurrent();
+      const generation = params.execution.capturePreparedGenerationClaim();
+      if (!generation) {
+        throw new SessionEntryChangedDuringReadError();
+      }
       const assertCurrent = () => {
+        // Recovery between reads must not accept a read across a native retirement.
+        generation.assertCurrent();
         assertOwnerCurrent();
         assertCallerCurrent();
       };
-      assertCurrent();
       const request = {
         sessionKeys: [params.sessionKey],
         snapshotFields: projection === "list" ? [] : projection === "full" ? undefined : projection,
@@ -145,9 +152,9 @@ export function createAdmittedSessionEntryCohortReader(params: {
         if (!assertNativeCurrent) {
           throw new Error("Session cohort consumption has ended");
         }
+        assertNativeCurrent();
         assertOwnerCurrent();
         assertCallerCurrent();
-        assertNativeCurrent();
       };
       const source = createSessionWorkerExecutionSource(
         assertCurrent,
@@ -180,7 +187,18 @@ export function createAdmittedSessionEntryCohortReader(params: {
             runOpenClawAgentWriteAdmissions(
               [database],
               async () => {
-                assertNativeCurrent = captureSessionEntryNativeMutationWitness([database]);
+                assertOwnerCurrent();
+                const generation = params.execution.capturePreparedGenerationClaim();
+                if (!generation) {
+                  throw new SessionEntryChangedDuringReadError();
+                }
+                // Capture after FIFO wait, then pin this generation through read and consume.
+                captured.expected.incarnation = generation.incarnation;
+                const assertUnchanged = captureSessionEntryNativeMutationWitness([database]);
+                assertNativeCurrent = () => {
+                  generation.assertCurrent();
+                  assertUnchanged();
+                };
                 try {
                   assertCurrent();
                   return await run();

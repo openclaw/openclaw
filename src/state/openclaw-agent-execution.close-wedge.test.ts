@@ -5,7 +5,10 @@ import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { loadSessionEntryForAdmission } from "../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry-replace.js";
 import { createSessionActorFactory } from "../config/sessions/session-actor-durable.js";
+import * as entryReadFacts from "../config/sessions/session-entry-read-facts.js";
 import * as backoff from "../infra/backoff.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
@@ -174,7 +177,7 @@ const capture = (env: ReturnType<typeof makeEnv>, agentId = "first") =>
   captureOpenClawAgentDatabaseExecution({ agentId, env });
 const faultState = new Int32Array(fault.enabled);
 
-function releaseOnExit(...resources: { release(): Promise<void> }[]) {
+function releaseOnExit(...resources: { release(): void | Promise<void> }[]) {
   return {
     async [Symbol.asyncDispose]() {
       Atomics.store(faultState, 0, 0);
@@ -406,14 +409,27 @@ it("recovers retained borrowers after native loss without replaying the failed o
 });
 
 it("reopens a native generation lost between operations before dispatch", async () => {
-  const execution = capture(makeEnv());
+  const env = makeEnv();
+  const session = { agentId: "first", env, sessionKey: "agent:first:retained-admission" };
+  replaceSessionEntrySync(session, {
+    sessionId: "retained",
+    lifecycleRevision: "original",
+    updatedAt: 1,
+  });
+  const execution = capture(env);
   await execution.prepare(source);
   expect(await readEntries(execution, "healthy")).toMatchObject({ entries: [] });
   const claim = execution.captureGenerationClaim();
   expect(() => claim.assertCurrent()).not.toThrow();
-
   const agentWorker = [...fault.workers].at(-1);
   expect(agentWorker).toBeDefined();
+  const { databaseClaim: admission } = await loadSessionEntryForAdmission(session);
+  await using _ = releaseOnExit(admission, execution);
+  const reader = "reader" in admission && admission.reader;
+  if (!reader) {
+    throw new Error("Expected a retained admission reader");
+  }
+
   await agentWorker!.terminate();
   const claimFailure = () => {
     try {
@@ -437,8 +453,56 @@ it("reopens a native generation lost between operations before dispatch", async 
   expect(replacement?.identity).toBe(claim.identity);
   expect(replacement?.incarnation).not.toBe(claim.incarnation);
   expect(isSqliteWorkerError(claimFailure(), "unavailable")).toBe(true);
+  const replacementWorker = [...fault.workers].at(-1);
+  expect(replacementWorker).toBeDefined();
+  // Chat retains its admission across tool calls; a recovered worker is not a reset.
+  for (let read = 0; read < 2; read++) {
+    await expect(
+      reader.withRead(
+        { sessionKeys: [session.sessionKey] },
+        () => {},
+        (result) => result.entries,
+      ),
+    ).resolves.toMatchObject([{ entry: { sessionId: "retained", lifecycleRevision: "original" } }]);
+    await expect(reader.readEntry(() => {}, "full")).resolves.toMatchObject({
+      entry: { sessionId: "retained", lifecycleRevision: "original" },
+    });
+    expect(admission.incarnation).toBe(replacement?.incarnation);
+  }
+
+  // Delay a real read's return until native loss and recovery have both settled.
+  const readFacts = entryReadFacts.readSessionEntriesWithRetainedFacts;
+  const interruptedRead = vi
+    .spyOn(entryReadFacts, "readSessionEntriesWithRetainedFacts")
+    .mockImplementationOnce(async (...args) => {
+      const result = await readFacts(...args);
+      await replacementWorker!.terminate();
+      expect(await readEntries(execution, "recovered-again")).toMatchObject({ entries: [] });
+      return result;
+    });
+  try {
+    await expect(reader.readEntry(() => {}, "full")).rejects.toMatchObject({ code: "unavailable" });
+    expect(interruptedRead).toHaveBeenCalledOnce();
+  } finally {
+    interruptedRead.mockRestore();
+  }
+  await expect(reader.readEntry(() => {}, "full")).resolves.toMatchObject({
+    entry: { sessionId: "retained", lifecycleRevision: "original" },
+  });
+  expect(admission.incarnation).toBe(execution.capturePreparedGenerationClaim()?.incarnation);
+
+  replaceSessionEntrySync(session, {
+    sessionId: "retained",
+    lifecycleRevision: "reset",
+    updatedAt: 2,
+  });
+  const consume = vi.fn();
+  await expect(
+    reader.withRead({ sessionKeys: [session.sessionKey] }, () => {}, consume),
+  ).rejects.toThrow(/changed/iu);
+  expect(consume).not.toHaveBeenCalled();
+  await expect(reader.readEntry(() => {}, "full")).rejects.toThrow(/changed/iu);
   expect(await readEntries(execution, "still-healthy")).toMatchObject({ entries: [] });
-  await execution.release();
 });
 
 it("surfaces the native cleanup cause while the close still fails, then recovers once it clears", async () => {
