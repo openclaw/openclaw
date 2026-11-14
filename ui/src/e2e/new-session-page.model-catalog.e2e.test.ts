@@ -80,7 +80,8 @@ suite.define(() => {
         await revealChatModelOption(page, "openai/gpt-5.5");
         await revealChatModelOption(page, "anthropic/claude-sonnet-4-6");
         await modelSelect.focus();
-        const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
+        // Shortcut numbering restarts in the selected provider rail.
+        const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="1"]');
         await pollCount(secondShortcut).toBe(1);
         // Finish the picker's opening scale before recording its baseline. The top
         // transform origin keeps the anchor gap stable while box geometry still grows.
@@ -114,7 +115,7 @@ suite.define(() => {
               },
             };
           });
-        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(4);
+        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(8);
         const geometryBeforeFocus = await menuGeometry();
         expect(geometryBeforeFocus).not.toBeNull();
         await pollOpacity(secondShortcut).toBe("1");
