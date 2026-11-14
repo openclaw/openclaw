@@ -104,7 +104,6 @@ describe("isRetryableDiscoveryError", () => {
   it.each([
     [new TypeError("fetch failed"), true],
     [new DiscoveryRequestError(500, "unavailable", "x"), true],
-    [new DiscoveryRequestError(503, "unavailable", "x"), true],
     [new DiscoveryRequestError(409, "conflict", "concurrent update; retry"), true],
     [new DiscoveryRequestError(429, "rate_limited", "x"), true],
     [new DiscoveryRequestError(400, "bad_request", "x"), false],

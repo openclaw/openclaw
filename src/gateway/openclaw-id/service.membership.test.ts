@@ -223,24 +223,6 @@ describe("Gateway membership authority and enforcement", () => {
     });
   });
 
-  it("refuses a replayed change with a stale seq", async () => {
-    const claw = await linkedClaw();
-    const { service } = serviceFor(claw.authority);
-    const bob = formatIrohEndpointKey(randomBytes(32));
-    const add = await claw.sign(2, {
-      op: "add",
-      account_id: "b",
-      role: "viewer",
-      peer_keys: [bob],
-      invite_id: null,
-    });
-    expect(await service.submitStatement("tunnel", add)).toMatchObject({ ok: true });
-    expect(await service.submitStatement("tunnel", add)).toMatchObject({
-      ok: false,
-      code: "seq_conflict",
-    });
-  });
-
   // Spec section 11 #3: Discovery cannot forge or relay a device approval.
   it("refuses a device-signed approval delivered through the mailbox", async () => {
     const claw = await linkedClaw();

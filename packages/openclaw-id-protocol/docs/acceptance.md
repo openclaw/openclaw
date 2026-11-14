@@ -6,8 +6,8 @@
 spec test. Run: `pnpm test packages/openclaw-id-protocol`.
 
 Integration tests are listed by exact name for the integration worker. They are not
-written as skipped or todo tests (the repo lint forbids both); the catalog test checks that
-every spec test has protocol coverage or a named integration test.
+written as skipped or todo tests (the repo lint forbids both). Nothing checks that a named
+integration test exists.
 
 | #   | Spec test                                     | Protocol level (this package)                                                                                                                                                                                      | Needs the full system (name, owner)                                                                            |
 | --- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |

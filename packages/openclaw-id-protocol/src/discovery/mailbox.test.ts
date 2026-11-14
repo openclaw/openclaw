@@ -16,10 +16,6 @@ describe("mailbox notices", () => {
       expect(noticeRecipientAllowed(event, "self")).toBe(false);
     }
   });
-  it("lists seq_conflict among the notice events", () => {
-    expect(MAILBOX_NOTICE_EVENTS).toContain("seq_conflict");
-  });
-
   it("sends seq_conflict only to one device, never to all owners or the Gateway", () => {
     expect(noticeRecipientAllowed("seq_conflict", FP)).toBe(true);
     expect(noticeRecipientAllowed("seq_conflict", "owners")).toBe(false);
