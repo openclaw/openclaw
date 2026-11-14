@@ -145,6 +145,29 @@ function mountCatalog(context: unknown, initial: Parameters<typeof McpAppCatalog
 }
 
 describe("app launch catalog", () => {
+  it("limits the empty message to the current catalog when conversation apps exist", async () => {
+    const request = vi.fn(async () => ({
+      servers: [
+        {
+          ...result.servers[0]!,
+          entrypoints: result.servers[0]!.entrypoints.filter(
+            (entry) => entry.entrypoint.type === "thread",
+          ),
+        },
+      ],
+    }));
+    const { context } = discoveryContext(request);
+    const catalog = mountCatalog(context, { sessionKey: "agent:main:one" });
+    await waitForSolid(() =>
+      expect(catalog.element.textContent).toContain("No apps to open here."),
+    );
+    expect(catalog.element.querySelector(".mcp-app-catalog__entry")).toBeNull();
+    catalog.update({ surface: "thread" });
+    await waitForSolid(() => expect(catalog.element.querySelector("button")).not.toBeNull());
+    catalog.element.querySelector<HTMLButtonElement>("button")!.click();
+    await waitForSolid(() => expect(catalog.element.textContent).toContain("Parts tray"));
+    expect(catalog.element.textContent).not.toContain("No apps to open here.");
+  });
   it("targets the agent named by a session key", async () => {
     const request = vi.fn(async () => ({ servers: [], onboarding: [] }));
     const { context } = discoveryContext(request);
