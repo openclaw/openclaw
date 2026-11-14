@@ -594,9 +594,10 @@ The Labs model selector offers:
 - **Default model**: use the agent's configured default model, ignoring the
   conversation's model override.
 
-Predictions use bounded recent text from the current conversation in an isolated,
-tool-free request. Tool calls and results are skipped, and long messages keep
-their endings. They cannot run tools, retrieve memory, or send messages. An
+Predictions use your recent messages in the current conversation (up to 16) and
+the assistant's final reply, in an isolated, tool-free request with low
+reasoning. Tool calls, tool results and the assistant's progress updates are
+skipped, and long messages keep their endings. They cannot run tools, retrieve memory, or send messages. An
 unavailable selected model skips the suggestion rather than silently switching
 to another model. Enabling the experiment can add model usage and cost; existing
 model configuration, provider credentials, and session access rules still apply.

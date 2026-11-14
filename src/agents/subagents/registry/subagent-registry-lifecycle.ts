@@ -12,7 +12,6 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../prepared-model-runtime-generation-scope.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   prepareRequesterCronAuthority,
@@ -397,15 +396,13 @@ export class SubagentLifecycleController {
     };
     // Restored work shares the Gateway's recovery capacity. Reserve its root before
     // waiting, then revalidate authority when capacity becomes available.
-    return runOutsidePreparedModelRuntimePluginGenerationScope(() =>
-      withoutGatewayToolCallerIdentity(() =>
-        runWithGatewayDetachedWorkContinuation(() => {
-          if (!this.restoredRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
-            return runCurrent(() => {});
-          }
-          return this.runBackgroundWork(entry, runCurrent);
-        }, "subagents:lifecycle-wake"),
-      ),
+    return withoutGatewayToolCallerIdentity(() =>
+      runWithGatewayDetachedWorkContinuation(() => {
+        if (!this.restoredRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
+          return runCurrent(() => {});
+        }
+        return this.runBackgroundWork(entry, runCurrent);
+      }, "subagents:lifecycle-wake"),
     );
   };
 

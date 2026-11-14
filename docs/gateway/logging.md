@@ -164,11 +164,11 @@ their structured file-log record, with cause and error-code details when
 available. Long summaries are truncated. The record retains its write timing
 and store fields.
 
-### Slow SQLite transcript hydration
+### Slow SQLite transcript hydration and appends
 
-Slow `sessions.transcript-hydration.*` read transactions and
-`session.lifecycle.delete` include native statement attribution on the existing
-slow-hold warning. `statementExecutionMs` sums native execution calls;
+Slow `sessions.transcript-hydration.*` read transactions,
+`session.transcript.append-turn` writes, and `session.lifecycle.delete` include
+native statement attribution on the existing slow-hold warning. `statementExecutionMs` sums native execution calls;
 `callbackOtherMs` is the remaining callback wall time, including JavaScript,
 statement preparation, GC, and scheduling. Neither is CPU time. Hydration also
 reports `callbackGcMs` from the current isolate's native GC sampler on Node;

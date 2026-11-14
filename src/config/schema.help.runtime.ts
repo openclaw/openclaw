@@ -23,7 +23,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
   "browser.profiles.*.engine":
-    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" for semantic DOM browsing. Lightpanda requires an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and does not support visual screenshots or other Chromium-only features.',
+    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" / "kitesurf" for external CDP browsing. External engines require an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and expose only their supported operations. Lightpanda has no screenshots; Kitesurf renders experimental screenshots.',
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
