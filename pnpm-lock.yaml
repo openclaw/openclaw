@@ -397,8 +397,8 @@ importers:
         specifier: 1.2.12
         version: 1.2.12(supports-color@10.2.2)
       npm:
-        specifier: 12.2.1
-        version: 12.2.1
+        specifier: 12.2.2
+        version: 12.2.2
       openai:
         specifier: 7.47.0
         version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
@@ -9490,8 +9490,8 @@ packages:
     resolution: {integrity: sha512-9qny7Z9DsQU8Ou39ERsPU4OZQlSTP47ShQzuKZ6PRXpYLtIFgl/DEBYEXKlvcEa+9tHVcK8CF81Y2V72qaZhWA==}
     engines: {node: '>=18'}
 
-  npm@12.2.1:
-    resolution: {integrity: sha512-bKCmFRVT/BB+YPEYbZwQ1XUI3N5t4xKSpU1MxOjo7z3iWzKBJ0ZXRC1xFdEN+TC7N5TdywaBzf2dMXGJq/e2PQ==}
+  npm@12.2.2:
+    resolution: {integrity: sha512-KglgbZyacf7jH+FHuNRqVuCzQi8VhI2a7J87Ix43FsPTuZoGWmIXXGdZtBUOA79vwL+IJREqURVzupA7PsQTcA==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
     hasBin: true
     bundledDependencies:
@@ -17798,7 +17798,7 @@ snapshots:
       path-key: 4.0.0
       unicorn-magic: 0.3.0
 
-  npm@12.2.1: {}
+  npm@12.2.2: {}
 
   nth-check@3.0.1:
     dependencies:
