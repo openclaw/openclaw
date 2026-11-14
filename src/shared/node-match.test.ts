@@ -70,6 +70,7 @@ describe("shared/node-match", () => {
   it.each([
     ["Mac Studio", "MacStudio", "MacStudio"],
     ["Cafe\u0301 01", "Cafe\u030101", "Café01"],
+    ["J\u030c desk", "J\u030cdesk", "ǰdesk"],
   ])("prefers exact %s matches to compact selectors", (spaced, compact, query) => {
     const nodes = [node("compact", spaced), node("exact", compact)];
     expect(resolve(nodes, query, true)).toBe("exact");
