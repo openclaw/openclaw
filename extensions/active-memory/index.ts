@@ -87,6 +87,17 @@ export default definePluginEntry({
       }
     };
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
+    // A provider without protected transcript recall is a config fact: the skip repeats on every
+    // eligible turn until the config changes. Warn once per provider and agent, then debug.
+    const warnedProductRecallSkips = new Set<string>();
+    const warnProductRecallSkipOnce = (key: string, message: string) => {
+      if (warnedProductRecallSkips.has(key)) {
+        api.logger.debug?.(message);
+        return;
+      }
+      warnedProductRecallSkips.add(key);
+      api.logger.warn?.(message);
+    };
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig = resolveLivePluginConfigObject(
         () => api.runtime.config.current() as OpenClawConfig,
@@ -509,7 +520,8 @@ export default definePluginEntry({
             const productRecallEligible =
               productRecallRequested && memoryCapability?.supportsPrivateTranscriptRecall === true;
             if (productRecallRequested && !productRecallEligible) {
-              api.logger.warn?.(
+              warnProductRecallSkipOnce(
+                `unsupported:${memorySlot ?? ""}:${effectiveAgentId}`,
                 "active-memory: the current memory provider does not support protected private transcript recall; skipping Remember across conversations",
               );
             }
