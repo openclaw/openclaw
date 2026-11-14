@@ -5,6 +5,10 @@ import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import * as directWake from "../agents/subagents/announce/subagent-announce-direct-delivery.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { createImageGenerateTool } from "../agents/tools/image-generate-tool.js";
 import { mediaGenerationCompletionDeliveryKey } from "../agents/tools/media-generate-background-completion.js";
 import { createMediaGenerationTaskLifecycle } from "../agents/tools/media-generate-background-shared.js";
@@ -12,6 +16,10 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
 import { startSessionDeliveryRuntime } from "../infra/session-delivery-queue-runtime.js";
 import { loadPendingSessionDelivery } from "../infra/session-delivery-queue-storage.js";
 import { enqueueUnclaimedSessionDeliveryFixture } from "../infra/session-delivery-queue.test-helpers.js";
@@ -23,6 +31,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { VERSION } from "../version.js";
 import * as managedMedia from "./managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 import { createScheduledGatewayRunner } from "./scheduled-run-gateway-context.js";
@@ -161,14 +170,28 @@ it.each([false, true])(
       const context = captureOpenClawStateWorkerContext();
       const clock = createGatewaySchedulerClock(Date.now());
       const scheduler = createTestGatewayScheduler(clock.clock);
-      const runDelivery = createScheduledGatewayRunner();
+      const installation = {
+        root: process.cwd(),
+        version: VERSION,
+        cliVersion: VERSION,
+        databasePath: context.admission.databasePath,
+      };
+      const runDelivery = await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "constructing-request" },
+        () =>
+          withGatewayServiceInstallation({ installation }, () => createScheduledGatewayRunner()),
+      );
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const stop = startSessionDeliveryRuntime({
         scheduler,
         queueContext: context,
         log,
         deliver: (entry, { queueContext }) =>
-          runDelivery(() => deliverQueuedSessionDelivery({ deps: {}, entry, queueContext })),
+          runDelivery(async () => {
+            expect(getGatewayServiceInstallation()).toEqual(installation);
+            expect(getGatewayToolCallerIdentity()).toBeUndefined();
+            await deliverQueuedSessionDelivery({ deps: {}, entry, queueContext });
+          }),
       });
       const attempt = createEmbeddedAttemptTranscriptLifecycle({ sessionId });
       try {

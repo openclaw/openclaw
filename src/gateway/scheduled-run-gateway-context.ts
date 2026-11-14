@@ -8,6 +8,10 @@
  */
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
+import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -56,6 +60,7 @@ export function createScheduledGatewayRunner(
   resolvePluginRegistry?: () => PluginRegistry | undefined,
 ) {
   const spawnBroker = getSpawnBroker();
+  const installationContext = { installation: getGatewayServiceInstallation() };
   const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   return async <T>(run: () => Promise<T>): Promise<T> =>
     await withoutGatewayToolCallerIdentity(() =>
@@ -63,7 +68,9 @@ export function createScheduledGatewayRunner(
         runWithSpawnBroker(spawnBroker, async () => {
           const runWithRegistry = () =>
             withPluginRuntimeRegistryScope(resolvePluginRegistry?.(), () =>
-              runWithReadOnlyWorkers(run),
+              runWithReadOnlyWorkers(() =>
+                withGatewayServiceInstallation(installationContext, run),
+              ),
             );
           if (!resolveGatewayContext) {
             return await runWithRegistry();

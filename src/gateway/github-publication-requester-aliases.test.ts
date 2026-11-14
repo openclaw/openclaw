@@ -547,9 +547,7 @@ it.each([false, true])(
     expect(restored.assertCurrent).not.toThrow();
     await visitors.execute("visitor_revoke", { email });
     expect(source.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
-    expect(restored.assertCurrent).toThrow(
-      operatorAccessPolicy.GatewayOperatorAccessUnavailableError,
-    );
+    expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
   },
 );
 
