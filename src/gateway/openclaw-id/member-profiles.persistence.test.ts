@@ -1,12 +1,32 @@
 // Canonical-profile integration, through real invitation approval, sweep and database reopen.
 import { expect, vi } from "vitest";
+import {
+  bytesToBase64url,
+  generateEd25519Signer,
+} from "../../../packages/openclaw-id-protocol/src/index.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { stateTest } from "../../plugin-state/plugin-state-fixtures.test-support.js";
 import { createCorePluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  readOpenClawIdLinkedProfile,
+  linkCanonicalOpenClawIdUserProfile,
+} from "../../state/user-profile-openclaw-id.js";
+import {
+  ensureCanonicalGatewayOwnerProfile,
+  ensureCanonicalUserProfileForEmail,
+  mergeCanonicalUserProfiles,
+  setCanonicalUserProfileDisplayName,
+} from "../../state/user-profile-writes.js";
+import { openclawIdHandlers } from "../server-methods/openclaw-id.js";
+import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { readStoredClaw, writeStoredClaw } from "./claw-store.js";
 import { fullClaw } from "./claw-store.test-support.js";
+import { createDiscoveryClient } from "./discovery-client.js";
 import { linkedClaw, ownerInvite, redemptionMail, serviceFor } from "./openclaw-id.test-support.js";
+import { publishClaw } from "./publisher.js";
 
 const it = stateTest("openclaw-id-member-profile-persistence");
 
@@ -173,3 +193,211 @@ it("keeps canonical email and assigns a new approval time on direct member re-ad
     vi.useRealTimers();
   }
 });
+
+it("registers only eligible local profiles through RPC, retains selection across restart, and binds only on signed approval", async ({
+  state,
+}) => {
+  state.applyEnv();
+  const person = await ensureCanonicalUserProfileForEmail("existing@example.test");
+  await setCanonicalUserProfileDisplayName(person.id, "Existing Person");
+  const owner = await ensureCanonicalGatewayOwnerProfile("Owner");
+  const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+  const { service } = serviceFor(claw.authority);
+  const invite = await ownerInvite(claw, { email: "bob@example.test", expiresIn: 60 });
+  const register = async (existingProfileId: unknown) => {
+    const respond = vi.fn();
+    await openclawIdHandlers["openclawId.authority"]!({
+      params: {
+        action: "register_invite",
+        cap: invite.cap,
+        proofKey: bytesToBase64url(invite.proofKey),
+        existingProfileId,
+      },
+      client: { internal: { isLocalClient: true } },
+      context: {
+        openclawIdService: service,
+        getRuntimeConfig: () => ({ gateway: { openclawId: { enabled: true } } }),
+      },
+      respond,
+    } as unknown as GatewayRequestHandlerOptions);
+    return respond.mock.calls[0];
+  };
+  try {
+    expect((await service.linkStatus()).existingProfiles).toEqual([
+      { id: person.id, displayName: "Existing Person" },
+    ]);
+    expect((await register(42))?.[0]).toBe(false);
+    for (const id of [owner.id, "missing-profile"]) {
+      expect((await register(id))?.[2]).toMatchObject({ details: { code: "profile_unavailable" } });
+    }
+    expect(claw.authority.current()?.authority?.invites).toEqual({});
+    expect((await register(person.id))?.[0]).toBe(true);
+    expect((await register(owner.id))?.[2]).toMatchObject({ details: { code: "invite_used" } });
+  } finally {
+    await service.stop();
+  }
+  await closeOpenClawStateDatabaseAsync();
+  const restored = createOpenClawIdAuthority();
+  await restored.load();
+  const { service: restarted } = serviceFor(restored);
+  const mail = await redemptionMail({
+    clawId: claw.clawId,
+    inviteId: invite.inviteId,
+    proofKey: invite.proofKey,
+    accountId: "acct-bob",
+    email: "bob@example.test",
+  });
+  try {
+    expect((await restarted.linkStatus()).invites?.[0]?.existingProfile).toEqual({
+      id: person.id,
+      displayName: "Existing Person",
+    });
+    expect(await restored.redeem(mail.message.payload.redemption, mail.message.from)).toMatchObject(
+      { ok: true },
+    );
+    expect(await readOpenClawIdLinkedProfile("acct-bob")).toBeNull();
+    expect(await restored.resolvePeer(mail.peerKey)).toBeUndefined();
+    const approval = await claw.sign({
+      op: "add",
+      account_id: "acct-bob",
+      role: "operator",
+      peer_keys: [mail.peerKey],
+      invite_id: invite.inviteId,
+    });
+    expect(
+      await restored.submit({ ...approval, sig: bytesToBase64url(new Uint8Array(64)) }, "tunnel"),
+    ).toMatchObject({
+      ok: false,
+      code: "bad_signature",
+    });
+    expect(await readOpenClawIdLinkedProfile("acct-bob")).toBeNull();
+    expect(await restored.submit(approval, "tunnel")).toMatchObject({ ok: true });
+    expect(await readOpenClawIdLinkedProfile("acct-bob")).toMatchObject({ profileId: person.id });
+    expect(await restored.resolvePeer(mail.peerKey)).toMatchObject({
+      kind: "member",
+      accountId: "acct-bob",
+    });
+    expect((await restarted.linkStatus()).members).toMatchObject([
+      { displayName: "Existing Person", email: "bob@example.test" },
+    ]);
+    expect(JSON.stringify(restored.current()?.authority)).not.toContain(person.id);
+    expect(JSON.stringify(invite.cap)).not.toContain(person.id);
+    const requests: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      requests.push(await new Response(init?.body).text());
+      return Response.json({ owner_account_id: "owner" });
+    });
+    const signer = await generateEd25519Signer();
+    expect(
+      await publishClaw({
+        record: restored.current()!,
+        relayUrl: "https://relay.example.test",
+        client: createDiscoveryClient({
+          baseUrl: "https://discovery.example.test",
+          signer,
+          fetchImpl: fetcher,
+        }),
+        signer,
+        enrollmentCode: "synthetic-code",
+      }),
+    ).toMatchObject({ state: "published" });
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.join("\n")).not.toContain(person.id);
+    expect(requests.join("\n")).not.toContain("Existing Person");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 361_000);
+    const next = await ownerInvite(claw, { email: "next@example.test" });
+    expect(
+      await restored.registerInvite({ cap: next.cap, proofKey: next.proofKey }, "tunnel"),
+    ).toMatchObject({ ok: true });
+    expect(restored.current()?.invite_reports?.[invite.inviteId]).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+    await restarted.stop();
+  }
+  await closeOpenClawStateDatabaseAsync();
+  expect(await readOpenClawIdLinkedProfile("acct-bob")).toMatchObject({ profileId: person.id });
+});
+
+for (const change of ["merged", "deleted", "taken", "account-linked", "same-account"] as const) {
+  it(`approves safely when the selected profile is ${change} before approval`, async ({
+    state,
+  }) => {
+    state.applyEnv();
+    const person = await ensureCanonicalUserProfileForEmail("existing@example.test");
+    const other = await ensureCanonicalUserProfileForEmail("other@example.test");
+    const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+    const invite = await ownerInvite(claw, { email: "bob@example.test" });
+    expect(
+      await claw.authority.registerInvite(
+        { cap: invite.cap, proofKey: invite.proofKey, existingProfileId: person.id },
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const mail = await redemptionMail({
+      clawId: claw.clawId,
+      inviteId: invite.inviteId,
+      proofKey: invite.proofKey,
+      accountId: "acct-bob",
+      email: "bob@example.test",
+    });
+    expect(
+      await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
+    ).toMatchObject({ ok: true });
+    if (change === "merged") {
+      await mergeCanonicalUserProfiles(person.id, other.id);
+    } else if (change === "deleted") {
+      // Offline fixture removal models a profile deleted after the invitation was issued.
+      await closeOpenClawStateDatabaseAsync();
+      const { db } = openOpenClawStateDatabase();
+      withEngineStoreAdmission(() =>
+        db.prepare("DELETE FROM user_profiles WHERE id = ?").run(person.id),
+      );
+      await closeOpenClawStateDatabaseAsync();
+    } else {
+      await linkCanonicalOpenClawIdUserProfile({
+        profileId: change === "account-linked" ? other.id : person.id,
+        accountId: change === "taken" ? "acct-other" : "acct-bob",
+        email: null,
+      });
+    }
+    expect(await claw.authority.resolvePeer(mail.peerKey)).toBeUndefined();
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: "acct-bob",
+          role: "operator",
+          peer_keys: [mail.peerKey],
+          invite_id: invite.inviteId,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    expect(await claw.authority.resolvePeer(mail.peerKey)).toMatchObject({ kind: "member" });
+    const linked = await readOpenClawIdLinkedProfile("acct-bob");
+    const outcome = claw.authority.current()?.invite_reports?.[invite.inviteId]?.existingProfile;
+    if (change === "same-account") {
+      expect(linked?.profileId).toBe(person.id);
+      expect(outcome?.fallbackReason).toBeUndefined();
+    } else {
+      expect(linked?.profileId).not.toBe(person.id);
+      expect(outcome?.fallbackReason).toMatch(/instead/);
+      if (change === "account-linked") {
+        expect(linked?.profileId).toBe(other.id);
+      }
+      if (change === "merged") {
+        expect(linked?.profileId).not.toBe(other.id);
+      }
+      if (change === "taken") {
+        expect(await readOpenClawIdLinkedProfile("acct-other")).toMatchObject({
+          profileId: person.id,
+        });
+      }
+    }
+    await closeOpenClawStateDatabaseAsync();
+    expect((await readStoredClaw())?.invite_reports?.[invite.inviteId]?.existingProfile).toEqual(
+      outcome,
+    );
+  });
+}

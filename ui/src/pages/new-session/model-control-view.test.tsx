@@ -314,6 +314,36 @@ it("keeps CLI targets and a typed search live while initial model metadata is pe
   }
 });
 
+it("releases the reserved effort slot only after empty model discovery finishes", async () => {
+  const catalog = deferred<ModelCatalogResult>();
+  const state = contextWith([]);
+  state.request.mockImplementation(() => catalog.promise);
+  const agent = { id: "main", model: { primary: "openai/gpt-5.5" } };
+  const control = new NewSessionModelControl(() => undefined);
+  const options = { agent, agentId: "main", context: state.context, sending: false };
+  control.load(state.context, "main", true, { agent });
+  const view = mountSolid(() => <NewSessionModelControlView control={control} options={options} />);
+  const reserved = () => view.container.querySelector(".chat-controls__effort-picker--reserved");
+  try {
+    await waitForSolid(() => expect(reserved()).not.toBeNull());
+    catalog.resolve({ models: [], pendingProviders: ["example"] });
+    await waitForSolid(() =>
+      expect(control.renderProps(options).modelCatalogState.pendingProviders).toEqual(["example"]),
+    );
+    expect(reserved()).not.toBeNull();
+    state.request.mockResolvedValue({ models: [] });
+    state.emitCatalogChanged();
+    await waitForSolid(() => {
+      expect(view.container.querySelector('[data-chat-model-empty="true"]')).not.toBeNull();
+      expect(reserved()).toBeNull();
+      expect(view.container.querySelector(".chat-controls__effort-picker")).toBeNull();
+    });
+  } finally {
+    view.unmount();
+    control.reset();
+  }
+});
+
 it("retains accepted rows and search through failed refresh, then retires them on a new scope", async () => {
   const initial = { models: [{ provider: "example", id: "current", name: "Current model" }] };
   const state = contextWith(initial.models);
@@ -351,9 +381,8 @@ it("retains accepted rows and search through failed refresh, then retires them o
     const retry = deferred<ModelCatalogResult>();
     state.request.mockImplementation(() => retry.promise);
     state.emitCatalogChanged();
-    await waitForSolid(() =>
-      expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull(),
-    );
+    await waitForSolid(() => expect(state.request).toHaveBeenCalledTimes(3));
+    expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
     retry.resolve(initial);
     await waitForSolid(() => {
       expect(container.textContent).not.toContain("Couldn’t refresh some models");

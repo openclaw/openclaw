@@ -336,6 +336,28 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
 
+  it("keeps the host Codex context window as a TOML integer in the isolated Codex home", async () => {
+    const { generated, prepare, sourceConfig } = createWrapperFixture();
+    await sourceConfig(
+      [
+        'model = "gpt-5.5-1"',
+        "model_context_window = 1050000",
+        "model_auto_compact_token_limit = 900000",
+        "tool_output_token_limit = 20000",
+        "[model_providers.custom]",
+        'base_url = "https://example.test/v1"',
+        "stream_idle_timeout_ms = 300000",
+      ].join("\n"),
+    );
+
+    await prepare();
+
+    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toMatch(/^model_context_window = 1050000$/m);
+    expect(isolatedConfig).toMatch(/^stream_idle_timeout_ms = 300000$/m);
+    expect(isolatedConfig).not.toMatch(/model_auto_compact_token_limit|tool_output_token_limit/);
+  });
+
   it.each(["inline map", "project tables"])(
     "copies only trusted Codex project declarations into the isolated Codex home (%s)",
     async (syntax) => {

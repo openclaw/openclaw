@@ -15,6 +15,10 @@ OpenClaw removes XML declarations, external DTD declarations, and generator
 metadata before serving the files as public assets. The SVG geometry and visual
 content otherwise match the cited upstream files.
 
+Every bundled provider icon also uses a square view box centered on its mark,
+without width or height attributes, so marks share one optical size at any icon
+size. Only the view box changes; drawn geometry and colors are untouched.
+
 Provider names and marks remain the property of their respective owners.
 
 ## Abliteration icon

@@ -65,7 +65,7 @@ function fixture({ pending = false, runActive = false } = {}) {
     prediction,
     show: async () => {
       finish();
-      await waitForSolid(() => expect(prediction()?.textContent).toBe(suggestion));
+      await waitForSolid(() => expect(prediction()?.textContent).toContain(suggestion));
     },
     key: (key: string) =>
       input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })),
@@ -99,23 +99,17 @@ const changes = {
   run: (f) => Object.assign(f.props, { runActive: true }),
 } satisfies Record<string, (f: ReturnType<typeof fixture>) => void>;
 
-it.each(["Tab", "touch"])("accepts with %s only when idle, without sending", async (control) => {
-  const f = fixture({ runActive: control === "touch" });
+it("accepts with Tab only when idle, without sending", async () => {
+  const f = fixture({ runActive: true });
   f.finish();
-  if (control === "touch") {
-    expect(f.predictions()).toHaveLength(0);
-    f.props.runActive = false;
-    f.paint();
-  }
-  await waitForSolid(() => expect(f.prediction()?.textContent).toBe(suggestion));
+  expect(f.predictions()).toHaveLength(0);
+  f.props.runActive = false;
+  f.paint();
+  await waitForSolid(() => expect(f.prediction()?.textContent).toContain(suggestion));
   f.expectDraft("");
   f.key("Enter");
   expect(f.props.onSend).not.toHaveBeenCalled();
-  if (control === "Tab") {
-    f.key("Tab");
-  } else {
-    f.container.querySelector<HTMLButtonElement>('[aria-label="Use suggestion"]')!.click();
-  }
+  f.key("Tab");
   f.expectDraft(suggestion);
   flush();
   expect(f.prediction()).toBeNull();

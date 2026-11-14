@@ -9,9 +9,7 @@ const catalog = {
     },
     composer: {
       composerInput: "Chat composer",
-      usePrediction: "Use suggestion",
-      predictionShortcut: "Tab",
-      dismissPrediction: "Dismiss suggestion",
+      predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
@@ -213,7 +211,7 @@ const catalog = {
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
         pausedByStop: "Queue paused",
-        pausedByStopReason: "You stopped the run",
+        pausedByStopReason: "You requested a stop",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         needsReview: "Needs review",
@@ -232,8 +230,9 @@ const catalog = {
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
       rejected: "Mention search rejected. Check access or use another session.",
       limit: "You can mention up to 10 people per message.",
-      selectedLabel: "Will notify",
-      selected: "Will notify: {names}",
+      selectedLabel: "Notify or invite",
+      selected: "Notify or invite: {names}",
+      invite: "Guest invitations require the session creator or an admin.",
       remove: "Remove mention",
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",

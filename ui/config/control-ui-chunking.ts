@@ -414,6 +414,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-session-organization-shared.ts":
       // Settings, New Session, and Chat share this English copy.
       return "chat-english";
+    case "ui/src/i18n/locales/en-session-organization.ts":
+      // Slash commands use shared labels; management copy loads with its own consumers.
+      return "session-management-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":

@@ -222,6 +222,13 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (!paused || (params.expected && !isSameSubagentRunOwner(paused, params.expected))) {
       return false;
     }
+    let refreshCompletionAuthority: true | undefined;
+    try {
+      // A surviving requester owns the whole cohort, including this successor.
+      subagentRuns.runWithCompletionAuthority(paused, () => undefined);
+    } catch {
+      refreshCompletionAuthority = true;
+    }
     return this.replaceSubagentRunAfterSteer({
       assertCurrent: params.assertCurrent,
       retainAdmission: params.retainAdmission,
@@ -233,7 +240,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       // A paused row is terminal by construction; adoption is exactly the case the
       // ended-source gate exists to keep out of unrelated replacement callers.
       allowEndedSource: true,
-      refreshCompletionAuthority: true,
+      refreshCompletionAuthority,
       // The original requester is idle behind its own yield, so its wake credential
       // is the only path back to it once this follow-up settles.
       preserveRequesterSettleWake: true,

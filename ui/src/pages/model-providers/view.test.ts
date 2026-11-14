@@ -244,9 +244,7 @@ describe("renderModelProviders", () => {
     const container = mount(
       props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
     );
-    expect(
-      container.querySelector('.model-providers__catalog-progress[role="status"]'),
-    ).not.toBeNull();
+    expect(container.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     await waitForFast(() =>
       expect(
         container.querySelector('.model-providers__catalog-progress[role="alert"] span')
