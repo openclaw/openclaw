@@ -69,7 +69,12 @@ only to that profile. If their access has changed, they must ask again.
 only one field preserves the other override when it is compatible. Selecting or
 applying a single-mode theme also selects its supported mode if the previous
 explicit mode cannot render it. An explicitly requested incompatible mode is
-rejected; `system` follows the available palette:
+rejected; `system` follows the available palette.
+
+Selecting a different theme, with `set` or `import` with `apply: true`, shows
+that theme's own design: it clears the person's accent and font overrides, the
+same as choosing a theme in Appearance. Changing only the mode or reselecting
+the current theme keeps them. To clear both the theme and mode overrides:
 
 ```json
 { "action": "set", "id": null, "mode": null }
