@@ -1,0 +1,8 @@
+# Exact net test-line growth for PR #197118: the new mcp-http.schema.test.ts covers
+# top-level union flattening (allOf, root+union, sibling keywords, empty unions), the
+# exact conjunctive projections that keep a tool available (root type plus branch
+# constants, intersecting allOf enums, number/integer subtyping, annotation-only
+# differences, a branch's additionalProperties), the scoped nested conjunction used
+# when no flat schema states both constraints, and the branch-level compositions that
+# withhold the tool with a named warning.
+334

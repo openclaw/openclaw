@@ -144,6 +144,11 @@ const BILLING_ERROR_HARD_402_RE =
 // standalone status token, HTTP/status context, or a structured status/code shape.
 const RATE_LIMIT_429_RE =
   /^\s*429\b|\b(?:https?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|http(?:[ _-]?status)?)\b[\s:=#"'(]{0,6}429\b|["'](?:status|code)["']\s*:\s*429\b|\b429\b[\s:)\].,-]*(?:rate[_ -]?limit(?:ed|ing)?|too many requests|resource has been exhausted|quota(?:\s+(?:exceeded|exhausted|depleted|reached))?)\b/i;
+// Provider request validation that names a published tool definition rather than
+// the conversation, e.g. `tools.2.custom.input_schema: ...`. The index identifies
+// a position in the request's tool array, so the text never names the tool.
+const TOOL_DEFINITION_SCHEMA_REJECTION_RE = /\btools\.\d+\.(?:custom\.)?input_schema\b/i;
+
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests/i,
@@ -303,6 +308,13 @@ const ERROR_PATTERNS = {
     // will fail identically — classify so the fallback notice is informative
     // instead of "unknown" (#91710).
     /agent harness .* does not support .*provider is not one of/i,
+    // A rejected tool definition is a property of the published tool set, not of
+    // the candidate model: every fallback candidate is offered the same tools and
+    // fails identically. Classify it so the ladder reports the tool-definition
+    // fault instead of "unknown", which reads as an unexplained dead turn.
+    TOOL_DEFINITION_SCHEMA_REJECTION_RE,
+    // Anthropic Messages rejects a union at the root of a tool input schema.
+    "input_schema does not support oneof, allof, or anyof at the top level",
   ],
 } as const;
 
