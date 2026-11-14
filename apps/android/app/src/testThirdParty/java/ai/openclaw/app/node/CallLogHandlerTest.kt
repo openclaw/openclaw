@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -244,6 +245,28 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
     assertTrue(result.ok)
     assertEquals(200, source.lastRequest?.limit)
     assertEquals(0, source.lastRequest?.offset)
+  }
+
+  @Test
+  fun handleCallLogSearchTreatsNullTextFiltersAsAbsent() {
+    val source = FakeCallLogDataSource(canRead = true)
+    val handler = CallLogHandler(appContext(), source)
+
+    assertTrue(handler.handleCallLogSearch("""{"cachedName":null,"number":null}""").ok)
+    val request = requireNotNull(source.lastRequest)
+    assertNull(request.cachedName)
+    assertNull(request.number)
+  }
+
+  @Test
+  fun handleCallLogSearchPreservesLiteralNullTextFilters() {
+    val source = FakeCallLogDataSource(canRead = true)
+    val handler = CallLogHandler(appContext(), source)
+
+    assertTrue(handler.handleCallLogSearch("""{"cachedName":"null","number":"null"}""").ok)
+    val request = requireNotNull(source.lastRequest)
+    assertEquals("null", request.cachedName)
+    assertEquals("null", request.number)
   }
 
   @Test

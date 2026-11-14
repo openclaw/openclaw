@@ -78,7 +78,7 @@ class SmsSendTest {
   @Test
   fun shortMessageAndSuccessfulPlatformDivisionKeepTheirExistingSendPaths() =
     runTest {
-      for (message in listOf("hello", "a".repeat(160), "^".repeat(80), "日".repeat(70))) {
+      for (message in listOf("null", "hello", "a".repeat(160), "^".repeat(80), "日".repeat(70))) {
         assertTrue(SmsManager(context).send(params(message)).ok)
         assertEquals(message, carrier.lastSentTextMessageParams.text)
         assertNull(carrier.lastSentMultipartTextMessageParams)
@@ -87,6 +87,28 @@ class SmsSendTest {
       carrier.platformParts = arrayListOf("carrier ", "segmentation")
       assertTrue(SmsManager(context).send(params("carrier segmentation")).ok)
       assertEquals(carrier.platformParts, carrier.lastSentMultipartTextMessageParams.parts)
+    }
+
+  @Test
+  fun nullMessageIsRejectedBeforeCarrierSubmission() =
+    runTest {
+      val result = SmsManager(context).send("""{"to":"+15551234567","message":null}""")
+
+      assertFalse(result.ok)
+      assertEquals("INVALID_REQUEST: 'message' text required", result.error)
+      assertNull(carrier.lastSentTextMessageParams)
+      assertNull(carrier.lastSentMultipartTextMessageParams)
+    }
+
+  @Test
+  fun nullRecipientIsRejectedBeforeCarrierSubmission() =
+    runTest {
+      val result = SmsManager(context).send("""{"to":null,"message":"hello"}""")
+
+      assertFalse(result.ok)
+      assertEquals("INVALID_REQUEST: 'to' phone number required", result.error)
+      assertNull(carrier.lastSentTextMessageParams)
+      assertNull(carrier.lastSentMultipartTextMessageParams)
     }
 
   @Test

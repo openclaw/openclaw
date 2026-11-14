@@ -115,8 +115,8 @@ class SmsManager(
 
       val obj = parseJsonParamsObject(params) ?: return ParseResult.Error(error = "INVALID_REQUEST: expected JSON object")
 
-      val to = (obj["to"] as? JsonPrimitive)?.content?.trim().orEmpty()
-      val message = (obj["message"] as? JsonPrimitive)?.content.orEmpty()
+      val to = parseJsonString(obj, "to")?.trim().orEmpty()
+      val message = parseJsonString(obj, "message").orEmpty()
 
       if (to.isEmpty()) {
         return ParseResult.Error(
@@ -154,9 +154,9 @@ class SmsManager(
         QueryParams(
           startTime = startTime,
           endTime = endTime,
-          contactName = (obj["contactName"] as? JsonPrimitive)?.content?.trim(),
-          phoneNumber = (obj["phoneNumber"] as? JsonPrimitive)?.content?.trim(),
-          keyword = (obj["keyword"] as? JsonPrimitive)?.content?.trim(),
+          contactName = parseJsonString(obj, "contactName")?.trim(),
+          phoneNumber = parseJsonString(obj, "phoneNumber")?.trim(),
+          keyword = parseJsonString(obj, "keyword")?.trim(),
           type = (obj["type"] as? JsonPrimitive)?.content?.toIntOrNull(),
           isRead = (obj["isRead"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull(),
           includeMms = (obj["includeMms"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false,
