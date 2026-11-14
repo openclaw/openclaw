@@ -1,3 +1,0 @@
-# Three owning-query regressions under absent, full, and partial SQLite statistics;
-# includes early/middle/tail bounds and identity-less/empty predecessor behavior.
-114
