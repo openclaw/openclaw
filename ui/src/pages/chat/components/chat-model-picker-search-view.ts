@@ -101,13 +101,12 @@ export function createChatModelSearchView(
     },
   );
   const selectable = createMemo(() => matches().filter(({ row }) => !row.disabled));
-  // Keep a surviving choice on refresh; a removed choice adopts the current fallback.
+  // Browsing providers is neutral; typing or arrow navigation establishes a highlight.
   const [highlighted, highlight] = createSignal<string | undefined>((previous) => {
     const rows = selectable();
     return (
       rows.find(({ row }) => row.key === previous)?.row.key ??
-      (query().trim() ? undefined : rows.find(({ row }) => row.selected)?.row.key) ??
-      rows[0]?.row.key
+      (query().trim() ? rows[0]?.row.key : undefined)
     );
   });
   // A highlight move changes only its old and new rows, including offscreen choices.
@@ -219,9 +218,15 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
     }
     return;
   }
-  const index = rows.findIndex(({ row }) => row.key === view.highlighted());
+  const highlighted = view.highlighted();
+  const index = rows.findIndex(({ row }) =>
+    highlighted === undefined ? row.selected : row.key === highlighted,
+  );
   const offset = event.key === "ArrowDown" ? 1 : rows.length - 1;
-  const next = rows[index < 0 ? 0 : (index + offset) % rows.length];
+  const next =
+    rows[
+      index < 0 ? (event.key === "ArrowDown" ? 0 : rows.length - 1) : (index + offset) % rows.length
+    ];
   if (next) {
     view.highlight(next.row.key);
     view.reveal(next.row.key);

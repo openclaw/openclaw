@@ -537,7 +537,11 @@ start a turn in that session. These out-of-root previews are read-only.
 
 In Chat and New session, provider groups retain their expanded or collapsed state when you close and reopen the same model picker. Closing clears the search text without resetting those toggles. Reloading the page initializes the groups from the selected model again.
 
-For providers without recommendations, the model picker initially shows up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
+Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
+
+On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model.
+
+Drag provider icons to reorder the rail, or focus an icon and press **Alt+Arrow**. The order is saved in this browser and survives reloading. While the picker is open and search is not focused, **/** focuses search and **1–9** selects the corresponding available option. The number labels stay hidden; context-window values remain visible.
 
 While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes. Open tooltips also leave Escape to the input method.
 

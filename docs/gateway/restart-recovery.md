@@ -661,6 +661,11 @@ recovery path. Its single resume input reconciles the stopped children's work;
 it is not re-parked waiting for their old executions. A stopped child also needs
 reconciliation when other children still have reachable waits.
 
+The same recovery applies when a child's recorded completion authority belonged
+to the previous process, including a message-waiting or nested child. A saved
+yield is not a reachable wake after that authority retires. The root resumes to
+inspect saved results or explicitly continue the child through current admission.
+
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes
 with a visible recorded failure. Its transcript remains available. A permanently

@@ -123,7 +123,10 @@ suite.define(() => {
           '[data-chat-model-provider="openai"] .chat-controls__auth-meta',
         );
         await polledText(auth).toContain("long-account-name+siwc@example.test");
+        const accountToggle = picker.locator(".chat-controls__account-trigger");
+        await accountToggle.click();
         await auth.waitFor({ state: "visible" });
+        await accountToggle.click();
         await openai.click({ trial: true });
         await polledVisible(alpha).toBe(true);
         expect(await beta.isVisible()).toBe(false);

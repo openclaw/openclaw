@@ -1827,6 +1827,11 @@ finish_native_update() {
 		printf 'WARNING native update backup cleanup remains pending: %s\n' "$native_update_root" >&2
 }
 
+native_forward_state() {
+	proof journal-native-forward "$journal_file" "$session_witness_record" "$serving_root" \
+		"$suspension_pid" "$suspension_generation" "$gateway_runtime_bin" "$runtime_uid" "$gateway_port"
+}
+
 native_update() {
 	local action="$1" migration_budget
 	# A 37 GiB crossing can take 39 minutes before its backup; keep slow disks in budget.
@@ -2438,7 +2443,7 @@ recover_journal() {
 	local observed_system observed_user recovery_record evidence recovery_position recovery_release recovery_info recovery_label
 	local migration_phase worker_phase missing stopped_snapshot started_restored=0 need_start=0
 	local recovery_owned_pid="" recovery_owned_generation=""
-	local start_state start_result=0 runtime_reload
+	local start_state start_result=0 runtime_reload native_forward_evidence
 	if [[ -n "$reconcile_config_hash" ]]; then
 		[[ -e "$journal_file" ]] || return 1
 		phase="$(proof journal-field "$journal_file" phase)" || return 1
@@ -2489,14 +2494,17 @@ recover_journal() {
 		if [[ "$mode" == recover && "$current_sha" == "$candidate_sha" && "$candidate_sha" != "$predecessor_sha" ]] &&
 			bind_successor_generation &&
 			[[ "$suspension_pid:$suspension_generation" != "$expected_pid:$expected_generation" &&
-				"$(realpath "$proc_root/$suspension_pid/cwd")" == "$candidate_release" ]] &&
-			wait_for_live "$candidate_release" "$candidate_info" system "$suspension_pid" "$suspension_generation"; then
-			recheck_generation system "$suspension_pid" "$suspension_generation" || return 1
-			[[ "$(read_pointer "$current_link")" == "$candidate_release" ]] || return 1
-			verified_markers record "$candidate_sha" || return 1
-			proof unlink-exact "$journal_file" "$root_uid" "$session_witness_record" || return 1
-			printf 'RECOVERED phase=%s action=verified-migrated-candidate-forward session-proof=%s\n' "$phase" "$session_proof"
-			return 0
+				"$(realpath "$proc_root/$suspension_pid/cwd")" == "$candidate_release" ]]; then
+			native_forward_evidence="$(native_forward_state)" || return 1
+			protected_identity="$(printf '%s' "$native_forward_evidence" | "$node_bin" -e 'let s="";process.stdin.on("data",v=>s+=v).on("end",()=>process.stdout.write(JSON.stringify(JSON.parse(s).protectedPaths)));')" || return 1
+			if wait_for_live "$candidate_release" "$candidate_info" system "$suspension_pid" "$suspension_generation"; then
+				recheck_generation system "$suspension_pid" "$suspension_generation" || return 1
+				[[ "$(native_forward_state)" == "$native_forward_evidence" ]] || return 1
+				verified_markers record "$candidate_sha" || return 1
+				proof unlink-exact "$journal_file" "$root_uid" "$session_witness_record" || return 1
+				printf 'RECOVERED phase=%s action=verified-migrated-candidate-forward session-proof=%s\n' "$phase" "$session_proof"
+				return 0
+			fi
 		fi
 		predecessor_stopped=1
 		if ! predecessor_is_stopped "$expected_pid"; then bind_successor_generation || return 1; fi
@@ -3160,7 +3168,6 @@ publish_release() (
 cleanup_releases() {
 	local current_sha previous_sha protected_sha field directory sha identity device inode quarantine quarantine_name extra
 	local verified_shas verified_count=0 release_device
-	local selected_sha="${1:-}"
 	local -a directories protected
 	current_sha="$(read_pointer "$current_link")" || return 1
 	current_sha="$(basename "$current_sha")"
@@ -3169,7 +3176,7 @@ cleanup_releases() {
 		previous_sha="$(read_pointer "$previous_link")" || return 1
 		previous_sha="$(basename "$previous_sha")"
 	fi
-	protected=("$current_sha" "$previous_sha" "$selected_sha")
+	protected=("$current_sha" "$previous_sha")
 	verified_shas="$(verified_markers list)" || return 1
 	while IFS= read -r protected_sha; do
 		[[ -n "$protected_sha" ]] || continue
@@ -4574,8 +4581,5 @@ if [[ "$target_sha" == "$previous_sha" ]]; then
 	fail 'current release is unhealthy; refusing an unattended restart'
 fi
 candidate_release="$releases_root/$target_sha"
-# Reclaim headroom even when publication or activation will fail or defer.
-# Even an old published candidate stays protected until its exact attempt settles.
-cleanup_releases "$target_sha"
 candidate_info="$(publish_release "$target_sha" "$previous_release")"
 activate_prepared_release

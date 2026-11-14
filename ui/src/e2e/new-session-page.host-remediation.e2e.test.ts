@@ -97,6 +97,7 @@ suite.define(() => {
         await palette.locator(".cmd-palette__input").press("Tab");
         await palette.locator(".palette-session-settings__trigger").click();
         const settings = palette.locator(".oc-popover.palette-session-settings");
+        await settings.locator(".palette-session-settings__workspace").click();
         await settings
           .locator('[data-machine="local"][data-project="docs"]')
           .waitFor({ state: "visible" });
