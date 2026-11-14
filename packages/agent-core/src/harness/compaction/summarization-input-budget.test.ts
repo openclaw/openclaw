@@ -140,13 +140,13 @@ describe("summary request input budget", () => {
           };
         },
       };
-      const serialization = createConversationSerializationIndex(messages);
-      for (let index = 0; index < messages.length; index++) {
-        serialization.append(index, messages.get(index));
+      const index = createConversationSerializationIndex(messages);
+      for (let position = 0; position < count; position++) {
+        index.append(position, messages.get(position));
       }
       expect(rendered.size).toBe(count);
       rendered.clear();
-      const result = serializeConversationSourceWithinBudget(serialization.source, budget);
+      const result = serializeConversationSourceWithinBudget(index.source, budget);
       expect(rendered.size).toBe(count - result.omittedEntries);
       if (budget >= 1_000) {
         expect(result.text).toContain("entry-999");

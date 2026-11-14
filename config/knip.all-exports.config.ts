@@ -186,10 +186,6 @@ const workspaces = Object.fromEntries(
               "src/test-helpers/control-ui-projection-fixture.tsx!",
             ]
           : []),
-        // The compaction-floor test launches this retention probe as a Node subprocess.
-        ...(workspace === "packages/agent-core"
-          ? ["src/harness/compaction/compaction-floor.retention.test-support.ts!"]
-          : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations
@@ -215,6 +211,10 @@ const workspaces = Object.fromEntries(
             ]
           : [
               TEST_ENTRY_GLOB,
+              // The floor test launches this heap-retention probe as a Node subprocess by path.
+              ...(workspace === "packages/agent-core"
+                ? ["src/harness/compaction/compaction-floor.retention.test-support.ts!"]
+                : []),
               // Realtime codec tests spawn these fixtures by basename.
               ...(workspace === "extensions/openai"
                 ? [

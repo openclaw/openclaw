@@ -2347,6 +2347,38 @@ describe("GitHub API public fallback", () => {
   );
 });
 
+describe("receipt recovery checklist consumption", () => {
+  it.each([
+    ["Full Release Receipt Recovery", ".github/workflows/full-release-receipt-recovery.yml", true],
+    ["Full Release Receipt Recovery", ".github/workflows/unrelated.yml", false],
+    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", false],
+  ])("binds workflow %s to its exact path %s", async (workflowName, workflowPath, accepted) => {
+    const result = runInNewContext(
+      stripNodeTypeScriptTypes(
+        checklistFunctions("waitForSuccessfulRun") +
+          ';waitForSuccessfulRun("fixture/repo", "123", { workflowName: "Full Release Validation", workflowRef: "main" });',
+      ),
+      {
+        runInfo: async () => ({
+          workflowName,
+          workflowPath,
+          headBranch: "main",
+          status: "completed",
+          conclusion: "success",
+        }),
+        summarizePendingDeployments: () => undefined,
+        pendingDeployments: async () => [],
+        console: { log: () => {} },
+      },
+    );
+    if (accepted) {
+      await expect(result).resolves.toMatchObject({ run: { workflowName, workflowPath } });
+    } else {
+      await expect(result).rejects.toThrow("workflow mismatch");
+    }
+  });
+});
+
 describe("release run environment approval diagnostics", () => {
   it.each([
     { capability: true, unavailable: false, empty: false },

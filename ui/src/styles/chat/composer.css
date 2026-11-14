@@ -4754,14 +4754,15 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-weight: 400;
 }
 
-.chat-controls__account-trigger > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-controls__account-trigger:is(:hover, [aria-expanded="true"]) {
   background: var(--menu-selected);
+}
+
+/* A locked account is a label, not a control; this follows the hover rule to win. */
+.chat-controls__account-trigger:disabled {
+  min-width: 0;
+  padding: 0;
+  background: none;
 }
 
 .chat-controls__account-popover {

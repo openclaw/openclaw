@@ -8,6 +8,7 @@ import { projectAgentSelection, projectGateway } from "../../../lib/reactive/app
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
+import { loadModelPickerFavoritesTab } from "./model-provider-order.ts";
 
 registerEnglishCatalog(registerModelFavoritesEnglish);
 
@@ -190,7 +191,7 @@ export function createChatModelFavorites(owner: ReturnType<typeof createChatMode
   };
 }
 
-/** Presentation order is fixed until dismissal; membership and save outcomes stay live. */
+/** Presentation order and the remembered tab are fixed until dismissal; membership and save outcomes stay live. */
 export function createChatModelFavoritesOpening(
   favorites: ReturnType<typeof createChatModelFavorites>,
   readScope: ReturnType<typeof createChatModelFavoritesScope>["scope"],
@@ -203,6 +204,7 @@ export function createChatModelFavoritesOpening(
     ready: boolean;
     keys: readonly string[];
     selected: string;
+    favoritesTab: boolean;
   }>((previous) => {
     const scope = readScope();
     const open = isOpen();
@@ -210,6 +212,13 @@ export function createChatModelFavoritesOpening(
       return previous;
     }
     const snapshot = favorites.snapshot();
-    return { scope, open, ready: snapshot.ready, keys: snapshot.keys, selected: selected() };
+    return {
+      scope,
+      open,
+      ready: snapshot.ready,
+      keys: snapshot.keys,
+      selected: selected(),
+      favoritesTab: loadModelPickerFavoritesTab(),
+    };
   });
 }
