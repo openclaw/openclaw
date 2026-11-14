@@ -278,6 +278,7 @@ export async function createTelegramQaTransportAdapter(
     }
   };
 
+  let setupStage = "participant setup";
   try {
     participants = privateProduction
       ? privateDescriptor!.participants.map((participant) => ({
@@ -301,14 +302,19 @@ export async function createTelegramQaTransportAdapter(
         ];
     resetRoutes();
     if (!privateProduction) {
+      setupStage = "scratch creation";
       stateRoot = skillRuntime!.createStateRoot();
+      setupStage = "credential restore";
       const restored = skillRuntime!.restoreCredential(
         // SAFETY: The leased credential passed the Telegram test-credential parser above.
         credential as TelegramTestCredential,
         stateRoot,
       );
+      setupStage = "proxy startup";
       apiProxy = await skillRuntime!.startApiProxy(leaseHealth);
+      setupStage = "stale-update drain";
       await apiProxy.drainUpdates(credential.sutToken);
+      setupStage = "userbot startup";
       userbot = await TelegramUserbotDriver.start({
         chatId: directMessageOnly ? `@${credential.sutUsername}` : restored.groupId,
         ...(credential.forumGroupId ? { observeChatIds: [credential.forumGroupId] } : {}),
@@ -320,6 +326,7 @@ export async function createTelegramQaTransportAdapter(
       });
       drivers.push(userbot);
       for (const [offset, participant] of participants.slice(1).entries()) {
+        setupStage = "participant userbot startup";
         if (!participant.credential) {
           continue;
         }
@@ -372,11 +379,14 @@ export async function createTelegramQaTransportAdapter(
       cleanupErrors.push(cleanupError);
     }
     if (cleanupErrors.length > 0) {
-      throw new AggregateError(cleanupErrors, "Telegram userbot setup and cleanup failed", {
-        cause: error,
-      });
+      throw new AggregateError(
+        cleanupErrors,
+        `Telegram userbot setup failed during ${setupStage} and cleanup failed`,
+        { cause: error },
+      );
     }
-    throw error;
+    const detail = error instanceof Error && error.message ? error.message : "unknown failure";
+    throw new Error(`Telegram QA setup failed during ${setupStage}: ${detail}`, { cause: error });
   }
 
   if (!privateProduction && (!userbot || !apiProxy || !stateRoot)) {
