@@ -120,7 +120,8 @@ describe("state-dir-gateway-check", () => {
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel("beta")
         : process.platform === "win32"
-          ? resolveGatewayWindowsTaskName("beta")
+          ? // Root prefixes and casing name the same task.
+            `\\${resolveGatewayWindowsTaskName("beta").toUpperCase()}`
           : resolveGatewaySystemdServiceName("beta");
     vi.stubEnv(selectorKey, selector ?? ownService);
     serviceEnv({ OPENCLAW_STATE_DIR: path.join(canonicalRoot, "production") });

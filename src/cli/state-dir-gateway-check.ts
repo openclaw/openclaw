@@ -1,11 +1,7 @@
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveGatewayLaunchAgentLabel,
-  resolveGatewaySystemdServiceNameCandidates,
-  resolveGatewayWindowsTaskName,
-} from "../daemon/constants.js";
+import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
   buildGatewayConnectionDetails,
@@ -164,21 +160,10 @@ export async function checkCliGatewayStateDir(params: {
   }
   if (servicePaths.kind === "known") {
     // Name the active backend's selector only when clearing it would pick this profile's service.
-    const profile = process.env.OPENCLAW_PROFILE;
-    const [selectorKey, profileServiceNames] =
-      process.platform === "darwin"
-        ? ["OPENCLAW_LAUNCHD_LABEL", [resolveGatewayLaunchAgentLabel(profile)]]
-        : process.platform === "win32"
-          ? ["OPENCLAW_WINDOWS_TASK_NAME", [resolveGatewayWindowsTaskName(profile)]]
-          : ["OPENCLAW_SYSTEMD_UNIT", resolveGatewaySystemdServiceNameCandidates(profile)];
-    const selectorValue = process.env[selectorKey]?.trim();
-    const redirectingSelector =
-      selectorValue &&
-      !profileServiceNames.some(
-        (name) => selectorValue === name || selectorValue === `${name}.service`,
-      )
-        ? `${selectorKey}=${selectorValue}`
-        : undefined;
+    const conflict = resolveGatewayNativeServiceIdentityConflict(process.env);
+    const redirectingSelector = conflict
+      ? `${conflict.envKey}=${process.env[conflict.envKey]?.trim()}`
+      : undefined;
     return compareCliGatewayStateDirs({
       cliStateDir,
       cliConfigPath,
