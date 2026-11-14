@@ -15,12 +15,12 @@ import {
   projectMcpAppModelContextInput,
 } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
+import { measureMcpAppViewBytes } from "./mcp-ui-resource-bounds.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 const MCP_APP_VIEW_TTL_MS = 10 * 60_000;
 const MCP_APP_VIEW_MAX_ENTRIES = 32;
-const MCP_APP_VIEW_MAX_BYTES = 6 * 1024 * 1024;
 const MCP_APP_VIEW_STORE_MAX_BYTES = 64 * 1024 * 1024;
 const MCP_APP_VIEW_STORE_KEY = Symbol.for("openclaw.mcpAppViewStore");
 
@@ -103,6 +103,56 @@ export type McpAppViewLease = {
   disposeCallbacks?: Set<() => void>;
 };
 
+/** Durable display only: no callbacks, approvals, host files, or runtime leases. */
+export type McpAppSavedDisplay = {
+  version: 1;
+  descriptor: {
+    viewId: string;
+    serverName: string;
+    toolName: string;
+    uiResourceUri: string;
+    toolCallId: string;
+  };
+  requesterId?: string;
+  html: string;
+  csp?: McpAppCsp;
+  toolInput: unknown;
+  toolResult: CallToolResult;
+};
+
+/** Capture at transcript append while the original bounded view is still live. */
+export function captureMcpAppSavedDisplay(
+  message: unknown,
+  sessionKey: string,
+  agentId: string,
+): McpAppSavedDisplay | undefined {
+  const preview = asRecord(asRecord(asRecord(message)?.details)?.mcpAppPreview);
+  const descriptor = asRecord(preview?.mcpApp);
+  if (typeof descriptor?.viewId !== "string") {
+    return undefined;
+  }
+  const view = getMcpAppViewLeaseForSession(descriptor.viewId, sessionKey, agentId);
+  if (!view?.toolCallId || view.hostFile || asRecord(message)?.toolCallId !== view.toolCallId) {
+    return undefined;
+  }
+  measureMcpAppViewBytes(view.html, view.toolInput, view.toolResult);
+  return {
+    version: 1,
+    descriptor: {
+      viewId: view.viewId,
+      serverName: view.serverName,
+      toolName: view.toolName,
+      uiResourceUri: view.uiResourceUri,
+      toolCallId: view.toolCallId,
+    },
+    ...(view.requesterId ? { requesterId: view.requesterId } : {}),
+    html: view.html,
+    ...(view.csp ? { csp: view.csp } : {}),
+    toolInput: view.toolInput,
+    toolResult: view.toolResult,
+  };
+}
+
 export type McpAppChannelView = {
   viewId: string;
 };
@@ -177,15 +227,6 @@ function pruneViewStore(additionalBytes = 0, reserveEntry = false): void {
       deleteView(oldest, evicted);
     }
   }
-}
-
-function measureViewBytes(html: string, toolInput: unknown, toolResult: CallToolResult): number {
-  const toolData = JSON.stringify({ toolInput, toolResult });
-  const byteSize = Buffer.byteLength(html, "utf8") + Buffer.byteLength(toolData, "utf8");
-  if (byteSize > MCP_APP_VIEW_MAX_BYTES) {
-    throw new Error(`MCP App view data exceeds ${MCP_APP_VIEW_MAX_BYTES} bytes`);
-  }
-  return byteSize;
 }
 
 function assertBoundedViewDescriptor(value: {
@@ -289,6 +330,7 @@ export async function fetchMcpAppView(params: {
   deepLink?: { url: string };
   displayMode?: "inline" | "fullscreen";
   viewId?: string;
+  savedDisplay?: McpAppSavedDisplay;
 }): Promise<
   | {
       viewId: string;
@@ -309,13 +351,23 @@ export async function fetchMcpAppView(params: {
     if (!agentId) {
       throw new Error("MCP App view requires a resolved session owner");
     }
-    if (!params.runtime.readResource) {
+    if (!params.savedDisplay && !params.runtime.readResource) {
       return undefined;
     }
     const result = asRecord(
-      await params.runtime.readResource(params.serverName, params.uiResourceUri, {
-        failureBackoff: "ignore",
-      }),
+      params.savedDisplay
+        ? {
+            contents: [
+              {
+                mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+                text: params.savedDisplay.html,
+                _meta: { ui: { csp: params.savedDisplay.csp } },
+              },
+            ],
+          }
+        : await params.runtime.readResource!(params.serverName, params.uiResourceUri, {
+            failureBackoff: "ignore",
+          }),
     );
     const contents = Array.isArray(result?.contents) ? result.contents : [];
     if (contents.length !== 1) {
@@ -326,7 +378,7 @@ export async function fetchMcpAppView(params: {
       throw new Error(`resource must use ${MCP_APP_RESOURCE_MIME_TYPE}`);
     }
     const html = decodeResourceHtml(content);
-    const byteSize = measureViewBytes(html, params.toolInput, params.toolResult);
+    const byteSize = measureMcpAppViewBytes(html, params.toolInput, params.toolResult);
     const { _meta: metadata, meta: deprecatedMetadata } = content;
     const contentUiMeta = asRecord(asRecord(metadata ?? deprecatedMetadata)?.ui);
     const listingUiMeta = contentUiMeta

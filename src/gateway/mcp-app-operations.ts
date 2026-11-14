@@ -182,6 +182,7 @@ export async function resolveMcpAppActiveView(params: {
             agentId: params.agentId,
             sessionKey: params.sessionKey,
             viewId: params.viewId,
+            requesterId: params.requesterId,
           })
         : undefined;
   if (!restored) {

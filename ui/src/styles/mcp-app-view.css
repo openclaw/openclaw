@@ -26,6 +26,9 @@ mcp-app-view iframe {
   border: 0;
   background: var(--board-surface, transparent);
 }
+mcp-app-view iframe[hidden] {
+  display: none;
+}
 mcp-app-view[display-mode="fullscreen"] {
   display: flex;
   flex-direction: column;

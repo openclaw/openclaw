@@ -372,6 +372,30 @@ describe("mcp-app-view localization", () => {
     await view.updateComplete;
     expect(view.querySelector('[role="status"]')).toBeNull();
   });
+  it("leaves expired board bridge operations to the board recovery owner", async () => {
+    const { bridge, request, view } = await mountBridge(
+      "board-expired-operation",
+      true,
+      true,
+      {},
+      {
+        surface: "board",
+      },
+    );
+    const expired = vi.fn();
+    view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
+    request.mockRejectedValueOnce(
+      Object.assign(new Error("MCP App view expired"), {
+        details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+      }),
+    );
+    await expect(bridge.updateModelContextHandler!({ structuredContent: {} })).rejects.toThrow(
+      "expired",
+    );
+    expect(expired).toHaveBeenCalledOnce();
+    expect(request.mock.calls.filter(([method]) => method === "mcp.app.view")).toHaveLength(1);
+    expect(view.querySelector('[role="status"]')).toBeNull();
+  });
   it("relaunches an ended entrypoint through the panel's existing launch request", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "mcp.app.launch") {
@@ -457,20 +481,60 @@ describe("mcp-app-view localization", () => {
     expect(bridge.capabilities).not.toHaveProperty("serverResources");
     expect(bridge.updateModelContextHandler).toBeUndefined();
   });
-  it("shows an inactive banner after a bridge request expires", async () => {
-    const { bridge, request, view } = await mountBridge(`view-expired-${crypto.randomUUID()}`);
+  it("automatically recovers an expired frame, retaining readable content and Retry on failure without replay", async () => {
+    const { bridge, request, view, frame, transport } = await mountBridge("view-expiry-retry");
     request.mockRejectedValueOnce(
       Object.assign(new Error("MCP App view expired or is not authorized"), {
         details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
       }),
     );
+    request.mockRejectedValueOnce(new Error("MCP server unavailable"));
     await expect(
-      bridge.updateModelContextHandler?.({ content: [{ type: "text", text: "selection" }] }),
+      bridge.updateModelContextHandler!({ structuredContent: { selection: "unsaved" } }),
     ).rejects.toThrow("expired");
-    await view.updateComplete;
-    expect(view.querySelector('[role="status"]')?.textContent).toContain(
-      "Send a message to interact again",
+    await waitForSolid(() =>
+      expect(view.querySelector(".error")?.textContent).toContain("MCP server unavailable"),
     );
+    expect(view.querySelector("iframe")).toBe(frame);
+    expect(transport.close).toHaveBeenCalledOnce();
+    await expect(
+      bridge.updateModelContextHandler!({ structuredContent: { selection: "stale" } }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "mcp.app.view",
+      "mcp.app.updateModelContext",
+      "mcp.app.view",
+    ]);
+    request.mockResolvedValueOnce({
+      sandboxUrl: "/mcp-app-sandbox?ticket=restored",
+      sandboxPort: 8444,
+      html: "<p>Saved diagram</p>",
+      toolInput: {},
+      toolResult: { content: [{ type: "text", text: "saved checkpoint" }] },
+      messageSupported: false,
+      updateModelContextSupported: false,
+    });
+    view.querySelector<HTMLButtonElement>(".error button")!.click();
+    await waitForSolid(() => expect(view.querySelectorAll("iframe")).toHaveLength(2));
+    expect(view.querySelectorAll("iframe")[1]!.hidden).toBe(true);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: window,
+        data: { method: "ui/notifications/sandbox-proxy-ready" },
+      }),
+    );
+    await waitForSolid(() => expect(bridgeMocks.instances).toHaveLength(2));
+    await waitForSolid(() => expect(frame.isConnected).toBe(false));
+    expect(view.querySelector(".error")).toBeNull();
+    expect(view.querySelector("iframe")?.hidden).toBe(false);
+    expect(bridgeMocks.instances[1]!.capabilities).not.toHaveProperty("message");
+    expect(bridgeMocks.instances[1]!.capabilities).not.toHaveProperty("updateModelContext");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "mcp.app.view",
+      "mcp.app.updateModelContext",
+      "mcp.app.view",
+      "mcp.app.view",
+    ]);
   });
 
   it("forwards update-model-context through the bound Gateway view", async () => {

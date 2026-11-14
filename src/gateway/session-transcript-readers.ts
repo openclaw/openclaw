@@ -240,9 +240,23 @@ export async function readSessionTranscriptSummaryAsync(
       await import("./session-transcript-summary.js");
     const select = await prepareSessionTranscriptSummaryReader(query);
     const messages: unknown[] = [];
-    await createSessionActorTranscriptReader(memory).visitSessionMessagesAsync(scope, (message) =>
-      messages.push(message),
-    );
+    if (query.kind === "mcp-app" && !memory.missing) {
+      let offset: number | undefined = 0;
+      do {
+        const page: { messages: Array<{ message: unknown; seq: number }>; nextOffset?: number } =
+          await memory.read("session.history.visitor-source", {
+            offset,
+            mcpAppDisplays: true,
+          });
+        messages.push(...page.messages.map(({ message }) => message));
+        offset = page.nextOffset;
+      } while (offset !== undefined);
+      memory.assertCurrent();
+    } else {
+      await createSessionActorTranscriptReader(memory).visitSessionMessagesAsync(scope, (message) =>
+        messages.push(message),
+      );
+    }
     return select((visit) => messages.forEach(visit));
   }
   const target = captureHistoryReadScope(scope);
