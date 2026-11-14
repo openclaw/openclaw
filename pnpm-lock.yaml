@@ -3058,6 +3058,9 @@ importers:
       '@openclaw/retry':
         specifier: workspace:*
         version: link:../retry
+      markdown-it:
+        specifier: 15.0.3
+        version: 15.0.3
       minimatch:
         specifier: 10.2.6
         version: 10.2.6
