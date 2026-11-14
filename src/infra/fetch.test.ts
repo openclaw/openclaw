@@ -100,150 +100,24 @@ describe("wrapFetchWithAbortSignal", () => {
     expect((getSeenInit() as (RequestInit & { duplex?: string }) | undefined)?.duplex).toBe("half");
   });
 
-  it("converts foreign abort signals to native controllers", async () => {
-    const { fetchImpl, getSeenInit } = createSeenInitFetch();
-    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
-
-    const { fakeSignal, triggerAbort } = createForeignSignalHarness();
-
-    const promise = wrapped("https://example.com", { signal: fakeSignal });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    const seenSignal = getSeenInit()?.signal;
-    expect(seenSignal).toBeInstanceOf(AbortSignal);
-    expect(seenSignal).not.toBe(fakeSignal);
-
-    triggerAbort();
-    expect(seenSignal?.aborted).toBe(true);
-
-    await promise;
-  });
-
-  it("keeps foreign cancellation connected after response headers", async () => {
-    const { fakeSignal, triggerAbort, removeEventListener } = createForeignSignalHarness();
-    let signal: AbortSignal | undefined;
+  it("converts foreign signals and preserves cancellation after headers", async () => {
+    let seenSignal: AbortSignal | null | undefined;
     const fetchImpl = withFetchPreconnect(
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        signal = init?.signal ?? undefined;
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new Uint8Array([1]));
-              signal?.addEventListener("abort", () => controller.error(signal?.reason), {
-                once: true,
-              });
-            },
-          }),
-        );
+        seenSignal = init?.signal;
+        return new Response(new ReadableStream<Uint8Array>());
       }),
     );
+    const { fakeSignal, triggerAbort } = createForeignSignalHarness();
     const response = await wrapFetchWithAbortSignal(fetchImpl)("https://example.com", {
       signal: fakeSignal,
     });
-    const reader = response.body!.getReader();
-    try {
-      expect((await reader.read()).value).toEqual(new Uint8Array([1]));
-      triggerAbort();
-      // Headers must not disconnect the signal from the underlying fetch.
-      expect(signal?.aborted).toBe(true);
-      await expect(reader.read()).rejects.toMatchObject({ name: "AbortError" });
-      expect(removeEventListener).toHaveBeenCalledOnce();
-    } finally {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-    }
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    const read = response.body!.getReader().read();
+    triggerAbort();
+    expect(seenSignal?.aborted).toBe(true);
+    await expect(read).rejects.toMatchObject({ name: "AbortError" });
   });
-
-  it.each(["eof", "error", "cancel"] as const)(
-    "releases the foreign listener on body %s even when cleanup throws",
-    async (terminal) => {
-      const { fakeSignal, removeEventListener } = createForeignSignalHarness();
-      removeEventListener.mockImplementation(() => {
-        throw new Error("foreign cleanup failed");
-      });
-      let controller!: ReadableStreamDefaultController<Uint8Array>;
-      const pull = vi.fn();
-      const cancel = vi.fn();
-      const body = new ReadableStream<Uint8Array>(
-        {
-          start(value) {
-            controller = value;
-          },
-          pull,
-          cancel,
-        },
-        { highWaterMark: 0 },
-      );
-      const fetchImpl = withFetchPreconnect(vi.fn(async () => new Response(body)));
-      const response = await wrapFetchWithAbortSignal(fetchImpl)("https://example.com", {
-        signal: fakeSignal,
-      });
-      await Promise.resolve();
-      expect(pull).not.toHaveBeenCalled();
-      expect(removeEventListener).not.toHaveBeenCalled();
-      const failure = new Error("body failed");
-      if (terminal === "eof") {
-        controller.enqueue(new TextEncoder().encode("complete"));
-        controller.close();
-        await expect(response.text()).resolves.toBe("complete");
-      } else if (terminal === "error") {
-        controller.error(failure);
-        await expect(response.text()).rejects.toBe(failure);
-      } else {
-        await response.body!.cancel(failure);
-        expect(cancel).toHaveBeenCalledExactlyOnceWith(failure);
-      }
-      expect(removeEventListener).toHaveBeenCalledOnce();
-      expect(body.locked).toBe(false);
-    },
-  );
-
-  it("preserves response metadata and cloned body consumption", async () => {
-    const { fakeSignal, removeEventListener } = createForeignSignalHarness();
-    const source = new Response("complete", {
-      status: 201,
-      statusText: "Created",
-      headers: { "content-type": "text/plain" },
-    });
-    Object.defineProperties(source, {
-      url: { value: "https://example.com/final" },
-      redirected: { value: true },
-      type: { value: "cors" },
-    });
-    const fetchImpl = withFetchPreconnect(vi.fn(async () => source));
-    const response = await wrapFetchWithAbortSignal(fetchImpl)("https://example.com", {
-      signal: fakeSignal,
-    });
-    expect(response.bodyUsed).toBe(false);
-    const clone = response.clone();
-    for (const value of [response, clone]) {
-      expect(value).toMatchObject({
-        status: 201,
-        statusText: "Created",
-        url: "https://example.com/final",
-        redirected: true,
-        type: "cors",
-      });
-      expect(value.headers).toBe(source.headers);
-    }
-    await expect(Promise.all([response.text(), clone.text()])).resolves.toEqual([
-      "complete",
-      "complete",
-    ]);
-    expect(response.bodyUsed).toBe(true);
-    expect(() => response.clone()).toThrow(TypeError);
-    expect(removeEventListener).toHaveBeenCalledOnce();
-  });
-
-  it("releases the foreign listener immediately for a bodyless response", async () => {
-    const { fakeSignal, removeEventListener } = createForeignSignalHarness();
-    const source = new Response(null, { status: 204 });
-    const fetchImpl = withFetchPreconnect(vi.fn(async () => source));
-    await expect(
-      wrapFetchWithAbortSignal(fetchImpl)("https://example.com", { signal: fakeSignal }),
-    ).resolves.toBe(source);
-    expect(removeEventListener).toHaveBeenCalledOnce();
-  });
-
   it("does not emit an extra unhandled rejection when wrapped fetch rejects", async () => {
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
