@@ -34,6 +34,8 @@
  * cover synchronous broadcaster/transport work only, excluding receiver inflation.
  * --fragmented-histories preserves distinct history tokens while clearing baselines;
  * --cpu-profile <file> attributes a separate sender-only measured pass.
+ * --start-at <epoch-ms> synchronizes warmed paired senders on separate --port values;
+ * a sender that misses the start fails rather than reporting an unmatched timing arm.
  * --fields-owner <saved-source.ts> replaces only the field fingerprint owner.
  * --source-revisions replaces materialized rows for each transcript publication;
  * omit it to measure clock/runtime changes over unchanged materialized facts.
@@ -57,7 +59,7 @@ import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
-import { setImmediate } from "node:timers/promises";
+import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -80,6 +82,7 @@ const { values } = parseArgs({
     "fragmented-histories": { type: "boolean", default: false },
     port: { type: "string", default: "41872" },
     "cpu-profile": { type: "string" },
+    "start-at": { type: "string" },
     "broadcast-owner": { type: "string", default: "src/gateway/server-broadcast.ts" },
     "session-kib": { type: "string", default: "0" },
     owner: { type: "string", default: "src/gateway/session-event-projection.ts" },
@@ -583,6 +586,11 @@ try {
     inspector.connect();
     await inspector.post("Profiler.enable");
     await inspector.post("Profiler.start");
+  }
+  if (values["start-at"]) {
+    const startAt = Number(values["start-at"]);
+    assert(Number.isSafeInteger(startAt) && startAt > Date.now(), "Missed synchronized start");
+    await delay(startAt - Date.now());
   }
   measuredBroadcastCpuUs = 0;
   measuredBroadcastMs = [];
