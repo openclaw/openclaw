@@ -27,7 +27,9 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
       resolvePluginProvidersCore: (params) => fixture.select(params),
       resolvePluginProviderRegistryCore: (params) => {
         const plugins = fixture.select(params);
-        if (!plugins.length) return undefined;
+        if (!plugins.length) {
+          return undefined;
+        }
         const registry = createEmptyPluginRegistry();
         registry.providers = plugins.map((provider) => ({
           pluginId: provider.id,
