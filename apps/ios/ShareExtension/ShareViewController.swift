@@ -6,12 +6,7 @@ import UIKit
 import UniformTypeIdentifiers
 
 final class ShareViewController: UIViewController {
-    private struct ShareAttachment: Codable {
-        var type: String
-        var mimeType: String
-        var fileName: String
-        var content: String
-    }
+    private typealias ShareAttachment = ShareAgentRequestPayload.Attachment
 
     /// Keeps the encoded payload with its preview so the compose card can show
     /// thumbnails without re-decoding base64 content.
@@ -170,28 +165,13 @@ final class ShareViewController: UIViewController {
                         message: "share extension does not support node invoke"))
             })
 
-        struct AgentRequestPayload: Codable {
-            var message: String
-            var sessionKey: String?
-            var thinking: String
-            var deliver: Bool
-            var attachments: [ShareAttachment]?
-            var receipt: Bool
-            var receiptText: String?
-            var to: String?
-            var channel: String?
-            var timeoutSeconds: Int?
-            var key: String?
-        }
-
         let deliveryChannel = config.deliveryChannel?.trimmingCharacters(in: .whitespacesAndNewlines)
         let deliveryTo = config.deliveryTo?.trimmingCharacters(in: .whitespacesAndNewlines)
         let canDeliverToRoute = (deliveryChannel?.isEmpty == false) && (deliveryTo?.isEmpty == false)
 
-        let params = AgentRequestPayload(
+        let params = ShareAgentRequestPayload(
             message: message,
             sessionKey: config.sessionKey,
-            thinking: "low",
             deliver: canDeliverToRoute,
             attachments: attachments.isEmpty ? nil : attachments,
             receipt: canDeliverToRoute,
