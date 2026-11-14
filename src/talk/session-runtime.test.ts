@@ -2,7 +2,10 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "./provider-contexts.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -72,6 +75,35 @@ describe("realtime voice bridge session runtime", () => {
       await transport.dispose();
       await provider.dispose();
     }
+  });
+
+  it("re-enters the callback owner without borrowing a closed provider caller scope", async () => {
+    const transport = createOwnedTestInstance("voice-closed-caller");
+    const provider = createOwnedTestInstance("voice-provider-closed-caller");
+    const onEvent = vi.fn();
+    let request!: RealtimeVoiceBridgeCreateRequest;
+    const session = transport.run(() =>
+      createRealtimeVoiceBridgeSession({
+        provider: provider.wrap(
+          makeVoiceProvider((params) => {
+            request = params;
+            return makeBridge();
+          }),
+        ),
+        providerConfig: {},
+        audioSink: { sendAudio: vi.fn() },
+        onEvent,
+      }),
+    );
+    const staleCaller = new PluginInvocationScope(transport.owner!.registry!, [transport]);
+    staleCaller.release();
+    const event = { direction: "client" as const, type: "conversation.item.create" };
+
+    expect(() =>
+      pluginInvocationContext.run(staleCaller, () => provider.run(() => request.onEvent?.(event))),
+    ).not.toThrow();
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith(event);
+    await session.close();
   });
 
   it.each(["abort", "detach", "cancelled-detach"] as const)(

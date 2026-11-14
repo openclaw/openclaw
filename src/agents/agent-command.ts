@@ -63,6 +63,7 @@ import {
 } from "./session-maintenance/run.js";
 import { clearRotatedSessionMetadata } from "./session-reset-metadata.js";
 import { measureAgentStartup } from "./startup-timing.js";
+import { registerRequesterFinalAttachment } from "./subagents/requester-final-attachment.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -198,6 +199,9 @@ async function agentCommandInternalOwned(
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
   let commandError: unknown;
+  const requesterFinal = opts.requesterFinal;
+  let requesterFinalRegistration: ReturnType<typeof registerRequesterFinalAttachment> | undefined;
+  let commandCompleted = false;
   try {
     const operatorSession =
       opts.operatorAuthority && sessionKey
@@ -229,7 +233,7 @@ async function agentCommandInternalOwned(
         sessionEntry = entry;
       },
     });
-    return await sessionWorkAdmission.run(async () => {
+    const result = await sessionWorkAdmission.run(async () => {
       sessionEntry = await repairAgentCommandSessionTranscript({
         prepared,
         sessionEntry,
@@ -492,6 +496,19 @@ async function agentCommandInternalOwned(
           recordCompactionSessionId(committedSessionId);
         },
       });
+      requesterFinalRegistration =
+        requesterFinal && sessionKey
+          ? registerRequesterFinalAttachment({
+              requesterAgentId: sessionAgentId,
+              requesterSessionKey: sessionKey,
+              requesterSessionId: attemptPrepared.sessionId,
+              requesterTurnRunId: runId,
+              lifecycleGeneration,
+              timeoutMs: attemptPrepared.timeoutMs,
+              append: requesterFinal.append,
+              onPromoted: requesterFinal.onPromoted,
+            })
+          : undefined;
       preparedRunAdmission = admission;
       sessionEntry = attemptPrepared.sessionEntry;
       if (attemptPrepared.sessionId !== runOwnedSessionId) {
@@ -509,6 +526,7 @@ async function agentCommandInternalOwned(
         onCompactionAccounting: (fact) => {
           if (fact.kind === "durable") {
             runOwnedSessionId = fact.target.sessionId;
+            requesterFinalRegistration?.updateSessionId(fact.target.sessionId);
             if (fact.previousSessionId !== undefined) {
               recordCompactionSessionId(fact.target.sessionId);
             }
@@ -543,6 +561,7 @@ async function agentCommandInternalOwned(
           runOwnedSessionId = ownership.runOwnedSessionId;
           sessionReboundDuringRun = ownership.sessionReboundDuringRun;
           if (committedCompactionSessionId) {
+            requesterFinalRegistration?.updateSessionId(committedCompactionSessionId);
             recordCompactionSessionId(committedCompactionSessionId);
           }
         },
@@ -553,10 +572,17 @@ async function agentCommandInternalOwned(
       maintenanceRequest = finalized.maintenance;
       return finalized.deliveryResult;
     });
+    commandCompleted = true;
+    return result;
   } catch (error) {
     commandError = error;
     throw error;
   } finally {
+    if (commandCompleted) {
+      requesterFinalRegistration?.releaseProvisional();
+    } else {
+      requesterFinalRegistration?.revoke();
+    }
     if (maintenanceRequest) {
       retainMaintenanceRequest?.(maintenanceRequest);
     }

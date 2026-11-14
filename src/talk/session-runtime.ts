@@ -1,4 +1,9 @@
-import { wrapCurrentPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
+import {
+  getPluginValueInstance,
+  pluginInvocationContext,
+  wrapCurrentPluginInstance,
+} from "../plugins/plugin-instance-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
@@ -62,6 +67,22 @@ export type RealtimeVoiceBridgeSessionParams = Omit<
 };
 
 type RealtimeVoiceSessionPhase = "admitting" | "provider-terminal" | "closing" | "disposed";
+
+function bindRealtimeVoiceCallback<TArgs extends unknown[], TResult>(
+  callback: ((...args: TArgs) => TResult) | undefined,
+): ((...args: TArgs) => TResult) | undefined {
+  if (!callback) {
+    return undefined;
+  }
+  const owner = getPluginValueInstance(callback);
+  if (!owner) {
+    return callback;
+  }
+  return (...args) =>
+    pluginInvocationContext.exit(() =>
+      pluginInstanceInvocation.exit(() => owner.runConsumer(() => callback(...args))),
+    );
+}
 
 export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
@@ -348,7 +369,52 @@ export function createRealtimeVoiceBridgeSession(
     },
   };
   // Only callbacks re-enter the transport plugin. Request data stays plain because providers
-  // pass it to core config and worker boundaries, which structured-clone it.
+  // pass it to core config and worker boundaries, which structured-clone it. Provider work can
+  // outlive its admitting caller, so each callback re-enters its exact owner without borrowing
+  // a retired invocation scope from the provider call.
+  const registeredCallbacks = wrapCurrentPluginInstance(bridgeCallbacks);
+  const providerCallbacks = {
+    ...registeredCallbacks,
+    onAudio: bindRealtimeVoiceCallback(registeredCallbacks.onAudio)!,
+    onClearAudio: bindRealtimeVoiceCallback(registeredCallbacks.onClearAudio)!,
+    ...(registeredCallbacks.getPlaybackState
+      ? { getPlaybackState: bindRealtimeVoiceCallback(registeredCallbacks.getPlaybackState) }
+      : {}),
+    ...(registeredCallbacks.onMark
+      ? { onMark: bindRealtimeVoiceCallback(registeredCallbacks.onMark) }
+      : {}),
+    ...(registeredCallbacks.onTranscript
+      ? { onTranscript: bindRealtimeVoiceCallback(registeredCallbacks.onTranscript) }
+      : {}),
+    ...(registeredCallbacks.handleDelegationInput
+      ? {
+          handleDelegationInput: bindRealtimeVoiceCallback(
+            registeredCallbacks.handleDelegationInput,
+          ),
+        }
+      : {}),
+    ...(registeredCallbacks.runAgentConsult
+      ? { runAgentConsult: bindRealtimeVoiceCallback(registeredCallbacks.runAgentConsult) }
+      : {}),
+    ...(registeredCallbacks.onEvent
+      ? { onEvent: bindRealtimeVoiceCallback(registeredCallbacks.onEvent) }
+      : {}),
+    ...(registeredCallbacks.onResponseDone
+      ? { onResponseDone: bindRealtimeVoiceCallback(registeredCallbacks.onResponseDone) }
+      : {}),
+    ...(registeredCallbacks.onToolCall
+      ? { onToolCall: bindRealtimeVoiceCallback(registeredCallbacks.onToolCall) }
+      : {}),
+    ...(registeredCallbacks.onReady
+      ? { onReady: bindRealtimeVoiceCallback(registeredCallbacks.onReady) }
+      : {}),
+    ...(registeredCallbacks.onError
+      ? { onError: bindRealtimeVoiceCallback(registeredCallbacks.onError) }
+      : {}),
+    ...(registeredCallbacks.onClose
+      ? { onClose: bindRealtimeVoiceCallback(registeredCallbacks.onClose) }
+      : {}),
+  } satisfies typeof bridgeCallbacks;
   const bridge = params.provider.createBridge({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -359,7 +425,7 @@ export function createRealtimeVoiceBridgeSession(
     autoRespondToAudio: params.autoRespondToAudio,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,
-    ...wrapCurrentPluginInstance(bridgeCallbacks),
+    ...providerCallbacks,
   });
   bridgeRef.current = bridge;
 

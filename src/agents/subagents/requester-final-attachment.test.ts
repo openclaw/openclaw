@@ -19,6 +19,7 @@ import {
   finalizeRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
   registerRequesterFinalAttachment,
+  revokeRequesterFinalAttachment,
 } from "./requester-final-attachment.js";
 
 const base = {
@@ -50,24 +51,82 @@ function finalize(overrides: Partial<Parameters<typeof finalizeRequesterFinalAtt
 
 describe("requester final attachment", () => {
   let append: ReturnType<typeof vi.fn<() => boolean>>;
+  let onPromoted: ReturnType<typeof vi.fn<() => void>>;
   let registration: ReturnType<typeof registerRequesterFinalAttachment>;
   beforeEach(() => {
     lifecycle.generation = "generation-1";
     lifecycle.rotate?.(lifecycle.generation);
     append = vi.fn(() => true);
-    registration = registerRequesterFinalAttachment({ ...base, append });
+    onPromoted = vi.fn();
+    registration = registerRequesterFinalAttachment({ ...base, append, onPromoted });
   });
 
   it("promotes an exact durable batch and consumes it once", () => {
     finalize({ batchRunIds: ["run-a", "run-b"] });
     expect(append).not.toHaveBeenCalled();
     expect(promote({ batchRunIds: ["run-b", "run-a"] })).toBe(true);
+    expect(promote({ batchRunIds: ["run-b", "run-a"] })).toBe(true);
+    expect(onPromoted).toHaveBeenCalledOnce();
     registration.releaseProvisional();
 
     finalize({ batchRunIds: ["run-a", "run-b"] });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
     finalize({ batchRunIds: ["run-a", "run-b"], finalAssistantVisibleText: "replay" });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
+  });
+
+  it("keeps overlapping yielded requester turns independently deliverable", () => {
+    const second = vi.fn(() => true);
+    const secondRegistration = registerRequesterFinalAttachment({
+      ...base,
+      requesterTurnRunId: "run-requester-2",
+      append: second,
+    });
+
+    expect(promote({ batchRunIds: ["run-a"], rearmGeneration: 1 })).toBe(true);
+    expect(
+      promote({
+        requesterTurnRunId: "run-requester-2",
+        batchRunIds: ["run-b"],
+        rearmGeneration: 2,
+      }),
+    ).toBe(true);
+    registration.releaseProvisional();
+    secondRegistration.releaseProvisional();
+
+    finalize({ batchRunIds: ["run-b"], rearmGeneration: 2, finalAssistantVisibleText: "second" });
+    finalize({ batchRunIds: ["run-a"], rearmGeneration: 1, finalAssistantVisibleText: "first" });
+    expect(second).toHaveBeenCalledExactlyOnceWith("second");
+    expect(append).toHaveBeenCalledExactlyOnceWith("first");
+  });
+
+  it("revokes every overlapping attachment for a requester session", () => {
+    const second = vi.fn(() => true);
+    registerRequesterFinalAttachment({
+      ...base,
+      requesterTurnRunId: "run-requester-2",
+      append: second,
+    });
+    expect(promote({ batchRunIds: ["run-a"], rearmGeneration: 1 })).toBe(true);
+    expect(
+      promote({
+        requesterTurnRunId: "run-requester-2",
+        batchRunIds: ["run-b"],
+        rearmGeneration: 2,
+      }),
+    ).toBe(true);
+
+    expect(
+      revokeRequesterFinalAttachment({
+        requesterAgentId: base.requesterAgentId,
+        requesterSessionKey: base.requesterSessionKey,
+        requesterSessionId: base.requesterSessionId,
+      }),
+    ).toBe(true);
+    finalize({ batchRunIds: ["run-a"], rearmGeneration: 1, finalAssistantVisibleText: "first" });
+    finalize({ batchRunIds: ["run-b"], rearmGeneration: 2, finalAssistantVisibleText: "second" });
+    expect(append).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
   });
 
   it("rejects the wrong session or batch without consuming the owner", () => {
@@ -116,6 +175,19 @@ describe("requester final attachment", () => {
 
     finalize();
     finalize({ finalAssistantVisibleText: "replay" });
+    expect(append).toHaveBeenCalledExactlyOnceWith("final");
+  });
+
+  it("keeps promotion durable when its observer has retired", () => {
+    onPromoted.mockImplementation(() => {
+      throw new Error("voice session closed");
+    });
+
+    expect(promote()).toBe(true);
+    registration.releaseProvisional();
+    finalize();
+
+    expect(onPromoted).toHaveBeenCalledOnce();
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 

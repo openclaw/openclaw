@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
+import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { emitSubagentEndedHookOnce } from "./subagent-registry-completion.js";
@@ -88,3 +89,25 @@ it.each(["committed", "refused", "unknown"] as const)(
     expect(params.recordEmitted).toHaveBeenCalledOnce();
   },
 );
+
+it("does not carry a closed caller plugin scope into terminal hooks", async () => {
+  lifecycleMocks.getGlobalHookRunner.mockReturnValue({
+    hasHooks: () => true,
+    runSubagentEnded: lifecycleMocks.runSubagentEnded,
+  });
+  lifecycleMocks.runSubagentEnded.mockImplementationOnce(async () => {
+    expect(pluginInvocationContext.getStore()).toBeUndefined();
+  });
+  const params = createEmitParams();
+  const closedCaller = {
+    lookup: () => {
+      throw new Error("Plugin invocation scope is closed");
+    },
+  };
+
+  await expect(
+    pluginInvocationContext.run(closedCaller, () => emitSubagentEndedHookOnce(params)),
+  ).resolves.toBe(true);
+  expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledOnce();
+  expect(params.recordEmitted).toHaveBeenCalledOnce();
+});

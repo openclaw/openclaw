@@ -48,6 +48,12 @@ import {
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { pluginInstanceInvocation } from "../plugin-instance-invocation.js";
+import {
+  getPluginOriginalValue,
+  getPluginValueInstance,
+  pluginInvocationContext,
+} from "../plugin-instance-scope.js";
 import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
@@ -58,6 +64,67 @@ import type { PluginRuntime } from "./types.js";
 
 type RuntimeSession = PluginRuntime["agent"]["session"];
 type RuntimeSessionStoreReadParams = Parameters<RuntimeSession["getSessionEntry"]>[0];
+
+function bindDeferredRequesterFinal(
+  requesterFinal: NonNullable<
+    Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0]["requesterFinal"]
+  >,
+) {
+  const owner = getPluginValueInstance(requesterFinal);
+  if (!owner) {
+    return requesterFinal;
+  }
+  let original: object = requesterFinal;
+  for (;;) {
+    const next = getPluginOriginalValue(original, owner);
+    if (!next || next === original) {
+      break;
+    }
+    original = next;
+  }
+  let append = Reflect.get(original, "append", original);
+  if (typeof append !== "function") {
+    return requesterFinal;
+  }
+  const appendOwner = getPluginValueInstance(append) ?? owner;
+  for (;;) {
+    const next = getPluginOriginalValue(append, appendOwner);
+    if (!next || next === append || typeof next !== "function") {
+      break;
+    }
+    append = next;
+  }
+  let onPromoted = Reflect.get(original, "onPromoted", original);
+  const onPromotedOwner =
+    typeof onPromoted === "function" ? (getPluginValueInstance(onPromoted) ?? owner) : undefined;
+  if (typeof onPromoted === "function" && onPromotedOwner) {
+    for (;;) {
+      const next = getPluginOriginalValue(onPromoted, onPromotedOwner);
+      if (!next || next === onPromoted || typeof next !== "function") {
+        break;
+      }
+      onPromoted = next;
+    }
+  }
+  return {
+    append: (text: string) =>
+      pluginInvocationContext.exit(() =>
+        pluginInstanceInvocation.exit(() =>
+          appendOwner.runConsumer(() => Reflect.apply(append, original, [text]) === true),
+        ),
+      ),
+    ...(typeof onPromoted === "function" && onPromotedOwner
+      ? {
+          onPromoted: () =>
+            pluginInvocationContext.exit(() =>
+              pluginInstanceInvocation.exit(() =>
+                onPromotedOwner.runConsumer(() => Reflect.apply(onPromoted, original, [])),
+              ),
+            ),
+        }
+      : {}),
+  };
+}
 
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
@@ -291,15 +358,20 @@ export function createRuntimeAgent(
         async (
           opts: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0],
           runtime: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[1],
-        ) =>
-          await command.agentCommandFromGatewayIngress(
+        ) => {
+          const { requesterFinal, ...publicOpts } = opts;
+          return await command.agentCommandFromGatewayIngress(
             {
-              ...identity.sanitizePublicAgentCommandIngressOpts(opts),
+              ...identity.sanitizePublicAgentCommandIngressOpts(publicOpts),
               senderIsOwner: opts.senderIsOwner === true,
+              requesterFinal: requesterFinal
+                ? bindDeferredRequesterFinal(requesterFinal)
+                : undefined,
             },
             runtime,
             undefined,
-          ),
+          );
+        },
     ),
   );
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>

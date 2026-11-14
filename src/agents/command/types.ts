@@ -224,6 +224,11 @@ export type AgentCommandOpts = {
   onPostAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
   ) => void | Promise<void>;
+  /** Host-owned sink for a yielded subagent cohort's eventual visible final. */
+  requesterFinal?: {
+    append: (text: string) => boolean;
+    onPromoted?: () => void;
+  };
   /** Gateway owns final media projection and joins transcript writes before delivery or cleanup. */
   beforeTerminalDelivery?: (
     reply?: {
@@ -278,6 +283,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   cronCreatorAuthorityCapability: undefined,
   onAdmittedRunContext: undefined,
   onPostAdmittedRunContext: undefined,
+  requesterFinal: undefined,
   beforeTerminalDelivery: undefined,
   isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,

@@ -35,6 +35,78 @@ defineDiscordVoiceTests(
     expectUserMessageIncludes,
     expectUserMessageNotIncludes,
   }) => {
+    it("returns a yielded delegated final to the active realtime voice session", async () => {
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "I started that research and will report back." }],
+      });
+      const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
+
+      beginSpeakerTurn(entry);
+      await emitFinalRealtimeUserTranscript(bridgeParams, "research the current answer");
+      await vi.waitFor(() =>
+        expectUserMessageIncludes("I started that research and will report back."),
+      );
+
+      const requesterFinal = (
+        lastAgentCommandArgs() as {
+          requesterFinal?: { append: (text: string) => boolean };
+        }
+      ).requesterFinal;
+      expect(requesterFinal).toBeDefined();
+      expect(requesterFinal?.append("The delegated research found the answer.")).toBe(true);
+      bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+      const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
+        | (() => void)
+        | undefined;
+      idleHandler?.();
+      await vi.waitFor(() => expectUserMessageIncludes("The delegated research found the answer."));
+    });
+
+    it("suppresses provider fallback while a promoted delegated final is pending", async () => {
+      agentCommandMock.mockImplementationOnce(async (options?: unknown) => {
+        const requesterFinal = (
+          options as
+            | {
+                requesterFinal?: {
+                  append: (text: string) => boolean;
+                  onPromoted?: () => void;
+                };
+              }
+            | undefined
+        )?.requesterFinal;
+        requesterFinal?.onPromoted?.();
+        return { payloads: [] };
+      });
+      const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
+
+      beginSpeakerTurn(entry);
+      await bridgeParams?.onToolCall?.(
+        consultEvent("deferred", "delegate this research"),
+        realtimeSessionMock,
+      );
+
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
+        "call-deferred",
+        {
+          status: "deferred",
+          message: "OpenClaw will deliver the delegated final separately. Do not speak a response.",
+        },
+        { suppressResponse: true },
+      );
+      const requesterFinal = (
+        lastAgentCommandArgs() as {
+          requesterFinal?: { append: (text: string) => boolean };
+        }
+      ).requesterFinal;
+      expect(requesterFinal?.append("The delegated final arrived.")).toBe(true);
+      bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+      const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
+        | (() => void)
+        | undefined;
+      idleHandler?.();
+      await vi.waitFor(() => expectUserMessageIncludes("The delegated final arrived."));
+    });
+
     it("queues forced agent-proxy answers until current realtime playback idles", async () => {
       const first = createDeferred<{ payloads: Array<{ text: string }> }>();
       const second = createDeferred<{ payloads: Array<{ text: string }> }>();
