@@ -1,2 +1,0 @@
-101
-# Chromium sidebar archive-exit regression: real archive button, single pending patch, inert snapshot, gliding neighbor, reduced-motion instant removal.

@@ -74,6 +74,62 @@ function pluginContext(id: string, plugin: ReturnType<typeof writePlugin>, provi
   };
 }
 
+it("forwards auth and catalog operations without loading the aggregate provider runtime", async () => {
+  const id = `sdk-runtime-owner-${sequence++}`;
+  const stateKey = `__${id}`;
+  const plugin = writePlugin({
+    id,
+    body: `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+      api.registerProvider({ id: ${JSON.stringify(id)}, label: "Runtime owner", auth: [],
+        formatApiKey(credentials) {
+          globalThis[${JSON.stringify(stateKey)}].push(this.id);
+          return credentials.access + ":formatted";
+        },
+        augmentModelCatalog: () => [{ provider: "fixture", id: "row", name: "Fixture row" }],
+      });
+    } };`,
+  });
+  const { config, env } = pluginContext(id, plugin, [id]);
+  const calls: string[] = [];
+  Object.defineProperty(globalThis, stateKey, { configurable: true, value: calls });
+  vi.resetModules();
+  // mock-isolation: Trap only the unrelated aggregate; use real auth, catalog and registration owners.
+  vi.doMock("../plugins/provider-runtime.js", () => {
+    throw new Error("Auth and catalog forwarding must not activate the aggregate provider runtime");
+  });
+  try {
+    const runtime = await import("../plugins/provider-runtime.runtime.js");
+    const catalog = await import("openclaw/plugin-sdk/provider-catalog-runtime");
+    await expect(
+      runtime.formatProviderAuthProfileApiKeyWithPlugin({
+        provider: id,
+        config,
+        env,
+        context: {
+          type: "oauth",
+          provider: id,
+          access: "fixture-access-key",
+          refresh: "fixture-refresh-key",
+          expires: 4_000_000_000_000,
+        },
+      }),
+    ).resolves.toBe("fixture-access-key:formatted");
+    for (const augment of [
+      runtime.augmentModelCatalogWithProviderPlugins,
+      catalog.augmentModelCatalogWithProviderPlugins,
+    ]) {
+      await expect(
+        augment({ config, env, context: { config, env, entries: [] } }),
+      ).resolves.toEqual([{ provider: "fixture", id: "row", name: "Fixture row" }]);
+    }
+    expect(calls).toEqual([id]);
+  } finally {
+    vi.doUnmock("../plugins/provider-runtime.js");
+    vi.resetModules();
+    Reflect.deleteProperty(globalThis, stateKey);
+  }
+});
+
 it("shipped catalog augmentation selects omitted hooks without filtering their rows", async () => {
   const id = `sdk-catalog-selection-${sequence++}`;
   const stateKey = `__${id}`;

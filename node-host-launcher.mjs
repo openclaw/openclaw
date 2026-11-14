@@ -1,7 +1,7 @@
 // The node supervisor must select its runtime before importing config or SQLite.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import {
+import fs, {
   closeSync,
   existsSync,
   fstatSync,
@@ -10,7 +10,6 @@ import {
   openSync,
   readFileSync,
   realpathSync,
-  renameSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -78,8 +77,11 @@ function parseInvocation(args, env) {
     words.push(arg);
   }
   const nodeRun = words[0] === "node" && words[1] === "run";
-  const connect = words[0] === "connect" && !words.includes("--service");
-  return nodeRun || connect ? { rootArgs } : null;
+  // Foreground enrollment is supervised like `node run`; it hands back `node run` restart args.
+  const enroll =
+    (words[0] === "connect" || (words[0] === "node" && words[1] === "join")) &&
+    !words.includes("--service");
+  return nodeRun || enroll ? { rootArgs } : null;
 }
 
 function readPackage(packageRoot) {
@@ -228,7 +230,7 @@ function activateRuntime(currentPath, runtimeRoot) {
   try {
     symlinkSync(runtimeRoot, temporary, process.platform === "win32" ? "junction" : "dir");
     try {
-      renameSync(temporary, currentPath);
+      fs.renameSync(temporary, currentPath);
     } catch (error) {
       if (
         !["EPERM", "EACCES", "EEXIST", "ENOTEMPTY"].includes(error.code) ||
@@ -238,12 +240,12 @@ function activateRuntime(currentPath, runtimeRoot) {
       }
       // Windows cannot replace a directory junction. Keep its timestamp and target recoverable.
       removePrevious();
-      renameSync(currentPath, previous);
+      fs.renameSync(currentPath, previous);
       try {
-        renameSync(temporary, currentPath);
+        fs.renameSync(temporary, currentPath);
       } catch (publishError) {
         try {
-          renameSync(previous, currentPath);
+          fs.renameSync(previous, currentPath);
         } catch (restoreError) {
           throw new AggregateError(
             [publishError, restoreError],

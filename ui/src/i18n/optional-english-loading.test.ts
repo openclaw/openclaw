@@ -86,6 +86,29 @@ beforeEach(() => {
 });
 afterEach(() => restoreElementRegistration?.());
 
+it("loads picker auth copy without loading Settings and preserves later Settings copy", async () => {
+  const { manager } = await loadI18n({
+    channels: { hub: { setUp: "Einrichten" } },
+    modelProviders: { status: { apiKey: "API-Schlüssel" } },
+  });
+  await manager.setLocale("de");
+  await import("../pages/chat/components/chat-model-picker-panel.tsx");
+
+  expect(manager.t("modelProviders.status.apiKey")).toBe("API-Schlüssel");
+  expect(manager.t("channels.hub.setUp")).toBe("Einrichten");
+  expect(manager.t("modelProviders.title")).toBe("modelProviders.title");
+  await manager.setLocale("en");
+  expect(manager.t("modelProviders.status.apiKey")).toBe("API key");
+  expect(manager.t("channels.hub.setUp")).toBe("Set up");
+
+  const { registerSettingsEnglish } = await import("./locales/en-settings.ts");
+  registerSettingsEnglish();
+  const { registerModelProviderAuthEnglish } = await import("./locales/en-model-provider-auth.ts");
+  registerModelProviderAuthEnglish();
+  expect(manager.t("modelProviders.title")).toBe("Configured providers");
+  expect(manager.t("modelProviders.status.ok")).toBe("Signed in");
+});
+
 it.each([false, true])(
   "preserves context inspector copy in either registration order (optional first=%s)",
   async (optionalFirst) => {
@@ -498,7 +521,7 @@ it("loads optional English copy at each view boundary while keeping shared label
   await manager.setLocale("de");
   for (const [key, copy, load] of [
     ["aboutPage.linkDocs", "Docs", () => import("../pages/about/view.tsx")],
-    ["dashboardsPage.live", "Live", () => import("../pages/dashboards/view.tsx")],
+    ["dashboardsPage.running", "Updating now", () => import("../pages/dashboards/view.tsx")],
     [
       "usage.providerUsage.balance",
       "Balance",

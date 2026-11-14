@@ -99,6 +99,23 @@ suite.define(() => {
     await expect.poll(families).toEqual(initial);
   });
 
+  // macOS stem darkening keeps light sans chat faces from rendering thin; app
+  // chrome keeps the body's antialiased smoothing.
+  it.each(["claw", "absolutely"])("keeps auto smoothing on %s chat prose only", async (theme) => {
+    const { page } = await openThemedChat(theme, "dark", {
+      historyMessages: [historyMessage("assistant", "Readable chat prose", Date.now())],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const prose = page.locator(".chat-thread .chat-text").first();
+    await expect.poll(() => prose.textContent()).toContain("Readable chat prose");
+    const smoothing = (locator: Locator) =>
+      locator.evaluate((element) =>
+        getComputedStyle(element).getPropertyValue("-webkit-font-smoothing"),
+      );
+    expect(await smoothing(prose)).toBe("auto");
+    expect(await smoothing(page.locator("body"))).toBe("antialiased");
+  });
+
   // #137473: compare incremental input pixels with a whole-value assignment.
   it.each(["crt", "phosphor"])(
     "paints typed operator sequences like their own value in the %s composer",

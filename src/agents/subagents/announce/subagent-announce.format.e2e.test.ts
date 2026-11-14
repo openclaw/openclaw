@@ -104,7 +104,7 @@ const { registry } = vi.hoisted(() => ({
     shouldIgnorePostCompletionAnnounceForSession: vi.fn(
       (_sessionKey: string, _childAgentId?: string) => false,
     ),
-    countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
+    countPendingDescendantRuns: vi.fn((_key: string, _assert?: unknown, _options?: unknown) => 0),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
@@ -797,7 +797,7 @@ describe("subagent announce formatting", () => {
       transcriptEvents.push(assistantEvent("new-a", "late-progress", false));
       agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2:wake"));
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      registry.countPendingDescendantRuns.mockReturnValueOnce(1);
+      registry.countPendingDescendantRuns.mockReturnValueOnce(1).mockReturnValueOnce(1);
       expect(await announceWake(parentKey, parentRunId)).toBe("retryable");
       expect(agentSpy).not.toHaveBeenCalled();
       const didAnnounce = await announceWake(parentKey, parentRunId, {
@@ -861,7 +861,7 @@ describe("subagent announce formatting", () => {
     registry.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(
       mode === "completed parent",
     );
-    registry.countPendingDescendantRuns.mockReturnValue(mode === "completed parent" ? 2 : 0);
+    registry.countPendingDescendantRuns.mockImplementation((_k, _a, opts) => (opts ? 0 : 1));
     if (destination) {
       registry.resolveRequesterForChildSession.mockReturnValue({
         requesterSessionKey: destination,
@@ -872,9 +872,10 @@ describe("subagent announce formatting", () => {
       await announceWithDefaults({
         childRunId: mode,
         requesterSessionKey: parentKey,
-        cleanup: mode === "missing fallback" ? "delete" : "keep",
+        cleanup: "delete",
       }),
     ).toBe(mode === "missing fallback" ? "retryable" : "delivered");
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     if (destination) {
       expectAgentCallFields(getAgentCall(), { sessionKey: destination, deliver: false });
       expect(getAgentCall().params?.channel).toBe(
@@ -883,7 +884,6 @@ describe("subagent announce formatting", () => {
     } else {
       expect(agentSpy).not.toHaveBeenCalled();
       expect(sendSpy).not.toHaveBeenCalled();
-      expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     }
   });
 });

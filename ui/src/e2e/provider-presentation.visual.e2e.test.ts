@@ -143,15 +143,12 @@ suite.define(() => {
           const picker = page.locator("details.chat-controls__model-picker");
           await picker.locator("summary").click();
           await page.getByText(label, { exact: true }).first().waitFor({ state: "visible" });
-          await page
-            .locator(
-              '[data-chat-model-provider-group="' +
-                customProvider +
-                '"] .chat-controls__provider-toggle',
-            )
-            .click();
+          await page.locator('[data-chat-model-provider-toggle="' + customProvider + '"]').click();
           const option = page.locator('[data-chat-model-option="' + customProvider + '/model-0"]');
-          expect(await option.count()).toBeGreaterThan(0);
+          await option.waitFor({ state: "visible" });
+          expect(await option.getAttribute("data-chat-model-option")).toBe(
+            customProvider + "/model-0",
+          );
           if (process.env.OPENCLAW_PROVIDER_PRESENTATION_CAPTURE === "1") {
             await writeFile(
               path.join(suite.artifactDir, "provider-picker-" + stage + ".png"),

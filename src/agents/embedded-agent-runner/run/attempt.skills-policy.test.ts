@@ -115,6 +115,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
 
     await run({
       sessionKey: "agent:main:guildchat:channel:test-ctx-engine",
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
       skillsSnapshot: {
         prompt:
           "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",

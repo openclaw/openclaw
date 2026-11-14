@@ -1,4 +1,0 @@
-43
-# Approved inherited-only test-budget reconciliation for PR #194902.
-# Base dd2e7c34b037e052ae181634a7fb19c67e46f9be: 6571220 test lines, 6571177 ceiling.
-# Own regression growth remains separately allocated as 98 lines; no production/test changes.

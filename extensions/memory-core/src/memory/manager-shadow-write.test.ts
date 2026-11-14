@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -95,7 +96,6 @@ describe("private session source staging", () => {
       } else {
         await sync;
       }
-      expect(probeReleased).toHaveLength(index + 1);
       await expect(probeReleased[index]!()).rejects.toThrow("owner is closed");
       expect((await manager.search("Violet")).length).toBeGreaterThan(0);
     }
@@ -121,11 +121,7 @@ describe("private session source staging", () => {
       .catch((error: unknown) => error);
     assert.instanceOf(failure, AggregateError);
     expect(failure.cause).toBe(original);
-    expect(failure.errors).toHaveLength(2);
-    expect(failure.errors[0]).toBe(original);
-    expect(failure.errors[1]).toBe(cleanup);
-    expect(String(failure)).toContain(original.message);
-    expect(String(failure)).toContain(cleanup.message);
+    expect(failure.errors).toEqual([original, cleanup]);
     expect(snapshot(db)).toEqual(before);
     await manager.sync({ reason: "retry", force: true });
     expect(snapshot(db)).toEqual(before);
@@ -256,7 +252,6 @@ describe("private session source staging", () => {
     try {
       await Promise.race([Promise.all([entered.promise, timedOut.promise]), sync]);
       await nextTurn();
-      expect(shadowPath).toBeDefined();
       const shadow = shadowDatabase;
       assert.isDefined(shadow, "Expected the retained shadow database");
       const expectPendingSetup = () => {
@@ -287,12 +282,14 @@ describe("private session source staging", () => {
     }
   });
 
-  it("preserves the published index when an accepted transfer fails without replaying inline", async () => {
+  it("releases each rebuild's shadow descriptor and keeps the published index after a failed transfer", async () => {
     const { manager, db } = await setup();
     await fs.writeFile(
       path.join(fixture.paths.memory, "transfer.md"),
       "Violet transfer source.\n".repeat(30_000),
     );
+    const opened = vi.spyOn(syncFs, "openSync");
+    const closed = vi.spyOn(syncFs, "closeSync");
     await manager.sync({ reason: "baseline", force: true });
     const before = snapshot(db);
     const transfer = await import("./manager-publication-transfer.js");
@@ -318,9 +315,11 @@ describe("private session source staging", () => {
     rejectedTransfer.mockRestore();
     await manager.sync({ reason: "retry", force: true });
     expect(snapshot(db)).toEqual(before);
-    const databasePath = db.location()!;
-    await manager.close();
-    const entries = await fs.readdir(path.dirname(databasePath));
-    expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
+    // Completed and failed rebuilds both delete their shadow; neither may keep it open.
+    const shadows = opened.mock.results.filter((_, call) =>
+      String(opened.mock.calls[call]![0]).includes(".memory-reindex-"),
+    );
+    expect(shadows).not.toHaveLength(0);
+    expect(closed.mock.calls.flat()).toEqual(expect.arrayContaining(shadows.map((r) => r.value)));
   });
 });

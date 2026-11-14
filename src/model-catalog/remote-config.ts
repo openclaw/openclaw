@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const DEFAULT_REMOTE_MODEL_CATALOG_URL = "https://catalog.openclaw.ai/models/v2/catalog.json";
-// Released clients stored downloads from this default. Until the first v2 download lands,
+const DEFAULT_REMOTE_MODEL_CATALOG_URL = "https://catalog.openclaw.ai/models/v3/catalog.json";
+// Released clients stored downloads from these defaults. Until the first v3 download lands,
 // an upgraded default install keeps serving that catalog, including offline.
-const RETIRED_DEFAULT_REMOTE_MODEL_CATALOG_URL =
-  "https://catalog.openclaw.ai/models/v1/catalog.json";
+const RETIRED_DEFAULT_REMOTE_MODEL_CATALOG_URLS: ReadonlySet<string> = new Set([
+  "https://catalog.openclaw.ai/models/v1/catalog.json",
+  "https://catalog.openclaw.ai/models/v2/catalog.json",
+]);
 
 export function isRemoteModelCatalogRefreshEnabled(config: OpenClawConfig): boolean {
   return config.models?.catalogRefresh?.enabled !== false;
@@ -20,6 +22,6 @@ export function isRemoteCatalogSourceActive(config: OpenClawConfig, sourceUrl: s
   return (
     sourceUrl === url ||
     (url === DEFAULT_REMOTE_MODEL_CATALOG_URL &&
-      sourceUrl === RETIRED_DEFAULT_REMOTE_MODEL_CATALOG_URL)
+      RETIRED_DEFAULT_REMOTE_MODEL_CATALOG_URLS.has(sourceUrl))
   );
 }

@@ -7,7 +7,9 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { resolveSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -28,31 +30,55 @@ export async function settleUnreachableYieldedSubagentRun(params: {
   entry: SubagentRunRecord;
   readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
-  requesterEnded?: boolean;
 }): Promise<boolean> {
   const { runId, entry, readScope, complete } = params;
-  let requesterEnded = params.requesterEnded;
-  if (isYieldedSubagentRun(entry) && entry.waitForMessage && requesterEnded === undefined) {
+  let requesterEnded = false;
+  if (isYieldedSubagentRun(entry) && entry.waitForMessage) {
+    // An unclaimed wait belongs to the session across turns. Only a real
+    // continuation claim makes the requester's committed turn end close it.
     const requester = await loadSessionEntryByKey(
       entry.requesterSessionKey,
       entry.requesterAgentId,
     );
+    const requesterCompletion = subagentRuns.getRequesterCompletion(entry);
     requesterEnded =
-      !requester || requester.archivedAt !== undefined || isTerminalSessionStatus(requester.status);
+      requesterCompletion?.ended === true ||
+      !requester ||
+      requester.archivedAt !== undefined ||
+      (requesterCompletion !== undefined &&
+        isTerminalSessionStatus(requester.status) &&
+        requester.lastRunId === requesterCompletion.runId);
   }
-  const continuation = isYieldedSubagentRun(entry)
+  const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  let continuation = isYieldedSubagentRun(entry)
     ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;
+  if (
+    continuation?.state === "continuable" &&
+    retired &&
+    !entry.collect &&
+    !resolveSubagentYieldWaitSource(entry)
+  ) {
+    continuation = {
+      state: "unreachable",
+      error: "Descendant completion can no longer continue this yielded requester.",
+    };
+  }
   if (continuation?.state !== "unreachable") {
     return false;
   }
+  subagentRegistryLog.warn("Settling unreachable yielded subagent", {
+    runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    reason: continuation.error,
+    yieldedAt: entry.execution.endedAt,
+  });
   // An outcome the yield already recorded is kept, as a collector that yields now ends with its
   // yielded turn as its result; only a run with no recorded outcome takes the diagnostic error.
   const outcome = entry.execution.outcome ?? {
     status: "error" as const,
     error: continuation.error,
   };
-  const retired = subagentRuns.isCompletionAuthorityRetired(entry);
   await complete(
     {
       runId,

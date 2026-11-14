@@ -27,6 +27,7 @@ it.for([false, true])(
       ready: Promise.resolve(),
       adapter: {
         pid: 12345,
+        memoryRootPid: 12344,
         onStdout() {},
         onStderr() {},
         onError() {},
@@ -52,6 +53,7 @@ it.for([false, true])(
     });
     owner.process.stdout.resume();
     owner.process.stderr.resume();
+    expect(owner.process.memoryRootPid).toBe(12344);
     expect(owner.process.kill("SIGTERM")).toBe(true);
     expect(signal).toHaveBeenCalledWith(12345, "SIGTERM");
     await vi.advanceTimersByTimeAsync(6_300);

@@ -484,6 +484,10 @@ a.activity-current-work__row:hover {
 .activity-feed__recap-text {
   max-width: 88ch;
   margin: 0;
+  /* Recap prose keeps macOS stem darkening so it does not read thin; the recap
+     note, retry action and other app chrome keep the body's antialiased smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .activity-feed__recap-skeleton {

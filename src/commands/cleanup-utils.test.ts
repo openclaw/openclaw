@@ -36,7 +36,8 @@ async function attemptGatewayLockInChild(env: NodeJS.ProcessEnv): Promise<string
       report("blocked");
     }
   `;
-  const childEnv = { ...env };
+  // The lock-only probe must not recreate state with diagnostic log files during cleanup.
+  const childEnv: NodeJS.ProcessEnv = { ...env, OPENCLAW_LOG_LEVEL: "silent" };
   delete childEnv.NODE_ENV;
   delete childEnv.VITEST;
   delete childEnv.VITEST_POOL_ID;
@@ -278,7 +279,12 @@ describe("cleanup path removals", () => {
   it.each(["shared", "separate"] as const)(
     "retains current and published Gateway exclusion through linked-path cleanup (%s lock directory)",
     async (layout) => {
-      const { stateDir, configPath, env, remove } = await cleanupFixture(true, "{}\n");
+      const { tmpRoot, stateDir, configPath, env, remove } = await cleanupFixture(true);
+      // The real startup probe must not recreate the state tree just to write a refusal log.
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ logging: { file: path.join(tmpRoot, "gateway-probe.log") } }),
+      );
       const markerPath = path.join(stateDir, "marker.txt");
       const lockDir =
         layout === "shared" ? resolveGatewayLockDir(stateDir) : path.join(stateDir, "custom-locks");

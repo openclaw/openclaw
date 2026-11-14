@@ -653,7 +653,7 @@ describe("chat pane header", () => {
     expect(indicator.getAttribute("aria-label")).toBe("Incognito");
     expect(indicator.textContent?.trim()).toBe("");
     expect(tooltip.content).toBe(
-      "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
+      "History expires after 24 hours or a Gateway restart, whichever comes first.",
     );
     expect(tooltip.openOnClick).toBe(true);
     expect(mountHeader().container.querySelector(".chat-pane__incognito")).toBeNull();

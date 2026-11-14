@@ -153,7 +153,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
             context.restartResumeWindows = { main: [{ startedAt: 100, endedAt: 200 }] };
           }
           const params = { context, signal: admission.signal, log: { warn: vi.fn() } };
-          const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
+          const wait = admission.observation.waitForAgentPreparation;
           const preparationWait = vi
             .spyOn(admission.observation, "waitForAgentPreparation")
             .mockImplementation((id, options) => {
@@ -298,7 +298,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       };
       const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
         ["crash", {}, mode !== "clean-or-unknown"],
-        ["yielded", { endedAt: 120 }, mode !== "clean-or-unknown"],
+        ["yielded", { endedAt: 120 }, false],
         ["stale", { startedAt: 1, updatedAt: 999 }, false],
         ["missing-start", { startedAt: undefined }, false],
         ["new-incarnation", { startedAt: 200 }, false],
@@ -308,6 +308,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         ["external", { modelSelectionLocked: true }, false],
         ["cron:job", {}, false],
         ["subagent:child", {}, false],
+        ["dashboard:spawned", { createdVia: "spawn" }, false],
         ["live", {}, false],
         ...(mode === "markers"
           ? [
@@ -322,7 +323,8 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       for (const [name, patch] of cases) {
         const target = sessionTarget(name);
         const { sessionKey } = target;
-        replaceSessionEntrySync(target, { sessionId: name, updatedAt: 110 });
+        const initial = { sessionId: name, updatedAt: 110, createdVia: patch.createdVia };
+        replaceSessionEntrySync(target, initial);
         await persistGatewaySessionLifecycleEvent({
           sessionKey,
           event: {
@@ -403,6 +405,13 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         expect(
           loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
         ).toHaveProperty("lifecycleRunId", "live");
+        expect(loadExactSessionEntry(sessionTarget("yielded"))?.entry).toMatchObject({
+          status: "failed",
+          lastRunError: expect.stringContaining("child completion"),
+        });
+        expect(
+          loadExactSessionEntry(sessionTarget("yielded"))?.entry.lifecycleRunId,
+        ).toBeUndefined();
       } finally {
         resume.mockRestore();
         releaseAgentRunContext("live", claim);
@@ -483,6 +492,41 @@ it("marks the active execution when an older message wait remains in the same se
     }
   }));
 
+it.each(["restart", "user", "completed"] as const)(
+  "selects retained %s work at the restart marker snapshot",
+  (ending) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const target = {
+        agentId: "main",
+        sessionKey: `agent:main:before-markers-${ending}`,
+        sessionId: `before-markers-${ending}`,
+      };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { operation, release } = await withSessionTurn(target, async (active) => {
+        assert(active);
+        if (ending === "completed") {
+          active.freezeAbort();
+        }
+        return { operation: active, release: active.retainExecution() };
+      });
+      try {
+        if (ending !== "completed") {
+          expect(ending === "restart" ? operation.abortForRestart() : operation.abortByUser()).toBe(
+            true,
+          );
+        }
+        await persistRunningSessionsForRestart({ cfg: {} });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          ending === "restart" ? { queuedInputIds: [] } : undefined,
+        );
+      } finally {
+        release();
+        await operation.ownerSettlement;
+      }
+    }),
+);
+
 it("marks completed reply settlement only when accepted inputs remain queued", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
@@ -519,6 +563,12 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       await persistRunningSessionsForRestart({ cfg: {} });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [queued.inputId],
+        queuedInputSources: {
+          [queued.inputId]: {
+            runId: "queued-behind-completed-reply",
+            source: { kind: "unavailable" },
+          },
+        },
       });
     } finally {
       queued?.finish("interrupted");
@@ -597,7 +647,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
     }
   }));
 
-it("settles captured queued sends as failed when the recorded owner's authority is revoked", () =>
+it("settles source-less queued sends even when the recorded owner cannot resume", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {

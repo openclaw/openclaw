@@ -371,6 +371,22 @@ describe("offsite backup CLI", () => {
       ).rejects.toThrow("CLI exit 1");
       expect(errors.mock.calls.flat().join(" ")).toContain("requires a local-companion checkpoint");
       await expectAbsent(target);
+      delete process.env.OPENCLAW_OFFSITE_TEST_UNSET_PG;
+      await expect(
+        from(
+          "restore",
+          "test-host",
+          "latest",
+          "--target",
+          target,
+          "--postgres-connection-env",
+          "OPENCLAW_OFFSITE_TEST_UNSET_PG",
+        ),
+      ).rejects.toThrow("CLI exit 1");
+      expect(errors.mock.calls.flat().join(" ")).toContain(
+        "OPENCLAW_OFFSITE_TEST_UNSET_PG is not set",
+      );
+      await expectAbsent(target);
       await from("restore", "test-host", "latest", "--target", target);
       const capturedState = created.assets.find((asset) => asset.kind === "state");
       expect(capturedState).toBeDefined();

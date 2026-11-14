@@ -38,7 +38,7 @@ async function withModelsRuntime(
 }
 
 // Ownership is selected before loading any mutation-capable auth runtime.
-function runAuthModelCommand<T extends object>(
+export function runAuthModelCommand<T extends object>(
   command: Command,
   options: (agent: string | undefined) => T,
   load: () => Promise<(opts: T, runtime: ModelsCliRuntime["defaultRuntime"]) => Promise<void>>,

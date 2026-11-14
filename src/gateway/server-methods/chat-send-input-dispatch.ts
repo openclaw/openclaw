@@ -24,6 +24,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
+import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
@@ -357,6 +358,7 @@ export async function handleChatSendWithStorage(
       const staged = await withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
         userTurnRecorder.stageApproved?.({
           ...pendingAdmission,
+          recoverySource: captureQueuedOperatorRecoverySource(admission.operatorAuthority),
         }),
       );
       stagePhase?.finish();
@@ -622,6 +624,7 @@ export async function handleChatSendWithStorage(
       client,
       context,
       toolsAllow: options?.toolsAllow,
+      deferWorkspaceBootstrap: options?.deferWorkspaceBootstrap,
       prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
       skillLibrary: {
         sessionKey,

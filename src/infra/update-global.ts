@@ -488,13 +488,6 @@ export function resolveGlobalInstallSpec(params: {
 
 export { createGlobalInstallEnv } from "./update-global-env.js";
 
-function resolveBunGlobalRoot(): string {
-  return (
-    resolveBunGlobalInstallOwner()?.globalRoot ??
-    path.join(os.homedir(), ".bun", "install", "global", "node_modules")
-  );
-}
-
 function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
   return (
     resolveNpmGlobalPrefixLayoutFromGlobalRoot(inferGlobalRootFromPackageRoot(pkgRoot))?.prefix ??
@@ -864,7 +857,7 @@ async function resolveGlobalRoot(
   pkgRoot?: string | null,
 ): Promise<string | null> {
   if (resolved.manager === "bun") {
-    return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalRoot();
+    return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalInstallOwner().globalRoot;
   }
   // Discovery runs while the updater owns the terminal pane: a Corepack shim must not prompt,
   // and the probe must never wait for input that the pane cannot answer.
@@ -1115,7 +1108,7 @@ export async function detectGlobalInstallManagerByPresence(
     }
   }
 
-  const bunRoot = resolveBunGlobalRoot();
+  const bunRoot = resolveBunGlobalInstallOwner().globalRoot;
   if (await pathExists(path.join(bunRoot, PRIMARY_PACKAGE_NAME))) {
     return "bun";
   }

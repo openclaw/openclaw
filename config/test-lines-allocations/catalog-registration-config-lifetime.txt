@@ -1,3 +1,0 @@
-# Cover remote catalog registration reuse, rollback and collection, immutable config provenance,
-# and changed or removed credentials through captured config and real local provider HTTP.
-1158

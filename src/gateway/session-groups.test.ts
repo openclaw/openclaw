@@ -396,6 +396,22 @@ describe("session groups catalog", () => {
     });
   });
 
+  it("sweeps only stores holding group members and skips empty groups", async () => {
+    await put(["Old", "Empty"], { cfg: groupCfg });
+    const session = await seedMember("member");
+    await seedMember("bystander", "Other", "other");
+    const sweep = vi.spyOn(sessionGroupCategories, "updateSessionGroupCategoriesInWorker");
+
+    expect((await rename({ cfg: groupCfg })).updatedSessions).toBe(1);
+    expect(sweep.mock.calls.map(([{ scope }]) => scope.agentId)).toEqual(["main"]);
+    expect(session.category()).toBe("New");
+
+    sweep.mockClear();
+    const result = await deleteSessionGroup({ cfg: groupCfg, name: "Empty", env });
+    expect(sweep).not.toHaveBeenCalled();
+    expect(result.groups.map(({ name }) => name)).toEqual(["New"]);
+  });
+
   it.each([
     { action: "rename", targetExists: false, stopAgent: "main" },
     { action: "rename", targetExists: true, stopAgent: "other" },
@@ -543,37 +559,51 @@ describe("session groups catalog", () => {
     expect(catalog().sectionOrder).toContain("category:Old");
   });
 
-  it("retains a group when a member is assigned after its store was swept", async () => {
-    await put(["Old"], { cfg: groupCfg, sectionOrder: ["category:Old"] });
-    const lateKey = "agent:main:dashboard:late";
-    const session = await seedMember("existing");
-    await seedMember("existing", "Old", "other", "other-existing");
-    let inserted = false;
-    await expect(
-      rename({
-        cfg: groupCfg,
-        assertTargetCurrent: ({ agentId }) => {
-          if (agentId !== "other" || inserted) {
-            return;
-          }
-          inserted = true;
-          expect(session.category()).toBe("New");
-          runOpenClawAgentWriteTransaction(
-            (database) => {
-              writeSessionEntry(database, lateKey, member("late"));
-            },
-            { agentId: "main", env },
-          );
-        },
-      }),
-    ).rejects.toThrow("still has members");
-    expect(inserted).toBe(true);
-    expect(loadSessionEntry({ ...session.target, sessionKey: lateKey })?.category).toBe("Old");
-    expect(catalog().groups.map(({ name }) => name)).toEqual(
-      expect.arrayContaining(["Old", "New"]),
-    );
-    expect(catalog().sectionOrder).toContain("category:Old");
-  });
+  it.each([
+    { lateAgent: "main", triggerAgent: "other", otherCategory: "Old" },
+    { lateAgent: "other", triggerAgent: "main", otherCategory: "Other" },
+  ])(
+    "retains late membership in $lateAgent and completes on retry",
+    async ({ lateAgent, triggerAgent, otherCategory }) => {
+      await put(["Old"], { cfg: groupCfg, sectionOrder: ["category:Old"] });
+      const lateKey = `agent:${lateAgent}:dashboard:late`;
+      const session = await seedMember("existing");
+      const other = await seedMember("existing", otherCategory, "other", "other-existing");
+      const target = lateAgent === "main" ? session.target : other.target;
+      const lateCategory = () => loadSessionEntry({ ...target, sessionKey: lateKey })?.category;
+      let inserted = false;
+      await expect(
+        rename({
+          cfg: groupCfg,
+          assertTargetCurrent: ({ agentId }) => {
+            if (agentId !== triggerAgent || inserted) {
+              return;
+            }
+            inserted = true;
+            if (lateAgent === "main") {
+              expect(session.category()).toBe("New");
+            }
+            runOpenClawAgentWriteTransaction(
+              (database) => {
+                writeSessionEntry(database, lateKey, member("late"));
+              },
+              { agentId: lateAgent, env },
+            );
+          },
+        }),
+      ).rejects.toThrow("still has members");
+      expect(inserted).toBe(true);
+      expect(lateCategory()).toBe("Old");
+      expect(catalog().groups.map(({ name }) => name)).toEqual(
+        expect.arrayContaining(["Old", "New"]),
+      );
+      expect(catalog().sectionOrder).toContain("category:Old");
+
+      await rename({ cfg: groupCfg });
+      expect(lateCategory()).toBe("New");
+      expect(catalog().groups.map(({ name }) => name)).toEqual(["New"]);
+    },
+  );
 
   it("keeps the source sidebar slot when the merge target has no stored slot", async () => {
     await put(["A", "B"], { sectionOrder: ["category:A", "work"] });

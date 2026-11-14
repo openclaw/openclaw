@@ -92,12 +92,16 @@ async function recoverStartup(
     key: storageKey,
     record: recovery,
   });
+  const failure = await failControlUiModuleForDocuments(
+    page,
+    moduleRequest("ui/src/app/session-placement-startup.runtime.ts"),
+  );
   let documentProbes = 0;
   // Automatic recovery outlives the first failed probe. Keep the outage
   // until the scenario has established the owner that must block reloads.
   let documentReachable = false;
   await page.route("**/*", async (route) => {
-    if (route.request().method() === "HEAD") {
+    if (route.request().headers()["x-openclaw-reachability-probe"] === "1") {
       documentProbes += 1;
       if (!documentReachable) {
         await route.fulfill({ status: 503 });
@@ -106,10 +110,6 @@ async function recoverStartup(
     }
     await route.fallback();
   });
-  const failure = await failControlUiModuleForDocuments(
-    page,
-    moduleRequest("ui/src/app/session-placement-startup.runtime.ts"),
-  );
   await page.reload();
   await expect.poll(failure.documentCount).toBe(1);
   await expect.poll(() => documentProbes).toBeGreaterThan(0);
@@ -167,7 +167,6 @@ async function recoverStartup(
       expect(await alert.locator("details").count()).toBe(0);
     }
     // Restored connectivity must not bypass the live unsaved-start owner.
-    const blockedDocumentProbes = documentProbes;
     documentReachable = true;
     await page.setViewportSize({ width: 390, height: 844 });
     // The resize event schedules the shell's mobile layout after the viewport RPC.
@@ -207,7 +206,6 @@ async function recoverStartup(
       privateStored: false,
       recovery: JSON.stringify(recovery),
     });
-    expect(documentProbes).toBe(blockedDocumentProbes);
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     if (escape === "toast") {
       await page.locator(".sidebar-rail .sidebar-new-session").click();

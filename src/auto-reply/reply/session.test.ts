@@ -916,6 +916,7 @@ describe("initSessionState RawBody", () => {
         label: "Other",
         autoLabel: "Device",
         displayName: "Dashboard Chat",
+        topicName: "Invoices",
         deviceFolder: { deviceId: "rollover-device", path: "/existing/project" },
         pendingDeliveryNotice: {
           createdAt: staleStartedAt,

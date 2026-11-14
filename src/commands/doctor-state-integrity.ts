@@ -4,18 +4,7 @@ import path from "node:path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { isSharedAuthStoreOwner } from "../agents/agent-delete-safety.js";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
-import {
-  listAgentIds,
-  resolveDefaultAgentDir,
-  tryResolveDefaultAgentId,
-} from "../agents/agent-scope.js";
-import {
-  prepareSharedAuthStoreOwnershipForNative as resolveSharedAuthStoreOwnership,
-  resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath,
-} from "../agents/auth-profiles/path-resolve.native.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -39,16 +28,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { preserveDeferredPluginSessionSource } from "../infra/deferred-plugin-session-sources.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { safeStatSync } from "../infra/path-guards.js";
 import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
-import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
-import { shortenHomePath } from "../utils.js";
+import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -56,11 +44,12 @@ import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
-import { countLabel, type OrphanAgentDir } from "./doctor-state-integrity-format.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
 import {
   resolveSessionRuntimeDirectories,
   type RuntimeDirLabel,
 } from "./doctor-state-integrity.directories.js";
+import { listOrphanAgentDirs } from "./doctor-state-integrity.orphan-dirs.js";
 import {
   detectLinuxSdBackedStateDir,
   detectLinuxVolatileStateDir,
@@ -119,77 +108,6 @@ export type StateIntegrityHealthIssue = { path: string } & (
       hint?: string;
     }
 );
-
-function tryResolveNativeRealPath(targetPath: string): string | null {
-  try {
-    return fs.realpathSync.native(targetPath);
-  } catch {
-    return null;
-  }
-}
-
-function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
-  const leftRealPath = tryResolveNativeRealPath(leftPath);
-  const rightRealPath = tryResolveNativeRealPath(rightPath);
-  return leftRealPath !== null && leftRealPath === rightRealPath;
-}
-
-function isReachableConfiguredAgentDir(params: {
-  agentsRoot: string;
-  dirName: string;
-  agentId: string;
-}): boolean {
-  if (params.dirName === params.agentId) {
-    return true;
-  }
-  const rawDir = path.join(params.agentsRoot, params.dirName, "agent");
-  const normalizedDir = path.join(params.agentsRoot, params.agentId, "agent");
-  return areComparablePathsEqual(rawDir, normalizedDir);
-}
-
-function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
-  const configuredIds = new Set(listAgentIds(cfg));
-  const sharedAuthOwnership = resolveSharedAuthStoreOwnership();
-  const sharedAuthDbPath = resolveSharedAuthStorePath();
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
-
-  const agentsRoot = path.join(stateDir, "agents");
-  const liveDefaultAgentDir = defaultAgentId ? resolveDefaultAgentDir(cfg) : undefined;
-  try {
-    const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
-    return entries
-      .flatMap((entry) => {
-        if (!entry.isDirectory()) {
-          return [];
-        }
-        const dirName = entry.name;
-        const agentId = normalizeAgentId(dirName);
-        const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
-        // Reserved system ids own state but cannot appear in the configured roster.
-        if (
-          !safeStatSync(nestedAgentDir)?.isDirectory() ||
-          isReservedSystemAgentId(agentId) ||
-          isSharedAuthStoreOwner({
-            ownership: sharedAuthOwnership,
-            agentAuthDbPath: resolveAuthProfileDatabasePath(nestedAgentDir),
-            sharedAuthDbPath,
-          }) ||
-          (liveDefaultAgentDir && areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) ||
-          (configuredIds.has(agentId) &&
-            isReachableConfiguredAgentDir({ agentsRoot, dirName, agentId }))
-        ) {
-          return [];
-        }
-        return [{ dirName, agentId }];
-      })
-      .toSorted(
-        (left, right) =>
-          left.agentId.localeCompare(right.agentId) || left.dirName.localeCompare(right.dirName),
-      );
-  } catch {
-    return [];
-  }
-}
 
 function canWriteDir(dir: string): boolean {
   try {
@@ -720,7 +638,11 @@ export async function noteStateIntegrity(
     }
   }
 
-  const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);
+  const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir, (agentsRoot, error) => {
+    warnings.push(
+      `- Could not scan ${shortenHomePath(agentsRoot)} for orphan agent directories: ${shortenHomeInString(formatErrorMessage(error))}. Check the directory's permissions and owner, then rerun openclaw doctor.`,
+    );
+  });
   if (orphanAgentDirs.length > 0) {
     const labels = orphanAgentDirs
       .slice(0, 3)

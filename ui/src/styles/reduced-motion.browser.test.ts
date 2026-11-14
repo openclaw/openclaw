@@ -33,9 +33,9 @@ fixture.describe("Reduced motion transitions", () => {
         expect(style).toEqual({ property: "none", duration: "0s", delay: "0s" });
       }
       expect(styles.shell).toEqual({
-        property: "grid-template-columns, grid-template-rows",
+        property: "grid-template-columns",
         duration: "0s",
-        delay: "0s, 0s",
+        delay: "0s",
       });
       expect(styles.latest).toEqual({
         property: "opacity, visibility",
