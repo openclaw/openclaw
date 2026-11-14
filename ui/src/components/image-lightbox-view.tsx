@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+import { registerChatMessageMetadataEnglish } from "../i18n/locales/en-chat-message-metadata.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
@@ -19,6 +20,7 @@ import { Icon } from "./solid/icon.tsx";
 
 registerEnglishCatalog(registerChatMediaEnglish);
 registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 type FocusableRef = () => (element: HTMLElement) => void;
 
@@ -222,7 +224,7 @@ function LightboxImageUse(props: {
       aria-busy={busy() ? "true" : undefined}
       onClick={(event) => void use(event.currentTarget)}
     >
-      {busy() ? t("common.loading") : t("chat.imageLightbox.useInMessage")}
+      {busy() ? t("common.loading") : t("chat.messages.addToChat")}
     </button>
   );
 }

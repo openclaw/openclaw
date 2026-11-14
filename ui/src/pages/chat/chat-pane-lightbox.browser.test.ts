@@ -61,7 +61,7 @@ it("uses selected B's original, dismisses the modal and focuses the retained dra
     .element(page.getByRole("dialog", { name: "Image preview: coastal-1.png", exact: true }))
     .toBeVisible();
   const dialog = document.querySelector("openclaw-image-lightbox dialog")!;
-  const use = page.getByRole("button", { name: "Use in message", exact: true });
+  const use = page.getByRole("button", { name: "Add to chat", exact: true });
   await use.click();
   await expect.poll(() => document.querySelector("openclaw-image-lightbox")).toBeNull();
   expect(dialog.matches(":modal")).toBe(false);

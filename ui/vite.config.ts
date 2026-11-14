@@ -846,6 +846,8 @@ export default function controlUiViteConfig(
   const parallelStyleTargets = new Set<string>();
   let composerMenuChunk: string | undefined;
   let composerSubviewChunk: string | undefined;
+  let imageLightboxChunk: string | undefined;
+  let imageUseChunk: string | undefined;
   const parallelStyleEntries = [
     "/ui/src/pages/config/config-page.tsx",
     "/ui/src/pages/cron/cron-page.tsx",
@@ -877,6 +879,14 @@ export default function controlUiViteConfig(
     // The executing importer has already loaded its whole static JS graph.
     // Keep the lazy target, its other dependencies, and Vite's CSS preloads.
     const loaded = collectStaticImports(context.hostId);
+    // Use in message is invoked from the mounted lightbox. Its original-byte
+    // reader and MIME dependencies have already loaded with that viewer.
+    if (filename === imageUseChunk && imageLightboxChunk) {
+      loaded.add(imageLightboxChunk);
+      for (const dependency of collectStaticImports(imageLightboxChunk)) {
+        loaded.add(dependency);
+      }
+    }
     // Vite removes CSS before calling this hook. Chunk metadata tells us when
     // its stylesheet wait would otherwise delay fetching the target script.
     // Keep optional artwork behind its existing wait so it cannot compete
@@ -982,11 +992,19 @@ export default function controlUiViteConfig(
           parallelStyleTargets.clear();
           composerMenuChunk = undefined;
           composerSubviewChunk = undefined;
+          imageLightboxChunk = undefined;
+          imageUseChunk = undefined;
           for (const chunk of Object.values(bundle)) {
             if (chunk.type === "chunk") {
               staticImports.set(chunk.fileName, chunk.imports);
               for (const id of chunk.moduleIds) {
                 const source = id.replaceAll("\\", "/");
+                if (source.endsWith("/ui/src/components/image-lightbox-content.tsx")) {
+                  imageLightboxChunk = chunk.fileName;
+                }
+                if (source.endsWith("/ui/src/pages/chat/chat-pane-image-attachment.runtime.ts")) {
+                  imageUseChunk = chunk.fileName;
+                }
                 if (
                   source.endsWith(
                     "/ui/src/pages/chat/components/chat-composer-plus-menu-content.tsx",

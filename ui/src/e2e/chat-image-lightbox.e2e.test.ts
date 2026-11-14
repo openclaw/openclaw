@@ -216,7 +216,7 @@ suite.define(() => {
           frame.png,
         );
       }
-      const use = exactButton(page, "Use in message");
+      const use = exactButton(page, "Add to chat");
       await use.waitFor({ timeout: 3000 });
       if (mobile) {
         const bounds = await use.boundingBox();
