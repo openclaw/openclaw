@@ -1,6 +1,7 @@
 import {
   hasNonEmptyString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
 import { resolveChannelMessageActionFacts } from "../../channels/plugins/message-action-names.js";
@@ -22,6 +23,9 @@ import {
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
 import { missingMessageActionTargetError } from "./target-errors.js";
+
+const THREAD_ID_PARAM_KEYS = ["threadId", "thread_id", "messageThreadId", "message_thread_id"];
+const TARGET_PARAM_KEYS = ["target", "to", "channelId"];
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
@@ -57,6 +61,35 @@ export function normalizeMessageActionInput(params: {
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
+  // Shared param readers also accept each key's snake_case form, and provider handlers may
+  // read `messageThreadId` before `threadId` (Telegram does). Fold every spelling into one
+  // string `threadId` (core reads only strings) so cross-context policy, core delivery and
+  // the provider all judge one thread.
+  const threadIds = new Set(
+    THREAD_ID_PARAM_KEYS.map((key) => normalizeOptionalStringifiedId(normalizedArgs[key])),
+  );
+  threadIds.delete(undefined);
+  // An explicit null threadId opts out of threading, so any other spelling contradicts it.
+  if (threadIds.size > 1 || (threadIds.size === 1 && normalizedArgs.threadId === null)) {
+    throw new Error(`Action ${action} received conflicting thread id values.`);
+  }
+  const [threadId] = threadIds;
+  if (threadId && normalizedArgs.threadId !== threadId) {
+    normalizedArgs.threadId = threadId;
+  }
+  // Provider readers may take numeric ids for these keys (Telegram's chat id reader does), but
+  // the target fold below reads only strings. Stringify exact integer ids so they follow the
+  // same contract; any other number cannot name a conversation exactly.
+  for (const key of TARGET_PARAM_KEYS) {
+    const value = normalizedArgs[key];
+    if (typeof value !== "number") {
+      continue;
+    }
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(`Action ${action} received a numeric ${key} that is not an exact id.`);
+    }
+    normalizedArgs[key] = String(value);
+  }
   const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
   const inferredChannel =
     explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";

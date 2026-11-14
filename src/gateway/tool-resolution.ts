@@ -62,6 +62,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
+import { inferChatTypeFromTarget } from "../infra/outbound/targets.js";
 import { logWarn } from "../logger.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -374,6 +375,14 @@ export async function resolveGatewayScopedTools(
     wrapBeforeToolCallHook: false,
     agentAccountId: params.accountId,
   });
+  const boundChannelId = params.currentChannelId ?? params.agentTo;
+  // A direct invocation is bound to a conversation only by its hints. Report that
+  // conversation's kind as outbound targets infer it, so chat-type confinement
+  // applies as it does to a turn from there.
+  const directInvocationChatType =
+    surface === "http" && messageProvider && boundChannelId
+      ? inferChatTypeFromTarget({ channel: messageProvider, to: boundChannelId })
+      : undefined;
   const delegatedExecPolicy = projectAgentToolsExecPolicy({
     options: { config: params.cfg, exec: params.execOverrides, sessionPermissionPolicy },
     execConfig: resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId }),
@@ -433,7 +442,8 @@ export async function resolveGatewayScopedTools(
     sourceReplyOnly: params.sourceReplyOnly,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
-    currentChannelId: params.currentChannelId ?? params.agentTo,
+    currentChannelId: boundChannelId,
+    currentChatType: directInvocationChatType,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     replyToMode: params.replyToMode,
     onYield: params.onYield,
