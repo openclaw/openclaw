@@ -5545,6 +5545,107 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it.each([1, 2])("hosts ordinary manual CI with configured Boat on attempt %s", (runAttempt) => {
+    const fixture = {
+      eventName: "workflow_dispatch" as const,
+      targetSupportsContract: true,
+      runAttempt,
+    };
+    const result = runRunnerProfileFixture({ ...fixture, configuredProfile: "boat" });
+    const control = runRunnerProfileFixture({ ...fixture, configuredProfile: "github" });
+    expect(result.status, result.output).toBe(0);
+    expect(control.status, control.output).toBe(0);
+    expect(result.outputs).toEqual(control.outputs);
+    expect(result.outputs).toMatchObject({
+      runner_profile: "github",
+      node_runner_backend: "github",
+      ci_qualification: "false",
+      ci_shape: "default",
+      qualification_runner_backend: "",
+      boat_build_qualification: "false",
+    });
+    const workflow = readCiWorkflow();
+    const context = {
+      ...fixture,
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/fixture",
+      runnerBackend: "github" as const,
+      releaseGate: false,
+      preflightOutputs: result.outputs,
+      matrix: { runner: "ubuntu-24.04", task: "test", node: "24" },
+      steps: {
+        runner_profile: { outputs: result.outputs },
+        changed_scope: { outputs: {} },
+        docs_scope: { outputs: {} },
+      },
+    };
+    const manifest = requiredWorkflowStep(workflow.jobs.preflight.steps, "Build CI manifest");
+    for (const [name, value] of Object.entries(manifest.env)) {
+      if (typeof value === "string" && value.includes("steps.runner_profile.outputs")) {
+        expect(evaluateWorkflowExpression(value, context), name).toEqual(
+          evaluateWorkflowExpression(value, {
+            ...context,
+            steps: { ...context.steps, runner_profile: { outputs: control.outputs } },
+          }),
+        );
+      }
+    }
+    for (const name of Object.keys(workflow.jobs)) {
+      const job = workflow.jobs[name];
+      if (!String(job.needs).includes("preflight")) {
+        continue;
+      }
+      const runner = job["runs-on"];
+      if (typeof runner === "string" && runner.startsWith("${{")) {
+        expect(evaluateWorkflowExpression(runner, context), name).toEqual(
+          evaluateWorkflowExpression(runner, { ...context, preflightOutputs: control.outputs }),
+        );
+      }
+    }
+    expect(evaluateWorkflowExpression(workflow.jobs["build-artifacts"]["runs-on"], context)).toBe(
+      "ubuntu-24.04",
+    );
+    const plan = (backend: "boat" | "github") =>
+      runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "workflow_dispatch",
+        historicalCompatibility: false,
+        runnerProfile: "github",
+        nodeRunnerBackend: "github",
+        scopeEnv: {
+          OPENCLAW_CI_CHECKOUT_REVISION: "b".repeat(40),
+          OPENCLAW_CI_RUNNER_BACKEND: backend,
+          OPENCLAW_CI_RUN_UI_TESTS: "true",
+        },
+      });
+    const boatPlan = plan("boat");
+    const githubPlan = plan("github");
+    expect(boatPlan.status, boatPlan.output).toBe(0);
+    expect(githubPlan.status, githubPlan.output).toBe(0);
+    expect(boatPlan.outputs).toEqual(githubPlan.outputs);
+    expect(boatPlan.outputs.frozen_target).toBe("false");
+  });
+
+  it.each([
+    { eventName: "push" as const },
+    { eventName: "pull_request" as const },
+    { repository: "fork/openclaw" },
+    { targetSupportsContract: false },
+    { requestedProfile: "hybrid" as const },
+    { requestedProfile: "boat" as const },
+    { ciShape: "main" as const },
+    { qualificationDispatch: true },
+  ])("rejects configured Boat outside ordinary hosted manual admission: %j", (override) => {
+    const result = runRunnerProfileFixture({
+      configuredProfile: "boat",
+      eventName: "workflow_dispatch",
+      targetSupportsContract: true,
+      ...override,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.outputs).toEqual({});
+  });
+
   it("qualifies only the first-attempt Boat build and keeps sibling routing and caches", () => {
     const fixture = {
       configuredProfile: "hybrid",
@@ -5621,6 +5722,7 @@ describe("ci workflow guards", () => {
         ...fixture,
         configuredProfile: "boat",
         requestedProfile: "default",
+        qualificationDispatch: true,
       }).status,
     ).not.toBe(0);
   });

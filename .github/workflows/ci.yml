@@ -1101,6 +1101,21 @@ jobs:
           runner_profile="${CONFIGURED_RUNNER_PROFILE:-blacksmith}"
           case "$runner_profile" in
             github | hybrid | blacksmith | runson) ;;
+            boat)
+              # Ordinary canonical dispatch uses the target's hosted contract, not Boat.
+              if [[
+                "$GITHUB_REPOSITORY" == "openclaw/openclaw" &&
+                "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+                "${QUALIFICATION_DISPATCH:-false}" == "false" &&
+                "${REQUESTED_RUNNER_PROFILE:-default}" == "default" &&
+                "${CI_SHAPE:-default}" == "default"
+              ]] && grep -Fq "hosted-runner-profile-contract-v1" .github/workflows/ci.yml; then
+                runner_profile=github
+              else
+                echo "Configured Boat requires ordinary canonical hosted manual CI" >&2
+                exit 1
+              fi
+              ;;
             *) echo "OPENCLAW_CI_RUNNER_BACKEND must be github, hybrid, blacksmith, or runson" >&2; exit 1 ;;
           esac
           ci_qualification=false
