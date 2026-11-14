@@ -36,7 +36,12 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
           provider,
           source: "fixture",
         }));
-        return { registry, onlyPluginIds: undefined, isProviderOwnerEligible: () => true };
+        return {
+          registry,
+          workspaceDir: params.workspaceDir,
+          onlyPluginIds: undefined,
+          isProviderOwnerEligible: () => true,
+        };
       },
     }),
   };
