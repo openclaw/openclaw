@@ -5,6 +5,7 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
+import { AgentCompactionMaxSummaryCharsSchema } from "../../config/zod-schema.agent-entry-base.js";
 import { mergeDeep } from "../../infra/deep-merge.js";
 import type {
   Settings,
@@ -41,6 +42,17 @@ export function requireSupportedSettings(value: unknown, scope: SettingsScope): 
         "Preserve the original file and replace the retired forms while retaining values that already use the current forms before retrying. " +
         "For a staged upgrade, OpenClaw 2026.9.7 retains the former settings reader. " +
         "See https://docs.openclaw.ai/gateway/doctor/config-migrations#session-settings.",
+      { recovery: "manual" },
+    );
+  }
+  const maxSummaryChars = isRecord(value.compaction) ? value.compaction.maxSummaryChars : undefined;
+  if (
+    maxSummaryChars !== undefined &&
+    !AgentCompactionMaxSummaryCharsSchema.safeParse(maxSummaryChars).success
+  ) {
+    throw createInvalidConfigError(
+      `${scope} session settings.json`,
+      "compaction.maxSummaryChars must be an integer from 1000 to 200000; remove it to restore the 16000 default.",
       { recovery: "manual" },
     );
   }

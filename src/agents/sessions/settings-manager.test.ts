@@ -4,18 +4,18 @@ import { SettingsManager } from "./settings-manager.js";
 
 describe("SettingsManager runtime overrides", () => {
   it("preserves compaction overrides after local setting writes", () => {
-    const settingsManager = SettingsManager.inMemory({
+    const manager = SettingsManager.inMemory({
       compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
     });
-    settingsManager.applyOverrides({
-      compaction: { reserveTokens: 50_000, keepRecentTokens: 16_000 },
-    });
-    settingsManager.setCompactionEnabled(false);
-    expect(settingsManager.getCompactionSettings()).toEqual({
+    manager.applyOverrides({ compaction: { reserveTokens: 50_000, keepRecentTokens: 16_000 } });
+    manager.setCompactionEnabled(false);
+    expect(manager.getCompactionSettings()).toEqual({
       enabled: false,
       reserveTokens: 50_000,
       keepRecentTokens: 16_000,
     });
+    const invalid = { compaction: { maxSummaryChars: 0 } };
+    expect(() => SettingsManager.inMemory(invalid)).toThrow("compaction.maxSummaryChars");
   });
 
   it("keeps mutable defaults separate from a shared frozen input", () => {
