@@ -248,6 +248,13 @@ V1 incident and independently reviewed actual four-file incumbent and replacemen
 closures. It reuses the existing adoption publication and replay owner; neither
 an old completion nor a new operation UUID authorizes today's files or incident.
 
+After a journal has been retired, use
+[`steady-successor`](RETAINED-REPAIR.md#adopt-a-controller-after-journal-retirement)
+to supersede the completed gate without requiring another incident. It binds the
+currently installed closure and serving Gateway, preserves the old closure and
+gate, and publishes the new four-file closure under the same lock. Controller
+adoption does not restart the Gateway or authorize a deployment.
+
 ## Installed closure
 
 Install from one reviewed, merged OpenClaw commit. These four files are one
