@@ -265,13 +265,28 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("AllowFrom: +15551234567");
   });
 
-  it.each(["webchat", "whatsapp"])(
-    "reports denied /status only on the internal surface (%s)",
-    async (channel) => {
+  it.each([
+    {
+      channel: "webchat",
+      source: "text",
+      reply:
+        "You are not authorized to use this command. Ask your Gateway administrator for command access.",
+    },
+    { channel: "whatsapp", source: "text", reply: undefined },
+    { channel: "whatsapp", source: "native", reply: undefined },
+    { channel: "webchat", source: "native", reply: "You are not authorized to use this command." },
+  ])(
+    "reports denied /status appropriately for $channel $source commands",
+    async ({ channel, source, reply }) => {
       const params = buildInfoParams(
         "/status",
         { commands: { text: true, allowFrom: { "*": ["verified-user"] } } },
-        { Provider: channel, Surface: channel, GatewayClientScopes: ["operator.admin"] },
+        {
+          Provider: channel,
+          Surface: channel,
+          CommandSource: source,
+          GatewayClientScopes: ["operator.admin"],
+        },
       );
       params.command.channel = channel;
       params.command.isAuthorizedSender = false;
@@ -281,9 +296,7 @@ describe("info command handlers", () => {
 
       expect(result).toEqual({
         shouldContinue: false,
-        ...(channel === "webchat"
-          ? { reply: { text: "You are not authorized to use this command." } }
-          : {}),
+        ...(reply ? { reply: { text: reply } } : {}),
       });
       expect(buildStatusReply).not.toHaveBeenCalled();
     },

@@ -113,11 +113,13 @@ export function rejectUnauthorizedCommand(
   logVerbose(
     `Ignoring ${commandLabel} from unauthorized sender: ${redactIdentifier(params.command.senderId)}`,
   );
-  if (
-    isNativeCommandTurn(resolveCommandTurnContext(params.ctx)) ||
-    isInternalMessageChannel(params.command.channel)
-  ) {
+  if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return commandReply("You are not authorized to use this command.");
+  }
+  if (isInternalMessageChannel(params.command.channel)) {
+    return commandReply(
+      "You are not authorized to use this command. Ask your Gateway administrator for command access.",
+    );
   }
   return { shouldContinue: false };
 }
