@@ -445,10 +445,13 @@ export async function resolveUpdateTag(opts: Pick<UpdateCommandOptions, "channel
   return normalizeTag(opts.tag) ?? channelToNpmTag(channel);
 }
 
-/** `openclaw update`: runs before the in-place updater admits state or inspects services. */
-export async function tryRunRuntimeSlotUpdate(opts: UpdateCommandOptions): Promise<boolean> {
-  if (opts.run || opts.recovery || opts.sourceUpdate) {
-    return false;
+/** `openclaw update` for every install that is not an adopted immutable installation. */
+export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<void> {
+  if (opts.run || opts.recovery) {
+    // An earlier release's in-place updater delegates its post-update phase to the
+    // installed release. That release migrates state when its Gateway starts.
+    defaultRuntime.log("Post-update steps run when the Gateway starts.");
+    return;
   }
   const owner = await resolveUpdateOwner(await resolveUpdateRoot(), await resolveUpdateTag(opts));
   if (owner.kind === "external") {
@@ -458,7 +461,7 @@ export async function tryRunRuntimeSlotUpdate(opts: UpdateCommandOptions): Promi
     } else {
       defaultRuntime.log(owner.message);
     }
-    return true;
+    return;
   }
   const install = owner;
   let result: RuntimeSlotUpdateResult;
@@ -485,5 +488,4 @@ export async function tryRunRuntimeSlotUpdate(opts: UpdateCommandOptions): Promi
   if (result.status === "error") {
     exitCliAfterOutput(defaultRuntime, 1);
   }
-  return true;
 }

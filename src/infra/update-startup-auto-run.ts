@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import { VERSION } from "../version.js";
 import { extractErrorCode, formatErrorMessage } from "./errors.js";
@@ -11,21 +10,13 @@ import {
   readRestartSentinelSnapshot,
   writeRestartSentinelIfUnchanged,
 } from "./restart-sentinel.js";
-import { detectRespawnSupervisor } from "./supervisor-markers.js";
+import { scheduleGatewayRestart } from "./restart.js";
 import type { UpdateCampaignController } from "./update-campaign.js";
+import { channelToNpmTag } from "./update-channels.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "./update-control-plane-sentinel.js";
 import type { TrackedDevUpdateTarget } from "./update-dev-target.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
-import {
-  buildManagedServiceHandoffUnavailableMessage,
-  formatManagedServiceUpdateCommand,
-} from "./update-managed-service-handoff-command.js";
-import {
-  cancelManagedServiceUpdateHandoff,
-  startManagedServiceUpdateHandoff,
-  transferManagedServiceUpdateHandoff,
-} from "./update-managed-service-handoff.js";
-import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { getUpdateRunAsync as getUpdateRun, listUpdateRunsAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -56,15 +47,16 @@ export type AutoUpdateRunParams = {
   signal?: AbortSignal;
 };
 
+/**
+ * Stages the release into the unused runtime slot inside this Gateway, then
+ * restarts it. The Gateway that confirms the slot, or that the launcher
+ * returns to, finishes the run.
+ */
 export async function runAutoUpdateCommand(
   params: AutoUpdateRunParams,
   log: { info: (msg: string, meta?: Record<string, unknown>) => void },
 ): Promise<AutoUpdateRunResult> {
   const startedAt = Date.now();
-  const command = formatManagedServiceUpdateCommand({
-    channel: params.channel,
-    ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
-  });
   const failure = (
     reason: string,
     message: string,
@@ -89,132 +81,44 @@ export async function runAutoUpdateCommand(
       "skipped",
     );
   }
-  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
-    includeLinuxOpenClawGatewayServiceMarker: true,
-  });
-  if (!supervisor) {
-    return failure(
-      "managed-service-handoff-unavailable",
-      buildManagedServiceHandoffUnavailableMessage(command),
-      "skipped",
-    );
+  if (!params.root?.trim()) {
+    return failure("not-openclaw-root", "The OpenClaw install root is unavailable.");
   }
-  await recordUpdateRunPhase(params.runId, "requested", {
-    target: { installationMethod: "managed-service" },
-  });
-  const handoffFailure = async (error: unknown): Promise<AutoUpdateRunResult> => {
-    log.info("automatic update handoff failed", { error: formatErrorMessage(error) });
-    const reason =
-      error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
-    const failureFacts =
-      error instanceof UpdatePreMutationError
-        ? error.failureFacts
-        : [createUpdateErrorFact("managed-service", error)];
-    const detail = failureFacts.map((fact) => fact.message ?? fact.code).join("; ");
-    // Cancellation may finish the run; retain its cause before that ownership transition.
-    try {
-      await recordUpdateRunStep(params.runId, {
-        step: "requested",
-        status: "failed",
-        reason,
-        detail: `${reason}: ${detail}`,
-        failureFacts,
-      });
-    } catch {
-      log.info("Update failure state could not be recorded; preserving the original error.");
-    }
-    await recordUpdateRunDiagnostics(
-      params.runId,
-      { failure: { step: "managed-service", detail, failureFacts } },
-      (message) => log.info(message),
-    );
-    const code = extractErrorCode(error);
-    const outcome = failure(
-      reason,
-      `Automatic update handoff failed${code ? ` (${code})` : ""}: ${reason}: ${detail}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
-    );
-    outcome.result.steps = [
-      {
-        name: "managed-service",
-        command: "",
-        cwd: "",
-        durationMs: 0,
-        exitCode: 1,
-        failureFacts,
-      },
-    ];
-    outcome.result.rollbackOutcome = {
-      status: "not-attempted",
-      reason: "Automatic handoff does not perform package rollback after an exception",
-    };
-    return outcome;
-  };
-
+  const { resolveUpdateOwner, runRuntimeSlotUpdate } =
+    await import("../cli/update-cli/update-slots.js");
   try {
+    const owner = await resolveUpdateOwner(
+      resolveUpdateInstallRoot(params.root),
+      params.packageTargetVersion ?? channelToNpmTag(params.channel),
+    );
+    if (owner.kind === "external") {
+      return failure(owner.reason, owner.message, "skipped");
+    }
     params.signal?.throwIfAborted();
-    if (!params.root?.trim()) {
-      throw new Error("managed auto-update install root is unavailable");
+    const outcome = await runRuntimeSlotUpdate(
+      {
+        channel: params.channel,
+        ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
+        ...(params.devTarget ? { sha: params.devTarget.upstreamSha } : {}),
+        timeout: String(Math.ceil(params.timeoutMs / 1000)),
+        yes: true,
+        runId: params.runId,
+        restartSelf: () => scheduleGatewayRestart({ delayMs: 0, reason: "update.auto" }),
+        log: (line) => log.info(`auto-update ${line.trim()}`),
+      },
+      owner,
+    );
+    if (outcome.restart === "self") {
+      return { status: "handoff", command: "openclaw update (runtime slot)" };
     }
-    const handoffId = randomUUID();
-    const started = await startManagedServiceUpdateHandoff({
-      root: params.root,
-      recoveryTimeoutMs: params.timeoutMs,
-      restartDrainTimeoutMs:
-        resolveGatewayRestartDeferralTimeoutMs(params.restartDrainTimeoutMs) ??
-        resolveGatewayRestartDeferralTimeoutMs(),
-      channel: params.channel,
-      ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
-      supervisor,
-      handoffId,
-      ...(params.devTarget ? { devTarget: params.devTarget } : {}),
-      meta: { runId: params.runId, handoffId, note: "background auto-update" },
-    });
-    if (started.status === "started") {
-      const successorOwner = {
-        kind: "managed-update-handoff" as const,
-        handoffId: started.handoffId,
-        installRoot: started.installRoot,
-      };
-      if (params.signal?.aborted) {
-        const cancelled = await cancelManagedServiceUpdateHandoff(successorOwner);
-        if (cancelled !== "restored-in-process") {
-          log.info("stopped auto-update handoff cancellation could not be verified", {
-            result: cancelled,
-            command: started.command,
-            logPath: started.logPath,
-          });
-        }
-        params.signal.throwIfAborted();
-      }
-      // Transfer starts validation while this generation remains available. Only
-      // the orchestrator's activation request may park the managed service.
-      try {
-        if (!(await transferManagedServiceUpdateHandoff(successorOwner))) {
-          throw new Error("managed update ownership transfer failed");
-        }
-        params.signal?.throwIfAborted();
-      } catch (error) {
-        const outcome = await handoffFailure(error);
-        await cancelManagedServiceUpdateHandoff(successorOwner);
-        return outcome;
-      }
-    } else {
-      // A joined helper owns another run; it cannot complete this campaign's admission.
-      await recordUpdateRunPhase(params.runId, "requested", {
-        origin: { nextAction: started.message },
-      });
-      await finishUpdateRun(params.runId, {
-        status: "skipped",
-        reason: "managed-service-handoff-already-running",
-      });
-    }
-    return {
-      status: "handoff",
-      command: started.command,
-      logPath: started.logPath,
-    };
-  } catch (err) {
-    return handoffFailure(err);
+    return failure(
+      outcome.reason ?? "runtime-slot-update-failed",
+      outcome.message,
+      outcome.status === "error" ? "error" : "skipped",
+    );
+  } catch (error) {
+    log.info("automatic update failed", { error: formatErrorMessage(error) });
+    return failure("runtime-slot-update-failed", formatErrorMessage(error));
   }
 }
 

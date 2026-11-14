@@ -9,14 +9,12 @@ import {
   resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
 import { redirectToCurrentRuntimeSlot } from "../runtime-slot-redirect.mjs";
-import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
   shouldKeepNativeHookRelayInProcess,
 } from "./cli/respawn-policy.js";
-import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
@@ -35,11 +33,8 @@ if (isMain) {
   });
   installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
 }
-const handledAdmission =
-  isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);
 if (
-  !handledAdmission &&
   !existsSync(new URL("entry.ts", import.meta.url)) &&
   (existsSync(new URL(".openclaw-lifecycle-pending", packageRootUrl)) ||
     existsSync(new URL("dist/openclaw-install-guard", packageRootUrl)))
@@ -111,7 +106,6 @@ export async function runLegacyCliEntry(
 
 const handledRootVersion =
   isMain &&
-  !handledAdmission &&
   (await import("./entry.version-fast-path.js")).tryHandleRootVersionFastPath(process.argv);
 if (!isMain) {
   ({
@@ -136,7 +130,7 @@ if (!isMain) {
   } = await import("./library.js"));
 }
 
-const shouldRunCli = isMain && !handledRootVersion && !handledAdmission;
+const shouldRunCli = isMain && !handledRootVersion;
 const compileCacheDirectory = shouldRunCli
   ? resolveOpenClawCompileCacheDirectory({
       installRoot: fileURLToPath(packageRootUrl),

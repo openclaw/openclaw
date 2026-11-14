@@ -7,10 +7,7 @@ import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
-import { requestOneShotSettledExitWatchdog } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
-import { getProgramContext } from "./program/program-context.js";
-import { hasCliProcessScope } from "./runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "./update-cli/shared.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
@@ -41,8 +38,7 @@ function inheritedUpdateTimeout(
   return timeout !== undefined ? timeout : inheritOptionFromParent<string>(command, option);
 }
 
-type CommanderUpdateOptions = Record<string, unknown> &
-  Omit<UpdateCommandOptions, "admission"> & { admission?: string };
+type CommanderUpdateOptions = Record<string, unknown> & UpdateCommandOptions;
 
 function requiredUpdateLeafString(opts: Record<string, unknown>, key: string): string {
   const value = opts[key];
@@ -61,11 +57,6 @@ function createUpdateLeafAction(
 ) {
   return async (opts: Record<string, unknown>, command: Command) => {
     try {
-      if (inheritOptionFromParent<boolean>(command, "reapplyLocalOverrides")) {
-        throw new Error(
-          `--reapply-local-overrides is not supported for openclaw update ${command.name()}. Use it with openclaw update.`,
-        );
-      }
       if (inheritOptionFromParent<string>(command, "sha") !== undefined) {
         throw new Error("--sha is supported only for openclaw update, not update subcommands.");
       }
@@ -89,61 +80,6 @@ function createUpdateLeafAction(
   };
 }
 
-function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
-  const command = update.command(name, { hidden });
-  command
-    .description("Reconcile abandoned updates or repair post-update doctor and plugin convergence")
-    .option("--json", "Output result as JSON", false)
-    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
-    .option("--timeout <seconds>", "Override per-phase repair deadlines in seconds")
-    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
-    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
-    .option("--no-restart", "Skip updater restart (package Gateways may restart themselves)")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw update repair", "Reconcile abandoned runs or repair post-update state."],
-          [
-            "openclaw update repair --accept-capabilities",
-            "Accept reviewed plugin capability changes during repair.",
-          ],
-          ["openclaw update repair --channel beta", "Repair against the beta update channel."],
-          ["openclaw update repair --json", "JSON output for automation."],
-        ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
-          "- Reconciles abandoned runs when the Gateway is healthy; otherwise repairs post-update state",
-        )}\n${theme.muted("- Runs Doctor repair and plugin convergence; repair restores only a service it stops")}\n\n${theme.muted(
-          "Docs:",
-        )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
-    )
-    .action(
-      createUpdateLeafAction(async (opts, actionCommand) => {
-        if (hasCliProcessScope()) {
-          requestOneShotSettledExitWatchdog();
-        }
-        const repair = hidden
-          ? (await import("./update-cli/update-command-finalize.js")).updateFinalizeCommand
-          : (await import("./update-cli/update-repair-command.js")).updateRepairCommand;
-        await repair({
-          json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
-          channel:
-            (opts.channel as string | undefined) ??
-            inheritOptionFromParent<string>(actionCommand, "channel"),
-          timeout: inheritedUpdateTimeout(opts, actionCommand),
-          yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(actionCommand, "yes")),
-          acceptCapabilities:
-            Boolean(opts.acceptCapabilities) ||
-            Boolean(inheritOptionFromParent<boolean>(actionCommand, "acceptCapabilities")),
-          fullIntegrityCheck:
-            Boolean(opts.fullIntegrityCheck) ||
-            Boolean(inheritOptionFromParent<boolean>(actionCommand, "fullIntegrityCheck")),
-          deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
-        });
-      }),
-    );
-}
-
 export function registerUpdateCli(program: Command) {
   program.enablePositionalOptions();
   const update = program
@@ -155,7 +91,7 @@ export function registerUpdateCli(program: Command) {
   update
     .addHelpText("after", () => {
       const examples = [
-        ["openclaw update", "Update a source checkout (git)"],
+        ["openclaw update", "Update to the latest release on the configured channel"],
         [
           "openclaw update --channel extended-stable",
           "Switch to the monthly supported npm channel",
@@ -167,16 +103,16 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --no-restart", "Update without an updater-managed restart"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
-        ["openclaw update --accept-capabilities", "Accept reviewed plugin capability changes"],
-        ["openclaw update repair", "Repair stranded post-update plugin state"],
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
       const fmtExamples = formatHelpExamples(examples, true);
       return `
 ${theme.heading("What this does:")}
-  - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor
-  - npm installs: updates via detected package manager
+  - npm installs and git checkouts: installs or builds the release into the unused runtime
+    slot, switches to it, and restarts the Gateway; a slot that does not start is replaced
+    by the previous one
+  - Homebrew, system packages, Bun, app bundles, containers: prints the update command
   - Adopted immutable installs: prepares sealed generations and activates only when adoption enables it
 
 ${theme.heading("Switch channels:")}
@@ -187,7 +123,6 @@ ${theme.heading("Switch channels:")}
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
-  - Use --accept-capabilities to accept each plugin's reviewed capability changes
   - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
   - Use --dry-run to preview actions without writing config/installing/restarting
 
@@ -196,27 +131,17 @@ ${fmtExamples}
 
 ${theme.heading("Notes:")}
   - Switch channels with --channel stable|extended-stable|beta|dev
-  - For global installs: auto-updates via detected package manager when possible (see docs/install/updating.md)
-  - Downgrades require confirmation (can break configuration)
-  - Skips update if the working directory has uncommitted changes
+  - Downgrades require --yes (can break configuration)
+  - Git checkouts are never changed; the slots carry the builds
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`;
     })
     .action(async (opts: CommanderUpdateOptions) => {
       try {
-        if (
-          opts.admission !== undefined &&
-          opts.admission !== "auto" &&
-          opts.admission !== "installed"
-        ) {
-          throw new Error('--admission must be "auto" or "installed".');
-        }
         const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
-          runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
-          reapplyLocalOverrides: Boolean(opts.reapplyLocalOverrides),
           dryRun: Boolean(opts.dryRun),
           channel: opts.channel,
           tag: opts.tag,
@@ -224,9 +149,6 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           timeout: opts.timeout,
           drainTimeout: opts.drainTimeout,
           yes: Boolean(opts.yes),
-          acceptCapabilities: Boolean(opts.acceptCapabilities),
-          fullIntegrityCheck: Boolean(opts.fullIntegrityCheck),
-          admission: opts.admission,
         });
       } catch (err) {
         handleUpdateCommandError(err);
@@ -416,9 +338,6 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       ),
     );
 
-  registerUpdateFinalizationCommand(update, "repair", false);
-  registerUpdateFinalizationCommand(update, "finalize", true);
-
   update
     .command("migration-plan", { hidden: true })
     .description("Plan Doctor-owned state migrations against an isolated snapshot")
@@ -443,10 +362,44 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     );
 
   update
-    .command("wizard")
-    .description("Interactive update wizard")
+    .command("repair")
+    .description("Retired: updates finish when the Gateway starts; use openclaw doctor --fix")
+    .allowUnknownOption()
+    .action(() => {
+      defaultRuntime.error(
+        "Updates now finish when the Gateway starts. Run `openclaw doctor --fix` to repair plugins or state.",
+      );
+      defaultRuntime.exit(1);
+    });
+
+  // Update helpers from earlier releases run `update finalize` on the installed release.
+  update
+    .command("finalize", { hidden: true })
+    .option("--json", "Output result as JSON", false)
+    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
+    .option("--timeout <seconds>", "Override per-phase repair deadlines in seconds")
+    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
     .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
+    .option("--no-restart", "Skip updater restart")
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updateFinalizeCommand } = await import("./update-cli/update-command-finalize.js");
+        await updateFinalizeCommand({
+          json: Boolean(opts.json) || inheritedUpdateJson(command),
+          channel: opts.channel as string | undefined,
+          timeout: inheritedUpdateTimeout(opts, command),
+          yes: Boolean(opts.yes),
+          acceptCapabilities: Boolean(opts.acceptCapabilities),
+          fullIntegrityCheck: Boolean(opts.fullIntegrityCheck),
+          deferCompletionCache: process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
+        });
+      }),
+    );
+
+  update
+    .command("wizard")
+    .description("Interactive update wizard")
     .option("--timeout <seconds>", "Set an overall update budget in seconds")
     .addHelpText(
       "after",
@@ -455,16 +408,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .action(
       createUpdateLeafAction(async (opts, command) => {
         const { updateWizardCommand } = await import("./update-cli/wizard.js");
-        await updateWizardCommand({
-          runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
-          timeout: inheritedUpdateTimeout(opts, command),
-          acceptCapabilities:
-            Boolean(opts.acceptCapabilities) ||
-            Boolean(inheritOptionFromParent<boolean>(command, "acceptCapabilities")),
-          fullIntegrityCheck:
-            Boolean(opts.fullIntegrityCheck) ||
-            Boolean(inheritOptionFromParent<boolean>(command, "fullIntegrityCheck")),
-        });
+        await updateWizardCommand({ timeout: inheritedUpdateTimeout(opts, command) });
       }),
     );
 

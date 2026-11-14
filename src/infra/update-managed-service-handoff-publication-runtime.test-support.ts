@@ -1,4 +1,3 @@
-export { settleManagedHandoffPluginCohort } from "../cli/update-cli/update-plugin-cohort-settlement.js";
 export { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 export { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
 export { encodePackageActivationLauncher } from "./package-update-activation-journal.js";

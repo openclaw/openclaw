@@ -5,7 +5,6 @@ import { format } from "node:util";
 import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { watchCliRespawnParent } from "../node-runtime-recovery.mjs";
 import { redirectToCurrentRuntimeSlot } from "../runtime-slot-redirect.mjs";
-import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
@@ -13,10 +12,6 @@ import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
-import {
-  isUpdateAdmissionInvocation,
-  tryRunUpdateAdmissionBeforeStartup,
-} from "./cli/run-main-update-admission.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
@@ -138,10 +133,6 @@ async function runEntryMain(): Promise<void> {
   });
   installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
   watchCliRespawnParent();
-  if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
-    await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
-    return;
-  }
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
   ensureOpenClawExecMarkerOnProcess();

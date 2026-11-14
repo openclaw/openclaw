@@ -7,11 +7,8 @@ export const UPDATE_OPTION_SPECS: readonly [
   ["--json", "Output result as JSON", false],
   ["--no-restart", "Skip updater restart (package Gateways may restart themselves)"],
   ["--dry-run", "Preview update actions without making changes", false],
-  ["--full-integrity-check", "Run full database integrity checks during migrations", false],
-  [
-    "--admission <auto|installed>",
-    "Select candidate or installed admission checks (default: auto)",
-  ],
+  ["--full-integrity-check", "No effect; accepted for existing scripts", false],
+  ["--admission <auto|installed>", "No effect; accepted for existing scripts"],
   ["--channel <stable|extended-stable|beta|dev>", "Persist update channel (git + npm)"],
   [
     "--tag <dist-tag|version|spec>",
@@ -19,12 +16,8 @@ export const UPDATE_OPTION_SPECS: readonly [
   ],
   ["--timeout <seconds>", "Set an overall update budget in seconds"],
   ["--drain-timeout <seconds>", "Set the immutable activation drain budget before interruption"],
-  ["--sha <commit>", "Prepare an exact official commit for an adopted immutable installation"],
+  ["--sha <commit>", "Update a git checkout or immutable installation to an exact commit"],
   ["--yes", "Skip confirmation prompts (non-interactive)", false],
-  [
-    "--reapply-local-overrides",
-    "Replay trusted packaged dist edits when the target baseline is unchanged",
-    false,
-  ],
-  ["--accept-capabilities", "Accept widened plugin capabilities", false],
+  ["--reapply-local-overrides", "No effect; accepted for existing scripts", false],
+  ["--accept-capabilities", "No effect; accepted for existing scripts", false],
 ];
