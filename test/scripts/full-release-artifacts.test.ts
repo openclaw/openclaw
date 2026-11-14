@@ -150,7 +150,8 @@ const { responses, calls } = fixture;
 if (!Object.hasOwn(responses, args[1])) throw new Error("Unexpected GitHub endpoint: " + args[1]);
 const response = responses[args[1]];
 calls[args[1]] = (calls[args[1]] ?? 0) + 1;
-const failure = response.fixtureErrorOnce ?? response.fixtureError;
+const failure = calls[args[1]] >= (response.fixtureErrorOnRead ?? 1)
+  ? response.fixtureErrorOnce ?? response.fixtureError : undefined;
 delete response.fixtureErrorOnce;
 writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(fixture));
 if (failure) { process.stderr.write(failure); process.exit(1); }
@@ -1118,6 +1119,21 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       );
     },
   );
+
+  it("preserves jobs API diagnostics while authenticating the raw producer", () => {
+    const test = fixture();
+    test.rawArtifact();
+    // The first read authenticates the producer; fail the preservation lookup.
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: test.jobs.length,
+      jobs: test.jobs,
+      fixtureErrorOnRead: 2,
+      fixtureError: "gh: Forbidden (HTTP 403): fixture jobs permission denied",
+    });
+    const result = test.wait("raw");
+    expectRejected(result, "HTTP 403");
+    expect(result.stderr).toContain("fixture jobs permission denied");
+  });
 
   it.each([
     ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],
