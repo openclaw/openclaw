@@ -488,6 +488,20 @@ async function resolveSessionAuthProfileOverride(
   // the compaction counter advanced.
   // A healthy automatic fallback yields when an explicit preference is eligible to retry,
   // preventing a metered backup from staying pinned. The real request proves recovery.
+  // A success on the preferred profile clears its rate-limit record, so also yield when
+  // the pinned fallback's latest outcome is a failure that the preferred profile has
+  // since outlived with a success (for example a same-turn rotation after the fallback
+  // rejected the session model). A fallback whose latest outcome succeeded stays pinned.
+  const currentStats = current ? store.usageStats?.[current] : undefined;
+  const currentFailedAt = currentStats?.lastFailureAt ?? 0;
+  const currentLastOutcomeFailed = currentFailedAt > (currentStats?.lastUsed ?? 0);
+  const isRecoveredPreference = (profileId: string) => {
+    const stats = store.usageStats?.[profileId];
+    return (
+      stats?.lastRateLimitAt !== undefined ||
+      (currentLastOutcomeFailed && (stats?.lastUsed ?? 0) > currentFailedAt)
+    );
+  };
   const retryableHigherPriorityProfile =
     source === "auto" && !currentUnavailable && current
       ? orderResolutions
@@ -498,8 +512,7 @@ async function resolveSessionAuthProfileOverride(
           })
           .find(
             (profileId) =>
-              store.usageStats?.[profileId]?.lastRateLimitAt !== undefined &&
-              !isProfileUnavailableForSessionModel(profileId),
+              isRecoveredPreference(profileId) && !isProfileUnavailableForSessionModel(profileId),
           )
       : undefined;
   const shouldRotateCurrent =

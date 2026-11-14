@@ -427,6 +427,37 @@ describe("session auth-profile rotation", () => {
       expect(sessionEntry.authProfileOverrideCompactionCount).toBe(1);
     }));
 
+  it.each([
+    [
+      "returns to the preferred profile after it outlived the fallback's failure",
+      -60_000,
+      API_PRIMARY,
+    ],
+    ["keeps the fallback when its latest outcome succeeded", -20_000, API_BACKUP],
+  ])("%s", (_name, backupLastUsedOffset, expected) =>
+    withAuthState(async (state) => {
+      const agentDir = await prepareMixedAuth(state);
+      const cfg = { auth: { order: { openai: [API_PRIMARY, API_BACKUP] } } };
+      const now = Date.now();
+      // The fallback rejected the session model 40s ago; its cooldown has expired.
+      // The preferred profile then served that turn and carries no rate-limit record.
+      authStoreMocks.state.store.usageStats = {
+        [API_BACKUP]: { lastFailureAt: now - 40_000, lastUsed: now + backupLastUsedOffset },
+        [API_PRIMARY]: { lastUsed: now - 30_000 },
+      };
+      const sessionEntry = automaticSession({
+        model: MODEL,
+        authProfileOverride: API_BACKUP,
+        compactionCount: 0,
+        authProfileOverrideCompactionCount: 0,
+      });
+
+      expect(await resolveSession({ agentDir, sessionEntry, cfg })).toBe(expected);
+      expect(sessionEntry.authProfileOverride).toBe(expected);
+      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+    }),
+  );
+
   it("keeps a healthy automatic profile across compaction when auth order is implicit", () =>
     withAuthState(async (state) => {
       const agentDir = await prepareMixedAuth(state);
