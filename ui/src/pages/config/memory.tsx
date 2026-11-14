@@ -219,7 +219,11 @@ function EngineSection(props: MemoryViewProps) {
       <>
         <SettingsRow
           title={t("memoryPage.engine.rowTitle")}
-          description={<>{!available() && t("memoryPage.engine.catalogUnavailable")}</>}
+          description={
+            !available() && props.catalog.kind !== "loading"
+              ? t("memoryPage.engine.catalogUnavailable")
+              : undefined
+          }
           control={
             available() ? (
               <SettingsSelect
