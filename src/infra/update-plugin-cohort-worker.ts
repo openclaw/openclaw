@@ -13,7 +13,7 @@ import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { readPackageVersion } from "./package-json.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
-import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { updateInstallRootsMatch } from "./update-install-root.js";
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
 import { loadPluginCohortRecovery } from "./update-run-recovery-store.js";
 import { pluginCohortRecoveryMatchesSource } from "./update-run-recovery.js";
@@ -50,8 +50,7 @@ export async function commitReadyUpdatePluginCohort(
         pair.cohort.installKey !== input.installKey ||
         authority.installKey !== pair.cohort.installKey ||
         !pluginCohortRecoveryMatchesSource(pair, { env: process.env }) ||
-        resolveUpdateInstallRoot(executingRoot) !==
-          resolveUpdateInstallRoot(pair.reservation.to.root)
+        !updateInstallRootsMatch(executingRoot, pair.reservation.to.root)
       ) {
         throw new Error("Plugin cohort commit does not match its retained intent and source.");
       }

@@ -193,6 +193,19 @@ assertion. Run it with `pnpm test:docker:published-driver-linked-root`. No CI
 workflow selects this lane; `ci-published-driver-update.yml` runs only the
 scoped-restore mode.
 
+`OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX=1` installs into an
+`install-cli.sh`-shaped prefix (`tools/node-v<version>` beside a `tools/node`
+link), which OpenClaw owns. `OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP` then runs the
+candidate's own updater once more after the published driver's update:
+`switch` checks adoption of the plain directory and the release switch,
+and `rollback` gives the new release a Doctor that fails after activation and
+checks the link points back. `refused`, with the linked-root mode, checks that the candidate
+refuses before any change when the published driver bound the service to a
+release's real path. Run them with
+`pnpm test:docker:published-driver-release-adoption` and
+`pnpm test:docker:published-driver-release-rollback`. No CI workflow selects
+these lanes.
+
 After the Docker cell, the same job reuses its verified candidate tarball for the
 [native systemd survivor flow](/help/testing-updates-plugins#native-systemd-update-matrix),
 initially against published `2026.10.9`. Its separate fifteen-minute step requires

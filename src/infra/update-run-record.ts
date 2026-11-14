@@ -107,6 +107,7 @@ export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecor
   delete origin.windowsUserSid;
   delete origin.managedHandoff;
   delete origin.packageStage;
+  delete origin.packageRelease;
   const verification = { ...record.verification };
   if (verification.recovery?.serviceRestartSafe === false) {
     verification.recovery = { ...verification.recovery };

@@ -462,6 +462,19 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
   }),
+  // Release directories behind a linked package path on an install-cli-shaped prefix: adoption
+  // and switch, and rollback after a failed post-switch Doctor. Each adds candidate updates to the cell. No CI workflow
+  // selects these lanes yet.
+  npmLane("published-driver-release-adoption", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-rollback", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
   npmLane("published-driver-scoped-restore", {
     resources: ["service"],
     stateScenario: "empty",

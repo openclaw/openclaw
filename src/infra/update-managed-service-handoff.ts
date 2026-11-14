@@ -126,7 +126,7 @@ const { pathToFileURL } = require("node:url");
 
 ${MANAGED_HANDOFF_BOOTSTRAP_SOURCE}
 
-const { parseLaunchctlJob, classifyUpdateOutcome, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, prepareManagedHandoffLedger, packageActivationIdentity, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
+const { parseLaunchctlJob, classifyUpdateOutcome, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, prepareManagedHandoffLedger, packageActivationIdentity, resolveUpdateInstallRoot, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");
@@ -569,7 +569,8 @@ async function collectUpdateFailureTriage() {
       // Bookkeeping, including lazy fs-safe loads, must survive a missing install.
       // Terminal writes prefer the fresh candidate after any schema migration.
       runLedger = await prepareManagedHandoffLedger(ownsManagedUpdateLease);
-      originalInstallationIdentity = packageActivationIdentity(params.updateLeaseKey, true);
+      // A release link is read through: the release it names is the installed runtime.
+      originalInstallationIdentity = packageActivationIdentity(fs.realpathSync(params.updateLeaseKey), true);
       for (const name of ["adoptUpdateRun", "finishUpdateRun", "getUpdateRun", "recordUpdateRunStep", "recordUpdateRunVerification"]) {
         if (typeof runLedger[name] !== "function") throw new Error("managed update ledger writer is unavailable");
       }
@@ -769,7 +770,8 @@ async function collectUpdateFailureTriage() {
       return;
     }
     let resultRoot;
-    try { resultRoot = fs.realpathSync(result?.root); } catch {}
+    // The lease key of a release link is the link itself, which outlives a switch.
+    try { fs.realpathSync(result?.root); resultRoot = resolveUpdateInstallRoot(result.root); } catch {}
     if (result?.status === "ok" && resultRoot && resultRoot !== params.updateLeaseKey) {
       terminalRuntimePath = path.join(resultRoot, "dist", "cli", "daemon-cli.js");
     }

@@ -6,7 +6,12 @@ fi
 set -euo pipefail
 
 # Direct callers use the same total envelope as CI; never restart an inherited budget.
-CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + 1125 ))}"
+# Follow-up updates by the candidate's own updater each add one update to the envelope.
+cell_budget=1125
+case "${OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP:-}" in
+  switch | rollback | refused) cell_budget=2025 ;;
+esac
+CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + cell_budget ))}"
 if ! [[ "$CELL_DEADLINE_EPOCH_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid published-driver cell deadline" >&2
   exit 2
@@ -37,7 +42,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
-DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE -e OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT -e OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE)
+DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE -e OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT -e OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX -e OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP -e OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE)
 if [ "${OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE:-0}" = "1" ]; then
   fixture_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
   DRIVER_ARGS+=(-v "$fixture_root/test/fixtures/sqlite/openclaw-agent-schema-v26.sql:/app/test/fixtures/sqlite/openclaw-agent-schema-v26.sql:ro")

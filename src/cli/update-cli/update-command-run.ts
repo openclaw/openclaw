@@ -27,7 +27,10 @@ import {
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
-import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import {
+  resolveUpdateInstallRoot,
+  updateInstallRootsMatch,
+} from "../../infra/update-install-root.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -656,10 +659,13 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   if (handoffRoot) {
     const { assertManagedServiceUpdateHandoffRoot } =
       await import("../../infra/update-managed-service-handoff.js");
+    // A release link and the release it selects are one installation; pass one spelling.
+    const sameInstallation = (candidate: string | null) =>
+      candidate && updateInstallRootsMatch(handoffRoot, candidate) ? handoffRoot : candidate;
     await assertManagedServiceUpdateHandoffRoot({
       expectedRoot: handoffRoot,
-      root: discoveredRoot,
-      executingRoot,
+      root: sameInstallation(discoveredRoot)!,
+      executingRoot: sameInstallation(executingRoot),
       postCore: postCoreUpdateResume,
     });
     opts.run?.executorFence?.assertCurrent();

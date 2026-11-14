@@ -417,6 +417,17 @@ async function inspectUpdateStatus(
     packageActivationError = safeMessage(formatErrorMessage(error));
   }
 
+  const packageReleases = root
+    ? await inspect(
+        "package releases",
+        async () => {
+          const { listPackageReleases } = await import("../../infra/package-release-retention.js");
+          return await listPackageReleases(root);
+        },
+        [],
+      )
+    : [];
+
   if (opts.json) {
     defaultRuntime.writeJson({
       update: preferredTarget ? { ...update, git: { ...update.git, preferredTarget } } : update,
@@ -439,6 +450,7 @@ async function inspectUpdateStatus(
       ...(migrationWarningsError ? { migrationWarningsError } : {}),
       ...runStatus,
       ...(packageActivation ? { packageActivation } : {}),
+      ...(packageReleases.length ? { packageReleases } : {}),
       ...(packageActivationError ? { packageActivationError } : {}),
       ...recoveryStatus,
       ...(configWarnings.length > 0 ? { configWarnings } : {}),
@@ -523,6 +535,10 @@ async function inspectUpdateStatus(
     ...(packageActivationError
       ? [{ Item: "Package recovery", Value: packageActivationError }]
       : []),
+    ...packageReleases.map((release) => ({
+      Item: release.selected ? "Active release" : "Retained release",
+      Value: `${release.id} · version ${release.version ?? "unknown"} · build ${release.build ?? "unknown"}${release.leased ? " · in use" : ""}`,
+    })),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
