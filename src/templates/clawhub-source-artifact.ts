@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { downloadClawHubPackageArchive } from "../infra/clawhub-artifacts.js";
 import { normalizeClawHubSha256Hex } from "../infra/clawhub-integrity.js";
@@ -243,9 +244,23 @@ export async function readVerifiedArtifactSource(params: {
 }): Promise<ResolvedClawHubSource> {
   const loaded = await readTemplateManifestFile(params.sourceRoot);
   if (!loaded.ok) {
+    const sourceRoot = await fs
+      .realpath(params.sourceRoot)
+      .catch(() => path.resolve(params.sourceRoot));
+    const sourceRoots = [...new Set([sourceRoot, path.resolve(params.sourceRoot)])];
     throw new ClawHubSourceError(
       "clawhub_manifest_invalid",
-      "Downloaded Template package manifest is invalid.",
+      [
+        "Downloaded Template package manifest is invalid.",
+        ...loaded.diagnostics.map((diagnostic) =>
+          sanitizeTerminalText(
+            sourceRoots.reduce(
+              (text, root) => text.replaceAll(`${root}${path.sep}`, "").replaceAll(root, "."),
+              `${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`,
+            ),
+          ),
+        ),
+      ].join("\n"),
     );
   }
   if (
