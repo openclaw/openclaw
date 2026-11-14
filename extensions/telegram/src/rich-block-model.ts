@@ -99,6 +99,7 @@ export type InputRichBlock =
       blocks: InputRichBlock[];
       credit?: RichText;
     }
+  | { type: "expandable_blockquote"; text: RichText; credit?: RichText }
   | {
       type: "table";
       cells: RichBlockTableCell[][];
@@ -233,6 +234,7 @@ export function measureInputRichBlocks(blocks: readonly InputRichBlock[]) {
           size.chars += block.expression.length;
           break;
         case "pullquote":
+        case "expandable_blockquote":
           measureRichBlockCaption(block, size, depth);
           break;
         case "blockquote":
@@ -371,6 +373,12 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
       case "pullquote":
         push(richTextWithCreditToPlainText(block));
         break;
+      case "expandable_blockquote":
+        push(richTextToPlainString(block.text));
+        if (block.credit) {
+          push(`— ${richTextToPlainString(block.credit)}`);
+        }
+        break;
       case "blockquote":
         visit(block.blocks, listDepth, (text) => {
           push(text);
@@ -465,6 +473,7 @@ export function normalizeInputRichBlocks(
       case "footer":
         return { ...block, text: normalizeRichText(block.text, textDepth) };
       case "pullquote":
+      case "expandable_blockquote":
         return { ...block, ...normalizeRichCaption(block, textDepth) };
       case "blockquote":
         return {
