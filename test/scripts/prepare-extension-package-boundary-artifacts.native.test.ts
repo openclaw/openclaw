@@ -524,7 +524,32 @@ describe("native declaration preparation", () => {
         expect(narrowPack.stderr).toContain("Only a current full SDK receipt");
         expect(producer.has(outputPath)).toBe(false);
         await producer.run();
-        success(producer, "pack");
+        const readGuard = ".artifacts/sdk-pack-read-guard.cjs";
+        producer.write(
+          readGuard,
+          `const fs = require("node:fs");
+const path = require("node:path");
+const output = path.join(process.cwd(), "packages/plugin-sdk/dist") + path.sep;
+const read = fs.readFileSync;
+const seen = new Set();
+fs.readFileSync = function (file, ...args) {
+  if (typeof file === "string" && path.resolve(file).startsWith(output)) {
+    if (seen.has(file)) throw new Error("SDK pack reread a validated output");
+    seen.add(file);
+  }
+  return Reflect.apply(read, this, [file, ...args]);
+};
+`,
+        );
+        expectExit(
+          command(
+            producer.root,
+            process.execPath,
+            ["--require", `./${readGuard}`, "scripts/ci-sdk-declarations.mts", "pack"],
+            { ...process.env, GITHUB_OUTPUT: path.join(producer.root, outputPath) },
+          ),
+          0,
+        );
         const packedOutput = producer.read(outputPath);
         const published = identity(producer);
         expect(packedOutput).toBe(`cache-key=${published["cache-key"]}\n`);
