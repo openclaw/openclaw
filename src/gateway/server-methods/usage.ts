@@ -60,6 +60,7 @@ import {
   usageCostHandler,
 } from "./usage-request.js";
 import { loadSessionsUsageSnapshotCached } from "./usage-result-cache.js";
+import { withUsageRowAttribution } from "./usage-row-attribution.js";
 import {
   loadUsageOverviewSummaries,
   loadUsageSessionSummaries,
@@ -591,10 +592,14 @@ export const usageHandlers: GatewayRequestHandlers = {
       if (partial && "overview" in slice) {
         slice.overview.queryWarnings.push(partial.message);
       }
+      if ("overview" in slice) {
+        slice.overview.selectedRows = slice.overview.selectedRows.map(withUsageRowAttribution);
+      }
       getAsyncWorkSignal()?.throwIfAborted();
       respond(true, {
         ...slice,
-        sessions: slice.sessions.map((row) => {
+        sessions: slice.sessions.map((session) => {
+          const row = withUsageRowAttribution(session);
           const source = sourceFor(row);
           return source && hydratedSources.has(source)
             ? row
