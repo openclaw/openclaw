@@ -116,7 +116,7 @@ describe("JSONL edits", () => {
       node: { value: { kind: "number", value: 42 } },
     });
     const second = appendJsonlOcPath(next, { kind: "number", value: 43 });
-    expect(second.lines.slice(-2).map(({ raw }) => raw)).toEqual(["42", "43"]);
+    expect(second.lines.slice(-2).map((line) => line.raw)).toEqual(["42", "43"]);
   });
 
   it("rejects new sentinel values without changing the source", () => {
