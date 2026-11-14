@@ -416,8 +416,8 @@ finalization continues. Multiple `revise` reasons are combined; any `finalize`
 decision overrides revision requests. This hook requires a finalization
 integration: the embedded runner and native hook relay provide it, but the
 Copilot harness does not dispatch it.
-Codex native `Stop` hooks are relayed into this hook as OpenClaw
-`before_agent_finalize` decisions.
+Codex and Claude CLI native `Stop` hooks are relayed into this hook as OpenClaw
+`before_agent_finalize` decisions; Claude CLI allows at most three revisions per turn.
 
 When returning `action: "revise"`, plugins can include `retry` metadata to
 bound repeated revision requests within a run:

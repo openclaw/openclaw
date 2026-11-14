@@ -20,6 +20,8 @@ import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
+// Same overall revision limit as the embedded runner, so a finalize hook cannot loop a turn.
+const MAX_FINALIZE_REVISIONS = 3;
 
 /**
  * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
@@ -56,6 +58,7 @@ type ClaudeCliTurn = {
   promptInputUuid: string;
   sawTerminalResult: boolean;
   interrupted: boolean;
+  finalizeRevisions: number;
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
@@ -224,7 +227,7 @@ async function handleRequest(
   }
   if (request.callback_id === "Stop" && input.hook_event_name === "Stop") {
     const finalize = turn?.context.runBeforeAgentFinalize;
-    if (!turn || signal.aborted || !finalize) {
+    if (!turn || signal.aborted || !finalize || turn.finalizeRevisions >= MAX_FINALIZE_REVISIONS) {
       return {};
     }
     const decision = await finalize({
@@ -235,8 +238,12 @@ async function handleRequest(
       ...(typeof input.transcript_path === "string" ? { transcriptPath: input.transcript_path } : {}),
       ...(typeof input.cwd === "string" ? { cwd: input.cwd } : {}),
     }).catch(() => ({ action: "continue" as const }));
+    if (decision.action !== "revise") {
+      return {};
+    }
     // A blocked Stop keeps the native turn going with the reason as its next instruction.
-    return decision.action === "revise" ? { decision: "block", reason: decision.reason } : {};
+    turn.finalizeRevisions++;
+    return { decision: "block", reason: decision.reason };
   }
   if (request.callback_id === "PreToolUse" && input.hook_event_name === "PreToolUse") {
     if (
@@ -656,6 +663,7 @@ export async function* executeClaudeCli(
     promptInputUuid: inputUuid,
     sawTerminalResult: false,
     interrupted: false,
+    finalizeRevisions: 0,
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),

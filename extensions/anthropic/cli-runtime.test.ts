@@ -735,6 +735,13 @@ describe("Claude native stdio boundary", () => {
     });
   });
 
+  it("stops relaying native Stop revisions after three", async () => {
+    const runBeforeAgentFinalize = vi.fn(async () => ({ action: "revise" as const, reason: "Again." }));
+    const detail = await runDetail(await createContext("stop-hook-loop", { runBeforeAgentFinalize }));
+    expect(detail).toMatchObject({ stops: 4, lastStopDecision: {} });
+    expect(runBeforeAgentFinalize).toHaveBeenCalledTimes(3);
+  });
+
   it("lets native Stop settle when no finalize hook is registered", async () => {
     const detail = await runDetail(await createContext("stop-hook"));
     expect(detail.stopDecision).toEqual({});

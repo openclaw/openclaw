@@ -348,12 +348,24 @@ for await (const line of createInterface({ input: process.stdin })) {
       hook("stop-" + turn, "Stop", { stop_hook_active: false, last_assistant_message: "I'll pick up the tests next.", cwd: process.cwd() });
       continue;
     }
+    if (scenario === "stop-hook-loop") {
+      // Native asks again after every blocked Stop, like a model that keeps the same answer.
+      hook("stop-loop-1", "Stop", { stop_hook_active: false, last_assistant_message: "Done." });
+      continue;
+    }
     promptHook("prompt-" + turn, user);
   } else if (message.type === "control_response") {
     assert.equal(message.response.subtype, "success");
     const { request_id: id, response } = message.response;
     if (id === "stop-" + turn) {
       result({ stopDecision: response });
+      continue;
+    }
+    if (id.startsWith("stop-loop-")) {
+      const stops = Number(id.slice("stop-loop-".length));
+      if (response.decision === "block" && stops < 10) {
+        hook("stop-loop-" + (stops + 1), "Stop", { stop_hook_active: true, last_assistant_message: "Done." });
+      } else result({ stops, lastStopDecision: response });
       continue;
     }
     if (id === "admitted-context") {
