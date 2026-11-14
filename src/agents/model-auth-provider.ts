@@ -50,6 +50,7 @@ import {
   type ResolvedProviderAuth,
 } from "./model-auth-runtime-shared.js";
 import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import { resolveProviderOAuthLoginCommand } from "./provider-auth-recovery-hint.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
@@ -727,15 +728,25 @@ export async function resolveApiKeyForProviderCore(input: {
     );
   }
 
+  // Prepared direct attempts disable profile discovery, not static recovery advice.
+  const loginCommand = resolveProviderOAuthLoginCommand({
+    provider,
+    config: cfg,
+    workspaceDir: params.workspaceDir,
+    modelBaseUrl: params.modelBaseUrl,
+  });
   const authStorePath = await resolveAuthStorePathForDisplayAsync(agentDir);
   const agentDirContext = agentDir ? ` (agentDir: ${resolveUserPath(agentDir)})` : "";
   throw new ProviderAuthError(
     "missing-provider-auth",
     provider,
     [
-      `No API key found for provider "${provider}".`,
+      `No ${loginCommand ? "credentials" : "API key"} found for provider "${provider}".`,
       `Auth store: ${authStorePath}${agentDirContext}.`,
-      `Configure an API key (${formatCliCommand(`openclaw models auth paste-api-key --provider ${provider}`)}; add --agent <id> for a non-default agent) or copy only portable static auth profiles from the main agentDir.`,
+      loginCommand
+        ? `Sign in (${loginCommand}; add --agent <id> to select the affected agent).`
+        : `Configure an API key (${formatCliCommand(`openclaw models auth paste-api-key --provider ${provider}`)}; add --agent <id> for a non-default agent) or copy only portable static auth profiles from the main agentDir.`,
     ].join(" "),
+    { providerGuidance: Boolean(loginCommand) },
   );
 }
