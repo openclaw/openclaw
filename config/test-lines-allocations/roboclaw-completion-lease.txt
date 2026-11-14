@@ -1,0 +1,9 @@
+# Net regression growth is 897 lines: the 400-line allowance plus 497 here.
+# Real fresh/follow-up Gateway completion must survive producer release without
+# extending its lease; private fixtures preserve policy and delivery decisions.
+# Distinct suspended-body, revocation, retirement, policy/Gateway identity,
+# live/cleanup custody and duplicate-terminal cases protect the authority fences.
+# Ten more lines exercise source retention and current-role reads after release.
+# Bounded real-factory rebinding covers stable identity and assertion/abort revocation.
+# The explicit release-spy receiver requires two formatter-only wrapping lines.
+497

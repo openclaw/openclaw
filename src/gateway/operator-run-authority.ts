@@ -53,6 +53,7 @@ import {
   isOperatorRoleSourcePolicyCurrent,
   sourceRolePolicy,
 } from "./operator-role-source-policy.js";
+import { bindIndependentContinuationAuthority } from "./operator-run-authority.continuation.js";
 import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
@@ -334,7 +335,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
     if (continuation && !params.independentContinuation && authority !== inherited) {
       continuationAuthorities.set(authority, continuation);
     }
-    return { authority, release: source.retain?.() ?? (() => {}) };
+    return {
+      authority: params.independentContinuation
+        ? bindIndependentContinuationAuthority(authority)
+        : authority,
+      release: source.retain?.() ?? (() => {}),
+    };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
@@ -724,7 +730,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
       // reconnects bound to that shared credential. The profile name grants nothing.
       bindSharedGatewayOwnerRunAuthority(authority);
     }
-    return { authority, release };
+    return {
+      authority: params.independentContinuation
+        ? bindIndependentContinuationAuthority(authority)
+        : authority,
+      release,
+    };
   } catch (error) {
     release();
     throw error;

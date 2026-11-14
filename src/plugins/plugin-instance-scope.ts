@@ -84,6 +84,8 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  /** True after ordinary invocation custody closes, including transfer to cleanup. */
+  readonly released?: boolean;
   readonly retainedInstances?: readonly PluginInstanceHandle[];
   readonly holdsPendingReplacement?: boolean;
   readonly pendingReplacementInstances?: readonly PluginInstanceHandle[];
@@ -116,6 +118,13 @@ export const pluginInvocationContext = resolveGlobalSingleton(
 /** Host-owned work admits a fresh plugin call without inheriting a finished turn's lease. */
 export function runOutsidePluginInvocationScope<T>(run: () => T): T {
   return pluginInvocationContext.exit(() => pluginInstanceInvocation.exit(run));
+}
+
+/** Independent work retains live custody, but uses fresh admission after its producer releases. */
+export function runOutsideReleasedPluginInvocationScope<T>(run: () => T): T {
+  return pluginInvocationContext.getStore()?.released === true
+    ? pluginInvocationContext.exit(run)
+    : run();
 }
 
 /** Compatibility query for callers holding a published plugin invocation context. */

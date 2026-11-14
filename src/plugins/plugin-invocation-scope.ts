@@ -125,6 +125,10 @@ export class PluginInvocationScope {
     }
   }
 
+  get released(): boolean {
+    return this.closed;
+  }
+
   get retainedInstances(): readonly PluginInstanceHandle[] {
     return this.closed
       ? []
