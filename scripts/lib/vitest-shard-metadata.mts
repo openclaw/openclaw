@@ -356,7 +356,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/write-plugin-sdk-entry-dts.test.ts", 74],
   ["test/scripts/ci-workflow-guards.test.ts", 38],
   ["test/scripts/crabbox-wrapper.test.ts", 19],
-  ["test/scripts/find-reusable-release-validation.test.ts", 8],
   ["test/scripts/install-sh.test.ts", 6],
   ["test/scripts/kitchen-sink-rpc-walk.test.ts", 5],
   ["test/scripts/managed-child-process.test.ts", 42],

@@ -65,7 +65,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/side-question.app-consent.test.ts",
   "extensions/codex/src/app-server/run-attempt.session-fork.test.ts",
   "extensions/codex/src/app-server/compact.cancellation.test.ts",
-  "extensions/codex/src/app-server/compact.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.adoption.test.ts",
   "extensions/codex/src/app-server/mcp-app-first-reply.test.ts",
   "extensions/codex/harness.test.ts",
