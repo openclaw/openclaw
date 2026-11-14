@@ -3849,7 +3849,6 @@
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts": 27,
       "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts": 25,
       "ui/src/e2e/chat-markdown-alignment.e2e.test.ts": 14,
-      "ui/src/e2e/chat-markdown-table-interactions.e2e.test.ts": 100,
       "ui/src/e2e/chat-mcp-app-fullscreen.e2e.test.ts": 14,
       "ui/src/e2e/chat-media-handoff.e2e.test.ts": 5,
       "ui/src/e2e/chat-media-picker.e2e.test.ts": 17,
