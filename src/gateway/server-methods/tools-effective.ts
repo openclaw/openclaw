@@ -573,6 +573,7 @@ async function resolveTrustedToolsEffectiveContext(
     ...context,
     capabilityProfile: await prepareConversationCapabilityProfile({
       config: context.cfg,
+      workspaceDir: context.workspaceDir,
       sessionKey: context.sessionKey,
       preparedSessionEntry: { sessionKey: canonicalKey, entry: loaded.entry },
       sandboxToolPolicy: await resolveSessionToolPreviewSandboxPolicy({
