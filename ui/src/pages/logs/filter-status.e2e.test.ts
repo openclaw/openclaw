@@ -11,6 +11,7 @@ const options = {
   viewport: { width: 1280, height: 900 },
 };
 const emptyMessage = "No log entries yet.";
+const filteredEmptyMessage = "No log entries match these filters.";
 const line = (message: string, level: string) =>
   JSON.stringify({ message, time: "2026-10-25T12:00:00Z", _meta: { logLevelName: level } });
 const tail = (lines: string[], reset = false) => ({
@@ -38,7 +39,7 @@ suite.define(() => {
       const [originalStatus] = await stream.getByRole("status").elementHandles();
       await filter.focus();
       await filter.pressSequentially("unmatched synthetic query");
-      await stream.getByText(emptyMessage, { exact: true }).waitFor();
+      await stream.getByText(filteredEmptyMessage, { exact: true }).waitFor();
       await writeFile(
         path.join(suite.artifactDir, "filtered-empty-ax.txt"),
         await stream.ariaSnapshot(),
@@ -49,7 +50,7 @@ suite.define(() => {
         throw new Error("The empty-result status must exist before filtering");
       }
       const status = stream.getByRole("status");
-      expect(await status.textContent()).toBe(emptyMessage);
+      expect(await status.textContent()).toBe(filteredEmptyMessage);
       expect(
         await status.evaluate((element, original) => element === original, originalStatus),
       ).toBe(true);
@@ -66,8 +67,8 @@ suite.define(() => {
         await checkbox.focus();
         await checkbox.press("Space");
       }
-      await stream.getByText(emptyMessage, { exact: true }).waitFor();
-      expect(await status.textContent()).toBe(emptyMessage);
+      await stream.getByText(filteredEmptyMessage, { exact: true }).waitFor();
+      expect(await status.textContent()).toBe(filteredEmptyMessage);
       const errorLevel = page.getByRole("menuitemcheckbox", { name: "error", exact: true });
       expect(await errorLevel.evaluate((element) => document.activeElement === element)).toBe(true);
       await errorLevel.press("Escape");

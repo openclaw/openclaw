@@ -803,6 +803,12 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 
 Open **Settings → Gateway**, enable **Use Manual Gateway**, and enter the Gateway host + port (default `18789`).
 
+A Tailscale Serve name (ending in `.ts.net`) with no port uses `443` with TLS. A
+loopback-only Gateway behind Serve refuses connections on its own port, even
+over Tailscale. When a connection is refused or times out, the error names the
+address the app tried; for a refused tailnet address, connect to the `.ts.net`
+name without a port or scan a new code from `openclaw qr`.
+
 IPv6 host fields accept raw addresses such as `fd00::1` and bracketed addresses
 such as `[fd00::1]`. Full Gateway URLs require brackets around the address,
 for example `wss://[fd00::1]:18789`.

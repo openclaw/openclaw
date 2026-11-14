@@ -74,6 +74,7 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     updatedAtMs: job.updatedAtMs,
     declarationKey: job.declarationKey || undefined,
     displayName: job.displayName || undefined,
+    ...(job.cyberAccessProgram !== undefined ? { cyberAccessProgram: job.cyberAccessProgram } : {}),
     owner: job.owner,
     enabled: job.enabled,
     // Keep epoch fields for existing clients; readable dates avoid model timestamp arithmetic.

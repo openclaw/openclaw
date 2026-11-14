@@ -118,28 +118,32 @@ it("keeps test-only ambient augmentation out of declaration roots but in test gr
   }
 });
 
-it("rechecks a previously missing declaration path after its parent becomes a symlink", () => {
-  const ancestor = fs.realpathSync.native(roots.make("declaration-path-recheck-"));
-  const root = path.join(ancestor, "checkout");
-  const outside = path.join(ancestor, "outside");
-  const parent = path.join(root, "generated");
-  const file = path.join(parent, "value.d.ts");
-  fs.mkdirSync(root);
-  fs.mkdirSync(outside);
-  fs.writeFileSync(path.join(outside, "value.d.ts"), "export {};\n");
-  const boundary = createDeclarationInputBoundary(root);
-  expect(boundary.assert(file)).toBe(file);
-  expect(boundary.assert(file)).toBe(file);
+it.each(["absolute", "relative"])(
+  "rechecks a missing %s declaration path after its parent becomes a symlink",
+  (spelling) => {
+    const ancestor = fs.realpathSync.native(roots.make("declaration-path-recheck-"));
+    const root = path.join(ancestor, "checkout");
+    const outside = path.join(ancestor, "outside");
+    const parent = path.join(root, "generated");
+    const file = path.join(parent, "value.d.ts");
+    fs.mkdirSync(root);
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "value.d.ts"), "export {};\n");
+    const boundary = createDeclarationInputBoundary(root);
+    const input = spelling === "absolute" ? file : path.relative(root, file);
+    expect(boundary.assert(input)).toBe(file);
+    expect(boundary.assert(input)).toBe(file);
 
-  fs.rmSync(parent, { recursive: true, force: true });
-  fs.symlinkSync(outside, parent, "junction");
-  expect(() => boundary.assert(file)).toThrow("Declaration input escapes checkout");
+    fs.rmSync(parent, { recursive: true, force: true });
+    fs.symlinkSync(outside, parent, "junction");
+    expect(() => boundary.assert(input)).toThrow("Declaration input escapes checkout");
 
-  fs.rmSync(parent, { recursive: true, force: true });
-  fs.mkdirSync(parent);
-  fs.writeFileSync(file, "export {};\n");
-  expect(boundary.assert(file)).toBe(file);
-});
+    fs.rmSync(parent, { recursive: true, force: true });
+    fs.mkdirSync(parent);
+    fs.writeFileSync(file, "export {};\n");
+    expect(boundary.assert(input)).toBe(file);
+  },
+);
 
 function createNativeFixture(root: string, declared = root) {
   fs.mkdirSync(root, { recursive: true });

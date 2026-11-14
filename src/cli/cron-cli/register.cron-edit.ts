@@ -99,6 +99,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-session-key", "Unset session key", false)
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--clear-active-hours", "Remove the entire execution window", false)
+      .option("--clear-access", "Remove the per-job Access selection", false)
       .option("--clear-idle-only", "Remove the per-job idle-only policy", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
       .option(

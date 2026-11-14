@@ -209,6 +209,7 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Opt-in append benchmark CLI documented in its source header.
   "scripts/perf/transcript-append-normalization-measure.ts!",
+  "scripts/perf/transcript-plan-stats.ts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
   "scripts/perf/session-delete-diagnostics-measure.ts!",
