@@ -36,6 +36,7 @@ import {
 } from "./local-workspace-manifest-tree.js";
 import { prepareLocalWorkspaceUpdate } from "./local-workspace-publication.js";
 import type {
+  LocalWorkspaceBaselineDocument,
   LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestScan,
@@ -51,12 +52,6 @@ import {
   buildCacheInputPaths,
   isIgnoredWorkspaceBuildOutput,
 } from "./workspace-path-exclusions.js";
-
-export type LocalWorkspaceBaselineDocument = {
-  rawManifest: string;
-  manifestRef: string;
-  buildCacheInputs: string[];
-};
 
 export type LocalWorkspaceManifestAction =
   | {
@@ -151,7 +146,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
     input.knownTreeRoot === localWorkspaceDigestReference(row.tree_root_digest) &&
     ["scan", "probe", "materialize", "archive"].includes(input.action.kind)
   ) {
-    return { row, records: undefined };
+    return { row, records: undefined, knownPacks: undefined };
   }
   let records: string[] = [];
   const replacing =
@@ -173,7 +168,15 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
       records.push(node_json);
     }
   }
-  return { row, records };
+  // A replacement can reuse live packs without reading their record payloads.
+  const knownPacks =
+    row.tree_root_digest && input.action.kind === "replace"
+      ? readLocalWorkspaceTree(db, row.tree_root_digest, {
+          referencesOnly: true,
+          allowMissing: true,
+        })
+      : undefined;
+  return { row, records, ...(knownPacks ? { knownPacks } : {}) };
 }
 
 export async function executeLocalWorkspaceManifestRead(
@@ -401,7 +404,10 @@ export async function executeLocalWorkspaceManifestRead(
     // Keep the full tree between workers; the host publishes only the accepted root.
     return {
       kind: "replace",
-      update: prepareLocalWorkspaceUpdate(mutation, prepareLocalWorkspaceTreePacks(records)),
+      update: prepareLocalWorkspaceUpdate(
+        mutation,
+        prepareLocalWorkspaceTreePacks(records, undefined, new Set(snapshot.knownPacks)),
+      ),
     };
   }
   if (action.kind === "materialize" && row.baseline_json && row.baseline_ref) {

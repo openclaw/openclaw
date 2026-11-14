@@ -44,6 +44,7 @@ export function localWorkspaceDigestReference(bytes: Uint8Array): string {
 function encodeLocalWorkspaceTreePacks(
   records: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
   selectedPaths?: Iterable<string>,
+  knownPacks?: ReadonlySet<string>,
 ): LocalWorkspaceTreePack[] {
   const roots = new Set<string>([""]);
   if (selectedPaths === undefined) {
@@ -66,8 +67,12 @@ function encodeLocalWorkspaceTreePacks(
       }
     }
   }
-  return [...roots].map((entryPath) => {
+  const packs: LocalWorkspaceTreePack[] = [];
+  for (const entryPath of roots) {
     const root = records.get(entryPath)!;
+    if (knownPacks?.has(root.treeRef)) {
+      continue;
+    }
     const packed: LocalWorkspaceManifestRecord[] = [];
     const children: string[] = [];
     const pending = [root];
@@ -84,15 +89,17 @@ function encodeLocalWorkspaceTreePacks(
       }
     }
     // A very large flat directory rewrites its whole pack on every edit.
-    return { treeRef: root.treeRef, records: packed, children };
-  });
+    packs.push({ treeRef: root.treeRef, records: packed, children });
+  }
+  return packs;
 }
 
 export function prepareLocalWorkspaceTreePacks(
   records: ReadonlyMap<string, LocalWorkspaceManifestRecord>,
   selectedPaths?: Iterable<string>,
+  knownPacks?: ReadonlySet<string>,
 ): Uint8Array[] {
-  const packs = encodeLocalWorkspaceTreePacks(records, selectedPaths);
+  const packs = encodeLocalWorkspaceTreePacks(records, selectedPaths, knownPacks);
   const batches: Uint8Array[] = [];
   for (let offset = 0; offset < packs.length; offset += LOCAL_WORKSPACE_CONTENT_BATCH) {
     batches.push(

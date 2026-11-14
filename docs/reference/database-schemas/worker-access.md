@@ -203,6 +203,13 @@ revision. Failed computation drops the retained tree; repair reads never reuse i
 The Gateway forwards snapshots without expanding them. Filesystem discovery stays
 off shared readers, and reconciliation custody and atomic publication are unchanged.
 
+Baseline replacement reads the live tree's pack digests without loading their
+record payloads. The computation worker omits those unchanged packs from preparation
+and prepares source-path content with the mutation. The Gateway forwards the
+compressed mutation unchanged and publishes its prepared header after settlement.
+Stored pack bytes, tree references, revision checks, and preparation expiry remain
+unchanged; missing baseline packs are rebuilt during replacement.
+
 Long-lived Gateway and local TUI processes reuse the shared-state reader pool for
 early awaited configuration and plugin metadata reads. Standalone CLI inspection
 keeps its one-shot reader retirement; failed reads and native cleanup still retire

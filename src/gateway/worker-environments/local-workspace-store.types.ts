@@ -2,6 +2,12 @@ import type { Selectable, Updateable } from "kysely";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 
+export type LocalWorkspaceBaselineDocument = {
+  rawManifest: string;
+  manifestRef: string;
+  buildCacheInputs: string[];
+};
+
 export type LocalWorkspaceRejectedResult = { ref: string; reason: string; manifestRef?: string };
 export type LocalWorkspaceProjection = Selectable<DB["local_workspace_projections"]> & {
   rejectedResult?: LocalWorkspaceRejectedResult;
@@ -31,6 +37,7 @@ export type LocalWorkspaceMutation =
 export type LocalWorkspacePreparedUpdate = {
   revision: number;
   patch: Updateable<DB["local_workspace_projections"]>;
+  rejectedResult?: LocalWorkspaceRejectedResult;
   mutation: Uint8Array;
   preparations?: Uint8Array[];
 };
