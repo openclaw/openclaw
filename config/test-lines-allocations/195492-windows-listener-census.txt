@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #195492 (Windows listener census consults netstat when the PowerShell query is empty).
+82

@@ -50,6 +50,28 @@ function parseListeningPidsFromNetstat(stdout: string, port: number): number[] {
   return [...new Set(parseWindowsNetstatListeners(stdout, port).map((listener) => listener.pid))];
 }
 
+function readListeningPidsViaNetstat(
+  port: number,
+  timeoutMs: number,
+): { pids: number[] } | { failure: { ok: false; permanent: boolean } } {
+  const netstat = spawnSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
+    env: resolveDiagnosticProcessEnv(),
+    encoding: "utf8",
+    timeout: timeoutMs,
+    windowsHide: true,
+  });
+  if (netstat.error) {
+    const code = (netstat.error as NodeJS.ErrnoException).code;
+    return {
+      failure: { ok: false, permanent: code === "ENOENT" || code === "EACCES" || code === "EPERM" },
+    };
+  }
+  if (netstat.status !== 0) {
+    return { failure: { ok: false, permanent: false } };
+  }
+  return { pids: parseListeningPidsFromNetstat(netstat.stdout, port) };
+}
+
 export function readWindowsListeningPidsOnPortSync(port: number): number[] {
   const result = readWindowsListeningPidsResultSync(port);
   return result.ok ? result.pids : [];
@@ -61,23 +83,18 @@ export function readWindowsListeningPidsResultSync(
 ): WindowsListeningPidsResult {
   assertAppContainerSpawnSupported();
   const powershellPids = readListeningPidsViaPowerShell(port, timeoutMs);
-  if (powershellPids != null) {
+  if (powershellPids && powershellPids.length > 0) {
     return { ok: true, pids: powershellPids };
   }
-  const netstat = spawnSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
-    env: resolveDiagnosticProcessEnv(),
-    encoding: "utf8",
-    timeout: timeoutMs,
-    windowsHide: true,
-  });
-  if (netstat.error) {
-    const code = (netstat.error as NodeJS.ErrnoException).code;
-    return { ok: false, permanent: code === "ENOENT" || code === "EACCES" || code === "EPERM" };
+  // A successful but empty PowerShell census is not proof that the port is free: the CIM
+  // listener view can miss a live listener that netstat still reports, so consult the
+  // fallback for that case too instead of returning the empty answer unexamined.
+  const netstat = readListeningPidsViaNetstat(port, timeoutMs);
+  if ("failure" in netstat) {
+    // PowerShell did run and found nothing; its answer still beats a failing fallback.
+    return powershellPids ? { ok: true, pids: powershellPids } : netstat.failure;
   }
-  if (netstat.status !== 0) {
-    return { ok: false, permanent: false };
-  }
-  return { ok: true, pids: parseListeningPidsFromNetstat(netstat.stdout, port) };
+  return { ok: true, pids: netstat.pids.length > 0 ? netstat.pids : (powershellPids ?? []) };
 }
 
 /** Read-only bounded listener observation, without PID enrichment or a second budget. */
