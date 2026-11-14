@@ -3012,22 +3012,42 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("shares one prepared runtime across affordable github groups", () => {
+  it("shares one prepared runtime across affordable github groups", async () => {
     const runnerBackend = "github";
-
+    const config = configPath("infra");
     const targets = [
       PRIVATE_QA_TOOLING_TEST,
       "src/infra/update-candidate-canary.integration.test.ts",
     ];
-    spyTimings().mockReturnValue(
-      Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
-    );
-    const plan = selectTests(targets, { runnerBackend });
+    // Keep the two real prerequisite owners affordable independently of unrelated
+    // inventory changes that can move them into different full-suite parent jobs.
+    vi.resetModules();
+    mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
+    mockOriginal("database", { databaseWorkerCoreTestFiles: [] });
+    mockOriginal("inventory", {
+      listScopedOwnerTestFiles: ({ root }) => (root === "src/infra" ? targets : []),
+      listNodeTestConfigFiles: (candidate) => (candidate === config ? targets : []),
+    });
+    mockPlanTimings(() => ({
+      "core-runtime-infra-misc": 1,
+      "core-runtime-infra-system-runtime": 1,
+    }));
+    const { createSelectedNodeTestShardBundles: select } = await loadPlanModule([
+      "database",
+      "inventory",
+    ]);
+    const plan = select(targets, { runnerBackend });
     expect(plan).not.toBeNull();
     const readers = plan!.filter((shard) => !shard.requiresDist);
     const reader = only(readers);
     expect(reader).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
     expect(reader.predictedSeconds).toBeLessThanOrEqual(210);
+    expect(reader.groups).toHaveLength(2);
+    expect(
+      reader.groups
+        .map((group) => required(group.pretestBuildMode))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["private-qa", "runtime"]);
     expectEvery(reader.groups, (group) => group.pretestBuildMode);
     expectSameEntries(reader.groups.flatMap(optionalPatterns), targets);
   });

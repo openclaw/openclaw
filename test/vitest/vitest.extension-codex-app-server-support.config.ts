@@ -15,7 +15,6 @@ const coveredAppServerPatterns = [
   "extensions/codex/src/app-server/client.test.ts",
   "extensions/codex/src/app-server/compact.cancellation.test.ts",
   "extensions/codex/src/app-server/compact.test.ts",
-  "extensions/codex/src/app-server/config.test.ts",
   "extensions/codex/src/app-server/managed-binary.test.ts",
   "extensions/codex/src/app-server/models.test.ts",
   "extensions/codex/src/app-server/session-binding.test.ts",

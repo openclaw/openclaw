@@ -2477,7 +2477,6 @@
         "env": {},
         "includePatterns": [
           "src/commands/doctor-config-flow.legacy-composition.test.ts",
-          "src/commands/doctor-config-preflight.process.test.ts",
           "src/commands/doctor-config-preflight.refusal.process.test.ts",
           "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts"
         ],
@@ -2944,7 +2943,6 @@
       "test/scripts/build-identity.test.ts": 1,
       "test/scripts/bundled-plugin-assets.test.ts": 6,
       "test/scripts/bundled-plugin-build-entries.test.ts": 4,
-      "test/scripts/bundled-plugin-install-uninstall-probe.test.ts": 3,
       "test/scripts/bundled-plugin-source-utils.test.ts": 1,
       "test/scripts/capability-catalog-artifacts.test.ts": 1,
       "test/scripts/changed-lanes.stylelint.test.ts": 1,
@@ -3645,7 +3643,6 @@
       "ui/src/e2e/activity-polish.e2e.test.ts": 22,
       "ui/src/e2e/activity-presence-connections.e2e.test.ts": 3,
       "ui/src/e2e/activity-run-inspector.collection.e2e.test.ts": 17,
-      "ui/src/e2e/activity-run-inspector.e2e.test.ts": 47,
       "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts": 26,
       "ui/src/e2e/activity-session-feed.capture.e2e.test.ts": 11,
       "ui/src/e2e/activity-session-git.e2e.test.ts": 5,
@@ -4381,7 +4378,6 @@
       "ui/src/e2e/session-management.group-defaults.e2e.test.ts": 66,
       "ui/src/e2e/session-management.group-identity.e2e.test.ts": 40,
       "ui/src/e2e/session-management.group-return.e2e.test.ts": 19,
-      "ui/src/e2e/session-management.groups.e2e.test.ts": 45,
       "ui/src/e2e/session-management.hidden-run-read.e2e.test.ts": 38,
       "ui/src/e2e/session-management.mutation-scope.e2e.test.ts": 38,
       "ui/src/e2e/session-management.nested-archive.e2e.test.ts": 19,
