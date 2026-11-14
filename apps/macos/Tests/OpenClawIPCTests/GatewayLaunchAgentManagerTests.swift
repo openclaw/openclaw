@@ -4,6 +4,29 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test(arguments: [false, true]) @MainActor
+    func `attach-only permission failures preserve saved state and allow retry`(initiallyDisabled: Bool) async throws {
+        let directory = try makeTempDirForTests()
+        let marker = directory.appendingPathComponent("disable-launchagent")
+        let fileManager = FileManager.default
+        defer {
+            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try? fileManager.removeItem(at: directory)
+        }
+        if initiallyDisabled { try Data().write(to: marker) }
+        try fileManager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        try await TestIsolation.withIsolatedState {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            defer { GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil) }
+            #expect(GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(!initiallyDisabled) != nil)
+            #expect(GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() == initiallyDisabled)
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            #expect(GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(!initiallyDisabled) == nil)
+            #expect(GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() == !initiallyDisabled)
+            #expect(GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(!initiallyDisabled) == nil)
+        }
+    }
+
     @Test(arguments: [
         "definition",
         "absent",
