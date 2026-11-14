@@ -1,6 +1,8 @@
 // Covers fixed-window rate limiter boundaries.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixedWindowBudget } from "./fixed-window-rate-limit.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function expectConsumeResult(
   result: { allowed: boolean; retryAfterMs: number },
@@ -12,7 +14,7 @@ function expectConsumeResult(
 
 describe("fixed-window rate limiter", () => {
   it("blocks after max requests until window reset", () => {
-    let nowMs = 1_000;
+    let nowMs = 100;
     const limiter = createFixedWindowBudget({
       maxRequests: 2,
       windowMs: 1_000,
@@ -70,4 +72,23 @@ describe("fixed-window rate limiter", () => {
     nowMs += 250;
     expectConsumeResult(limiter.consume(), { allowed: false, retryAfterMs: 750 });
   });
+
+  it.each([-60_000, 60_000])(
+    "keeps the default quota on elapsed time after a %ims wall-clock step",
+    (step) => {
+      let elapsedMs = 100;
+      let wallMs = 1_000_000;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      vi.spyOn(Date, "now").mockImplementation(() => wallMs);
+      const limiter = createFixedWindowBudget({ maxRequests: 1, windowMs: 1_000 });
+      expectConsumeResult(limiter.consume(), { allowed: true, retryAfterMs: 0 });
+
+      elapsedMs += 250;
+      wallMs += step;
+      expectConsumeResult(limiter.consume(), { allowed: false, retryAfterMs: 750 });
+
+      elapsedMs += 750;
+      expectConsumeResult(limiter.consume(), { allowed: true, retryAfterMs: 0 });
+    },
+  );
 });
