@@ -235,7 +235,7 @@ it("names missing models and exhausted utility fallbacks without exposing provid
 
 function completionAfter(delay?: number) {
   return vi.fn(
-    (params: { abortSignal?: AbortSignal }) =>
+    (params: { abortSignal?: AbortSignal; timeoutMs: number }) =>
       new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
         params.abortSignal!.addEventListener("abort", () => reject(new Error("aborted")), {
           once: true,
@@ -245,6 +245,8 @@ function completionAfter(delay?: number) {
             () => resolve(modelMessage({ headline: "Working", health: "on-track" })),
             delay,
           );
+        } else {
+          setTimeout(() => reject(new Error("candidate timed out")), params.timeoutMs);
         }
       }),
   );
@@ -297,7 +299,113 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
   expectBroadcast(harness, { headline: "Working", health: "on-track" });
 });
 
-it("aborts stuck completions at the cap and disables the run after two failures", async () => {
+it.each([true, false])(
+  "bounds each utility candidate independently (fallback recovers: %s)",
+  async (recovers) => {
+    const isolated = vi.fn(async (params: Parameters<typeof runUtilityCompletion>[0]) => {
+      const succeeds = params.provider === "anthropic" && recovers;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, succeeds ? 5_000 : params.timeoutMs);
+      });
+      if (!succeeds) {
+        throw new FailoverError("Candidate timed out", { reason: "timeout" });
+      }
+      return modelMessage({ headline: "Recovered", health: "on-track" });
+    });
+    const completeModel = vi.fn<typeof defaultCompleteModel>((params) =>
+      runUtilityCompletion(params, isolated),
+    );
+    const request = createSessionObserverCompletion({
+      getConfig: () => ({
+        agents: {
+          defaults: {
+            utilityModel: {
+              primary: "openai/gpt-test",
+              fallbacks: ["anthropic/claude-haiku-5-5"],
+            },
+          },
+        },
+      }),
+      prepareModel: vi.fn(async () => ({ ...preparedModel(), useUtilityModel: true as const })),
+      completeModel,
+      isCurrent: () => true,
+    });
+    const state = observerState();
+    const settled = request(state, []).catch((error: unknown) => error);
+    let finished = false;
+    void settled.then(() => {
+      finished = true;
+    });
+    await vi.waitFor(() => expect(isolated).toHaveBeenCalledOnce());
+    await advance(29_000);
+    expect(isolated).toHaveBeenCalledOnce();
+    await advance(1_000);
+    await vi.waitFor(() => expect(isolated).toHaveBeenCalledTimes(2));
+    expect(finished).toBe(false);
+    const signal = completeModel.mock.calls[0]?.[0].abortSignal;
+    expect(signal?.aborted).toBe(false);
+    await advance(recovers ? 5_000 : 30_000);
+    if (recovers) {
+      await expect(settled).resolves.toMatchObject({ headline: "Recovered", health: "on-track" });
+    } else {
+      await expect(settled).resolves.toBeInstanceOf(Error);
+    }
+    expect(signal?.aborted).toBe(false);
+    expect(isolated.mock.calls.map(([call]) => [call.model, call.timeoutMs])).toEqual([
+      ["gpt-test", 30_000],
+      ["claude-haiku-5-5", 30_000],
+    ]);
+    expect(state.activeController).toBeUndefined();
+  },
+);
+
+it("gives the JSON validation retry its own model budget", async () => {
+  const completeModel = vi.fn<typeof defaultCompleteModel>((params) => {
+    const attempt = completeModel.mock.calls.length - 1;
+    return new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          resolve(
+            attempt === 0
+              ? modelMessage({ headline: "Invalid", health: "on-track", planProgress: null })
+              : modelMessage({ headline: "Recovered", health: "on-track" }),
+          ),
+        attempt === 0 ? 25_000 : 10_000,
+      );
+      params.abortSignal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("aborted", { cause: params.abortSignal?.reason }));
+        },
+        { once: true },
+      );
+    });
+  });
+  const request = createSessionObserverCompletion({
+    getConfig: () => ({}),
+    prepareModel: vi.fn(async () => preparedModel()),
+    completeModel,
+    isCurrent: () => true,
+  });
+  const completion = request(observerState(), []);
+  await vi.waitFor(() => expect(completeModel).toHaveBeenCalledOnce(), {
+    timeout: 1_000,
+    interval: 1,
+  });
+
+  await advance(25_000);
+  await vi.waitFor(() => expect(completeModel).toHaveBeenCalledTimes(2), {
+    timeout: 1_000,
+    interval: 1,
+  });
+  await advance(10_000);
+
+  await expect(completion).resolves.toMatchObject({ headline: "Recovered", health: "on-track" });
+  expect(completeModel.mock.calls[1]?.[0].abortSignal?.aborted).toBe(false);
+});
+
+it("times out stuck candidates independently and disables the run after two failures", async () => {
   const completeModel = completionAfter();
   const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
   const harness = createHarness({ completeModel });
@@ -306,39 +414,13 @@ it("aborts stuck completions at the cap and disables the run after two failures"
   await advance(29_999);
   expect(signal(0)?.aborted).toBe(false);
   await advance(1);
-  expect(signal(0)?.aborted).toBe(true);
+  expect(signal(0)?.aborted).toBe(false);
   expect(completeModel).toHaveBeenCalledTimes(2);
   await advance(30_000);
-  expect(signal(1)?.aborted).toBe(true);
+  expect(signal(1)?.aborted).toBe(false);
   await advance(60_000);
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
-});
-
-it("budgets one model call per configured utility candidate", async () => {
-  const completeModel = completionAfter();
-  const request = createSessionObserverCompletion({
-    getConfig: () => ({
-      agents: {
-        defaults: {
-          utilityModel: { primary: "openai/gpt-test", fallbacks: ["anthropic/claude-haiku-5-5"] },
-        },
-      },
-    }),
-    prepareModel: vi.fn(async () => ({ ...preparedModel(), config: {} })),
-    completeModel,
-    isCurrent: () => true,
-  });
-  const settled = request(observerState(), []).catch((error: unknown) => error);
-  await advance(29_999);
-  const signal = completeModel.mock.calls[0]?.[0].abortSignal;
-  expect(signal?.aborted).toBe(false);
-  // The primary used its own call budget; the configured fallback still needs a turn.
-  await advance(1);
-  expect(signal?.aborted).toBe(false);
-  await advance(30_000);
-  expect(signal?.aborted).toBe(true);
-  await expect(settled).resolves.toBeInstanceOf(Error);
 });
 
 it("uses a healthy configured fallback when the primary returns invalid observer JSON", async () => {
