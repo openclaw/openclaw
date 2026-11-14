@@ -198,6 +198,52 @@ Other balance failures include guidance for checking the server or its access pe
     existing Off default rather than adopting `thinking.default`. Discovery
     caches these mappings with model metadata; turns do not fetch them again.
 
+    Discovery also fills a missing `thinkingLevelMap` on an explicitly configured
+    native Ollama model. If you disable discovery with `models.mode: "replace"`
+    or `plugins.entries.ollama.config.discovery.enabled: false`, configure the
+    map yourself under `models.providers.ollama.models[]` to use the server's
+    advertised thinking levels.
+
+    For example, if `/api/show` reports `thinking.values` of
+    `[false, "low", "medium", "xhigh"]`, use this map. Replace the model ID and
+    keep your existing context and output limits:
+
+    ```json5
+    {
+      models: {
+        mode: "replace",
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            apiKey: "ollama-local",
+            api: "ollama",
+            models: [
+              {
+                id: "custom-thinking:latest",
+                name: "Custom thinking model",
+                reasoning: true,
+                thinkingLevelMap: {
+                  off: "false",
+                  minimal: null,
+                  low: "low",
+                  medium: "medium",
+                  high: "xhigh",
+                  xhigh: "xhigh",
+                  max: "xhigh",
+                },
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    Map values are strings or `null`. The strings `"false"` and `"true"`
+    become native Ollama booleans; `null` removes an unsupported selection.
+    Here, High and Maximum send `"xhigh"`. Match the map to your model's
+    advertised values; it cannot add levels the server does not support.
+
     When replaying an assistant message, native requests retain its available
     reasoning in Ollama's separate `thinking` field alongside text and tool
     calls, including later tool steps and reopened sessions. Earlier reasoning
