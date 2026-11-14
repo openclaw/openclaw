@@ -37,6 +37,7 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTarget,
 } from "./approval-reactions.js";
+import { resolveIMessageAttachmentChat, type IMessageSendTransport } from "./attachment-target.js";
 import { chatContextFromIMessageTarget, resolveIMessageDirectChatService } from "./chat-context.js";
 import { withIMessageReceiptGuidReader } from "./chat-db.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
@@ -72,7 +73,6 @@ import {
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
 const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
 const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
-type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
 type IMessageApprovalPromptBinding = {
   approvalId: string;
@@ -541,48 +541,24 @@ async function sendMessageIMessageForAccount(
         "iMessage voice messages require bridge transport; AppleScript cannot send native voice notes. Set sendTransport to bridge or auto.",
       );
     }
-    // Service-qualified handles are not existing chat GUIDs. Let imsg's canonical
-    // send RPC resolve them; explicit bridge and native voice retain bridge semantics.
-    if (
-      target.kind === "handle" &&
-      !audioAsVoice &&
-      sendTransport !== "bridge" &&
-      (service === "sms" || service === "imessage")
-    ) {
-      return null;
-    }
-    if (remoteHost && sendTransport === "applescript") {
-      return null;
-    }
-    let attachmentChatTarget: string | null = null;
-    if (target.kind === "chat_guid") {
-      attachmentChatTarget = target.chatGuid;
-    } else if (target.kind === "handle") {
-      const rawHandle = target.to.trim();
-      // Local imsg only accepts canonical handles; remote resolution accepts aliases.
-      if (remoteHost || rawHandle.includes("@") || rawHandle.startsWith("+")) {
-        const normalizedHandle = normalizeIMessageHandle(target.to);
-        if (normalizedHandle) {
-          const attachmentService = target.service !== "auto" ? target.service : service;
-          attachmentChatTarget = `${attachmentService === "sms" ? "SMS" : attachmentService === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
+    const attachmentChatTarget = await resolveIMessageAttachmentChat({
+      target,
+      service,
+      sendTransport,
+      remoteHost,
+      audioAsVoice,
+      lookupChatGuid: async (chatId) => {
+        try {
+          const result = await runCliJson(["group", "--chat-id", String(chatId)]);
+          return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
+        } catch (error) {
+          if (!audioAsVoice && isAttachmentCommandFallbackError(error)) {
+            return null;
+          }
+          throw error;
         }
-      }
-    } else if (remoteHost) {
-      attachmentChatTarget =
-        target.kind === "chat_identifier"
-          ? target.chatIdentifier
-          : formatIMessageChatTarget(target.chatId);
-    } else if (target.kind === "chat_id") {
-      try {
-        const result = await runCliJson(["group", "--chat-id", String(target.chatId)]);
-        attachmentChatTarget = stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
-      } catch (error) {
-        if (!audioAsVoice && isAttachmentCommandFallbackError(error)) {
-          return null;
-        }
-        throw error;
-      }
-    }
+      },
+    });
     if (!attachmentChatTarget) {
       if (audioAsVoice) {
         throw new Error("iMessage voice messages require an existing chat and bridge transport.");
