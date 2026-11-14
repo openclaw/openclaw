@@ -568,6 +568,14 @@ type DiagnosticHarnessRunBaseEvent = DiagnosticBaseEvent &
   DiagnosticRunScopeFields & {
     harnessId: string;
     pluginId?: string;
+    /** Effective provider route that served the run, e.g. "nvidia/nemotron-fast". */
+    selectedRoute?: string;
+    /** True when the gateway served the run through a fallback chain. */
+    fallbackUsed?: boolean;
+    /** Harness runner kind that executed the run ("embedded" for pi, "harness" otherwise). */
+    runnerType?: string;
+    /** Gateway request id for the served attempt, when the upstream response exposes one. */
+    requestId?: string;
   };
 
 export type DiagnosticHarnessRunStartedEvent = DiagnosticHarnessRunBaseEvent & {
@@ -580,6 +588,14 @@ type DiagnosticHarnessRunCompletedEvent = DiagnosticHarnessRunBaseEvent & {
   type: "harness.run.completed";
   durationMs: number;
   outcome: DiagnosticHarnessRunOutcome;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  costUsd?: number;
   resultClassification?: "empty" | "reasoning-only" | "planning-only";
   yieldDetected?: boolean;
   itemLifecycle?: {
@@ -657,6 +673,7 @@ type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
     | "configured"
     | "emit_failed"
     | "handler_failed"
+    | "langfuse_config_incomplete"
     | "queue_full"
     | "shutdown_failed"
     | "start_failed"

@@ -67,7 +67,11 @@ type OtelConfig = NonNullable<
 export type OtelContextFlags = Pick<
   OtelConfig,
   "traces" | "metrics" | "logs" | "protocol" | "logsExporter" | "captureContent" | "flushIntervalMs"
->;
+> & {
+  langfuse?: NonNullable<
+    NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["langfuse"]
+  >;
+};
 
 type StartOtelServiceOptions = OtelContextFlags & {
   endpoint?: string;
@@ -108,7 +112,13 @@ export function createOtelContext(
     logs: flags.logs ?? false,
   };
   const ctx: OpenClawPluginServiceContext = {
-    config: { diagnostics: { enabled: true, otel } },
+    config: {
+      diagnostics: {
+        enabled: true,
+        otel,
+        ...(flags.langfuse ? { langfuse: flags.langfuse } : {}),
+      },
+    },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     stateDir: "/tmp/openclaw-diagnostics-otel-test",
     internalDiagnostics,

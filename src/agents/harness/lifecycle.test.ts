@@ -598,3 +598,36 @@ describe("AgentHarness lifecycle runner", () => {
     expect(outcome.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
   });
 });
+
+describe("AgentHarness gateway attribution", () => {
+  it("reports the selected route, runner type, usage, cost and gateway request id", async () => {
+    const params = createAttemptParams();
+    const harness = createLifecycleHarness({ pluginId: "codex-plugin" });
+    const diagnostics = captureDiagnosticEvents((evt) => evt.type === "harness.run.completed");
+    const result = {
+      ...createAttemptResult(),
+      attemptUsage: { input: 11, output: 7, total: 18 },
+      lastAssistant: {
+        ...createFinalAssistant(),
+        requestId: "req-42",
+        usage: { cost: { total: 0.125 } },
+      },
+    } as unknown as EmbeddedRunAttemptResult;
+
+    await runAgentHarnessLifecycleAttempt(harness, params, async () => result);
+    await waitForDiagnosticEventsDrained();
+    diagnostics.unsubscribe();
+
+    expect(diagnostics.events).toHaveLength(1);
+    expect(diagnostics.events[0]?.event).toMatchObject({
+      type: "harness.run.completed",
+      provider: "codex",
+      model: "gpt-5.4",
+      selectedRoute: "codex/gpt-5.4",
+      runnerType: "harness",
+      requestId: "req-42",
+      usage: { input: 11, output: 7, total: 18 },
+      costUsd: 0.125,
+    });
+  });
+});
