@@ -89,6 +89,26 @@ function escapePreMarkerText(value: string): string {
   return value.replaceAll("\u0000", "\u0000\u0000");
 }
 
+function escapeMarkdownLinkLabel(value: string): string {
+  // Brackets in fetched text must stay inside this anchor's label.
+  return value.replace(/[\\[\]]/g, "\\$&");
+}
+
+function escapeMarkdownLinkDestination(href: string): string {
+  let depth = 0;
+  for (const character of href) {
+    depth += character === "(" ? 1 : character === ")" ? -1 : 0;
+    if (depth < 0) {
+      break;
+    }
+  }
+  // Protect URL whitespace from prose normalization; angle form permits unmatched parentheses.
+  const destination = escapePreMarkerText(href)
+    .replace(/[\\<>]/g, "\\$&")
+    .replace(/\s/g, encodeURIComponent);
+  return depth === 0 && !/\s/.test(href) ? destination : `<${destination}>`;
+}
+
 function appendText(stack: RenderContext[], value: string): void {
   const context = stack[stack.length - 1];
   context?.parts.push(context.kind === "pre" ? value : escapePreMarkerText(value));
@@ -171,7 +191,7 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
     case "anchor":
       parent.parts.push(
         state.extractMode !== "text" && !state.linksAsText && context.href && label
-          ? `[${label}](${escapePreMarkerText(context.href)})`
+          ? `[${escapeMarkdownLinkLabel(label)}](${escapeMarkdownLinkDestination(context.href)})`
           : label || escapePreMarkerText(context.href || ""),
       );
       return;
