@@ -22,6 +22,10 @@ import {
 } from "../../system-agent/delegated-change-policy.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES } from "../../system-agent/operator-approval.js";
+import {
+  getSystemAgentTemplateGateway,
+  withSystemAgentTemplateGateway,
+} from "../../system-agent/template-gateway.js";
 import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
@@ -126,6 +130,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     turnSourceThreadId?: string | number;
   };
 }): Promise<DelegatedProposalResolver> {
+  const templateGateway = getSystemAgentTemplateGateway();
   const callerIdentity = getGatewayToolCallerIdentity();
   const approvalAuthority =
     callerIdentity?.approvalAuthority ??
@@ -209,16 +214,18 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         if (decision && decision !== "deny") {
           assertLiveApprovalAuthority();
         }
-        return await params.session.engine.resolveOperatorApproval(
-          decision,
-          proposal.hash,
-          () => {
-            assertLiveApprovalAuthority();
-            if (automatic) {
-              callerIdentity!.assertAutoApproveChangesCurrent!();
-            }
-          },
-          terminalStatus,
+        return await withSystemAgentTemplateGateway(templateGateway, () =>
+          params.session.engine.resolveOperatorApproval(
+            decision,
+            proposal.hash,
+            () => {
+              assertLiveApprovalAuthority();
+              if (automatic) {
+                callerIdentity!.assertAutoApproveChangesCurrent!();
+              }
+            },
+            terminalStatus,
+          ),
         );
       };
       const resolveCorrection = async (
@@ -282,7 +289,8 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (!manager) {
         throw new Error("OpenClaw approval registry unavailable");
       }
-      const operationDescription = describeSystemAgentPersistentOperation(proposal.operation);
+      const operationDescription =
+        proposal.description ?? describeSystemAgentPersistentOperation(proposal.operation);
       const description = approvalReason
         ? `${operationDescription}\n\n${approvalReason}`
         : operationDescription;

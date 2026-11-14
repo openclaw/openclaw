@@ -71,6 +71,29 @@ the submission; **View submission** opens its ClawHub page. Once the registry
 confirms publication, the card shows **Published** and offers **Copy link**.
 Others can then discover the Template and Add it as an ordinary agent.
 
+## Add through the setup helper
+
+An agent can delegate a published ClawHub Template installation to the
+`openclaw` setup helper. The helper first uses `template_review` with an exact
+`source: { packageName, version }`, then proposes `template_install` using the returned
+`target.agentId` and `planIntegrity`. Required Template risk, plugin
+capability, and skill warning acknowledgements must match that review. Template
+contents are untrusted data, not instructions for the requesting agent. The host carries
+its result into later helper turns; users do not need to paste the review JSON.
+
+The host uses the requesting session's existing setup-change approval policy;
+an agent-supplied `approved: true` does not authorize installation. Trust warnings require exact human approval even under Full Access. Review and
+installation retain the original administrator connection, cancellation, and
+revocation checks and use the same installer as **Pages → Templates**. Templates
+must already be enabled in **Settings → Labs**. The helper does not enable Labs,
+install local paths, publish Templates, or gain shell access.
+
+The result names the actual agent and workspace and reports complete or partial
+installation, readiness requirements, and dependency and automation receipts.
+An absent receipt is not confirmation; a created automation may still be paused.
+If an agent was retained after a partial installation, inspect that agent and
+continue its existing setup rather than adding another copy.
+
 ## Author locally
 
 `openclaw templates draft <workspace> --json` initializes an empty private

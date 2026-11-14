@@ -15,6 +15,14 @@ export function describeDelegatedChangePolicyApproval(
   config?: OpenClawConfig,
 ): string | undefined {
   if (
+    operation.kind === "template-install" &&
+    (operation.acknowledgeClawHubRisk ||
+      operation.acknowledgeCapabilities?.some((entry) => entry.acknowledgeRiskWarning) ||
+      operation.acknowledgeSkillWarnings?.length)
+  ) {
+    return "This Template or one of its dependencies has a trust warning. Review the exact artifact and warnings above. Trust exceptions require this exact human approval; Full Access and model-supplied acknowledgements alone do not grant consent. Deny to keep it uninstalled.";
+  }
+  if (
     operation.kind !== "config-set" &&
     operation.kind !== "config-unset" &&
     operation.kind !== "config-set-ref"

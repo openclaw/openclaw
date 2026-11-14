@@ -1,11 +1,24 @@
+import type {
+  TemplatesAddApplyParams,
+  TemplatesAddPlanParams,
+} from "../../packages/gateway-protocol/src/schema/templates.js";
 // Leaf contract for the parsed OpenClaw operation shape. Uses only type imports so
 // gateway server types can reference it without pulling the system-agent
 // runtime graph (operations-parse -> overview -> config -> gateway) into a
 // type-only import cycle.
 import type { AgentRoleId } from "../agents/agent-roles.js";
 
+export type SystemAgentTemplateOperation =
+  | ({ kind: "template-review" } & TemplatesAddPlanParams)
+  | ({
+      kind: "template-install";
+      agentId: string;
+      planIntegrity: string;
+    } & TemplatesAddApplyParams);
+
 /** Parsed OpenClaw operation before approval/execution. */
 export type SystemAgentOperation =
+  | SystemAgentTemplateOperation
   | { kind: "none"; message: string }
   | { kind: "overview" }
   | { kind: "doctor" }
@@ -54,6 +67,13 @@ export type SystemAgentOperation =
     }
   | { kind: "create-team"; coordinatorId?: string; prefix?: string; workspaceRoot?: string }
   | { kind: "set-default-model"; model: string; agentId?: string };
+
+export type SystemAgentOperatorProposal = {
+  operation: SystemAgentOperation;
+  hash: string;
+  /** Host-authored exact review; presentation only, never authority. */
+  description?: string;
+};
 
 /** Interactive actions owned by the host chat, never by delegated model turns. */
 export type SystemAgentNavigationOperation =

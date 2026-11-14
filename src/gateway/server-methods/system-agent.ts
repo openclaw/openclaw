@@ -69,6 +69,7 @@ import {
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
 import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
+import { withSystemAgentTemplateRequests } from "./system-agent-templates.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
@@ -350,7 +351,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       }
     },
   ),
-  "openclaw.chat": async (options) => {
+  "openclaw.chat": withSystemAgentTemplateRequests(async (options) => {
     const { params: rawParams, respond, client, context } = options;
     const reject = (error: ReturnType<typeof errorShape>) => respond(false, undefined, error);
     const authority = readGatewayRequestMutationAuthority(options);
@@ -675,5 +676,5 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       assertCurrent();
       respond(true, buildSystemAgentChatResult({ sessionId: params.sessionId, reply }), undefined);
     }
-  },
+  }),
 };
