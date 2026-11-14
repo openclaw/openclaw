@@ -201,7 +201,7 @@ async function handleRequest(
       : {};
   }
   if (request.callback_id === "Stop" && input.hook_event_name === "Stop") {
-    return relayNativeStop(turn, input, signal.aborted);
+    return turn && !signal.aborted ? relayNativeStop(turn, input) : {};
   }
   if (request.callback_id === "PreToolUse" && input.hook_event_name === "PreToolUse") {
     if (

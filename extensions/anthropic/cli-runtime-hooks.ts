@@ -35,12 +35,11 @@ export function privateInputHolds(turn: {
 
 /** Answers a native Stop hook with the run's before_agent_finalize decision. */
 export async function relayNativeStop(
-  turn: { context: ClaudeCliFinalizeContext; finalizeRevisions: number } | undefined,
+  turn: { context: ClaudeCliFinalizeContext; finalizeRevisions: number },
   input: Record<string, unknown>,
-  aborted: boolean,
 ): Promise<{ decision?: "block"; reason?: string }> {
-  const finalize = turn?.context.runBeforeAgentFinalize;
-  if (!turn || aborted || !finalize || turn.finalizeRevisions >= MAX_FINALIZE_REVISIONS) {
+  const finalize = turn.context.runBeforeAgentFinalize;
+  if (!finalize || turn.finalizeRevisions >= MAX_FINALIZE_REVISIONS) {
     return {};
   }
   const decision = await finalize({
