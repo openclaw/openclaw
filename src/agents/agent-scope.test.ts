@@ -165,6 +165,29 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("keeps a request-supplied ladder when the run pins a model", () => {
+    const cfg = agentConfig({
+      defaults: {
+        model: modelConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]),
+      },
+      entries: { main: {} },
+    });
+    const selection = {
+      cfg,
+      agentId: "main",
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user" as const,
+      selectedModel: { provider: "minimax-portal", model: "MiniMax-M3" },
+      modelFallbacksOverride: ["anthropic/claude-sonnet-4-6"],
+    };
+    expect(resolveModelFallbackAvailability(selection)).toEqual({
+      kind: "active",
+      models: ["anthropic/claude-sonnet-4-6"],
+      source: "explicit",
+    });
+    expect(resolveEffectiveModelFallbacks(selection)).toEqual(["anthropic/claude-sonnet-4-6"]);
+  });
+
   describe("modelFallbackOverrideFromAvailability", () => {
     const projectionRows: Array<[string, ModelFallbackAvailability]> = [
       [

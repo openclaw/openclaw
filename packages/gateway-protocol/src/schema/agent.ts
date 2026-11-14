@@ -286,6 +286,12 @@ export const AgentParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   provider: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  /**
+   * Explicit model-fallback ladder for this run, as provider/model refs. Pinning a model
+   * suppresses the configured ladder; a caller that wants the ladder to survive the pin
+   * sends it here.
+   */
+  fallbacks: Type.Optional(Type.Array(NonEmptyString, { maxItems: 16 })),
   to: Type.Optional(Type.String()),
   replyTo: Type.Optional(Type.String()),
   sessionId: Type.Optional(Type.String()),
