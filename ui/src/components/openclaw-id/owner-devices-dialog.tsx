@@ -81,9 +81,12 @@ function DeviceRow(props: {
       ...new Intl.Segmenter(getLocale(), { granularity: "sentence" }).segment(message),
     ];
     const recoveryStart = sentences.at(-1)?.index ?? 0;
+    const node = props.device.nodePeerKey
+      ? [t("openclawId.revokeNode", { device: props.device.label })]
+      : [];
     return recoveryStart
-      ? [message.slice(0, recoveryStart), message.slice(recoveryStart)]
-      : [message];
+      ? [message.slice(0, recoveryStart), ...node, message.slice(recoveryStart)]
+      : [message, ...node];
   });
   return (
     <div
@@ -115,6 +118,9 @@ function DeviceRow(props: {
               : t("openclawId.approvedByRemoved")}
         </div>
       </div>
+      <Show when={props.device.nodePeerKey}>
+        <span class="chip">{t("openclawId.runsTools")}</span>
+      </Show>
       <Show when={props.isThisBrowser}>
         <span class="chip">{t("openclawId.thisBrowser")}</span>
       </Show>

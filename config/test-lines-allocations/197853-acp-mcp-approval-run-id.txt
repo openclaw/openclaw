@@ -1,0 +1,3 @@
+# Regression proving an ACP exec approval from an MCP tool call reaches its originating turn by run ID
+# when Claude CLI and MCP tool call IDs differ (#197829). Exact net test growth.
+27

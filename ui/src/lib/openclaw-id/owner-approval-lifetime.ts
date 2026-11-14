@@ -18,6 +18,7 @@ export function ownerApprovalFor(client: GatewayBrowserClient): OwnerApproval | 
 export function bindOwnerApproval(
   gateway: ApplicationGateway,
   onRequest: (client: GatewayBrowserClient) => void,
+  onKitUsed: (client: GatewayBrowserClient, device: string | undefined) => void,
 ) {
   let client: GatewayBrowserClient | null = null;
   let account = openClawIdAccount();
@@ -52,7 +53,11 @@ export function bindOwnerApproval(
       if (!(await thisOwnerDevice(link)) || disposed || epoch !== generation) {
         return;
       }
-      const owner = createOwnerApproval(next, () => onRequest(next));
+      const owner = createOwnerApproval(
+        next,
+        () => onRequest(next),
+        (device) => onKitUsed(next, device),
+      );
       owners.set(next, owner);
       owner.start();
     })().catch(() => {

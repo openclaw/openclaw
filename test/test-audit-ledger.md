@@ -684,6 +684,134 @@ instrumentation was restored byte for byte. Independent preservation review
 found no coverage loss. Focused checks, full local review and hosted outcomes
 are tracked in [PR #198154](https://github.com/openclaw/openclaw/pull/198154).
 
+### Binary discovery oracle errors
+
+At `da0e0ba8cae139938cba66ff96e1f794c48acf12`, two binary-discovery tests
+interpret every `which` error as a missing executable. The repair preserves
+real resolver parity while accepting only the expected exit status 1 without a
+signal. Fixed fixture outcomes are asserted independently, so two broken
+lookups cannot agree on a false negative. All 11 declarations and 19 expanded
+cases remain; test code grows by four lines, with no production or support
+changes.
+
+Normal baseline and repaired runs pass all 19 cases. Replacing negative lookup
+results with real child-process launch errors, exit status 2 or signal
+termination leaves the original green; each repaired control fails the two
+affected cases. A paired false-negative mutation of `which` and `detectBinary`
+also passes the original but fails both repaired positive controls. Temporary
+test and production instrumentation was restored byte for byte. Independent
+preservation review found no lost coverage. Focused checks, full local review
+and hosted outcomes are tracked in
+[PR #198168](https://github.com/openclaw/openclaw/pull/198168).
+
+### Guarded fetch redirect caller headers
+
+At `91046f7bbbb8b064491ee2ecbfd782cb12b0124c`, the cross-origin header case
+only supplies a symbol-bearing dictionary. Header normalization copies that
+representation before redirect handling, so the case misses mutation of an
+ordinary caller-owned dictionary. The repair adds the plain representation to
+the same declaration and checks the original string fields after the redirect.
+It retains the symbol stripping and exact safe-header expectations. All 28
+owner declarations remain; expanded cases increase from 49 to 50. Test code
+grows by nine lines; no production or shared support code changes.
+
+The baseline owner and header-normalizer suites pass all 55 cases. They also
+pass all 55 when the redirect filter temporarily removes unsafe fields from
+its input in place. The repair rejects that same mutation in the new plain
+row, with the other 55 cases passing. Temporary changes are restored byte for
+byte. The clean candidate passes all 56 cases. Targeted checks and full review
+are tracked in [PR #198181](https://github.com/openclaw/openclaw/pull/198181).
+
+The other 27 guarded-fetch declarations retain their policy, redirect,
+transport, deadline and lifecycle contracts. Independent source review retains
+all ten declarations (13 expanded cases) in `ssrf.dispatcher.test.ts` and
+`fetch-guard.configured-origin-linklocal.test.ts`: their negative inputs reach
+the intended guard. The separate Ollama transport integration supplies the
+positive provider-owned link-local exemption proof. These additional retention
+decisions are source-only; no runtime result or removal is claimed for them.
+
+### Runtime FormData payload fidelity
+
+At `5dfccbb92b2ab016c8c2082968f0b87798dc13bb`, the runtime FormData case checks
+the filename but not file bytes or MIME type. It now checks the dispatched
+Blob's exact bytes and MIME type while retaining its filename, model-field and
+stale-header assertions. All seven declarations and ten expanded cases across
+runtime-fetch, proxy-fetch and the FormData helper remain. Test code grows by
+seven lines; production and shared support code do not change.
+
+The baseline and clean candidate pass all ten cases. Empty-file and explicit
+generic-MIME mutations both pass the baseline but fail the repaired case at
+the corresponding assertion, with the other nine cases passing. A first
+rewrapping-only MIME control stayed green and was not counted as proof; the
+explicit control substitutes `application/octet-stream` while preserving bytes.
+All temporary production and test changes were restored byte for byte.
+The precise scanner mistakes the bounded fixture Blob read for an untrusted
+HTTP response read; a rule-specific exception documents that false positive.
+Focused checks, independent preservation review, full local review and hosted
+outcomes are tracked in [PR #198305](https://github.com/openclaw/openclaw/pull/198305).
+
+The adjacent SSRF, dispatcher-pool, guarded-body-stream and hostname suites
+retain 24 declarations and 48 expanded cases. They protect policy
+and DNS boundaries, pool capacity and lifetime, stream cleanup and metadata,
+and hostname normalization. The request-body,
+authority and release suites retain another ten declarations and 21 expanded
+cases covering wire payloads, caller authority and release ownership. These
+retention decisions are source-only; no runtime pass or removal is claimed.
+
+### Provider WebSocket proxy DNS pin proof
+
+At `cd61ce32dd28e92003b213f8d2014608504515fb`, the provider WebSocket proxy
+case used localhost and accepted any function-valued socket lookup. Replacing
+the prepared proxy lookup with Node's default DNS lookup still passed all 21
+WebSocket and Node proxy cases. The repaired fixture uses `proxy.invalid`, pinned
+to loopback through the real SSRF resolver, so the existing successful CONNECT
+and WebSocket assertions require the prepared pin. The same mutation now fails
+only the proxy transport row with `ENOTFOUND proxy.invalid`; restoring production
+passes all 21 cases. Production was restored byte for byte. No cases were added
+or removed; the test file shrinks by one line and production is unchanged.
+
+Source review covers 35 declarations and 59 expanded cases across proxy-env,
+node-proxy-agent, provider-websocket, undici-runtime and undici-global-dispatcher.
+The environment, admission, deadline, TLS and lifecycle contracts remain useful.
+Separate follow-ups are the WSL temporary-family dispatch ordering assertion and
+the supplied-env SOCKS CA fixture's setup/cleanup ownership. These are source-only
+findings; no runtime result or production defect is claimed for those follow-ups.
+
+### WSL managed-dispatch ordering proof
+
+At `82e8cded772dcfc01c4f470b58f123ec7cb22266`, the managed-dispatcher WSL
+case checked the disable/restore setter sequence and eventual dispatch, but did
+not order dispatch between those calls. Both moving dispatch before policy
+activation and moving it after restoration still passed all 19 global-dispatcher
+and runtime cases. The repaired case spies on the existing managed dispatcher
+and checks that its call falls between the two policy writes. Each mutation now
+fails only the WSL case (one failed, 18 passed); restored production passes all
+19 cases in 2.64 seconds. Production was restored byte for byte.
+
+All 17 declarations and 19 expanded cases remain. The repair adds five test
+lines, no cases or production code. Timeout updates, helper/lifecycle binding,
+bootstrap/reset ownership, CA rotation and lazy runtime-loading proof remain in
+their existing cases. This proves the synchronous dispatch ordering under the
+WSL policy fixture; it does not claim live Windows or WSL network coverage.
+
+### Managed proxy CA fixture cleanup
+
+At `9cb3c14855e5a5216148a1c125f9240c5da1f6de`, the supplied-env TLS proxy
+case leaked its CA directory when setup or dispatcher teardown failed. The
+existing auto-cleanup tracker now owns the directory, and the existing dispatcher
+helper owns shutdown. All 17 declarations / 27 cases remain, including the real
+HTTP/SOCKS/TLS payload and routing assertions. Independent preservation review
+found no lost contracts.
+
+The baseline passed 27/27. Temporary probes injected a real certificate-write
+failure and a failure after dispatcher shutdown. Both left the directory present
+at an `afterAll` observation, before runner namespace cleanup. With the repair,
+both directories were absent at the same observation and both original errors
+still failed the test. The probes were removed and the file restored byte for
+byte; the clean candidate passed 27/27. Production changed by 0 lines; the test
+changed by +8/-9 lines. The warm candidate run took 2.92 seconds; the cold baseline
+took 17.87 seconds, so these timings do not establish a speed improvement.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
@@ -691,7 +819,6 @@ are tracked in [PR #198154](https://github.com/openclaw/openclaw/pull/198154).
 - Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
-- `detect-binary.test.ts` retains all 11 declarations (19 cases). Its two `which` oracle catch-all blocks remain a source-only repair candidate: distinguish an expected not-found result from resolver execution failures before claiming parity.
 - Diagnostics OTel: the NodeSDK replay removal remains qualified above; content capture completion proof is recorded separately above.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.

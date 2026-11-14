@@ -24,7 +24,6 @@ import {
   chatItemGroups,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
@@ -56,7 +55,6 @@ type AgentRunFrameOptions = {
   partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
   onToggleWork: (key: string, expanded: boolean) => void;
-  turnRecap?: TurnRecap;
 };
 type FrameProps = { frame: AgentRunFrameRenderItem; options: AgentRunFrameOptions };
 type BodyPart =
@@ -291,6 +289,10 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
+  const shellOptions = createMemo(() => props.options.renderGroupOptions(state().shell));
+  // Only the completed frame's action owner moves its summary into the outer footer.
+  const footerReactionMessageKey = () =>
+    shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const frameContent = [
     <FrameBody
@@ -355,7 +357,11 @@ function RunFrame(props: FrameProps) {
                   <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
                     <For each={work().groups} keyed={(group) => group.key}>
                       {(group) => (
-                        <MessageGroupContent group={group()} options={groupOptions(group())} />
+                        <MessageGroupContent
+                          group={group()}
+                          options={groupOptions(group())}
+                          footerReactionMessageKey={footerReactionMessageKey()}
+                        />
                       )}
                     </For>
                   </Show>
@@ -379,7 +385,13 @@ function RunFrame(props: FrameProps) {
               }}
             </Match>
             <Match when={messageGroup()}>
-              {(group) => <MessageGroupContent group={group()} options={groupOptions(group())} />}
+              {(group) => (
+                <MessageGroupContent
+                  group={group()}
+                  options={groupOptions(group())}
+                  footerReactionMessageKey={footerReactionMessageKey()}
+                />
+              )}
             </Match>
           </Switch>
         );
@@ -403,14 +415,12 @@ function RunFrame(props: FrameProps) {
     <MessageGroup
       group={state().shell}
       options={{
-        ...props.options.renderGroupOptions(state().shell),
+        ...shellOptions(),
         frameContent,
         frameReplyLine: state().frameReplyLine,
         frameActionOwner: state().actionOwner,
         frameHeader: props.frame.fragment?.first,
         frameFooter: props.frame.fragment?.last,
-        turnRecap:
-          !props.frame.fragment || props.frame.fragment.last ? props.options.turnRecap : undefined,
       }}
     />
   );

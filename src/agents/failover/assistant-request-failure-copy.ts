@@ -81,6 +81,8 @@ const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> =
 export const API_KEY_EXPIRED_ERROR_CODE = "api_key_expired";
 const API_KEY_EXPIRED_USER_TEXT =
   "This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
+const ITEM_CONFLICT_USER_TEXT =
+  "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
 
 const ASSISTANT_REQUEST_FAILURE_COPY = {
   auth: "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
@@ -123,6 +125,9 @@ export function renderAssistantRequestFailureCopy(
   }
   if (facts.code === API_KEY_EXPIRED_ERROR_CODE) {
     return `⚠️ ${API_KEY_EXPIRED_USER_TEXT}`;
+  }
+  if (facts.code === "item_conflict") {
+    return ITEM_CONFLICT_USER_TEXT;
   }
   if (facts.code === "incomplete_tool_call") {
     return "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.";
@@ -223,10 +228,18 @@ export function renderFormatErrorCopy(raw: string, options?: FailureCopyOptions)
 
 /** Share bounded request-limit facts between live failures and persisted chat history. */
 export function renderAssistantFormatFailureCopy(
-  message: { errorMessage?: unknown; errorBody?: unknown; errorType?: unknown },
+  message: {
+    errorMessage?: unknown;
+    errorBody?: unknown;
+    errorType?: unknown;
+    errorCode?: unknown;
+  },
   reason?: FailoverReason | null,
   options?: FailureCopyOptions,
 ): string | undefined {
+  if (message.errorCode === "item_conflict" || message.errorMessage === ITEM_CONFLICT_USER_TEXT) {
+    return ITEM_CONFLICT_USER_TEXT;
+  }
   for (const [isBody, raw] of [
     [true, message.errorBody],
     [false, message.errorMessage],
@@ -235,6 +248,14 @@ export function renderAssistantFormatFailureCopy(
       continue;
     }
     const info = parseApiErrorInfo(raw);
+    if (
+      info?.code === "item_conflict" ||
+      /^(?:LLM request rejected: )?An input item conflicts with an existing record\.$/u.test(
+        info?.message ?? raw.trim(),
+      )
+    ) {
+      return ITEM_CONFLICT_USER_TEXT;
+    }
     if (isBody && !info?.message) {
       continue;
     }

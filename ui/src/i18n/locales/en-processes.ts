@@ -19,7 +19,6 @@ const catalog = {
       noOutputTitle: "No output yet",
       noRunning: "No running processes",
       stop: "Stop {name}",
-      stopProcess: "Stop process",
       stopping: "Stopping…",
       stopNotRequested: "Couldn’t stop the process. Refresh to check its current state.",
       expired: "This process is no longer retained. Return to the process list.",

@@ -20,6 +20,12 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 | `tunnel`         | an authenticated device over the iroh tunnel                                                                             |
 | `mailbox`        | through Discovery                                                                                                        |
 
+The Gateway also runs the link ceremony (`linkClaw` and its first owner device) on
+`local_operator` for an administrator whose direct connection carries a verified personal
+identity (Tailscale, a trusted proxy, an enterprise principal), never for a shared token or
+password, a member or the tunnel. Every other `local_operator` write, re-bind and owner reset
+stay on direct loopback.
+
 ### Write rules
 
 | Write                                         | Function                                   | Allowed channels       | Notes                                                                                               |
@@ -72,8 +78,8 @@ Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machin
 the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
 
 Owner device certificates have **no expiry unless the person approving the device enters
-one** (`expires_at: null`). A device stops being an owner when it is removed from the claw's
-allowlist.
+one** (`expires_at: null`). A device stops being an owner when its certificate expires or
+it is removed from the claw's allowlist.
 
 `ownerDeviceCertBody` is the certificate builder approvers use: `expires_at` defaults to
 null, and an explicit expiry must be after the issue time. Approval UIs (SAS approval, owner
@@ -286,10 +292,44 @@ polling/reconnect. This is routing configuration, not authority: the link's claw
 and root fingerprint must still verify the descriptor, binding and snapshot before dialing.
 Never send the invite secret or proof key to the configured Discovery origin.
 
+### Owner device node
+
+A native app (the macOS app first) signs in with OpenClaw ID and becomes an **owner device**, not
+a node-invite node. Its node is an implementation detail bound to that same approval:
+
+- The app holds D and an owner peer key W in its own process, and a separate node key W_node
+  that is the only key its node worker sees. W_node never holds human authority.
+- **SAS approval.** `start` gains an optional `node { peer_key: W_node, description }`. The
+  commitment and transcript cover it, so the six compared digits bind D, W and W_node and the
+  surface the approver shows ("will also be able to run tools"). A browser's `start` has no
+  `node` and commits exactly as before. Discovery relays `start` unparsed.
+- **Kit enrollment.** The app derives R in-process and signs the cert and the change with the
+  same `node`; it arrives over the mailbox as a `root_statement` (owners get `kit_used`).
+- `add_owner_device { cert, node }` lists the device, then binds the node:
+  `NodeRecord { owner_device: fp(D), added_by, description, … }` with no `invite_id`. The key
+  must not be a human key (R, any D, any owner/member peer key, including the new device's) or
+  another node's key; a device has at most one node, and binding a new key replaces the old one.
+  A change without `node` leaves a listed device's node as it is.
+- The node is listed in `node_peer_keys`, so tunnel and relay admission work unchanged, and its
+  auto-pairing is bounded by the approved `description`, as for invited nodes.
+- **Stop using for tools:** `remove_node { peer_key }` removes only the node; the device stays.
+  The device (or anyone who may re-add it) turns it back on with a re-add carrying `node`.
+- **Removing the device removes its node:** a Revocation of the device (directly or through the
+  device that approved it) and an inactivity drop of the device remove the bound node with the
+  usual node-removal events. A node from an invite is never bound to its approver.
+- **An explicit expiry covers both keys:** when the device certificate expires, its human and
+  bound node keys lose admission together. The Gateway closes their sessions, retires ID-derived
+  node pairings and omits the node from snapshots and active listings. Independently approved
+  descendant devices and invite-enrolled nodes keep their own lifetimes. Renew before expiry
+  to retain the node's existing pairing; after expiry cleanup, certificate renewal alone does
+  not restore the consumed automatic pairing. Pair the node explicitly again, or remove its
+  listing and enroll it again.
+
 ### Node authority and lifecycle
 
 `AuthorityState.nodes` is keyed by W. `NodeRecord` holds `label`, `listed_seq`, `added_by`
-(root or approving owner fingerprint), `last_seen`, `invite_id` and `description`. `node_invites` is a
+(root or approving owner fingerprint), `last_seen`, `description`, and either `invite_id` (from a
+node invite) or `owner_device` (bound to an owner device, above). `node_invites` is a
 separate map of `NodeInviteRecord`. Both invite maps share an ID namespace and a total
 `MAX_INVITES` cap (100) and spent-record cleanup. Node links have the stricter one-hour
 registration limit above; the member-invite lifetime is unchanged.

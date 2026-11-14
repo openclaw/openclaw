@@ -118,7 +118,7 @@ export type OpenClawIdLinkResult =
   | { ok: true }
   | {
       ok: false;
-      code: "owner_profile" | "profile_changed" | "linked_elsewhere";
+      code: "owner_profile" | "profile_changed" | "linked_elsewhere" | "profile_linked";
     };
 
 /**
@@ -154,6 +154,18 @@ export function linkOpenClawIdUserProfile(
         return requireResolvedUserProfileMetadataById(db, holder.profile_id).id === target.id
           ? { ok: true }
           : { ok: false, code: "linked_elsewhere" };
+      }
+      // A profile takes a second account only through a merge, never through a link.
+      const held = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select("subject")
+          .where("provider", "=", openClawIdProfileProvider)
+          .where("profile_id", "=", target.id),
+      );
+      if (held) {
+        return { ok: false, code: "profile_linked" };
       }
       options.mutation?.before(db, target.id);
       executeSqliteQuerySync(

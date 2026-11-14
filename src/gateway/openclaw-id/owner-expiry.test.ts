@@ -10,6 +10,7 @@ import {
   OWNER_CAPABILITIES,
   randomBytes,
   signStatement,
+  type OwnerDeviceNode,
   type StatementSigner,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { createOpenClawIdAuthority } from "./authority.js";
@@ -72,6 +73,7 @@ async function enroll(
   claw: LinkedClaw,
   issuer: { signer: StatementSigner },
   window: { issued_at?: number; expires_at: number | null },
+  node?: OwnerDeviceNode,
 ) {
   const added = await ownerCert(issuer.signer, window);
   const seq = ((await claw.authority.load())?.authority?.seq ?? 0) + 1;
@@ -80,7 +82,7 @@ async function enroll(
     {
       claw_id: claw.clawId,
       seq,
-      target: { op: "add_owner_device", cert: added.cert },
+      target: { op: "add_owner_device", cert: added.cert, ...(node ? { node } : {}) },
       issued_at: nowSeconds(),
     },
     issuer.signer,
@@ -152,12 +154,13 @@ describe("owner certificate expiry at the Gateway", () => {
     expect(await claw.authority.resolvePeer(added.peerKey)).toBeUndefined();
   });
 
-  it("closes an already-connected owner device's sessions when its certificate expires", async () => {
+  it("expires an owner device and its bound node, including connections, pairings and listings", async () => {
     const claw = await linkedClaw();
     const effects: OpenClawIdEffects = {
       captureConnections: vi.fn((keys: readonly string[]) => keys.map((key) => `conn-${key}`)),
       cancelRuns: vi.fn(async () => 0),
       closeConnections: vi.fn(),
+      removeNodePairings: vi.fn(async () => {}),
       revokeDeviceTokens: vi.fn(async (tokens) => [...tokens]),
     };
     const service = createOpenClawIdService({
@@ -172,25 +175,54 @@ describe("owner certificate expiry at the Gateway", () => {
     const peopleChanged = vi.fn();
     const stopPeopleChanges = service.onPeopleChanged(peopleChanged);
     try {
+      const nodePeerKey = formatIrohEndpointKey(randomBytes(32));
       const d2 = await enroll(
         claw,
         { signer: claw.device },
         {
           expires_at: nowSeconds() + 60,
         },
+        {
+          peer_key: nodePeerKey,
+          label: "Laptop node",
+          description: {
+            display_name: "Laptop node",
+            platform: "macos",
+            commands: ["system.run"],
+            caps: ["system"],
+          },
+        },
       );
       expect(await service.submitStatement("tunnel", d2.change)).toMatchObject({ ok: true });
-      expect(runtime.push).toHaveBeenLastCalledWith(2, [claw.w1, d2.peerKey].toSorted());
+      const principal = (await claw.authority.resolvePeer(nodePeerKey))!;
+      const listing = { peerKey: nodePeerKey, authority: principal.authority! };
+      expect(principal.kind).toBe("node");
+      expect(claw.authority.isCurrentNodeListing(listing)).toBe(true);
+      await claw.authority.bindToken("laptop-node", "node", nodePeerKey);
+      expect(runtime.push).toHaveBeenLastCalledWith(
+        2,
+        [claw.w1, d2.peerKey, nodePeerKey].toSorted(),
+      );
       expect(effects.closeConnections).not.toHaveBeenCalled();
       peopleChanged.mockClear();
 
       await vi.advanceTimersByTimeAsync(59_000);
       expect(effects.closeConnections).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1_000);
-      await settle(() => vi.mocked(effects.closeConnections).mock.calls.length > 0);
+      await settle(() => vi.mocked(effects.removeNodePairings!).mock.calls.length > 0);
 
-      expect(effects.captureConnections).toHaveBeenCalledWith([d2.peerKey]);
-      expect(effects.closeConnections).toHaveBeenCalledWith([`conn-${d2.peerKey}`]);
+      const expired = [d2.peerKey, nodePeerKey].toSorted();
+      expect(effects.captureConnections).toHaveBeenCalledWith(expired);
+      expect(effects.closeConnections).toHaveBeenCalledWith(expired.map((key) => `conn-${key}`));
+      expect(effects.removeNodePairings).toHaveBeenCalledWith(expired);
+      expect(effects.revokeDeviceTokens).toHaveBeenCalledWith([
+        { deviceId: "laptop-node", role: "node", peerKey: nodePeerKey },
+      ]);
+      expect(await claw.authority.resolvePeer(nodePeerKey)).toBeUndefined();
+      expect(claw.authority.isCurrentNodeListing(listing)).toBe(false);
+      expect((await claw.authority.ownerView(claw.w1))?.nodes).toEqual([]);
+      expect((await service.linkStatus()).nodes).toEqual([]);
+      expect(await createOpenClawIdAuthority(claw.store).resolvePeer(nodePeerKey)).toBeUndefined();
       expect(runtime.push).toHaveBeenLastCalledWith(2, [claw.w1]);
       expect(peopleChanged).toHaveBeenCalledOnce();
     } finally {

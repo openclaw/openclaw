@@ -764,6 +764,78 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, live.id)?.removedAt).toBeUndefined();
   });
 
+  it.each(["empty", "files", "symlink"] as const)(
+    "finishes empty retired checkouts and remembers %s retention holds across restart",
+    async (leftover) => {
+      const created = await materializeDownstreamFixture("retention-leftover");
+      const removed = await service.remove({ id: created.id, reason: "retention" });
+      // Older retired records can still own their branch after checkout removal.
+      await git(repo, "update-ref", `refs/heads/${created.branch}`, "HEAD");
+      await updateRegistryWorktree(env, created.id, {
+        removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+      });
+      const external = path.join(root, "external");
+      await fs.mkdir(external);
+      await fs.writeFile(path.join(external, "keep.txt"), "unowned data");
+      if (leftover === "symlink") {
+        await fs.symlink(external, created.path, "dir");
+      } else {
+        await fs.mkdir(created.path, { recursive: true });
+        if (leftover === "files") {
+          await fs.writeFile(path.join(created.path, "keep.txt"), "unrecovered data");
+        }
+      }
+      const first = await service.gc();
+      if (leftover !== "empty") {
+        expect(first).toMatchObject({
+          snapshotsPruned: 0,
+          failedCount: 0,
+          retiredCheckoutPaths: [created.path],
+        });
+        expect(getRegistryWorktree(env, created.id)?.gcProtection).toContain(
+          "recovery and branch preserved",
+        );
+        expect(await git(repo, "rev-parse", "--verify", removed.snapshotRef!)).toBeTruthy();
+        expect(await git(repo, "rev-parse", "--verify", created.branch)).toBeTruthy();
+        if (leftover === "files") {
+          expect(await fs.readFile(path.join(created.path, "keep.txt"), "utf8")).toBe(
+            "unrecovered data",
+          );
+          await fs.unlink(path.join(created.path, "keep.txt"));
+        } else {
+          await fs.unlink(created.path);
+          await fs.mkdir(created.path);
+        }
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        service = new ManagedWorktreeService({ env });
+        // Even after external repair and restart, only explicit retry clears the hold.
+        expect(await service.gc()).toMatchObject({
+          snapshotsPruned: 0,
+          failedCount: 0,
+          retiredCheckoutPaths: [created.path],
+        });
+        expect((await fs.stat(created.path)).isDirectory()).toBe(true);
+        expect((await service.gc({ retryDeferred: true })).snapshotsPruned).toBe(1);
+      } else {
+        expect(first.snapshotsPruned).toBe(1);
+      }
+      await expect(fs.lstat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+      expect(
+        await git(
+          repo,
+          "for-each-ref",
+          "--format=%(refname)",
+          removed.snapshotRef!,
+          `refs/heads/${created.branch}`,
+        ),
+      ).toBe("");
+      expect(await fs.readFile(path.join(external, "keep.txt"), "utf8")).toBe("unowned data");
+      expect((await service.gc()).snapshotsPruned).toBe(0);
+    },
+  );
+
   it("preserves expired recovery refs when the removal pin is locked", async () => {
     const created = await materializeDownstreamFixture("locked-expiry-pin");
     const removed = await service.remove({ id: created.id, reason: "retention" });
