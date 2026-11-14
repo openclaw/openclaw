@@ -22,8 +22,10 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
       expect(resolved.coalescing.idleMs).toBe(25);
     } else {
       expect(baseChunking.maxChars).toBeLessThan(1800);
+      expect(baseChunking.hardMaxChars).toBe(4096);
     }
     expect(resolved.chunking.maxChars).toBe(maxChunkChars);
+    expect(resolved.chunking.hardMaxChars).toBe(maxChunkChars);
     expect(resolved.chunking.minChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
     expect(resolved.coalescing.maxChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
     expect(resolved.coalescing.minChars).toBeLessThanOrEqual(resolved.coalescing.maxChars);
@@ -36,7 +38,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
       chunking,
       coalesceIdleMs: 0,
     });
-    expect(resolved.chunking).toEqual(chunking);
+    expect(resolved.chunking).toEqual({ ...chunking, hardMaxChars: 20 });
     expect(resolved.coalescing).toMatchObject({ maxChars: 20, idleMs: 0 });
   });
 
@@ -80,5 +82,23 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
         accountId: "personal",
       }).coalescing,
     ).toMatchObject({ minChars: 10, maxChars: 40, idleMs: 2 });
+  });
+
+  it("keeps an explicitly configured maxChars as the hard chunk bound", () => {
+    const cfg = {
+      channels: { discord: { textChunkLimit: 4096 } },
+      agents: {
+        defaults: {
+          blockStreamingChunk: {
+            minChars: 20,
+            maxChars: 64,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveEffectiveBlockStreamingConfig({ cfg, provider: "discord" });
+
+    expect(resolved.chunking).toMatchObject({ minChars: 20, maxChars: 64, hardMaxChars: 64 });
   });
 });

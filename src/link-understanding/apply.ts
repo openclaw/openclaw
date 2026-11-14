@@ -84,7 +84,7 @@ export async function applyLinkUnderstanding(params: {
   // Display-only Markdown citations must not trigger link fetches.
   const chunks: string[] = [];
   let cursor = 0;
-  for (const [start, end] of findMarkdownLinkSourceSpans(message)) {
+  for (const { start, end } of findMarkdownLinkSourceSpans(message)) {
     chunks.push(message.slice(cursor, start), " ");
     cursor = end;
   }

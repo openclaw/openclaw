@@ -7,9 +7,14 @@ type PositionedMarkdownNode = {
 };
 
 /** Returns parser-owned source spans for links, images, and reference definitions. */
-export function findMarkdownLinkSourceSpans(markdown: string): Array<[number, number]> {
-  const spans: Array<[number, number]> = [];
-  const tree: PositionedMarkdownNode = fromMarkdown(markdown);
+export function findMarkdownLinkSourceSpans(
+  markdown: string,
+  options: { html?: boolean } = {},
+): Array<{ start: number; end: number; definition: boolean }> {
+  const spans: Array<{ start: number; end: number; definition: boolean }> = [];
+  const tree: PositionedMarkdownNode = fromMarkdown(markdown, {
+    extensions: options.html === false ? [{ disable: { null: ["htmlFlow", "htmlText"] } }] : [],
+  });
   const pending = [tree];
 
   while (pending.length > 0) {
@@ -21,7 +26,7 @@ export function findMarkdownLinkSourceSpans(markdown: string): Array<[number, nu
       const start = node.position?.start?.offset;
       const end = node.position?.end?.offset;
       if (start !== undefined && end !== undefined) {
-        spans.push([start, end]);
+        spans.push({ start, end, definition: node.type === "definition" });
       }
       // The outer link owns nested image source, so overlapping spans are not useful to callers.
       continue;
@@ -31,5 +36,5 @@ export function findMarkdownLinkSourceSpans(markdown: string): Array<[number, nu
     }
   }
 
-  return spans.toSorted((left, right) => left[0] - right[0]);
+  return spans.toSorted((left, right) => left.start - right.start);
 }
