@@ -307,7 +307,10 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
       }
       const wire = JSON.stringify(
         selected.routeKind === "manifest"
-          ? { body, ...(openRouter ? {} : { pathParams: { model: selected.model!.upstream } }) }
+          ? {
+              body: openRouter ? { ...body, model: selected.model!.id } : body,
+              ...(openRouter ? {} : { pathParams: { model: selected.model!.upstream } }),
+            }
           : body,
       );
       if (Buffer.byteLength(wire) > (openRouter ? 256 * 1024 : JSON_LIMIT)) {

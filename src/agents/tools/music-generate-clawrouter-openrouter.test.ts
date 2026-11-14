@@ -73,9 +73,42 @@ const profiles = [PRO, CLIP].flatMap((model) =>
 );
 
 it.each(profiles)(
-  "runs registered music $model/$routeKind/$format with full output",
+  "runs registered music $model/$routeKind/$format with colliding Google catalog IDs",
   async ({ model, routeKind, format }) => {
     f.inventory = catalog(routeKind);
+    const googleModels = ["google/lyria-3-pro-preview", "google/lyria-3-clip-preview"];
+    f.inventory.providers.push({
+      id: "google-gemini",
+      allowed: true,
+      executable: true,
+      nativeBaseUrl: "/v1/native/google-gemini",
+      routes: [
+        {
+          endpoint: "music_generate",
+          path: "/v1beta/models/${model}:generateContent",
+          methods: ["POST"],
+          requestFormat: "google.music_generate",
+          responseFormat: "google.music",
+        },
+      ],
+      models: googleModels.map((id) => ({
+        id,
+        upstream: id.slice("google/".length),
+        capabilities: ["audio.generate"],
+      })),
+      offers: googleModels.map((modelId) => ({
+        endpoint: "music_generate",
+        modelId,
+        transport: "http",
+        routeKind,
+        route:
+          routeKind === "native"
+            ? "/v1/native/google-gemini/v1beta/models/${model}:generateContent"
+            : "/v1/proxy/google-gemini/music_generate",
+        eligible: true,
+        affordability: "request-dependent",
+      })),
+    });
     const audio = format === "mp3" ? f.mp3 : musicWavFixture();
     f.output = stream(audio);
     const save = vi.spyOn(mediaStore, "saveMediaBuffer");
@@ -98,7 +131,7 @@ it.each(profiles)(
       expect(call.headers.cookie).toBeUndefined();
     }
     const body = {
-      model: model.slice("openrouter/".length),
+      model: routeKind === "manifest" ? model : model.slice("openrouter/".length),
       messages: [
         {
           role: "user",
