@@ -1,0 +1,3 @@
+18
+# Source c021b9d28d8b5768398f2a9d2b3cda21498a4cfe; Only scripts/lib/check-limits.mts limitsAreAdvisory/reportLimitViolations handling of existing OPENCLAW_UPDATE_IN_PROGRESS=1 plus marker propagation tests; omit declaration-budget ratchet and retain fatal correctness checks.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
