@@ -422,6 +422,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           throw new Error("Secret egress proxy requires an admitted agent run instance");
         }
         const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
+          allowUnsafeOverrides: security === "full" && ask === "off",
           execParams: params,
           host,
           sandbox,

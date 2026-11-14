@@ -26,7 +26,8 @@ enum ExecHostExecutor {
             displayCommand: validatedRequest.displayCommand,
             cwd: effectiveCwd,
             envOverrides: request.env,
-            agentId: request.agentId)
+            agentId: request.agentId,
+            hasForwardedApproval: validatedRequest.approvalSource != nil || request.approvalDecision != nil)
         guard !Task.isCancelled else { return self.cancelledResponse() }
         if let reason = context.unavailableReason {
             return self.errorResponse(

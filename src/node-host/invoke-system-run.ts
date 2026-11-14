@@ -8,7 +8,6 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
 import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
 import { createDedupeCache } from "../infra/dedupe.js";
@@ -18,12 +17,10 @@ import {
   createExecApprovalPolicySnapshot,
   hasDurableExecApproval,
   isExecApprovalPolicySnapshotCurrent,
-  maxAsk,
   minSecurity,
   resolveApprovalAuditTrustPath,
   resolveAllowAlwaysPersistenceDecision,
   resolveDurableExecApprovalRequirement,
-  resolveExecApprovalsLocked,
   type ExecApprovalUsageAuthorization,
 } from "../infra/exec-approvals.js";
 import { planExecAuthorization } from "../infra/exec-authorization-plan.js";
@@ -68,8 +65,8 @@ import {
 import { logWarn } from "../logger.js";
 import {
   evaluateSystemRunPolicy,
+  resolveEffectiveSystemRunExecPolicy,
   resolveExecApprovalDecision,
-  resolveNodeExecConfigPolicy,
 } from "./exec-policy.js";
 import type { runCommand } from "./invoke-run-command.js";
 import {
@@ -113,28 +110,6 @@ function warnWritableTrustedDirOnce(message: string): void {
     return;
   }
   logWarn(message);
-}
-
-export async function resolveEffectiveSystemRunExecPolicy(params: {
-  cfg: OpenClawConfig;
-  agentId: string | undefined;
-  requireSocket: boolean;
-}) {
-  const modePolicy = resolveNodeExecConfigPolicy(params);
-  const { agentExec, globalExec } = modePolicy;
-  const approvals = await resolveExecApprovalsLocked(params.agentId, {
-    security: modePolicy.security,
-    ask: modePolicy.ask,
-    requireSocket: params.requireSocket,
-  });
-  return {
-    agentExec,
-    globalExec,
-    approvals,
-    security: minSecurity(modePolicy.security, approvals.agent.security),
-    ask: maxAsk(modePolicy.ask, approvals.agent.ask),
-    autoReview: modePolicy.autoReview,
-  };
 }
 
 type HandleSystemRunInvokeOptions = {
@@ -259,6 +234,19 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   if (forwardedDelayedApproval && !delayedApprovalPolicySnapshot) {
     return invalid("delayed approval requires a prepared policy snapshot");
   }
+  const cfg = (await import("../config/config.js")).getRuntimeConfig();
+  const effectivePolicy = await resolveEffectiveSystemRunExecPolicy({
+    cfg,
+    agentId,
+    requireSocket: opts.preferMacAppExecHost,
+  });
+  // Forwarded approvals may come from a more restrictive Gateway. They must not
+  // inherit full-access helper execution from the node's own policy.
+  const allowUnsafeOverrides =
+    effectivePolicy.security === "full" &&
+    effectivePolicy.ask === "off" &&
+    !explicitApproval &&
+    approvalSource == null;
   const envAssignmentKeys = extractEnvAssignmentKeysFromDispatchWrappers(command.argv);
   const envAssignmentOverrides =
     envAssignmentKeys.length > 0
@@ -266,6 +254,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
       : undefined;
   const envAssignmentDiagnostics = inspectHostExecEnvOverrides({
     overrides: envAssignmentOverrides,
+    allowUnsafeOverrides,
     blockPathOverrides: true,
   });
   // `extractEnvAssignmentKeysFromDispatchWrappers` only emits keys that satisfy
@@ -277,6 +266,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   }
   const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
+    allowUnsafeOverrides,
     blockPathOverrides: true,
   });
   if (
@@ -287,6 +277,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
+    allowUnsafeOverrides,
     shellWrapper: shellWrapperInvocation,
   });
   if (
@@ -297,11 +288,18 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
   }
   const env = withHostExecInheritedEnvOmitted(
     opts.params.executionContext ? ["OPENCLAW_CHANNEL_CONTEXT", SUBAGENT_EXEC_ENV_VAR] : [],
-    () => sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
+    () =>
+      sanitizeHostExecEnv({
+        overrides: envOverrides,
+        blockPathOverrides: true,
+        allowUnsafeOverrides,
+      }),
   );
   const validatedApprovalSource: ExecHostRequest["approvalSource"] = approvalSource ?? undefined;
   const execution = { sessionKey, runId, commandText, suppressNotifyOnExit };
   return {
+    cfg,
+    effectivePolicy,
     argv: command.argv,
     shellPayload: command.shellPayload,
     shellWrapperInvocation,
@@ -320,6 +318,8 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     approvalSource: validatedApprovalSource,
     delayedApprovalPolicySnapshot,
     envOverrides,
+    preservePath:
+      allowUnsafeOverrides && envOverrides !== undefined && Object.hasOwn(envOverrides, "PATH"),
     env: { ...env, ...buildExecRoutingEnv(opts.params.executionContext) },
     cwd,
     timeoutMs: opts.params.timeoutMs ?? undefined,
@@ -332,12 +332,7 @@ async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
 ) {
-  const cfg = (await import("../config/config.js")).getRuntimeConfig();
-  const effectivePolicy = await resolveEffectiveSystemRunExecPolicy({
-    cfg,
-    agentId: parsed.agentId,
-    requireSocket: opts.preferMacAppExecHost,
-  });
+  const { cfg, effectivePolicy } = parsed;
   const { agentExec, globalExec, approvals } = effectivePolicy;
   const currentPolicySnapshot = createExecApprovalPolicySnapshot({
     file: approvals.file,
@@ -852,6 +847,7 @@ async function executeSystemRunPhase(
       phase.timeoutMs,
       opts.signal,
       assertCurrent,
+      phase.preservePath,
     );
     // Some launch adapters translate spawn errors into a RunResult. A revoked
     // authorization still belongs on the denial route, never exec.finished.

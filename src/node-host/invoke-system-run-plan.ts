@@ -59,11 +59,13 @@ export function buildEnvOverrideRejectionMessage(params: {
 }
 
 export function buildSystemRunPrepareCoverageEnv(params: {
+  allowUnsafeOverrides?: boolean;
   argv: string[];
   env?: Record<string, string> | null;
 }): SystemRunPrepareEnv {
   const diagnostics = inspectHostExecEnvOverrides({
     overrides: params.env ?? undefined,
+    allowUnsafeOverrides: params.allowUnsafeOverrides,
     blockPathOverrides: true,
   });
   if (
@@ -77,13 +79,18 @@ export function buildSystemRunPrepareCoverageEnv(params: {
   }
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: params.env ?? undefined,
+    allowUnsafeOverrides: params.allowUnsafeOverrides,
     shellWrapper: isShellWrapperInvocation(params.argv),
   });
   return {
     ok: true,
     // Prepared coverage is durable approval evidence, so keep this in parity
     // with the env passed to `system.run` policy and execution.
-    env: sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
+    env: sanitizeHostExecEnv({
+      overrides: envOverrides,
+      blockPathOverrides: true,
+      allowUnsafeOverrides: params.allowUnsafeOverrides,
+    }),
   };
 }
 

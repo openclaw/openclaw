@@ -204,10 +204,21 @@ it.runIf(process.platform !== "win32")("merges login-shell PATH for host=gateway
   expect(mocks.shellPath).toHaveBeenCalledTimes(1);
 });
 
-it("runs exact no-pager requests with empty rather than executable pager values", async () => {
-  await runGateway({ command: "echo GIT_PAGER PAGER", env: { GIT_PAGER: "cat", PAGER: "cat" } });
-  expect(mocks.spawnInputs[0]?.env).toMatchObject({ GIT_PAGER: "", PAGER: "" });
-});
+it.each([
+  { security: "full", ask: "off", pager: "cat" },
+  { security: "full", ask: "always", pager: "" },
+  { security: "allowlist", ask: "off", pager: "" },
+] as const)(
+  "applies $security/$ask policy to explicit pager values",
+  async ({ security, ask, pager }) => {
+    await createExecTool({ host: "gateway", security, ask }).execute("exec-pager", {
+      command: "echo GIT_PAGER PAGER",
+      env: { GIT_PAGER: "cat", PAGER: "cat" },
+      yieldMs: 120_000,
+    });
+    expect(mocks.spawnInputs[0]?.env).toMatchObject({ GIT_PAGER: pager, PAGER: pager });
+  },
+);
 
 it.each([
   [{ PATH: "/explicit/bin" }, /Security Violation: Custom 'PATH' variable is forbidden/],
@@ -217,12 +228,12 @@ it.each([
     /Security Violation: blocked override keys: HTTPS_PROXY, NODE_TLS_REJECT_UNAUTHORIZED\./,
   ],
 ] satisfies Array<[NonNullable<ExecParams["env"]>, RegExp]>)(
-  "blocks unsafe host overrides %j before reading login PATH",
+  "blocks unsafe host overrides %j before reading login PATH when approval is required",
   async (env, error) => {
     if (process.platform === "win32" && "PATH" in env) {
       return;
     }
-    await expect(runGateway({ command: "echo $PATH", env })).rejects.toThrow(error);
+    await expect(runGateway({ command: "echo $PATH", env, ask: "always" })).rejects.toThrow(error);
     expect(mocks.shellPath).not.toHaveBeenCalled();
   },
 );
@@ -340,28 +351,50 @@ it("refuses a cancelled exec after its store read without cancelling the run's s
   }
 });
 
-it("ignores protected store entries without replacing inherited network settings", async () => {
-  vi.stubEnv("PATH", "/inherited/bin");
-  vi.stubEnv("HTTPS_PROXY", "http://inherited-proxy.test:8080");
-  vi.stubEnv("NODE_EXTRA_CA_CERTS", "/inherited/ca.pem");
-  await writeEntries({
-    PATH: "/store/bin",
-    HTTPS_PROXY: "http://store-proxy.test:8080",
-    NODE_EXTRA_CA_CERTS: "/store/ca.pem",
-  });
-  const result = await execute(lazyTool(), "call-protected-store-env");
+it.each([
+  { security: "full", ask: "off", allowUnsafe: true },
+  { security: "full", ask: "always", allowUnsafe: false },
+  { security: "allowlist", ask: "off", allowUnsafe: false },
+] as const)(
+  "applies $security/$ask policy to stored execution env",
+  async ({ security, ask, allowUnsafe }) => {
+    vi.stubEnv("PATH", "/inherited/bin");
+    vi.stubEnv("HTTPS_PROXY", "http://inherited-proxy.test:8080");
+    vi.stubEnv("NODE_EXTRA_CA_CERTS", "/inherited/ca.pem");
+    const storeEnv = {
+      PATH: "/store/bin",
+      HTTPS_PROXY: "http://store-proxy.test:8080",
+      NODE_EXTRA_CA_CERTS: "/store/ca.pem",
+    };
+    await writeEntries({ ...storeEnv, OPENCLAW_CLI: "0" });
+    const result = await execute(
+      createLazyExecTool({ host: "gateway", security, ask }),
+      "call-protected-store-env",
+    );
 
-  expect(mocks.gatewayParams[0]?.env).toMatchObject({
-    PATH: "/inherited/bin",
-    HTTPS_PROXY: "http://inherited-proxy.test:8080",
-    NODE_EXTRA_CA_CERTS: "/inherited/ca.pem",
-  });
-  expect(mocks.gatewayParams[0]?.requestedEnv).toBeUndefined();
-  expect(result.content[0]).toMatchObject({
-    type: "text",
-    text: expect.stringMatching(/HTTPS_PROXY, NODE_EXTRA_CA_CERTS, PATH/u),
-  });
-});
+    for (const env of [mocks.gatewayParams[0]?.env, mocks.spawnInputs[0]?.env]) {
+      expect(env).toMatchObject(
+        allowUnsafe
+          ? storeEnv
+          : {
+              PATH: "/inherited/bin",
+              HTTPS_PROXY: "http://inherited-proxy.test:8080",
+              NODE_EXTRA_CA_CERTS: "/inherited/ca.pem",
+            },
+      );
+      expect(env?.OPENCLAW_CLI).toBe("1");
+    }
+    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual(allowUnsafe ? storeEnv : undefined);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        allowUnsafe
+          ? "entries were not applied for host=gateway: OPENCLAW_CLI."
+          : "entries were not applied for host=gateway: HTTPS_PROXY, NODE_EXTRA_CA_CERTS, OPENCLAW_CLI, PATH.",
+      ),
+    });
+  },
+);
 
 it.each(["gateway", "sandbox"] as const)(
   "applies enabled secret egress only to gateway exec (%s)",

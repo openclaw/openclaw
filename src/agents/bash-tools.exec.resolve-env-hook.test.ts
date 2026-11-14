@@ -144,52 +144,71 @@ beforeEach(() => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
-it("merges filtered plugin env into gateway execution and approval-visible requested env", async () => {
-  installResolveExecEnvHook({
-    EXISTING: "plugin",
-    PLUGIN_SAFE: "yes",
-    PATH: "/tmp/plugin-bin",
-    NODE_OPTIONS: "--require /tmp/hook.js",
-    OPENCLAW_CLI: "0",
-    "bad-key": "bad",
-  });
-
-  const tool = createTestExecTool({
-    ...messageContext,
-    host: "auto",
-    currentChannelId: "chat-1",
-    channelContext: channelContext(),
-  });
-  await tool.execute("call-1", {
-    command: "echo ok",
-    env: { EXISTING: "request" },
-    yieldMs: 120_000,
-  });
-
-  expect(mocks.hookRunner?.runResolveExecEnv).toHaveBeenCalledWith(
-    { sessionKey, toolName: "exec", host: "gateway" },
-    {
-      ...messageContext,
-      agentId: "main",
-      channelId: "chat-1",
-      channelContext: channelContext(),
-    },
-  );
-  for (const env of [
-    mocks.gatewayParams[0]?.requestedEnv,
-    mocks.gatewayParams[0]?.env,
-    mocks.spawnInputs[0]?.env,
-  ]) {
-    expect(env).toMatchObject({ EXISTING: "plugin", PLUGIN_SAFE: "yes" });
-    expect(JSON.parse(env?.OPENCLAW_CHANNEL_CONTEXT ?? "{}")).toEqual({
-      chat: { id: "oc_1" },
-      sender: { id: "ou_1" },
+it.each([
+  { security: "full", ask: "off", allowUnsafe: true },
+  { security: "full", ask: "always", allowUnsafe: false },
+  { security: "allowlist", ask: "off", allowUnsafe: false },
+] as const)(
+  "applies $security/$ask policy to plugin env before gateway execution",
+  async ({ security, ask, allowUnsafe }) => {
+    installResolveExecEnvHook({
+      EXISTING: "plugin",
+      PLUGIN_SAFE: "yes",
+      PATH: "/tmp/plugin-bin",
+      NODE_OPTIONS: "--require /tmp/hook.js",
+      OPENCLAW_CLI: "0",
+      "bad-key": "bad",
     });
-  }
-  expect(mocks.gatewayParams[0]?.env).not.toHaveProperty("NODE_OPTIONS");
-  expect(mocks.gatewayParams[0]?.env.OPENCLAW_CLI).toBe("1");
-  expect(mocks.gatewayParams[0]?.env.PATH).not.toBe("/tmp/plugin-bin");
-});
+
+    const tool = createTestExecTool({
+      ...messageContext,
+      host: "auto",
+      security,
+      ask,
+      currentChannelId: "chat-1",
+      channelContext: channelContext(),
+    });
+    await tool.execute("call-1", {
+      command: "echo ok",
+      env: { EXISTING: "request" },
+      yieldMs: 120_000,
+    });
+
+    expect(mocks.hookRunner?.runResolveExecEnv).toHaveBeenCalledWith(
+      { sessionKey, toolName: "exec", host: "gateway" },
+      {
+        ...messageContext,
+        agentId: "main",
+        channelId: "chat-1",
+        channelContext: channelContext(),
+      },
+    );
+    for (const env of [
+      mocks.gatewayParams[0]?.requestedEnv,
+      mocks.gatewayParams[0]?.env,
+      mocks.spawnInputs[0]?.env,
+    ]) {
+      expect(env).toMatchObject({ EXISTING: "plugin", PLUGIN_SAFE: "yes" });
+      expect(env).not.toHaveProperty("bad-key");
+      if (allowUnsafe) {
+        expect(env).toMatchObject({
+          PATH: "/tmp/plugin-bin",
+          NODE_OPTIONS: "--require /tmp/hook.js",
+        });
+      } else {
+        expect(env).not.toHaveProperty("NODE_OPTIONS");
+        expect(env?.PATH).not.toBe("/tmp/plugin-bin");
+      }
+      expect(JSON.parse(env?.OPENCLAW_CHANNEL_CONTEXT ?? "{}")).toEqual({
+        chat: { id: "oc_1" },
+        sender: { id: "ou_1" },
+      });
+    }
+    expect(mocks.gatewayParams[0]?.env.OPENCLAW_CLI).toBe("1");
+    expect(mocks.gatewayParams[0]?.requestedEnv).not.toHaveProperty("OPENCLAW_CLI");
+    expect(mocks.spawnInputs[0]?.env?.OPENCLAW_CLI).toBe("1");
+  },
+);
 
 it("retains plugin env when prepared arguments are prepared again", async () => {
   installResolveExecEnvHook({ PLUGIN_SAFE: "yes" });

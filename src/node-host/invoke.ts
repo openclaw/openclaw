@@ -52,6 +52,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { invokeNodeWorkerComputerCommand, type NodeWorkerComputer } from "./computer-command.js";
 import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
+import { resolveEffectiveSystemRunExecPolicy } from "./exec-policy.js";
 import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
@@ -65,7 +66,7 @@ import {
   buildSystemRunApprovalPlan,
   buildSystemRunPrepareCoverageEnv,
 } from "./invoke-system-run-plan.js";
-import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
+import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { NodeInvokeRequestPayload, SystemRunParams } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
@@ -577,6 +578,11 @@ export async function handleInvoke(
           return;
         }
         const prepareEnv = buildSystemRunPrepareCoverageEnv({
+          allowUnsafeOverrides:
+            execPolicy.security === "full" &&
+            execPolicy.ask === "off" &&
+            params.security === "full" &&
+            params.ask === "off",
           argv: prepared.plan.argv,
           env: params.env ?? undefined,
         });

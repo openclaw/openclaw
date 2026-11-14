@@ -875,6 +875,26 @@ describe("node host invoke", () => {
     }
   });
 
+  it.each([
+    ["full", "off", true],
+    ["allowlist", "off", false],
+    ["full", "always", false],
+  ] as const)(
+    "prepares command-control env only for full/off caller policy (%s/%s)",
+    async (security, ask, allowed) => {
+      const { result } = await invokeCommand("system.run.prepare", {
+        command: ["echo", "ok"],
+        security,
+        ask,
+        env: { SUDO_ASKPASS: "/synthetic/askpass-helper", NODE_OPTIONS: "--no-warnings" },
+      });
+      expect(result.ok).toBe(allowed);
+      if (!allowed) {
+        expect(result.error?.message).toContain("SUDO_ASKPASS");
+      }
+    },
+  );
+
   it("includes effective exec policy in system.run.prepare responses", async () => {
     const { result } = await invokeCommand("system.run.prepare", {
       command: ["echo", "ok"],

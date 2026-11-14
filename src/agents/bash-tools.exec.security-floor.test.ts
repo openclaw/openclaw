@@ -154,6 +154,77 @@ it("does not load optional review or delivery runtimes for full/off execution", 
   expect(optionalRuntimeImports).toEqual({ reviewer: 0, followup: 0 });
 });
 
+it.each([
+  ["full", { mode: "full" }],
+  ["elevated full", { mode: "full", elevated }],
+] as const)(
+  "passes requested runtime and tool environment to real %s exec",
+  async (_name, options) => {
+    const requested = {
+      SUDO_ASKPASS: path.join(tempRoot, "askpass-helper"),
+      GIT_ASKPASS: path.join(tempRoot, "git-helper"),
+      NODE_OPTIONS: "--no-warnings",
+      PYTHONPATH: path.join(tempRoot, "modules"),
+      HTTPS_PROXY: "http://127.0.0.1:9",
+      GIT_CONFIG_COUNT: "0",
+    };
+    const result = await run(
+      { host: "gateway", ...options },
+      `"${process.execPath}" -e 'console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(Object.keys(requested))}.map(k => [k, process.env[k]]))))'`,
+      { env: requested },
+    );
+    expectOutput(result, JSON.stringify(requested));
+  },
+);
+
+it.each(["auto", "ask"] as const)("still rejects command-control env in %s mode", async (mode) => {
+  await expect(
+    run({ host: "gateway", mode }, "echo should-not-run", {
+      security: "full",
+      env: { SUDO_ASKPASS: "/synthetic/askpass-helper", PYTHONPATH: "/synthetic/modules" },
+    }),
+  ).rejects.toThrow("blocked override keys: PYTHONPATH, SUDO_ASKPASS");
+});
+
+it("does not let requested full env override the host approval floor", async () => {
+  writePolicy("full", "always");
+  await expect(
+    run({ host: "gateway", mode: "full", elevated }, "echo should-not-run", {
+      security: "full",
+      ask: "off",
+      env: { PYTHONPATH: "/synthetic/modules" },
+    }),
+  ).rejects.toThrow("Environment variable 'PYTHONPATH' is forbidden");
+});
+
+it.runIf(process.platform !== "win32")(
+  "resolves a real full-mode command from requested PATH",
+  async () => {
+    const bin = path.join(tempRoot, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "full-env-tool"),
+      '#!/bin/sh\nprintf "full-env-path-ok|%s" "$PATH"',
+      {
+        mode: 0o755,
+      },
+    );
+    expectOutput(
+      await run({ host: "gateway", mode: "full" }, "full-env-tool", { env: { PATH: bin } }),
+      `full-env-path-ok|${bin}`,
+    );
+  },
+);
+
+it.runIf(process.platform !== "win32")("preserves an explicitly empty full-mode PATH", async () => {
+  expectOutput(
+    await run({ host: "gateway", mode: "full" }, 'printf "path=<%s>" "$PATH"', {
+      env: { PATH: "" },
+    }),
+    "path=<>",
+  );
+});
+
 it("records elevated execution without logging the command payload", async () => {
   using logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
 

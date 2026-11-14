@@ -142,8 +142,8 @@ Notes:
 - On non-Windows hosts, exec uses `SHELL` when set. If `SHELL` is `fish`, it prefers `bash` (or `sh`) from `PATH` to avoid fish-incompatible bashisms, then falls back to `SHELL` if neither exists.
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery: Program Files, ProgramW6432, then PATH. It falls back to Windows PowerShell 5.1.
 - On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded. The in-memory cache keeps up to 128 recently used snapshot keys; evicted keys can reuse fresh snapshots on disk without launching another validation shell. New captures are validated before atomic publication. Sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
-- Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to prevent binary hijacking or injected code.
-- Exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently. Use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
+- Constrained host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to keep approved commands bound to their intended behavior. Effective full/off execution accepts explicit overrides; see [Environment overrides and full access](#environment-overrides-and-full-access).
+- In constrained execution, exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently. Use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
 - On POSIX Gateway hosts and their Docker/Podman sandboxes, OpenClaw places a Git wrapper on the agent's `PATH`. `git cat-file -e/-t`, `git rev-parse --verify`, and `git merge-base --is-ancestor` run offline. In partial clones, a missing commit can otherwise trigger Git's lazy fetch of its entire commit/tree history. A failed probe preserves Git's exit status and prints recovery guidance; a valid negative ancestry answer remains exit 1 without a warning. This is a performance default, not a security boundary: absolute Git paths, shell aliases/functions, native harness shells, remote node execution, and SSH/Crabbox sandboxes do not use this wrapper.
 - In shared blobless clones, the wrapper prepares missing revision arguments before content/history commands such as `show`, `diff`, `log`, `cat-file -p`, `rev-parse` content expressions, `restore`, `checkout`, and `merge-base`. This covers both the base checkout and linked worktrees, including child processes such as Python that inherit the agent PATH. It begins with one offline batch for `rev:path`, ranges, ancestry suffixes, and `restore --source`. For `rev-parse`, a native Git batch accepts valid expressions without requiring their blobs. Git itself distinguishes ambiguous expressions from implicit path arguments before the wrapper fetches more roots. Resolvable missing objects are fetched from `origin` with history negotiation and `--filter=blob:none`; present commits add no network request, and normal blob hydration remains available. If that fetch fails, the command stops with guidance to fetch from the owning remote. Unresolved names and paths after `--` pass through to Git; revisions supplied through standard input, optional `rev-parse --default` values, and `rev-parse` invocations containing newline arguments are not inspected.
@@ -255,6 +255,26 @@ These paths skip the approval owner that detects strict inline evaluation. Tight
 
 For ordinary configured full/off execution without prompts for these forms, leave `strictInlineEval` unset or set it to `false`. `askFallback: "full"` does not satisfy strict inline-eval approval when detection runs.
 
+### Environment overrides and full access
+
+Host execution accepts explicitly supplied environment overrides when the effective
+policy is `security=full` and `ask=off`. This includes authorized full-session and
+elevated-full execution. The same rule applies to tool, plugin, and shared-store
+`env` entries: `SUDO_ASKPASS` for `sudo -A`, Git helpers and configuration,
+interpreter options, proxy/CA settings, and `PATH` are not special cases.
+
+Allowlisted, approval-gated, auto-reviewed, and approval-fallback execution retain
+the constrained environment policy. Nodes and the macOS companion enforce their
+own policy; full access on the Gateway cannot loosen a constrained execution host.
+Variable names are still validated, and OpenClaw-owned routing and execution
+markers retain their precedence.
+
+Inherited environment filtering is unchanged, including service credentials and
+startup hooks. Owner-scoped credential omissions still apply. Supply needed
+command settings explicitly; full execution does not implicitly forward the
+Gateway's private environment. This adds no configuration setting and does not
+change sandbox environment policy.
+
 ### PATH handling
 
 Gateway-hosted commands use an `openclaw` launcher tied to the running Gateway's installation. Source checkouts pin any inherited TSX preload to that checkout on both Node and Bun, so the launcher also works from an agent workspace outside the checkout.
@@ -263,13 +283,13 @@ Prepared child commands resolve the launcher's concrete path before they start.
 Switching an installation symlink during an update does not redirect a command
 that was already prepared. A fresh `openclaw` invocation follows the updated link.
 
-- `host=gateway`: merges your login-shell `PATH` into the exec environment. `env.PATH` overrides are rejected for host execution. The daemon itself still runs with a minimal `PATH`:
+- `host=gateway`: merges your login-shell `PATH` into the exec environment. An explicit `env.PATH` takes precedence under full/off execution; constrained execution rejects it. The daemon itself still runs with a minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
   - To prevent user shell configuration (like `~/.zshenv` or `/etc/zshenv`) from overriding priority paths during startup, `tools.exec.pathPrepend` entries are securely prepended to the final `PATH` inside the shell command right before execution.
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`. OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation). `tools.exec.pathPrepend` applies here too.
 - Native Codex on an owned local stdio process receives a nonempty configured prefix and Gateway CLI shim ahead of an explicitly configured native shell `PATH`, or the Gateway process `PATH` when no native value is set. Request-level native PATH overrides take precedence over native config files; an explicit empty PATH keeps only the prefix. Per-agent `tools.exec.pathPrepend` overrides the global list, including an empty list. OpenClaw applies this environment to new and resumed native threads without changing native login-shell policy. Codex reapplies the environment after loading a shell snapshot, but shell startup files can still replace `PATH` when snapshots are unavailable or bypassed, or when the command shell starts. Codex's existing `allow_login_shell = false` setting opts out of login-profile startup; it does not suppress every shell startup file. Host PATH entries are not forwarded to sandbox, remote-workspace, or socket-backed Codex execution.
-- `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are rejected for host execution and ignored by node hosts. `tools.exec.pathPrepend` does not apply either; when it is set, completed `host=node` results, including finished approval follow-ups and delivered node completion events, carry a warning. If you need additional PATH entries on a node, configure the node host service environment (systemd/launchd) or install tools in standard locations. For Linux login-shell commands, the node re-applies its service PATH after profile startup, ahead of profile-provided entries.
+- `host=node`: only explicit env overrides are sent to the node, not the Gateway's inherited environment. Full/off execution accepts `env.PATH`; constrained execution rejects it and filters other command-control overrides. `tools.exec.pathPrepend` does not apply either; when it is set, completed `host=node` results, including finished approval follow-ups and delivered node completion events, carry a warning. For a persistent node PATH, configure the node host service environment (systemd/launchd) or install tools in standard locations. For Linux login-shell commands, an explicit full/off PATH is restored exactly after profile startup, including an empty value. Without an explicit override, the node re-applies its service PATH ahead of profile-provided entries.
 
 Per-agent node binding (use the keyed agent ID in config):
 

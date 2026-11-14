@@ -104,7 +104,8 @@ enum HostEnvSanitizer {
     static func sanitize(
         searchPaths: [String],
         overrides: [String: String]?,
-        shellWrapper: Bool = false) -> [String: String]
+        shellWrapper: Bool = false,
+        allowUnsafeOverrides: Bool = false) -> [String: String]
     {
         var merged: [String: String] = [:]
         for (rawKey, value) in ProcessInfo.processInfo.environment {
@@ -131,10 +132,10 @@ enum HostEnvSanitizer {
             merged[key] = value
         }
 
-        // Approval and execution share the app-owned PATH, independent of how the app launched.
+        // Constrained approval and execution share the app-owned PATH. Full requests may override it.
         merged["PATH"] = searchPaths.joined(separator: ":")
 
-        let effectiveOverrides = shellWrapper
+        let effectiveOverrides = shellWrapper && !allowUnsafeOverrides
             ? self.filterOverridesForShellWrapper(overrides)
             : overrides
 
@@ -142,8 +143,11 @@ enum HostEnvSanitizer {
         for (rawKey, value) in effectiveOverrides {
             guard let key = self.normalizeOverrideKey(rawKey) else { continue }
             let upper = key.uppercased()
-            // PATH is part of the security boundary (command resolution + safe-bin checks). Never
-            // allow request-scoped PATH overrides from agents/gateways.
+            // Full execution permits caller-selected command behavior, including PATH.
+            if allowUnsafeOverrides {
+                merged[key] = value
+                continue
+            }
             if upper == "PATH" { continue }
             // Never pass an executable cat through generic PAGER consumers or PATH lookup.
             // Exact cat/empty requests become empty; whitespace and commands stay blocked.

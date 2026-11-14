@@ -12,6 +12,7 @@ import {
   sanitizeHostExecEnvWithDiagnostics,
   sanitizeSystemRunEnvOverrides,
   setGatewayCredentialEnvKeys,
+  withHostExecInheritedEnvOmitted,
 } from "./host-env-security.js";
 
 function expectEnv(baseEnv: NodeJS.ProcessEnv, expected: NodeJS.ProcessEnv) {
@@ -54,6 +55,51 @@ async function runGitCommandExitCode(
 }
 
 describe("sanitizeHostExecEnv", () => {
+  it("allows requested command controls under full authority without inheriting them", () => {
+    const input = {
+      SUDO_ASKPASS: "/synthetic/askpass-helper",
+      SSH_ASKPASS: "/synthetic/ssh-helper",
+      NODE_OPTIONS: "--require=/synthetic/startup.js",
+      PATH: "/synthetic/bin",
+      HTTPS_PROXY: "http://127.0.0.1:9",
+      GIT_CONFIG_COUNT: "0",
+      PAGER: "cat",
+    };
+    const constrained = sanitizeHostExecEnvWithDiagnostics({ baseEnv: input, overrides: input });
+    expect(constrained.env).not.toHaveProperty("SUDO_ASKPASS");
+    expect(constrained.rejectedOverrideBlockedKeys).toEqual([
+      "GIT_CONFIG_COUNT",
+      "HTTPS_PROXY",
+      "NODE_OPTIONS",
+      "PATH",
+      "SSH_ASKPASS",
+      "SUDO_ASKPASS",
+    ]);
+    const full = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: input,
+      overrides: input,
+      allowUnsafeOverrides: true,
+    });
+    expect(full.env).toEqual({ OPENCLAW_CLI: "1", ...input });
+    expect(full.rejectedOverrideBlockedKeys).toEqual([]);
+    const inherited = sanitizeHostExecEnv({ baseEnv: input, allowUnsafeOverrides: true });
+    expect(inherited).not.toHaveProperty("NODE_OPTIONS");
+    expect(inherited).not.toHaveProperty("SUDO_ASKPASS");
+  });
+
+  it("keeps structural validation and owner-scoped omissions under full authority", () => {
+    const result = withHostExecInheritedEnvOmitted(["RESERVED"], () =>
+      sanitizeHostExecEnvWithDiagnostics({
+        baseEnv: { RESERVED: "inherited" },
+        overrides: { "BAD=KEY": "bad", RESERVED: "requested", OPENCLAW_CLI: "0" },
+        allowUnsafeOverrides: true,
+      }),
+    );
+    expect(result.env).toEqual({ OPENCLAW_CLI: "1" });
+    expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD=KEY"]);
+    expect(result.rejectedOverrideBlockedKeys).toEqual(["RESERVED"]);
+  });
+
   it("preserves Gateway identity for child commands that need their custom service", () => {
     const serviceEnv = {
       OPENCLAW_SERVICE_KIND: "gateway",
@@ -131,14 +177,16 @@ it("normalizes and validates keys", () => {
 
 describe("sanitizeSystemRunEnvOverrides", () => {
   it.each([
-    [false, { OPENCLAW_TEST: "1", TOKEN: "abc", LANG: "C", LC_ALL: "C", LC_TIME: "C" }],
-    [true, { LANG: "C", LC_ALL: "C", LC_TIME: "C" }],
+    [false, false, { OPENCLAW_TEST: "1", TOKEN: "abc", LANG: "C", LC_ALL: "C", LC_TIME: "C" }],
+    [true, false, { LANG: "C", LC_ALL: "C", LC_TIME: "C" }],
+    [true, true, { OPENCLAW_TEST: "1", TOKEN: "abc", LANG: "C", LC_ALL: "C", LC_TIME: "C" }],
   ] as const)(
-    "filters shell-wrapper overrides only when enabled (%s)",
-    (shellWrapper, expected) => {
+    "filters constrained shell-wrapper overrides (wrapper=%s, full=%s)",
+    (shellWrapper, allowUnsafeOverrides, expected) => {
       expect(
         sanitizeSystemRunEnvOverrides({
           shellWrapper,
+          allowUnsafeOverrides,
           overrides: { OPENCLAW_TEST: "1", TOKEN: "abc", LANG: "C", LC_ALL: "C", LC_TIME: "C" },
         }),
       ).toEqual(expected);

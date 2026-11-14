@@ -217,6 +217,7 @@ enum ExecApprovalEvaluator {
         cwd: String?,
         envOverrides: [String: String]?,
         agentId: String?,
+        hasForwardedApproval: Bool = false,
         skillBinsCache: SkillBinsCache = .shared) async -> ExecApprovalEvaluation
     {
         let searchPaths = await self.searchPaths.value
@@ -227,10 +228,12 @@ enum ExecApprovalEvaluator {
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         let shellWrapper = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand).isWrapper
+        // A forwarded approval can originate from a more constrained Gateway.
         let env = HostEnvSanitizer.sanitize(
             searchPaths: searchPaths,
             overrides: envOverrides,
-            shellWrapper: shellWrapper)
+            shellWrapper: shellWrapper,
+            allowUnsafeOverrides: security == .full && ask == .off && !hasForwardedApproval)
         let effectiveDisplayCommand = displayCommand ??
             ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
         let allowlistRawCommand = ExecSystemRunCommandValidator.allowlistEvaluationRawCommand(

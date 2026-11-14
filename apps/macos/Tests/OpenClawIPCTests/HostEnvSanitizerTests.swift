@@ -37,6 +37,46 @@ struct HostEnvSanitizerTests {
         }
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func `requested command controls require full execution authority`(
+        shellWrapper: Bool,
+        allowUnsafeOverrides: Bool)
+    {
+        let helper = "/opt/openclaw-test/askpass"
+        let env = HostEnvSanitizer.sanitize(
+            searchPaths: Self.searchPaths,
+            overrides: [
+                "SUDO_ASKPASS": helper, "LD_PRELOAD": "/tmp/loader.so", "PATH": "/tmp/bin",
+                "SSH_ASKPASS": helper, "GIT_CONFIG_COUNT": "0", "PAGER": "cat",
+                "CUSTOM_APP_SETTING": "requested", "BAD=KEY": "invalid",
+            ],
+            shellWrapper: shellWrapper,
+            allowUnsafeOverrides: allowUnsafeOverrides)
+
+        #expect(env["SUDO_ASKPASS"] == (allowUnsafeOverrides ? helper : nil))
+        #expect(env["LD_PRELOAD"] == (allowUnsafeOverrides ? "/tmp/loader.so" : nil))
+        #expect(env["SSH_ASKPASS"] == (allowUnsafeOverrides ? helper : nil))
+        #expect(env["PATH"] == (allowUnsafeOverrides ? "/tmp/bin" : Self.searchPaths.joined(separator: ":")))
+        #expect(env["GIT_CONFIG_COUNT"] == (allowUnsafeOverrides ? "0" : nil))
+        #expect(env["PAGER"] == (allowUnsafeOverrides ? "cat" : ""))
+        #expect(env["CUSTOM_APP_SETTING"] == (!shellWrapper || allowUnsafeOverrides ? "requested" : nil))
+        #expect(env["BAD=KEY"] == nil)
+    }
+
+    @MainActor
+    @Test func `full execution does not inherit helpers or credentials`() async {
+        await TestIsolation.withEnvValues([
+            "SUDO_ASKPASS": "/opt/openclaw-test/inherited-askpass",
+            "GH_TOKEN": "synthetic-inherited-token",
+        ]) {
+            #expect(HostEnvSanitizer.sanitize(searchPaths: Self.searchPaths, overrides: nil)["SUDO_ASKPASS"] == nil)
+            let env = HostEnvSanitizer.sanitize(
+                searchPaths: Self.searchPaths, overrides: nil, allowUnsafeOverrides: true)
+            #expect(env["SUDO_ASKPASS"] == nil)
+            #expect(env["GH_TOKEN"] == nil)
+        }
+    }
+
     @Test(arguments: ["cat", ""])
     func `no pager overrides never forward an executable`(value: String) {
         let overrides = ["GIT_PAGER": value, "PAGER": value]

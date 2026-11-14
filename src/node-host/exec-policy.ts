@@ -2,7 +2,10 @@ import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
 import {
+  maxAsk,
+  minSecurity,
   requiresExecApproval,
+  resolveExecApprovalsLocked,
   resolveExecModePolicy,
   type ExecAsk,
   type ExecSecurity,
@@ -23,6 +26,28 @@ export function resolveNodeExecConfigPolicy(params: {
     agentExec,
   );
   return { agentExec, globalExec, ...resolveExecModePolicy(layered) };
+}
+
+export async function resolveEffectiveSystemRunExecPolicy(params: {
+  cfg: OpenClawConfig;
+  agentId: string | undefined;
+  requireSocket: boolean;
+}) {
+  const modePolicy = resolveNodeExecConfigPolicy(params);
+  const { agentExec, globalExec } = modePolicy;
+  const approvals = await resolveExecApprovalsLocked(params.agentId, {
+    security: modePolicy.security,
+    ask: modePolicy.ask,
+    requireSocket: params.requireSocket,
+  });
+  return {
+    agentExec,
+    globalExec,
+    approvals,
+    security: minSecurity(modePolicy.security, approvals.agent.security),
+    ask: maxAsk(modePolicy.ask, approvals.agent.ask),
+    autoReview: modePolicy.autoReview,
+  };
 }
 
 type ExecApprovalDecision = "allow-once" | "allow-always" | null;

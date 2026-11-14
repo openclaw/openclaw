@@ -37,6 +37,7 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
+import { registerSystemRunEnvironmentTests } from "./invoke-system-run.env.test-support.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import {
   expectOk,
@@ -345,6 +346,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       undefined,
       undefined,
       expect.any(Function),
+      false,
     );
   }
 
@@ -1167,7 +1169,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectApprovalRequired(sendNodeEvent, sendInvokeResult);
   });
 
-  it("rejects unsafe environment inputs before execution", async () => {
+  registerSystemRunEnvironmentTests({ runLocal, fixtureDir });
+
+  it("rejects unsafe environment inputs before constrained execution", async () => {
     const shellCommand =
       process.platform === "win32"
         ? ["cmd.exe", "/d", "/s", "/c", "echo ok"]
@@ -1213,6 +1217,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const { runCommand, sendInvokeResult } = await runLocal({
         command: testCase.command,
         env: testCase.env,
+        ask: "always",
         executionContext: { subagent: true },
       });
 
@@ -1228,7 +1233,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     ["cmd.exe", "/d", "/s", "/c", "echo context"],
     ["powershell.exe", "-NoProfile", "-Command", "Write-Output context"],
     ["/bin/sh", "-c", "echo context"],
-  ])("injects routing context after filtering shell overrides for %s", async (...command) => {
+  ])("injects routing context after full-mode shell overrides for %s", async (...command) => {
     const { runCommand, sendInvokeResult } = await runLocal({
       command,
       executionContext: { senderId: "sender-1", chatId: "chat-1", subagent: true },
@@ -1240,7 +1245,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       OPENCLAW_CHANNEL_CONTEXT: '{"sender":{"id":"sender-1"},"chat":{"id":"chat-1"}}',
       OPENCLAW_SUBAGENT_EXEC: "1",
     });
-    expect(firstMockCall(runCommand)[2]).not.toHaveProperty("OPENCLAW_TEST");
+    expect(firstMockCall(runCommand)[2]).toHaveProperty("OPENCLAW_TEST", "untrusted");
   });
 
   it.each<[InvokeOptions["params"]["executionContext"], string | undefined, string | undefined]>([
@@ -1279,23 +1284,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       );
     },
   );
-
-  it("applies shell-wrapper env allowlist for shell executable commands without inline payload", async () => {
-    const { runCommand, sendInvokeResult } = await runLocal({
-      command: ["/bin/sh", "./script.sh"],
-      env: {
-        OPENCLAW_TEST: "1",
-        LANG: "C",
-        LC_TIME: "C",
-      },
-    });
-
-    expect(runCommand).toHaveBeenCalledTimes(1);
-    const passedEnv = firstMockCall(runCommand)[2];
-    expect(passedEnv).toMatchObject({ LANG: "C", LC_TIME: "C" });
-    expect(passedEnv).not.toHaveProperty("OPENCLAW_TEST");
-    expectOk(sendInvokeResult);
-  });
 
   it("does not restore a revoked allowlist rule during explicit allow-always persistence", async () => {
     const tempDir = fixtureDir("openclaw-allow-always-revoked-rule-");

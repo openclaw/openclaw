@@ -227,6 +227,7 @@ function sanitizeHostInheritedEnvValue(key: string, value: string): string | und
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  allowUnsafeOverrides?: boolean;
 }): {
   acceptedOverrides: Record<string, string>;
   rejectedOverrideBlockedKeys: string[];
@@ -248,10 +249,18 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       continue;
     }
     const upper = normalized.toUpperCase();
-    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
-    // request-scoped PATH overrides from agents/gateways.
-    if (isScopedBlockedHostExecEnvVarName(upper) || (blockPathOverrides && upper === "PATH")) {
+    // Constrained execution binds command resolution to the host PATH.
+    if (
+      isScopedBlockedHostExecEnvVarName(upper) ||
+      (!params?.allowUnsafeOverrides && blockPathOverrides && upper === "PATH")
+    ) {
       rejectedBlocked.push(upper);
+      continue;
+    }
+    // Full execution already permits arbitrary command behavior. Keep structural and
+    // owner-scoped validation, without applying constrained-command policy to its env.
+    if (params?.allowUnsafeOverrides) {
+      acceptedOverrides[normalized] = value;
       continue;
     }
     // Git treats exact cat/empty as no pager. Never forward cat: generic PAGER consumers
@@ -278,6 +287,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  allowUnsafeOverrides?: boolean;
 }): HostExecEnvSanitizationResult {
   const baseEnv = params?.baseEnv ?? process.env;
 
@@ -311,6 +321,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 export function inspectHostExecEnvOverrides(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  allowUnsafeOverrides?: boolean;
 }): HostExecEnvOverrideDiagnostics {
   const result = sanitizeHostEnvOverridesWithDiagnostics(params);
   return {
@@ -323,6 +334,7 @@ export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  allowUnsafeOverrides?: boolean;
 }): Record<string, string> {
   return sanitizeHostExecEnvWithDiagnostics(params).env;
 }
@@ -330,12 +342,13 @@ export function sanitizeHostExecEnv(params?: {
 export function sanitizeSystemRunEnvOverrides(params?: {
   overrides?: Record<string, string> | null;
   shellWrapper?: boolean;
+  allowUnsafeOverrides?: boolean;
 }): Record<string, string> | undefined {
   const overrides = params?.overrides ?? undefined;
   if (!overrides) {
     return undefined;
   }
-  if (!params?.shellWrapper) {
+  if (!params?.shellWrapper || params.allowUnsafeOverrides) {
     return overrides;
   }
   const filtered: Record<string, string> = {};

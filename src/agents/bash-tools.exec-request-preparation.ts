@@ -141,7 +141,10 @@ function isExecToolArgsObject(value: unknown): value is ExecToolArgs {
   return isRecord(value);
 }
 
-function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, string> | undefined {
+function filterPluginExecEnv(
+  rawEnv: Record<string, string>,
+  allowUnsafeOverrides = false,
+): Record<string, string> | undefined {
   const env: Record<string, string> = {};
   for (const [rawKey, value] of Object.entries(rawEnv)) {
     const key = normalizeHostOverrideEnvVarKey(rawKey);
@@ -150,10 +153,11 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
     }
     const upperKey = key.toUpperCase();
     if (
-      upperKey === "PATH" ||
       upperKey === OPENCLAW_CLI_ENV_VAR ||
-      isDangerousHostEnvVarName(upperKey) ||
-      isDangerousHostEnvOverrideVarName(upperKey)
+      (!allowUnsafeOverrides &&
+        (upperKey === "PATH" ||
+          isDangerousHostEnvVarName(upperKey) ||
+          isDangerousHostEnvOverrideVarName(upperKey)))
     ) {
       continue;
     }
@@ -310,7 +314,7 @@ export function createExecRequestPreparation(params: {
       return execParams;
     }
     const sessionId = context?.hookContext?.sessionId ?? params.defaults?.sessionId;
-    const rawPluginEnv = await hookRunner.runResolveExecEnv(
+    const pluginEnv = await hookRunner.runResolveExecEnv(
       {
         sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
         toolName: "exec",
@@ -327,7 +331,6 @@ export function createExecRequestPreparation(params: {
           : {}),
       },
     );
-    const pluginEnv = filterPluginExecEnv(rawPluginEnv);
     resolvedExecEnvPreparedStates.set(execParams, {
       host,
       ...(pluginEnv ? { pluginEnv } : {}),
@@ -419,6 +422,7 @@ export function createExecRequestPreparation(params: {
 }
 
 export function resolvePreparedExecEnvironment(params: {
+  allowUnsafeOverrides?: boolean;
   execParams: ExecToolArgs;
   host: ExecHost;
   sandbox?: BashSandboxConfig;
@@ -449,14 +453,21 @@ export function resolvePreparedExecEnvironment(params: {
     ...(params.subagentExecution ? { subagent: true } : {}),
   };
   const routingEnv = buildExecRoutingEnv(executionContext);
+  const pluginEnv = params.pluginEnv
+    ? filterPluginExecEnv(
+        params.pluginEnv,
+        params.host !== "sandbox" && params.allowUnsafeOverrides,
+      )
+    : undefined;
   const explicitEnv: Record<string, string> | undefined =
-    params.execParams.env !== undefined || params.pluginEnv !== undefined
-      ? { ...params.execParams.env, ...params.pluginEnv }
+    params.execParams.env !== undefined || pluginEnv !== undefined
+      ? { ...params.execParams.env, ...pluginEnv }
       : undefined;
   const storeEnvResult = params.storeEnv
     ? sanitizeHostExecEnvWithDiagnostics({
         baseEnv: {},
         overrides: params.storeEnv,
+        allowUnsafeOverrides: params.allowUnsafeOverrides,
         blockPathOverrides: true,
       })
     : undefined;
@@ -499,6 +510,7 @@ export function resolvePreparedExecEnvironment(params: {
       : sanitizeHostExecEnvWithDiagnostics({
           baseEnv: inheritedBaseEnv,
           overrides: untrustedRequestedEnv,
+          allowUnsafeOverrides: params.allowUnsafeOverrides,
           blockPathOverrides: true,
         });
   if (
@@ -546,7 +558,11 @@ export function resolvePreparedExecEnvironment(params: {
         })
       : (hostEnvResult?.env ?? inheritedBaseEnv);
 
-  if (!params.sandbox && params.host === "gateway" && !requestedEnv?.PATH) {
+  if (
+    !params.sandbox &&
+    params.host === "gateway" &&
+    (!requestedEnv || !Object.hasOwn(requestedEnv, "PATH"))
+  ) {
     const shellPath = getShellPathFromLoginShell({
       env: process.env,
       timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
@@ -555,7 +571,7 @@ export function resolvePreparedExecEnvironment(params: {
   }
 
   // `tools.exec.pathPrepend` is only meaningful when exec runs locally (gateway) or in the sandbox.
-  // Node hosts intentionally ignore request-scoped PATH overrides, so don't pretend this applies.
+  // Node hosts own their PATH and accept explicit overrides only under full/off policy.
   // The Gateway CLI shim is merged in automatically and only exists on the Gateway host.
   if (params.host === "node") {
     if (omitGatewayAgentCliPath(params.defaultPathPrepend).length > 0) {
