@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { payloadRequiresDurablePayloadTransport } from "../../channels/message/capabilities.js";
-import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
+import {
+  isReservedMessageIdentity,
+  resolveReceiptSourceId,
+} from "../../channels/message/receipt.js";
 import { renderPresentationForDelivery } from "../../channels/plugins/outbound/presentation-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
@@ -53,7 +56,7 @@ const log = createSubsystemLogger("outbound/deliver");
 function normalizePlatformIds(values: Array<string | undefined>): string[] {
   return values
     .map((value) => value?.trim())
-    .filter((id): id is string => Boolean(id && id !== "unknown" && id !== "suppressed"));
+    .filter((id): id is string => Boolean(id) && !isReservedMessageIdentity(id));
 }
 
 export async function deliverOutboundPayloadsCore(
