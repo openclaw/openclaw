@@ -3,7 +3,8 @@ import {
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
+import type { PickerOption } from "../../components/select-picker-types.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
@@ -21,7 +22,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const runtimeConfig = page.inventories.runtimeConfig.read();
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
-  let agentSuggestions: string[] = [];
+  let agentOptions: PickerOption[] = [];
   let modelSuggestions: string[] = [];
   let timezoneSuggestions: string[] = [];
   let accountSuggestions: string[] = [];
@@ -47,14 +48,18 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
         .filter((entry) => entry.kind === "system")
         .map((entry) => entry.id.trim()),
     );
-    agentSuggestions = normalizeSortedUniqueTrimmedStringList([
-      ...listSelectableAgents(agentsList?.agents ?? []).map((entry) => entry.id.trim()),
-      ...cron.cronJobs.map((job) =>
-        typeof job.agentId === "string" && !systemAgentIds.has(job.agentId.trim())
-          ? job.agentId.trim()
-          : "",
-      ),
-    ]);
+    agentOptions = listSelectableAgents(agentsList?.agents ?? []).map((agent) => ({
+      value: agent.id,
+      label: normalizeAgentLabel(agent),
+      description: agent.id,
+    }));
+    for (const id of normalizeSortedUniqueTrimmedStringList(
+      cron.cronJobs.map((job) => job.agentId),
+    )) {
+      if (!systemAgentIds.has(id) && !agentOptions.some((option) => option.value === id)) {
+        agentOptions.push({ value: id, label: id, description: t("cron.form.savedAgent") });
+      }
+    }
     modelSuggestions = normalizeSortedUniqueTrimmedStringList([
       ...page.cronModelSuggestions(),
       ...resolveConfiguredCronModelSuggestions(configValue),
@@ -164,7 +169,10 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     eventSource,
     fieldErrors,
     canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
-    agentSuggestions,
+    agentOptions,
+    agentOptionsLoading: page.inventories.agents.read().agentsLoading,
+    agentOptionsError: page.inventories.agents.read().agentsError,
+    onLoadAgentOptions: () => void page.context().agents.ensureList(),
     modelSuggestions,
     thinkingSuggestions: THINKING_SUGGESTIONS,
     timezoneSuggestions,
