@@ -71,7 +71,6 @@ export class ComposerDictationOwner extends EventTarget {
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private pendingCommitSession: ComposerDictationSession | null = null;
-  private recoverySession: ComposerDictationSession | null = null;
   private disposed = false;
 
   constructor(private options: ComposerDictationOwnerOptions) {
@@ -116,26 +115,19 @@ export class ComposerDictationOwner extends EventTarget {
     return this.stop({ commit: true });
   }
 
-  get hasRecovery(): boolean {
-    return this.recoverySession !== null;
-  }
-
-  get retrying(): boolean {
-    return this.hasRecovery && this.pendingCommitSession === this.recoverySession;
-  }
-
-  get canRetry(): boolean {
-    return this.hasRecovery && !this.retrying && !this.disposed && this.canHold();
+  get recovery() {
+    return this.pendingCommitSession?.recovery;
   }
 
   retry(): Promise<boolean> {
-    const session = this.recoverySession;
-    if (!session || !this.canRetry) {
+    const session = this.recovery;
+    if (!session || session.retrying || !this.canHold()) {
       return Promise.resolve(false);
     }
-    this.pendingCommitSession = session;
-    this.dispatchEvent(new Event("change"));
-    return this.complete(session, session.retry());
+    return this.complete(
+      session,
+      session.retry(this.playback, () => this.cancel()),
+    );
   }
 
   startDirect(): boolean {
@@ -150,7 +142,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   update(options: ComposerDictationOwnerOptions): void {
-    const couldRetry = this.canRetry;
+    const wasConnected = this.options.connected;
     if (
       this.options.client !== options.client ||
       this.options.sessionKey !== options.sessionKey ||
@@ -159,7 +151,7 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancel();
     }
     this.options = options;
-    if (couldRetry !== this.canRetry) {
+    if (wasConnected !== options.connected && this.pendingCommitSession) {
       this.dispatchEvent(new Event("change"));
     }
     if (!options.enabled || options.realtimeTalkActive) {
@@ -298,10 +290,7 @@ export class ComposerDictationOwner extends EventTarget {
   };
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (
-      event.key !== "Escape" ||
-      (this.phase === "idle" && !this.pendingCommitSession && !this.recoverySession)
-    ) {
+    if (event.key !== "Escape" || (this.phase === "idle" && !this.pendingCommitSession)) {
       return;
     }
     event.preventDefault();
@@ -321,7 +310,7 @@ export class ComposerDictationOwner extends EventTarget {
     void this.finishActive();
   };
 
-  private canHold(): boolean {
+  canHold(): boolean {
     return (
       this.options.enabled &&
       this.options.connected &&
@@ -448,12 +437,8 @@ export class ComposerDictationOwner extends EventTarget {
       .then((lateTranscript) => {
         const ownsPendingCommit = this.pendingCommitSession === session;
         if (ownsPendingCommit) {
-          this.pendingCommitSession = null;
-          // A usable preview keeps its existing text-recovery contract. Empty results
-          // keep the exact recording instead of silently dropping the last copy.
-          this.recoverySession = !lateTranscript && session.hasRecording ? session : null;
-          if (!this.recoverySession) {
-            session.releaseRecording();
+          if (!session.recovery) {
+            this.pendingCommitSession = null;
           }
           this.playback.stop();
           this.syncCancellationListeners();
@@ -476,9 +461,8 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private retirePendingCommit(): void {
-    const session = this.pendingCommitSession ?? this.recoverySession;
+    const session = this.pendingCommitSession;
     this.pendingCommitSession = null;
-    this.recoverySession = null;
     this.playback.stop();
     this.syncCancellationListeners();
     void session?.cancel().catch(() => undefined);
@@ -529,7 +513,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private syncCancellationListeners(): void {
-    if (this.phase !== "idle" || this.pendingCommitSession || this.recoverySession) {
+    if (this.phase !== "idle" || this.pendingCommitSession) {
       if (this.cancellationListeners) {
         return;
       }

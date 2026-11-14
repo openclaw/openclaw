@@ -132,20 +132,12 @@ const catalog = {
       holdToDictate: "Hold to dictate",
       holdToRecordSettingDescription:
         "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
-      dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
-      dictationBrowserAudioUnsupported: "This browser cannot capture dictation audio at 8 kHz.",
       dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
-      dictationFailed: "Couldn’t transcribe your voice.",
       dictationInterruptedRecovery:
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
       dictationFinalizing: "Finishing dictation…",
-      dictationRetryRecording: "Retry recording",
-      dictationDiscardRecording: "Discard recording",
-      dictationRecordingKept:
-        "No transcript received. This recording is kept in this tab for retry.",
       dictationListening: "Listening…",
-      dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",

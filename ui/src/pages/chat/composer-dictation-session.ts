@@ -2,8 +2,11 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -12,6 +15,8 @@ import {
 } from "./talk/audio.ts";
 import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
+
+registerEnglishCatalog(registerChatDictationEnglish);
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -71,6 +76,8 @@ export class ComposerDictationSession {
   private readonly pendingAudio: string[] = [];
   // One tab-local recording; released on successful text, cancellation, or replacement.
   private readonly recording: string[] = [];
+  recovery: ComposerDictationSession | undefined;
+  retrying = false;
   private pendingAudioSamples = 0;
   private appendChain: Promise<void> = Promise.resolve();
   private closeRequest: { discard: boolean; promise: Promise<void> } | null = null;
@@ -235,41 +242,55 @@ export class ComposerDictationSession {
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
     // Bound admission separately; a started close uses the media provider timeout.
     void this.stopAndClose(true).catch(() => undefined);
-    return transcript;
+    const text = await transcript;
+    this.recovery = !text && this.hasRecording ? this : undefined;
+    if (text) {
+      this.releaseRecording();
+    }
+    return text;
   }
 
   get hasRecording(): boolean {
     return this.recording.length > 0 && !this.discarded;
   }
 
-  releaseRecording(): void {
+  private releaseRecording(): void {
     this.recording.length = 0;
   }
 
-  async retry(): Promise<string> {
-    // Finish the prior transport before reusing this recording's session owner.
-    // No capture is restarted and every explicit attempt creates a freshly authorized relay.
-    this.gatewayDisconnected = false;
-    await this.stopAndClose(false);
-    if (this.discarded || this.gatewayDisconnected) {
-      return "";
+  async retry(playback: GatewaySpeechPlayback, superseded: () => void): Promise<string> {
+    // Every voice action, including replay, reclaims the existing shared slot.
+    playback.prepare(this.client, superseded);
+    this.retrying = true;
+    this.callbacks.onTranscriptChange();
+    try {
+      // Finish the prior transport before reusing this recording's session owner.
+      // No capture is restarted and every explicit attempt creates a freshly authorized relay.
+      this.gatewayDisconnected = false;
+      await this.stopAndClose(false);
+      if (this.discarded || this.gatewayDisconnected) {
+        return "";
+      }
+      this.failed = false;
+      this.sessionId = null;
+      this.transcriptionSessionId = null;
+      this.closeRequest = null;
+      this.finalTranscripts.length = 0;
+      this.currentPartial = "";
+      this.pendingAudio.length = 0;
+      for (const audio of this.recording) {
+        this.pendingAudio.push(audio);
+      }
+      this.startPromise = this.createRemote();
+      return await this.finish();
+    } finally {
+      this.retrying = false;
     }
-    this.failed = false;
-    this.sessionId = null;
-    this.transcriptionSessionId = null;
-    this.closeRequest = null;
-    this.finalTranscripts.length = 0;
-    this.currentPartial = "";
-    this.pendingAudio.length = 0;
-    for (const audio of this.recording) {
-      this.pendingAudio.push(audio);
-    }
-    this.startPromise = this.createRemote();
-    return this.finish();
   }
 
   async cancel(): Promise<void> {
     this.discarded = true;
+    this.recovery = undefined;
     this.releaseRecording();
     this.pendingAudio.length = 0;
     this.pendingAudioSamples = 0;

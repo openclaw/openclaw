@@ -331,41 +331,53 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed("dictation-1", true));
   });
 
-  it.each([false, true])("Read aloud replaces dictation (finalizing: %s)", async (finalizing) => {
-    const stopTrack = captureStop();
-    const { controller, onCommit, options } = createHarness();
-    const previous = new GatewaySpeechPlayback();
-    const next = new GatewaySpeechPlayback();
-    const reading = previous.speak(options.client, "First message");
-    try {
-      await speechStarted.promise;
-      const firstAudio = latestAudio();
-      await startDirect(controller);
-      expect(firstAudio.pause).toHaveBeenCalledTimes(2);
-      await reading;
-      expect(controller.active).toBe(true);
-      const finished = finalizing ? controller.finishActive() : null;
-      speechStarted = createDeferred();
-      const replacement = next.speak(options.client, "Second message");
-      expect(controller.active).toBe(false);
-      expect(stopTrack).toHaveBeenCalledOnce();
-      await speechStarted.promise;
-      await waitForFast(() => expectClosed("dictation-1", true));
-      transcript("discard");
-      emit({ type: "close", reason: "completed" });
-      if (finished) {
-        await expect(finished).resolves.toBe(false);
+  it.each(["recording", "finalizing", "retry"])(
+    "Read aloud replaces dictation (%s)",
+    async (stage) => {
+      const stopTrack = captureStop();
+      const { controller, onCommit, options } = createHarness();
+      const previous = new GatewaySpeechPlayback();
+      const next = new GatewaySpeechPlayback();
+      const reading = previous.speak(options.client, "First message");
+      try {
+        await speechStarted.promise;
+        const firstAudio = latestAudio();
+        await startDirect(controller);
+        expect(firstAudio.pause).toHaveBeenCalledTimes(2);
+        await reading;
+        expect(controller.active).toBe(true);
+        let finished = stage === "finalizing" ? controller.finishActive() : null;
+        if (stage === "retry") {
+          captureAudio();
+          const failed = controller.finishActive();
+          await vi.advanceTimersByTimeAsync(0);
+          emit({ type: "error", message: "Transcription unavailable" });
+          await failed;
+          finished = controller.retry();
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        speechStarted = createDeferred();
+        const replacement = next.speak(options.client, "Second message");
+        expect(controller.active).toBe(false);
+        expect(stopTrack).toHaveBeenCalledOnce();
+        await speechStarted.promise;
+        await waitForFast(() => expectClosed("dictation-1", true));
+        transcript("discard");
+        emit({ type: "close", reason: "completed" });
+        if (finished) {
+          await expect(finished).resolves.toBe(false);
+        }
+        expect(onCommit).not.toHaveBeenCalled();
+        const current = latestAudio();
+        expect(current.pause).toHaveBeenCalledOnce();
+        current.dispatchEvent(new Event("ended"));
+        await replacement;
+      } finally {
+        previous.stop();
+        next.stop();
       }
-      expect(onCommit).not.toHaveBeenCalled();
-      const current = latestAudio();
-      expect(current.pause).toHaveBeenCalledOnce();
-      current.dispatchEvent(new Event("ended"));
-      await replacement;
-    } finally {
-      previous.stop();
-      next.stop();
-    }
-  });
+    },
+  );
 
   it("keeps captured text and releases dictation on microphone loss when error delivery throws", async () => {
     const { controller, onCommit, onError } = createHarness();
@@ -671,7 +683,7 @@ describe("ComposerDictationOwner", () => {
         );
       }
       await expect(finished).resolves.toBe(false);
-      expect(controller.hasRecovery).toBe(true);
+      expect(controller.recovery).toBeDefined();
       if (outcome === "disconnect") {
         await expect(controller.retry()).resolves.toBe(false);
         controller.update(options);
@@ -687,11 +699,11 @@ describe("ComposerDictationOwner", () => {
         return { ok: true };
       });
       const retried = controller.retry();
-      expect(controller.retrying).toBe(true);
+      expect(controller.recovery?.retrying).toBe(true);
       await vi.advanceTimersByTimeAsync(0);
       if (outcome === "slow replay") {
         await vi.advanceTimersByTimeAsync(10_001);
-        expect(controller.retrying).toBe(true);
+        expect(controller.recovery?.retrying).toBe(true);
         upload.resolve();
         await vi.advanceTimersByTimeAsync(0);
       }
@@ -708,7 +720,7 @@ describe("ComposerDictationOwner", () => {
       emit({ transcriptionSessionId: "retry-1", type: "close", reason: "completed" });
       await expect(retried).resolves.toBe(true);
       expect(onCommit).toHaveBeenCalledExactlyOnceWith("Recovered recording", true);
-      expect(controller.hasRecovery).toBe(false);
+      expect(controller.recovery).toBeUndefined();
     },
   );
 
@@ -720,7 +732,7 @@ describe("ComposerDictationOwner", () => {
     await vi.advanceTimersByTimeAsync(0);
     emit({ type: "error", message: "Transcription unavailable" });
     await finished;
-    expect(controller.hasRecovery).toBe(true);
+    expect(controller.recovery).toBeDefined();
     const admission = createDeferred<ReturnType<typeof sessionResult>>();
     request.mockImplementation(async (method) =>
       method === "talk.session.create" ? admission.promise : { ok: true },
@@ -732,7 +744,7 @@ describe("ComposerDictationOwner", () => {
     await vi.advanceTimersByTimeAsync(0);
     transcript("Must not land", "discarded-retry");
     await expect(retried).resolves.toBe(false);
-    expect(controller.hasRecovery).toBe(false);
+    expect(controller.recovery).toBeUndefined();
     expect(onCommit).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalledWith("talk.session.appendAudio", {
       sessionId: "discarded-retry",

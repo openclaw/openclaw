@@ -21,6 +21,7 @@ import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-
 import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
+import { registerChatDictationEnglish } from "../../ui/src/i18n/locales/en-chat-dictation.ts";
 import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
@@ -149,6 +150,7 @@ const sourceFiles = [
   "en-chat-command-results.ts",
   "en-chat-commands.ts",
   "en-chat-composer.ts",
+  "en-chat-dictation.ts",
   "en-chat-details.ts",
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
@@ -224,6 +226,24 @@ export function loadControlUiStartupCatalog(): TranslationMap {
 }
 
 export function loadControlUiSourceCatalog(): TranslationMap {
+  // Lazy dictation copy retains its original canonical translation positions.
+  const composer: TranslationMap = {};
+  const dictationCopy = registerChatDictationEnglish.catalog.chat.composer;
+  const dictationBefore = new Map<string, (keyof typeof dictationCopy)[]>([
+    ["dictationDisconnected", ["dictationAudioUnsupported", "dictationBrowserAudioUnsupported"]],
+    ["dictationInterruptedRecovery", ["dictationFailed"]],
+    [
+      "dictationListening",
+      ["dictationRetryRecording", "dictationDiscardRecording", "dictationRecordingKept"],
+    ],
+    ["dictationStopAndKeep", ["dictationStarting"]],
+  ]);
+  for (const [key, value] of Object.entries(registerChatComposerEnglish.catalog.chat.composer)) {
+    for (const moved of dictationBefore.get(key) ?? []) {
+      composer[moved] = dictationCopy[moved];
+    }
+    composer[key] = value;
+  }
   // Keep canonical translation order when summary copy moves out of the lazy CI catalog.
   const { automationNoChecks, ...pullRequests } = registerGitHubEnglish.catalog.chat.pullRequests;
   const { automationRetry, ...ciPullRequests } = registerChatCiEnglish.catalog.chat.pullRequests;
@@ -647,7 +667,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       chat: {
         ...registerChatComposerEnglish.catalog.chat,
         composer: {
-          ...registerChatComposerEnglish.catalog.chat.composer,
+          ...composer,
           menu: registerChatComposerMenuEnglish.catalog.chat.composer.menu,
         },
         permissions: registerChatPermissionsEnglish.catalog.chat.permissions,
