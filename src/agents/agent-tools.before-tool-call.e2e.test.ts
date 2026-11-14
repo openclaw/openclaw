@@ -2353,6 +2353,58 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("deny");
   });
 
+  it.each<{
+    label: string;
+    approval: Partial<NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>>;
+    offered: string[] | undefined;
+  }>([
+    {
+      label: "one-call decisions when the hook names none and has no onResolution",
+      approval: {},
+      offered: ["allow-once", "deny"],
+    },
+    {
+      label: "one-call decisions when the list is empty and there is no onResolution",
+      approval: { allowedDecisions: [] },
+      offered: ["allow-once", "deny"],
+    },
+    {
+      label: "the default decisions when the hook has an onResolution callback",
+      approval: { onResolution: () => {} },
+      offered: undefined,
+    },
+    {
+      label: "an explicit allow-always without an onResolution callback",
+      approval: { allowedDecisions: ["allow-once", "allow-always", "deny"] },
+      offered: ["allow-once", "allow-always", "deny"],
+    },
+  ])("requests $label", async ({ approval, offered }) => {
+    setApproval(approval);
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id", decision: "allow-once" });
+
+    const result = await requestApproval({ params: { command: "echo ok" } });
+
+    expect(result).toMatchObject({ blocked: false, approvalResolution: "allow-once" });
+    const requestParams = requireRecord(requireGatewayCall(0)[2], "approval request params");
+    expect(requestParams.allowedDecisions).toEqual(offered);
+  });
+
+  it("does not accept allow-always for a hook that cannot learn the decision", async () => {
+    setApproval();
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id", decision: "allow-always" });
+
+    const result = await requestApproval({ params: { command: "echo ok" } });
+
+    expect(result).toMatchObject({
+      blocked: true,
+      kind: "failure",
+      disposition: "timed_out",
+      deniedReason: "plugin-approval",
+    });
+  });
+
   it.each([
     { label: "an unknown decision", decision: "approved" },
     { label: "an excluded allow decision", decision: "allow-always", restricted: true },
