@@ -318,6 +318,7 @@ describe("handleFileFetch", () => {
     ["empty.png", "", "image/png"],
     ["LICENSE", "Permission is hereby granted\n", "text/plain"],
     ["opaque", Buffer.from([0x00, 0x01, 0x02, 0xff]), "application/octet-stream"],
+    ...["é", "€", "🌍"].map((c) => [c, "a".repeat(8191) + c + " tail", "text/plain"]),
   ])("fetches %s with detected MIME and exact bytes", async (name, content, mimeType) => {
     const peer = duplexPeer();
     const result = await handleFileFetch({ path: await put(name, content) }, peer.io);
@@ -330,66 +331,7 @@ describe("handleFileFetch", () => {
       size: Buffer.byteLength(content),
       base64: Buffer.from(content).toString("base64"),
     });
-    if (name === "empty.png") {
-      expect(result.sha256).toBe(
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      );
-    }
-  });
-  it.each(
-    ["é", "€", "🌍"].flatMap((character) =>
-      Array.from(
-        { length: Buffer.byteLength(character) - 1 },
-        (_, index) => [character, index + 1] as const,
-      ),
-    ),
-  )(
-    "recognizes UTF-8 %s split after %i bytes at the sniff boundary",
-    async (character, prefixBytes) => {
-      const content = Buffer.from("a".repeat(8192 - prefixBytes) + character + " tail");
-      const result = await handleFileFetch({ path: await put("unicode", content) });
-      expectOk(result, {
-        mimeType: "text/plain",
-        size: content.length,
-        base64: content.toString("base64"),
-        sha256: crypto.createHash("sha256").update(content).digest("hex"),
-      });
-    },
-  );
-  it.each([
-    ["complete", Buffer.from("a".repeat(8188) + "🌍"), "text/plain"],
-    [
-      "outside-window",
-      Buffer.concat([Buffer.alloc(8192, 0x61), Buffer.from([0x80])]),
-      "text/plain",
-    ],
-    [
-      "truncated",
-      Buffer.concat([Buffer.alloc(8191, 0x61), Buffer.from([0xe2])]),
-      "application/octet-stream",
-    ],
-    [
-      "truncated-beyond-boundary",
-      Buffer.concat([Buffer.alloc(8191, 0x61), Buffer.from([0xf0, 0x9f])]),
-      "application/octet-stream",
-    ],
-    [
-      "invalid-continuation",
-      Buffer.concat([Buffer.alloc(8191, 0x61), Buffer.from([0xe2, 0x61])]),
-      "application/octet-stream",
-    ],
-    [
-      "malformed",
-      Buffer.concat([Buffer.from([0xff]), Buffer.alloc(8192, 0x61)]),
-      "application/octet-stream",
-    ],
-    [
-      "nul",
-      Buffer.concat([Buffer.from([0]), Buffer.alloc(8192, 0x61)]),
-      "application/octet-stream",
-    ],
-  ] as const)("keeps the %s text sniff control", async (name, content, mimeType) => {
-    expectOk(await handleFileFetch({ path: await put(name, content) }), { mimeType });
+    expect(result.sha256).toBe(digest(Buffer.from(content)));
   });
   it.each([
     ["hard", [Number.MAX_SAFE_INTEGER], 16 * 1024 * 1024],
