@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CodexAppInventoryCache,
   buildCodexAppInventoryCacheKey,
+  resolveCodexPluginThreadAppCacheKey,
   serializeCodexAppInventoryError,
 } from "./app-inventory-cache.js";
 import { appMetadata as app } from "./app-inventory.test-helpers.js";
@@ -14,6 +15,75 @@ type AppMetadata = CodexAppServerRequestResult<"app/read">["apps"][number];
 const CACHE_TTL_MS = 60 * 60 * 1_000;
 
 describe("Codex app inventory cache", () => {
+  it("keeps sibling thread snapshots fresh when invalidating an encoded thread key", async () => {
+    const cache = new CodexAppInventoryCache();
+    const appCacheKey = buildCodexAppInventoryCacheKey({ accountId: "account-a" }, "test", "test");
+    const key = resolveCodexPluginThreadAppCacheKey({ appCacheKey, threadId: "thread" });
+    const siblingKey = resolveCodexPluginThreadAppCacheKey({
+      appCacheKey,
+      threadId: "thread:thread:sibling/%",
+    });
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, [app("app-a")], params),
+    );
+    for (const currentKey of [key, siblingKey]) {
+      await cache.refreshNow({ key: currentKey, request, nowMs: 0, forceRefetch: true });
+    }
+
+    cache.invalidate(key);
+
+    expect(cache.read({ key, request, nowMs: 1, suppressRefresh: true }).state).toBe("stale");
+    expect(cache.read({ key: siblingKey, request, nowMs: 1 }).state).toBe("fresh");
+    await cache.refreshNow({ key, request, nowMs: 1 });
+  });
+
+  it("scopes readiness refresh reuse without delaying manual refresh or invalidation", async () => {
+    const cache = new CodexAppInventoryCache();
+    const apps = [app("app-a"), app("app-b")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+    const repair = (key: string, targetAppIds: string[], nowMs = 0) =>
+      cache.refreshNow({
+        key,
+        targetAppIds,
+        request,
+        nowMs,
+        forceRefetch: true,
+        reuseRecentForcedRefresh: true,
+      });
+    const installedCount = () =>
+      request.mock.calls.filter(([method]) => method === "app/installed").length;
+
+    await Promise.all([
+      repair("account-a:thread-a", ["app-a"]),
+      repair("account-a:thread-a", ["app-a"]),
+    ]);
+    expect(installedCount()).toBe(1);
+    await repair("account-a:thread-b", ["app-a"]);
+    await repair("account-a:thread-a", ["app-a"]);
+    await repair("account-b:thread-a", ["app-a"]);
+    expect(installedCount()).toBe(3);
+    const broader = await repair("account-a:thread-a", ["app-a", "app-b"]);
+    expect(broader.apps.map((row) => row.id)).toEqual(["app-a", "app-b"]);
+    expect(installedCount()).toBe(4);
+    await repair("account-a:thread-a", ["app-a"], 59_999);
+    expect(installedCount()).toBe(4);
+    await repair("account-a:thread-a", ["app-a"], 60_000);
+    expect(installedCount()).toBe(5);
+
+    await cache.refreshNow({
+      key: "account-a:thread-a",
+      request,
+      nowMs: 60_001,
+      forceRefetch: true,
+    });
+    expect(installedCount()).toBe(6);
+    cache.invalidate("account-a:thread-a");
+    await repair("account-a:thread-a", ["app-a"], 60_002);
+    expect(installedCount()).toBe(7);
+  });
+
   it.each([false, true, undefined])(
     "preserves cold-cache refresh intent %s across independent thread keys",
     async (forceRefetch) => {

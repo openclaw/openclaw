@@ -1,6 +1,11 @@
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
+import {
+  buildCodexAppInventoryCacheKey,
+  defaultCodexAppInventoryCache,
+} from "./app-server/app-inventory-cache.js";
+import { CodexPluginMetadataCache } from "./app-server/plugin-metadata-cache.js";
+import { buildCodexPluginThreadConfig } from "./app-server/plugin-thread-config.js";
 import type { CodexAppsInstalledParams } from "./app-server/protocol-control-plane.js";
 import type { v2 } from "./app-server/protocol.js";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
@@ -63,6 +68,7 @@ function fixture(
     refreshedRuntime?: v2.InstalledApp[];
     accountType?: "chatgpt" | "apiKey";
     appsFeature?: boolean;
+    appDenied?: boolean;
     detailPolicy?: Partial<v2.PluginSummary>;
     catalog?: { marketplace: string; kind: string };
   } = {},
@@ -88,6 +94,10 @@ function fixture(
     ? [...apps, { ...apps[0]!, id: "other-app", name: "Other plugin app" }]
     : apps;
   const responses: Record<string, unknown> = {
+    "config/read": () => {
+      const config = { apps: { "app-0": { enabled: !options.appDenied } } };
+      return { config, layers: [{ name: { type: "user" }, config }] };
+    },
     "account/read": {
       account: {
         type: options.accountType ?? "chatgpt",
@@ -304,6 +314,66 @@ describe("Codex plugin status command", () => {
 });
 
 describe("Codex hosted app refresh", () => {
+  it("repairs warm thread readiness after runtime refresh without crossing account or runtime scopes", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const options: Parameters<typeof fixture>[0] = { runtime: [], refreshedRuntime: [] };
+    const test = fixture(options);
+    const metadataCache = new CodexPluginMetadataCache();
+    const runtimeKey = (accountId: string, endpoint = "fixture-runtime") =>
+      buildCodexAppInventoryCacheKey({ accountId, endpoint }, "test", "test");
+    const appCacheKey = runtimeKey("account-a:thread:home");
+    const otherAccountKey = runtimeKey("account-a:thread:home-other");
+    const otherRuntimeKey = runtimeKey("account-a:thread:home", "other-runtime");
+    const threadId = "thread-a:thread:child/%";
+    test.context.appCacheKey = appCacheKey;
+    test.context.threadId = threadId;
+    const build = (key = appCacheKey, thread = threadId) =>
+      buildCodexPluginThreadConfig({
+        pluginConfig: { codexPlugins: test.current },
+        appCache: defaultCodexAppInventoryCache,
+        metadataCache,
+        appCacheKey: key,
+        threadId: thread,
+        request: test.context.request,
+      });
+    for (const [key, thread] of [
+      [appCacheKey, threadId],
+      [appCacheKey, "thread-a"],
+      [otherAccountKey, threadId],
+      [otherRuntimeKey, threadId],
+    ]) {
+      expect((await build(key, thread)).policyContext.apps).toEqual({});
+    }
+
+    options.runtime = options.refreshedRuntime = [
+      { id: "app-0", runtimeName: "App 0", enabled: true, callable: true },
+    ];
+    const boundary = test.request.mock.calls.length;
+    const result = await refreshHostedApps(test.context);
+    expect(result.text).toContain("refresh request completed");
+    expect(
+      test.request.mock.calls.slice(boundary).filter(([method]) => method === "app/installed"),
+    ).toEqual([["app/installed", { forceRefresh: true }]]);
+
+    expect((await build()).policyContext.apps).toHaveProperty("app-0");
+    expect((await build(appCacheKey, "thread-a")).policyContext.apps).toHaveProperty("app-0");
+    const recoveredBoundary = test.request.mock.calls.length;
+    expect((await build(otherAccountKey)).policyContext.apps).toEqual({});
+    expect((await build(otherRuntimeKey)).policyContext.apps).toEqual({});
+    options.appDenied = true;
+    expect((await build()).policyContext.apps).toEqual({});
+    expect(
+      test.request.mock.calls
+        .slice(recoveredBoundary)
+        .filter(([method]) => method === "app/installed"),
+    ).toEqual([]);
+    expect(
+      test.request.mock.calls
+        .slice(recoveredBoundary)
+        .filter(([method]) => method === "config/read"),
+    ).toHaveLength(1);
+  });
+
   it.each([
     { args: "plugins refresh notes", owner: true, expected: "Usage: /codex plugins refresh" },
     { args: "plugins refresh", owner: false, expected: "Only an owner or operator.admin" },
