@@ -36,6 +36,7 @@ export function createCliRuntimeModelAuthEvaluator(
     cfg: OpenClawConfig;
     authStore: AuthProfileStore;
     agentId?: string;
+    env?: NodeJS.ProcessEnv;
     metadataSnapshot?: PluginMetadataSnapshot;
     preparedCliRuntimeAuthDirectories?: CliRuntimeAuthDirectories;
     preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
@@ -75,7 +76,13 @@ export function createCliRuntimeModelAuthEvaluator(
             configuredRuntimePolicy,
           ) ?? normalizedProvider);
     const normalizedRuntimeProvider = normalizeProviderId(runtimeProvider);
-    const binding = resolveCliRuntimeModelBackendBinding({ provider, runtime: runtimeProvider });
+    const binding = resolveCliRuntimeModelBackendBinding({
+      provider,
+      runtime: runtimeProvider,
+      config: params.cfg,
+      env: params.env,
+      metadataSnapshot: params.metadataSnapshot,
+    });
     const runtimeOwners =
       params.metadataSnapshot?.owners?.cliBackends.get(normalizedRuntimeProvider);
     // Agent harnesses can use provider auth without registering a CLI backend.
