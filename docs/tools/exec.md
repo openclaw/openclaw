@@ -55,7 +55,8 @@ in a trusted system directory, including the NixOS system profile.
 The Gateway and its internal workers retain the service's
 core limit for crash diagnostics. Docker sandboxes default to `core=0` through
 the existing `docker.ulimits` setting; an explicit configured core limit wins.
-Durable commands receive the same zero limit on their transient systemd unit.
+Durable commands receive the same zero limit on their transient systemd unit; on macOS,
+the durable launchd job sets a zero core limit for its wrapper and command.
 This prevents direct-file core dumps. Linux ignores this limit for cores piped
 to a collector; those collectors retain their own capture policy.
 
@@ -84,13 +85,13 @@ Start a deliberately independent service immediately. Request Stop leaves it run
 </ParamField>
 
 <ParamField path="durable" type="boolean" default="false">
-Keep a background command running across Gateway restarts. Requires explicit `background: true` or `yieldMs`, the `process` tool, and Gateway-host execution on Linux with systemd 250 or newer and a reachable systemd user manager (`XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`). Unsupported hosts and unavailable user managers return an error; execution never silently falls back to a non-durable process. Sandbox, remote node, worker, macOS, and Windows execution are unsupported.
+Keep a background command running across Gateway restarts. Requires explicit `background: true` or `yieldMs`, the `process` tool, and Gateway-host execution on either Linux with systemd 250 or newer and a reachable systemd user manager (`XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`), or macOS with the Gateway running in a logged-in user's GUI session (`launchctl managername` reports `Aqua`). Unsupported hosts and unavailable user managers return an error; execution never silently falls back to a non-durable process. Sandbox, remote node, worker, and Windows execution are unsupported.
 
 Durable commands have no interactive input: `pty: true`, `awaitResults: true`, and process input actions are refused. Exec policy, approvals, cwd restrictions, and environment preparation still apply. Durable commands launch without secret-egress proxy grants, secret-store sentinels, or proxy environment because those grants end when the Gateway restarts. The result reports how many credentials were omitted. Use the managed GitHub identity, the command's own configuration, or non-durable background execution for commands that need credentials. A managed GitHub identity's direct credential is still injected at launch, but its token is not refreshed for the running command and can expire during long work.
 
-Durable units receive their launch environment as user-manager unit properties held in memory/tmpfs and readable by the same Unix user via `systemctl --user show`; use durable mode only where the Gateway user's other processes may see that environment. Durable process bookkeeping does not copy launch environment values into its OpenClaw state-database records or logs.
+Durable units receive their launch environment as user-manager unit properties held in memory/tmpfs and readable by the same Unix user via `systemctl --user show`; use durable mode only where the Gateway user's other processes may see that environment. On macOS the launch environment is written to a private (`0600`) spec file under `$OPENCLAW_STATE_DIR/processes/`, which the job's wrapper deletes before it starts the command; it is never placed in the launchd job definition. Durable process bookkeeping does not copy launch environment values into its OpenClaw state-database records or logs.
 
-The process uses a transient systemd user service with `ExitType=cgroup`, so descendants keep the process running after its initial shell exits. `timeoutSeconds` applies as `RuntimeMaxSec`, and output appends under `$OPENCLAW_STATE_DIR/processes/`. After restart, the same registry adopts the process under its existing session scope; `process list`, `poll`, `log`, and `kill` continue to work. See [durable processes](/gateway/background-process#durable-processes) for completion authority, retention, and host lifetime limits.
+On Linux the process uses a transient systemd user service with `ExitType=cgroup`, so descendants keep the process running after its initial shell exits. `timeoutSeconds` applies as `RuntimeMaxSec`. On macOS it runs as a transient launchd job whose wrapper waits for the command's process group to empty and enforces `timeoutSeconds` itself. Output appends under `$OPENCLAW_STATE_DIR/processes/`. After restart, the same registry adopts the process under its existing session scope; `process list`, `poll`, `log`, and `kill` continue to work. See [durable processes](/gateway/background-process#durable-processes) for completion authority, retention, and host lifetime limits.
 </ParamField>
 
 <ParamField path="timeoutSeconds" type="number" default="tools.exec.timeoutSeconds">
