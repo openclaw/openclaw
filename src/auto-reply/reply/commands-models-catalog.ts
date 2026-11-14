@@ -222,6 +222,7 @@ export async function loadModelsProviderData(
             entry,
             evaluation,
             pluginRegistry: owner.pluginRegistry,
+            resolveOpenAIProviderRoutes: decisionsForEntry(entry).resolveOpenAIProviderRoutes,
           })
         : undefined;
     // An unavailable canonical row must not hide the only usable CLI choice.

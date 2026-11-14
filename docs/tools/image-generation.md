@@ -42,6 +42,51 @@ A key in `models.providers.<provider>.apiKey` also makes the tool available,
 including an env-backed SecretRef. Inline keys in an auth or billing cooldown
 remain unavailable.
 
+## Review before delivery
+
+Automatic preview delivery remains the default. For creative work that needs a
+quality check before the user sees an image, the agent can opt in per request:
+
+```text
+action=generate deliveryMode=review prompt="..."
+```
+
+The tool returns a task ID immediately. Once generation finishes, OpenClaw saves
+the candidate and its held disposition in the existing durable delivery queue
+**before** waiting for the originating turn or waking the agent to review it.
+The review completion provides private file references, not a visible image send.
+The agent inspects the candidate against the request and reference images, then
+chooses an exact-task action:
+
+- `action=review` lists at most eight saved candidate summaries in stable task
+  order in the current original session, including after a restart. Continue with
+  `cursor=nextCursor` until `nextCursor` is null; omit the cursor to refresh this
+  live list. Add `taskId` to prepare private `inspectionFiles` for one
+  candidate without widening filesystem access; original sandbox references
+  remain available in its `inspectionContext`.
+- `action=deliver taskId="<task-id>"` approves only that candidate for the existing
+  delivery queue. Approval is not delivery confirmation; the agent must not send
+  the same files independently.
+- `action=supersede taskId="<task-id>"` suppresses only that older task's automatic
+  delivery. Accepted generation continues and its paid output is retained. Other
+  concurrent jobs are unaffected. Generate a corrected candidate separately with
+  `deliveryMode=review`.
+
+Review mode requires a durable chat session. Cancelling the requesting turn does
+not cancel already accepted generation. A failed reviewer wake or Gateway restart
+leaves the candidate held; startup does not start a review or provider inference.
+Use `action=review` in a later turn to resume the decision. Files whose delivery has
+already started cannot be retracted. Ambiguous send evidence is reconciled from
+its original receipt, never by blindly sending again.
+
+Held candidates use an inert queue payload kind and candidate-specific names in
+the existing durable media spool. Rolling back does not approve a held candidate,
+but older releases may refuse state written with a newer database schema. Do not
+assume downgrade compatibility; keep a verified backup before changing versions.
+Return to a version supporting review mode to make a decision. This feature adds
+no database schema migration, configuration change, or global media-retention
+extension.
+
 ## Creative projects
 
 The bundled `creative-project` skill guides branding, posters, illustrations,
@@ -186,7 +231,7 @@ Task status and duplicate detection are scoped to the requesting chat, even
 when direct chats share the main session transcript. Completion returns to
 the peer who requested the image.
 Exact retries reuse active or recently completed tasks. Keeping the same prompt while changing
-references, model, or options starts different work; image references are loaded
+references, model, delivery mode, or options starts different work; image references are loaded
 before duplicate detection, so replacing a file at the same path also counts.
 Started and completed receipts include ordered `referenceInputs` facts (SHA-256,
 byte count, and MIME type) for the bytes loaded, not proof of what the provider

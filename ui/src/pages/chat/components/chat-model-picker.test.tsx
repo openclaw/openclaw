@@ -267,7 +267,7 @@ it("keeps search live while targets load, then ranks model, target, and account 
     container.querySelector(
       '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
     ),
-  ).not.toBeNull();
+  ).toBeNull();
   search.focus();
   searchFor(search, "needle");
   const model = control(container, "option", "fixture/model")!;

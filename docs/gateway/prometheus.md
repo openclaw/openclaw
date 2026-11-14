@@ -1175,7 +1175,14 @@ Labels contain a bounded `worker_class` (`reader`, `file-reader`, `compute`,
 above. GC counters also carry the same `kind` values as
 `openclaw_gc_duration_seconds`. No worker, pool, session, or task ID is exported.
 
-`openclaw_worker_tasks_completed_total` counts observed terminal task replies,
+SQLite broker workers share these totals under
+`worker_class="writer",script="sqlite-store.worker.js"`, across all databases and
+worker retirements. They omit `openclaw_worker_tasks_completed_total` because
+broker operations do not use the pool task-reply protocol. This adds at most four
+series to each existing GC counter family (one per kind) and one heap high-water
+series, independent of database or worker count.
+
+`openclaw_worker_tasks_completed_total` counts observed terminal pool task replies,
 including handled failures. `openclaw_worker_gc_duration_seconds_total` and
 `openclaw_worker_gc_collections_total` record elapsed GC seconds and collection
 counts. `openclaw_worker_gc_reclaimed_bytes_total` sums positive differences
@@ -1189,10 +1196,13 @@ byte counter or a sum of simultaneous worker heaps. It can miss peaks between
 samples, and remains visible after the last worker exits.
 
 Workers report through the existing periodic memory channel. The native sampler
-drains worker GC batches every 100 ms (the main thread remains at one second).
-Task replies carry
+drains GC samples once per second; broker samples travel with the next memory
+sample. The 30-second diagnostics heartbeat publishes the cumulative totals, so a
+15-second scrape window cannot precisely locate a collection. Inspector-triggered
+collections contribute to `mark_sweep_compact`; the native profiler does not
+expose a forced flag. Task replies carry
 only a completion marker, without a heap read or another per-task round trip.
-Healthy retirement flushes the last GC batch and heap sample over the same channel
+Healthy pool retirement flushes the last GC batch and heap sample over the same channel
 before stopping the worker, with a 100 ms best-effort limit. Collection requires
 enabled diagnostics and an interested consumer. Tasks before activation are not
 backfilled. Forced termination, crashes, cancellation, or a retirement flush timeout

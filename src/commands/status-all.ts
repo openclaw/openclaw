@@ -58,7 +58,7 @@ import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusAllOverviewRows } from "./status-overview-rows.ts";
 import { buildStatusSecretDiagnostics, countActiveStatusAgents } from "./status-overview-values.js";
 import {
-  reportStatusScanFailure,
+  reportStatusScanFailureUnlessInterrupted,
   resolveStatusServiceSummaries,
   resolveStatusUsageSummary,
   resolveStatusGatewayDiagnosticsSafe,
@@ -140,27 +140,24 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
 }
 
 async function readStatusAllLogTails() {
-  const logPaths = (() => {
-    try {
-      // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
-      return process.platform === "darwin"
+  let logPaths;
+  try {
+    // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
+    logPaths =
+      process.platform === "darwin"
         ? resolveGatewaySupervisorLogPaths(process.env)
         : resolveGatewayLogPaths(process.env);
-    } catch {
-      return null;
-    }
-  })();
-  if (logPaths) {
-    const restartLogPath = resolveGatewayRestartLogPath(process.env);
-    const readStderr = process.platform !== "darwin";
-    const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readStderr ? readFileTailLines(logPaths.stderrPath, 40) : [],
-      readFileTailLines(logPaths.stdoutPath, 40),
-      readFileTailLines(restartLogPath, 30),
-    ]);
-    return { logPaths, restartLogPath, readStderr, stderrTail, stdoutTail, restartTail };
+  } catch {
+    return null;
   }
-  return null;
+  const restartLogPath = resolveGatewayRestartLogPath(process.env);
+  const readStderr = process.platform !== "darwin";
+  const [stderrTail, stdoutTail, restartTail] = await Promise.all([
+    readStderr ? readFileTailLines(logPaths.stderrPath, 40) : [],
+    readFileTailLines(logPaths.stdoutPath, 40),
+    readFileTailLines(restartLogPath, 30),
+  ]);
+  return { logPaths, restartLogPath, readStderr, stderrTail, stdoutTail, restartTail };
 }
 
 async function resolveStatusAllLocalDiagnosis(params: {
@@ -302,7 +299,7 @@ export async function statusAllCommand(
         queryingChannelStatus: "Querying gateway…",
         summarizingChannels: "Summarizing channels…",
       },
-    }).catch((error: unknown) => reportStatusScanFailure(error, runtime, opts?.timeoutMs));
+    });
     progress.setLabel("Checking services…");
     const [daemon, nodeService] = await resolveStatusServiceSummaries(opts.timeoutMs);
     const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
@@ -744,5 +741,7 @@ export async function statusAllCommand(
     progress.setLabel("Rendering…");
     runtime.log(lines.join("\n"));
     progress.tick();
-  });
+  }).catch((error: unknown) =>
+    reportStatusScanFailureUnlessInterrupted(error, runtime, opts.timeoutMs),
+  );
 }

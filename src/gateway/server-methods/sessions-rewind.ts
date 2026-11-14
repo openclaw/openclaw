@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionMessageCutResult as MessageCutMutationResult } from "../../config/sessions/session-message-cut.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import {
@@ -170,7 +171,8 @@ async function mutatePreparedSessionAtMessage({
   const reject = (message: string, code: ErrorCode = ErrorCodes.INVALID_REQUEST) =>
     respond(false, undefined, errorShape(code, message));
   const { sessionMutationCommitGuard, sessionMutationAuthorization } = options;
-  const commitGuard = () => {
+  const assertMutationCurrent = () => {
+    assertSourceCurrent();
     sessionMutationCommitGuard?.();
     sessionMutationAuthorization?.assertCurrent();
   };
@@ -180,8 +182,7 @@ async function mutatePreparedSessionAtMessage({
     withGatewaySessionEntryReadOnly(
       { key: sessionKey, cfg, agentId: requestedAgentId, excludeInternalEffects: true },
       async (current) => {
-        assertSourceCurrent();
-        commitGuard();
+        assertMutationCurrent();
         return current;
       },
     );
@@ -210,10 +211,6 @@ async function mutatePreparedSessionAtMessage({
       return;
     }
   }
-  const assertMutationCurrent = () => {
-    assertSourceCurrent();
-    commitGuard();
-  };
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
   const upstreamContext = captureSessionUpstreamLinkReadSource();
@@ -583,7 +580,10 @@ async function mutatePreparedSessionAtMessage({
           reject(error.message);
           return;
         }
-        if (error instanceof LocalWorkspaceConflictError) {
+        if (
+          error instanceof LocalWorkspaceConflictError ||
+          error instanceof SqliteJsonlReadBudgetExceededError
+        ) {
           reject(error.message, ErrorCodes.UNAVAILABLE);
           return;
         }
