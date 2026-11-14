@@ -215,7 +215,7 @@ When Claude channel mode is enabled, the server advertises Claude experimental c
 Current bridge behavior:
 
 - inbound `user` transcript messages are forwarded as `notifications/claude/channel`
-- Claude permission requests received over MCP are tracked in-memory
+- Claude permission requests received over MCP are tracked in-memory, up to 1000 open at once; past that the bridge refuses new requests with a stderr line, and Claude's local terminal prompt still answers them
 - if the command owner in the linked conversation later sends `yes <id>` or `no <id>` (`<id>` is the 5-letter request id, excluding `l`), the bridge converts that to `notifications/claude/channel/permission`
 - these notifications are live-session only; if the MCP client disconnects, there is no push target
 

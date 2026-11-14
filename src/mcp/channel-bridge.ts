@@ -47,6 +47,8 @@ type NotificationDeliveryOutcome = "delivered" | "unavailable" | "failed";
 
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
 const QUEUE_LIMIT = 1_000;
+// Never track more open permissions than the event backlog can show to a poller.
+const PENDING_CLAUDE_PERMISSION_LIMIT = QUEUE_LIMIT;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
@@ -340,6 +342,20 @@ export class OpenClawChannelBridge {
   }): Promise<void> {
     if (this.closed) {
       return;
+    }
+    if (
+      !this.pendingClaudePermissions.has(params.requestId) &&
+      this.pendingClaudePermissions.size >= PENDING_CLAUDE_PERMISSION_LIMIT
+    ) {
+      this.sweepPendingExpired();
+      if (this.pendingClaudePermissions.size >= PENDING_CLAUDE_PERMISSION_LIMIT) {
+        // Refuse before queueing so no channel owner sees a request whose reply would be
+        // ignored; Claude still answers it through its own local prompt.
+        process.stderr.write(
+          `openclaw mcp: refused Claude permission ${params.requestId}: ${PENDING_CLAUDE_PERMISSION_LIMIT} already pending\n`,
+        );
+        return;
+      }
     }
     this.pendingClaudePermissions.set(params.requestId, Date.now());
     this.ensurePendingSweeper();
