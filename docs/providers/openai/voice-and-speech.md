@@ -332,6 +332,11 @@ sidebarTitle: "Voice and speech"
     `openai` API-key profile, then `OPENAI_API_KEY`. Create the OAuth profile
     with `openclaw models auth login --provider openai`.
 
+    ChatGPT-subscription calls do not apply the instructions sent with the call
+    setup. When OpenClaw starts one of these calls, it also sends the same
+    instructions once as silent commentary context after `session.started`, so
+    configured personas and response rules reach the model.
+
     Discord uses this same Gateway-owned WebRTC bridge when
     `channels.discord.voice.realtime.model` is `gpt-live-1-codex`. Set
     `channels.discord.voice.realtime.speakerVoice` to `cove` for the Codex
