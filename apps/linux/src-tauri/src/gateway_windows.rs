@@ -3182,7 +3182,7 @@ fn notice_script(message: &str) -> String {
     format!("window.dispatchEvent(new CustomEvent('openclaw:gateway-notice',{{detail:{detail}}}));")
 }
 
-fn show_error(app: &AppHandle, label: &str, error: &str) {
+pub(crate) fn show_error(app: &AppHandle, label: &str, error: &str) {
     let owner = app.state::<GatewayWindows>();
     let mut local_notice = true;
     let document = owner.routing.lock().ok().and_then(|mut state| {

@@ -206,7 +206,7 @@ fn handle_deep_links(app: &AppHandle, urls: Vec<Url>) {
                         .state::<gateway_windows::GatewayWindows>()
                         .open_clawhub_review(&current_app, &review)
                     {
-                        notify::notify(&current_app, "OpenClaw", &error);
+                        gateway_windows::show_error(&current_app, "main", &error);
                     }
                 }) {
                     eprintln!("Could not open ClawHub review: {error}");
