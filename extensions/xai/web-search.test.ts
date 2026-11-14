@@ -539,6 +539,14 @@ describe("xai x_search tool", () => {
     await expect(runXSearch(name, undefined, args)).rejects.toThrow(error);
     expect(mockFetch).not.toHaveBeenCalled();
   });
+
+  it("sends handles without the @ that xAI ignores", async () => {
+    const mockFetch = installXaiWebSearchFetch();
+    await runXSearch("at handles", undefined, { excluded_x_handles: ["@openclaw", "grok", "@"] });
+    expect(firstFetchBody(mockFetch)).toMatchObject({
+      tools: [{ type: "x_search", excluded_x_handles: ["openclaw", "grok"] }],
+    });
+  });
 });
 
 describe("xai code_execution tool", () => {
