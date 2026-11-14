@@ -22,6 +22,7 @@ import { withEngineStoreAdmission } from "./admission-scope.js";
 import {
   denyWhileSourceReserved,
   preparePublicationAuthority,
+  withPublicationRetryProbe,
 } from "./github-publication-authority.conformance.test-support.js";
 import {
   mixedAgentConnection,
@@ -37,103 +38,104 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
 
     it("persists only publications whose configured source session remains current", async ({
       signal,
-    }) => {
-      await captureRuntimeConfigAsyncReader()();
-      withEngineStoreAdmission(() =>
-        runOpenClawStateWriteTransaction(({ db }) => ensureRepositoryGitHubPublicationSchema(db)),
-      );
-      const row = repositoryRow(randomUUID());
-      row.session_id = row.request_id;
-      row.session_key = `agent:main:${row.request_id}`;
-      const workspace = withEngineStoreAdmission(() =>
-        runOpenClawStateWriteTransaction(({ db }) =>
-          createSessionRepositoryWorkspaceInDatabase(
-            db,
-            {
-              agentId: row.agent_id,
-              sessionKey: row.session_key,
-              url: "https://github.com/example/repository",
-              branch: row.branch,
-            },
-            1000,
-          ),
-        ),
-      );
-      row.workspace_id = workspace.workspaceId;
-      const target = { agentId: row.agent_id, sessionKey: row.session_key };
-      const authority = await preparePublicationAuthority(target, signal);
-      const entry = await upsertSessionEntryCore(target, {
-        createdActor: { type: "human", source: "profile", id: authority.profileId },
-        sessionId: row.session_id,
-        updatedAt: 1000,
-        repositoryWorkspaceId: row.workspace_id,
-      });
-      row.session_lifecycle_revision = entry!.lifecycleRevision ?? null;
-      let requester = await authority.capture();
-      await authority.rejectForeign();
-      row.requester_authority_json = encodeGitHubPublicationRequester(requester.snapshot);
-      row.request_digest = repositoryGitHubPublicationDigest(row);
-      const prepare = () =>
-        requester.prepareSource({
-          ...target,
-          sessionId: row.session_id,
-          lifecycleRevision: row.session_lifecycle_revision,
-          repositoryWorkspaceId: row.workspace_id,
-          repositoryBranch: row.branch,
-        });
-      const source = await prepare();
-      try {
-        await expect(
-          stateEngine === "postgres"
-            ? insertWithReservedSource(row, source, signal)
-            : insertRepositoryGitHubPublicationAsync(row, source),
-        ).resolves.toMatchObject({
-          request_id: row.request_id,
-          status: "requested",
-        });
-      } finally {
-        await source.release();
-      }
-      const queuedSource = await prepare();
-      const queued = { ...row, request_id: randomUUID(), idempotency_key: randomUUID() };
-      queued.request_digest = repositoryGitHubPublicationDigest(queued);
-      try {
-        await denyWhileSourceReserved(queued, queuedSource, authority);
-        expect(
-          withEngineStoreAdmission(() =>
-            listRepositoryGitHubPublicationsInDatabase(openOpenClawStateDatabase().db, {
-              idempotencyKey: queued.idempotency_key,
-            }),
-          ),
-        ).toEqual([]);
-      } finally {
-        await queuedSource.release();
-      }
-      authority.restore();
-      requester = await authority.capture();
-      const stale = await prepare();
-      try {
-        await upsertSessionEntryCore(target, { archivedAt: 2000 });
-        await expect(insertRepositoryGitHubPublicationAsync(row, stale)).rejects.toThrow(
-          /changed|expired/,
+    }) =>
+      withPublicationRetryProbe(signal, async (retry) => {
+        await captureRuntimeConfigAsyncReader()();
+        withEngineStoreAdmission(() =>
+          runOpenClawStateWriteTransaction(({ db }) => ensureRepositoryGitHubPublicationSchema(db)),
         );
-        expect(
-          withEngineStoreAdmission(() =>
-            listRepositoryGitHubPublicationsInDatabase(openOpenClawStateDatabase().db, {
-              idempotencyKey: row.idempotency_key,
-            }),
+        const row = repositoryRow(randomUUID());
+        row.session_id = row.request_id;
+        row.session_key = `agent:main:${row.request_id}`;
+        const workspace = withEngineStoreAdmission(() =>
+          runOpenClawStateWriteTransaction(({ db }) =>
+            createSessionRepositoryWorkspaceInDatabase(
+              db,
+              {
+                agentId: row.agent_id,
+                sessionKey: row.session_key,
+                url: "https://github.com/example/repository",
+                branch: row.branch,
+              },
+              1000,
+            ),
           ),
-        ).toEqual([
-          expect.objectContaining({
+        );
+        row.workspace_id = workspace.workspaceId;
+        const target = { agentId: row.agent_id, sessionKey: row.session_key };
+        const authority = await preparePublicationAuthority(target, signal);
+        const entry = await upsertSessionEntryCore(target, {
+          createdActor: { type: "human", source: "profile", id: authority.profileId },
+          sessionId: row.session_id,
+          updatedAt: 1000,
+          repositoryWorkspaceId: row.workspace_id,
+        });
+        row.session_lifecycle_revision = entry!.lifecycleRevision ?? null;
+        let requester = await authority.capture();
+        await authority.rejectForeign();
+        row.requester_authority_json = encodeGitHubPublicationRequester(requester.snapshot);
+        row.request_digest = repositoryGitHubPublicationDigest(row);
+        const prepare = () =>
+          requester.prepareSource({
+            ...target,
+            sessionId: row.session_id,
+            lifecycleRevision: row.session_lifecycle_revision,
+            repositoryWorkspaceId: row.workspace_id,
+            repositoryBranch: row.branch,
+          });
+        const source = await prepare();
+        try {
+          await expect(
+            stateEngine === "postgres"
+              ? insertWithReservedSource(row, source, signal)
+              : insertRepositoryGitHubPublicationAsync(row, source),
+          ).resolves.toMatchObject({
             request_id: row.request_id,
             status: "requested",
-            requester_authority_json: row.requester_authority_json,
-          }),
-        ]);
-      } finally {
-        await stale.release();
-      }
-    });
+          });
+        } finally {
+          await source.release();
+        }
+        const queuedSource = await prepare();
+        const queued = { ...row, request_id: randomUUID(), idempotency_key: randomUUID() };
+        queued.request_digest = repositoryGitHubPublicationDigest(queued);
+        try {
+          await denyWhileSourceReserved(queued, queuedSource, authority, retry);
+          expect(
+            withEngineStoreAdmission(() =>
+              listRepositoryGitHubPublicationsInDatabase(openOpenClawStateDatabase().db, {
+                idempotencyKey: queued.idempotency_key,
+              }),
+            ),
+          ).toEqual([]);
+        } finally {
+          await queuedSource.release();
+        }
+        authority.restore();
+        requester = await authority.capture();
+        const stale = await prepare();
+        try {
+          await upsertSessionEntryCore(target, { archivedAt: 2000 });
+          await expect(insertRepositoryGitHubPublicationAsync(row, stale)).rejects.toThrow(
+            /changed|expired/,
+          );
+          expect(
+            withEngineStoreAdmission(() =>
+              listRepositoryGitHubPublicationsInDatabase(openOpenClawStateDatabase().db, {
+                idempotencyKey: row.idempotency_key,
+              }),
+            ),
+          ).toEqual([
+            expect.objectContaining({
+              request_id: row.request_id,
+              status: "requested",
+              requester_authority_json: row.requester_authority_json,
+            }),
+          ]);
+        } finally {
+          await stale.release();
+        }
+      }));
   },
 );
 
