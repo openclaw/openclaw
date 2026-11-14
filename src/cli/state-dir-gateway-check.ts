@@ -71,6 +71,8 @@ export function compareCliGatewayStateDirs(params: {
   source: "live Gateway" | "installed Gateway service";
   mode: "refuse" | "warn";
   command?: string;
+  /** Inherited `KEY=value` that picked the installed service instead of this profile's own. */
+  serviceSelector?: string;
 }): CliGatewayStateDirOutcome {
   const cliStateDir = resolveIdentityPathViaExistingAncestorSync(params.cliStateDir);
   const cliConfigPath = resolveIdentityPathViaExistingAncestorSync(params.cliConfigPath);
@@ -92,6 +94,17 @@ export function compareCliGatewayStateDirs(params: {
     return {
       kind: "warn",
       message: `CLI and ${params.source} use different ${detail}. Local commands may read or write state the Gateway does not use.`,
+    };
+  }
+  if (params.serviceSelector) {
+    const key = params.serviceSelector.split("=")[0];
+    return {
+      kind: "refuse",
+      message: [
+        `No credentials or configuration were written. CLI and ${params.source} use different ${detail}.`,
+        `This shell selects that service with ${params.serviceSelector}, usually inherited from a Gateway process.`,
+        `Fix: run unset ${key}, then ${params.command ?? "openclaw configure"}.`,
+      ].join(" "),
     };
   }
   return {
@@ -154,6 +167,11 @@ export async function checkCliGatewayStateDir(params: {
     return { kind: "warn", message: GATEWAY_SERVICE_PATHS_UNVERIFIED };
   }
   if (servicePaths.kind === "known") {
+    const selectorKey = [
+      "OPENCLAW_LAUNCHD_LABEL",
+      "OPENCLAW_SYSTEMD_UNIT",
+      "OPENCLAW_WINDOWS_TASK_NAME",
+    ].find((key) => process.env[key]?.trim());
     return compareCliGatewayStateDirs({
       cliStateDir,
       cliConfigPath,
@@ -162,6 +180,7 @@ export async function checkCliGatewayStateDir(params: {
       source: "installed Gateway service",
       mode: "refuse",
       command: params.command,
+      serviceSelector: selectorKey && `${selectorKey}=${process.env[selectorKey]?.trim()}`,
     });
   }
 

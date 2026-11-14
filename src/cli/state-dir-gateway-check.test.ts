@@ -96,6 +96,28 @@ describe("state-dir-gateway-check", () => {
     expect(mocks.readServiceCommand.mock.calls[0]?.[1]).toMatchObject({ requireEffective: true });
   });
 
+  it("names an inherited service selector instead of advising uninstall", async () => {
+    const canonicalRoot = await fs.realpath(root);
+    const serviceStateDir = path.join(canonicalRoot, "production");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(canonicalRoot, "beta"));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(canonicalRoot, "beta", "openclaw.json"));
+    vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.production");
+    serviceEnv({ OPENCLAW_STATE_DIR: serviceStateDir });
+
+    const outcome = await check();
+
+    expect(outcome).toMatchObject({
+      kind: "refuse",
+      message: expect.stringContaining(
+        "This shell selects that service with OPENCLAW_LAUNCHD_LABEL=ai.openclaw.production",
+      ),
+    });
+    expect(outcome).toMatchObject({
+      message: expect.stringContaining("Fix: run unset OPENCLAW_LAUNCHD_LABEL"),
+    });
+    expect(outcome).not.toMatchObject({ message: expect.stringContaining("uninstall") });
+  });
+
   it("allows an offline command and does not probe an ordinary transport failure", async () => {
     await expect(check()).resolves.toEqual({ kind: "allow" });
     expect(mocks.probeGateway).not.toHaveBeenCalled();
