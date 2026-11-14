@@ -659,7 +659,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       const apply = await gateway.waitForRequest("templates.add.apply");
       await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
       const pending = page.locator("openclaw-pending-session-create");
-      await pending.getByText("Creating new agent…", { exact: true }).waitFor();
+      await pending.getByText("Creating new agent", { exact: true }).waitFor();
       // The Gateway admitted the agent and chat, then could not fetch the Template.
       await gateway.emitGatewayEvent("templates.add.progress", {
         requestId: apply.id,
@@ -770,7 +770,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       });
       await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
       const pending = page.locator("openclaw-pending-session-create");
-      await pending.getByText("Creating new agent…", { exact: true }).waitFor();
+      await pending.getByText("Creating new agent", { exact: true }).waitFor();
       expect(await pending.locator("textarea").isEnabled()).toBe(true);
       await pending.locator("textarea").fill("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);

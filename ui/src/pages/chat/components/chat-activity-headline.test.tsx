@@ -128,14 +128,14 @@ describe("activity headline cadence", () => {
     update(operation("discarded"));
     advanceTimersByTime(400);
     update(operation("latest"));
-    expectAfter(2_199, "Read first…");
-    expectAfter(1, "Read latest…");
+    expectAfter(2_199, "Read first");
+    expectAfter(1, "Read latest");
     expect(vi.getTimerCount()).toBe(0);
 
     update(operation("next"));
-    expectAfter(2_999, "Read latest…");
-    expectAfter(1, "Read next…");
-    expectAfter(30_000, "Read next…");
+    expectAfter(2_999, "Read latest");
+    expectAfter(1, "Read next");
+    expectAfter(30_000, "Read next");
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -154,7 +154,7 @@ describe("activity headline cadence", () => {
     draw(operation("first"));
     advanceTimersByTime(100);
     draw({ ...operation("untitled"), title: "" });
-    expect(label()).toBe("Read first…");
+    expect(label()).toBe("Read first");
     expect(outcomes()).toEqual(["1 unknown"]);
     expectAfter(2_900, "2 reads · 1 unknown");
     expect(outcomes()).toEqual([]);
@@ -166,8 +166,8 @@ describe("activity headline cadence", () => {
     update(operation("stale"));
     update(operation("first"), "new-scope");
     update(operation("next"), "new-scope");
-    expectAfter(2_999, "Read first…");
-    expectAfter(1, "Read next…");
+    expectAfter(2_999, "Read first");
+    expectAfter(1, "Read next");
   });
 
   it("cancels its timer while disconnected and resumes with only the latest pending operation", () => {
@@ -176,9 +176,9 @@ describe("activity headline cadence", () => {
     expect(vi.getTimerCount()).toBe(1);
     root.setConnected(false);
     expect(vi.getTimerCount()).toBe(0);
-    expectAfter(3_000, "Read first…");
+    expectAfter(3_000, "Read first");
     root.setConnected(true);
-    expect(label()).toBe("Read pending…");
+    expect(label()).toBe("Read pending");
     expect(vi.getTimerCount()).toBe(0);
   });
 });
@@ -235,9 +235,9 @@ function nestedStep(childName: string, parent: AgentActivityItem, child: AgentAc
 }
 
 it.each([
-  ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect…"],
-  ["web_search", { query: "new plugin APIs" }, "start", 'for "new plugin APIs"…'],
-  ["lookup_record", { query: "release notes" }, "start", "release notes…"],
+  ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect"],
+  ["web_search", { query: "new plugin APIs" }, "start", 'for "new plugin APIs"'],
+  ["lookup_record", { query: "release notes" }, "start", "release notes"],
   ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
   ["exec", {}, "result", "Exec"],
   ["session_status", {}, "result", "1 other operation"],
@@ -276,11 +276,11 @@ it("keeps the icon paired with the held purpose and restores the aggregate icon"
   const execSvg = icon()?.innerHTML;
   advanceTimersByTime(100);
   await draw([exec, search]);
-  expect(label()).toBe("Inspect source…");
+  expect(label()).toBe("Inspect source");
   expect(icon()?.getAttribute("aria-label")).toBe("exec");
   advanceTimersByTime(2_900);
   await settleToolBridges(container);
-  expect(label()).toBe('for "API docs"…');
+  expect(label()).toBe('for "API docs"');
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
   expect(icon()?.innerHTML).not.toBe(execSvg);
   await draw([exec, search], false);
@@ -321,7 +321,7 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
   expect(summary.getAttribute("aria-expanded")).toBe("true");
   expect(body.hidden).toBe(false);
   expectAfter(1_999, "Read first");
-  expectAfter(1, "Read next…");
+  expectAfter(1, "Read next");
   expect(query("label")).toBe(headline);
   expanded = false;
   draw([prepared("first", "completed"), prepared("next", "completed")]);
@@ -340,7 +340,7 @@ it("selects only visible activity from the matching run and newest eligible grou
     group("peer", [prepared("peer")], "peer-run"),
   ];
   activityRoot.render(groups, { ...liveOptions, activityGroupKey: "current" });
-  expect(label()).toBe("Read current…");
+  expect(label()).toBe("Read current");
   activityRoot.render(groups, { ...liveOptions, activityGroupKey: "newer-group" });
   expect(label()).toBe("3 reads");
   activityRoot.render(groups, { ...liveOptions, activityRunId: "absent-run" });
@@ -386,7 +386,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
   expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
   expect(activitySummary.getAttribute("aria-label")).toBeNull();
   expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-  expect(label()).toBe("in /repo/src/a.ts…");
+  expect(label()).toBe("in /repo/src/a.ts");
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
   expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe("1 read · 1 edit");
@@ -419,7 +419,7 @@ it("keeps the live row for a step with a routine nested call until the run settl
       { ...prepared("child", "completed"), hideFromChannelProgress: true },
     );
   await renderActivityFixture([step("running")], liveOptions);
-  expect(label()).toBe("Build the snake game…");
+  expect(label()).toBe("Build the snake game");
   await renderActivityFixture([step("completed")], liveOptions);
   expect(label()).toBe("Build the snake game");
   await renderActivityFixture([step("completed")], { ...liveOptions, runActive: false });
@@ -444,6 +444,6 @@ it.each([false, true])(
     }
     activityRoot.render([group("current", [...settled, prepared("next")])], liveOptions);
     expect(container.querySelector(".text-shimmer")?.textContent).toBe("Read first");
-    expectAfter(2_800, "Read next…");
+    expectAfter(2_800, "Read next");
   },
 );

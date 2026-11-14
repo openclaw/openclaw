@@ -118,7 +118,7 @@ it("limits live copy to the newest activity group in the active run, not history
     { persistCommentary: true },
   );
   await waitForSolid(() =>
-    expect(texts(".chat-activity-group__label--live")).toEqual(["Latest active file…"]),
+    expect(texts(".chat-activity-group__label--live")).toEqual(["Latest active file"]),
   );
   expect(labels().filter((label) => label === "2 reads")).toHaveLength(3);
 });
@@ -127,7 +127,7 @@ it.each(["end", "session", "run", "connection"] as const)(
   "does not carry a pending title across a %s scope change",
   async (scope) => {
     draw([user, first()]);
-    await waitForSolid(() => expectLabels(["Inspect the first file…"]));
+    await waitForSolid(() => expectLabels(["Inspect the first file"]));
     vi.advanceTimersByTime(100);
     const messages = [
       user,
@@ -142,7 +142,7 @@ it.each(["end", "session", "run", "connection"] as const)(
       expectLabels(["4 reads"]);
       vi.advanceTimersByTime(3_000);
       expectLabels(["4 reads"]);
-      expect(container.textContent).not.toContain("Stale pending file…");
+      expect(container.textContent).not.toContain("Stale pending file");
       return;
     }
     const owner = scope === "run" ? "replacement-run" : runId;
@@ -158,8 +158,8 @@ it.each(["end", "session", "run", "connection"] as const)(
         ...(scope === "connection" ? { connectionEpoch: 2 } : {}),
       },
     );
-    await waitForSolid(() => expectLabels(["Fresh scope file…"]));
+    await waitForSolid(() => expectLabels(["Fresh scope file"]));
     vi.advanceTimersByTime(3_000);
-    expectLabels(["Fresh scope file…"]);
+    expectLabels(["Fresh scope file"]);
   },
 );

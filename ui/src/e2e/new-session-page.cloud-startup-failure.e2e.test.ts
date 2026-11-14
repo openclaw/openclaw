@@ -107,7 +107,7 @@ suite.define(() => {
       await pollLocatorText(retained).toContain(message);
       const working = retained.locator(".chat-working-indicator");
       await pollLocatorText(working).toContain(
-        outcome === "pending" ? "Starting…" : "Provisioning environment",
+        outcome === "pending" ? "Starting" : "Provisioning environment",
       );
       expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
       expect(page.url()).toBe(route);
@@ -216,7 +216,7 @@ suite.define(() => {
         );
       }
       const working = page.locator('.chat-thread .chat-working-indicator[role="status"]');
-      await pollLocatorText(working).toContain("Provisioning environment…");
+      await pollLocatorText(working).toContain("Provisioning environment");
       expect(await working.locator(".chat-reading-indicator").count()).toBe(1);
       expect(
         await page

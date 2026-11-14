@@ -142,7 +142,7 @@ describe("Solid shell chrome", () => {
     setGatewayStatus({ kind: "reconnecting" });
     flush();
     await topbar.updateComplete;
-    expect(find(".mobile-header__notice")?.textContent).toBe("Reconnecting…");
+    expect(find(".mobile-header__notice")?.textContent).toBe("Reconnecting");
     expect(find(".mobile-header__spinner")).not.toBeNull();
 
     setGatewayStatus({ kind: "offline", onRetry: retry });

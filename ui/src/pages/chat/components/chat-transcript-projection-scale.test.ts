@@ -492,15 +492,15 @@ describe("transcript projection", () => {
     view.draw();
     await view.settle();
     await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(liveLabels()).toEqual(["Latest operation…"]));
+    await waitForSolid(() => expect(liveLabels()).toEqual(["Latest operation"]));
     props.messages = props.messages.map((message) =>
       message === latest ? { ...latest, runId: "peer" } : message,
     );
     view.draw();
-    expect(liveLabels()).toEqual(["Earlier operation…"]);
+    expect(liveLabels()).toEqual(["Earlier operation"]);
     props.runId = "peer";
     view.draw();
-    expect(liveLabels()).toEqual(["Latest operation…"]);
+    expect(liveLabels()).toEqual(["Latest operation"]);
     props.runActive = false;
     view.draw();
     expect(liveLabels()).toEqual([]);

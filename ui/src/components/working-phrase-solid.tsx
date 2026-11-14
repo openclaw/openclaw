@@ -69,7 +69,7 @@ defineSolidBridge<WorkingPhraseProps>(
     });
     return (
       <Show when={label() !== undefined}>
-        <span>·</span> {label()}…
+        <span>·</span> {label()}
       </Show>
     );
   },

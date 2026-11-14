@@ -346,14 +346,14 @@ describe("sessions page lifecycle", () => {
       expect(sessions.deleteMany).not.toHaveBeenCalled();
       answerConfirmDialog(actions, "confirm");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       pending.reject(new Error("Deletion unavailable. Try again."));
       await waitForFast(() =>
         expect(page.querySelector('[role="alert"]')?.textContent).toContain(
           "Deletion unavailable. Try again.",
         ),
       );
-      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).not.toContain("Working");
       expect(page.textContent).toContain("Command fixture");
     } finally {
       pending.resolve(emptyDeletion());
@@ -397,19 +397,19 @@ describe("sessions page lifecycle", () => {
     try {
       await chooseAdvanced(page, target, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       changeScope("reviewer");
       await page.updateComplete;
-      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).not.toContain("Working");
       const nextTarget = sessionRow("new-scope-command", {
         key: "agent:reviewer:new-scope-command",
       });
       page.result = sessionsResult([nextTarget], 2);
       await chooseAdvanced(page, nextTarget, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledTimes(2));
-      expect(page.textContent).toContain("Working…");
+      expect(page.textContent).toContain("Working");
       next.resolve(emptyDeletion());
-      await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
+      await waitForFast(() => expect(page.textContent).not.toContain("Working"));
       pending.reject(new Error("Old agent deletion failed"));
       await page.updateComplete;
       expect(page.textContent).not.toContain("Old agent deletion failed");

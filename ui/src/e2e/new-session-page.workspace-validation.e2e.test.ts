@@ -159,7 +159,7 @@ async function expectPendingNewSession(page: Page, message: string) {
   await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
   await pollLocatorText(submittedPrompt).toContain(message);
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-    "Starting…",
+    "Starting",
   );
   expect(await messageInput(page).isVisible()).toBe(false);
 }

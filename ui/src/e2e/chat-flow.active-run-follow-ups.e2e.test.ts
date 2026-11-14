@@ -478,7 +478,7 @@ suite.define(() => {
       chatEvent(runId, "agent:main:main", "status", { seq: 1, phase: "naming_worktree" }),
     );
     const startupIndicator = page.locator('.chat-working-indicator[role="status"]');
-    await expect.poll(() => startupIndicator.textContent()).not.toContain("Naming worktree…");
+    await expect.poll(() => startupIndicator.textContent()).not.toContain("Naming worktree");
     const steerParams = requireRecord(steerSend.params);
     expect(steerParams).toMatchObject({
       deliver: false,
