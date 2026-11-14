@@ -261,7 +261,7 @@ export async function reportStatusScanFailureUnlessInterrupted(
 }
 
 /** Preserve independent service diagnostics when local status collection refuses state. */
-export async function reportStatusScanFailure(
+async function reportStatusScanFailure(
   error: unknown,
   runtime: RuntimeEnv,
   timeoutMs?: number,
