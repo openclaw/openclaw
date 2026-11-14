@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import type { LookupAddress } from "node:dns";
 import { createServer, type RequestListener, type Server, type ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createSearxngWebSearchProvider } from "./searxng-search-provider.js";
+
+const lookup = vi.hoisted(() => vi.fn<() => Promise<LookupAddress[]>>());
+vi.mock("node:dns/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns/promises")>()),
+  lookup,
+}));
 
 let server: Server, baseUrl: string, requests: number, respond: RequestListener;
 const makeResult = (id: string | number) => ({ title: "Result", url: `https://example.com/${id}` });
@@ -13,6 +20,7 @@ function sendResults(response: ServerResponse, ids: (string | number)[] = [reque
 }
 beforeEach(async () => {
   requests = 0;
+  lookup.mockReset().mockResolvedValue([{ address: "127.0.0.1", family: 4 }]);
   respond = (_request, response) => sendResults(response);
   server = createServer((request, response) => {
     requests++;
@@ -24,6 +32,7 @@ beforeEach(async () => {
   baseUrl = `http://127.0.0.1:${address.port}`;
 });
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   server.closeAllConnections();
   await server[Symbol.asyncDispose]();
@@ -111,4 +120,51 @@ it("aborts at the configured deadline but permits a longer configured timeout", 
   await closed.promise;
   const allowed = await createTool(0, { timeoutSeconds: 3 }).execute({ query: "longer budget" });
   expect(allowed.results).toHaveLength(1);
+});
+
+it.each([
+  { protocol: "http", stop: "cancel", warmCache: false },
+  { protocol: "https", stop: "cancel", warmCache: false },
+  { protocol: "http", stop: "deadline", warmCache: false },
+  { protocol: "https", stop: "deadline", warmCache: false },
+  { protocol: "http", stop: "cancel", warmCache: true },
+  { protocol: "http", stop: "deadline", warmCache: true },
+])("settles $protocol DNS $stop (cached: $warmCache)", async ({ protocol, stop, warmCache }) => {
+  baseUrl = baseUrl.replace("http://127.0.0.1", `${protocol}://search.example.test`);
+  const tool = createTool(15, { timeoutSeconds: 1 });
+  const args = { query: "preflight lifetime" };
+  if (warmCache) {
+    await tool.execute(args);
+  }
+  const dns = Promise.withResolvers<LookupAddress[]>();
+  const entered = Promise.withResolvers<void>();
+  lookup.mockImplementationOnce(() => {
+    entered.resolve();
+    return dns.promise;
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const caller = new AbortController();
+  const reason = new Error("caller stopped during DNS");
+  const observe = vi.fn();
+  const settled = tool.execute(args, { signal: caller.signal }).then(
+    (value) => observe({ value }),
+    (error: unknown) => observe({ error }),
+  );
+  try {
+    await entered.promise;
+    if (stop === "cancel") {
+      caller.abort(reason);
+    }
+    await vi.advanceTimersByTimeAsync(stop === "deadline" ? 1_000 : 0);
+    expect(observe).toHaveBeenCalledWith({
+      error: stop === "deadline" ? expect.objectContaining({ name: "TimeoutError" }) : reason,
+    });
+    expect(requests).toBe(warmCache ? 1 : 0);
+  } finally {
+    caller.abort();
+    dns.resolve([{ address: "127.0.0.1", family: 4 }]);
+    await settled;
+  }
+  expect(requests).toBe(warmCache ? 1 : 0);
+  expect(vi.getTimerCount()).toBe(0);
 });
