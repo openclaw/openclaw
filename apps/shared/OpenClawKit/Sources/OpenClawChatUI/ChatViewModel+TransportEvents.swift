@@ -598,11 +598,10 @@ extension OpenClawChatViewModel {
         default: nil
         }
         self.retirePendingRun(terminalRunID, hapticEvent: hapticEvent)
-        self.clearStreamingActivity()
         self.appendFinalChatMessageIfPresent(chat)
         let context = self.beginHistoryRequest()
         self.applyDeferredExternalStateIfReady()
-        return Task { _ = await self.refreshHistoryAfterRun(historyRequest: context) }
+        return self.clearStreamingActivityAfterHistory(context)
     }
 
     private func appendFinalChatMessageIfPresent(_ chat: OpenClawChatEventPayload) {
@@ -899,10 +898,26 @@ extension OpenClawChatViewModel {
         if isFailure || aborted {
             self.errorText = Self.agentLifecycleErrorMessage(evt, aborted: aborted)
         }
-        self.clearStreamingActivity()
         let context = self.beginHistoryRequest()
         self.applyDeferredExternalStateIfReady()
-        return Task { _ = await self.refreshHistoryAfterRun(historyRequest: context) }
+        return self.clearStreamingActivityAfterHistory(context)
+    }
+
+    /// Words the transcript already records leave with the run. Otherwise a finished run keeps its
+    /// live words until the history read after it, whose durable row replaces them in one update
+    /// (`liveText` hides recorded words). Clearing them at a terminal event that carried no reply
+    /// left the turn with neither for that round trip; the transcript collapsed and lost its
+    /// scroll position.
+    private func clearStreamingActivityAfterHistory(_ context: HistoryRequest) -> Task<Void, Never> {
+        if self.liveText(self.streamingAssistantText) == nil {
+            self.clearStreamingActivity()
+        }
+        return Task {
+            _ = await self.refreshHistoryAfterRun(historyRequest: context)
+            // A run started meanwhile owns the live text now.
+            guard self.isCurrentSession(context.session), !self.hasBlockingRunActivity else { return }
+            self.clearStreamingActivity()
+        }
     }
 
     private static func lowercasedAgentEventString(_ value: AnyCodable?) -> String? {
