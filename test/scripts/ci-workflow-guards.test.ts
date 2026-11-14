@@ -1664,6 +1664,9 @@ AFTER_CD
       for (const docsSelected of [false, true]) {
         for (const frozen of [false, true]) {
           const context = {
+            eventName: "pull_request" as const,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
             preflightOutputs: {
               run_format_check: String(enabled),
               run_check_docs: String(docsSelected),
