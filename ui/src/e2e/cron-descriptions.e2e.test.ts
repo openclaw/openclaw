@@ -113,7 +113,7 @@ suite.define(() => {
         const text = cases[index]?.text;
         expect({ row: rowText, detail }).toEqual({
           row: text,
-          detail: `${text} · Paused`,
+          detail: `${text} · Disabled`,
         });
         await page.locator('[data-test-id="cron-back"]').click();
         await row.waitFor();

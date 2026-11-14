@@ -62,7 +62,7 @@ suite.define(() => {
         await gateway.setMethodResponse("cron.list", cronList([job], "recovered"));
         await page.locator(".cron-refresh").click();
         await expect.poll(() => row.textContent()).not.toContain("Waiting");
-        expect(await row.locator(".cron-table__state").getAttribute("aria-label")).toBe("Active");
+        expect(await row.locator(".cron-table__state").getAttribute("aria-label")).toBe("Enabled");
       },
     );
   });

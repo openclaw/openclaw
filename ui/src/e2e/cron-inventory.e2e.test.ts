@@ -202,7 +202,7 @@ suite.define(() => {
       await row(added.name).waitFor({ state: "detached" });
       const paused = { ...edited, enabled: false, updatedAtMs: 3 };
       await publish([held, paused]);
-      await row(paused.name).getByText("Paused", { exact: true }).waitFor();
+      await row(paused.name).getByText("Disabled", { exact: true }).waitFor();
       await publish([held]);
       await row(paused.name).waitFor({ state: "detached" });
 

@@ -35,7 +35,7 @@ it("keeps the configured occurrence while runtime refreshes, pauses, runs, or co
   for (const [state, enabled, expected] of [
     [{ nextRunAtMs: next + 60_000 }, true, `Next activity at ${formatMs(next + 60_000)}`],
     [{ nextRunAtMs: next, runningAtMs: next }, true, "Running"],
-    [{ nextRunAtMs: next }, false, "Paused"],
+    [{ nextRunAtMs: next }, false, "Disabled"],
     [{}, true, "No next run scheduled"],
   ] as const) {
     job.state = state;

@@ -134,7 +134,7 @@ function DetailHeader(
             when={props.mode === "job" && props.canManage ? props.selectedJob : undefined}
             keyed
           >
-            {(job) => <EnabledSwitch {...props} job={job} />}
+            {(_job) => <EnabledSwitch {...props} job={props.selectedJob!} />}
           </Show>
           <span class="cron-detail-sub">{subtitle()}</span>
           {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}

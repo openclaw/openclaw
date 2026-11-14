@@ -18,9 +18,9 @@ it("labels an auto-disabled job distinctly from an operator pause", async () => 
   });
   const container = await renderView({ jobs: [paused, autoDisabled] });
   const pausedRow = container.querySelector("[data-test-id='cron-row-job-paused']");
-  expect(pausedRow?.textContent).toContain("Paused");
+  expect(pausedRow?.textContent).toContain("Disabled");
   expect(pausedRow?.querySelector(".cron-table__state--paused")?.getAttribute("aria-label")).toBe(
-    "Paused",
+    "Disabled",
   );
   const autoDisabledRow = container.querySelector("[data-test-id='cron-row-job-auto']");
   const note = autoDisabledRow?.querySelector("[data-test-id='cron-row-auto-disabled-job-auto']");

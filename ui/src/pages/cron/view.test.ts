@@ -112,7 +112,7 @@ describe("cron view list pane", () => {
     expect(rows[1]?.textContent).toContain("n/a");
     expect(attribute(rows[1]!, ".cron-trigger-icon", "aria-label")).toBe("Trigger configured");
     expect(rows[2]?.classList.contains("cron-table__row--paused")).toBe(true);
-    expect(rows[2]?.textContent).toContain("Paused");
+    expect(rows[2]?.textContent).toContain("Disabled");
     getElement(rows[2] as Element, ".cron-table__name", HTMLButtonElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(paused);
   });
