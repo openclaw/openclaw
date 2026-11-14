@@ -143,6 +143,13 @@ function nativeEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEn
   };
 }
 
+function nativeCatalogTimeout() {
+  return Object.assign(new Error("model/list timed out"), {
+    code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+    reason: "timed out",
+  });
+}
+
 function accountConfig(apiKey: string): OpenClawConfig {
   return { models: { providers: { acme: { baseUrl: entry.baseUrl, apiKey, models: [] } } } };
 }
@@ -290,6 +297,82 @@ it.each(["ready", "retired", "failure"] as const)(
     expect(preparedSnapshotMock).not.toHaveBeenCalled();
   },
 );
+
+it.each(["admitted", "published"] as const)(
+  "retains native metadata after a %s capability lookup timeout",
+  async (kind) => {
+    const config = {};
+    const native = nativeEntry();
+    const timeout = nativeCatalogTimeout();
+    const loadNativeModelCatalog = vi.fn(async () => {
+      throw timeout;
+    });
+    const snapshot = { ...owner(config, [native]), loadNativeModelCatalog };
+    const result =
+      kind === "admitted"
+        ? readAdmitted(snapshot, { agentRuntime: "native-one" })
+        : (() => {
+            publishedSnapshotMock.mockReturnValue(snapshot);
+            return readThinking(config, { agentRuntime: "native-one" });
+          })();
+
+    await expect(result).resolves.toEqual([native]);
+    expect(loadNativeModelCatalog).toHaveBeenCalledOnce();
+  },
+);
+
+it("retains native metadata after a TimeoutError capability lookup", async () => {
+  const config = {};
+  const native = nativeEntry();
+  const timeout = Object.assign(
+    new Error("other runtime capability lookup exceeded its deadline"),
+    {
+      name: "TimeoutError",
+    },
+  );
+  const loadNativeModelCatalog = vi.fn(async () => {
+    throw timeout;
+  });
+  const snapshot = { ...owner(config, [native]), loadNativeModelCatalog };
+  publishedSnapshotMock.mockReturnValue(snapshot);
+
+  await expect(readThinking(config, { agentRuntime: "native-one" })).resolves.toEqual([native]);
+  expect(loadNativeModelCatalog).toHaveBeenCalledOnce();
+});
+
+it("keeps the published owner's latest accepted catalog after a lookup timeout", async () => {
+  const config = {};
+  const accepted = nativeEntry({ reasoning: false });
+  const loadNativeModelCatalog = vi.fn(async () => {
+    throw nativeCatalogTimeout();
+  });
+  const snapshot = {
+    ...owner(config, [nativeEntry()]),
+    loadNativeModelCatalog,
+    readFullModelCatalog: () => catalog([accepted]),
+  };
+  publishedSnapshotMock.mockReturnValue(snapshot);
+
+  await expect(readThinking(config, { agentRuntime: "native-one" })).resolves.toEqual([accepted]);
+});
+
+it.each([
+  ["native cancellation", Object.assign(new Error("model/list aborted"), { reason: "aborted" })],
+  ["abort cancellation", Object.assign(new Error("request aborted"), { name: "AbortError" })],
+  ["unrelated failure", new Error("native observation unavailable")],
+] as const)("preserves %s from native capability lookup", async (_label, failure) => {
+  const config = {};
+  const native = nativeEntry();
+  const loadNativeModelCatalog = vi.fn(async () => {
+    throw failure;
+  });
+  const snapshot = { ...owner(config, [native]), loadNativeModelCatalog };
+
+  await expect(readAdmitted(snapshot, { agentRuntime: "native-one" })).rejects.toBe(failure);
+  publishedSnapshotMock.mockReturnValue(snapshot);
+  await expect(readThinking(config, { agentRuntime: "native-one" })).rejects.toBe(failure);
+  expect(loadNativeModelCatalog).toHaveBeenCalledTimes(2);
+});
 
 it.each([
   { configured: [], before: [entry] },
