@@ -113,13 +113,17 @@ it("fills historical active facts exactly and resumes without rereading covered 
     expect(first.done).toBe(false);
     // Losing the process cursor starts an index-only coverage scan, not another payload fill.
     const openStore = workerStores.openOpenClawAgentSqliteWorkerStoreV2;
+    // Discovery during Gateway startup waits behind worker boot and IO before its reply lands.
+    let chargedMs = 27_000;
     const open = vi
       .spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2")
       .mockImplementation((options, authority, publication) =>
         openStore(options, authority, {
           ...publication,
-          observeWriteExecution: (elapsedMs) =>
-            publication.observeWriteExecution?.(Math.max(100, elapsedMs)),
+          observeWriteExecution: (elapsedMs) => {
+            publication.observeWriteExecution?.(Math.max(chargedMs, elapsedMs));
+            chargedMs = 100;
+          },
         }),
       );
     const resume = createSessionTranscriptFactsBackfill({
@@ -129,7 +133,8 @@ it("fills historical active facts exactly and resumes without rereading covered 
       log: { info() {}, warn() {} },
     });
     try {
-      await resume.runBatch(); // Index-only discovery has its own yield.
+      // A contended discovery yields a bounded pause, not 20x its charge.
+      expect((await resume.runBatch()).delayMs).toBe(30_000);
       // A short native transaction still charges the writer's preparation/reply occupancy.
       expect((await resume.runBatch()).delayMs).toBeGreaterThanOrEqual(2_000);
       while (!(await resume.runBatch()).complete) {
