@@ -46,7 +46,10 @@ export async function handleDirList(params: DirListParams) {
   }
 
   const maxEntries = Math.min(
-    Math.floor(asPositiveFiniteNumber(params.maxEntries) ?? DIR_LIST_DEFAULT_MAX_ENTRIES),
+    Math.max(
+      1,
+      Math.floor(asPositiveFiniteNumber(params.maxEntries) ?? DIR_LIST_DEFAULT_MAX_ENTRIES),
+    ),
     DIR_LIST_HARD_MAX_ENTRIES,
   );
   const offset = parsePageOffset(params.pageToken);
