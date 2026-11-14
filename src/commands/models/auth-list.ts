@@ -4,7 +4,7 @@ import {
   ensureAuthProfileStoreAsync,
   externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel,
-  resolveAuthStatePathForDisplay,
+  resolveAuthStatePathForDisplayAsync,
 } from "../../agents/auth-profiles.js";
 import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import {
@@ -91,11 +91,13 @@ export async function modelsAuthListCommand(
     .filter((profile) => !provider || profile.provider === provider)
     .toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 
+  const authStatePath = shortenHomePath(await resolveAuthStatePathForDisplayAsync(agentDir));
+
   if (opts.json) {
     writeRuntimeJson(runtime, {
       agentId,
       agentDir: shortenHomePath(agentDir),
-      authStatePath: shortenHomePath(resolveAuthStatePathForDisplay(agentDir)),
+      authStatePath,
       provider: provider || null,
       profiles,
     });
@@ -103,9 +105,7 @@ export async function modelsAuthListCommand(
   }
 
   runtime.log(terminalText`Agent: ${agentId}`);
-  runtime.log(
-    terminalText`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`,
-  );
+  runtime.log(terminalText`Auth state store: ${authStatePath}`);
   if (provider) {
     runtime.log(terminalText`Provider: ${provider}`);
   }
