@@ -85,7 +85,7 @@ describe("sanitizeSessionHistory", () => {
     const toolResult = sanitized.find((m) => m && typeof m === "object" && m.role === "toolResult");
     expect(toolResult).toMatchObject({
       role: "toolResult",
-      toolCallId: "call1",
+      toolCallId: "call_1",
       toolName: "web_fetch",
     });
     expect(toolResult).not.toHaveProperty("details");

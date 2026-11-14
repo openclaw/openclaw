@@ -84,7 +84,6 @@ async function measure(arm: "base" | "candidate", pair: number) {
         : childRun
           ? {
               persistent: buildSubagentStandingInstructions({
-                spawnMode: "run",
                 childDepth: 1,
                 maxSpawnDepth: 5,
               }),
