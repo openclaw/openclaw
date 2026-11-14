@@ -101,7 +101,7 @@ it("rejects waitForExit when the process owner is lost and never reports an exit
   });
   transport.close();
   await expect(transport.waitForExit()).rejects.toMatchObject({
-    message: expect.stringContaining("restart the Gateway"),
+    message: expect.stringContaining("retry the message"),
     cause: lost,
   });
 });

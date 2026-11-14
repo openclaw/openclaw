@@ -314,7 +314,7 @@ export async function createClaudeCliTransport(params: {
         () => undefined,
         (cause: unknown) => {
           throw new Error(
-            "Claude CLI process cleanup could not be confirmed; restart the Gateway before retrying.",
+            "Claude CLI process cleanup could not be confirmed; retry the message. If it fails again, restart the Gateway.",
             { cause },
           );
         },
