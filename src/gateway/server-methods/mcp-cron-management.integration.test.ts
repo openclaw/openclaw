@@ -56,8 +56,8 @@ it("retains an admitted owner's automation management through CLI construction, 
     })) as { content: Array<{ text: string }> };
     return JSON.parse(result.content[0]!.text) as { scope: string; jobs: Array<{ id: string }> };
   };
-  const update = (tools: CreatorTransportTools, name: string) =>
-    tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "update", jobId: job.id, job: { name } });
+  const update = (tools: CreatorTransportTools, displayName: string) =>
+    tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "update", jobId: job.id, job: { displayName } });
   const isCurrent = () =>
     isConfiguredCommandOwner(getRuntimeConfig(), { channel: "discord", senderId: "owner-1" });
   // The process-owned listener has no admitted turn or Cron construction scope.
@@ -91,7 +91,10 @@ it("retains an admitted owner's automation management through CLI construction, 
             tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: job.id }),
           ).resolves.toMatchObject({ content: [{ text: expect.stringContaining(job.id) }] });
           await update(tools, "Reviewed legacy reminder");
-          expect((await fixture.read())[0]).toMatchObject({ name: "Reviewed legacy reminder" });
+          expect((await fixture.read())[0]).toMatchObject({
+            name: "Legacy reminder",
+            displayName: "Reviewed legacy reminder",
+          });
           expect((await fixture.read())[0]).not.toHaveProperty("owner");
 
           setRuntimeConfigSnapshot({ ...config, commands: { ownerAllowFrom: [] } });
@@ -137,7 +140,10 @@ it("retains an admitted owner's automation management through CLI construction, 
         clearGatewayContextResolver(admitted);
       }
     });
-    expect((await fixture.read())[0]).toMatchObject({ name: "Reviewed legacy reminder" });
+    expect((await fixture.read())[0]).toMatchObject({
+      name: "Legacy reminder",
+      displayName: "Reviewed legacy reminder",
+    });
     expect((await fixture.read())[0]).not.toHaveProperty("owner");
   } finally {
     await closeMcpLoopbackServer();
