@@ -35,6 +35,24 @@ async function main() {
     }
     throw new Error(`Chrome extension source not found: ${srcDir}`);
   }
+  if (await pathExists(outDir)) {
+    const sourcePath = await fs.realpath(srcDir);
+    const outputPath = await fs.realpath(outDir);
+    // fs.cp rejects overlapping trees, but only after the cleanup would delete files.
+    const overlaps = [
+      path.relative(sourcePath, outputPath),
+      path.relative(outputPath, sourcePath),
+    ].some(
+      (relative) =>
+        relative === "" ||
+        (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)),
+    );
+    if (overlaps) {
+      throw new Error(
+        `Chrome extension source and output directories must not overlap: ${srcDir} -> ${outDir}`,
+      );
+    }
+  }
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.mkdir(path.dirname(outDir), { recursive: true });
   // Ship only the runtime extension; colocated *.test.ts and *.d.ts stay out.
