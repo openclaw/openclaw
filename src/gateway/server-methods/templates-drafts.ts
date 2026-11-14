@@ -15,6 +15,7 @@ import {
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import {
+  ClawHubRequestError,
   fetchClawHubJson,
   resolveClawHubAuthToken,
   resolveClawHubBaseUrl,
@@ -24,6 +25,7 @@ import {
   fetchClawHubPackageVersion,
   fetchClawHubPackageSecurity,
 } from "../../infra/clawhub-packages.js";
+import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import { templateDraftPrompt } from "../../templates/draft-prompt.js";
 import {
   prepareTemplateDraft,
@@ -371,8 +373,18 @@ function draftAuthority(
 
 function draftError(error: unknown, publishing = false, publicationStarted = false) {
   const known =
-    error instanceof TemplateProjectError || error instanceof TemplatesLabsDisabledError;
-  const code = error instanceof TemplateProjectError ? error.code : "templates_disabled";
+    error instanceof TemplateProjectError ||
+    error instanceof TemplatesLabsDisabledError ||
+    error instanceof ClawHubRequestError ||
+    isTransientNetworkError(error);
+  const code =
+    error instanceof TemplateProjectError
+      ? error.code
+      : error instanceof ClawHubRequestError
+        ? "clawhub_request_failed"
+        : isTransientNetworkError(error)
+          ? "clawhub_unreachable"
+          : "templates_disabled";
   const unconfirmed = publicationStarted || code === "publication_unconfirmed";
   const publication =
     publishing && known
@@ -397,7 +409,15 @@ function draftError(error: unknown, publishing = false, publicationStarted = fal
     ErrorCodes.INVALID_REQUEST,
     error instanceof TemplateProjectError
       ? error.message
-      : "The Template draft could not be processed. Check its contents and try again.",
+      : error instanceof ClawHubRequestError
+        ? error.status === 401
+          ? "Your ClawHub sign-in has expired. Sign in again and retry publishing."
+          : error.status === 429
+            ? "ClawHub is rate-limiting this Gateway. Wait and retry publishing."
+            : "ClawHub returned an error. Check the registry status and retry publishing."
+        : isTransientNetworkError(error)
+          ? "ClawHub could not be reached. Check your network connection and retry publishing."
+          : "The Template draft could not be processed. Check its contents and try again.",
     publication,
   );
 }

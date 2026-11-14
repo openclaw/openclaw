@@ -167,7 +167,7 @@ async function publicationFixture(name = "@maker/research-brief") {
   const connections = new Set(["draft-author"]);
   const uploads: Buffer[] = [];
   let posts = 0;
-  const identity = { publisher: "maker", revoke: false };
+  const identity = { publisher: "maker", revoke: false, unauthorized: false, rateLimit: false };
   const registry = {
     visible: true,
     digest: "",
@@ -178,6 +178,7 @@ async function publicationFixture(name = "@maker/research-brief") {
     attemptName: name,
     reads: 0,
     dropUploadResponse: false,
+    dropWhoamiResponse: false,
     postRevoke: false,
   };
   const write = (document = proposal) => writeFile(draft.path, JSON.stringify(document));
@@ -190,6 +191,18 @@ async function publicationFixture(name = "@maker/research-brief") {
     if (request.url.endsWith("/whoami")) {
       if (identity.revoke) {
         connections.delete("draft-author");
+      }
+      if (identity.unauthorized) {
+        return new Response("Sign-in required", { status: 401 });
+      }
+      if (identity.rateLimit) {
+        return new Response("Rate limit exceeded", {
+          status: 429,
+          headers: { "retry-after": "120" },
+        });
+      }
+      if (registry.dropWhoamiResponse) {
+        return undefined;
       }
       return Response.json({ user: { handle: identity.publisher } });
     }
@@ -582,6 +595,54 @@ Research public sources.
       details: { templatePublication: { effect: "unconfirmed", code: "publication_unconfirmed" } },
     });
     expect(fixture.posts).toBe(1);
+  });
+
+  it("does not lock a pre-upload ClawHub sign-in failure as unconfirmed", async () => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    fixture.identity.unauthorized = true;
+    const result = await fixture.publish(review.reviewToken);
+    expect(result[0]).toBe(false);
+    expect(result[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      retryable: true,
+      details: { templatePublication: { effect: "none", code: "clawhub_request_failed" } },
+      message: "Your ClawHub sign-in has expired. Sign in again and retry publishing.",
+    });
+    expect(fixture.posts).toBe(0);
+    expect(fixture.uploads).toHaveLength(0);
+  });
+
+  it("keeps a pre-upload ClawHub rate limit retryable without locking as unconfirmed", async () => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    fixture.identity.rateLimit = true;
+    const result = await fixture.publish(review.reviewToken);
+    expect(result[0]).toBe(false);
+    expect(result[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      retryable: true,
+      details: { templatePublication: { effect: "none", code: "clawhub_request_failed" } },
+      message: "ClawHub is rate-limiting this Gateway. Wait and retry publishing.",
+    });
+    expect(fixture.posts).toBe(0);
+    expect(fixture.uploads).toHaveLength(0);
+  });
+
+  it("keeps a pre-upload transport failure retryable without locking as unconfirmed", async () => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    fixture.registry.dropWhoamiResponse = true;
+    const result = await fixture.publish(review.reviewToken);
+    expect(result[0]).toBe(false);
+    expect(result[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      retryable: true,
+      details: { templatePublication: { effect: "none", code: "clawhub_unreachable" } },
+      message: "ClawHub could not be reached. Check your network connection and retry publishing.",
+    });
+    expect(fixture.posts).toBe(0);
+    expect(fixture.uploads).toHaveLength(0);
   });
 
   it.each(["draft", "publisher", "authority"])(
