@@ -879,7 +879,7 @@ container, or service account.
 
     | Variable                   | Meaning                                                                                  |
     | -------------------------- | ---------------------------------------------------------------------------------------- |
-    | `LLMMAN_KEEP_ALIVE`        | Idle unload timer (default `5m`); `0` unloads right after each request                    |
+    | `LLMMAN_KEEP_ALIVE`        | Idle unload timer (default `5m`); `0` unloads right after each request; `-1` never unloads |
     | `LLMMAN_MAX_LOADED_MODELS` | Cap on concurrently loaded models; idle ones are evicted LRU, busy ones return `503`      |
     | `LLMMAN_MAX_QUEUE`         | Pending-request cap before `503` (default `512`)                                          |
     | `LLMMAN_LOAD_TIMEOUT`      | Load stall timeout (default `10m`)                                                       |
@@ -927,6 +927,8 @@ container, or service account.
       },
     }
     ```
+
+    The first `memory_search` after an idle unload pays the model load. To keep the embedding model resident, run `LLMMAN_KEEP_ALIVE=-1 llmman serve embeddinggemma`: it preloads the model and never unloads it.
 
     Embedding models are capped to their trained context regardless of `LLMMAN_CONTEXT_LENGTH`. See [Memory config](/reference/memory-config#remote-endpoint-config) for the remaining fields.
 
