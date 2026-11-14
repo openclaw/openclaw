@@ -385,7 +385,11 @@ async function compileDeclarationsWithCompilerCli({
       throw new Error(diagnostics.trim() || compiled.failure.message);
     }
     const outputFiles = new Map<string, { text: string }>();
-    for (const entry of fs.readdirSync(output, { recursive: true, withFileTypes: true })) {
+    // The compiler creates the output directory only when it emits a declaration.
+    const emitted = fs.existsSync(output)
+      ? fs.readdirSync(output, { recursive: true, withFileTypes: true })
+      : [];
+    for (const entry of emitted) {
       if (entry.isFile() && /\.d\.[cm]?ts(?:\.map)?$/u.test(entry.name)) {
         const file = path.join(entry.parentPath, entry.name);
         outputFiles.set(file, { text: fs.readFileSync(file, "utf8") });

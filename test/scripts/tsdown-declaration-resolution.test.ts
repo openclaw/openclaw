@@ -282,7 +282,7 @@ for (const kind of [
         expect(inputs).toEqual(expect.arrayContaining([localInput, "src/shared.ts"]));
         expect(inputs.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
         // Receipts list the sources the compiler read. Manifests it only consulted key
-        // the cache through the writer's package.json, tsconfig and lockfile inputs.
+        // the cache through the writer's package.json and tsconfig inputs.
         expect(inputs.some((file) => file.endsWith("synthetic-core/package.json"))).toBe(false);
         for (const input of inputs) {
           const relative = path.relative(root, fs.realpathSync(path.resolve(root, input)));
