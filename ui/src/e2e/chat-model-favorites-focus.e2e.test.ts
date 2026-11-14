@@ -297,6 +297,13 @@ suite.define(() => {
         const context = picker.locator(".chat-controls__context-trigger");
         const gear = picker.locator(".chat-controls__provider-settings").first();
         await context.waitFor();
+        const metadataSize = await picker
+          .locator(".chat-controls__model-option-meta:not(.chat-controls__context-placeholder)")
+          .first()
+          .evaluate((el) => getComputedStyle(el).fontSize);
+        expect
+          .soft(await context.evaluate((el) => getComputedStyle(el).fontSize))
+          .toBe(metadataSize);
         const starBounds = (await star.boundingBox())!;
         const gearBounds = (await gear.boundingBox())!;
         expect
@@ -308,7 +315,11 @@ suite.define(() => {
           expect(await star.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
         }
         await context.click();
-        await picker.getByRole("menuitemradio", { name: "1M", exact: true }).waitFor();
+        const contextChoice = picker.getByRole("menuitemradio", { name: "1M", exact: true });
+        await contextChoice.waitFor();
+        expect
+          .soft(await contextChoice.evaluate((el) => getComputedStyle(el).fontSize))
+          .toBe(metadataSize);
         await page.keyboard.press("Escape");
         expect(await picker.getAttribute("open")).not.toBeNull();
         await star.click();

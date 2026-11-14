@@ -4685,7 +4685,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: none;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .chat-controls__model-option-meta.chat-controls__context-placeholder {
@@ -4727,7 +4727,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   padding: 4px 2px 4px 8px;
   border-radius: min(12px, var(--radius-menu-item));
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
 }
