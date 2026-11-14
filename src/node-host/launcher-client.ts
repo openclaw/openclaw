@@ -1,6 +1,20 @@
+import type { EventEmitter } from "node:events";
+
 // Node runtime messages to the process that owns executable selection and restart.
+const CHANNEL_MARKER = Symbol.for("openclaw.node-host.launcher-channel");
 const CHILD_MARKER = Symbol.for("openclaw.node-host.launcher-child");
 const MANAGED_STATE_MARKER = Symbol.for("openclaw.node-host.managed-state-path");
+
+type LauncherChannel = EventEmitter & {
+  connected: boolean;
+  send(message: object, callback: (error?: Error | null) => void): void;
+  ref(): void;
+  unref(): void;
+};
+
+function launcherChannel(): LauncherChannel | undefined {
+  return Reflect.get(process, CHANNEL_MARKER) as LauncherChannel | undefined;
+}
 
 /** A companion retains stdin's write end; EOF also retires the node after an app crash. */
 export function watchNodeHostParentStdin(onClose: () => void): () => void {
@@ -29,7 +43,10 @@ export function watchNodeHostParentStdin(onClose: () => void): () => void {
 }
 
 export function isNodeHostLauncherChild(): boolean {
-  return Reflect.get(process, CHILD_MARKER) === true && process.connected;
+  return (
+    Reflect.get(process, CHILD_MARKER) === true &&
+    (launcherChannel()?.connected ?? process.connected)
+  );
 }
 
 export function getManagedNodeHostStatePath(): string | undefined {
@@ -42,11 +59,12 @@ export function getManagedNodeHostStatePath(): string | undefined {
 
 function sendLauncherMessage(message: object): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (!isNodeHostLauncherChild() || !process.send) {
+    const target = launcherChannel() ?? process;
+    if (!isNodeHostLauncherChild() || !target.send) {
       reject(new Error("The node runtime has no connected update supervisor."));
       return;
     }
-    process.send(message, (error) => (error ? reject(error) : resolve()));
+    target.send(message, (error) => (error ? reject(error) : resolve()));
   });
 }
 
@@ -84,11 +102,13 @@ export function requestNodeHostLauncherRestart(params: {
 
 function requestLauncherReply(request: object, responseType: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    const channel = launcherChannel();
+    const target: EventEmitter = channel ?? process;
     const cleanup = () => {
       clearTimeout(timer);
-      process.off("message", onMessage);
-      process.off("disconnect", onDisconnect);
-      process.channel?.unref();
+      target.off("message", onMessage);
+      target.off("disconnect", onDisconnect);
+      (channel ?? process.channel)?.unref();
     };
     const fail = (error: Error) => {
       cleanup();
@@ -121,8 +141,9 @@ function requestLauncherReply(request: object, responseType: string): Promise<vo
       () => fail(new Error("The node update supervisor did not acknowledge the restart.")),
       30_000,
     );
-    process.on("message", onMessage);
-    process.once("disconnect", onDisconnect);
+    target.on("message", onMessage);
+    target.once("disconnect", onDisconnect);
+    (channel ?? process.channel)?.ref();
     void sendLauncherMessage(request).catch(fail);
   });
 }

@@ -5,6 +5,7 @@
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
     "updateRehearsalProtocol": 1,
+    "nodeLauncherTransport": "byte-pipe-v1",
     "databaseEngines": [
       "sqlite",
       "postgres"
