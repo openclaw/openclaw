@@ -335,6 +335,22 @@ its candidate, predecessor/candidate schema
 pair, creation time, and transaction UUID in `nativeUpdate.backupRoot`; V1
 activation journals have no separate `id` field.
 
+Serving-process binding accepts exactly the system unit's cgroup or its
+`/gateway` leaf, matching `DelegateSubgroup=gateway`. Other leaves, nested
+sandboxes and other units are refused. The observed path stays in the native
+owner witness. Profiling uses the same two process locations; the privileged
+systemd condition instead accepts the unit root or its exact `/.control` leaf.
+Unit `ControlGroup` remains the unit root. Stopped custody checks that root's
+recursive kernel population bit, so empty delegated children do not block it;
+root-owned ancestors and the exact runtime-owned delegation boundary remain
+checked.
+
+The adoption sequence and request shape are unchanged. After a refused binding
+that published no adoption intent, stage the newly reviewed complete four-file
+closure and bind its new descriptors before retrying. Never reuse a replacement
+descriptor for changed file bytes or overwrite a packet referenced by an
+incomplete adoption.
+
 Adoption retains the original journal and all four old controller files through
 the existing immutable adoption archives. It validates the original session
 witness and native backup identity without rewriting either or copying database
