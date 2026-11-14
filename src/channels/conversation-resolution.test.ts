@@ -71,9 +71,26 @@ it.each<CommandCase>([
       messaging: {
         targetPrefixes: ["tg"],
         normalizeTarget: () => "telegram:group:-100123:topic:77",
+        // The channel owns its topic grammar; core asks it for the base conversation.
+        resolveSessionConversation: () => ({
+          id: "-100123:topic:77",
+          baseConversationId: "-100123",
+        }),
       },
     },
     "tg:group:-100123:topic:77",
+    ["-100123"],
+  ],
+  [
+    "legacy numeric shorthand adapter",
+    {
+      id: "legacychat",
+      messaging: {
+        numericTopicShorthand: true,
+        normalizeTarget: () => "legacychat:-100123:77",
+      },
+    },
+    "-100123:77",
     ["-100123"],
   ],
   [

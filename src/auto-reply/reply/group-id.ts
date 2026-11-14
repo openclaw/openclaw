@@ -4,11 +4,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
+import { resolveBaseConversationId } from "../../channels/plugins/session-conversation.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import {
   stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
-  stripTargetTopicSuffix,
 } from "../../infra/outbound/channel-target-prefix.js";
 
 /** Extracts a group/channel target id from explicit channel target syntax. */
@@ -27,10 +27,10 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
   const simple =
     idStart === undefined
       ? undefined
-      : parts
-          .slice(idStart)
-          .join(":")
-          .replace(/:topic:.*$/, "");
+      : resolveBaseConversationId(
+          idStart === 2 ? parts[0] : undefined,
+          parts.slice(idStart).join(":"),
+        );
   if (simple) {
     return simple;
   }
@@ -50,7 +50,8 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
     if (chatType === "direct" || chatType == null) {
       continue;
     }
-    const target = stripTargetTopicSuffix(
+    const target = resolveBaseConversationId(
+      channelId,
       stripOutboundTargetKindPrefix(stripTargetProviderPrefix(candidate, channelId), [
         "group",
         "channel",
@@ -58,7 +59,6 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
         "room",
         "thread",
       ]),
-      { allowNumericShorthand: messaging?.numericTopicShorthand === true },
     );
     if (target) {
       return target;

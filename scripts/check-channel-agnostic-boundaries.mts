@@ -40,6 +40,17 @@ const systemMarkLiteralGuardSources = [
   path.join(repoRoot, "src", "channels", "thread-bindings-messages.ts"),
 ];
 
+// Channel conversation ids are opaque outside their codec: core asks the channel plugin.
+const topicGrammarSources = [path.join(repoRoot, "src")];
+const topicGrammarExempt = new Set([
+  // Doctor migration owns rewriting legacy Telegram General-topic rows.
+  "src/commands/doctor-telegram-general-topic-conversations.ts",
+  // Telegram-named session protection; moves to a channel capability next.
+  "src/config/sessions/store-maintenance.ts",
+]);
+const testSupportPathRe =
+  /(^|\/)(test-utils|test-helpers)\/|\.test-(support|setup|helpers)\.ts$|-test-support\.ts$|\.generated\.ts$/;
+
 const channelIds = [
   "discord",
   "googlechat",
@@ -218,6 +229,27 @@ function stringLiteralBoundaryRule(matches: (text: string) => boolean, reason: s
   };
 }
 
+export function findTopicGrammarViolations(sourceFile: ts.SourceFile) {
+  const violations: BoundaryViolation[] = [];
+  const visit = (node: ts.Node): void => {
+    const literal =
+      ts.isStringLiteralLikeNode(node) ||
+      ts.isRegularExpressionLiteral(node) ||
+      ts.isTemplateHead(node) ||
+      ts.isTemplateMiddle(node) ||
+      ts.isTemplateTail(node);
+    if (literal && /:topic:/i.test(node.text)) {
+      violations.push({
+        line: toLine(sourceFile, node),
+        reason: "parses or builds channel :topic: grammar; ask the channel plugin",
+      });
+    }
+    node.forEachChild(visit);
+  };
+  visit(sourceFile);
+  return violations;
+}
+
 export const findAcpUserFacingChannelNameViolations = stringLiteralBoundaryRule(
   (text) => userFacingChannelNameRe.test(text),
   "user-facing text references channel name",
@@ -228,7 +260,12 @@ export const findSystemMarkLiteralViolations = stringLiteralBoundaryRule(
   "hardcoded system mark literal",
 );
 
-const boundaryRuleSets = [
+const boundaryRuleSets: Array<{
+  id: string;
+  sources: string[];
+  scan: (sourceFile: ts.SourceFile) => BoundaryViolation[];
+  skip?: (relativeFile: string) => boolean;
+}> = [
   {
     id: "acp-core",
     sources: acpCoreProtectedSources,
@@ -249,6 +286,13 @@ const boundaryRuleSets = [
     sources: systemMarkLiteralGuardSources,
     scan: findSystemMarkLiteralViolations,
   },
+  {
+    id: "core-topic-grammar",
+    sources: topicGrammarSources,
+    scan: findTopicGrammarViolations,
+    skip: (relativeFile: string) =>
+      topicGrammarExempt.has(relativeFile) || testSupportPathRe.test(relativeFile),
+  },
 ];
 
 export async function main() {
@@ -257,7 +301,10 @@ export async function main() {
   for (const ruleSet of boundaryRuleSets) {
     const files = await collectTypeScriptFilesFromRoots(ruleSet.sources);
     for (const filePath of files) {
-      const relativeFile = path.relative(repoRoot, filePath);
+      const relativeFile = path.relative(repoRoot, filePath).split(path.sep).join("/");
+      if (ruleSet.skip?.(relativeFile)) {
+        continue;
+      }
       const content = await fs.readFile(filePath, "utf8");
       const sourceFile = parser.parseSourceFile(filePath, content);
       for (const violation of ruleSet.scan(sourceFile)) {

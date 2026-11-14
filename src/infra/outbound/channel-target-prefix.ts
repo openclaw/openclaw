@@ -41,16 +41,6 @@ export function stripOutboundTargetKindPrefix(
   return kindPattern ? raw.replace(new RegExp(`^(${kindPattern}):`, "i"), "").trim() : raw.trim();
 }
 
-/** Strips plugin topic suffixes while preserving ordinary colon-containing targets. */
-export function stripTargetTopicSuffix(
-  raw: string,
-  options: { allowNumericShorthand?: boolean } = {},
-): string {
-  const trimmed = raw.trim();
-  const numericTopicMatch = options.allowNumericShorthand ? /^(-?\d+):(\d+)$/.exec(trimmed) : null;
-  return numericTopicMatch?.[1] ?? trimmed.replace(/:topic:.*$/i, "").trim();
-}
-
 function resolveChannelTargetProviderPrefix(
   raw?: string | null,
 ): { prefix: string; channel: string } | undefined {

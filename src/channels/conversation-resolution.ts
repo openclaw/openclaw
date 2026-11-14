@@ -11,7 +11,6 @@ import {
   resolveTargetPrefixedChannel,
   stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
-  stripTargetTopicSuffix,
 } from "../infra/outbound/channel-target-prefix.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
@@ -19,6 +18,8 @@ import type { SessionBindingPlacement } from "../infra/outbound/session-binding.
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { loadOptionalBundledChannelPublicArtifact } from "./plugins/optional-public-artifact.js";
 import { getLoadedChannelPluginForRead } from "./plugins/registry-loaded.js";
+import { getChannelPlugin } from "./plugins/registry.js";
+import { resolveBaseConversationId } from "./plugins/session-conversation.js";
 import type { ChannelCommandConversationContext } from "./plugins/types.adapters.js";
 import type { ChannelMessagingAdapter } from "./plugins/types.core.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
@@ -129,22 +130,16 @@ function resolveConversationScope(
 }
 
 function resolveFallbackConversationTargetId(params: {
+  channel: string;
   rawTarget: string;
-  allowNumericTopicShorthand?: boolean;
-  preserveExplicitTopicSuffix?: boolean;
+  preserveScope?: boolean;
 }): string | undefined {
   const target = params.rawTarget;
   const withoutKind = stripOutboundTargetKindPrefix(target);
-  const withoutTopic =
-    params.preserveExplicitTopicSuffix && /:topic:/iu.test(withoutKind)
-      ? withoutKind
-      : stripTargetTopicSuffix(withoutKind, {
-          allowNumericShorthand: params.allowNumericTopicShorthand ?? false,
-        });
-  return (
-    resolveConversationIdFromTargets([withoutTopic]) ??
-    (withoutTopic !== target ? withoutTopic : undefined)
-  );
+  const base = params.preserveScope
+    ? withoutKind
+    : resolveBaseConversationId(params.channel, withoutKind);
+  return resolveConversationIdFromTargets([base]) ?? (base !== target ? base : undefined);
 }
 
 function resolveChannelTargetId(params: {
@@ -175,8 +170,8 @@ function resolveChannelTargetId(params: {
   if (!prefixedChannel || prefixedChannel !== params.channel) {
     const explicitConversationId = resolveFallbackConversationTargetId({
       rawTarget: target,
-      allowNumericTopicShorthand: messaging?.numericTopicShorthand === true,
-      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
+      channel: params.channel,
+      preserveScope: params.preserveExplicitTopicSuffix,
     });
     if (explicitConversationId) {
       return explicitConversationId;
@@ -188,8 +183,8 @@ function resolveChannelTargetId(params: {
     const withoutProvider = stripTargetProviderPrefix(normalizedTarget, params.channel);
     const conversationId = resolveFallbackConversationTargetId({
       rawTarget: withoutProvider,
-      allowNumericTopicShorthand: messaging?.numericTopicShorthand === true,
-      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
+      channel: params.channel,
+      preserveScope: params.preserveExplicitTopicSuffix,
     });
     return conversationId || withoutProvider || normalizedTarget;
   }
@@ -367,4 +362,34 @@ export function resolveInboundConversationResolution(
     conversationId: genericConversationId,
     parentConversationId: threadId != null ? parentConversationId : undefined,
   });
+}
+
+type DeliveryRoute = { to: string; threadId?: string | number | null };
+
+/** Same conversation per the channel's own resolver; undefined when it cannot tell. */
+export function deliveryRoutesShareConversation(params: {
+  channel: string;
+  left: DeliveryRoute;
+  right: DeliveryRoute;
+}): boolean | undefined {
+  const channel = resolveChannelId(params.channel);
+  // Bundled fallback keeps matching before the channel registers (#93107).
+  const resolve = channel ? getChannelPlugin(channel)?.messaging?.resolveInboundConversation : null;
+  if (!resolve) {
+    return undefined;
+  }
+  const [left, right] = [params.left, params.right].map((route) =>
+    resolve({
+      to: route.to,
+      conversationId: route.to,
+      threadId: route.threadId ?? undefined,
+      isGroup: true,
+    }),
+  );
+  const same = (a?: string, b?: string) =>
+    normalizeOptionalString(a) === normalizeOptionalString(b);
+  return left?.conversationId && right?.conversationId
+    ? same(left.conversationId, right.conversationId) &&
+        same(left.parentConversationId, right.parentConversationId)
+    : undefined;
 }
