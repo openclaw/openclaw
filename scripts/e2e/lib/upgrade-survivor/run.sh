@@ -17,6 +17,12 @@ source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 source scripts/e2e/lib/upgrade-survivor/paths.sh
 
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
+if [ "$SCENARIO" = "base" ]; then
+  export OTEL_METRIC_EXPORT_TIMEOUT=2000
+  export OTEL_EXPORTER_OTLP_TIMEOUT=7000
+  export OTEL_EXPORTER_OTLP_TRACES_TIMEOUT=6000
+  export OTEL_EXPORTER_OTLP_LOGS_TIMEOUT=5000
+fi
 WORKER_CELL=0
 if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ]; then
   WORKER_CELL=1

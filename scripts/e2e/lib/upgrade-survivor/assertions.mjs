@@ -676,6 +676,31 @@ function assertConfigSurvived() {
       "logging.file tilde path changed",
     );
   }
+
+  if (coverage && acceptsIntent(coverage, "diagnostics-otel")) {
+    const otel = config.diagnostics?.otel;
+    assertStrict.deepEqual(
+      {
+        enabled: otel?.enabled,
+        endpoint: otel?.endpoint,
+        serviceName: otel?.serviceName,
+        traces: otel?.traces,
+        metrics: otel?.metrics,
+        logs: otel?.logs,
+        flushIntervalMs: otel?.flushIntervalMs,
+      },
+      {
+        enabled: true,
+        endpoint: "http://127.0.0.1:4318",
+        serviceName: "upgrade-survivor",
+        traces: false,
+        metrics: true,
+        logs: false,
+        flushIntervalMs: 15000,
+      },
+      "diagnostics.otel settings changed",
+    );
+  }
 }
 
 function readLegacyOperatorPendingDelivery(db) {
