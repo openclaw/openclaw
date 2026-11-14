@@ -1,86 +1,155 @@
-# TEMPLATE: parent reviews/seals/publishes; no dispatch performed.
-name: Swift cancellation boundary diagnostic
-run-name: Swift cancellation diagnostic ${{ inputs.diagnostic_sha }}
-on:
+name: "PowerShell original Linux startup diagnostic \u2014 not qualification"
+'on':
   workflow_dispatch:
     inputs:
-      diagnostic_sha:
-        description: Clean direct child of C5fed containing only the reviewed diagnostic patch
-        required: true
-        type: string
-      tooling_sha:
-        description: Exact reviewed workflow commit (must equal github.workflow_sha)
+      workflow_ref:
+        description: Exact reviewed workflow commit SHA
         required: true
         type: string
 permissions:
   contents: read
+concurrency:
+  group: powershell-startup-diagnostic
+  cancel-in-progress: false
+env:
+  CI: 'true'
+  WORKFLOW_SHA: ${{ github.workflow_sha }}
+  EXPECTED_WORKFLOW_SHA: ${{ inputs.workflow_ref }}
 jobs:
-  selected-native:
-    runs-on: xcode-27
-    timeout-minutes: 30
+  selected-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     env:
-      NODE_VERSION: "24.22.1"
-      DIAGNOSTIC_SHA: ${{ inputs.diagnostic_sha }}
-      EXPECTED_WORKFLOW_SHA: ${{ inputs.tooling_sha }}
-      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      OPENCLAW_VITEST_MAX_WORKERS: '2'
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_E2E_USE_PREBUILT_DIST: ''
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: dual
+      FROZEN_TARGET: 'false'
+      RUNNER_ENVIRONMENT: github-hosted
+      OPENCLAW_NODE_TEST_CONFIGS_JSON: 'null'
+      OPENCLAW_NODE_TEST_ENV_JSON: 'null'
+      OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: 'null'
+      OPENCLAW_NODE_TEST_TARGETS_JSON: 'null'
+      OPENCLAW_VITEST_SHARD_NAME: ''
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: '300000'
+      OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ''
+      OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '[]'
+      PRIVATE_PROOF: ${{ github.workspace }}/../powershell-private
+      SAFE_PROOF: ${{ github.workspace }}-powershell-safe
     steps:
-      - name: Checkout clean diagnostic commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: openclaw/openclaw
-          ref: ${{ inputs.diagnostic_sha }}
-          fetch-depth: 2
-          persist-credentials: false
-      - name: Checkout reviewed proof owner
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: openclaw/openclaw
-          ref: ${{ github.workflow_sha }}
-          path: proof
-          persist-credentials: false
-      - name: Checkout frozen CI harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: openclaw/openclaw
-          ref: 5fed4f0df99d1d1c3e7a9ac8b9848aac6526af29
-          path: harness
-          persist-credentials: false
-      - name: Bind before any product-capable setup
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          export PRIVATE_PROOF="$RUNNER_TEMP/swift-cancellation-private"
-          export SAFE_PROOF="$RUNNER_TEMP/swift-cancellation-safe"
-          printf 'PRIVATE_PROOF=%s\nSAFE_PROOF=%s\n' "$PRIVATE_PROOF" "$SAFE_PROOF" >> "$GITHUB_ENV"
-          mkdir -p "$PRIVATE_PROOF" "$SAFE_PROOF"
-          python3 proof/scripts/swift-cancellation-proof/verify.py bind "$PWD" "$GITHUB_WORKSPACE/harness"
-      - name: Setup Node environment for Apple assets
-        uses: ./harness/.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache-mode: off
-          install-bun: "false"
-          install-deps: "false"
-      - name: Build exact head and run selected default-profile suite
-        id: native
-        shell: bash
-        run: bash proof/scripts/swift-cancellation-proof/hosted.sh
-      - name: Collect bounded facts only
-        if: always()
-        id: collect
-        env:
-          NATIVE_STEP_OUTCOME: ${{ steps.native.outcome }}
-        shell: bash
-        run: python3 proof/scripts/swift-cancellation-proof/verify.py collect "$PWD" "$GITHUB_WORKSPACE/harness"
-      - name: Upload only allowlisted diagnostic facts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: swift-cancellation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/swift-cancellation-safe/identity.json
-            ${{ runner.temp }}/swift-cancellation-safe/result.json
-          if-no-files-found: error
-          retention-days: 7
-# NO raw log upload: Actions artifact visibility is not private to this conversation.
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: openclaw/openclaw
+        ref: ec5b98921312f748fb32ebdb19336b802f3092b2
+        persist-credentials: false
+        fetch-depth: 1
+    - name: Initialize private evidence
+      shell: bash
+      run: 'set -euo pipefail
+
+        umask 077
+
+        mkdir -p "$PRIVATE_PROOF" "$SAFE_PROOF"
+
+        '
+    - name: Transport and verify hosted.py
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s ''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'' | base64 --decode | gzip -d > "$PRIVATE_PROOF/hosted.py"
+
+        printf ''%s\n'' ''c2755c921241a77158186187e40c2f15120976612187542720a4e382cb5fbd8a  ''"$PRIVATE_PROOF/hosted.py" | sha256sum --check --strict
+
+        '
+    - name: Transport and verify containment.py
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s ''H4sIAAAAAAAC/6VWW2/bNhR+96/gsgGUElm2m6YD7CrAhrprsaQJGncvhhAwEm1xkUiBpOJ4Rf/7Di+yZTsJMuzBF/Lw3D9+h6yqhdTobyV4JFSkikazMlJsyQn8NHe1FBlVKtKsor2FFBWqiS5KdoeY07yGZS+nC8T4g7inAScVjYhcOhXR6HDcQ0QpCmf9TpJcznEmqorw/PcmX1J9QzPBc4XTJDkdDoc95KWJMTSh/CERKoYfJgWPM1Gvg3AiqfGffJ1eX32d9ZAUq+Q7Nt7x2MaAlSYaFlg2nDO+xBGmj0zj8RfBQZo3kmgm+KXC42EE4XBNGK8o19Oq1ms8/khKRX94N5t4IcaY1DXleQAew4kiDzTA7lBsqogjtwCRJhCfyTmuBBdacJYFIeS2TEzRAjxQazVYqEG2lKKpcTgIsADLWUlW/QWDBvSh+mLRxydKywAqAJWqWR6EYTjJClbmiUmlh0z1VZOL4NjWPStodp/MZEPDsaS6kRxtGxlDNYI5NsehIH0I1yqlXst+R0rnpk0drQ/Tv758u7gwEirlU5K2t6MhpGijwdV9ziSOTPDZMoRtLdcAhhYNsDnALvf4npUlDmNokNLKFMmbyAqx4s6Ey7+x+Z9AWztFWdpN72jPprFVkoZDZjI58qA1SF+ryEM5qlf5pMV1bHsD0hjq8jAfpVFrz2SsIMiVZJreavqog8O+IAgwYVxvLbxJYXe5v3tqdkGVcaateRVAFNbSyuQInzCuV7cWyqDtTiuXa3fdHrZrf0Xm+Pq32Se4TRt3b9Nd+aery2lXfubljzR7qOk2zHdptP0/TqOtjfAICtte07njjXhVsKwI/O58mIbRcbsYjdN02/vtEdhbMV2g4MPAcscJjkuxhL7F5i4EeHWHQ9BCgK260QY+yGG/g8Fre3QH1bg/ha96rQvBT80yw1ELgxaRB7CKDiB1WNPosIybJNPIUBV8Inv3bzld3SoIEGjG3sf2YrlcnrhMN7MPV99mBrLtXTHgVfrWaRyQycQKFfuHJkP3v6Dg+I4SnQytNnSkpMg4d9aQpBXwHPDh8yTcP+0H+576NqPQ2eDAtQeh2CgOu2hYODA/Nkynz4CvYPFTsgl/3M0SzHcS21EDUb9z9NwkwcWVXcwcAwGhp4MRTJGxJEzRLvf5E9PHmkmatziNXrARbjxv6vY++U+Wnyuxt2zaDINk7mZTmlhsxyvCdNAyasV4MIo2/oFkrIIbb2liNWmOJ3eSkntnlT5mtNbPB+ixgGhJakXz5Olu+0OQvD93/hJmXFEOdPq7sDxP3g1b72gPsV6jldosO2M6TYAnYe76Y8e2Py8M4NZOLQ3zGlGcNxUQ7XdcF0S99E5wHtrkxjt+wx9htCgbVbgR23t1uX9Gs+nXS6QLioRkSzPgkWeHCerMLAQPD4Fg7ilE+BqmuybAWjn8URm8OwjXKu612AE2Mjr1MnDIgTnkX2/xzec/jENXBx9icO0CvBDivqmnUgoZXVNZMRuGXYfjGki6t8sVBoOnL8D5Ob5wzrvX57xtv4n+CbRvcf5KKG+ifeI90RnVeITDV1btz88XF/+jak8kdebvrL/kozdv9+6wP4h7rcurG2vW1GpX89c9TTfU+gsCPJ+Dvn04lnZ2uCeUKvz4w/YiLNAInaOjX0aDTqmOQGrOtYPRPQbtC9gUIqckLxmnBzxxctZrR0y3+u1LCQgpd9U3A0CyOoBRznO0b+Z962BsJaqktA7i4VnYZn/wOk9hSGh0J0QZvNLx9k0pq+6zdD/X51jnOYS/gob8Ixws9/4FWtkexG8NAAA='' | base64 --decode | gzip -d > "$PRIVATE_PROOF/containment.py"
+
+        printf ''%s\n'' ''f8d859f25661719c3dcbf8d3e503e9399b2f6f1526f0128a7da228f1de385c79  ''"$PRIVATE_PROOF/containment.py" | sha256sum --check --strict
+
+        '
+    - name: Transport and verify observe.py
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s ''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'' | base64 --decode | gzip -d > "$PRIVATE_PROOF/observe.py"
+
+        printf ''%s\n'' ''86dbbc4da5ef0bf961a2de9d73785e8cc56640b103bdca2e41b3de1e34b38baa  ''"$PRIVATE_PROOF/observe.py" | sha256sum --check --strict
+
+        '
+    - name: Transport and verify run_observed.py
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s ''H4sIAAAAAAAC/3VTTW/bMAy9+1cI2UE2FqvpYRjQwod+ZGuHoQ2WAD10gaHYTK1VlgSJTmMU+++jkjRNi86AbZF+JB8f6cFgcGUDQs2s0b1g5xYbVjVK1x4MU6YBr5BhAwxMpW1Q5oFVD952jklDQR26DlnVBbR1LwaDQaJaZz2yP8GaoQ3D0C2ctxUEOvYhWXrbMiex0WrBdtAJmcllEV9pWS6VhrLMhIdg9QrSTDhJXDDx1mJxecQb4hv4aTRF+1grn7a2hmJkv45GWUJEXETZRQC/Ai+igycvZvHKR0ysA5PeEy0Ba6g6lAsNQ56f82FAn74mEa7n2cYXi2bvvnoRe9U7RCyXzbOE6Hcai2duJKoVjNcK+cmNNVTgJe4j3w+rDNT85JvUAf4m6PuThNEFZlVY4mlWylsjKuv6NDsl857fTsY3Fz/P7srZeDorJ3fTq/Ly+uz7ze10dn1Bx198Xuy5b5Jtud0fUpsfCuM7koUbUpWTHPl2THTEsKZnqLxyGI4qlRMwj7AcIWAeGulr0dJw5sPIl+44Ruy8qQiULJWRWu8aijoJtF3VpFtS+1YPGb6Ral7sFX+SClNULdACFl+y0/f4nYzzYuY72Aq4rsAhO+hytg0fr53yUL/W/sRmb9fdGpTKtLSDzD4Z8OxRaR02+0+5VhCILlKOLWLJqElWQ6jA1NJgEPvMToawMeL27GjkASV2YbNDPBNP9LtBibDGNHpE3bUupNv2ss/8N2ESL1UANu3pt22jMOlH82Rqyf6nyob6x0GGpaPhccaA1o8dZ8k/PNCKMyAEAAA='' | base64 --decode | gzip -d > "$PRIVATE_PROOF/run_observed.py"
+
+        printf ''%s\n'' ''3d8ada23be1f1f0c5469ee25066acbe0f3f26b6895386c468c8540173ef6bb07  ''"$PRIVATE_PROOF/run_observed.py" | sha256sum --check --strict
+
+        '
+    - name: Transport and verify native_data.py
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s ''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'' | base64 --decode | gzip -d > "$PRIVATE_PROOF/native_data.py"
+
+        printf ''%s\n'' ''769d42335031bd75b4573f43d535ade4c70d8bdb9b81a4201f41f04af394fdbb  ''"$PRIVATE_PROOF/native_data.py" | sha256sum --check --strict
+
+        '
+    - name: Transport and verify project_observations.py
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s ''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'' | base64 --decode | gzip -d > "$PRIVATE_PROOF/project_observations.py"
+
+        printf ''%s\n'' ''17075a5fcbde7363dd0a7316768b6e41aee2cf582937522ba9a993b37ad6788e  ''"$PRIVATE_PROOF/project_observations.py" | sha256sum --check --strict
+
+        '
+    - name: Transport and verify manifest.json
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s ''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'' | base64 --decode | gzip -d > "$PRIVATE_PROOF/manifest.json"
+
+        printf ''%s\n'' ''6e0f3f82b5c2dfa5cce77056bd2c94adfc61a4523e370992c00fcbcbc04eca5b  ''"$PRIVATE_PROOF/manifest.json" | sha256sum --check --strict
+
+        '
+    - name: Bind exact diagnostic source
+      shell: bash
+      run: 'set -euo pipefail
+
+        python3 -B "$PRIVATE_PROOF/hosted.py" bind
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        node-version: 24.22.1
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+        vitest-fs-cache: 'true'
+        node-compile-cache: 'true'
+        frozen-lockfile: 'true'
+    - uses: ./.github/actions/setup-test-bun
+    - name: Run original dual-runtime shard with passive observer
+      shell: bash
+      run: 'set -euo pipefail
+
+        python3 -B "$PRIVATE_PROOF/hosted.py" run
+
+        '
+    - name: Upload bounded evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: powershell-startup-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '${{ github.workspace }}-powershell-safe/identity.json
+
+          ${{ github.workspace }}-powershell-safe/report.json
+
+          ${{ github.workspace }}-powershell-safe/native.json
+
+          ${{ github.workspace }}-powershell-safe/observations.json'
+        if-no-files-found: error
+        retention-days: 14
