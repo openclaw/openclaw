@@ -106,11 +106,8 @@ stored identity cannot prove an account need authenticated administrator recover
 Doctor does not infer ownership from delivery settings or the current caller.
 
 Automations created before owner attribution have no recorded owner. Chat can
-still enable, disable, reschedule or remove them when their stored `sessionKey`
-or `sessionTarget` binds them to that exact conversation. That binding does not
-prove an account: only a Gateway owner or an operator can change what they run,
-their name, delivery or failure alerts. Refused edits leave the job and its
-execution authority unchanged.
+still enable, disable, reschedule or remove them, but only a Gateway owner or an
+operator can change their prompt or tools.
 
 Operator-created automations that name an owner conversation run with operator
 authority. That conversation can list, enable, disable, reschedule, run

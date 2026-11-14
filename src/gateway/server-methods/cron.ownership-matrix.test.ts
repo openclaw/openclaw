@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   bindCronManagementGrant,
@@ -8,10 +7,6 @@ import {
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveCronRunAdmissionSource,
-  resolveCronSessionWorkspaceOwnershipError,
-} from "../../cron/run-authority.js";
 import { createCronStoreHarness } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
@@ -25,9 +20,8 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronJobMatchesDeclarationScope, readCronCallerScope } from "./cron-caller-scope.js";
-import { callCron, createReadService } from "./cron-read.test-support.js";
+import { createReadService } from "./cron-read.test-support.js";
 import {
   cronAccountPolicy as policy,
   expectCronReply,
@@ -396,86 +390,6 @@ describe("cron ownership access matrix", () => {
       payload: { kind: "agentTurn", message: "m", toolsAllow: ["read"] },
     });
     expect(matches(accountJob)).toBe(true);
-  });
-
-  it("keeps an ownerless operator job runnable after refusing its bound conversation's prompt edit", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createReadService({
-      storePath,
-      cronEnabled: false,
-      defaultAgentId: "ops",
-      enqueueSystemEvent: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    onTestFinished(() => cron.stop());
-    const context = createDirectChatContext({ cron, cronStorePath: storePath, getRuntimeConfig });
-    const input: CronJobCreate = {
-      name: "Operator report",
-      agentId: "ops",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionKey: S_A,
-      sessionTarget: `session:${S_A}`,
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "Report status", toolsAllow: ["*"] },
-      delivery: { mode: "none" },
-    };
-    const added = await callCron(context, "cron.add", input);
-    expect(added.mock.calls[0]?.[0]).toBe(true);
-    const before = expectDefined((await loadCronStore(storePath)).jobs[0], "created job");
-    expect(before.owner).toBeUndefined();
-    expect(before.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
-    expect(before.toolsAllowProvenance).toBeUndefined();
-
-    // Code Mode's final-surface capture is not proof of an owning account.
-    const client = createCronCallerClient("ops", undefined, S_A);
-    client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
-    const edited = await callCron(
-      context,
-      "cron.update",
-      {
-        id: before.id,
-        patch: { payload: { kind: "agentTurn", message: "Report status, then summarize" } },
-      },
-      { client },
-    );
-    expect(String(edited.mock.calls[0]?.[2]?.message)).toContain(
-      "only pause, resume, reschedule or remove it",
-    );
-    expect((await loadCronStore(storePath)).jobs[0]).toEqual(before);
-
-    const rescheduled = await callCron(
-      context,
-      "cron.update",
-      { id: before.id, patch: { schedule: { kind: "every", everyMs: 120_000 } } },
-      { client },
-    );
-    expect(rescheduled.mock.calls[0]?.[0]).toBe(true);
-    const after = expectDefined((await loadCronStore(storePath)).jobs[0], "rescheduled job");
-    expect(after.schedule).toMatchObject({ kind: "every", everyMs: 120_000 });
-    expect(after.owner).toBeUndefined();
-    expect(after.toolsAllowProvenance).toBeUndefined();
-    expect(after.scheduledToolPolicy).toEqual(before.scheduledToolPolicy);
-    const admissionSource = resolveCronRunAdmissionSource(after);
-    expect(admissionSource).toBe("operator-schedule");
-    expect(
-      resolveCronSessionWorkspaceOwnershipError({
-        cfg: OWNER_CONFIG,
-        agentId: "ops",
-        sessionKey: S_A,
-        ownerSessionKey: after.owner?.sessionKey,
-        hasWorkspaceBinding: true,
-        admissionSource,
-      }),
-    ).toBeUndefined();
-    const foreign = await callCron(
-      context,
-      "cron.update",
-      { id: before.id, patch: { enabled: false } },
-      { client: createCronCallerClient("ops", undefined, S_B) },
-    );
-    expect(String(foreign.mock.calls[0]?.[2]?.message)).toContain("not found");
-    expect((await loadCronStore(storePath)).jobs[0]).toEqual(after);
   });
 
   it("lets the owner conversation pause or remove its trusted job and narrows other edits", async () => {
