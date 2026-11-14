@@ -375,10 +375,7 @@ export async function admitScheduledOccurrence(
                 (job.operatorSource?.source.kind === "gateway"
                   ? operatorScopeSatisfied("operator.admin", run.operatorAuthority.scopes)
                   : run.operatorAuthority.openclawIdPrincipal?.kind !== "member")
-            : // A fired condition can wait long for a run slot after admission, so the
-              // requester's owner bit is read again for each run, not reused.
-              (requesterOwner?.isOwner?.(selectLiveRuntimeConfig(run.cfg)) ??
-                requesterOwner?.owner),
+            : requesterOwner?.owner,
         );
         result = buildScheduledExecutionContext(job, facts);
       } catch (error) {
