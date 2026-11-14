@@ -6,10 +6,10 @@ import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionMessageCutMutationResult } from "./session-accessor.types.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
-import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { extractEditorText } from "./session-message-cut-content.js";
+import type { SessionMessageCutReader } from "./session-message-cut-target.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
@@ -37,6 +37,15 @@ export type SessionMessageCutPlan =
       status: "prepared";
       header: ReturnType<typeof createSessionTranscriptHeader>;
       events: TranscriptEvent[];
+      result: Extract<SessionMessageCutResult, { status: "created" }>;
+    };
+
+/** Rewind and switch install one appended control row on the existing transcript. */
+export type SessionMessageCutInPlacePlan =
+  | Exclude<SessionMessageCutResult, { status: "created" }>
+  | {
+      status: "prepared";
+      leafEvent: TranscriptEvent;
       result: Extract<SessionMessageCutResult, { status: "created" }>;
     };
 
@@ -111,14 +120,7 @@ export function planSessionMessageCut(
     return selected;
   }
   const { entry: currentEntry, cut } = selected;
-  const workspace = params.settledLocalWorkspace;
-  if (
-    workspace &&
-    (params.mode === "fork" ||
-      currentEntry.worktree?.id !== workspace.worktreeId ||
-      currentEntry.sessionId !== workspace.sessionId ||
-      (currentEntry.lifecycleRevision ?? null) !== workspace.lifecycleRevision)
-  ) {
+  if (settledWorkspaceConflicts(currentEntry, params)) {
     return { status: "conflict" };
   }
   const nextSessionId = randomUUID();
@@ -154,19 +156,156 @@ export function planSessionMessageCut(
             targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
           },
         ];
-  // Rotating transcript identity fences stale live managers: later snapshot-replace writes
-  // target the old session and cannot erase this leaf repoint from the active session.
+  const nextEntry = buildMessageCutSessionEntry(currentEntry, params, nextSessionId);
+  return {
+    status: "prepared",
+    header,
+    events: nextEvents,
+    result: {
+      status: "created",
+      key: params.targetKey,
+      entry: nextEntry,
+      ...readMessageCutEditorFields(cut?.message),
+    },
+  };
+}
+
+/**
+ * Rewind and branch switch install their repoint on the existing transcript.
+ *
+ * The appended `leaf` control is the only semantic change, so the session keeps
+ * its id and the committing writer fences stale writers with the transcript
+ * generation and mutation watermark instead of a new transcript identity.
+ */
+export function planInPlaceSessionMessageCut(
+  entry: SessionEntry | undefined,
+  reader: SessionMessageCutReader,
+  params: SessionMessageCutIntent & { mode: "rewind" | "switch" },
+  sourceRepositoryWorkspaceId?: string,
+): SessionMessageCutInPlacePlan {
+  const refusal = refuseUnselectableMessageCut(entry, params, sourceRepositoryWorkspaceId);
+  if (refusal) {
+    return refusal;
+  }
+  const currentEntry = entry!;
+  const target = reader.readTarget(params.entryId);
+  if (!target) {
+    return { status: "missing-entry" };
+  }
+  let message: Record<string, unknown> | undefined;
+  let repointTargetId: string | null;
+  if (params.mode === "switch") {
+    if (target.eventType === "leaf" || !reader.isBranchTip(params.entryId)) {
+      return { status: "not-branch-tip" };
+    }
+    if (reader.activeLeafEventId() === params.entryId) {
+      return { status: "already-active" };
+    }
+    repointTargetId = params.entryId;
+  } else {
+    message = asRecord(target.event?.message);
+    if (target.event?.type !== "message" || message?.role !== "user") {
+      return { status: "not-user-message" };
+    }
+    if (!target.onActivePath) {
+      return { status: "off-active-path" };
+    }
+    repointTargetId = target.repointTargetId;
+  }
+  if (settledWorkspaceConflicts(currentEntry, params)) {
+    return { status: "conflict" };
+  }
+  return {
+    status: "prepared",
+    leafEvent: {
+      type: "leaf",
+      id: reader.allocateEventId(),
+      parentId: reader.tailEventId(),
+      timestamp: new Date().toISOString(),
+      targetId: repointTargetId,
+    },
+    result: {
+      status: "created",
+      key: params.targetKey,
+      entry: buildMessageCutSessionEntry(currentEntry, params, currentEntry.sessionId),
+      ...readMessageCutEditorFields(message),
+    },
+  };
+}
+
+/** Preconditions shared by both planners, independent of how history is read. */
+function refuseUnselectableMessageCut(
+  currentEntry: SessionEntry | undefined,
+  params: SessionMessageCutIntent,
+  sourceRepositoryWorkspaceId?: string,
+): Exclude<SessionMessageCutResult, { status: "created" }> | undefined {
+  if (!currentEntry?.sessionId) {
+    return { status: "missing-session" };
+  }
+  if (
+    !params.expectedState ||
+    currentEntry.sessionId !== params.expectedState.sessionId ||
+    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
+  ) {
+    return { status: "conflict" };
+  }
+  if (
+    sourceRepositoryWorkspaceId !== undefined &&
+    currentEntry.repositoryWorkspaceId !== sourceRepositoryWorkspaceId
+  ) {
+    throw new Error("Repository workspace changed before session fork");
+  }
+  // Local cuts clear harness ownership. Locked history must instead stay with
+  // its native owner, even without an upstream link.
+  assertModelSelectionUnlocked(
+    currentEntry,
+    "Session history changes are unavailable while model selection is locked.",
+  );
+  return undefined;
+}
+
+function settledWorkspaceConflicts(
+  currentEntry: SessionEntry,
+  params: SessionMessageCutIntent,
+): boolean {
+  const workspace = params.settledLocalWorkspace;
+  return Boolean(
+    workspace &&
+    (params.mode === "fork" ||
+      currentEntry.worktree?.id !== workspace.worktreeId ||
+      currentEntry.sessionId !== workspace.sessionId ||
+      (currentEntry.lifecycleRevision ?? null) !== workspace.lifecycleRevision),
+  );
+}
+
+/**
+ * The destination entry for every message cut.
+ *
+ * Fork installs a detached identity. Rewind and switch keep theirs and reset
+ * only the state the moved transcript tail invalidates, so the next turn
+ * rebuilds context, run and harness facts from the new active path.
+ */
+function buildMessageCutSessionEntry(
+  currentEntry: SessionEntry,
+  params: SessionMessageCutIntent,
+  sessionId: string,
+): SessionEntry {
   const forked = params.mode === "fork";
-  const cutEntry: SessionEntry = {
-    // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
+  const workspace = params.settledLocalWorkspace;
+  // In-place cuts keep the transcript identity, so the lifecycle revision is the
+  // fence that retires pre-cut owners: live workspace custody, owned transcript
+  // writers and lifecycle-scoped authority all compare it.
+  const lifecycleRevision = randomUUID();
+  return {
     ...(forked ? inheritSessionSelection(currentEntry) : currentEntry),
-    sessionId: nextSessionId,
-    lifecycleRevision: forked ? randomUUID() : currentEntry.lifecycleRevision,
+    sessionId,
+    lifecycleRevision,
     localWorkspaceHandoff: workspace
       ? {
           worktreeId: workspace.worktreeId,
           fromSessionId: workspace.sessionId,
-          toSessionId: nextSessionId,
+          toSessionId: sessionId,
+          // The settled incarnation this custody record transfers from.
           lifecycleRevision: workspace.lifecycleRevision,
           projectionRevision: workspace.projectionRevision,
         }
@@ -188,8 +327,8 @@ export function planSessionMessageCut(
     totalTokens: undefined,
     totalTokensFresh: undefined,
     totalTokensVersion: undefined,
-    // A rotated transcript cannot resume provider/runtime identity from the old tail.
-    // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
+    // A moved transcript tail cannot resume provider/runtime identity. Clear
+    // transcript-derived accounting too so the next turn rebuilds canonical state.
     contextTokens: undefined,
     contextTokensSource: undefined,
     contextBudgetStatus: undefined,
@@ -215,43 +354,30 @@ export function planSessionMessageCut(
           },
           parentSessionKey: params.canonicalSourceKey,
           ...(currentEntry.visibility === "draft" ? { visibility: "draft" as const } : {}),
+          ...params.forkWorkspace,
+          ...(params.creation ? buildSessionCreationStamp(params.creation) : {}),
+          ...(params.repositoryWorkspaceId
+            ? { repositoryWorkspaceId: params.repositoryWorkspaceId }
+            : {}),
         }
-      : {}),
-    ...(params.mode === "fork" ? params.forkWorkspace : {}),
-    ...(params.mode === "fork" && params.creation
-      ? buildSessionCreationStamp(params.creation)
-      : {}),
-    ...(params.mode === "fork" && params.repositoryWorkspaceId
-      ? { repositoryWorkspaceId: params.repositoryWorkspaceId }
       : {}),
     ...(currentEntry.incognito === true || isIncognitoSessionKey(params.canonicalSourceKey)
       ? { incognito: true as const }
       : {}),
   };
-  // Rewind and branch switch keep the session key, so Usage keeps the retired window in its family.
-  const nextEntry = forked
-    ? cutEntry
-    : preserveSqliteSameKeySessionRolloverLineage({
-        next: cutEntry,
-        previous: currentEntry,
-        sessionKey: params.targetKey,
-      });
-  const editorText =
-    cut && (readMessageWorkContext(cut.message)?.text ?? extractEditorText(cut.message.content));
-  const editorAttachments = cut && extractEditorAttachments(cut.message.content);
-  const editorMediaRefs = cut && extractEditorMediaRefs(cut.message);
+}
+
+function readMessageCutEditorFields(message: Record<string, unknown> | undefined) {
+  if (!message) {
+    return {};
+  }
+  const editorText = readMessageWorkContext(message)?.text ?? extractEditorText(message.content);
+  const editorAttachments = extractEditorAttachments(message.content);
+  const editorMediaRefs = extractEditorMediaRefs(message);
   return {
-    status: "prepared",
-    header,
-    events: nextEvents,
-    result: {
-      status: "created",
-      key: params.targetKey,
-      entry: nextEntry,
-      ...(editorText ? { editorText } : {}),
-      ...(editorAttachments ? { editorAttachments } : {}),
-      ...(editorMediaRefs ? { editorMediaRefs } : {}),
-    },
+    ...(editorText ? { editorText } : {}),
+    ...(editorAttachments ? { editorAttachments } : {}),
+    ...(editorMediaRefs ? { editorMediaRefs } : {}),
   };
 }
 

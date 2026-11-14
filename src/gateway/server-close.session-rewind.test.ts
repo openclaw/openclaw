@@ -178,8 +178,9 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     expect(child.session_id).not.toBe(row?.session_id);
     expect(activeEvents.all(child.session_id)).toEqual(retainedEvents);
     assert(typeof row?.session_id === "string");
-    expect(row.session_id).not.toBe(scope.sessionId);
-    expect(row.previous_session_id).toBe(scope.sessionId);
+    // The fork creates a session; the queued rewind repoints the source in place.
+    expect(row.session_id).toBe(scope.sessionId);
+    expect(row.previous_session_id).toBeNull();
     expect(activeEvents.all(row.session_id)).toEqual(retainedEvents);
   } finally {
     race.onCleanup(async () => {

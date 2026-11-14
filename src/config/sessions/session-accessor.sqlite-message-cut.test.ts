@@ -32,6 +32,7 @@ import {
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -87,38 +88,46 @@ it("returns missing-session for history navigation in an absent store", async ()
   ).rejects.toBe(denied);
 });
 
-it("returns a committed rewind after identity publication retires its old authority", async () => {
-  const { scope, params } = await createSession();
-  let current = true;
+// Rewind keeps its transcript identity, so the fence that retires pre-rewind
+// readers and writers is the rotated transcript generation, not a new session id.
+it("rewinds in place and voids the pre-rewind transcript generation", async () => {
+  const { env, scope, params } = await createSession();
+  const readGeneration = () =>
+    readTranscriptGenerationInTransaction(
+      openOpenClawAgentDatabase({ agentId, env }),
+      scope.sessionId,
+    );
+  const before = readGeneration();
+  const rotatedSessionIds: Array<string | undefined> = [];
   const stop = onSessionIdentityMutation((event) => {
     if (
       event.kind !== "delete" &&
       event.previous.sessionKeys.includes(sessionKey) &&
       event.current.sessionId !== scope.sessionId
     ) {
-      current = false;
+      rotatedSessionIds.push(event.current.sessionId);
     }
   });
+  let result;
   try {
-    const result = await rewind(
-      {
-        ...params,
-        commitGuard() {
-          if (!current) {
-            throw new Error("The old session authority ended after publication");
-          }
-        },
-      },
-      sourceExpectedState,
-    );
-    expect({ status: result.status, current, entry: readEntry(scope) }).toMatchObject({
-      status: "created",
-      current: false,
-      entry: { previousSessionId: scope.sessionId },
-    });
+    result = await rewind(params, sourceExpectedState);
   } finally {
     stop();
   }
+  assert(result.status === "created");
+  expect({
+    sessionId: result.entry.sessionId,
+    previousSessionId: result.entry.previousSessionId,
+    storedSessionId: readEntry(scope)?.sessionId,
+    generationRotated: Boolean(before) && readGeneration() !== before,
+    rotatedSessionIds,
+  }).toEqual({
+    sessionId: scope.sessionId,
+    previousSessionId: undefined,
+    storedSessionId: scope.sessionId,
+    generationRotated: true,
+    rotatedSessionIds: [],
+  });
 });
 
 it("refuses a valid physical store replacement before rewind preparation resumes", async () => {
@@ -286,8 +295,10 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
     createdActor: { type: "human", source: "profile", id: "profile-1" },
     createdAt: 1_000,
     forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
-    previousSessionId: "message-cut-source",
+    // The rewound session keeps its transcript, so no generation is retired.
+    sessionId: "message-cut-source",
   });
+  expect(result.entry.previousSessionId).toBeUndefined();
   expect(deliveryContextFromSession(result.entry)).toEqual({
     channel: "telegram",
     to: "chat-123",
