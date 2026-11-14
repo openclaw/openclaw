@@ -625,7 +625,6 @@ describe("CI changed Node test plan", () => {
         "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
         "src/gateway/server.sessions.delete-worktree-lifecycle.test.ts",
         "src/infra/update-managed-service-handoff-foreground.test.ts",
-        "src/node-host/node-worker-supervisor.recovery.test.ts",
         "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
         "src/state/openclaw-database-preflight.lifecycle.test.ts",
         "src/config/state-startup-corpus.part-2.test.ts",
