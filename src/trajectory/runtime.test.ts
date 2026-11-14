@@ -645,7 +645,9 @@ describe("trajectory runtime", () => {
   it("drops repeated conversation fields in priority order", async () => {
     const prompt = "summarize the incident timeline";
     const messageBlocks = oversizedMessages();
-    const parsed = await captureEvent("context.compiled", {
+    const recorder = await createCapturedRuntimeRecorder();
+    const stringify = vi.spyOn(JSON, "stringify");
+    recorder.recordEvent("context.compiled", {
       prompt,
       messagesSnapshot: messageBlocks,
       messages: messageBlocks,
@@ -655,7 +657,12 @@ describe("trajectory runtime", () => {
         description: "x".repeat(32_760),
       })),
     });
-
+    const fullEvents = stringify.mock.calls.filter(
+      ([value]) => value?.traceSchema && value.data?.messagesSnapshot,
+    ).length;
+    stringify.mockRestore();
+    expect(fullEvents).toBe(0);
+    const parsed = captured();
     expect(parsed.data.prompt).toBe(prompt);
     expect(parsed.data.tools).toHaveLength(7);
     expect(parsed.data.messagesSnapshot).toBeUndefined();
