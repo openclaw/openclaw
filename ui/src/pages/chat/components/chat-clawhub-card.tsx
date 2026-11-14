@@ -12,11 +12,9 @@ export type ChatClawHubCardProps = {
   agentId?: string;
 };
 
-const CardBody = lazy(() =>
-  import("./chat-clawhub-card-body.tsx").then(({ ChatClawHubCardBody }) => ({
-    default: ChatClawHubCardBody,
-  })),
-);
+const CardBody = lazy(() => import("./chat-clawhub-card-body.tsx"), {
+  export: "ChatClawHubCardBody",
+});
 
 export function ChatClawHubCard(props: ChatClawHubCardProps) {
   const context = useApplication();
