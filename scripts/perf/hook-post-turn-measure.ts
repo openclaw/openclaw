@@ -1,8 +1,8 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/hook-post-turn-measure.ts
 //   <synthetic-fixture-root> <label> [timing|allocation]
 // Real hook runner + managed plugin admission, 40 plugins and 10,000 session keys.
-// Acceptance: closed-turn hooks execute exactly once; healthy-path CPU/allocation
-// stays within A/A variation. Storage is intentionally untouched by this owner.
+// Acceptance: closed-turn hooks execute exactly once; record healthy-path admission
+// cost against A/A variation. Storage is intentionally untouched by this owner.
 import assert from "node:assert/strict";
 import { readFileSync, statSync } from "node:fs";
 import { Session } from "node:inspector/promises";

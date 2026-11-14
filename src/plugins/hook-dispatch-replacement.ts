@@ -1,7 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 // One hook dispatch's view of plugins a reload replaced while it was dispatching.
 import type { PluginHookName, PluginHookRegistration } from "./hook-types.js";
+import { runOutsidePluginInvocationScope } from "./plugin-instance-scope.js";
 import { isPluginReloadingError } from "./plugin-replacement-retry.js";
 
 /** Settles in place of a handler result once a reload that refused the handler finishes. */
@@ -62,7 +62,7 @@ export class HookDispatchSelection<K extends PluginHookName> {
       const result =
         registration.hookName === "subagent_ended" ||
         registration.hookName === "subagent_delivery_target"
-          ? runOutsidePreparedModelRuntimePluginGenerationScope(run)
+          ? runOutsidePluginInvocationScope(run)
           : run();
       return isPromiseLike(result)
         ? Promise.resolve(result).then(undefined, replace)
