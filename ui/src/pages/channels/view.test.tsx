@@ -100,22 +100,17 @@ describe("channel hub refresh actions", () => {
   });
 
   it("announces a channel status failure as an alert", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: [],
-      channelLabels: {},
-      channels: {},
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    });
+    const props = createProps(null);
     props.channels.channelsError = "Channel status unavailable";
+    props.selectedChannel = "whatsapp";
     const container = document.createElement("div");
 
     renderChannelView(ChannelsView, props, container);
 
     expect(
       Array.from(container.querySelectorAll('[role="alert"]'), (alert) => alert.textContent),
-    ).toEqual(["Channel status unavailable"]);
+    ).toEqual(["Channel status unavailable", "Channel status unavailable"]);
+    expect(text(container, ".channels-detail__status .settings-status")).toBe("Status unknown");
   });
 });
 
@@ -617,7 +612,7 @@ describe("channel detail", () => {
     const detail = container.querySelector(".channels-detail")!;
 
     expect(detail.querySelector(heading)).not.toBeNull();
-    expect(text(detail, ".channels-detail__status .settings-status")).toBe("Not configured");
+    expect(text(detail, ".channels-detail__status .settings-status")).toBe("Status unknown");
     expect(detail.querySelector(probeButton)).not.toBeNull();
     expect(texts(detail, ".channels-detail__footer button")).toEqual(["Run setup"]);
     expect(detail.textContent).not.toContain("n/a");

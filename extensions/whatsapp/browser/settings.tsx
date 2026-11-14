@@ -16,7 +16,7 @@ export function WhatsAppCard(props: {
   // SAFETY: this declared placement receives the WhatsApp status published by its channel.
   const status = () => props.snapshot.status as WhatsAppStatus | undefined;
   const completed = createMemo(() => completion()?.then(() => null) ?? null);
-  const linked = () => status()?.linked === true;
+  const linked = () => status()?.linked;
   const login = () => props.snapshot.login;
   const configured = () => {
     const value = status()?.configured;
@@ -36,16 +36,16 @@ export function WhatsAppCard(props: {
   ) => ({
     key: field,
     label: t(`common.${field}`),
-    value: value == null ? null : t(value ? "common.yes" : "common.no"),
+    value: t(value == null ? "common.unknown" : value ? "common.yes" : "common.no"),
     kind: value === true ? "ok" : "muted",
   });
   const facts = createMemo(() => {
     const value = status();
     return [
       booleanFact("configured", configured()),
-      booleanFact("linked", value?.linked === true),
-      booleanFact("running", value?.running === true),
-      booleanFact("connected", value?.connected === true),
+      booleanFact("linked", value?.linked),
+      booleanFact("running", value?.running),
+      booleanFact("connected", value?.connected),
       {
         key: "lastConnect",
         label: t("common.lastConnect"),
@@ -128,7 +128,8 @@ export function WhatsAppCard(props: {
               {phone() ? t("channels.whatsapp.phoneNumber") : t("common.linked")}
             </span>
             <span class="settings-row__desc">
-              {phone() ?? t(linked() ? "common.yes" : "common.no")}
+              {phone() ??
+                t(linked() == null ? "common.unknown" : linked() ? "common.yes" : "common.no")}
             </span>
           </div>
           <div class="settings-row__control">
@@ -139,7 +140,7 @@ export function WhatsAppCard(props: {
                 { primary: !linked() && !login()?.qrDataUrl && configured() === true },
               ]}
               disabled={login()?.busy}
-              onClick={() => run(() => props.context.login!.start(linked()))}
+              onClick={() => run(() => props.context.login!.start(linked() === true))}
             >
               {linked()
                 ? t("common.relink")

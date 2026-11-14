@@ -12,7 +12,7 @@ type WhatsAppDisconnect = {
 
 export type WhatsAppStatus = {
   configured: boolean;
-  linked: boolean;
+  linked?: boolean;
   authAgeMs?: number | null;
   self?: WhatsAppSelf | null;
   running: boolean;

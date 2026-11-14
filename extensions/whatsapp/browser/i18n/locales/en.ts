@@ -11,6 +11,7 @@ export default {
     na: "n/a",
     yes: "Yes",
     no: "No",
+    unknown: "Unknown",
     relink: "Relink",
     working: "Working…",
     showQr: "Show QR",

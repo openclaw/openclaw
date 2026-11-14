@@ -112,13 +112,18 @@ it("keeps QR/relink actions and busy state tied to the shared login snapshot", (
     expect(f.button(label).disabled).toBe(true);
   }
 });
-it("uses the declared default account for configured fallback and keeps absent status booleans false", () => {
+it("uses the declared default account without treating missing status as false", () => {
   const configuredAccount = { accountId: "selected", configured: true };
   const f = fixture({
     accounts: [{ accountId: "first", configured: false }, configuredAccount],
     defaultAccountId: "selected",
   });
-  f.expectFacts({ Configured: "Yes", Linked: "No", Running: "No", Connected: "No" });
+  f.expectFacts({ Configured: "Yes", Linked: "Unknown", Running: "Unknown", Connected: "Unknown" });
+  expect(f.container.querySelector(".settings-row__desc")?.textContent).toBe("Unknown");
+  f.update({ status: { linked: false, running: false, connected: false } });
+  f.expectFacts({ Linked: "No", Running: "No", Connected: "No" });
+  f.update({ status: { linked: true, running: true, connected: true } });
+  f.expectFacts({ Linked: "Yes", Running: "Yes", Connected: "Yes" });
   f.update({ status: { configured: false } });
   f.expectFacts({ Configured: "No" });
   f.update({
@@ -153,7 +158,7 @@ it("retains localized rows and login controls until the configuration slot is di
   expect(qr?.getAttribute("src")).toBe(qrLogin.qrDataUrl);
   expect(f.mountConfig).toHaveBeenCalledOnce();
   f.update({ status: { configured: true, running: true } });
-  expect(phone()).toBe("No");
+  expect(phone()).toBe("Unknown");
   expectOriginal();
   f.dispose();
   expect(f.configDispose).toHaveBeenCalledOnce();

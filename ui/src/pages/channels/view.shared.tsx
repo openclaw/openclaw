@@ -57,6 +57,7 @@ export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
 }
 
 const CHANNEL_HEALTH = {
+  unknown: { kind: "muted", labelKey: "channels.hub.stateUnknown" },
   running: { kind: "ok", labelKey: "channels.hub.stateRunning" },
   configured: { kind: "muted", labelKey: "channels.hub.stateConfigured" },
   attention: { kind: "danger", labelKey: "channels.hub.stateAttention" },
@@ -73,6 +74,9 @@ export function channelProbe(key: string, props: ChannelsProps) {
 /** One answer to "does it work", shared by the channel's list row and its dialog. */
 export function resolveChannelHealth(key: string, props: ChannelsProps): ChannelHealth {
   const snapshot = props.channels.channelsSnapshot;
+  if (!snapshot) {
+    return "unknown";
+  }
   const display = resolveChannelDisplayState(key, props);
   const failed =
     snapshot?.statusIssues?.some((issue) => issue.channel === key) ||
