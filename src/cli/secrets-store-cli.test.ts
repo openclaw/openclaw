@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -185,6 +186,21 @@ describe("secrets store CLI", () => {
       await command;
       expect(mocks.runtimeLogs.join("\n")).toContain("Would set SERVICE_VALUE (env)");
     }
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "\n", "\r\n"])("limits stdin values after stripping %j framing", async (ending) => {
+    const value = "é".repeat(32_768);
+    using stdin = vi.spyOn(process, "stdin", "get");
+    stdin.mockReturnValue(Readable.from([value, ending]) as typeof process.stdin);
+    await run("set", "FRAMING_VALUE", "--kind", "env", "--value-file", "-");
+    expect(mocks.write).toHaveBeenCalledWith(expect.objectContaining({ value }));
+
+    mocks.write.mockClear();
+    stdin.mockReturnValue(Readable.from([value, "x", ending]) as typeof process.stdin);
+    await expect(run("set", "FRAMING_VALUE", "--kind", "env", "--value-file", "-")).rejects.toThrow(
+      "__exit__:2",
+    );
     expect(mocks.write).not.toHaveBeenCalled();
   });
 

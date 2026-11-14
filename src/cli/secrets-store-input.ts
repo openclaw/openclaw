@@ -52,7 +52,8 @@ export async function readSecretStoreInput(valueFile?: string): Promise<string> 
     return await readBoundedFile(valueFile, SECRET_STORE_VALUE_MAX_BYTES);
   }
   if (valueFile === "-" || !process.stdin.isTTY) {
-    return (await readBoundedStdin(SECRET_STORE_VALUE_MAX_BYTES)).replace(/\r?\n$/u, "");
+    // Allow stdin's optional LF/CRLF framing; the store validates the trimmed value's byte limit.
+    return (await readBoundedStdin(SECRET_STORE_VALUE_MAX_BYTES + 2)).replace(/\r?\n$/u, "");
   }
   const value = await password({
     message: "Secret value",
