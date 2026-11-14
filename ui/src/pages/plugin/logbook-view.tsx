@@ -59,26 +59,30 @@ function ActionButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button class="btn btn--small" type="button" {...props} />;
 }
 
-function StatusChips(props: { status: LogbookStatusPayload }) {
+function StatusChips(props: { status: LogbookStatusPayload; capturePending: boolean }) {
   return (
     <div class="logbook__chips">
       <StatusChip
         kind={
-          props.status.captureEnabled &&
-          !props.status.capturePaused &&
-          !props.status.lastCaptureError
-            ? "ok"
-            : "warn"
+          props.capturePending
+            ? undefined
+            : props.status.captureEnabled &&
+                !props.status.capturePaused &&
+                !props.status.lastCaptureError
+              ? "ok"
+              : "warn"
         }
       >
         <span class="logbook__chip-dot" />
-        {props.status.capturePaused
-          ? t("logbook.status.paused")
-          : props.status.captureEnabled
-            ? t("logbook.status.capturing", {
-                seconds: String(props.status.captureIntervalSeconds),
-              })
-            : t("logbook.status.disabled")}
+        {props.capturePending
+          ? t(props.status.capturePaused ? "logbook.status.pausing" : "logbook.status.resuming")
+          : props.status.capturePaused
+            ? t("logbook.status.paused")
+            : props.status.captureEnabled
+              ? t("logbook.status.capturing", {
+                  seconds: String(props.status.captureIntervalSeconds),
+                })
+              : t("logbook.status.disabled")}
       </StatusChip>
       <Show when={props.status.nodeName || props.status.nodeId}>
         <StatusChip title={t("logbook.status.nodeHelp")}>
@@ -375,7 +379,14 @@ export function Logbook(props: LogbookProps) {
             </ActionButton>
           </Show>
         </div>
-        <Show when={actions.status()}>{(status) => <StatusChips status={status()} />}</Show>
+        <Show when={actions.status()}>
+          {(status) => (
+            <StatusChips
+              status={status()}
+              capturePending={status().capturePaused !== state().status?.capturePaused}
+            />
+          )}
+        </Show>
         <div class="logbook__actions">
           <Show when={actions.status()}>
             {(status) => (
@@ -383,6 +394,7 @@ export function Logbook(props: LogbookProps) {
                 disabled={
                   actions.actionPending() || state().actionPending || !status().captureEnabled
                 }
+                title={t("logbook.actions.captureHint")}
                 onClick={() => void actions.setCapturePaused(!actions.status()?.capturePaused)}
               >
                 {t(status().capturePaused ? "logbook.actions.resume" : "logbook.actions.pause")}

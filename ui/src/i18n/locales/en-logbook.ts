@@ -11,6 +11,8 @@ const enLogbook = {
     status: {
       capturing: "Capturing every {seconds}s",
       paused: "Capture paused",
+      pausing: "Pausing capture…",
+      resuming: "Resuming capture…",
       disabled: "Capture off",
       nodeHelp: "Device providing screen snapshots.",
       pending: "{count} frames queued",
@@ -23,14 +25,14 @@ const enLogbook = {
         "Set plugins.entries.logbook.config.visionModel or configure tools.media models.",
     },
     actions: {
-      pause: "Pause",
-      resume: "Resume",
+      pause: "Pause capture",
+      resume: "Resume capture",
+      captureHint: "Queued snapshots can still be analyzed while capture is paused.",
       analyzeNow: "Analyze now",
     },
     empty: {
       title: "No activity yet.",
-      subtitle:
-        "Logbook is collecting snapshots; cards appear after the first analysis batch completes.",
+      subtitle: "Activity appears here after captured snapshots are analyzed.",
     },
     card: {
       keyframeAlt: "Screen snapshot from this activity",
