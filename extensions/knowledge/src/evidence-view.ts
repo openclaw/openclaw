@@ -35,7 +35,12 @@ export function evidenceView(
   root.className = "knowledge-evidence-list";
   root.setAttribute("aria-label", "Source evidence");
   if ((result.evidenceTotal ?? 0) > 1 || (result.evidenceSourceTotal ?? 0) > 1) {
-    root.append(el("p", `${result.evidenceTotal} citations · ${result.evidenceSourceTotal} files`));
+    root.append(
+      el(
+        "p",
+        `${result.evidenceTotal} citations · ${result.evidenceSourceTotal} ${result.evidenceSourceTotal === 1 ? "file" : "files"}`,
+      ),
+    );
   }
   const sources = new Map<
     string,
@@ -191,7 +196,7 @@ export function evidenceView(
   }
   let offset = result.nextEvidenceOffset;
   if (offset != null) {
-    const more = el("button", "More source files");
+    const more = el("button", "More citations");
     more.type = "button";
     root.append(more);
     const loadMore = async () => {
@@ -307,7 +312,7 @@ export function originalDownload(
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 60000);
       }
-      status.textContent = "Original file downloaded.";
+      status.textContent = writer ? "Original file saved." : "Download requested.";
     } catch (error) {
       await writer?.abort().catch(() => {});
       status.textContent = redact(String(error));
