@@ -88,15 +88,18 @@ afterEach(() => restoreElementRegistration?.());
 
 it("loads picker auth copy without loading Settings and preserves later Settings copy", async () => {
   const { manager } = await loadI18n({
+    channels: { hub: { setUp: "Einrichten" } },
     modelProviders: { status: { apiKey: "API-Schlüssel" } },
   });
   await manager.setLocale("de");
   await import("../pages/chat/components/chat-model-picker-panel.tsx");
 
   expect(manager.t("modelProviders.status.apiKey")).toBe("API-Schlüssel");
+  expect(manager.t("channels.hub.setUp")).toBe("Einrichten");
   expect(manager.t("modelProviders.title")).toBe("modelProviders.title");
   await manager.setLocale("en");
   expect(manager.t("modelProviders.status.apiKey")).toBe("API key");
+  expect(manager.t("channels.hub.setUp")).toBe("Set up");
 
   const { registerSettingsEnglish } = await import("./locales/en-settings.ts");
   registerSettingsEnglish();

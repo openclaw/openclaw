@@ -273,7 +273,7 @@ const enSettings = {
       stateAttention: "Needs attention",
       stateNotConfigured: "Not configured",
       details: "Details",
-      setUp: "Set up",
+      setUp: registerModelProviderAuthEnglish.catalog.channels.hub.setUp,
       guidedSetup: "Guided step-by-step setup",
       openDetails: "Open details",
       lastMessageAgo: "Last message {ago}",
