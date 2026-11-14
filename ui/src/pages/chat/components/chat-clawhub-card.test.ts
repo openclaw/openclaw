@@ -617,9 +617,13 @@ describe("ClawHub chat recommendations", () => {
         search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
       });
       if (!installed) {
-        expect(part(card, "dismiss")?.textContent?.trim()).toBe("Dismiss");
-        part(card, "dismiss")!.click();
-        await waitForSolid(() => expect(card.querySelector(".chat-clawhub-card")).toBeNull());
+        expect(part(card, "dismiss")).toBeNull();
+        expect(part(card, "install")?.textContent?.trim()).toBe("Install");
+        context.navigate.mockClear();
+        part(card, "install")!.click();
+        expect(context.navigate).toHaveBeenCalledWith("skills", {
+          search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
+        });
       }
     },
   );
