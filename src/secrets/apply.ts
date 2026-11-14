@@ -310,18 +310,20 @@ async function projectPlanState(params: {
           continue;
         }
         if (profile.kind === "api_key" || profile.kind === "token") {
+          // Provider migration does not select a replacement for every agent/account.
+          if (coerceSecretRef(profile.refValue, nextConfig.secrets?.defaults) === null) {
+            if (isNonEmptyString(profile.value)) {
+              warnings.push(
+                `Auth profile "${profile.profileId}" for provider "${provider}" in ${authStorePath} retains its plaintext credential because it has no valid ${profile.refField}. Add an explicit auth-profile target to migrate this account.`,
+              );
+            }
+            continue;
+          }
           if (isNonEmptyString(profile.value)) {
             scrubbedValues.add(profile.value.trim());
           }
           if (profile.valueField in profile.profile) {
             delete profile.profile[profile.valueField];
-            mutated = true;
-          }
-          if (
-            profile.refField in profile.profile &&
-            coerceSecretRef(profile.refValue, nextConfig.secrets?.defaults) === null
-          ) {
-            delete profile.profile[profile.refField];
             mutated = true;
           }
           continue;

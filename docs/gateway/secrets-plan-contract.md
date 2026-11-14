@@ -129,7 +129,7 @@ No writes are committed for an invalid plan: target resolution and path validati
 - Ref-only SQLite auth-profile entries (`keyRef`/`tokenRef`) are included in runtime credential resolution and audit coverage.
 - `secrets apply` writes supported `openclaw.json` targets and SQLite auth-profile targets. Two optional scrub passes are on by default:
   - `scrubEnv` removes migrated plaintext values from `.env` files in the effective state and active-config directories.
-  - `scrubAuthProfilesForProviderTargets` clears plaintext/unused-ref residue in auth stores for providers a plan just migrated.
+  - `scrubAuthProfilesForProviderTargets` clears plaintext in auth stores for providers a plan just migrated only when the profile has a valid `keyRef` or `tokenRef`. Profiles without a replacement ref keep their credentials and produce a warning; add an explicit auth-profile target for each intended account rather than reusing another account’s provider key.
 
   Set either option to `false` in the plan to skip that pass.
 
