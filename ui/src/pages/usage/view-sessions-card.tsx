@@ -4,7 +4,7 @@ import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
-import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
@@ -90,16 +90,6 @@ export function SessionsCard(props: {
               {normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}
             </span>
           </div>
-          <SettingsSegmented
-            mode="buttons"
-            value={props.usage.display.sessionsTab}
-            onChange={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}
-            onReselect={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}
-            options={[
-              { value: "all", label: t("usage.sessions.all") },
-              { value: "recent", label: t("usage.sessions.recent") },
-            ]}
-          />
           <label class="sessions-sort">
             <span>{t("usage.sessions.sort")}</span>
             <SettingsSelect
@@ -141,20 +131,9 @@ export function SessionsCard(props: {
           ) : undefined}
         </div>
         {props.sessions.length === 0 ? (
-          <div class="usage-empty-block">
-            {t(
-              props.usage.display.sessionsTab === "recent"
-                ? "usage.sessions.noRecent"
-                : "usage.sessions.noneInRange",
-            )}
-          </div>
+          <div class="usage-empty-block">{t("usage.sessions.noneInRange")}</div>
         ) : (
-          <div
-            class={[
-              "session-bars",
-              { "session-bars--recent": props.usage.display.sessionsTab === "recent" },
-            ]}
-          >
+          <div class="session-bars">
             <SessionRows
               sessions={showAll() ? props.sessions : props.sessions.slice(0, SESSION_PREVIEW)}
               selectedSessions={props.usage.filters.selectedSessions}
@@ -177,7 +156,7 @@ export function SessionsCard(props: {
             </Show>
           </div>
         )}
-        <Show when={props.usage.display.sessionsTab === "all" ? props.overview : undefined}>
+        <Show when={props.overview}>
           {(overview) => (
             <div class="data-table-pagination">
               <div class="data-table-pagination__controls">

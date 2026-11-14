@@ -1857,12 +1857,6 @@ select.usage-creator-filter {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.session-bars--recent {
-  max-height: 220px;
-  margin-top: 6px;
-  overflow: auto;
-}
-
 .session-bars--selected {
   max-height: 160px;
   margin-top: 6px;

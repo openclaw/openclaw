@@ -52,12 +52,10 @@ export function createUsagePage(context: ApplicationContext) {
     queryDraft: "",
     timeZone: "local",
   };
-  // Sorting and recent selection belong to the next request, before Solid commits.
+  // Sorting belongs to the next request, before Solid commits.
   let display: Omit<UsageDisplayState, keyof UsagePresentation["display"]> = {
     sessionSort: DEFAULT_USAGE_SESSION_SORT.sort,
     sessionSortDir: DEFAULT_USAGE_SESSION_SORT.sortDirection,
-    recentSessions: [],
-    sessionsTab: "all",
   };
   const [presentation, setPresentation] = createStore<UsagePresentation>({
     display: {
@@ -325,7 +323,6 @@ export function createUsagePage(context: ApplicationContext) {
       selectedDays: filters.selectedDays,
       selectedHours: filters.selectedHours,
       selectedSessions: usageSelectedSessions,
-      recentKeys: display.sessionsTab === "recent" ? display.recentSessions : undefined,
       offset: usageOffset,
       sort: display.sessionSort,
       sortDirection: display.sessionSortDir,
@@ -350,8 +347,6 @@ export function createUsagePage(context: ApplicationContext) {
       JSON.stringify(query.selectedHours) === JSON.stringify(current.selectedHours) &&
       (projection === "roster" ||
         JSON.stringify(query.selectedSessions) === JSON.stringify(current.selectedSessions)) &&
-      (projection === "calendar" ||
-        JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys)) &&
       // Chart/filter projections describe the whole selection, not its roster page or order.
       (projection === "calendar" ||
         projection === "filterOptions" ||
@@ -488,11 +483,6 @@ export function createUsagePage(context: ApplicationContext) {
       usageRosterResult()?.sessions.find((session) => session.key === key) ??
       usageResult()?.overview?.selectedRows.find((session) => session.key === key);
     details.clear();
-    display = {
-      ...display,
-      recentSessions: [key, ...display.recentSessions.filter((entry) => entry !== key)].slice(0, 8),
-    };
-
     usageSelectedSessions = toggleUsageRangeSelection(
       usageSelectedSessions,
       key,
@@ -662,21 +652,15 @@ export function createUsagePage(context: ApplicationContext) {
             void loadUsage();
           },
           onChange: (next: Partial<UsageDisplayState>) => {
-            const { sessionSort, sessionSortDir, sessionsTab, recentSessions, ...local } = next;
+            const { sessionSort, sessionSortDir, ...local } = next;
             display = {
               sessionSort: sessionSort ?? display.sessionSort,
               sessionSortDir: sessionSortDir ?? display.sessionSortDir,
-              sessionsTab: sessionsTab ?? display.sessionsTab,
-              recentSessions: recentSessions ?? display.recentSessions,
             };
             setPresentation((draft) => {
               Object.assign(draft.display, local);
             });
-            if (
-              next.sessionSort !== undefined ||
-              next.sessionSortDir !== undefined ||
-              next.sessionsTab !== undefined
-            ) {
+            if (next.sessionSort !== undefined || next.sessionSortDir !== undefined) {
               refreshOverview();
             }
             notify();
