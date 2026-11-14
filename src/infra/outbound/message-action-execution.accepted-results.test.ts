@@ -95,7 +95,7 @@ describe("accepted results through registered message actions", () => {
 
   it.each([
     { mode: "plugin", messageId: "accepted-1" },
-    { mode: "core", messageId: "unknown" },
+    { mode: "core", messageId: "accepted-2" },
   ] as const)(
     "retains an accepted $mode send ($messageId) when its caller closes before annotation",
     async ({ mode, messageId }) => {
@@ -128,7 +128,7 @@ describe("accepted results through registered message actions", () => {
                     channel,
                     messageId,
                     receipt: createMessageReceiptFromOutboundResults({
-                      results: messageId === "unknown" ? [] : [{ channel, messageId }],
+                      results: [{ channel, messageId }],
                       kind: "text",
                     }),
                   };

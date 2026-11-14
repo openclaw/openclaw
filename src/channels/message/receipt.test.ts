@@ -100,6 +100,34 @@ describe("createMessageReceiptFromOutboundResults", () => {
     expect(receipt.primaryPlatformMessageId).toBeUndefined();
   });
 
+  it.each(["unknown", "suppressed", "ok"])(
+    "does not treat the reserved placeholder %s as a delivery identity",
+    (placeholder) => {
+      const result = {
+        outcome: "sent" as const,
+        messageId: placeholder,
+        receipt: { platformMessageIds: [], parts: [], sentAt: 123 },
+      };
+      expect(resolveReceiptSourceId(result)).toBeUndefined();
+      const receipt = createMessageReceiptFromOutboundResults({ results: [result] });
+      expect(receipt.platformMessageIds).toEqual([]);
+      expect(receipt.primaryPlatformMessageId).toBeUndefined();
+    },
+  );
+
+  it("keeps the real platform id that arrives beside a reserved placeholder", () => {
+    const result = {
+      outcome: "sent" as const,
+      messageId: "unknown",
+      receipt: {
+        platformMessageIds: ["$event:example.org"],
+        parts: [{ platformMessageId: "$event:example.org", kind: "text" as const, index: 0 }],
+        sentAt: 123,
+      },
+    };
+    expect(resolveReceiptSourceId(result)).toBe("$event:example.org");
+  });
+
   it("keeps conflicting provider threads on parts and omits the aggregate thread", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [

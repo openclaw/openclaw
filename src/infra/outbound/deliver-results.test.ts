@@ -54,11 +54,38 @@ function deliver(
   });
 }
 
+function placeholderMatrixResult() {
+  // The bundled Matrix adapter reports this shape when the homeserver returned no
+  // event id (extensions/matrix/src/matrix/send.ts): a reserved placeholder plus an
+  // empty native receipt.
+  return {
+    channel: "matrix" as const,
+    messageId: "unknown",
+    receipt: createMessageReceiptFromOutboundResults({ results: [] }),
+  };
+}
+
 function progressResult(position: string) {
   return { channel: "line", messageId: "push", meta: { position } };
 }
 
 describe("delivery result reconciliation", () => {
+  it("does not confirm a payload whose adapter returned only a reserved placeholder", async () => {
+    const outcomes: unknown[] = [];
+    const onDeliveryResult = vi.fn();
+    const results = await deliver(() => ({ sendText: async () => placeholderMatrixResult() }), {
+      channel: "matrix",
+      onDeliveryResult,
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(results).toEqual([]);
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([
+      { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
+    ]);
+  });
+
   it.each([true, false])("reconciles aggregate receipts (formatted: %s)", async (formatted) => {
     const first = progressResult("first"),
       second = progressResult("second"),

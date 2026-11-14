@@ -53,14 +53,36 @@ export function listMessageReceiptSourceTargets(value: unknown): string[] {
   return [...targets];
 }
 
+/**
+ * Adapters use these ids for a send whose transport returned no physical identity.
+ * They describe delivery evidence, never a platform message identity. The bundled
+ * iMessage adapter documents "ok"/"unknown" as bridge placeholders and excludes
+ * both from its own receipt (extensions/imessage/src/message-guid.ts).
+ */
+const RESERVED_MESSAGE_IDENTITIES = new Set(["unknown", "suppressed", "ok"]);
+
+export function isReservedMessageIdentity(value: string | undefined): boolean {
+  const normalized = normalizeOptionalString(value);
+  return normalized !== undefined && RESERVED_MESSAGE_IDENTITIES.has(normalized);
+}
+
+/** One identity gate: a reserved placeholder must not outrank a real part id. */
+function resolveConcreteIdentity(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (normalized === undefined || isReservedMessageIdentity(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
 export function resolveReceiptSourceId(result: MessageReceiptInputResult): string | undefined {
   if (result.outcome === "not_sent") {
     return undefined;
   }
   return (
-    normalizeOptionalString(result.messageId) ??
+    resolveConcreteIdentity(result.messageId) ??
     (result.receipt ? resolveMessageReceiptPrimaryId(result.receipt) : undefined) ??
-    normalizeOptionalString(result.pollId)
+    resolveConcreteIdentity(result.pollId)
   );
 }
 
