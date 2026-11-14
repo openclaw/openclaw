@@ -248,3 +248,21 @@ export function resolveSessionParentSessionKey(
   }
   return baseSessionKey ?? null;
 }
+
+/** The conversation an id belongs to without the channel's own topic or sender scope. */
+export function resolveBaseConversationId(channel: string | undefined, rawId: string): string {
+  const trimmed = rawId.trim();
+  if (!channel) {
+    return trimmed;
+  }
+  const messaging = getLoadedChannelPlugin(normalizeResolvedChannel(channel))?.messaging;
+  // Deprecated numericTopicShorthand keeps its meaning for adapters that have not
+  // adopted resolveSessionConversation yet.
+  if (messaging?.numericTopicShorthand && !messaging.resolveSessionConversation) {
+    return /^(-?\d+):\d+$/.exec(trimmed)?.[1] ?? trimmed;
+  }
+  return (
+    resolveSessionConversation({ channel, kind: "group", rawId: trimmed })?.baseConversationId ||
+    trimmed
+  );
+}

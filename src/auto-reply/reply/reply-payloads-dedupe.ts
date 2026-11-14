@@ -7,6 +7,7 @@ import {
   normalizeTextForComparison,
 } from "../../agents/embedded-agent-helpers/messaging-dedupe.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
+import { deliveryRoutesShareConversation } from "../../channels/conversation-resolution.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -193,23 +194,28 @@ function getMatchingMessagingToolReplyTargets(
     if (channelRouteTargetsMatchExact({ left: originRoute, right: targetRoute })) {
       return true;
     }
-    // For providers without a thread-aware suppression matcher (e.g. Slack), a
-    // structured thread id on either side means the routes are NOT the same
-    // conversation, so do not fall back to channel-only matching (which would
-    // collapse distinct threads together and suppress a real reply). Providers
-    // that encode the thread/topic inside the target string carry their own
-    // matcher and must still run it.
     const match = getChannelPlugin(provider)?.outbound?.targetsMatchForReplySuppression;
-    if (!match && (originRoute.threadId != null || targetRoute.threadId != null)) {
+    if (match) {
+      return match({
+        originTarget: originRoute.to,
+        targetKey: targetRoute.to,
+        targetThreadId: stringifyRouteThreadId(target.threadId),
+      });
+    }
+    const sameConversation = deliveryRoutesShareConversation({
+      channel: provider,
+      left: originRoute,
+      right: targetRoute,
+    });
+    if (sameConversation !== undefined) {
+      return sameConversation;
+    }
+    // Without a channel resolver, a structured thread id on either side means
+    // distinct conversations; channel-only matching would suppress a real reply.
+    if (originRoute.threadId != null || targetRoute.threadId != null) {
       return false;
     }
-    return match
-      ? match({
-          originTarget: originRoute.to,
-          targetKey: targetRoute.to,
-          targetThreadId: stringifyRouteThreadId(target.threadId),
-        })
-      : targetRoute.to === originRoute.to;
+    return targetRoute.to === originRoute.to;
   });
 }
 

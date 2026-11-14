@@ -1,4 +1,8 @@
-import { normalizeTelegramLookupTarget, parseTelegramTarget } from "./targets.js";
+import {
+  normalizeTelegramLookupTarget,
+  parseTelegramTarget,
+  type TelegramTarget,
+} from "./targets.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
 
 export type ParsedTelegramTopicConversation = {
@@ -58,4 +62,54 @@ export function parseTelegramTopicConversation(params: {
   }
   const canonicalConversationId = serializeTelegramTopicConversation({ chatId, thread });
   return canonicalConversationId ? { chatId, thread, canonicalConversationId } : null;
+}
+
+/** Thread spec carried by a parsed target; an encoded topic wins over the fallback. */
+export function resolveTelegramTargetThread(
+  target: Pick<TelegramTarget, "messageThreadId" | "directMessagesTopicId">,
+  fallbackThreadId?: string | number | null,
+): TelegramThreadSpec {
+  if (target.directMessagesTopicId != null) {
+    return { id: target.directMessagesTopicId, scope: "direct-messages" };
+  }
+  const forumThreadId = target.messageThreadId ?? fallbackThreadId;
+  if (forumThreadId == null) {
+    return { scope: "none" };
+  }
+  const id = Number(forumThreadId);
+  return Number.isFinite(id) ? { id, scope: "forum" } : { scope: "none" };
+}
+
+/**
+ * The one Telegram conversation identity: a topic conversation id, else a
+ * target whose encoded topic wins over the separate thread id.
+ */
+export function resolveTelegramConversationRef(params: {
+  to?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+  threadId?: string | number | null;
+}): { chatId: string; thread: TelegramThreadSpec; conversationId: string } | null {
+  const topic =
+    params.conversationId &&
+    parseTelegramTopicConversation({
+      conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
+    });
+  if (topic) {
+    return {
+      chatId: topic.chatId,
+      thread: topic.thread,
+      conversationId: topic.canonicalConversationId,
+    };
+  }
+  const target = parseTelegramTarget(
+    params.to || params.parentConversationId || params.conversationId || "",
+  );
+  const chatId = target.chatId.trim();
+  if (!chatId) {
+    return null;
+  }
+  const thread = resolveTelegramTargetThread(target, params.threadId);
+  return { chatId, thread, conversationId: buildTelegramConversationId({ chatId, thread }) };
 }

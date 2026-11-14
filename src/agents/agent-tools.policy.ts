@@ -163,28 +163,18 @@ export function resolveConfiguredToolPolicies(params: {
   return policies;
 }
 
-function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
-  const raw = groupId?.trim();
-  if (!raw) {
-    return [];
-  }
-  const topicSenderMatch = raw.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
-  if (topicSenderMatch) {
-    const [, chatId, topicId] = topicSenderMatch;
-    // Sender-scoped sessions still inherit topic/base group tool policies.
-    return normalizeUniqueSingleOrTrimmedStringList([raw, `${chatId}:topic:${topicId}`, chatId]);
-  }
-  const topicMatch = raw.match(/^(.+):topic:([^:]+)$/i);
-  if (topicMatch) {
-    const [, chatId, topicId] = topicMatch;
-    return normalizeUniqueSingleOrTrimmedStringList([`${chatId}:topic:${topicId}`, chatId]);
-  }
-  const senderMatch = raw.match(/^(.+):sender:([^:]+)$/i);
-  if (senderMatch) {
-    const [, chatId] = senderMatch;
-    return normalizeUniqueSingleOrTrimmedStringList([raw, chatId]);
-  }
-  return [raw];
+// The channel owns any topic or sender scope encoded in the id; scoped sessions
+// inherit the policies of every parent conversation it reports.
+function resolveScopedGroupIds(channel: string, kind: "group" | "channel", rawId: string) {
+  const resolved = resolveSessionConversation({ channel, kind, rawId });
+  return normalizeUniqueSingleOrTrimmedStringList([
+    rawId,
+    resolved?.id,
+    // Parents are ordered narrowest first (topic before group); the first matching
+    // policy wins, so the base conversation must come last.
+    ...(resolved?.parentConversationCandidates ?? []),
+    resolved?.baseConversationId,
+  ]);
 }
 
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
@@ -199,19 +189,9 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   const conversationKey = threadId ? baseSessionKey : raw;
   const conversation = parseRawSessionConversationRef(conversationKey);
   if (conversation) {
-    const resolvedConversation = resolveSessionConversation({
-      channel: conversation.channel,
-      kind: conversation.kind,
-      rawId: conversation.rawId,
-    });
     return {
       channel: conversation.channel,
-      groupIds: normalizeUniqueSingleOrTrimmedStringList([
-        ...buildScopedGroupIdCandidates(conversation.rawId),
-        resolvedConversation?.id,
-        resolvedConversation?.baseConversationId,
-        ...(resolvedConversation?.parentConversationCandidates ?? []),
-      ]),
+      groupIds: resolveScopedGroupIds(conversation.channel, conversation.kind, conversation.rawId),
     };
   }
   const parts = (conversationKey ?? raw).split(":").filter(Boolean);
@@ -230,9 +210,10 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!groupId) {
     return {};
   }
+  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
   return {
-    channel: normalizeLowercaseStringOrEmpty(channel),
-    groupIds: buildScopedGroupIdCandidates(groupId),
+    channel: normalizedChannel,
+    groupIds: resolveScopedGroupIds(normalizedChannel, kind, groupId),
   };
 }
 
@@ -531,13 +512,15 @@ export function resolveGroupToolPolicy(params: {
   });
   // Keep server-derived ids first so a caller cannot use a trusted parent
   // candidate to skip a more-specific session group policy.
+  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
+  const channel = normalizeMessageChannel(channelRaw);
+  const trustedGroupId = trustedGroup.groupId?.trim();
   const groupIds = normalizeUniqueSingleOrTrimmedStringList([
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),
-    ...buildScopedGroupIdCandidates(trustedGroup.groupId),
+    ...(trustedGroupId && channel ? resolveScopedGroupIds(channel, "group", trustedGroupId) : []),
+    trustedGroupId,
   ]);
-  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
-  const channel = normalizeMessageChannel(channelRaw);
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID

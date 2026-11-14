@@ -1,5 +1,6 @@
 // Source-delivery plans decide whether final output is visible through the
 // message tool, direct fallback delivery, both, or neither.
+import { deliveryRoutesShareConversation } from "../../channels/conversation-resolution.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type {
@@ -53,8 +54,6 @@ function deliveryTargetsMatch(channel: string, targetTo: string, deliveryTo: str
   );
 }
 
-const TOPIC_THREAD_SUFFIX = /:topic:(\d+)$/i;
-
 /** Compares a message-tool target with the required source delivery target. */
 export function sourceDeliveryTargetsMatch(
   target: SourceDeliveryMessageToolTarget,
@@ -71,28 +70,30 @@ export function sourceDeliveryTargetsMatch(
   if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  const targetTo = target.to.trim();
-  const deliveryTo = delivery.to.trim();
-  const targetTopic = TOPIC_THREAD_SUFFIX.exec(targetTo);
-  const deliveryTopic = TOPIC_THREAD_SUFFIX.exec(deliveryTo);
-  if (
-    !deliveryTargetsMatch(
-      channel,
-      targetTopic ? targetTo.slice(0, targetTopic.index) : targetTo,
-      deliveryTopic ? deliveryTo.slice(0, deliveryTopic.index) : deliveryTo,
-    )
-  ) {
+  const deliveryThreadId = stringifyRouteThreadId(delivery.threadId);
+  const explicitTargetThreadId = stringifyRouteThreadId(target.threadId);
+  const inheritsThread = target.threadImplicit === true && target.threadSuppressed !== true;
+  const sameConversation = deliveryRoutesShareConversation({
+    channel,
+    left: {
+      to: target.to.trim(),
+      threadId: explicitTargetThreadId ?? (inheritsThread ? deliveryThreadId : undefined),
+    },
+    right: { to: delivery.to.trim(), threadId: deliveryThreadId },
+  });
+  if (sameConversation !== undefined) {
+    return sameConversation;
+  }
+  if (!deliveryTargetsMatch(channel, target.to, delivery.to)) {
     return false;
   }
-  const deliveryThreadId = stringifyRouteThreadId(delivery.threadId) ?? deliveryTopic?.[1];
-  const targetThreadId = stringifyRouteThreadId(target.threadId) ?? targetTopic?.[1];
-  if (!deliveryThreadId && !targetThreadId) {
+  if (!deliveryThreadId && !explicitTargetThreadId) {
     return true;
   }
-  if (deliveryThreadId && !targetThreadId) {
-    return target.threadImplicit === true && target.threadSuppressed !== true;
+  if (deliveryThreadId && !explicitTargetThreadId) {
+    return inheritsThread;
   }
-  return deliveryThreadId === targetThreadId;
+  return deliveryThreadId === explicitTargetThreadId;
 }
 
 /** Evaluates whether observed message-tool sends satisfy the source delivery plan. */

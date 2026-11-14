@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -10,6 +12,11 @@ vi.mock("./target-normalization.js", () => ({
 }));
 import { resolveSourceDeliveryOutcome, type SourceDeliveryPlan } from "./source-delivery-plan.js";
 import type { SourceDeliveryMessageToolTarget } from "./source-delivery-plan.types.js";
+
+const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+  pluginId: "telegram",
+  artifactBasename: "api.ts",
+});
 
 afterEach(() => {
   setActivePluginRegistry(createTestRegistry());
@@ -52,11 +59,14 @@ const outcomeFlags = (verified: boolean, unverified = false) => ({
 type EvidenceCase = { sent: SourceDeliveryMessageToolTarget; source: SourceDeliveryPlan["target"] };
 
 describe("source delivery plan", () => {
-  it("normalizes message-tool delivery outcomes against the planned source target", () => {
+  it("asks the channel whether an encoded topic target is the planned source thread", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    );
     expect(
       deliveryOutcome(
-        { provider: "message", accountId: "a", to: "oc:topic:456" },
-        { channel: "feishu", to: "oc", accountId: "a", threadId: 456 },
+        { provider: "message", accountId: "a", to: "-100:topic:456" },
+        { channel: "telegram", to: "-100", accountId: "a", threadId: 456 },
       ),
     ).toMatchObject(outcomeFlags(true));
   });

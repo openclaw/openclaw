@@ -43,6 +43,7 @@ import {
   type TelegramThreadBindingRecord,
 } from "./thread-bindings-store.js";
 import { resolveTelegramToken } from "./token.js";
+import { buildTelegramConversationId } from "./topic-conversation.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
@@ -369,7 +370,10 @@ async function initializeThreadBindingManager(
               accountId,
               ...(assertCurrent ? { assertPlatformSendAuthorized: assertCurrent } : {}),
             });
-            conversationId = `${result.chatId}:topic:${result.topicId}`;
+            conversationId = buildTelegramConversationId({
+              chatId: result.chatId,
+              thread: { scope: "forum", id: result.topicId },
+            });
             nativeTopicCreated = true;
           } catch (err) {
             logVerbose(

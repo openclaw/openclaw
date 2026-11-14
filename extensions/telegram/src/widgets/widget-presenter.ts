@@ -4,6 +4,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTelegramAccount } from "../accounts.js";
 import { parseTelegramTarget } from "../targets.js";
+import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
   measureTelegramWidgetHtml,
   TELEGRAM_WIDGET_DATA_MAX_BYTES,
@@ -98,7 +99,13 @@ function resolveTelegramWidgetRoute(
     cfg,
     accountId: account.accountId,
     chatId: target.chatId,
-    to: messageThreadId === undefined ? to : `${target.chatId}:topic:${messageThreadId}`,
+    to:
+      messageThreadId === undefined
+        ? to
+        : buildTelegramConversationId({
+            chatId: target.chatId,
+            thread: { scope: "forum", id: messageThreadId },
+          }),
   };
 }
 
