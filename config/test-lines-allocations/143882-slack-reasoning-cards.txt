@@ -1,0 +1,2 @@
+# Slack reasoning task rows on the native progress card (#143882): the native-stream dispatcher harness the card scenarios share, reasoning segmentation and card units, progress-block reasoning rows, compositor window units, and dispatcher scenarios for the detailed card's rows, a turn without reasoning keeping its eviction window, the quiet card's reasoning rows without tool rows, the quiet card with reasoning off pinned to main's calls, and the expired-stream trace golden expecting the reasoning as a task row instead of text.
+689

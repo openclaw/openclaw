@@ -178,6 +178,35 @@ Legacy keys:
 - top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
 - Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the current keys.
 
+### Reasoning cards
+
+With `agents.defaults.reasoningDefault: "stream"` (or a per-agent `reasoningDefault`), OpenClaw streams the model's reasoning while the reply is generated. On the native card the reasoning renders as task rows; on the detailed card (`progress.toolProgress: true` with native task cards) they are interleaved with the tool rows:
+
+- The reasoning text is split into segments of about 240 characters at word boundaries, and each segment is one row prefixed with 🧠. Finished segments are marked complete and stay put; the newest one is in progress. Row titles are capped at 250 characters, a cap OpenClaw chooses below the 256 characters Slack documents per `task_update` field ([chat.appendStream](https://docs.slack.dev/reference/methods/chat.appendStream/)). Slack shows the plan block as collapsible rows on desktop, web and mobile.
+- Slack's plan block holds at most 50 tasks ([plan block](https://docs.slack.dev/reference/block-kit/blocks/plan-block/)), shared with tool rows. Segment rows stop at 47 minus the number of tool calls so far, never fewer than 8; the rest of the reasoning rolls through one tail row that shows the latest 240 characters until the answer starts.
+- A tool call or the end of a reasoning phase closes the open segment, so thinking after a tool result starts a new row below the tool row.
+- When the turn finishes, the detailed card's title becomes `Thought for <n>s, <k> tool calls` unless `progress.label` sets an explicit title.
+- Commentary still streams as text; reasoning does not appear in the text.
+
+The quiet card (`progress.toolProgress: false`) shows the same 🧠 reasoning rows below its single summary row, and still no tool rows; its summary row and title behave as before. With reasoning visibility off, the quiet card is unchanged. A turn that streams reasoning widens the rolling progress window to at least 64 lines (a larger `progress.maxLines` raises it further), so a burst of reasoning cannot push a row out of the window before it is sent; a turn without streamed reasoning keeps the configured window. Card updates ride the same one-second coalescing as other progress updates, one `chat.appendStream` call per batch.
+
+While an assistant thread status set through `assistant.threads.setStatus` is showing, the Slack client hides the streamed cards; they appear once the status clears.
+
+With `agents.defaults.reasoningDefault: "stream"` in place, the Slack side is:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: { toolProgress: true },
+      },
+    },
+  },
+}
+```
+
 ## Typing reaction fallback
 
 `typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use Slack's `processing` session status.
