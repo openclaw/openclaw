@@ -1,0 +1,3 @@
+# Real WhatsApp normalizer/SDK regression for verified primary identity in DMs and groups.
+# Existing shared authority tests do not exercise the WhatsApp producer (#195643).
+36
