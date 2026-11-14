@@ -11,6 +11,10 @@ const enActivity = {
       incomplete: "Images too large to preview here",
     },
     pulse: {
+      title: "Sessions by last activity",
+      lastYear: "Last 12 months",
+      empty: "No recorded activity in this period.",
+      descriptionEmpty: "{window}: no recorded activity.",
       sessionsOne: "session",
       sessions: "sessions",
       started: "started",
@@ -19,8 +23,8 @@ const enActivity = {
       running: "running now",
       bucketOne: "{period} · {count} session",
       bucket: "{period} · {count} sessions",
-      descriptionOne: "{window}: {count} session; busiest {period}",
-      description: "{window}: {count} sessions; busiest {period}",
+      descriptionOne: "{window}: {count} session by last activity; most sessions at {period}",
+      description: "{window}: {count} sessions by last activity; most sessions at {period}",
     },
     git: {
       pullRequest: "{repository} pull request #{number}: {title} ({state})",
