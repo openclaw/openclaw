@@ -215,7 +215,7 @@ it.each([
     let b = pcmWav();
     if (kind.endsWith("high-bit")) {
       const offset = kind.startsWith("signature") ? 0 : kind.startsWith("fmt") ? 12 : 36;
-      b[offset] |= 128;
+      b.writeUInt8(b.readUInt8(offset) | 128, offset);
     } else if (kind.startsWith("duplicate")) {
       b = Buffer.concat([b, kind.endsWith("fmt") ? b.subarray(12, 36) : b.subarray(36)]);
     } else {

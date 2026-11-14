@@ -233,9 +233,9 @@ export async function transcodeAudioBuffer(params: {
 
 // Parse bounded RIFF chunks rather than platform-dependent afinfo LPCM wording.
 function readPcmWavFrames(buffer: Buffer): number {
-  const invalid = (): never => {
+  function invalid(): never {
     throw new Error("invalid decoded PCM WAV header");
-  };
+  }
   if (
     buffer.length < 12 ||
     buffer.toString("latin1", 0, 4) !== "RIFF" ||
