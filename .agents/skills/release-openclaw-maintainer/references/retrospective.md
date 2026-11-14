@@ -80,3 +80,14 @@ Each nudge-that-should-be-a-default and each P0/P1 follow-up becomes a skill,
 tooling, or issue change on `main` (release-process changes then reach the
 active release branch per the shared release boundaries). Link them from the
 retrospective PR when they exist.
+
+## Track in-flight fixes per agent
+
+Use the [shared tracker issue body](https://github.com/openclaw/tideclaw/issues/11)
+for per-agent active claims and status, not repository progress commits.
+Before editing, freshly read the body and merge only your own section,
+preserving other agents and your still-active batches; verify the result.
+Once a batch is finished **and its durable ledger-update PR is merged**,
+archive its outcome and evidence (including that PR) in a comment and verify it;
+then freshly read the body, remove only your completed batch, and verify again.
+Keep active, unmerged, or blocked work in the body. Do not close the tracker.
