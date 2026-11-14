@@ -100,6 +100,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       headerPinned: false,
     },
     detail: {
+      conversationHref: null,
       context: {
         weight: undefined,
         read: null,
@@ -115,8 +116,6 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       sessionLogs: null,
       sessionLogsRead: null,
       sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
-      sessionLogsExpanded: false,
-      logFilters: { roles: [], tools: [], hasTools: false, query: "" },
     },
     callbacks: {
       filters: {
@@ -137,8 +136,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       display: { onExportJson: noop, onExportCsv: noop, onPageChange: noop, onChange: noop },
       details: {
         onToggleContextExpanded: noop,
-        onToggleSessionLogsExpanded: noop,
-        onLogFiltersChange: noop,
+        onOpenConversation: noop,
         onSelectSession: noop,
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,

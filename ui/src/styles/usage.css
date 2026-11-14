@@ -41,8 +41,7 @@
 .usage-overview-layout,
 .session-detail-panel,
 .session-detail-content,
-.session-detail-row,
-.session-detail-bottom {
+.session-detail-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
@@ -106,8 +105,7 @@
   font-size: 11px;
 }
 
-.usage-mosaic-section,
-.session-log-tools {
+.usage-mosaic-section {
   display: grid;
   gap: 8px;
 }
@@ -135,8 +133,7 @@
 .sessions-card-meta,
 .timeseries-header-row,
 .context-breakdown-header,
-.session-detail-header,
-.session-logs-header {
+.session-detail-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -245,13 +242,10 @@ select.usage-select {
 .session-bar-meta,
 .context-weight-desc,
 .timeseries-summary,
-.session-log-meta,
-.session-logs-header-count,
 .usage-hour-labels,
 .context-breakdown-more,
 .usage-lineage-note,
 .session-detail-indicator,
-.session-log-tools summary,
 .legend-item,
 .usage-creators-more > summary {
   color: var(--muted);
@@ -752,8 +746,7 @@ select.usage-select {
 
 .usage-query-chips,
 .usage-query-suggestions,
-.usage-badges,
-.session-log-tools-list {
+.usage-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -893,27 +886,12 @@ select.usage-select {
 .usage-summary-grid,
 .session-summary-grid,
 .usage-insights-grid,
-.context-breakdown-grid,
-.session-logs-list {
+.context-breakdown-grid {
   display: grid;
   gap: 10px;
 }
 
 /* Long conversation text must not recursively size implicit grid columns in WebKit. */
-.session-logs-list {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.session-logs-list--windowed {
-  display: block;
-  height: min(70vh, 640px);
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-
-.session-logs-window {
-  position: relative;
-}
 
 .usage-summary-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1569,8 +1547,7 @@ select.usage-creator-filter {
 .cost-breakdown,
 .sessions-card,
 .session-timeseries-compact,
-.context-details-panel,
-.session-logs-compact {
+.context-details-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
@@ -1986,9 +1963,6 @@ select.usage-creator-filter {
 }
 
 /* The detail panel is a side column: its sections stack. */
-.session-detail-bottom {
-  grid-template-columns: minmax(0, 1fr);
-}
 
 .usage-badges {
   margin-bottom: 2px;
@@ -1999,8 +1973,7 @@ select.usage-creator-filter {
 }
 
 .session-timeseries-compact,
-.context-details-panel,
-.session-logs-compact {
+.context-details-panel {
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -2071,14 +2044,6 @@ select.usage-creator-filter {
   background: var(--bg);
 }
 
-.session-logs-header {
-  align-items: flex-start;
-}
-
-.session-log-filters {
-  margin: 0;
-}
-
 .usage-filters-inline {
   display: flex;
   flex-wrap: wrap;
@@ -2097,80 +2062,16 @@ select.usage-creator-filter {
   padding: 0 var(--field-padding-inline);
 }
 
-.session-log-has-tools {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-}
-
-.session-log-entry {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-}
-
-.session-log-entry.user {
-  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
-}
-
-.session-log-entry.assistant {
-  border-color: color-mix(in srgb, var(--info) 18%, var(--border));
-}
-
-.session-log-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  font-size: 12px;
-}
-
-.session-log-role {
-  font-weight: 700;
-  color: var(--text-strong);
-}
-
-.session-log-content {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.session-log-tools summary {
-  font-weight: 600;
-}
-
-.session-log-tools-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 8%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
-  font-size: 12px;
-}
-
 :root[data-theme-mode="light"] .session-bar-row,
 :root[data-theme-mode="light"] .usage-insight-card,
 :root[data-theme-mode="light"] .session-timeseries-compact,
-:root[data-theme-mode="light"] .context-details-panel,
-:root[data-theme-mode="light"] .session-logs-compact {
+:root[data-theme-mode="light"] .context-details-panel {
   background: var(--card);
 }
 
 @container (max-width: 900px) {
   .usage-grid,
-  .usage-mosaic,
-  .session-detail-bottom {
+  .usage-mosaic {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2224,8 +2125,7 @@ select.usage-creator-filter {
 
 @media (max-width: 900px) {
   .usage-grid,
-  .usage-mosaic,
-  .session-detail-bottom {
+  .usage-mosaic {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2267,10 +2167,6 @@ select.usage-creator-filter {
   .sessions-card-meta,
   .timeseries-controls {
     justify-content: flex-start;
-  }
-
-  .session-log-entry {
-    align-items: flex-start;
   }
 
   .session-bar-row,
@@ -2509,30 +2405,6 @@ select.usage-creator-filter {
   }
 
   /* Side by side when both labels fit; wider mono themes wrap instead of truncating. */
-  .session-log-filters > .usage-filter-select {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .session-log-filters .usage-filter-trigger {
-    width: 100%;
-  }
-
-  .session-log-filters .usage-filter-trigger > .oc-menu-item__label {
-    justify-content: space-between;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .session-log-filters .usage-filter-trigger__label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .session-log-filters > .session-log-has-tools {
-    flex: 1 0 100%;
-  }
 }
 
 /* Legend: every stacked series with its share of the range. */
