@@ -21,11 +21,22 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { createDeferred } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-stopped"] as const)(
+it
+  .skipIf(process.platform === "win32")
+  .for([
+    "continue",
+    "finish",
+    "root-source-stopped",
+    "other-agent",
+    "retired-message",
+    "completed-before",
+  ] as const)(
   "preserves yielded work through an actual Gateway restart (%s)",
   { timeout: 180_000 },
   async (action, { signal, onTestFailed }) => {
-    const parkedRoot = action === "root-source-stopped";
+    const parkedRoot = action === "root-source-stopped" || action === "retired-message";
+    const restartRoot = parkedRoot || action === "completed-before";
+    const childAgent = action === "other-agent" ? "other" : "main";
     const rootKey = parkedRoot
       ? "agent:main:dashboard:yield-restart"
       : "agent:main:main:thread:yield-restart";
@@ -39,6 +50,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
     let rootResumes = 0;
     let sequence = 0;
     let sentContinuation = false;
+    let yieldRoot: (() => void) | undefined;
     let continueChild: (() => void) | undefined;
     let finishRequester: (() => void) | undefined;
     const reservation = await reserveTestPortListener({
@@ -75,7 +87,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           };
           if (text.includes(childPrompt) && !text.includes(rootPrompt)) {
             childCalls++;
-            if (text.includes("CONTINUE_PARKED_CHILD")) {
+            if (action === "completed-before" || text.includes("CONTINUE_PARKED_CHILD")) {
               reply("PARKED_CHILD_COMPLETED");
               return;
             }
@@ -96,6 +108,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           if (!spawned) {
             call("sessions_spawn", {
               taskName: "message_waiting_child",
+              agentId: childAgent,
               task: childPrompt,
               context: "isolated",
               visible: true,
@@ -110,7 +123,11 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           if (text.includes("The Gateway restarted while you were working.")) {
             rootResumes++;
           }
-          if (parkedRoot) {
+          if (action === "retired-message" && rootResumes === 0) {
+            yieldRoot = () => call("sessions_yield", {});
+            return;
+          }
+          if (action === "root-source-stopped") {
             if (rootResumes > 0) {
               reply("ROOT_RECONCILED_STOPPED_CHILD");
               return;
@@ -125,10 +142,18 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
               return;
             }
             if (sentContinuation) {
-              call("sessions_yield", {});
+              if (text.includes("already_pending") || text.includes("nothing_pending")) {
+                reply("WAITING_FOR_CHILD_COMPLETION");
+              } else {
+                call("sessions_yield", {});
+              }
               return;
             }
             continueChild = () => {
+              if (action === "completed-before") {
+                call("sessions_history", { sessionKey: childKey });
+                return;
+              }
               sentContinuation = true;
               call("sessions_send", {
                 sessionKey: childKey,
@@ -137,8 +162,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
               });
             };
           }
-          // The requester remains alive before and after restart. Only an explicit
-          // continuation message should resume its parked child.
+          // Hold the model response until the fixture chooses yield, restart, or continuation.
         }),
     });
     const model = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${reservation.claim.port}/v1`);
@@ -148,7 +172,14 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
       signal,
       config: {
         ...base,
-        tools: { ...base.tools, allow: ["sessions_spawn", "sessions_yield", "sessions_send"] },
+        agents: {
+          ...base.agents,
+          entries: { main: { subagents: { allowAgents: ["main", "other"] } }, other: {} },
+        },
+        tools: {
+          ...base.tools,
+          allow: ["sessions_spawn", "sessions_yield", "sessions_send", "sessions_history"],
+        },
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
@@ -183,9 +214,15 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
         if (action !== "root-source-stopped") {
           expect(
             await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
-          ).toMatchObject({ status: "ok", yielded: true });
+          ).toMatchObject(
+            action === "completed-before" ? { status: "ok" } : { status: "ok", yielded: true },
+          );
         } else {
           await vi.waitFor(() => expect(childCalls).toBe(1), { timeout: 30_000 });
+        }
+        if (action === "retired-message") {
+          assert(yieldRoot);
+          yieldRoot();
         }
         if (parkedRoot) {
           expect(
@@ -193,18 +230,23 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           ).toMatchObject({ status: "ok", yielded: true });
           // agent.wait observes the yielded terminal before controller cleanup.
           // Restart only after the real root execution and terminal write have drained.
-          await vi.waitFor(
-            async () => {
-              const history = await client!.request<{
-                sessionInfo: { hasActiveRun: boolean };
-              }>("chat.history", { sessionKey: rootKey });
-              expect(history.sessionInfo.hasActiveRun).toBe(false);
-            },
-            { timeout: 15_000 },
-          );
+          if (action !== "retired-message") {
+            await vi.waitFor(
+              async () => {
+                const history = await client!.request<{
+                  sessionInfo: { hasActiveRun: boolean };
+                }>("chat.history", { sessionKey: rootKey });
+                expect(history.sessionInfo.hasActiveRun).toBe(false);
+              },
+              { timeout: 15_000 },
+            );
+          }
         }
-        const parkedKey = parkedRoot ? rootKey : childKey;
-        const parked = readRestartSession(instance.state.agentDir("main"), parkedKey);
+        const parkedKey = restartRoot ? rootKey : childKey;
+        const parked = readRestartSession(
+          instance.state.agentDir(restartRoot ? "main" : childAgent),
+          parkedKey,
+        );
         expect(parked?.lifecycleRunId).toEqual(expect.any(String));
         expect(parked?.status).toBeUndefined();
         const callsBeforeRestart = childCalls;
@@ -213,16 +255,28 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
         await client.stopAndWait();
         client = undefined;
         expect
-          .soft(readRestartSession(instance.state.agentDir("main"), parkedKey)?.resumeAfterRestart)
+          .soft(
+            readRestartSession(
+              instance.state.agentDir(restartRoot ? "main" : childAgent),
+              parkedKey,
+            )?.resumeAfterRestart,
+          )
           .toBeDefined();
+        if (action === "retired-message") {
+          expect(readRestartSession(instance.state.agentDir("main"), rootKey)?.lifecycleRunId).toBe(
+            root.runId,
+          );
+        }
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         await vi.waitFor(
           () =>
-            parkedRoot
+            action === "root-source-stopped"
               ? expect(
-                  readRestartSession(instance.state.agentDir("main"), parkedKey)
-                    ?.resumeAfterRestart,
+                  readRestartSession(
+                    instance.state.agentDir(restartRoot ? "main" : childAgent),
+                    parkedKey,
+                  )?.resumeAfterRestart,
                 ).toBeUndefined()
               : expect(rootResumes).toBe(1),
           { timeout: 20_000 },
@@ -248,7 +302,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           return;
         }
         phase = "restored parked child";
-        const restored = readRestartSession(instance.state.agentDir("main"), parkedKey);
+        const restored = readRestartSession(instance.state.agentDir(childAgent), childKey);
         process.stdout.write(
           `[yield-restart-proof] ${JSON.stringify({
             childKey,
@@ -258,8 +312,12 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
             rootResumes,
           })}\n`,
         );
-        expect(restored?.status).toBeUndefined();
-        expect(restored?.lifecycleRunId).toBe(parked?.lifecycleRunId);
+        if (action === "completed-before") {
+          expect(restored).toMatchObject({ status: "done", lastRunId: childRunId });
+        } else {
+          expect(restored?.status).toBeUndefined();
+          expect(restored?.lifecycleRunId).toBe(childRunId);
+        }
         expect(restored?.resumeAfterRestart).toBeUndefined();
         expect(childCalls).toBe(callsBeforeRestart);
         if (action === "finish") {
@@ -280,7 +338,7 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
             { timeout: 15_000 },
           );
           // An unclaimed restored wait survives this committed requester turn.
-          const retained = readRestartSession(instance.state.agentDir("main"), childKey);
+          const retained = readRestartSession(instance.state.agentDir(childAgent), childKey);
           expect(retained?.status).toBeUndefined();
           expect(retained?.lifecycleRunId).toBe(parked?.lifecycleRunId);
           expect(retained?.activeWriterRunId).toBe(parked?.activeWriterRunId);
@@ -297,8 +355,13 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           });
         }
         phase = "requester continues child";
-        assert(continueChild);
-        continueChild();
+        if (action === "completed-before") {
+          // Recovery may already see the durable result in the parent transcript.
+          continueChild?.();
+        } else {
+          assert(continueChild);
+          continueChild();
+        }
         await vi.waitFor(
           async () => {
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
@@ -310,6 +373,9 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           },
           { timeout: 30_000 },
         );
+        if (action === "completed-before") {
+          expect(childCalls).toBe(callsBeforeRestart);
+        }
       },
       async () => {
         await client?.stopAndWait();

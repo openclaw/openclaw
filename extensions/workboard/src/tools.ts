@@ -244,8 +244,9 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const { store } = params;
   const ownerId = contextOwner(params.context);
+  const runId = params.context?.runId;
   const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
-    createWorkboardCardMutations(store, ownerId);
+    createWorkboardCardMutations(store, ownerId, runId);
   const tools: AnyAgentTool[] = [
     {
       name: "workboard_list",
@@ -468,7 +469,7 @@ export function createWorkboardTools(params: {
         store.move(id, record.status, undefined, scope),
       ),
     },
-    ...createWorkboardOrchestrationTools({ store, ownerId }),
+    ...createWorkboardOrchestrationTools({ store, ownerId, runId }),
   ];
   for (const tool of tools) {
     const execute = tool.execute;
