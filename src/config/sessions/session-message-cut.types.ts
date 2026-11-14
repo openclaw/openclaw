@@ -39,6 +39,14 @@ export type SessionMessageCutIntent = {
   targetKey: string;
 };
 
+/** Read-only precheck input for an in-place cut, resolved before its commit. */
+export type SessionMessageCutPreflight = {
+  sessionId: string;
+  entry: SessionEntry;
+  intent: SessionMessageCutIntent & { mode: "rewind" | "switch" };
+  sourceRepositoryWorkspaceId?: string;
+};
+
 export type SessionMessageCutCommit = {
   agentId: string;
   intent: SessionMessageCutIntent & { mode: "rewind" | "switch" };

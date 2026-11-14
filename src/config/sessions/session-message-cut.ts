@@ -11,6 +11,7 @@ import {
 } from "./session-accessor.sqlite-deletion.js";
 import type { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { createSessionIdentityResultPublisher } from "./session-accessor.sqlite-identity.js";
+import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { toDatabaseOptions, type ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionMessageCutMutationParams } from "./session-accessor.types.js";
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
@@ -18,7 +19,6 @@ import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { executeSessionForkOperation } from "./session-fork-domain.js";
 import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
-import { refuseInPlaceSessionMessageCut } from "./session-message-cut-target.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutIntent,
@@ -97,19 +97,27 @@ export async function mutateSessionHistoryInWorker(
     assertCurrent,
   );
   assertCurrent();
-  if (intent.mode !== "fork") {
+  const mode = intent.mode;
+  if (mode !== "fork") {
     if (preparedEntry.worktree) {
-      const refused = refuseInPlaceSessionMessageCut(
-        {
-          agentId: resolved.agentId,
-          env: database.env,
-          storePath: database.path,
-          sessionKey: intent.sourceKey,
-          sessionId: preparedEntry.sessionId,
-        },
-        preparedEntry,
-        { ...preparedIntent, mode: intent.mode },
-        preconditions?.sourceRepositoryWorkspaceId,
+      // The precheck reads the same indexed projection the commit uses, in the
+      // database's own worker; a vanished store simply defers to that commit.
+      const refused = await withSessionEntryWorker(
+        database,
+        undefined,
+        assertCurrent,
+        async (reader, workerSource) =>
+          reader.runExisting(workerSource, (worker) =>
+            worker.execute({
+              type: "session.messageCut.preflight",
+              input: {
+                sessionId: preparedEntry.sessionId,
+                entry: preparedEntry,
+                intent: { ...preparedIntent, mode },
+                sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId,
+              },
+            }),
+          ),
       );
       assertCurrent();
       if (refused) {

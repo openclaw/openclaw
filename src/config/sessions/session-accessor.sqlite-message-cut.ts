@@ -1,7 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -11,7 +10,6 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { invalidateSessionBranchCache } from "./session-accessor.sqlite-branches.js";
 import {
-  commitSqliteSessionDeletion,
   runSqliteSessionDeletionTransaction,
   withSqliteSessionContextReset,
 } from "./session-accessor.sqlite-deletion.js";
@@ -23,16 +21,11 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import {
-  getSessionKysely,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  readNextTranscriptSeq,
-  rotateTranscriptGenerationInTransaction,
-} from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionBranchSwitchMutationParams,
@@ -43,26 +36,25 @@ import type {
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import {
+  installInPlaceSessionMessageCut,
+  refuseInPlaceSessionMessageCutInDatabase,
+} from "./session-message-cut-in-place.kernel.js";
 import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
-import { planInPlaceSessionMessageCut, planSessionMessageCut } from "./session-message-cut-plan.js";
+import {
+  createMemorySessionMessageCutReader,
+  planInPlaceSessionMessageCut,
+  planSessionMessageCut,
+} from "./session-message-cut-plan.js";
 import {
   readSessionMessageCut,
   SESSION_MESSAGE_CUT_MAX_BYTES,
 } from "./session-message-cut-read.js";
-import {
-  createMemorySessionMessageCutReader,
-  createSessionMessageCutReader,
-  refuseInPlaceSessionMessageCut,
-} from "./session-message-cut-target.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutPreconditions,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
-import {
-  applySessionTranscriptActivePathRepoint,
-  prepareSessionTranscriptActivePathRepoint,
-} from "./session-transcript-active-path-repoint.js";
 import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
 import { withSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
@@ -322,10 +314,10 @@ export async function mutateSqliteSessionAtMessage(
       selection?.release();
     }
   }
-  const preparedEntry = readSessionEntryRow(
-    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
-    sourceKey,
-  )?.entry;
+  // This route runs without agent-database execution: inside a worker thread, or
+  // for a store the execution owner does not serve. Both own their handle here.
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const preparedEntry = readSessionEntryRow(database, sourceKey)?.entry;
   const preparedExpectedState =
     expectedState ??
     (preparedEntry?.sessionId
@@ -353,14 +345,9 @@ export async function mutateSqliteSessionAtMessage(
     );
   if (mode !== "fork" && preparedEntry) {
     if (preparedEntry.worktree) {
-      const refused = refuseInPlaceSessionMessageCut(
-        {
-          ...params,
-          agentId: resolved.agentId,
-          sessionKey: sourceKey,
-          storePath: resolved.path,
-          sessionId: preparedEntry.sessionId,
-        },
+      const refused = refuseInPlaceSessionMessageCutInDatabase(
+        database,
+        preparedEntry.sessionId,
         preparedEntry,
         { ...intent, mode, expectedState: preparedExpectedState },
         preconditions?.sourceRepositoryWorkspaceId,
@@ -497,92 +484,4 @@ export function mutateSqliteSessionAtMessageInTransaction(
   );
   writeSessionEntry(database, params.targetKey, plan.result.entry);
   return plan.result;
-}
-
-/**
- * Rewind and branch switch append one `leaf` control row to the existing
- * transcript, so their cost does not depend on transcript size.
- *
- * Consumers that previously detected the cut through a new session id now see
- * the rotated transcript generation, and stale writers that captured the
- * pre-cut rows fail their own compare-and-swap against the bumped mutation
- * watermark.
- */
-function installInPlaceSessionMessageCut(
-  database: OpenClawAgentDatabase,
-  resolved: ResolvedSqliteScope,
-  params: SessionMessageCutIntent & { mode: "rewind" | "switch" },
-  currentEntry: SessionEntry | undefined,
-  projection?: {
-    scheduleProjectionReconcile?: boolean;
-    onProjectionReconcileNeeded?: () => void;
-    sourceRepositoryWorkspaceId?: string;
-  },
-): SessionMessageCutResult {
-  if (!currentEntry?.sessionId) {
-    return { status: "missing-session" };
-  }
-  const sessionId = currentEntry.sessionId;
-  const reader = createSessionMessageCutReader(database, sessionId);
-  if (!reader) {
-    throw new Error(`Session transcript projection is unavailable for ${sessionId}`);
-  }
-  const plan = planInPlaceSessionMessageCut(
-    currentEntry,
-    reader,
-    params,
-    projection?.sourceRepositoryWorkspaceId,
-  );
-  if (plan.status !== "prepared") {
-    return plan;
-  }
-  commitSqliteSessionDeletion(params.sourceKey, currentEntry);
-  rotateTranscriptGenerationInTransaction(database, sessionId);
-  // Plan the projection difference against the still-clean projection; the append
-  // below marks it dirty, and the repoint publishes the exact replacement rows.
-  const repoint = prepareSessionTranscriptActivePathRepoint(
-    database.db,
-    sessionId,
-    plan.leafTargetId,
-  );
-  const appended = appendTranscriptEventsInTransaction(
-    database,
-    // An aliased store key owns its transcript rows, so the append must target
-    // the persisted owner, not the cut's target key.
-    {
-      ...resolved,
-      sessionId,
-      sessionKey: readTranscriptOwnerSessionKey(database, sessionId) ?? params.targetKey,
-    },
-    [plan.leafEvent],
-    projection,
-  );
-  if (repoint && appended > 0) {
-    applySessionTranscriptActivePathRepoint(
-      database.db,
-      sessionId,
-      repoint,
-      readNextTranscriptSeq(database, sessionId) - 1,
-    );
-  } else {
-    // The projection was already lagging, or the divergence exceeded its bound.
-    // Its reconcile owner publishes the result, as it does for any dirty session.
-    projection?.onProjectionReconcileNeeded?.();
-  }
-  writeSessionEntry(database, params.targetKey, plan.result.entry);
-  return plan.result;
-}
-
-/** Logical owner of the existing transcript rows, which may be an aliased key. */
-function readTranscriptOwnerSessionKey(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): string | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    getSessionKysely(database.db)
-      .selectFrom("session_windows")
-      .select("session_key")
-      .where("session_id", "=", sessionId),
-  )?.session_key;
 }

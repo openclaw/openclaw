@@ -6,14 +6,35 @@ import { readSessionIdentitySnapshot } from "./session-accessor.sqlite-entry-sto
 import { mutateSqliteSessionAtMessageInTransaction } from "./session-accessor.sqlite-message-cut.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import { refuseInPlaceSessionMessageCutInDatabase } from "./session-message-cut-in-place.kernel.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutCommit,
   SessionMessageCutIntent,
+  SessionMessageCutPreflight,
 } from "./session-message-cut.types.js";
 import { runSessionNativeBindingTransaction } from "./session-native-binding.worker.js";
 import type { SessionForkMessageCutCommit } from "./session-parent-fork.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
+
+/**
+ * Indexed precheck for an in-place cut, before its local workspace is retired.
+ *
+ * The commit transaction revalidates the same preconditions through the same
+ * reader, so this read only avoids retiring custody for a cut that must refuse.
+ */
+export function preflightSessionMessageCut(
+  input: SessionMessageCutPreflight,
+  context: AgentWorkerOperationContext,
+) {
+  return refuseInPlaceSessionMessageCutInDatabase(
+    context.open(),
+    input.sessionId,
+    input.entry,
+    input.intent,
+    input.sourceRepositoryWorkspaceId,
+  );
+}
 
 export function commitSessionForkMessageCut(
   input: SessionForkMessageCutCommit,

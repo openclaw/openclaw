@@ -3565,6 +3565,8 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-message-cut-in-place.kernel.ts", // session-message-cut.worker.ts owns both callers: commitSessionMessageCut installs the cut inside its write transaction, and preflightSessionMessageCut reads through session.messageCut.preflight. The remaining native caller in session-accessor.sqlite-message-cut.ts runs only when agent-database execution is unavailable (worker thread or unserved store) and passes its own handle.
+  "src/config/sessions/session-transcript-active-path-repoint.ts", // Only session-message-cut-in-place.kernel.ts plans and applies the repoint, inside the message-cut write transaction; the full-rebuild owner shares its projection fact columns by type.
   "src/config/sessions/session-transcript-replay.kernel.ts", // Only session-history-read-operation.worker.ts and openclaw-agent-execution-transcript.worker.ts import and call this reader.
   "src/plugins/installed-plugin-snapshot-candidates.kernel.ts", // Only plugins/state.worker.ts mutates the journal; installed-index commits transfer ownership inside that worker's transaction.
   "src/config/sessions/session-accessor.sqlite-compaction.ts", // Only session-manager-metadata.worker.ts calls the required-worker entry point; the async facade imports its type only.

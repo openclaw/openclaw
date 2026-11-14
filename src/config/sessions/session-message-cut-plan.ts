@@ -9,15 +9,16 @@ import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { extractEditorText } from "./session-message-cut-content.js";
-import type { SessionMessageCutReader } from "./session-message-cut-target.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
+  isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
+  selectSessionTranscriptTreeTipNodes,
 } from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
@@ -48,6 +49,71 @@ export type SessionMessageCutInPlacePlan =
       leafTargetId: string | null;
       result: Extract<SessionMessageCutResult, { status: "created" }>;
     };
+
+export type SessionMessageCutTarget = {
+  /** Parsed payload of the target row; the only event body this path reads. */
+  event: Record<string, unknown> | undefined;
+  eventType: string | null;
+  /** Visible predecessor on the active path, or null at the root. */
+  repointTargetId: string | null;
+  onActivePath: boolean;
+};
+
+export type SessionMessageCutReader = {
+  readTarget(entryId: string): SessionMessageCutTarget | undefined;
+  /** True when no non-control event continues past this entry. */
+  isBranchTip(entryId: string): boolean;
+  activeLeafEventId(): string | null;
+  /** Physical append cursor: the newest identity row, which the leaf control chains onto. */
+  tailEventId(): string | null;
+  allocateEventId(): string;
+};
+
+/**
+ * Reader for a memory-resident transcript, where the whole event list is already
+ * in the actor's working state and the navigation tree is the only index.
+ */
+export function createMemorySessionMessageCutReader(
+  events: readonly unknown[],
+): SessionMessageCutReader {
+  const tree = scanSessionTranscriptTree(events);
+  const activeIds = new Set(
+    selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.id),
+  );
+  return {
+    readTarget(entryId) {
+      const node = tree.byId.get(entryId);
+      if (!node) {
+        return undefined;
+      }
+      const record = asRecord(node.entry);
+      return {
+        event: record,
+        eventType: typeof record?.type === "string" ? record.type : null,
+        onActivePath: activeIds.has(entryId),
+        repointTargetId: node.parentId,
+      };
+    },
+    isBranchTip(entryId) {
+      const node = tree.byId.get(entryId);
+      return (
+        node !== undefined &&
+        !isSessionTranscriptLeafControl(node.entry) &&
+        selectSessionTranscriptTreeTipNodes(tree).some((tip) => tip.id === entryId)
+      );
+    },
+    activeLeafEventId: () => tree.leafId,
+    tailEventId: () => tree.nodes.at(-1)?.id ?? null,
+    allocateEventId() {
+      for (;;) {
+        const candidate = randomUUID().slice(0, 8);
+        if (!tree.byId.has(candidate)) {
+          return candidate;
+        }
+      }
+    },
+  };
+}
 
 /** Fork identity and prefix policy; the backend owns the atomic install. */
 export function planSessionMessageCut(

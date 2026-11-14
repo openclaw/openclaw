@@ -1,100 +1,45 @@
-// Indexed message-cut validation. Rewind and branch switch only need the target
-// entry, its visible predecessor and the active leaf, so they read index seeks
-// instead of hydrating the whole transcript into the SQLite worker heap.
+// In-place rewind and branch switch, inside the agent database worker.
+//
+// Rewind and branch switch only need the target entry, its visible predecessor
+// and the active leaf, so this reads index seeks instead of hydrating the whole
+// transcript into the worker heap, then appends one `leaf` control row.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
+import { getSessionKysely, type ResolvedSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
-  resolveSqliteTranscriptReadScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
-import type { SessionAccessScope } from "./session-accessor.types.js";
-import { planInPlaceSessionMessageCut } from "./session-message-cut-plan.js";
+  readNextTranscriptSeq,
+  rotateTranscriptGenerationInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  planInPlaceSessionMessageCut,
+  type SessionMessageCutReader,
+} from "./session-message-cut-plan.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
 import {
+  applySessionTranscriptActivePathRepoint,
+  prepareSessionTranscriptActivePathRepoint,
+} from "./session-transcript-active-path-repoint.js";
+import {
   reconcileSessionTranscriptIndexInTransaction,
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import { readTranscriptPayload } from "./transcript-payload.js";
-import {
-  isSessionTranscriptLeafControl,
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-  selectSessionTranscriptTreeTipNodes,
-} from "./transcript-tree.js";
-import type { InternalSessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-export type SessionMessageCutTarget = {
-  /** Parsed payload of the target row; the only event body this path reads. */
-  event: Record<string, unknown> | undefined;
-  eventType: string | null;
-  /** Visible predecessor on the active path, or null at the root. */
-  repointTargetId: string | null;
-  onActivePath: boolean;
+type MessageCutProjection = {
+  scheduleProjectionReconcile?: boolean;
+  onProjectionReconcileNeeded?: () => void;
+  sourceRepositoryWorkspaceId?: string;
 };
-
-export type SessionMessageCutReader = {
-  readTarget(entryId: string): SessionMessageCutTarget | undefined;
-  /** True when no non-control event continues past this entry. */
-  isBranchTip(entryId: string): boolean;
-  activeLeafEventId(): string | null;
-  /** Physical append cursor: the newest identity row, which the leaf control chains onto. */
-  tailEventId(): string | null;
-  allocateEventId(): string;
-};
-
-/**
- * Reader for a memory-resident transcript, where the whole event list is already
- * in the actor's working state and the navigation tree is the only index.
- */
-export function createMemorySessionMessageCutReader(
-  events: readonly unknown[],
-): SessionMessageCutReader {
-  const tree = scanSessionTranscriptTree(events);
-  const activeIds = new Set(
-    selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.id),
-  );
-  return {
-    readTarget(entryId) {
-      const node = tree.byId.get(entryId);
-      if (!node) {
-        return undefined;
-      }
-      const record = asRecord(node.entry);
-      return {
-        event: record,
-        eventType: typeof record?.type === "string" ? record.type : null,
-        onActivePath: activeIds.has(entryId),
-        repointTargetId: node.parentId,
-      };
-    },
-    isBranchTip(entryId) {
-      const node = tree.byId.get(entryId);
-      return (
-        node !== undefined &&
-        !isSessionTranscriptLeafControl(node.entry) &&
-        selectSessionTranscriptTreeTipNodes(tree).some((tip) => tip.id === entryId)
-      );
-    },
-    activeLeafEventId: () => tree.leafId,
-    tailEventId: () => tree.nodes.at(-1)?.id ?? null,
-    allocateEventId() {
-      for (;;) {
-        const candidate = randomUUID().slice(0, 8);
-        if (!tree.byId.has(candidate)) {
-          return candidate;
-        }
-      }
-    },
-  };
-}
 
 /**
  * Builds the indexed reader for one session inside the caller's transaction.
@@ -155,7 +100,7 @@ export function createSessionMessageCutReader(
         event: asRecord(
           row.event_json === null && row.event_zstd === null
             ? undefined
-            : (JSON.parse(readTranscriptPayload(row)) as TranscriptEvent),
+            : JSON.parse(readTranscriptPayload(row)),
         ),
         eventType: row.event_type,
         onActivePath: row.active_position !== null,
@@ -223,22 +168,101 @@ export function createSessionMessageCutReader(
  * Reads are indexed and read-only, so a lagging active-path projection defers
  * to the committing transaction, which owns reconciliation and revalidation.
  */
-export function refuseInPlaceSessionMessageCut(
-  scope: SessionAccessScope & { agentId: string; sessionId: string },
-  entry: InternalSessionEntry,
+export function refuseInPlaceSessionMessageCutInDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  entry: SessionEntry,
   intent: SessionMessageCutIntent & { mode: "rewind" | "switch" },
   sourceRepositoryWorkspaceId?: string,
 ): Exclude<SessionMessageCutResult, { status: "created" }> | undefined {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const reader = createSessionMessageCutReader(database, resolved.sessionId, {
-      reconcile: false,
-    });
-    if (!reader) {
-      return undefined;
-    }
-    const plan = planInPlaceSessionMessageCut(entry, reader, intent, sourceRepositoryWorkspaceId);
-    return plan.status === "prepared" ? undefined : plan;
-  }, toDatabaseOptions(resolved));
-  return result.found ? result.value : undefined;
+  const reader = createSessionMessageCutReader(database, sessionId, { reconcile: false });
+  if (!reader) {
+    return undefined;
+  }
+  const plan = planInPlaceSessionMessageCut(entry, reader, intent, sourceRepositoryWorkspaceId);
+  return plan.status === "prepared" ? undefined : plan;
+}
+
+/**
+ * Rewind and branch switch append one `leaf` control row to the existing
+ * transcript, so their cost does not depend on transcript size.
+ *
+ * Consumers that previously detected the cut through a new session id now see
+ * the rotated transcript generation, and stale writers that captured the
+ * pre-cut rows fail their own compare-and-swap against the bumped mutation
+ * watermark.
+ */
+export function installInPlaceSessionMessageCut(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedSqliteScope,
+  params: SessionMessageCutIntent & { mode: "rewind" | "switch" },
+  currentEntry: SessionEntry | undefined,
+  projection?: MessageCutProjection,
+): SessionMessageCutResult {
+  if (!currentEntry?.sessionId) {
+    return { status: "missing-session" };
+  }
+  const sessionId = currentEntry.sessionId;
+  const reader = createSessionMessageCutReader(database, sessionId);
+  if (!reader) {
+    throw new Error(`Session transcript projection is unavailable for ${sessionId}`);
+  }
+  const plan = planInPlaceSessionMessageCut(
+    currentEntry,
+    reader,
+    params,
+    projection?.sourceRepositoryWorkspaceId,
+  );
+  if (plan.status !== "prepared") {
+    return plan;
+  }
+  commitSqliteSessionDeletion(params.sourceKey, currentEntry);
+  rotateTranscriptGenerationInTransaction(database, sessionId);
+  // Plan the projection difference against the still-clean projection; the append
+  // below marks it dirty, and the repoint publishes the exact replacement rows.
+  const repoint = prepareSessionTranscriptActivePathRepoint(
+    database.db,
+    sessionId,
+    plan.leafTargetId,
+  );
+  const appended = appendTranscriptEventsInTransaction(
+    database,
+    // An aliased store key owns its transcript rows, so the append must target
+    // the persisted owner, not the cut's target key.
+    {
+      ...resolved,
+      sessionId,
+      sessionKey: readTranscriptOwnerSessionKey(database, sessionId) ?? params.targetKey,
+    },
+    [plan.leafEvent],
+    projection,
+  );
+  if (repoint && appended > 0) {
+    applySessionTranscriptActivePathRepoint(
+      database.db,
+      sessionId,
+      repoint,
+      readNextTranscriptSeq(database, sessionId) - 1,
+    );
+  } else {
+    // The projection was already lagging, or the divergence exceeded its bound.
+    // Its reconcile owner publishes the result, as it does for any dirty session.
+    projection?.onProjectionReconcileNeeded?.();
+  }
+  writeSessionEntry(database, params.targetKey, plan.result.entry);
+  return plan.result;
+}
+
+/** Logical owner of the existing transcript rows, which may be an aliased key. */
+function readTranscriptOwnerSessionKey(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): string | undefined {
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("session_windows")
+      .select("session_key")
+      .where("session_id", "=", sessionId),
+  )?.session_key;
 }
