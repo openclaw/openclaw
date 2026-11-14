@@ -166,9 +166,9 @@ function TranscriptRows(props: {
                         active() || preparing()
                           ? `${props.snapshot.layout.rowMinimum(index())}px`
                           : "0",
-                      // Keep a zero-height box while parked so forecasting does
-                      // not repeatedly detach and rebuild the row's layout tree.
-                      height: active() || preparing() ? undefined : "0",
+                      // Retain parked DOM without making WebKit restyle its hidden
+                      // layout tree. Forecast rows regain their boxes before arrival.
+                      display: active() || preparing() ? undefined : "none",
                       position: active() ? undefined : "absolute",
                       top: active()
                         ? undefined
