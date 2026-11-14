@@ -267,13 +267,19 @@ export function currentOwnerDevicePrincipal(
     : undefined;
 }
 
+export class OpenClawIdPrincipalChangedError extends GatewayOperatorRecoveryAuthorizationError {
+  constructor() {
+    super("OpenClaw ID membership authority changed");
+  }
+}
+
 /** Wait only for local authority hydration; recovery does not count as a tunnel admission. */
 export async function prepareOpenClawIdTunnelPrincipal(
   principal: OpenClawIdTunnelPrincipal,
 ): Promise<void> {
   await prepareLookup?.();
   if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
-    throw new GatewayOperatorRecoveryAuthorizationError("OpenClaw ID membership authority changed");
+    throw new OpenClawIdPrincipalChangedError();
   }
 }
 

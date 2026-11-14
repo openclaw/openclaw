@@ -4,9 +4,18 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  encodeGitHubPublicationRequester,
+  matchesGitHubPublicationRequester,
+} from "../state/github-publication-requester.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import * as userProfileList from "../state/user-profile-list.js";
@@ -23,10 +32,14 @@ import {
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
   prepareGitHubPublicationRequesterV2,
+  prepareGitHubPublicationTaskRequester,
   restoreGitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import {
   capturePublicationGuest as captureGuest,
+  createGitHubPublicationRequesterFixture,
+  guestScopes,
+  requireVisitorPublicationPolicy,
   createRequesterPolicyFixture,
   createRequesterPublicationFixture,
   forPublicationBackends as forBackends,
@@ -36,6 +49,10 @@ import {
   resumePublicationFixture,
   startVisitorPublicationFixture as startVisitors,
 } from "./github-publication-requester.test-support.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import * as operatorAccessPolicy from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
@@ -405,3 +422,189 @@ it("retains the winning repository request's bindings across concurrent alias-ad
   expect(f.readRequester(admitted.requestId)).toEqual(winningSnapshot);
   expect(f.externalWrites).toEqual([]);
 });
+
+afterEach(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+
+async function memberFixture() {
+  const f = await createRequesterPolicyFixture();
+  f.config.gateway!.openclawId = { enabled: true };
+  f.config.gateway!.roles!.definitions.operator = {
+    scopes: ["operator.read", "operator.write"],
+    agents: "*",
+    sessions: { others: "write" },
+  };
+  const principal = {
+    kind: "member" as const,
+    peerKey: `iroh:${"ab".repeat(32)}`,
+    accountId: "publication-member",
+    role: "operator",
+    authority: { clawId: "publication-claw", rootPub: "publication-root", listedSeq: 1 },
+  };
+  let current: OpenClawIdTunnelPrincipal | undefined = principal;
+  setOpenClawIdTunnelPrincipalLookup(() => current);
+  const config = requireVisitorPublicationPolicy(f);
+  const capture = () =>
+    createGitHubPublicationRequesterFixture({
+      profileId: f.guestProfile,
+      scopes: guestScopes,
+      ...f.guestSource.session,
+      openclawIdPrincipal: principal,
+    });
+  return {
+    ...f,
+    config,
+    principal,
+    capture,
+    setMember: (next: typeof current) => {
+      current = next;
+    },
+  };
+}
+
+async function restore(json: string, f: Awaited<ReturnType<typeof createRequesterPolicyFixture>>) {
+  const requester = await restoreGitHubPublicationRequester(
+    json,
+    f.guestSource.session,
+    f.guestSource.context.getCommittedRuntimeConfig,
+  );
+  onTestFinished(requester.release);
+  return requester;
+}
+
+it("publishes under the member role with a null grant despite the visitor default, including task handoff and restoration", async () => {
+  const f = await memberFixture();
+  await using visitors = await startVisitors(f);
+  void visitors;
+  const source = await f.capture();
+  expect(source.client.internal?.operatorAccessAuthority).toBeNull();
+  expect(source.requester.snapshot.grant).toBeNull();
+  expect(source.requester.assertCurrent).not.toThrow();
+  const json = encodeGitHubPublicationRequester(source.requester.snapshot);
+  expect(JSON.parse(json).openclawIdPrincipal).toEqual(f.principal);
+  expect(matchesGitHubPublicationRequester(f.guest.snapshot, source.requester.snapshot)).toBe(true);
+  await expect(restore(encodeGitHubPublicationRequester(f.guest.snapshot), f)).rejects.toThrow(
+    GitHubPublicationRequesterUnavailableError,
+  );
+  expect(matchesGitHubPublicationRequester(source.requester.snapshot, f.guest.snapshot)).toBe(
+    false,
+  );
+  expect(
+    matchesGitHubPublicationRequester(source.requester.snapshot, {
+      ...source.requester.snapshot,
+      openclawIdPrincipal: {
+        ...f.principal,
+        authority: { ...f.principal.authority, listedSeq: 2 },
+      },
+    }),
+  ).toBe(false);
+  const restored = await restore(json, f);
+  const parent = f.guestSource.session;
+  const entry = loadSessionEntryReadOnly(parent)!;
+  const target = { agentId: parent.agentId, sessionKey: "agent:main:publication:member-source" };
+  await upsertSessionEntryCore(target, {
+    sessionId: "member-publication-source",
+    updatedAt: 1,
+    createdActor: entry.createdActor,
+    owner: entry.owner,
+    parentSessionKey: parent.sessionKey,
+  });
+  const transferred = await prepareGitHubPublicationTaskRequester(
+    source.requester,
+    target,
+    {
+      ...parent,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision ?? null,
+    },
+    source.context.getCommittedRuntimeConfig,
+  );
+  onTestFinished(transferred.release);
+  expect(transferred.requester.assertCurrent).not.toThrow();
+  source.release();
+  expect(restored.assertCurrent).not.toThrow();
+  expect(f.externalWrites).toEqual([]);
+});
+
+it.each(["removed", "reassigned", "edited", "deleted"] as const)(
+  "refuses live and persisted member publication when membership is %s",
+  async (change) => {
+    const f = await memberFixture();
+    const source = await f.capture();
+    const json = encodeGitHubPublicationRequester(source.requester.snapshot);
+    const restored = await restore(json, f);
+    expect(restored.assertCurrent).not.toThrow();
+    if (change === "removed") {
+      f.setMember(undefined);
+    } else if (change === "reassigned") {
+      f.config.gateway!.roles!.definitions.viewer = {
+        scopes: ["operator.sessions.read"],
+        agents: "*",
+        sessions: { others: "view" },
+      };
+      f.setMember({ ...f.principal, role: "viewer" });
+    } else if (change === "edited") {
+      f.config.gateway!.roles!.definitions.operator!.scopes = ["operator.sessions.read"];
+    } else {
+      delete f.config.gateway!.roles!.definitions.operator;
+    }
+    setRuntimeConfigSnapshot(f.config);
+    expect(source.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+    await expect(restore(json, f)).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(f.externalWrites).toEqual([]);
+  },
+);
+
+it("retains historical null-grant authorization and refusal without inferring membership", async () => {
+  const f = await createRequesterPolicyFixture();
+  const json = JSON.stringify({
+    version: 1,
+    actor: { kind: "operator", profileId: f.guestProfile },
+    scopes: guestScopes,
+    grant: null,
+  });
+  expect(encodeGitHubPublicationRequester(f.guest.snapshot)).toBe(json);
+  const restored = await restore(json, f);
+  expect(restored.assertCurrent).not.toThrow();
+  requireVisitorPublicationPolicy(f);
+  expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+  await expect(restore(json, f)).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+});
+
+it.each([false, true])(
+  "preserves non-member visitor grants and exact snapshot bytes with OpenClaw ID enabled=%s",
+  async (enabled) => {
+    const f = await createRequesterPolicyFixture();
+    f.config.gateway = { ...f.config.gateway, openclawId: { enabled } };
+    await using visitors = await startVisitors(f);
+    void visitors;
+    const source = await captureGuest(f);
+    expect(source.requester.snapshot.grant?.pluginId).toBe("visitor-access");
+    const json = JSON.stringify({
+      version: 1,
+      actor: { kind: "operator", profileId: f.guestProfile },
+      scopes: guestScopes,
+      grant: source.requester.snapshot.grant,
+    });
+    expect(encodeGitHubPublicationRequester(source.requester.snapshot)).toBe(json);
+    const restored = await restore(json, f);
+    expect(restored.assertCurrent).not.toThrow();
+    await visitors.execute("visitor_revoke", { email });
+    expect(source.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(restored.assertCurrent).toThrow(
+      operatorAccessPolicy.GatewayOperatorAccessUnavailableError,
+    );
+  },
+);
+
+it.each([{}, { kind: "unknown" }, { kind: "member", peerKey: "invalid" }])(
+  "explicitly refuses a malformed principal %j without poisoning the next recovery",
+  async (openclawIdPrincipal) => {
+    const f = await createRequesterPolicyFixture();
+    await expect(
+      restore(JSON.stringify({ ...f.guest.snapshot, openclawIdPrincipal }), f),
+    ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    const restored = await restore(encodeGitHubPublicationRequester(f.guest.snapshot), f);
+    expect(restored.assertCurrent).not.toThrow();
+  },
+);

@@ -7,4 +7,6 @@
 # Main restack: explicit member catalogs in delegated ingress/MCP fixtures and
 # a transient policy recovery regression retaining the resolved membership role.
 # CI consumer fixtures: explicit member catalogs, runtime publication, and cleanup.
-986
+# Publication: attested member capture/restoration, revocation, legacy/nonmember parity,
+# malformed-record isolation, task handoff, and accepted-snapshot retry preservation.
+1194
