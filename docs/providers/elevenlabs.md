@@ -36,11 +36,23 @@ export ELEVENLABS_API_KEY="..."
         apiKey: "${ELEVENLABS_API_KEY}",
         voiceId: "pMsXgVXv3BLzUgSXRplE",
         modelId: "eleven_multilingual_v2",
+        pronunciationDictionaryLocators: [
+          { pronunciationDictionaryId: "dictionary-id", versionId: "version-id" },
+        ],
       },
     },
   },
 }
 ```
+
+`pronunciationDictionaryLocators` selects up to three existing dictionary
+versions in order. OpenClaw sends their `pronunciation_dictionary_id` and
+`version_id` values with the original TTS text unchanged. Omit the property to
+leave dictionaries disabled, or use `[]` to clear an inherited list. The
+configured API key must have access to each dictionary. An inaccessible
+dictionary can fail that provider attempt, and the existing fallback may speak
+without equivalent rules. Pronunciation results can vary by model and dictionary
+contents. See the [ElevenLabs TTS API](https://elevenlabs.io/docs/api-reference/text-to-speech/convert).
 
 Set `modelId` to `eleven_v3` to use ElevenLabs v3 TTS. OpenClaw keeps
 `eleven_multilingual_v2` as the default for existing installs.
