@@ -84,6 +84,7 @@ beforeEach(({ onTestFinished }) => {
         cancel: vi.fn((runId: string, reason?: Parameters<ProcessSupervisor["cancel"]>[1]) => {
           activeRuns.get(runId)?.cancel(reason);
         }),
+        release: vi.fn(async () => undefined),
         cancelScope: vi.fn(),
       };
     }),

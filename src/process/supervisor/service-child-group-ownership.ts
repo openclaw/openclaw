@@ -4,6 +4,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
+import type { ReleasedProcess } from "./types.js";
 
 export type ProcessCommand =
   | {
@@ -320,4 +321,95 @@ export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | un
     return undefined;
   }
   return observedOwner ? false : undefined;
+}
+
+const MAX_RELEASED_PROCESSES = 16;
+const MAX_RELEASED_COMMAND_CHARS = 200;
+
+type ProcessRow = { pid: number; ppid: number; pgid: number; live: boolean; command?: string };
+
+function readLinuxProcessRow(pid: number): ProcessRow | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const command = readFileSync(`/proc/${pid}/cmdline`, "utf8")
+      .split("\0")
+      .filter(Boolean)
+      .join(" ");
+    return {
+      pid,
+      ppid: Number(fields[1]),
+      pgid: Number(fields[2]),
+      live: fields[0] !== "Z" && fields[0] !== "X",
+      command: command || undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readProcessRows(): ProcessRow[] {
+  if (process.platform === "linux") {
+    return readdirSync("/proc")
+      .filter((name) => /^\d+$/.test(name))
+      .flatMap((name) => readLinuxProcessRow(Number(name)) ?? []);
+  }
+  const listing = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid=,pgid=,stat=,command="], {
+    encoding: "utf8",
+    timeout: 1_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  return (listing.stdout?.split("\n") ?? []).flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+    return match
+      ? [
+          {
+            pid: Number(match[1]),
+            ppid: Number(match[2]),
+            pgid: Number(match[3]),
+            live: !match[4]!.startsWith("Z"),
+            command: match[5]!.trim() || undefined,
+          },
+        ]
+      : [];
+  });
+}
+
+/**
+ * Name the live processes a command left behind: members of the owner's group
+ * plus caller-observed children (adopted orphans). The owner's own helpers (its
+ * direct children other than the command root) are not the command's. Diagnostics only.
+ */
+export function describeReleasedProcesses(
+  rootPid: number | undefined,
+  adoptedPids: readonly number[] = [],
+): ReleasedProcess[] {
+  const adopted = new Set(adoptedPids);
+  let rows: ProcessRow[];
+  try {
+    rows = readProcessRows();
+  } catch {
+    return [];
+  }
+  const released = rows
+    .filter(
+      (row) =>
+        row.live &&
+        row.pid !== process.pid &&
+        (adopted.has(row.pid) ||
+          (row.pgid === process.pid && (row.ppid !== process.pid || row.pid === rootPid))),
+    )
+    .toSorted((left, right) => left.pid - right.pid)
+    .slice(0, MAX_RELEASED_PROCESSES);
+  return released.map(({ pid, command }) =>
+    command === undefined
+      ? { pid }
+      : {
+          pid,
+          command:
+            command.length > MAX_RELEASED_COMMAND_CHARS
+              ? `${command.slice(0, MAX_RELEASED_COMMAND_CHARS - 1)}…`
+              : command,
+        },
+  );
 }

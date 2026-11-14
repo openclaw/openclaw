@@ -22,7 +22,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
-import type { ProcessExtinctionResult, SpawnInput } from "../process/supervisor/types.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
   SecretEgressSentinelBinding,
@@ -52,6 +52,7 @@ import {
   resolveProcessCleanupMs,
   waitForExecSession,
 } from "./bash-process-registry.js";
+import { settleHostExecDescendants } from "./bash-tools.exec-descendants.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
@@ -107,8 +108,6 @@ export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
-const UNCONFIRMED_DESCENDANT_CLEANUP_NOTE =
-  "OpenClaw could not confirm that every process started by this command stopped; a detached process (such as a daemon or tmux server) may still be running. Use background: true for long-running services.";
 
 /** Live handle returned after an exec process has started. */
 export type ExecProcessHandle = {
@@ -241,6 +240,8 @@ export async function runExecProcess({
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
+  /** Explicit `background: true` service, handed off rather than stopped at one-shot exit. */
+  independentService?: boolean;
   /** Cancels startup only; background process lifetime belongs to the supervisor. */
   startupSignal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
@@ -299,6 +300,7 @@ export async function runExecProcess({
         exited: false,
         truncated: false,
         backgrounded: false,
+        ...(opts.independentService ? { independentService: true as const } : {}),
         cursorKeyMode: opts.usePty ? "unknown" : "normal",
       },
       opts.requestOwners,
@@ -424,35 +426,7 @@ export async function runExecProcess({
     session.finalizing = true;
     try {
       if (!opts.sandbox && managedRun?.waitForExtinction) {
-        // Root completion does not release descendants that retained the group's lineage fd.
-        managedRun.cancel();
-        let extinction: ProcessExtinctionResult | undefined;
-        try {
-          extinction = await managedRun.waitForExtinction();
-        } catch (error) {
-          if (outcome.status !== "completed" || session.requestCancelled) {
-            throw error;
-          }
-          // The observed exit stays the result. A descendant that left the owned
-          // group (e.g. a daemonized tmux server) only leaves cleanup unconfirmed.
-          session.cleanupUncertain = true;
-          recordAgentCleanupFailure();
-          logWarn(
-            `exec: descendant cleanup after completion was not confirmed (${redactToolPayloadText(formatErrorMessage(error))}).`,
-          );
-          appendOutput(session, "stderr", `\n${UNCONFIRMED_DESCENDANT_CLEANUP_NOTE}\n`);
-          finalOutcome = {
-            ...outcome,
-            aggregated: joinExecFailureOutput(
-              outcome.aggregated,
-              UNCONFIRMED_DESCENDANT_CLEANUP_NOTE,
-            ),
-          };
-        }
-        session.cleanupUncertain ||= extinction?.status === "uncertain";
-        if (session.requestCancelled && session.cleanupUncertain) {
-          throw new Error("Command descendant cleanup could not be confirmed");
-        }
+        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome);
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -680,6 +654,8 @@ export async function runExecProcess({
         mode: "child",
         argv: spawnSpec.argv,
         stdinMode: spawnSpec.stdinMode,
+        // Host commands own only their foreground; sandbox lifetimes stay with the backend.
+        ...(opts.sandbox ? {} : { releaseOnRootExit: true as const }),
       });
     }
     if (opts.durable && requestSignal?.aborted) {

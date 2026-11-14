@@ -10,12 +10,16 @@ import {
   peekExecRequestSystemEventEntries,
 } from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { forgetReleasedProcesses } from "../process/supervisor/released-processes.js";
+import type { ReleasedProcess } from "../process/supervisor/types.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { serviceCapacityError } from "./bash-process-adopted.js";
 import {
   removeNotifyOnExit,
   getSession,
   listExecSessionsForCancellation,
   markCancellationRequested,
+  markExecSessionReleased,
   waitForExecSession,
   waitForExecScope,
   type ProcessSession,
@@ -51,9 +55,21 @@ export function registerOneShotExecScopeCleanup(
   // need tree cleanup, including elevated commands from sandboxed sessions.
   const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
   options.registerRunCleanup(async () => {
+    // Explicit services outlive the one-shot run. Hand them off first; the
+    // scope cleanup then stops only in-flight work and whatever could not be handed off.
+    const services = await releaseIndependentExecServices(scopeKey);
     // Transport closure can precede backend finalization. Join both owners
     // before their local artifacts or the invocation state can be released.
     const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+    // The run ends here, so everything it left running keeps running without OpenClaw.
+    const handedOff = [...services, ...forgetReleasedProcesses(scopeKey)];
+    if (handedOff.length > 0) {
+      process.stderr.write(
+        `[openclaw] Left running after this run (OpenClaw no longer tracks them; stop with kill <pid>):\n${handedOff
+          .map(({ pid, command }) => `  pid ${pid}${command ? `  ${command}` : ""}`)
+          .join("\n")}\n`,
+      );
+    }
     const failed = settled.find((result) => result.status === "rejected");
     if (failed) {
       throw failed.reason;
@@ -61,10 +77,45 @@ export function registerOneShotExecScopeCleanup(
   });
 }
 
+async function releaseIndependentExecServices(scopeKey: string): Promise<ReleasedProcess[]> {
+  const supervisor = getProcessSupervisor();
+  const services = listExecSessionsForCancellation().filter(
+    (session) =>
+      session.scopeKey === scopeKey &&
+      session.independentService === true &&
+      !session.durable &&
+      isBackgroundExecCancellable(session),
+  );
+  const released = await Promise.all(
+    services.map(async (session) => {
+      const survivors = await supervisor.release(session.id);
+      if (survivors === undefined) {
+        return [];
+      }
+      markExecSessionReleased(session);
+      return survivors.length > 0 ? survivors : [{ pid: session.pid!, command: session.command }];
+    }),
+  );
+  return released.flat();
+}
+
+/** Refuse a new service at the limit; never stop old ones to make room. */
+export function assertExecProcessCapacity(scopeKey: string | undefined): void {
+  const capacityError = serviceCapacityError(scopeKey);
+  if (capacityError) {
+    throw new Error(`Cannot start another background service. ${capacityError}`);
+  }
+}
+
 export function cancelBackgroundExecSession(sessionId: string): boolean {
   const session = getSession(sessionId);
   if (!isBackgroundExecCancellable(session)) {
     return false;
+  }
+  if (session.adopted) {
+    markCancellationRequested(session);
+    void session.adopted.stop();
+    return true;
   }
   if (session.durable) {
     session.durable.cancel(captureAgentToolSourceExecutionGuard());
@@ -84,14 +135,12 @@ export function isConfirmedRequestedStop(session: ProcessSession): boolean {
   );
 }
 
-/** Agent retirement also owns independent services after their creating turns settle. */
-export async function drainAgentExecProcesses(
-  agentId: string,
+/** Stop the selected exec processes and join their cleanup before reporting completion. */
+async function drainExecSessions(
+  sessions: ProcessSession[],
   assertCurrent: () => void,
+  label: string,
 ): Promise<void> {
-  const sessions = listExecSessionsForCancellation().filter(
-    (session) => session.agentId === agentId,
-  );
   const accepted: ProcessSession[] = [];
   const failures: unknown[] = [];
   try {
@@ -101,7 +150,9 @@ export async function drainAgentExecProcesses(
       session.requestCancelled = true;
       if (!session.exited && !session.finalizing) {
         markCancellationRequested(session);
-        if (session.durable) {
+        if (session.adopted) {
+          void session.adopted.stop();
+        } else if (session.durable) {
           session.durable.cancel(assertCurrent);
         } else {
           getProcessSupervisor().cancel(session.id, "manual-cancel");
@@ -120,8 +171,43 @@ export async function drainAgentExecProcesses(
     );
   }
   if (failures.length > 0) {
-    throw new AggregateError(failures, `Agent ${agentId} command cleanup is still draining`);
+    throw new AggregateError(failures, `${label} command cleanup is still draining`);
   }
+}
+
+/** Agent retirement also owns independent services after their creating turns settle. */
+export async function drainAgentExecProcesses(
+  agentId: string,
+  assertCurrent: () => void,
+): Promise<void> {
+  await drainExecSessions(
+    listExecSessionsForCancellation().filter((session) => session.agentId === agentId),
+    assertCurrent,
+    `Agent ${agentId}`,
+  );
+}
+
+/**
+ * Session reset and delete end everything the session still runs: in-flight
+ * commands, `background: true` services and adopted survivors. After a reset
+ * nothing would manage them. Durable processes deliberately survive.
+ */
+export async function stopSessionExecProcesses(
+  scopeKeys: Iterable<string>,
+  assertCurrent: () => void,
+): Promise<void> {
+  const keys = new Set(scopeKeys);
+  await drainExecSessions(
+    listExecSessionsForCancellation().filter(
+      (session) =>
+        session.scopeKey !== undefined &&
+        keys.has(session.scopeKey) &&
+        !session.durable &&
+        (!session.exited || session.finalizing),
+    ),
+    assertCurrent,
+    "Session",
+  );
 }
 
 /** Select before awaited cancellation work; a later human turn cannot enter this plan. */

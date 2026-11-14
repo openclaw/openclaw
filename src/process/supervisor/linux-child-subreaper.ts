@@ -70,6 +70,8 @@ export function acquireLinuxChildSubreaper() {
   let closed = false;
   const owner = {
     retainSpawnedChild,
+    /** Current direct and adopted children; observation only, never signal authority. */
+    children: childPids,
     /** Discovery selects candidates; a retained kernel wait pins every signal target. */
     drain(signal?: "SIGTERM" | "SIGKILL"): boolean {
       if (closed) {

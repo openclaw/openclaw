@@ -221,6 +221,10 @@ export interface ProcessSession {
   finalizing?: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  /** Explicit `background: true` service. */
+  independentService?: true;
+  /** A process a completed command left running, tracked by identity instead of a run. */
+  adopted?: { stop: () => Promise<void> };
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
   cursorKeyMode: "unknown" | "normal" | "application";
 }
@@ -647,11 +651,21 @@ export function getActiveBackgroundExecSessionCount(): number {
   return count;
 }
 
+// Handed off to keep running without OpenClaw; no cleanup remains to join.
+const releasedSessions = new WeakSet<ProcessSession>();
+
+export function markExecSessionReleased(session: ProcessSession): void {
+  releasedSessions.add(session);
+}
+
 /** Joins registered exec cleanup, including foreground and hidden processes. */
 export async function waitForExecScope(scopeKey: string): Promise<void> {
   while (true) {
     const pending = Array.from(activeExecSessions.values())
-      .filter(({ session }) => session.scopeKey === scopeKey)
+      .filter(
+        ({ session }) =>
+          session.scopeKey === scopeKey && !session.adopted && !releasedSessions.has(session),
+      )
       .map((active) => (active.settled ??= createDeferredCore()).promise);
     if (pending.length === 0) {
       return;

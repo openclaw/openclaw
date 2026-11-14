@@ -1,6 +1,8 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
+import { stopSessionExecProcesses } from "../agents/bash-process-control.js";
 import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
 import {
   clearSessionResetRuntimeState,
@@ -79,6 +81,18 @@ export async function ensureSessionRuntimeCleanup(params: {
   // Process scopes may use the requested alias, canonical key, or session id.
   // Clear only completed records so reset/delete cannot erase another scope's
   // output or hide a background process whose owner has not confirmed exit.
+  // Everything the session still runs ends with it: nothing would manage it after a reset.
+  try {
+    await stopSessionExecProcesses([...queueKeys, params.key], assertCurrent);
+  } catch (error) {
+    if (error instanceof SessionResetCleanupError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      `Session processes could not be stopped: ${formatErrorMessage(error)}`,
+    );
+  }
   clearFinishedSessionsForScopes([...queueKeys, params.key]);
   clearSessionResetRuntimeState(queueKeys, {
     controllerTarget: captureSessionTarget({

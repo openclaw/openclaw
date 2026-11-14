@@ -25,6 +25,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { assertExecProcessCapacity } from "./bash-process-control.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -278,6 +279,9 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       }
       const host = resolveExecHost(params, defaults);
       assertDurableExecAvailable(params, host, allowBackground);
+      if (allowBackground && params.background === true && host !== "node") {
+        assertExecProcessCapacity(defaults?.scopeKey);
+      }
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -395,7 +399,12 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       }
       let run: ExecProcessHandle;
       let settled = false;
-      const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
+      // A deliberate service has no built-in lifetime; an explicit or configured timeout applies.
+      const configuredTimeoutSec =
+        defaults?.timeoutSec && defaults.timeoutSec > 0 ? defaults.timeoutSec : null;
+      const effectiveTimeout =
+        params.timeoutSeconds ??
+        (allowBackground && params.background === true ? configuredTimeoutSec : defaultTimeoutSec);
       try {
         if (elevatedRequested) {
           logInfo("exec: elevated command");
@@ -570,6 +579,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           subagentSession,
           notifyOnExitEmptySuccess,
           requestOwners: params.background === true ? undefined : requestOwners,
+          independentService: params.background === true,
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
           agentId,

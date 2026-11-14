@@ -12,33 +12,34 @@ OpenClaw runs shell commands through the `exec` tool. Ordinary long-running task
 
 Parameters:
 
-| Parameter        | Description                                                                                                                                                       |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`        | Required. Shell command to run.                                                                                                                                   |
-| `workdir`        | Working directory; omit to use the default cwd.                                                                                                                   |
-| `env`            | Extra environment variables for the command.                                                                                                                      |
-| `yieldMs`        | Milliseconds before returning a handle for an ordinary command (default 10000).                                                                                   |
-| `background`     | Start a deliberately independent service immediately.                                                                                                             |
-| `durable`        | Survive Gateway restarts as a systemd user service (Linux) or launchd job (macOS); requires explicit `background: true` or `yieldMs`.                             |
-| `timeoutSeconds` | Timeout in seconds (default `tools.exec.timeoutSeconds`); kills the process on expiry. Set `timeoutSeconds: 0` to disable the exec process timeout for that call. |
-| `pty`            | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                       |
-| `elevated`       | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                                     |
-| `host`           | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                             |
-| `node`           | Node id/name, used with `host: "node"`.                                                                                                                           |
+| Parameter        | Description                                                                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`        | Required. Shell command to run.                                                                                                                                                                                   |
+| `workdir`        | Working directory; omit to use the default cwd.                                                                                                                                                                   |
+| `env`            | Extra environment variables for the command.                                                                                                                                                                      |
+| `yieldMs`        | Milliseconds before returning a handle for an ordinary command (default 10000).                                                                                                                                   |
+| `background`     | Start a deliberately independent service immediately.                                                                                                                                                             |
+| `durable`        | Survive Gateway restarts as a systemd user service (Linux) or launchd job (macOS); requires explicit `background: true` or `yieldMs`.                                                                             |
+| `timeoutSeconds` | Timeout in seconds (default `tools.exec.timeoutSeconds`; for `background: true`, none unless configured); kills the process on expiry. Set `timeoutSeconds: 0` to disable the exec process timeout for that call. |
+| `pty`            | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                                                                       |
+| `elevated`       | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                                                                                     |
+| `host`           | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                                                                             |
+| `node`           | Node id/name, used with `host: "node"`.                                                                                                                                                                           |
 
 Behavior:
 
 - Foreground runs return retained output directly and disclose when earlier output exceeded the aggregate cap.
 - Set `awaitResults: true` when a command result is needed to finish the task. It stays an owned tool call through process settlement and terminal collection instead of returning an uncollected background handle. This works with `notifyOnExit=false`; no completion notification is enabled. `awaitResults: true` cannot be combined with `background: true`, which explicitly selects an independently running service. Run, tool, and process deadlines still apply. In OpenClaw Code Mode, the cell retains required calls and resumes on their settlement without model polling.
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail. On the Gateway and in its sandbox, a yielded handle does not make an ordinary command independent: the browser's **Stop** button and typed `/stop` cancel the selected request's commands. Stop waits for process cleanup and reports when cleanup could not be confirmed. Completed output remains available, and canceled commands do not emit a new completion notification. Managed workers retain the separate behavior described below.
-- Use `background: true` only for a deliberately independent service. Request Stop leaves that service running; use its process handle to stop it separately. Normal turn completion also preserves ordinary commands that are still running.
+- One session can run at most 16 services, and the Gateway at most 64. Services are background sessions plus processes that earlier commands left running. At the limit, a new `background: true` start fails, and processes that a foreground command leaves running are stopped; the tool result says which and why. OpenClaw never stops an older process to make room. Use `process list` and `process kill` to free a slot.
+- Use `background: true` only for a deliberately independent service. Request Stop leaves that service running; use its process handle to stop it separately. Resetting, starting a new, or deleting the session stops it, because nothing would manage it afterwards. Normal turn completion also preserves ordinary commands that are still running. When a one-shot `openclaw agent --local` run ends, it hands its `background: true` services off without stopping them, and stops only work that is still in flight.
 - Launch failures return the operating-system error and release worker cleanup even when no process starts.
-- Ordinary non-PTY Gateway-hosted exec on Linux and macOS completes when its root command exits, after up to 250 ms to drain output. Later descendant output is discarded. Background descendants retain their existing cleanup and memory ownership; completion does not terminate them. Keep long-running work in the foreground of the shell when you need its eventual output.
+- Ordinary non-PTY Gateway-hosted exec on Linux and macOS completes when its root command exits, after up to 250 ms to drain output. Later descendant output is discarded. Completion does not terminate processes that the command deliberately left running (`cmd &`, `nohup`, `setsid`, `disown`, or a daemon that forks itself away, such as `nginx` or `sshd`). Each one becomes a background session: the tool result names its process ID and session ID, `process list` shows it, and `process kill` stops it by process identity. OpenClaw drops a session when its process exits (checked every 5 seconds), stops these processes when the session is reset or deleted, and stops them when the Gateway stops. Only a one-shot `openclaw agent --local` run leaves them running when it exits, and it prints them. OpenClaw discards their later output to the command's stdout and stderr, so send it to a file to keep it. While they keep those pipes open, one small OpenClaw process stays alive to drain them, and it exits when they close them. On macOS, a process that leaves the command's process group (`setsid`, double fork) is not visible to OpenClaw: it is not tracked, and it keeps running after session reset and Gateway stop, as in other agent harnesses. Keep long-running work in the foreground of the shell when you need its eventual output.
 - Native Windows command shells retain `SystemRoot` when launched with a replacement environment, including on ARM64. Other omitted variables stay absent, and an explicitly supplied `SystemRoot` takes precedence.
 - Managed sandbox workspace finalization bounds each container inspection, pause, and resume command to 30 seconds. A failed or timed-out operation preserves its recovery receipt rather than treating an uncertain pause or resume as successful.
-- Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
+- `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`. `background: true` services have no built-in timeout; an explicit `timeoutSeconds` or a configured `tools.exec.timeoutSeconds` still applies.
 - With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each non-durable Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
-- Returning a background session ID does not stop the process timeout. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Host and worker lifecycle limits still apply.
+- Returning a background session ID does not stop an explicit process timeout. Stop a persistent service with `process` action `kill` when finished. Host and worker lifecycle limits still apply.
 - Output stays in memory up to the per-session aggregate cap until the session is polled or cleared.
 - Finished sessions expire after their configured TTL, measured from completion. Each exec captures its agent's retention setting when admitted; using another agent's process tool does not change existing results' lifetimes. The registry also retains at most 50 finished sessions and 2,000,000 total retained output characters, evicting the oldest records first. The newest completed session retains its capped per-session aggregate even when that record alone exceeds the global limit.
 - Remote `host=node` execution ignores `background`/`yieldMs`. Explicit `background: true` or `yieldMs` requests produce a warning with the execution result, not while approval is pending. The call returns output without a process `sessionId`.
@@ -250,14 +251,17 @@ operating-system processes.
 
 ## Child process bridging
 
-After a host exec command finishes, OpenClaw releases its retained process
-scope before reporting completion. Children left behind by shell backgrounding
-(`&`) are stopped with that scope. To continue ordinary work across turns, let the
+After a host exec command exits normally, OpenClaw releases its process owner
+before it reports completion. The owner exits without signalling the processes
+that the command left running (shell backgrounding with `&`, `nohup`, `setsid`,
+or a daemon), and the tool result lists them. Timeout, cancellation, request Stop,
+`process kill` and a failed launch still stop the whole process tree. Scopes that
+require full cleanup (the local TUI shell and managed workers) also still stop
+everything when the command exits. To continue ordinary work across turns, let the
 long-running command yield a handle with `yieldMs` and use `process` to collect its
 result. Request Stop still cancels it on the Gateway or in its sandbox. Reserve
-`background: true` for a deliberately independent service. Each command's process
-scope stays owned until it finishes; sandbox runtime lifetimes remain with the
-sandbox backend.
+`background: true` for a deliberately independent service. Sandbox runtime
+lifetimes remain with the sandbox backend.
 
 When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
 
@@ -336,7 +340,8 @@ Older builds do not reinterpret the new certificate as lineage completion.
 macOS and retained Bun process-group owners still require kernel group
 disappearance. Permission-denied checks never prove absence. A completed command
 or closed output pipe alone does not establish that its descendants stopped.
-A descendant that leaves the process group, such as a daemonized tmux server,
+When cleanup must stop the whole tree (cancellation or a strict scope), a
+descendant that leaves the process group, such as a daemonized tmux server,
 can outlive cleanup there. Exec then still reports the command's own exit, adds a
 note that a detached process may still be running, and records the cleanup as
 uncertain; a failed or canceled command keeps reporting the cleanup failure.
@@ -376,7 +381,7 @@ Notes:
 
 - Only backgrounded sessions are listed. Ordinary records stay in memory and are lost on process restart; durable records are adopted from SQLite. New handles include an opaque boot suffix so old handles cannot select a different process after restart. A durable process keeps its original handle when adopted. Looking up a lost ordinary handle advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
 - Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable processes keep running under the systemd user manager (Linux) or launchd (macOS). Restart interruption signals active requests' ordinary commands after saving restart markers, so their cleanup grace overlaps request draining. Accepted finalizers still finish before database sealing. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
-- Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
+- Resetting, starting a new, or deleting a session stops everything that session still runs: in-flight commands, `background: true` services and processes its commands left running (SIGTERM, then SIGKILL, by process identity). It also clears the session's completed records. Durable processes, other sessions and explicit shared scopes are not affected. Processes that OpenClaw never tracked, such as a daemon that left the process group on macOS, keep running.
 - A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable processes do not block either operation.
 - `process remove` can hide a running session immediately after requesting termination; ordinary processes keep suspension and restart blocked until exit confirmation.
 - Process output enters chat history only when a `process poll`/`log` result is recorded. Durable commands also retain their local log artifact until the process record is retired.

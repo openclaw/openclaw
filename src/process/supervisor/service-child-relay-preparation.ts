@@ -1,6 +1,8 @@
 import type { Writable } from "node:stream";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
+import { ServiceChildLaunchNotInitiatedError } from "../spawn-broker/relay-integration.js";
+import type { SpawnInitiation } from "../spawn-initiation.js";
 import { prepareSecretInputStdio, type SpawnStdioEntry } from "../spawn-secret-input.js";
 import { toStringEnv } from "./adapters/env.js";
 import {
@@ -10,10 +12,17 @@ import {
 import { assertProcessGroupControl } from "./service-child-group-ownership.js";
 import {
   supportsNodeWorkerProcessOwner,
+  type ServiceChildControlPayload,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
 import { reserveStdioEntry } from "./service-child-stdio.js";
-import type { ProcessAdapterConstruction, SpawnProcessAdapter, SpawnSecretInput } from "./types.js";
+import type {
+  ProcessAdapterConstruction,
+  ProcessRelease,
+  ReleasedProcess,
+  SpawnProcessAdapter,
+  SpawnSecretInput,
+} from "./types.js";
 
 declare const WORKER_DEPLOY_BUILD: boolean;
 
@@ -33,6 +42,8 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
   oomScoreWrapperSelected: boolean;
   onWorkerMessage?: (message: unknown) => void;
   windowsShellCommand?: string;
+  /** Hand off descendants after root exit; ignored where custody cannot be handed off. */
+  releaseOnRootExit?: true;
 } & (
     | {
         ownedWorker: true;
@@ -45,7 +56,9 @@ export type ServiceChildRelayParams = ProcessAdapterConstruction & {
 
 export type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
   treeOwnership?: "linux-subreaper";
-  waitForExtinction: () => Promise<void>;
+  waitForExtinction: () => Promise<ProcessRelease | void>;
+  /** Present when the owner can hand off a running root; resolves undefined if cancellation won. */
+  release?: () => Promise<ReleasedProcess[] | undefined>;
   confirmExtinction: () => boolean;
   openStartGate?: () => Promise<void>;
   closeStartGate?: () => void;
@@ -114,6 +127,12 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
       : getInheritedProcessLineageFds().map((fd) => reserveStdioEntry(stdio, fd));
     reserveStdioEntry(stdio, "ipc");
     return {
+      // Enclosing worker lineage would stay held by survivors; keep strict cleanup there.
+      releaseOnRootExit:
+        params.releaseOnRootExit === true &&
+        !params.ownedWorker &&
+        !useWindowsJobAnchor &&
+        parentLineageFds.length === 0,
       useWindowsJobAnchor,
       useLinuxSubreaper,
       nativeProcessOwner: useNativeProcessOwner ? nativeProcessOwner : undefined,
@@ -157,7 +176,7 @@ export function createServiceChildStart(
   params: ServiceChildRelayParams,
   preparation: Pick<
     ReturnType<typeof prepareServiceChildRelay>,
-    "controlFd" | "ownership" | "useLinuxSubreaper" | "nativeProcessOwner"
+    "controlFd" | "ownership" | "useLinuxSubreaper" | "nativeProcessOwner" | "releaseOnRootExit"
   >,
   generation: string,
   acknowledgeClosing: boolean,
@@ -180,6 +199,40 @@ export function createServiceChildStart(
     treeOwnership: preparation.useLinuxSubreaper ? "linux-subreaper" : undefined,
     nativeProcessOwner: preparation.nativeProcessOwner,
     ...(acknowledgeClosing ? { acknowledgeClosing: true as const } : {}),
+    ...(preparation.releaseOnRootExit ? { releaseOnRootExit: true as const } : {}),
     windowsShellCommand: params.windowsShellCommand,
   };
+}
+
+/** Grant a prepared anchor its launch frame after final caller policy checks. */
+export function grantServiceChildLaunch(options: {
+  params: ServiceChildRelayParams;
+  isStarting: () => boolean;
+  sendControlMessage: (
+    payload: ServiceChildControlPayload,
+    initiate?: SpawnInitiation,
+  ) => Promise<void>;
+  onError: (error: unknown) => void;
+  onRefused: (cause: unknown) => void;
+}): void {
+  const { params, isStarting, sendControlMessage } = options;
+  void (async () => {
+    try {
+      await params.prepareTargetSpawn?.();
+      assertServiceChildSpawn(params);
+    } catch (error) {
+      throw new ServiceChildLaunchNotInitiatedError(error);
+    }
+    if (!isStarting()) {
+      return;
+    }
+    await sendControlMessage({ type: "launch" }, params.initiateSpawn);
+  })().catch((error: unknown) => {
+    if (!(error instanceof ServiceChildLaunchNotInitiatedError) || !isStarting()) {
+      options.onError(error);
+      return;
+    }
+    options.onRefused(error.cause);
+    void sendControlMessage({ type: "cancel", signal: "SIGKILL" }).catch(options.onError);
+  });
 }
