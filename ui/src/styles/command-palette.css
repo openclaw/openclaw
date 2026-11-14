@@ -46,12 +46,27 @@
 .cmd-palette__filters {
   display: flex;
   flex: 0 0 auto;
+  align-items: center;
   gap: 2px;
+  min-height: 38px;
   padding: 10px 12px 0;
+}
+
+/* Refresh status shares the existing tab row instead of moving the results and dock. */
+.cmd-palette__search-status {
+  min-width: 0;
+  margin-inline-start: auto;
+  padding-inline-start: 8px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .cmd-palette__filter {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   height: 28px;
