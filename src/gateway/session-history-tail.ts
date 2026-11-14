@@ -19,10 +19,7 @@ import {
   isProjectedHistoryTurnBoundaryMessage,
   createPreSessionStartAnnouncePairFilter,
 } from "./chat-display-projection.history.js";
-import {
-  prepareLinkedChannelSenderDisplay,
-  type LinkedChannelSenderDisplayPreparation,
-} from "./chat-display-projection.linked-senders.js";
+import type { LinkedChannelSenderDisplayPreparation } from "./chat-display-projection.linked-sender-preparation.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import type {
   SessionTranscriptPageReader,
@@ -457,9 +454,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
     return { filteredRawMessages, projected, projection };
   };
   const projectWindow = async () => {
-    resolveLinkedChannelSenderDisplay = await (
-      params.prepareLinkedChannelDisplay ?? prepareLinkedChannelSenderDisplay
-    )(rawMessages);
+    resolveLinkedChannelSenderDisplay = await params.prepareLinkedChannelDisplay?.(rawMessages);
     const result = project();
     if (
       recoveryContext !== undefined ||

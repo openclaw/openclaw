@@ -25,7 +25,7 @@ import {
 import {
   prepareLinkedChannelSenderDisplay,
   type LinkedChannelSenderDisplayResolver,
-} from "./chat-display-projection.linked-senders.js";
+} from "./chat-display-projection.linked-sender-preparation.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
   createPreparedSessionHistorySubagentProjection,
@@ -60,6 +60,7 @@ export async function readSessionHistorySnapshotAsync(
       readers: createSessionActorTranscriptReader(memory),
       readOnly: true,
       resolveCurrentUserProfileDisplay,
+      prepareLinkedChannelDisplay: prepareLinkedChannelSenderDisplay,
       resolveCronJobName: () => undefined,
     });
     const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
@@ -77,6 +78,7 @@ export async function readSessionHistorySnapshotAsync(
     const snapshot = await readSessionHistorySnapshotKernel(params, {
       readers: sessionTranscriptReaders,
       resolveCurrentUserProfileDisplay,
+      prepareLinkedChannelDisplay: prepareLinkedChannelSenderDisplay,
       // Match the worker projection: install current names on the completed page below.
       resolveCronJobName: () => undefined,
     });

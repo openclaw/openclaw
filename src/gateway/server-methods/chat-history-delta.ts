@@ -12,7 +12,7 @@ import {
   createCurrentUserProfileMessageProjector,
   isAssistantTtsSupplementMessage,
 } from "../chat-display-projection.js";
-import { prepareLinkedChannelSenderDisplay } from "../chat-display-projection.linked-senders.js";
+import { prepareLinkedChannelSenderDisplay } from "../chat-display-projection.linked-sender-preparation.js";
 import {
   chatHistoryActivityBytes,
   createChatHistoryActivityProjection,

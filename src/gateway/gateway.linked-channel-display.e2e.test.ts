@@ -163,8 +163,6 @@ it(
       expect(metadata).not.toHaveProperty("requesterOrigin");
       expect(metadata?.transport).toMatchObject({ channel: "telegram" });
       expect(await readRaw()).toEqual(rawBefore);
-      // The existing projector leaves observations untouched, so this is the
-      // intended pre-fix failure, after all native prerequisite assertions.
       expect(metadata?.senderProfileAvatarUrl).toEqual(
         expect.stringContaining(`/api/users/${profile.id}/avatar`),
       );

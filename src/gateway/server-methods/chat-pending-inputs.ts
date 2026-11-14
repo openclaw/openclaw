@@ -20,7 +20,7 @@ import {
 import {
   prepareLinkedChannelSenderDisplay,
   type LinkedChannelSenderDisplayResolver,
-} from "../chat-display-projection.linked-senders.js";
+} from "../chat-display-projection.linked-sender-preparation.js";
 import { replaceOversizedChatHistoryMessages } from "../chat-history-budget.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {

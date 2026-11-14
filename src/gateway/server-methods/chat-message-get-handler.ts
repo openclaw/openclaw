@@ -12,7 +12,7 @@ import {
   augmentChatHistoryWithCanvasBlocks,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
-import { prepareLinkedChannelSenderDisplay } from "../chat-display-projection.linked-senders.js";
+import { prepareLinkedChannelSenderDisplay } from "../chat-display-projection.linked-sender-preparation.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";

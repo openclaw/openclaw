@@ -14,10 +14,7 @@ import {
   dropPreSessionStartAnnouncePairs,
   isProjectedHistoryTurnBoundaryMessage,
 } from "./chat-display-projection.history.js";
-import {
-  prepareLinkedChannelSenderDisplay,
-  type LinkedChannelSenderDisplayPreparation,
-} from "./chat-display-projection.linked-senders.js";
+import type { LinkedChannelSenderDisplayPreparation } from "./chat-display-projection.linked-sender-preparation.js";
 import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
 import { isChatHistoryResponsePageByteLimited } from "./chat-history-response-page.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
@@ -159,9 +156,7 @@ export async function readChatHistoryPageKernel(
     );
     const project = async (messages: unknown[]) =>
       projectChatDisplayMessagesWithState(messages, {
-        resolveLinkedChannelSenderDisplay: await (
-          options.prepareLinkedChannelDisplay ?? prepareLinkedChannelSenderDisplay
-        )(messages),
+        resolveLinkedChannelSenderDisplay: await options.prepareLinkedChannelDisplay?.(messages),
         includePluginSteering: params.includePluginSteering,
         subagentCoordination: options.readers.subagentCoordination,
         includeCommentaryFallbacks: true,

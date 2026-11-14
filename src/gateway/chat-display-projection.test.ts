@@ -16,7 +16,7 @@ import {
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
-import { prepareLinkedChannelSenderDisplay } from "./chat-display-projection.linked-senders.js";
+import { prepareLinkedChannelSenderDisplay } from "./chat-display-projection.linked-sender-preparation.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
@@ -449,6 +449,11 @@ it("requires exact attestation and historical requester agreement for channel pr
   for (const message of result) {
     expect(message["__openclaw"]).not.toHaveProperty("requesterOrigin");
   }
+  expect(projectChatDisplayMessages(result, { resolveLinkedChannelSenderDisplay })).toEqual(result);
+  const copied = structuredClone(result);
+  expect(
+    projectChatDisplayMessages(copied, { resolveLinkedChannelSenderDisplay })[0]?.["__openclaw"],
+  ).not.toHaveProperty("senderDisplayProfileId");
   expect(readLink).toHaveBeenCalledTimes(3);
   expect(messages).toEqual(before);
 });
