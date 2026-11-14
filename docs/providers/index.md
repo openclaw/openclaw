@@ -95,6 +95,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [vLLM (local models)](/providers/vllm)
 - [Volcengine (Doubao)](/providers/volcengine)
 - [Vydra](/providers/vydra)
+- [Wally (hosted open-weight models)](/providers/wally)
 - [xAI](/providers/xai)
 - [Xiaomi](/providers/xiaomi)
 - [Z.AI (GLM)](/providers/zai)
