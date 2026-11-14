@@ -34,7 +34,6 @@ it.each(["cap downgrade", "draft transition"] as const)(
           roles: {
             default: "reader",
             definitions: {
-              // @ts-expect-error Runtime invitation policy precedes config enum activation in step 13.
               reader: { sessions: { others }, agents: "*", scopes: ["operator.read"] },
             },
           },
