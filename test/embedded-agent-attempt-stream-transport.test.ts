@@ -25,7 +25,9 @@ import { createModelGenerationFixture } from "../src/agents/embedded-agent-runne
 import { prepareEmbeddedAttemptTransport } from "../src/agents/embedded-agent-runner/run/attempt-stream-settle.js";
 import { setPreparedModelFullCatalogAuth } from "../src/agents/prepared-model-runtime-auth.js";
 import { createPreparedAccountCatalogAccess } from "../src/agents/prepared-model-runtime.catalog-auth.js";
+import { applyPreparedRuntimeAuthToModel } from "../src/agents/provider-request-config.js";
 import type { StreamFn } from "../src/agents/runtime/index.js";
+import { resolveModelRegistryRequestAuth } from "../src/agents/sessions/model-registry-request-auth.js";
 import {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -178,6 +180,72 @@ describe("prepareEmbeddedAttemptTransport", () => {
     extraParamsTesting.resetProviderRuntimeDepsForTest();
     registerProviderStreamForModel.mockReset();
   });
+
+  it.each(["authorization-bearer", "header"] as const)(
+    "preserves prepared %s credentials at the HTTP transport boundary",
+    async (mode) => {
+      const { input, session } = createTransportFixture({ apiKey: "generic-key" });
+      const requestAuth =
+        mode === "authorization-bearer"
+          ? { mode, token: "request-token" }
+          : { mode, headerName: "authorization", value: "request-token", prefix: "Token:" };
+      input.attempt.model = applyPreparedRuntimeAuthToModel(
+        {
+          ...anthropicModel,
+          provider: "openai",
+          api: "openai-responses",
+          id: "synthetic-model",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        { request: { auth: requestAuth } },
+      );
+      input.attempt.modelRegistry.getApiKeyAndHeaders = (model) =>
+        resolveModelRegistryRequestAuth({
+          model,
+          providerConfig: {
+            authHeader: true,
+            apiKey: "generic-key",
+            headers: { "API-KEY": "old-provider-key" },
+          },
+          modelHeaders: { "X-Catalog-Route": "ops", "x-api-key": "old-model-key" },
+          authStorage: input.attempt.authStorage,
+        });
+      registerProviderStreamForModel.mockReturnValue(createOpenAIResponsesTransportStreamFn());
+      const previousHost = getAiTransportHost();
+      const requests: Request[] = [];
+      configureAiTransportHost({
+        ...previousHost,
+        buildModelFetch: () => async (url, init) => {
+          requests.push(new Request(url, init));
+          return new Response(
+            `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp-auth", status: "completed", output: [] } })}\n\n`,
+            {
+              headers: { "content-type": "text/event-stream" },
+            },
+          );
+        },
+      });
+      try {
+        await prepareEmbeddedAttemptTransport(input);
+        const result = await (
+          await session.agent.streamFn(input.attempt.model, { messages: [] })
+        ).result();
+        expect(result.errorMessage).toBeUndefined();
+        expect(requests).toHaveLength(1);
+        const headers = requests[0]!.headers;
+        expect(headers.get("X-Catalog-Route")).toBe("ops");
+        expect(headers.get("api-key")).toBeNull();
+        expect(headers.get("x-api-key")).toBeNull();
+        if (mode === "authorization-bearer") {
+          expect(headers.get("authorization")).toBe("Bearer request-token");
+        } else {
+          expect(headers.get("authorization")).toBe("Token:request-token");
+        }
+      } finally {
+        configureAiTransportHost(previousHost);
+      }
+    },
+  );
 
   it.each(
     (["private", "shared"] as const).flatMap((source) =>

@@ -1,2 +1,3 @@
-# Secondary-agent catalog isolation: focused source/auth/route regressions and real Gateway credential-rotation proof (E2E execution pending). Exact net test growth.
-561
+# Secondary-agent catalog isolation and explicit-auth transport regressions; retained Gateway credential-rotation proof remains unexecuted.
+# Net test growth is 678 lines; allocation covers the 278 lines above the 400-line allowance.
+278
