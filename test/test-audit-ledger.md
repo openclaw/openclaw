@@ -812,6 +812,15 @@ byte; the clean candidate passed 27/27. Production changed by 0 lines; the test
 changed by +8/-9 lines. The warm candidate run took 2.92 seconds; the cold baseline
 took 17.87 seconds, so these timings do not establish a speed improvement.
 
+### Managed proxy CA cleanup continuation
+
+At `7e69bf4c26b3cd00789f55ee4f6185af8aa2dbf3`, the shared proxy CA fixture
+splices every directory from its local list before removal. A removal failure
+aborts cleanup of later directories and drops their ownership. The candidate
+reuses the canonical auto-cleanup tracker while preserving the CA writer API,
+file contents and missing-file fixture. Baseline and failure-path qualification
+are pending; production code is outside this change.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
