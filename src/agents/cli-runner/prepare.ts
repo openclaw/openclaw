@@ -1354,7 +1354,7 @@ async function prepareCliRunContextWithinReadFence(
             skillsPrompt: preparedSkills.prompt,
             tools: promptTools,
             contextFiles,
-            bootstrapMode,
+            bootstrap: bootstrapRouting,
             bootstrapTruncationNotice,
             modelDisplay,
             agentId: sessionAgentId,

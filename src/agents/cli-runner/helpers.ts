@@ -105,7 +105,7 @@ export function buildCliAgentSystemPrompt(params: {
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
-  bootstrapMode?: BootstrapMode;
+  bootstrap?: { bootstrapMode: BootstrapMode; bootstrapCompleted: boolean };
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
@@ -171,7 +171,8 @@ export function buildCliAgentSystemPrompt(params: {
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
     contextFiles: params.contextFiles,
-    bootstrapMode: params.bootstrapMode,
+    bootstrapMode: params.bootstrap?.bootstrapMode,
+    bootstrapCompleted: params.bootstrap?.bootstrapCompleted,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }

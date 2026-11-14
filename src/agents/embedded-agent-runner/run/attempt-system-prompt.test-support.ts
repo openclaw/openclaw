@@ -7,6 +7,7 @@ export function createEmptyPromptBootstrap(): Parameters<
   return {
     ...buildBootstrapBudgetState({ files: [] }),
     bootstrapMode: "full",
+    bootstrapCompleted: false,
     contextFiles: [],
     bootstrapInjectionStats: [],
     shouldRecordCompletedBootstrapTurn: false,
