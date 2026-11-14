@@ -174,6 +174,8 @@ the override. Jobs without the field keep their existing selection behavior.
 The choice is reported in full and compact job reads and does not change the
 conversation's saved Access. Current role, account, model, and runtime grants
 still apply when the job runs; saving a choice does not grant access.
+OpenAI CLI runtimes reject explicit Daybreak because they cannot honor that choice;
+select Standard or use the OpenClaw or native Codex runtime.
 
 Jobs with explicit Access persist with a private `accessAgentTurn` payload kind.
 Readers from before this feature reject that unknown kind and quarantine the job

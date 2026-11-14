@@ -44,7 +44,6 @@ import { resolveScheduledRunMemoryReceipt } from "../execution-context-registry.
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
-import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import {
   assertCronCandidateSandboxPlacement,
@@ -316,22 +315,6 @@ export function createCronPromptExecutor(
         const preparedSessionPersisted = canReusePreparedSession;
         canReusePreparedSession = false;
         params.lifecycle.beginAttempt();
-        const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) =>
-          params.onExecutionStarted?.({
-            ...info,
-            ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
-            provider: providerOverride,
-            model: modelOverride,
-          });
-        const notifyExecutionPhase = (
-          info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
-            Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
-        ) =>
-          params.onExecutionPhase?.({
-            ...info,
-            provider: providerOverride,
-            model: modelOverride,
-          });
         attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
@@ -366,9 +349,7 @@ export function createCronPromptExecutor(
             modelOverride,
             candidateRuntime,
           );
-          if (runtimeCatalog.length > 0) {
-            thinkingCatalog = runtimeCatalog;
-          }
+          thinkingCatalog = runtimeCatalog.length > 0 ? runtimeCatalog : thinkingCatalog;
         }
         // Revalidate the candidate without rewriting the durable thinking preference.
         const { level: candidateThinkLevel } = resolveThinkingSelection({
@@ -477,8 +458,19 @@ export function createCronPromptExecutor(
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
             messageToolFinalByDefault: sourceDelivery.messageTool.finalByDefault,
             scheduledToolPolicy,
-            onExecutionStarted: notifyExecutionStarted,
-            onExecutionPhase: notifyExecutionPhase,
+            onExecutionStarted: (info?: { lifecycleGeneration?: string }) =>
+              params.onExecutionStarted?.({
+                ...info,
+                ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
+                provider: providerOverride,
+                model: modelOverride,
+              }),
+            onExecutionPhase: (info) =>
+              params.onExecutionPhase?.({
+                ...info,
+                provider: providerOverride,
+                model: modelOverride,
+              }),
             bootstrapContextMode,
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,

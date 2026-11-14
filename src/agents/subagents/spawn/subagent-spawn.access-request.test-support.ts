@@ -1,5 +1,4 @@
 import { Socket } from "node:net";
-import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -9,31 +8,16 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import { admitScheduledOccurrence } from "../../../cron/execution-context-admission.js";
-import { captureCronInferenceBinding } from "../../../cron/inference-binding.runtime.js";
-import { runCronIsolatedAgentTurn } from "../../../cron/isolated-agent/run.js";
-import { CronService } from "../../../cron/service.js";
-import { createNoopLogger } from "../../../cron/service.test-harness.js";
-import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { runCronSessionTurn } from "../../../cron/session-run.js";
-import {
-  createOperatorRecoveryFixture,
-  pairedOperator,
-} from "../../../gateway/operator-run-recovery.test-support.js";
-import { createScheduledGatewayRunner } from "../../../gateway/scheduled-run-gateway-context.js";
 import * as fetchGuard from "../../../infra/net/fetch-guard.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
-import { setCanonicalUserProfileRole } from "../../../state/user-profile-writes.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
-import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import * as agentScope from "../../agent-scope.js";
 import { codeModeSwarmHandlers } from "../../code-mode-swarm.runtime.js";
 import { applyCodeModeCatalog } from "../../code-mode.js";
 import { createCodeModeHarness } from "../../code-mode.test-support.js";
-import { captureScheduledOperatorSource } from "../../operator-run-recovery-source.js";
 import { createRequestNativeSubagentRuntime } from "../../plugin-native-subagent.js";
 import { setPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
 import { getPreparedModelRuntimeMocks } from "../../prepared-model-runtime.test-harness.js";
@@ -43,6 +27,7 @@ import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { installSpawnAccessCodex } from "./subagent-spawn.access-codex.test-support.js";
+import { runCronAccessLifecycle } from "./subagent-spawn.cron-access.test-support.js";
 import {
   holdNativeCapacity,
   nativeRequestSource,
@@ -73,7 +58,7 @@ export function registerAccessRequestSpawnCases(
       runtimeName,
       selection,
       outcome,
-      adapter: "native",
+      adapter: "native" as const,
       queued: false,
     })),
     ...(["code-mode", "plugin"] as const).map((adapter) => ({
@@ -115,7 +100,7 @@ export function registerAccessRequestSpawnCases(
       ),
     ),
   ];
-  it.each(cases)(
+  it.each<(typeof cases)[number]>(cases)(
     "$adapter queued=$queued $selection child Access at final $runtimeName submission: $outcome",
     async ({ runtimeName, selection, outcome, adapter, queued }) => {
       const program =
@@ -438,149 +423,20 @@ export function registerAccessRequestSpawnCases(
       const failures: unknown[] = [];
       try {
         if (adapter === "cron" || adapter === "cron-session") {
-          bound.cfg.gateway = {
-            ...bound.cfg.gateway,
-            roles: {
-              default: "runner",
-              definitions: {
-                runner: {
-                  scopes: ["operator.admin"],
-                  agents: "*",
-                  sessions: { others: "none" },
-                  accessPrograms: { cyber: ["daybreak_blue"] },
-                },
-              },
-            },
-          };
-          const profile = ensureProfileForEmail("cron-access@example.test");
-          await setCanonicalUserProfileRole(profile.id, "runner");
-          const recovery = await createOperatorRecoveryFixture({
-            stateDir: bound.cfg.agents!.defaults!.workspace!,
+          const cron = await runCronAccessLifecycle({
+            adapter,
+            outcome,
+            program,
+            modelId: model.id,
+            bound,
             context,
-            config: bound.cfg,
-            profileId: profile.id,
-            device: pairedOperator(),
+            options,
+            writes,
           });
-          await upsertSessionEntryCore(
-            { storePath: bound.storePath, sessionKey: options.parentSessionKey },
-            { createdActor: { type: "human", source: "profile", id: profile.id } },
-          );
-          const restored = await recovery.restore();
-          const operatorSource = captureScheduledOperatorSource({
-            authority: restored.authority,
-            agentId: "main",
-            independent: true,
-            sourceRunId: "cron-access-source",
-          });
-          restored.release();
-
-          const cron = new CronService({
-            scheduler: createTestGatewayScheduler(),
-            runSchedulerOwned: createScheduledGatewayRunner(context.resolveGatewayContext),
-            storePath: path.join(
-              bound.cfg.agents!.defaults!.workspace!,
-              "cron",
-              "access-proof.json",
-            ),
-            cronEnabled: false,
-            defaultAgentId: "main",
-            log: createNoopLogger(),
-            enqueueSystemEvent: () => {},
-            admitScheduledOccurrence: ({ job }) =>
-              admitScheduledOccurrence({ cfg: bound.cfg, job, agentId: "main", trigger: "cron" }),
-            runSessionEvent: async (request) => {
-              cronResult = await runCronSessionTurn({
-                ...request,
-                cfg: bound.cfg,
-                agentId: "main",
-                sessionKey: options.parentSessionKey,
-              });
-              return cronResult;
-            },
-            runIsolatedAgentJob: (request) =>
-              runCronIsolatedAgentTurn({
-                ...request,
-                cfg: bound.cfg,
-                deps: {},
-                agentId: "main",
-                sessionKey: `cron:${request.job.id}`,
-              }),
-          });
-          onTestFinished(async () => {
-            cron.stop();
-            await cron.waitForIdle();
-          });
-          const binding = await captureCronInferenceBinding({
-            cfg: bound.cfg,
-            agentId: "main",
-            model: `openai/${model.id}@openai:default`,
-          });
-          const job = await cron.add(
-            {
-              name: "Access boundary proof",
-              enabled: false,
-              schedule: { kind: "every", everyMs: 60000 },
-              sessionTarget:
-                adapter === "cron-session" ? `session:${options.parentSessionKey}` : "isolated",
-              wakeMode: "now",
-              payload: {
-                kind: "agentTurn",
-                message: "bounded review",
-                model: `openai/${model.id}`,
-              },
-              delivery: { mode: "none" },
-              cyberAccessProgram: program,
-            },
-            { inferenceBinding: binding, operatorSource },
-          );
-          context.cron = cron;
-          if (adapter === "cron-session") {
-            bound.admission.close();
-            bound.parent.cleanup();
-          }
-          if (outcome === "role-denied") {
-            bound.cfg.gateway.roles!.definitions.runner!.accessPrograms = { cyber: [] };
-            setRuntimeConfigSnapshot(bound.cfg);
-          }
-          expect(await cron.run(job.id, "force")).toMatchObject({ ok: true, ran: true });
-          if (outcome === "role-denied" && options.runEmbeddedAgent.mock.calls.length === 0) {
-            expect(cron.getJob(job.id)?.state.lastError).toMatch(/Access|allowed|role/i);
-            expect(writes).toHaveLength(0);
+          if (cron.skipped) {
             return;
           }
-          if (adapter === "cron") {
-            expect(options.runEmbeddedAgent).toHaveBeenCalled();
-          }
-          if (outcome === "allowed") {
-            expect(await cron.run(job.id, "force")).toMatchObject({ ok: true, ran: true });
-            await cron.update(
-              job.id,
-              { cyberAccessProgram: "standard" },
-              {
-                operatorSource,
-                operatorSourceExecutionRevision: resolveCronOperatorExecutionRevision({
-                  ...expectDefined(cron.getJob(job.id), "current job"),
-                  cyberAccessProgram: "standard",
-                }),
-              },
-            );
-            expect(await cron.run(job.id, "force")).toMatchObject({ ok: true, ran: true });
-            expect(writes).toHaveLength(3);
-            expect(writes[1]).toMatchObject({ access_programs: { cyber: program } });
-            expect(writes[2]).toMatchObject({ access_programs: { cyber: "standard" } });
-            await cron.remove(job.id);
-            expect(cron.getJob(job.id)).toBeUndefined();
-            await expect(cron.run(job.id, "force")).rejects.toThrow("unknown cron job id");
-            expect(writes).toHaveLength(3);
-            console.log(
-              JSON.stringify({
-                adapter,
-                lifecycle: "repeated fire, update Standard, delete",
-                finalAccess: [program, program, "standard"],
-                requests: writes.length,
-              }),
-            );
-          }
+          cronResult = cron.result;
         } else {
           const requested = selection === "inherited" ? undefined : program;
           const invoke = createBoundSpawnInvocation(
