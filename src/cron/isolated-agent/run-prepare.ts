@@ -401,6 +401,11 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         provider,
         model,
         agentRuntime: effectiveAgentRuntime,
+        authProfileId:
+          input.job.inferenceBinding?.profileId ??
+          (provider === resolvedModelSelection.provider && model === resolvedModelSelection.model
+            ? resolvedModelSelection.configuredProfileId
+            : undefined),
         jobThinking:
           input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
         hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,

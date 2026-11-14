@@ -481,6 +481,8 @@ export type AgentHarnessModelCatalogParams = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  /** Selected execution account, when known; omitted for unpinned inventory discovery. */
+  authProfileId?: string;
   configuredModelRefs?: readonly ModelRef[];
 };
 

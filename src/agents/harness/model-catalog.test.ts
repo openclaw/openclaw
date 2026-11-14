@@ -362,6 +362,7 @@ describe("agent harness model catalog", () => {
 it("checks resident native readiness with linear catalog work and observes revocation", () => {
   let inspectedRows = 0;
   let ready = true;
+  let selectedAccount: string | undefined;
   const rows: ModelCatalogEntry[] = Array.from({ length: 240 }, (_, index) => ({
     get provider() {
       inspectedRows++;
@@ -371,8 +372,8 @@ it("checks resident native readiness with linear catalog work and observes revoc
     name: `Model ${index}`,
     ...(index >= 200 ? { nativeRuntime: "native-test" } : {}),
   }));
-  const readModelCatalogReadiness = vi.fn(() =>
-    ready ? { accountType: "apiKey" as const } : undefined,
+  const readModelCatalogReadiness = vi.fn(({ authProfileId }: { authProfileId?: string }) =>
+    ready && authProfileId === selectedAccount ? { accountType: "apiKey" as const } : undefined,
   );
   const pluginRegistry = harnessRegistry("native-test", { readModelCatalogReadiness });
   const params = {
@@ -409,16 +410,18 @@ it("checks resident native readiness with linear catalog work and observes revoc
     }),
   ).toBe(true);
   ready = true;
-  for (const [modelId, runtime, expected] of [
-    ["model-239", "native-test", true],
-    ["model-0", "native-test", false],
-    ["missing", "native-test", false],
-    ["model-239", "other-runtime", false],
+  selectedAccount = "fixture:selected";
+  for (const [modelId, runtime, authProfileId, expected] of [
+    ["model-239", "native-test", selectedAccount, true],
+    ["model-0", "native-test", selectedAccount, false],
+    ["missing", "native-test", selectedAccount, false],
+    ["model-239", "other-runtime", selectedAccount, false],
+    ["model-239", "native-test", "fixture:other", false],
   ] as const) {
     expect(
       isPreparedNativeModelCatalogReady({
         ...params,
-        selection: { provider: "fixture", modelId, runtime },
+        selection: { provider: "fixture", modelId, runtime, authProfileId },
       }),
     ).toBe(expected);
   }

@@ -238,6 +238,11 @@ export async function prepareModelSelectionRuntime(params: {
       provider: params.provider,
       model: params.model,
       agentRuntime,
+      authProfileId:
+        params.profileOverride ??
+        ((sessionEntry?.providerOverride ?? sessionEntry?.modelProvider) === params.provider
+          ? sessionEntry?.authProfileOverride
+          : undefined),
       workspaceDir: params.workspaceDir,
     });
     hydratedSelection = findSelectedCatalogEntry({ ...params, catalog });

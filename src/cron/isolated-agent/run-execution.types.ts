@@ -63,6 +63,7 @@ export type CronRunExecutionParams = Pick<
       provider: string,
       model: string,
       agentRuntime: string,
+      authProfileId?: string,
     ) => Promise<ModelCatalogEntry[]>;
     persistRunContinuationSession?: CronRunContinuationSession["sync"];
     recordScheduledMemoryParent?: CronRunContinuationSession["recordScheduledMemoryParent"];

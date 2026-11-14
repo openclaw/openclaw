@@ -457,6 +457,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
         provider: params.provider,
         model: params.model,
         agentRuntime: params.agentRuntime,
+        authProfileId: authProfile.authProfileId,
         agentId: params.run.agentId,
         agentDir: params.run.agentDir,
         workspaceDir: params.run.workspaceDir,

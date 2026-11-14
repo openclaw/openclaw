@@ -472,6 +472,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
   model: string;
   /** Concrete runtime selected by the turn owner, including session overrides. */
   agentRuntime?: string;
+  authProfileId?: string;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -498,6 +499,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
           provider: params.provider,
           modelId: params.model,
           runtime: params.agentRuntime,
+          ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
         });
       } catch (error) {
         if (
@@ -524,6 +526,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
         provider: params.provider,
         modelId: params.model,
         runtime: params.agentRuntime,
+        ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
       });
     } else {
       const catalog = owner
@@ -542,6 +545,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
         defaultProvider: params.provider,
         defaultModel: `${params.provider}/${params.model}`,
         agentRuntime: params.agentRuntime,
+        authProfileId: params.authProfileId,
         snapshot: catalog,
       });
     }

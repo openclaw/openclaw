@@ -612,7 +612,14 @@ export async function createModelSelectionState(params: {
     selection: ThinkingDefaultSelection = { provider, model },
   ) => {
     const { agentRuntime } = resolveThinkingSelection(selection);
-    const key = JSON.stringify([selection.provider, selection.model, agentRuntime]);
+    const authProfileId =
+      !params.skipStoredModelOverride &&
+      !params.hasResolvedTurnModelOverride &&
+      !operatorModelOverride &&
+      selection.provider === provider
+        ? sessionEntry?.authProfileOverride
+        : undefined;
+    const key = JSON.stringify([selection.provider, selection.model, agentRuntime, authProfileId]);
     let catalog = thinkingCatalogs.get(key);
     if (!catalog) {
       catalog = visibilityPolicy.catalog;
@@ -623,6 +630,7 @@ export async function createModelSelectionState(params: {
         provider: selection.provider,
         model: selection.model,
         agentRuntime,
+        authProfileId,
       });
       // An empty refresh cannot replace the admitted owner with a configuration-only row.
       if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {

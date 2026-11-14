@@ -67,6 +67,7 @@ import {
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
+import { resolveCommandAuthProfileSelection } from "./attempt-auth-selection.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import {
   normalizeAgentCommandModelRef,
@@ -569,6 +570,13 @@ export async function resolveEmbeddedModelSelection(params: {
         provider,
         model,
         agentRuntime: thinkingRuntime,
+        authProfileId: resolveCommandAuthProfileSelection({
+          sessionEntry: sessionEntryForAttempt,
+          configuredAuthProfileId:
+            provider === defaultProvider && model === defaultModel
+              ? configuredDefaultAuthProfileId
+              : undefined,
+        })?.id,
         ...(params.sessionAgentId ? { agentId: params.sessionAgentId } : {}),
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       }),
