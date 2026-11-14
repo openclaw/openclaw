@@ -80,6 +80,8 @@ export const AgentSummarySchema = closedObject({
   creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   name: Type.Optional(NonEmptyString),
+  description: Type.Optional(NonEmptyString),
+  conversationStarters: Type.Optional(Type.Array(NonEmptyString)),
   identity: Type.Optional(
     closedObject({
       name: Type.Optional(NonEmptyString),

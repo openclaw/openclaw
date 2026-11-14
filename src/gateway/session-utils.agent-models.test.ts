@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { listAgentsForGateway } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
 
@@ -22,6 +25,33 @@ beforeEach(() => {
 });
 
 afterAll(closeSessionSqliteDatabasesForTest);
+
+test("projects each agent's welcome from its own BOOTSTRAP frontmatter", async () => {
+  await withOpenClawTestState({ label: "bootstrap-welcome" }, async (state) => {
+    const workspace = state.path("briefing");
+    await fs.mkdir(workspace);
+    await fs.writeFile(
+      path.join(workspace, "BOOTSTRAP.md"),
+      "---\nconversationStarters:\n  - Set up a repository\n  - Brief me\n---\nFollow tracked projects.\n",
+    );
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          briefing: { workspace, description: " Follows repositories. " },
+          plain: { workspace: state.path("plain") },
+        },
+      },
+    };
+    const { agents } = await listAgentsForGateway(config);
+    expect(agents.find((agent) => agent.id === "briefing")).toMatchObject({
+      description: "Follows repositories.",
+      conversationStarters: ["Set up a repository", "Brief me"],
+    });
+    const plain = agents.find((agent) => agent.id === "plain");
+    expect(plain).not.toHaveProperty("description");
+    expect(plain).not.toHaveProperty("conversationStarters");
+  });
+});
 
 type ModelCase = {
   name: string;

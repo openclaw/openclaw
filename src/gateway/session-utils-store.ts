@@ -11,6 +11,7 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { loadBootstrapConversationStarters } from "../agents/bootstrap-conversation-starters.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { isConversationToolAllowed } from "../agents/conversation-tool-policy-pipeline.js";
 import { resolveRunEntryCliRuntime } from "../agents/embedded-agent-runner/run-entry-runtime.js";
@@ -518,13 +519,18 @@ export async function listAgentsForGateway(
       : undefined;
     identityById.set(agentId, identity);
   }
+  const starters = await Promise.all(
+    roster.map(({ id }) => loadBootstrapConversationStarters(resolveAgentWorkspaceDir(cfg, id))),
+  );
   const provenanceById = new Map(
     provenanceRecords.map((record) => [record.agentId, record] as const),
   );
-  const agents = roster.map((entry) => {
+  const agents = roster.map((entry, index) => {
     const { id } = entry;
     const agentConfig = resolveAgentConfig(cfg, id);
     const newSessionPermissionMode = agentConfig?.newSessionPermissionMode;
+    const description = normalizeOptionalString(agentConfig?.description);
+    const conversationStarters = starters[index];
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     // This label must never overstate permissiveness. When sandbox policy can vary
     // by session, the effective policy is unknowable at agent scope: omit the label.
@@ -587,6 +593,8 @@ export async function listAgentsForGateway(
           : {}),
         ...(options?.includeSystem ? { kind: entry.kind } : {}),
         name: entry.name,
+        ...(description ? { description } : {}),
+        ...(conversationStarters ? { conversationStarters } : {}),
         identity: identityById.get(id),
         workspace,
         workspaceGit,

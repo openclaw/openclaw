@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as runtimeConfig from "../agents/agent-runtime-config.js";
+import { loadBootstrapConversationStarters } from "../agents/bootstrap-conversation-starters.js";
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { readCanonicalWorkspaceStateSnapshot } from "../agents/workspace-state-read.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
@@ -36,7 +37,8 @@ it.each([
       const root = state.path("template");
       await fs.mkdir(root);
       const soul = "A calm fixture personality.\n";
-      const bootstrap = "Connect the declared calendar, then ask about priorities.";
+      const bootstrap =
+        "---\nconversationStarters:\n  - Connect my calendar\n---\nConnect the declared calendar, then ask about priorities.";
       await fs.writeFile(path.join(root, "SOUL.md"), soul);
       await fs.writeFile(path.join(root, "BOOTSTRAP.md"), bootstrap);
       const manifest = path.join(root, "CLAW.md");
@@ -221,6 +223,9 @@ it.each([
       expect(await fs.readFile(path.join(plan.agent.workspace, "BOOTSTRAP.md"), "utf8")).toBe(
         bootstrap,
       );
+      expect(await loadBootstrapConversationStarters(plan.agent.workspace)).toEqual([
+        "Connect my calendar",
+      ]);
       // Durability is distinct from the primed host snapshot; do not clear that cache.
       expect(
         (await readWorkspaceStateSnapshot(plan.agent.workspace, { readOnly: true })).setup,

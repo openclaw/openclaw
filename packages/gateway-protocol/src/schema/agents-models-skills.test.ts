@@ -8,6 +8,19 @@ const deleted = { ok: true, agentId: "ops", removedBindings: 1 };
 const auth = (overrides: object = {}) => ({ provider: "openai", ...overrides });
 it.each([
   [
+    "optional agent welcome metadata",
+    S.AgentSummarySchema,
+    [
+      { id: "briefing" },
+      { id: "briefing", description: "Follows repositories.", conversationStarters: ["Brief me"] },
+      { id: "briefing", conversationStarters: [] },
+    ],
+    [
+      { id: "briefing", conversationStarters: "Brief me" },
+      { id: "briefing", conversationStarters: [""] },
+    ],
+  ],
+  [
     "per-path agent cleanup",
     S.AgentsDeleteResultSchema,
     [

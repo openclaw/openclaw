@@ -477,10 +477,13 @@ export class NewSessionPageOwner {
 
   welcomeOptions(): DraftWelcomeOptions {
     const agent = this.place.selectedAgent();
+    const welcomeAgent = catalog.isTarget(this.data) ? undefined : agent;
     const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;
     return {
       currentAgentId: this.place.agentId,
+      description: welcomeAgent?.description,
+      conversationStarters: welcomeAgent?.conversationStarters,
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),

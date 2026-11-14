@@ -166,7 +166,10 @@ workspace:
       path: reference/policy.md
 ```
 
-An optional package-root `BOOTSTRAP.md` supplies first-run instructions.
+An optional package-root `BOOTSTRAP.md` supplies first-run instructions. Its
+YAML frontmatter can also define [conversation starters](/start/bootstrapping#conversation-starters)
+for the new-chat welcome screen; Add preserves these with the instructions,
+rather than copying them into agent configuration.
 The package may also declare exact ClawHub skill and plugin requirements,
 MCP servers, and scheduled automations:
 

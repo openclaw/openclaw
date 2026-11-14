@@ -10,6 +10,7 @@ import {
   validateAgentsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { invalidateBootstrapConversationStarters } from "../../agents/bootstrap-conversation-starters.js";
 import {
   buildIdentityMarkdownForWrite,
   loadAgentIdentityFromWorkspaceAsync,
@@ -475,6 +476,9 @@ export const agentFileHandlers: Pick<
     if (conflict) {
       respondWorkspaceFileConflict(respond, name, conflict.currentHash);
       return;
+    }
+    if (name === DEFAULT_BOOTSTRAP_FILENAME) {
+      invalidateBootstrapConversationStarters(workspaceDir);
     }
     const meta: Partial<FileMeta> | null = access
       ? { size: Buffer.byteLength(content) }
