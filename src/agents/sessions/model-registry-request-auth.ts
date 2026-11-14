@@ -1,6 +1,10 @@
 import type { Model } from "../../llm/types.js";
 import { applyLocalNoAuthHeaders, resolveExplicitProviderNoAuth } from "../model-auth-markers.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
+import {
+  getModelProviderRequestTransport,
+  applyPreparedRuntimeAuthToModel,
+} from "../provider-request-config.js";
 import type { AuthStorage } from "./auth-storage.js";
 import type { ProviderRequestConfig, ResolvedRequestAuth } from "./model-registry-sources.js";
 import {
@@ -42,30 +46,45 @@ export async function resolveModelRegistryRequestAuth(params: {
       providerConfig: { auth: providerConfig?.auth },
       modelApi: model.api,
     });
+    const requestAuth = getModelProviderRequestTransport(model)?.auth;
+    const hasExplicitRequestAuth = requestAuth && requestAuth.mode !== "provider-default";
     const usesAwsSdkAuth = providerConfig?.auth === "aws-sdk";
-    const apiKeyFromAuthStorage = noAuth
-      ? noAuth.apiKey
-      : usesAwsSdkAuth
-        ? undefined
-        : await authStorage.getApiKey(model.provider, {
-            includeFallback: false,
-            baseUrl: model.baseUrl,
-          });
+    const apiKeyFromAuthStorage = hasExplicitRequestAuth
+      ? undefined
+      : noAuth
+        ? noAuth.apiKey
+        : usesAwsSdkAuth
+          ? undefined
+          : await authStorage.getApiKey(model.provider, {
+              includeFallback: false,
+              baseUrl: model.baseUrl,
+            });
     const apiKey =
       apiKeyFromAuthStorage ??
-      (!usesAwsSdkAuth && providerConfig?.apiKey
+      (!hasExplicitRequestAuth && !usesAwsSdkAuth && providerConfig?.apiKey
         ? await resolveConfigValueOrThrow(
             providerConfig.apiKey,
             `API key for provider "${model.provider}"`,
           )
         : undefined);
 
-    // Unused Authorization values must not trigger environment or command credential resolution.
+    // Do not evaluate credentials the prepared request (or no-auth policy) replaces.
+    const replacedHeaders = new Set<string>();
+    if (hasExplicitRequestAuth) {
+      for (const name of ["authorization", "api-key", "x-api-key"]) {
+        replacedHeaders.add(name);
+      }
+      if (requestAuth.mode === "header") {
+        replacedHeaders.add(requestAuth.headerName.trim().toLowerCase());
+      }
+    } else if (noAuth) {
+      replacedHeaders.add("authorization");
+    }
     const resolveHeaders = (headers: Record<string, string> | undefined, description: string) =>
       resolveHeadersOrThrow(
-        noAuth && headers
+        headers
           ? Object.fromEntries(
-              Object.entries(headers).filter(([name]) => name.toLowerCase() !== "authorization"),
+              Object.entries(headers).filter(([name]) => !replacedHeaders.has(name.toLowerCase())),
             )
           : headers,
         description,
@@ -83,7 +102,14 @@ export async function resolveModelRegistryRequestAuth(params: {
         ? { ...model.headers, ...providerHeaders, ...modelHeaders }
         : undefined;
 
-    if (noAuth) {
+    if (hasExplicitRequestAuth) {
+      // Prepared request auth owns the credential choice; registry inventory may
+      // add route headers but must not synthesize a second generic credential.
+      headers = applyPreparedRuntimeAuthToModel(
+        { ...model, headers },
+        { request: { auth: requestAuth } },
+      ).headers;
+    } else if (noAuth) {
       headers = applyLocalNoAuthHeaders(model.api, noAuth.apiKey, headers);
     } else if (providerConfig?.authHeader) {
       if (!apiKey) {
