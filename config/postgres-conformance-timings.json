@@ -180,10 +180,6 @@
       "group": "extension-database-workers",
       "seconds": 8.845
     },
-    "extensions/workboard/src/store.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 81.069
-    },
     "extensions/workboard/src/tools.test.ts": {
       "group": "extension-database-workers",
       "seconds": 18.235

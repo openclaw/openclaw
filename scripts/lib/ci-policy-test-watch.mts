@@ -243,7 +243,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["extensions/codex/src/app-server/run-attempt.ts"],
   },
   {
-    testFile: "extensions/telegram/src/bot-message-dispatch.preview.telegram-http.test.ts",
+    testFile:
+      "extensions/telegram/src/bot-message-dispatch.progress-lifecycle.telegram-http.test.ts",
     watchGlobs: ["extensions/telegram/src/bot-message-dispatch.ts"],
   },
   {

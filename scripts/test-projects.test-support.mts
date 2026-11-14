@@ -810,7 +810,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   [
     "extensions/browser/src/browser/chrome-mcp-options.ts",
-    ["extensions/browser/src/browser/chrome-mcp.test.ts"],
+    ["extensions/browser/src/browser/chrome-mcp-options.test.ts"],
   ],
   [
     "scripts/prepare-apple-mermaid.mjs",

@@ -2155,7 +2155,6 @@
     "extensions/browser/src/browser/extension-relay/relay-coexistence.e2e.test.ts": 4,
     "extensions/browser/src/browser/pw-ai.e2e.test.ts": 1,
     "extensions/diagnostics-prometheus/src/install-runtime.e2e.test.ts": 17,
-    "extensions/discord/src/voice/voice-runtime.e2e.test.ts": 2,
     "extensions/discord/src/voice/voice-runtime.secret-owner.e2e.test.ts": 1,
     "extensions/ollama/src/node-inference.paired-node.e2e.test.ts": 36,
     "extensions/openshell/src/backend.e2e.test.ts": 1,

@@ -733,7 +733,7 @@ console.log(JSON.stringify(directImporterTests));`,
     expect(
       planRuns([
         "src/config/config-misc.test.ts",
-        "extensions/discord/src/monitor/message-handler.preflight.test.ts",
+        "extensions/discord/src/monitor/message-handler.preflight-channel-context.test.ts",
         "-t",
         "mention",
       ]),
@@ -741,14 +741,16 @@ console.log(JSON.stringify(directImporterTests));`,
       expectedPlan("runtime-config", ["src/config/config-misc.test.ts"], ["-t", "mention"]),
       expectedPlan(
         "extension-discord",
-        ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
+        ["extensions/discord/src/monitor/message-handler.preflight-channel-context.test.ts"],
         ["-t", "mention"],
       ),
     ]);
   });
 
   it("writes scoped include files for routed extension runs", () => {
-    const [spec] = runSpecs(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]);
+    const [spec] = runSpecs([
+      "extensions/discord/src/monitor/message-handler.preflight-channel-context.test.ts",
+    ]);
 
     expect(spec?.pnpmArgs).toEqual([
       ...VITEST_NODE_PREFIX,
@@ -757,7 +759,7 @@ console.log(JSON.stringify(directImporterTests));`,
       "test/vitest/vitest.extension-discord.config.ts",
     ]);
     expect(spec?.includePatterns).toEqual([
-      "extensions/discord/src/monitor/message-handler.preflight.test.ts",
+      "extensions/discord/src/monitor/message-handler.preflight-channel-context.test.ts",
     ]);
     expect(spec?.includeFilePath).toContain("openclaw-vitest-include-");
     expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(spec?.includeFilePath);
@@ -835,7 +837,7 @@ console.log(JSON.stringify(directImporterTests));`,
       planRuns([
         "--watch",
         "src/config/config-misc.test.ts",
-        "extensions/discord/src/monitor/message-handler.preflight.test.ts",
+        "extensions/discord/src/monitor/message-handler.preflight-channel-context.test.ts",
       ]),
     ).toThrow("watch mode with mixed test suites is not supported");
   });
