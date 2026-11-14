@@ -3,7 +3,6 @@ import http2 from "node:http2";
 import tls from "node:tls";
 import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { openProxyConnectTunnel } from "@openclaw/proxyline";
 import { monotonicNow } from "../shared/monotonic-time.js";
 import { toErrorObject } from "./errors.js";
 import {
@@ -12,6 +11,7 @@ import {
   type ActiveManagedProxyUrl,
 } from "./net/proxy/active-proxy-state.js";
 import type { ManagedProxyTlsOptions } from "./net/proxy/proxy-tls.js";
+import { loadProxyline } from "./net/proxyline-runtime.js";
 import { apnsSendInvalidatedError } from "./push-apns-send-current.js";
 
 const APNS_AUTHORITIES = new Set([
@@ -105,6 +105,8 @@ async function openApnsTlsTunnel(params: {
   // CONNECT ignores URL paths. Strip path metadata before Proxyline sees it so
   // tokens embedded in a configured proxy URL cannot surface in errors.
   const proxyUrl = normalizeConnectProxyUrl(params.proxyUrl);
+  // Cold proxy initialization must not consume the remaining target TLS budget.
+  const { openProxyConnectTunnel } = loadProxyline();
   const deadline = monotonicNow() + params.timeoutMs;
   const proxySocket = await openProxyConnectTunnel({
     proxyUrl,
