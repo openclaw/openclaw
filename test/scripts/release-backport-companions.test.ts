@@ -110,6 +110,39 @@ describe("release-backport-companions", () => {
     expect(report.comparison.extraCandidatePaths).toEqual(["release-note.md"]);
   });
 
+  it("finds bounded SHA-only followups across paths without matching unrelated tokens", () => {
+    const repo = fixture();
+    git(repo.root, ["switch", "-q", "main"]);
+    const selected = commit(repo.root, "fix: standalone producer", {
+      "src/standalone.ts": "fix\n",
+    });
+    const full = commit(repo.root, `fix: follow up on ${selected}`, {
+      "src/consumer.ts": "full\n",
+    });
+    const abbreviated = commit(
+      repo.root,
+      `test: follow up\n\nCovers (${selected.slice(0, 7).toUpperCase()}) and ${selected.slice(0, 12)}.`,
+      { "test/consumer.test.ts": "short\n" },
+    );
+    const wrongPrefix = `${selected.slice(0, 7)}${selected[7] === "a" ? "b" : "a"}`;
+    const scanEnd = commit(
+      repo.root,
+      `unrelated: ${selected.slice(0, 6)} ${wrongPrefix} ${selected}0 x${selected} ${selected}_suffix`,
+      { "unrelated.txt": "unrelated\n" },
+    );
+    commit(repo.root, `fix: beyond pinned end ${selected}`, { "late.txt": "late\n" });
+    const result = audit(repo.root, { baseline: repo.baseline, "scan-end": scanEnd, selected });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).selection[0]).toMatchObject({
+      prLookupRequired: true,
+      laterSamePath: [],
+      laterPrMentions: [],
+      laterShaMentions: [full, abbreviated]
+        .toSorted()
+        .map((sha) => expect.objectContaining({ sha })),
+    });
+  });
+
   it("rejects a selected commit already included in the pinned baseline", () => {
     const repo = fixture();
     const result = audit(repo.root, {
