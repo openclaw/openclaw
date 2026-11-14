@@ -40,7 +40,6 @@ export {
 } from "./markdown-chunks.js";
 export {
   blankDreamingFencedRanges,
-  findDreamingFenceRanges,
   isDreamingFenceMarkerLine,
   lineRangeOverlapsDreamingFence,
 } from "./dreaming-fences.js";

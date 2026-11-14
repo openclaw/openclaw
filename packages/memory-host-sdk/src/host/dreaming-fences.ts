@@ -29,28 +29,6 @@ function dreamingFenceLineStates(lines: string[]): boolean[] {
   });
 }
 
-/** Managed ranges as 1-indexed inclusive line spans, in document order. */
-export function findDreamingFenceRanges(
-  lines: string[],
-): Array<{ startLine: number; endLine: number }> {
-  const states = dreamingFenceLineStates(lines);
-  const ranges: Array<{ startLine: number; endLine: number }> = [];
-  let rangeStart: number | undefined;
-  for (let index = 0; index < states.length; index += 1) {
-    if (states[index] && rangeStart === undefined) {
-      rangeStart = index + 1;
-    }
-    if (!states[index] && rangeStart !== undefined) {
-      ranges.push({ startLine: rangeStart, endLine: index });
-      rangeStart = undefined;
-    }
-  }
-  if (rangeStart !== undefined) {
-    ranges.push({ startLine: rangeStart, endLine: states.length });
-  }
-  return ranges;
-}
-
 /** True when any line of the 1-indexed inclusive range is managed content. */
 export function lineRangeOverlapsDreamingFence(
   lines: string[],
@@ -77,7 +55,9 @@ export function lineRangeOverlapsDreamingFence(
  * Returns the input unchanged when the document holds no fence.
  */
 export function blankDreamingFencedRanges(content: string): string {
-  if (!content.includes("openclaw:dreaming:")) {
+  // The marker regexes are case-insensitive, so the fast path must be too:
+  // a differently cased marker still opens a fence the parser would honor.
+  if (!/openclaw:dreaming:/i.test(content)) {
     return content;
   }
   const lines = content.split("\n");

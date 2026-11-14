@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   blankDreamingFencedRanges,
-  findDreamingFenceRanges,
   isDreamingFenceMarkerLine,
   lineRangeOverlapsDreamingFence,
 } from "./dreaming-fences.js";
@@ -14,43 +13,6 @@ const NOTE_LINES = [
   "<!-- openclaw:dreaming:light:end -->",
   "Another real line.",
 ];
-
-describe("dreaming fence ranges", () => {
-  it("finds a closed fence including its marker lines", () => {
-    expect(findDreamingFenceRanges(NOTE_LINES)).toEqual([{ startLine: 2, endLine: 5 }]);
-  });
-
-  it("finds multiple fences across phases", () => {
-    const lines = [
-      "<!-- openclaw:dreaming:rem:start -->",
-      "rem scratch",
-      "<!-- openclaw:dreaming:rem:end -->",
-      "real",
-      "<!-- openclaw:dreaming:deep:start -->",
-      "deep scratch",
-      "<!-- openclaw:dreaming:deep:end -->",
-    ];
-    expect(findDreamingFenceRanges(lines)).toEqual([
-      { startLine: 1, endLine: 3 },
-      { startLine: 5, endLine: 7 },
-    ]);
-  });
-
-  it("runs an unclosed fence to the end of the file", () => {
-    const lines = ["real", "<!-- openclaw:dreaming:light:start -->", "scratch"];
-    expect(findDreamingFenceRanges(lines)).toEqual([{ startLine: 2, endLine: 3 }]);
-  });
-
-  it("treats a stray end marker as a one-line managed range", () => {
-    const lines = ["real", "<!-- openclaw:dreaming:light:end -->", "also real"];
-    expect(findDreamingFenceRanges(lines)).toEqual([{ startLine: 2, endLine: 2 }]);
-  });
-
-  it("returns no ranges without fences", () => {
-    expect(findDreamingFenceRanges(["a", "b"])).toEqual([]);
-    expect(findDreamingFenceRanges([])).toEqual([]);
-  });
-});
 
 describe("isDreamingFenceMarkerLine", () => {
   it("matches start and end markers for any phase and nothing else", () => {
@@ -101,6 +63,17 @@ describe("blankDreamingFencedRanges", () => {
   it("blanks an unclosed fence through the end of the content", () => {
     const content = ["real", "<!-- openclaw:dreaming:rem:start -->", "scratch"].join("\n");
     expect(blankDreamingFencedRanges(content)).toBe(["real", "", ""].join("\n"));
+  });
+
+  it("blanks fences whose markers use different casing", () => {
+    const content = [
+      "real",
+      "<!-- OpenClaw:Dreaming:Light:Start -->",
+      "scratch",
+      "<!-- OPENCLAW:DREAMING:LIGHT:END -->",
+      "kept",
+    ].join("\n");
+    expect(blankDreamingFencedRanges(content)).toBe(["real", "", "", "", "kept"].join("\n"));
   });
 
   it("keeps CRLF line endings on surviving lines", () => {

@@ -108,6 +108,28 @@ describe("managed dreaming ranges at the indexing boundary", () => {
     expect(booked?.endLine).toBe(6);
   });
 
+  it("does not take recall metadata from annotations inside a dreaming fence", () => {
+    const { chunks } = prepareMemoryIndexChunks({
+      entry: { path: "MEMORY.md", mtimeMs: 1 },
+      source: "memory",
+      content: [
+        "# 2026-10-14",
+        "Met with Sam about the launch plan. <!-- trigger: launch -->",
+        "<!-- openclaw:dreaming:light:start -->",
+        "Dream scratch. <!-- importance: 9 --> <!-- trigger: scratchword -->",
+        "<!-- openclaw:dreaming:light:end -->",
+        "Booked the venue for Friday.",
+      ].join("\n"),
+      pathClassification: { curatedRoot: true, originClass: "agent" },
+      chunking: { tokens: 400, overlap: 80 },
+      hardMaxInputTokens: 8192,
+    });
+    expect(chunks.length).toBe(1);
+    expect(chunks[0]?.importance).toBeNull();
+    expect(chunks[0]?.triggers).toBe("launch");
+    expect(chunks[0]?.text).not.toContain("scratchword");
+  });
+
   it("produces no chunks for a note that is only a dreaming fence", () => {
     const { chunks } = prepareMemoryIndexChunks({
       entry: { path: "memory/2026-10-14.md", mtimeMs: 1 },

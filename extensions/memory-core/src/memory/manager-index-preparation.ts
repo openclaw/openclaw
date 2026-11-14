@@ -63,6 +63,13 @@ export function prepareMemoryIndexChunks({
     source === "memory" ? blankDreamingFencedRanges(stripMemoryAnnotationCarriers(content)) : content;
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
+  // Recall metadata is eligibility signal too: read it from the fence-blanked
+  // lines so annotations inside managed dreaming ranges cannot set a
+  // surviving chunk's importance, triggers, or project scope.
+  const metadataLines =
+    source === "memory"
+      ? blankDreamingFencedRanges(content.replace(/\r\n/gu, "\n")).split("\n")
+      : [];
   const chunkOptions = { ...chunking, perEntry };
   const baseChunks: MemoryChunk[] = [];
   for (const chunk of source === "sessions"
@@ -123,7 +130,7 @@ export function prepareMemoryIndexChunks({
         curatedRoot: pathClassification.curatedRoot,
         projectScopeEligible:
           source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
-        sourceLines: sourceLines.slice(start - 1, end),
+        sourceLines: metadataLines.slice(start - 1, end),
       });
       recallMetadata.set(span, metadata);
     }
