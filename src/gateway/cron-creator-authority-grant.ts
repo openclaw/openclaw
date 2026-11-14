@@ -482,8 +482,10 @@ export async function withCronManagementGrant<T>(
     {
       identity,
       assertActive,
-      ...(entry.scope.callerOrigin.kind === "local"
-        ? { callerOrigin: { kind: "local" as const } }
+      // The admitted turn's server-authenticated origin. An owner's edit from a
+      // channel chat must keep that channel, or account-scoped runs lose their account.
+      ...(entry.scope.callerOrigin.kind !== "unknown"
+        ? { callerOrigin: { ...entry.scope.callerOrigin } }
         : {}),
       channelRequester: channelRequestersByScope.get(entry.scope),
       execPolicy: entry.execPolicy,

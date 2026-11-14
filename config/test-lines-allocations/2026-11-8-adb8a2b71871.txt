@@ -1,0 +1,5 @@
+95
+# LOCAL 2026.11.8 row 78; source adb8a2b71871cc987e74dcc0aea5a5b06e988683.
+# Preserves admitted nonunknown channel origin without minting authority; replay and lifetime checks unchanged. Scope limits: Grant and real CronService persistence covered; larger scheduled-policy companion omitted.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
