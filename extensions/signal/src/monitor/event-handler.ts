@@ -76,7 +76,7 @@ import {
   resolveSignalRecipient,
   resolveSignalSender,
 } from "../identity.js";
-import { formatSignalMediaText } from "../media-text.js";
+import { formatSignalMediaText, withoutDuplicateLongText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
@@ -1012,7 +1012,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-    const attachments = dataMessage.attachments ?? [];
+    const attachments = withoutDuplicateLongText(dataMessage.attachments, rawMessage);
     const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
       const contentType = attachment?.contentType ?? undefined;
       return { contentType, kind: kindFromMime(contentType) ?? "unknown" };

@@ -1,0 +1,4 @@
+51
+# Signal receive-handler regressions: exactly 51 net test lines.
+# Complete/truncated UTF-8 carriers, downloads on/off, and unrelated image handling.
+# Do not rely on spare lines from the comparison base; shared scalar stays unchanged.
