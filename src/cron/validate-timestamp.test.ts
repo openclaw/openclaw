@@ -22,6 +22,20 @@ describe("validateScheduleTimestamp", () => {
     }
   });
 
+  it("rejects a one-minute-stale schedule.at with singular minute wording", () => {
+    const result = validateScheduleTimestamp(
+      { kind: "at", at: "2026-02-23T11:58:30.000Z" },
+      Date.parse("2026-02-23T12:00:00.000Z"),
+    );
+
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) {
+      expect(result.message).toContain(
+        "schedule.at is in the past: 2026-02-23T11:58:30.000Z (1 minute ago)",
+      );
+    }
+  });
+
   it("rejects at timestamps more than ten years ahead", () => {
     const result = validateScheduleTimestamp(
       { kind: "at", at: "2037-01-01T00:00:00.000Z" },
