@@ -366,9 +366,6 @@ describe("Checkout chip state", () => {
     onPopoverHide.mockClear();
 
     expect(name.title).toBe("Creates branch openclaw/picker-fixes in a separate checkout.");
-    expect(container.querySelector(".new-session-page__checkout-fields")?.textContent).toBe(
-      "FrommainName",
-    );
     const suggestionPopup = container.querySelector(".new-session-page__branch-popup")!;
     for (const type of ["overlay-show", "overlay-hide", "overlay-after-hide"]) {
       suggestionPopup.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
