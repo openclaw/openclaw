@@ -246,7 +246,10 @@ suite.define(() => {
           historyMessages: [ready],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.getByText("The PR is ready to land.", { exact: true }).waitFor();
+        await page
+          .locator(".chat-bubble")
+          .getByText("The PR is ready to land.", { exact: true })
+          .waitFor();
         await gateway.deferNext("chat.send");
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
         await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -501,7 +504,7 @@ suite.define(() => {
         await gateway.setOnline(true);
         const replay = await gateway.waitForRequest("chat.send", { after: 1 });
         expect(replay.params).toMatchObject({ idempotencyKey: runId, message: prompt });
-        await page.getByText(finalText, { exact: true }).waitFor();
+        await page.locator(".chat-bubble").getByText(finalText, { exact: true }).waitFor();
         await expect.poll(() => page.locator(".chat-send-status").count()).toBe(0);
         await emitSessionMessage(gateway, finalMessage, "consumed-prompt-final", 605, [], {
           sessionId,
@@ -563,7 +566,10 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("chat.history")).length)
           .toBeGreaterThan(historyRequestsBefore);
-        await page.getByText("Later history window.", { exact: true }).waitFor();
+        await page
+          .locator(".chat-bubble")
+          .getByText("Later history window.", { exact: true })
+          .waitFor();
         const probe = page.locator(".chat-bubble").getByText(PROBE_TEXT, { exact: true });
         await expect.poll(() => probe.count()).toBe(0);
         await capture("03-later-page.png");

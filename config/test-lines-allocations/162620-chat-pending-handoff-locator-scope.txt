@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #162620 (scope pending-handoff e2e exact-text locators to .chat-bubble).
+6
