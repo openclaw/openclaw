@@ -1,7 +1,7 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { withMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
-import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
+import { migrateLegacyConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { digestTemplateValue } from "./digest.js";
 import {
@@ -20,8 +20,10 @@ function mcpServerFromActionDetails(
   return "command" in server || "url" in server ? (server as TemplateMcpServer) : undefined;
 }
 
+// A manifest declares `timeout` and `connectTimeout` in seconds, under the names
+// config retired for `requestTimeoutMs` and `connectionTimeoutMs`.
 export function digestTemplateMcpServer(server: Record<string, unknown>): string {
-  return digestTemplateValue(canonicalizeConfiguredMcpServer(server));
+  return digestTemplateValue(migrateLegacyConfiguredMcpServer(server));
 }
 
 /**
@@ -79,7 +81,7 @@ export async function installTemplateMcpServersStateless(
       if (!configured) {
         const result = await setConfiguredMcpServer({
           name: action.id,
-          server,
+          server: migrateLegacyConfiguredMcpServer(server),
           createOnly: true,
           skipLifecycleLease: true,
           assertCurrent,
