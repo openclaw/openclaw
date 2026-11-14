@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -8,12 +11,14 @@ import {
   beforeEach,
   expect,
   it,
+  onTestFinished,
   vi,
   type MockInstance,
 } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -51,6 +56,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import { runMediaConsult, writeTestImage } from "./server.talk-consult-media.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
@@ -274,6 +280,7 @@ function transcriptManager(params: Parameters<typeof embeddedAgent.runEmbeddedAg
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   });
 }
+const mediaFixture = () => ({ ...parityFixture(), transcriptManager });
 function parityFixture() {
   return {
     harness,
@@ -732,6 +739,164 @@ it.each(["before-final", "after-final"] as const)(
     }
   },
 );
+
+const mediaOnlyAck = "I've put that in the chat.";
+const mediaRefusedAck = "I couldn't put that in the chat.";
+const consultFallback = "I need a moment to verify that before answering.";
+it.each([
+  ["direct", "captioned", "COMIC_189542: Here is the comic."],
+  ["direct", "media-only", ""],
+  ["relay", "captioned", "COMIC_189542: Here is the comic."],
+  ["relay", "media-only", ""],
+] as const)("delivers %s %s consult media to Talk chat", async (route, _kind, caption) => {
+  const imagePath = await writeTestImage(resolveAgentWorkspaceDir(getRuntimeConfig(), agentId));
+  const { outcome, claimed, opened, history, images } = await runMediaConsult(mediaFixture(), {
+    route,
+    caption,
+    mediaUrl: imagePath,
+    watchedFiles: [imagePath],
+  });
+
+  expect(outcome).toEqual({ text: caption || mediaOnlyAck });
+  expect(claimed).toBe(route === "relay" ? true : undefined);
+  expect(opened.length).toBeGreaterThan(0);
+  expect(context.logGateway.warn).not.toHaveBeenCalled();
+  expect(images).toHaveLength(1);
+  expect(asOptionalRecord(images[0])?.content).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: "image",
+        url: expect.stringContaining("/api/chat/media/outgoing/"),
+      }),
+    ]),
+  );
+  expect(JSON.stringify(history)).not.toContain(imagePath);
+  if (caption) {
+    expect(matchingTexts(history, caption)).toEqual([caption]);
+  }
+  // Live clients see the consult final as it streams. Staging its attachment rewrites
+  // that row afterwards, like Gateway agent finals: either the live message already
+  // carries the image, or a later sessions.changed tells the client to refresh history.
+  const events = broadcast.mock.calls.map(([event, payload]) => ({
+    event,
+    content: JSON.stringify(asOptionalRecord(asOptionalRecord(payload)?.message)?.content ?? null),
+  }));
+  const finalIndex = events.findLastIndex(({ event }) => event === "session.message");
+  expect(finalIndex).toBeGreaterThanOrEqual(0);
+  expect(
+    events[finalIndex]?.content.includes("/api/chat/media/outgoing/") ||
+      events.slice(finalIndex + 1).some(({ event }) => event === "sessions.changed"),
+  ).toBe(true);
+});
+
+it.each([
+  ["an outside directory", "COMIC_189542: Here is the comic."],
+  ["an outside directory", ""],
+  ["a workspace symlink", ""],
+] as const)(
+  "refuses workspace-only relay consult media from %s (caption: %j) without reading it",
+  async (source, caption) => {
+    // Media follows the session's read authority: a workspace-only session cannot attach
+    // files its read tool could not open, even when the model names them directly.
+    const previousConfig = getRuntimeConfig();
+    await prepareGatewayReplyRuntimeForTest({
+      force: true,
+      config: {
+        ...previousConfig,
+        tools: { ...previousConfig.tools, fs: { workspaceOnly: true } },
+      },
+    });
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "talk-189542-outside-"));
+    onTestFinished(() => fs.rm(outside, { recursive: true, force: true }));
+    const secret = await writeTestImage(outside, `secret-${randomUUID()}.png`);
+    let mediaUrl = secret;
+    if (source === "a workspace symlink") {
+      mediaUrl = path.join(
+        resolveAgentWorkspaceDir(getRuntimeConfig(), agentId),
+        `link-${randomUUID()}.png`,
+      );
+      await fs.symlink(secret, mediaUrl);
+      onTestFinished(() => fs.rm(mediaUrl, { force: true }));
+    }
+    const { outcome, opened, history, images } = await runMediaConsult(mediaFixture(), {
+      route: "relay",
+      caption,
+      mediaUrl,
+      watchedFiles: [secret, mediaUrl],
+    });
+
+    expect(opened).toEqual([]);
+    expect(images).toEqual([]);
+    expect(JSON.stringify(history)).not.toContain(secret);
+    // The chat shows the existing attachment-failed notice; speech must not claim delivery.
+    expect(
+      history.flatMap((message) => {
+        const content = asOptionalRecord(message)?.content;
+        return Array.isArray(content) ? content : [];
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: "attachment_error",
+        attachment: expect.objectContaining({ code: "delivery-failed", kind: "image" }),
+      }),
+    );
+    expect(outcome).toEqual({ text: caption || mediaRefusedAck });
+  },
+);
+
+it.each([
+  ["relay", "Talk stops", "close"],
+  ["relay", "another owner settles the completion claim", "claim"],
+  ["direct", "the session is reset", "reset"],
+] as const)(
+  "rejects %s consult media when %s during staging, before reading it",
+  async (route, _change, revoke) => {
+    const imagePath = await writeTestImage(resolveAgentWorkspaceDir(getRuntimeConfig(), agentId));
+    const { outcome, claimed, opened, history, images } = await runMediaConsult(mediaFixture(), {
+      route,
+      caption: "",
+      mediaUrl: imagePath,
+      watchedFiles: [imagePath],
+      duringStaging: async ({ closeCall, relayRunner }) => {
+        if (revoke === "close") {
+          await closeCall();
+        } else if (revoke === "claim") {
+          expectDefined(relayRunner, "relay runner").claimFailureAppend();
+        } else {
+          await rpc("sessions.reset", { key: sessionKey, reason: "new" });
+        }
+      },
+    });
+
+    expect(opened).toEqual([]);
+    expect(images).toEqual([]);
+    // Nobody owns the answer any more: the shared no-answer fallback, never the path.
+    expect(outcome).toEqual({ text: consultFallback });
+    expect(claimed).toBe(route === "relay" ? false : undefined);
+    expect(vi.mocked(context.logGateway.warn).mock.calls).toEqual([
+      ["[talk] agent consult media could not be delivered to chat"],
+      ["[talk] agent consult produced no answer: agent returned no speakable text"],
+    ]);
+    // A revoked consult leaves the authored row as main does; no attachment is published.
+    expect(matchingTexts(history, `MEDIA:${imagePath}`)).toHaveLength(revoke === "reset" ? 0 : 1);
+  },
+);
+
+it("keeps delivering direct consult media after the call ends, like its retained answer", async () => {
+  // Accepted direct work outlives its audio transport (see "retains the direct answer");
+  // the run and session custody, not the call, authorize its attachment.
+  const imagePath = await writeTestImage(resolveAgentWorkspaceDir(getRuntimeConfig(), agentId));
+  const { outcome, images } = await runMediaConsult(mediaFixture(), {
+    route: "direct",
+    caption: "",
+    mediaUrl: imagePath,
+    watchedFiles: [imagePath],
+    duringStaging: async ({ closeCall }) => await closeCall(),
+  });
+
+  expect(outcome).toEqual({ text: mediaOnlyAck });
+  expect(images).toHaveLength(1);
+});
 
 it.each([
   [undefined, false, false, false, undefined],
