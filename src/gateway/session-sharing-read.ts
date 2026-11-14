@@ -12,6 +12,7 @@ import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   operatorSessionCap,
@@ -70,7 +71,8 @@ export function canReceiveSessionEvent(params: {
       (!operatorScopeSatisfied("operator.sessions.read", client.connect.scopes ?? []) ||
         operatorActor?.kind === "system" ||
         operatorScopeSatisfied("operator.read", client.connect.scopes ?? [])) &&
-      (!policyConfig.gateway?.roles || isSessionSharingOwnerEquivalent(client, operatorActor)) &&
+      (!isNamedOperatorRoleEnforcementEnabled(policyConfig) ||
+        isSessionSharingOwnerEquivalent(client, operatorActor)) &&
       event !== "session.suggestion" &&
       event !== "session.typing"
     );
@@ -379,7 +381,9 @@ export function prepareProjectedSessionSharing(params: {
             roleProfile?.githubLogin ?? null,
           );
   const ownerEquivalent =
-    !identity && Boolean(cfg.gateway?.roles) && isSessionSharingOwnerEquivalent(client, actor);
+    !identity &&
+    isNamedOperatorRoleEnforcementEnabled(cfg) &&
+    isSessionSharingOwnerEquivalent(client, actor);
   let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
@@ -411,7 +415,7 @@ export function prepareProjectedSessionSharing(params: {
         facts[8] === Boolean(client?.authenticatedGitHubIdentitySync) &&
         facts[9] === profile &&
         facts[10] === policy &&
-        facts[11] === Boolean(cfg.gateway?.roles) &&
+        facts[11] === isNamedOperatorRoleEnforcementEnabled(cfg) &&
         facts[12] === (scopes !== undefined) &&
         facts[13] === ownerEquivalent &&
         facts.length === 14 + (scopes?.length ?? 0)
@@ -435,7 +439,7 @@ export function prepareProjectedSessionSharing(params: {
         // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
         profile && [...profile.aliases].sort(),
         policy,
-        Boolean(cfg.gateway?.roles),
+        isNamedOperatorRoleEnforcementEnabled(cfg),
         // Equal effective scopes can retain different source sharing authority.
         ownerEquivalent,
       ]);
@@ -451,7 +455,7 @@ export function prepareProjectedSessionSharing(params: {
         Boolean(client?.authenticatedGitHubIdentitySync),
         profile,
         policy,
-        Boolean(cfg.gateway?.roles),
+        isNamedOperatorRoleEnforcementEnabled(cfg),
         scopes !== undefined,
         ownerEquivalent,
       ];
@@ -484,7 +488,7 @@ export function createSessionListEntryFilter(
     return undefined;
   }
   if (!identity) {
-    return params.cfg?.gateway?.roles &&
+    return isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
       !isSessionSharingOwnerEquivalent(params.client, operatorActor)
       ? () => false
       : undefined;

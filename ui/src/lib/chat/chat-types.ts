@@ -536,9 +536,9 @@ export type ToolCard = {
   previewRevision?: string;
   /** Tab actions can identify a route without a previewable page URL. */
   browserTab?: BrowserTabTarget;
-  preview?:
-    | (NonNullable<ReturnType<typeof extractCanvasFromText>> & { surface: "assistant_message" })
-    | (BrowserTabTarget & { kind: "browser-tab"; url: string; title?: string });
+  preview?: NonNullable<ReturnType<typeof extractCanvasFromText>> & {
+    surface: "assistant_message";
+  };
 };
 
 export type ToolCardOutcome =

@@ -301,8 +301,14 @@ export async function updateMigrateCommand(
       receipt.deferredInspectionCheckIds = capture.deferredInspectionCheckIds;
       receipt.warnings = capture.warnings;
     });
-    const migrated = await measure("schema-verification", () => prepareDoctorDatabasePreflight());
-    if (hasSchemaRefusal(migrated) || migrated.pendingMigrations?.length) {
+    const migrated = await measure("schema-verification", () =>
+      prepareDoctorDatabasePreflight({ verifyCurrentSchemaShape: true }),
+    );
+    if (
+      hasSchemaRefusal(migrated) ||
+      migrated.pendingMigrations?.length ||
+      migrated.agentRefusals?.length
+    ) {
       throw new Error(
         "Doctor did not complete the candidate database migrations; the recovery backup was retained.",
       );

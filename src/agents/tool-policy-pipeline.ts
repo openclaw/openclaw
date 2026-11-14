@@ -6,7 +6,7 @@ import { rememberBoundedKey } from "../infra/dedupe.js";
  */
 import { isFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isKnownCoreToolId, isRunGrantedCoreToolId } from "./core-tool-facts.js";
+import { CORE_TOOL_GROUPS, isKnownCoreToolId, isRunGrantedCoreToolId } from "./core-tool-facts.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
@@ -35,6 +35,12 @@ export type ConfiguredToolPolicySources = Partial<
     ToolPolicySource
   >
 >;
+
+// Built-in groups stay core entries even when the inspected subset lacks every
+// member, such as the bundle-tool pass that runs after core tools are validated.
+function isKnownCoreToolPolicyEntry(entry: string): boolean {
+  return isKnownCoreToolId(entry) || Object.hasOwn(CORE_TOOL_GROUPS, entry);
+}
 
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
@@ -163,13 +169,14 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           ),
         );
         const gatedCoreEntries = resolved.unknownAllowlist.filter(
-          (entry) => isKnownCoreToolId(entry) && !isRunGrantedCoreToolId(entry),
+          (entry) => isKnownCoreToolPolicyEntry(entry) && !isRunGrantedCoreToolId(entry),
         );
         const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
           ? []
           : gatedCoreEntries.filter((entry) => !unavailableCoreWarningAllowlist.has(entry));
         const otherEntries = resolved.unknownAllowlist.filter(
-          (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
+          (entry) =>
+            !isKnownCoreToolPolicyEntry(entry) && !unavailableCoreWarningAllowlist.has(entry),
         );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (warningEntries.length > 0) {

@@ -264,10 +264,10 @@ function ProviderAccess(props: ModelProvidersViewProps) {
   // The last refresh time lives in the refresh tooltip instead of the header row.
   const refreshTooltip = () =>
     props.updatedAt && !props.refreshing
-      ? `${refreshLabel()} · ${t("modelProviders.updated", {
+      ? t("modelProviders.updated", {
           time: formatTimeMs(props.updatedAt, { hour: "numeric", minute: "2-digit" }),
-        })}`
-      : refreshLabel();
+        })
+      : undefined;
   // Setup with nothing connected has no list to filter.
   const nothingToSearch = () =>
     needsModelSetup(props) && props.cards.length === 0 && !props.error && !search();

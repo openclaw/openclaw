@@ -1026,7 +1026,7 @@ describe("scheduled authenticated operator source", () => {
       } satisfies GatewayOperatorRoleDefinition;
       const cfg = {
         agents: { defaults: { model: "fixture/a" } },
-        gateway: { roles: { definitions: { operator } } },
+        gateway: { roles: { default: "operator", definitions: { operator } } },
       } satisfies OpenClawConfig;
       const fixture = await recoveryFixture(state.stateDir, profile.id, {
         config: cfg,

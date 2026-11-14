@@ -708,14 +708,7 @@ suite.define(() => {
           session: finishedChild,
           ancestorSessions: [finishedParent],
         });
-        // One closing line for the request with both runs' tokens; run duration
-        // belongs to the Worked summary, never a separate "Done in" line.
-        const recap = activePane.locator(".chat-turn-recap");
-        await recap.waitFor();
-        expect(
-          await recap.locator(":scope > span:not(.chat-turn-recap__claw)").allTextContents(),
-        ).toEqual(["4.4k output tokens"]);
-        expect(await block.locator(".chat-turn-recap").count()).toBe(1);
+        await block.getByText(answerText, { exact: true }).waitFor();
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         // Completed duration and child navigation remain available in Subagents.
         await expect

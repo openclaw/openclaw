@@ -699,7 +699,8 @@ export async function runGitCandidatePreflight(params: {
           });
           return false;
         });
-      if (tested?.status !== "ok" || !params.retainCleanup?.(cleanup)) {
+      // Failed candidates still need their private Git repository until cleanup settles.
+      if (!params.retainCleanup?.(cleanup)) {
         await cleanup();
       }
     }

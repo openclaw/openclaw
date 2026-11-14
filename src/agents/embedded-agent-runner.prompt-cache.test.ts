@@ -22,7 +22,6 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../gateway/message-action-turn-capability.js";
-import { RUNTIME_CONTEXT_HEADER } from "../llm/types.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveActiveReplyOperationForSessionId } from "../sessions/session-controller.queries.js";
@@ -250,15 +249,8 @@ it.for(cases)(
               }
               const prefix = snapshotProviderPrefix(api, effectivePayload);
               if (route === "messages") {
-                const runtimeIndex = prefix.history.findIndex((item) =>
-                  item.includes(RUNTIME_CONTEXT_HEADER),
-                );
+                // Runtime-context carriers stay in history, so they may carry a checkpoint.
                 expect(prefix.breakpoints.length).toBeGreaterThan(0);
-                expect(
-                  prefix.breakpoints.some(
-                    (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
-                  ),
-                ).toBe(false);
               }
               expect(prefix.tools, "advertised tool").toContain('"name":"cache_probe"');
               requests.push({ turn, payload, prefix, userEnvelopes });

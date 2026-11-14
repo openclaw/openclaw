@@ -116,7 +116,7 @@ export function renderChatModelAccountControl(params: {
   const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
   const selectedLabel = selectedProfile?.displayName || selection.label;
   const selectedIdentity = [
-    ...new Set([selectedProfile?.email, selectedLabel].filter(Boolean)),
+    ...new Set([selectedLabel, selectedProfile?.email].filter(Boolean)),
   ].join(" · ");
   const description = (account: UserModelAccount | undefined) =>
     email(account?.authProfileId) ??

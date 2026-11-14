@@ -24,8 +24,10 @@ Enable **Templates** in **Settings → Labs** before adding one. On a headless i
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
 Authoring and inspecting local Template packages do not require the Labs toggle.
 
-`templates add` accepts a ClawHub package name, a canonical local package directory,
-or `CLAW.md` with YAML frontmatter. Other source-reading commands remain local-only.
+`templates add` accepts a ClawHub Template reference (`@publisher/slug`), a canonical
+local package directory, or `CLAW.md` with YAML frontmatter. The reference uses the
+publisher's ClawHub handle, as skill references do, including for a Template whose
+package name is the unscoped slug. Other source-reading commands remain local-only.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
 path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
