@@ -156,7 +156,9 @@ beforeEach(async ({ task }) => {
     }
     return lease;
   });
-  vi.spyOn(PluginInvocationScope.prototype, "release").mockImplementation(function () {
+  vi.spyOn(PluginInvocationScope.prototype, "release").mockImplementation(function (
+    this: PluginInvocationScope,
+  ) {
     release.call(this);
     releasedScopes.add(this);
     if (this === active?.producerScope) {
