@@ -31,6 +31,7 @@ import {
   readCodexCliAuthFileApiKey,
   readFirstNonEmptyEnv,
 } from "./auth-cache-key.js";
+import { unresolvedCodexOAuthError } from "./auth-oauth-unresolved.js";
 import {
   CodexAppServerAuthProfileUnavailableError,
   formatCodexAuthProfileUnavailableMessage,
@@ -761,9 +762,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     !isCodexAppServerAuthProvider(resolved.credential.provider) ||
     !resolved.apiKey.trim()
   ) {
-    throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" could not resolve usable OAuth credentials from its OpenClaw credential store. Run "openclaw doctor" to inspect credential ownership, or select an existing OpenAI profile.`,
-    );
+    throw unresolvedCodexOAuthError(profileId, [currentCredential, store.profiles[profileId]]);
   }
   const candidate = { ...resolved.credential, access: resolved.apiKey };
   if (isDeepStrictEqual(params.store.profiles[profileId], credential)) {

@@ -33,6 +33,7 @@ import {
   getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
+  recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import * as updateRunWrites from "../infra/update-run-write.async.js";
@@ -766,6 +767,36 @@ it("retires a failed update's own capture only when it never activated", async (
     expect.objectContaining({ step: "recovery-artifact-cleanup", status: "completed" }),
   );
 });
+
+it.each([true, false])(
+  "retires an update's own copies once its Gateway is verified healthy (verified: %s)",
+  async (verified) => {
+    const runId = start(now - 1_000);
+    const directory = capture(runId);
+    // Activation's Doctor migration completes inside the run.
+    const { backup } = await migrationOriginal();
+    if (verified) {
+      recordUpdateRunVerification(
+        runId,
+        {
+          serviceRunning: true,
+          versionMatch: true,
+          settled: true,
+          readyz: true,
+          channelsReady: true,
+          coreReady: true,
+          pluginErrors: [],
+        },
+        { env },
+      );
+    }
+    const result = await complete(runId, now + 60_000);
+    expect([directory, backup].map(fs.existsSync)).toEqual([!verified, !verified]);
+    const cleanup = result.steps.at(-1);
+    expect(cleanup).toMatchObject({ name: "recovery-artifact-cleanup", exitCode: 0 });
+    expect(cleanup?.advisory).toBeUndefined();
+  },
+);
 
 it("keeps the triggering update's capture when the wall clock moves backward", async () => {
   const { runId, directory: current } = capturedRun(now + 60_000);

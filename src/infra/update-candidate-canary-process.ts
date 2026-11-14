@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcess } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
@@ -16,6 +17,18 @@ import { warnOnUpdateCleanupFailure } from "./update-maintenance.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "./update-preflight-details.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
+/** Lets a rehearsal's owner learn which process groups its checks started and closed. */
+export type CanaryProcessObserver = {
+  started: (pid: number) => void;
+  closed: (pid: number) => void;
+};
+const canaryProcessObserver = new AsyncLocalStorage<CanaryProcessObserver>();
+
+/** Every check launched inside `run` reports its process to `observer`. */
+export function withCanaryProcessObserver<T>(observer: CanaryProcessObserver, run: () => T): T {
+  return canaryProcessObserver.run(observer, run);
+}
+
 export function launchCanary(params: {
   target: UpdateCanaryTarget;
   args: string[];
@@ -29,6 +42,8 @@ export function launchCanary(params: {
   /** Receipt lines reach onLine only; they never become logs or failure reasons. */
   hidesLine?: (line: string) => boolean;
   onStdout?: (stdout: string) => void;
+  /** Open a pipe to the child's stdin; the caller must end it. */
+  stdin?: "pipe";
 }) {
   const { target, args, env, capture } = params;
   params.assertCurrent?.();
@@ -42,13 +57,28 @@ export function launchCanary(params: {
           entryPath: target.entryPath,
           args,
         });
-  const child = spawn(invocation.command, invocation.args, {
+  const spawnOptions = {
     cwd: params.root,
     env,
     detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
-  });
+  };
+  const child =
+    params.stdin === "pipe"
+      ? spawn(invocation.command, invocation.args, {
+          ...spawnOptions,
+          stdio: ["pipe", "pipe", "pipe"],
+        })
+      : spawn(invocation.command, invocation.args, {
+          ...spawnOptions,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+  const observer = canaryProcessObserver.getStore();
+  const observedPid = child.pid;
+  if (observer && observedPid) {
+    observer.started(observedPid);
+    child.once("close", () => observer.closed(observedPid));
+  }
   const failureFacts: UpdateFailureFact[] = [];
   let stdout = "";
   let lastStderrLine: string | undefined;
@@ -138,6 +168,10 @@ export function launchCanary(params: {
         captureLine(line);
       }
       if (pending.length > 64 * 1024) {
+        // A dropped protocol line still reaches its owner, which cannot read it as an event.
+        if (params.hidesLine?.(pending)) {
+          params.onLine?.(pending);
+        }
         // Discard an oversized unterminated line whole, never through a secret.
         pending = "";
         droppingLine = true;

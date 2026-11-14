@@ -47,6 +47,7 @@ import {
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
+import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import {
   formatSandboxToolPolicyBlockedMessage,
   type resolveSandboxRuntimeStatus,
@@ -116,6 +117,8 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),
     code: signal.code,
+    rateLimitResetAt:
+      signal.retryAfterMs === undefined ? undefined : Date.now() + signal.retryAfterMs,
   };
 }
 export function formatAssistantErrorText(
@@ -179,7 +182,13 @@ export function formatAssistantErrorText(
   }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"
-      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
+      ? renderRateLimitOrOverloadedCopy({
+          ...classifiedFacts,
+          reason: failoverReason,
+          raw,
+          locale: opts?.cfg?.ui?.prefs?.locale,
+          timeZone: opts?.cfg?.agents?.defaults?.userTimezone,
+        })
       : undefined;
   if (transientCopy) {
     return transientCopy;
@@ -332,6 +341,9 @@ export function formatUserFacingAssistantErrorText(
     return `⚠️ ${approvalMessage}`;
   }
   const facts = classifyAssistantErrorFacts(msg, opts);
+  if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
+    return MODEL_REQUEST_POLICY_DENIED_TEXT;
+  }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const schemaFriendlyError =

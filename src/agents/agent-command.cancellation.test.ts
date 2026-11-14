@@ -8,8 +8,12 @@ import {
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { getCurrentSessionControllerOwner as currentOwner } from "../sessions/session-controller.context.js";
+import * as controllerDiagnostics from "../sessions/session-controller.diagnostics.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   agentCommand,
+  agentCommandFromGatewayIngress,
+  GATEWAY_INGRESS_ARGS,
   compactionTestRuntime as runtime,
   compactionTestState as state,
   makeCompactionResult,
@@ -79,6 +83,65 @@ it("lets the runner inherit a turn claimed with a mixed-case session key", async
 
   expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
 });
+
+it.each(["revoked while queued", "revoked after starting"] as const)(
+  "checks ingress authority at turn admission (%s)",
+  async (scenario) => {
+    const queued = createDeferred();
+    const revoked = new Error("Node pairing removed");
+    let sourceCurrent = true;
+    const assertTurnAdmissionCurrent = vi.fn(() => {
+      if (!sourceCurrent) {
+        throw revoked;
+      }
+    });
+    const claimLog = vi.spyOn(controllerDiagnostics, "logSessionControllerSourceClaim");
+    claimLog.mockImplementation((input, status) => {
+      if (status === "waiting" && input.mailbox.key === identity.sessionKey) {
+        queued.resolve();
+      }
+    });
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      sourceCurrent = false;
+      return result(params.sessionId);
+    });
+    let command: Promise<unknown> | undefined;
+    try {
+      await withCommandTarget(async () => {
+        const opts = {
+          ...commandOptions,
+          allowModelOverride: false,
+          assertTurnAdmissionCurrent,
+        };
+        command = runInDetachedAsyncContext(() =>
+          agentCommandFromGatewayIngress(opts, ...GATEWAY_INGRESS_ARGS),
+        );
+        // Observe the real mailbox waiting before withdrawing source authority.
+        void command.catch(() => {});
+        await awaitGateBeforeSettlement(queued.promise, command, "Ingress did not queue");
+        expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+        expect(assertTurnAdmissionCurrent).not.toHaveBeenCalled();
+        if (scenario === "revoked while queued") {
+          sourceCurrent = false;
+        }
+      });
+      if (scenario === "revoked while queued") {
+        await expect(command).rejects.toBe(revoked);
+        expect(state.runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
+        expect(state.runSessionPreflightCompactionMock).not.toHaveBeenCalled();
+        expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+      } else {
+        await expect(command).resolves.toBeDefined();
+        expect(state.runSessionPreflightCompactionMock).toHaveBeenCalledOnce();
+        expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+      }
+      expect(assertTurnAdmissionCurrent).toHaveBeenCalledOnce();
+    } finally {
+      claimLog.mockRestore();
+      await command?.catch(() => {});
+    }
+  },
+);
 
 it("cancels a nested command without aborting its outer turn", async () => {
   const caller = new AbortController();

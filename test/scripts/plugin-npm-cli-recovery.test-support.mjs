@@ -9,7 +9,6 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   RECEIPT_RECOVERY_SCHEMA,
-  RECEIPT_RECOVERY_WORKFLOW,
   receiptRecoveryChildInputs,
   receiptRecoverySourceRequest,
 } from "../../scripts/full-release-receipt-recovery.mjs";
@@ -19,6 +18,7 @@ import {
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
+import { RECEIPT_RECOVERY_WORKFLOW } from "../../scripts/lib/release-evidence-identity.mjs";
 import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
@@ -386,7 +386,7 @@ export function addRecoveryGraph({
     const normalizedInputs = Object.fromEntries(
       Object.entries(inputs)
         .filter(([key, value]) => key !== "dispatch_id" && value !== "")
-        .map(([key, value]) => [key, String(value)]),
+        .map(([key, value]) => [key, value]),
     );
     const dispatchId = "full-release-validation-" + f.runId + "-1" + spec.suffix;
     const childRun = run(id, ".github/workflows/" + spec.workflow, {
@@ -403,7 +403,7 @@ export function addRecoveryGraph({
       "Checkout trusted child evidence tooling",
       "Seal exact child attempt evidence",
       "Upload sealed child evidence",
-    ].map((name, number) => ({ name, number: number + 1, ...complete }));
+    ].map((name, number) => Object.assign({ name, number: number + 1 }, complete));
     childJobs.push(publisher);
     const composite = composeReleaseChildAttemptEvidence({
       attempts: [{ runAttempt: 1, jobs: childJobs }],
@@ -609,13 +609,17 @@ export function addRecoveryGraph({
       "Upload fresh publication observations",
       "Seal receipt-backed aggregate",
       "Upload receipt-backed aggregate",
-    ].map((name, index) => ({
-      name,
-      number: index + 1,
-      ...complete,
-      started_at: time,
-      completed_at: time,
-    })),
+    ].map((name, index) =>
+      Object.assign(
+        {
+          name,
+          number: index + 1,
+          started_at: time,
+          completed_at: time,
+        },
+        complete,
+      ),
+    ),
   };
   const aggregateRun = run(9900, RECEIPT_RECOVERY_WORKFLOW, {
     name: "Full Release Receipt Recovery",
@@ -649,7 +653,7 @@ export function addRecoveryGraph({
   );
   // The plugin producer current endpoint is distinct from the live publisher.
   recordRun(run(producer.runId, producer.workflowPath), []);
-  for (const id of [6001, 6002, producer.runId, 9900]) {
+  for (const id of [f.runId, 6001, 6002, producer.runId, 9900]) {
     list(id);
   }
   return {

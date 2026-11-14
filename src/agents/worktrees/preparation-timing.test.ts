@@ -111,11 +111,15 @@ it("reports uncovered time without double-counting overlapping phases", async ()
     finishBase();
     clock = 50;
     finishWait();
+    const finishPatch = startWorktreePreparationPhase("reuse.patch");
     clock = 60;
+    finishPatch();
   });
   expect(log.mock.calls[0]?.[1]).toMatchObject({
     durationMs: 60,
-    unattributedMs: 20,
-    phaseDurationsMs: { base: 30, baseWait: 30 },
+    unattributedMs: 10,
+    reuseDominantPhase: "reuse.patch",
+    phaseDurationsMs: { base: 30, baseWait: 30, "reuse.patch": 10 },
   });
+  expect(log.mock.calls[0]?.[1].consoleMessage).toContain("reuseDominantPhase=reuse.patch");
 });

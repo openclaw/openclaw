@@ -119,8 +119,10 @@ Interactive setup can additionally prompt for a preferred load context length an
 the discovered models it saves to config, capped by each model's advertised maximum. The synthesized
 output budget is sized from that final load context, rather than the context that happened to be
 loaded during discovery: a 16K preference gets an 8K output budget, and a 64K preference gets 32K.
-Leaving the preference blank keeps the discovered context and output budget. Existing saved
-configurations are not automatically rewritten.
+Leaving the preference blank keeps the discovered context. Setup preserves existing per-model
+output limits; otherwise, a configured provider `maxTokens` default takes precedence over the
+synthesized budget and is capped to the final context. Without either override, setup keeps the
+context-sized output default. Existing saved configurations are not automatically rewritten.
 
 ## Configuration
 

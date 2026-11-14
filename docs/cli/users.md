@@ -31,6 +31,10 @@ openclaw users list --json
 Requires `operator.read`. Human output lists each profile's ID, display name, and
 email aliases. Use the durable IDs when linking or merging profiles.
 
+With `--json`, Ctrl-C or SIGTERM stops a pending list without printing a late
+result; the CLI exits with status 130 or 143. Without `--json`, Ctrl-C cancels the
+progress spinner and the CLI exits with status 0.
+
 ## Link an email alias
 
 ```bash

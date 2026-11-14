@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SandboxConfig } from "../../agents/sandbox/types.js";
-import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/local-workspace-quiescence.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   assertLocalWorkspaceDirectory,
@@ -17,6 +17,7 @@ import {
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
   createLocalWorkspaceCheckpointRejection,
+  createLocalWorkspaceCheckpointAcceptance,
   type LocalWorkspaceSyncOptions,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
@@ -36,7 +37,6 @@ import type {
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceCapture, LocalWorkspaceOwner } from "./local-workspace-types.js";
-import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,
@@ -46,7 +46,6 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
   parseWorkerWorkspaceReconciliationPlan,
-  serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-manifest.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import {
@@ -68,6 +67,12 @@ export function projectionOperations(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   initialRow: LocalWorkspaceProjection | undefined,
+  quiescence?: {
+    pause: () => Promise<void>;
+    resume: () => Promise<void>;
+    capture: NonNullable<LocalWorkspaceSyncOptions["capture"]>;
+    markPhase: (phase: LocalWorkspacePausePhase) => void;
+  },
 ) {
   const signal = store.signal;
   const projectionPath = localWorkspaceProjectionPath(owner);
@@ -215,6 +220,10 @@ export function projectionOperations(
     target: Direction,
     source?: LocalWorkspaceCapture,
   ): Promise<LocalWorkspaceManifestCheckpoint> => {
+    if (target === "projection") {
+      await quiescence?.resume();
+    }
+    quiescence?.markPhase("scan");
     await assertLocalWorkspaceDirectory(source?.root ?? sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",
@@ -240,6 +249,8 @@ export function projectionOperations(
     if (!selected.journal_json) {
       return;
     }
+    await quiescence?.pause();
+    quiescence?.markPhase("recovery");
     if (!selected.journal_pack || !pendingDirection(selected.pending_target)) {
       throw new Error("Local workspace recovery metadata is incomplete");
     }
@@ -262,6 +273,7 @@ export function projectionOperations(
     if (!selected.pending_ref || selected.pending_target) {
       return;
     }
+    quiescence?.markPhase("cleanup");
     await deleteStagedWorkerWorkspaceResult({
       root: owner.worktree.repoRoot,
       stagedResultRef: selected.pending_ref,
@@ -352,6 +364,7 @@ export function projectionOperations(
               assertCurrent,
             })
           : baseline;
+      quiescence?.markPhase("staging");
       await stageLocalWorkspaceCheckpoint(
         {
           root: owner.worktree.path,
@@ -376,8 +389,14 @@ export function projectionOperations(
     // The Git result now owns the command's bytes. Canonical-only reconciliation
     // can run beside later guest writes; command completion still awaits acceptance.
     await afterCapture?.();
+    // A base refresh owns both namespaces until its two-sided transfer settles.
+    // Ordinary results already own immutable Git bytes, so materialization and
+    // patch generation need no guest freeze. Imports re-fence before confirmation.
+    if (!refresh) {
+      await quiescence?.resume();
+    }
+    quiescence?.markPhase("materialization");
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
-    let conflictPaths: string[] | undefined;
     await withStagedWorkerWorkspaceManifest(
       {
         root: owner.worktree.path,
@@ -408,62 +427,24 @@ export function projectionOperations(
           reconciliation: snapshot.reconciliation,
           current: snapshot.current,
           assertCurrent,
-          journal: {
-            load: async () => undefined,
-            begin: async (journal) => {
-              await update({
-                journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
-                journal_pack: journal.basePack,
-              });
-            },
-            abort: async () => {
-              await update({ journal_json: null, journal_pack: null });
-            },
-            commit: async () => {
-              if (!conflictPaths) {
-                throw new Error("Local workspace acceptance is missing");
-              }
-              // A conflicting result remains a durable pending receipt. No guest
-              // bytes are discarded or silently replaced by the canonical side.
-              try {
-                if (conflictPaths.length) {
-                  await update({ journal_json: null, journal_pack: null });
-                } else if (refresh && target === "canonical") {
-                  await update({
-                    pending_target: "projection",
-                    journal_json: null,
-                    journal_pack: null,
-                  });
-                } else {
-                  const patch = {
-                    ...(refresh ? { base_commit: snapshot.current.baseCommit! } : {}),
-                    pending_target: null,
-                    journal_json: null,
-                    journal_pack: null,
-                  };
-                  if (checkpoint) {
-                    await update(patch, checkpoint);
-                  } else {
-                    await replaceBaseline(
-                      snapshot.currentManifestRaw,
-                      snapshot.currentManifestRef,
-                      patch,
-                    );
-                  }
-                }
-              } catch (error) {
-                throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
-              }
-            },
-          },
-          acceptance: {
-            kind: "reconcile",
-            publish: async (value) => {
-              current();
-              conflictPaths = value.conflictPaths;
-            },
-          },
+          freezeTarget: target === "projection" ? quiescence?.pause : undefined,
+          onPhase: quiescence?.markPhase,
+          ...createLocalWorkspaceCheckpointAcceptance({
+            current,
+            update,
+            replaceBaseline,
+            checkpoint,
+            target,
+            refreshBaseCommit: refresh ? snapshot.current.baseCommit! : undefined,
+            rawManifest: snapshot.currentManifestRaw,
+            manifestRef: snapshot.currentManifestRef,
+            beforeCommit: () => quiescence?.markPhase("acceptance"),
+          }),
         });
+        if (!refresh) {
+          await quiescence?.resume();
+        }
+        quiescence?.markPhase("cleanup");
       },
     );
     if (refresh && target === "canonical" && current().pending_target === "projection") {
@@ -477,24 +458,37 @@ export function projectionOperations(
       await cleanupAccepted();
     }
   };
-  const synchronize = (target: Direction, options?: LocalWorkspaceSyncOptions) =>
-    rejection.synchronize({ target, ...options, settle, scan });
-  const prepare = async (dependencies?: {
-    sandbox: SandboxConfig;
-    allocation: WorktreeAllocationGuard;
-  }) => {
+  const synchronize = async (target: Direction, options?: LocalWorkspaceSyncOptions) => {
+    await rejection.synchronize({
+      target,
+      capture: target === "canonical" ? quiescence?.capture : undefined,
+      ...options,
+      settle,
+      scan,
+    });
+    // Public operation callbacks retain their frozen-workspace contract.
+    await quiescence?.pause();
+  };
+  const prepare = async (
+    dependencies?: Parameters<typeof initializeLocalWorkspaceProjection>[0]["dependencies"],
+    operation: "prepare" | "reuse" = "prepare",
+  ) => {
+    const phase = `attempt.setup.sandbox.workspace_selection.${operation}.reconcile`;
+    using phases = observeDiagnosticsTimelinePhases(`${phase}.head`);
     if (!row) {
       const baseCommit = await requireGit(
         owner.worktree.path,
         ["rev-parse", "--verify", "HEAD^{commit}"],
         { signal, beforeRun: owner.assertCurrent },
       );
+      phases.mark(`${phase}.sources`);
       const sourcePaths = await admitLocalWorkspaceSourcePaths({
         root: owner.worktree.path,
         signal,
         assertCurrent: owner.assertCurrent,
       });
       owner.assertCurrent();
+      phases.mark(`${phase}.reservation`);
       row = await store.create(
         {
           worktree_id: owner.worktree.id,
@@ -524,6 +518,7 @@ export function projectionOperations(
     }
     const selected = current();
     if (!selected.baseline_ref) {
+      phases.mark(`${phase}.initialization`);
       const initial = await initializeLocalWorkspaceProjection({
         owner,
         projectionPath: selected.projection_path,
@@ -533,9 +528,12 @@ export function projectionOperations(
         buildCacheInputs,
         dependencies,
       });
+      phases.mark(`${phase}.baseline`);
       await replaceBaseline(initial.rawManifest, initial.manifestRef);
     }
+    phases.mark(`${phase}.checkpoint`);
     return await prepareLocalWorkspaceCheckpoint({
+      operation,
       baselineRef: selected.baseline_ref,
       synchronize,
       current,
@@ -550,9 +548,12 @@ export function projectionOperations(
     buildCacheInputs,
     baselineDocument,
     prepare,
-    reuse: async () => (row?.baseline_ref ? await prepare() : undefined),
+    reuse: async () => (row?.baseline_ref ? await prepare(undefined, "reuse") : undefined),
     synchronize,
-    settle,
+    settle: async () => {
+      await settle();
+      await quiescence?.pause();
+    },
     recover,
     applyBaseRefresh: async (stagedResultRef: string) => {
       if (!isLocalWorkspaceBaseRefreshRef(stagedResultRef)) {

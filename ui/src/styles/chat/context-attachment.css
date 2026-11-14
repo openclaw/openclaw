@@ -1,6 +1,6 @@
 .chat-context-attachment {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   margin: 6px 0 10px;
   max-width: 100%;
   min-width: 0;
@@ -44,7 +44,7 @@
   padding: 12px;
 }
 .chat-context-attachment__body p {
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   margin: 0 0 10px;
 }
 .chat-context-attachment__body p:last-child {
@@ -71,7 +71,7 @@
 }
 .chat-context-attachment__technical pre {
   font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }

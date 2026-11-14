@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,6 +14,7 @@ import {
   authProfileFileChanges,
 } from "../agents/auth-profiles/file-state.js";
 import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
@@ -22,10 +24,13 @@ import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import * as directoryWatch from "./directory-watch-host.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
@@ -40,7 +45,8 @@ import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(actual.spawn) };
+  const mocked = { ...actual, spawn: vi.fn(actual.spawn) };
+  return { ...mocked, default: mocked };
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -54,11 +60,10 @@ const skipBroker = process.platform === "win32";
 it.skipIf(skipBroker)(
   "reuses the Gateway reader through detached observations and retained-state restart",
   async () => {
-    // The macOS directory watch host bypasses fs.watch; keep the unavailable watcher in-process.
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(fs, "watch").mockImplementation(() => {
-      throw new Error("synthetic unavailable watcher");
-    });
+    // Hold native notifications so only explicit and recovery reads drive this transport proof.
+    vi.spyOn(directoryWatch, "watchDirectory").mockImplementation(() =>
+      Object.assign(new EventEmitter(), { close() {} }),
+    );
     const { source, store } = createAuthDatabase();
     const writer = openNodeSqliteDatabase(source);
     admitSqliteSchema(writer);
@@ -147,10 +152,9 @@ it.skipIf(skipBroker)(
 it.skipIf(skipBroker)(
   "keeps late-discovered auth directories on the bound Gateway readers",
   async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(fs, "watch").mockImplementation(() => {
-      throw new Error("synthetic unavailable watcher");
-    });
+    vi.spyOn(directoryWatch, "watchDirectory").mockImplementation(() =>
+      Object.assign(new EventEmitter(), { close() {} }),
+    );
     const broker = createSpawnBrokerHost();
     const gatewayReaders = createSqliteReadOnlyWorkerScope();
     const callerReaders = createSqliteReadOnlyWorkerScope();
@@ -273,6 +277,88 @@ function read(
     signal,
   });
 }
+
+it.each(["delete", "drained-wal", "journal"])(
+  "reads custodied auth rows without bypassing journal recovery (%s)",
+  async (kind) => {
+    const { source, rows } = createAuthDatabase();
+    const journal = kind === "journal";
+    if (kind === "drained-wal") {
+      const database = openNodeSqliteDatabase(source);
+      database.exec(
+        `PRAGMA journal_mode=WAL; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION}; PRAGMA wal_checkpoint(TRUNCATE)`,
+      );
+      const sidecars = ["-wal", "-shm"].map((suffix) => ({
+        file: source + suffix,
+        bytes: fs.readFileSync(source + suffix),
+      }));
+      database.close();
+      for (const { file, bytes } of sidecars) {
+        fs.writeFileSync(file, bytes);
+      }
+    }
+    if (journal) {
+      fs.writeFileSync(`${source}-journal`, Buffer.alloc(512));
+    }
+    const family = ["", "-wal", "-shm", "-journal"].map((suffix) => ({
+      file: source + suffix,
+      bytes: fs.existsSync(source + suffix) ? fs.readFileSync(source + suffix) : undefined,
+      mtimeNs: fs.existsSync(source + suffix)
+        ? fs.statSync(source + suffix, { bigint: true }).mtimeNs
+        : undefined,
+    }));
+    const requests: unknown[] = [];
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    vi.mocked(spawn).mockImplementation((...args) => {
+      const child = actual.spawn(...args);
+      const send = child.send.bind(child);
+      vi.spyOn(child, "send").mockImplementation((...message) => {
+        requests.push(message[0]);
+        return send(...message);
+      });
+      return child;
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.dirname(source) };
+    await withDoctorSqliteMaintenanceLock({
+      env,
+      operation: "synthetic stopped auth read",
+      run: async (authority) => {
+        const scope = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: () => authority.assertCurrent(),
+          assertDatabaseAccess: () => authority.assertCurrent(),
+        });
+        try {
+          expect(
+            await scope.run(() =>
+              withArtifactPreservingStateReads(() => read(source, "canonical", undefined, env), {
+                agentDatabases: true,
+              }),
+            ),
+          ).toEqual({ ...rows, cacheable: false });
+        } finally {
+          await scope.close();
+        }
+      },
+    });
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          artifactPreserving: true,
+          immutable: journal ? undefined : true,
+          retainReader: false,
+        }),
+      }),
+    );
+    for (const { file, bytes, mtimeNs } of family) {
+      expect(fs.existsSync(file)).toBe(bytes !== undefined);
+      if (bytes) {
+        expect(fs.readFileSync(file)).toEqual(bytes);
+        expect(fs.statSync(file, { bigint: true }).mtimeNs).toBe(mtimeNs);
+      }
+    }
+  },
+);
 
 it("rejects stale auth identity before transferring credentials from a replaced database", async () => {
   const { source } = createAuthDatabase("original");

@@ -626,6 +626,57 @@ struct ChatStreamReplayTests {
         #expect(vm.liveText(vm.streamingAssistantText) == nil)
     }
 
+    @Test @MainActor func `a durable reply retires the live bubble while pacing holds its last words`() {
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer {
+            vm.detachTransport()
+            transport.finish()
+        }
+        let user = replayDurableMessage(role: "USER", text: "Again", timestamp: 100)
+        vm.updateStreamingAssistantText("The layout")
+        vm.updateStreamingAssistantText("The layout is ready.")
+        #expect(vm.liveAssistantTextShape == "The layout")
+
+        // The saved reply and the live bubble must never be on screen together.
+        let reply = replayDurableMessage(role: "ASSISTANT", text: "The layout is ready.", timestamp: 200)
+        vm.replaceMessages([user, reply])
+        #expect(vm.liveAssistantTextShape == nil)
+    }
+
+    /// Clearing at a terminal event that carries no reply left the turn with neither the live
+    /// words nor the saved reply for a history round trip; the transcript collapsed and lost its
+    /// scroll position.
+    @Test(arguments: ["lifecycle-end", "final-without-message"]) @MainActor
+    func `a run end without its reply keeps the live words until history brings it`(terminal: String) async throws {
+        let harness = try await StreamReplayHarness.bootstrapped()
+        defer { harness.vm.detachTransport() }
+        let runId = try await harness.send("Review the layout")
+        let text = "The layout is ready."
+        harness.transport.emit(replayAssistantDeltaEvent(runId: runId, cumulativeText: text, seq: 1))
+        await harness.converge("live words shown") { $0.liveAssistantTextShape == text }
+        let now = Date().timeIntervalSince1970 * 1000
+        await harness.transport.setHistory(replayHistory(messages: [
+            replayRawMessage(role: "user", text: "Review the layout", timestamp: now, idempotencyKey: "\(runId):user"),
+            replayRawMessage(role: "assistant", text: text, timestamp: now + 1, runId: runId, messageId: "final"),
+        ]))
+        let event: OpenClawChatTransportEvent = terminal == "lifecycle-end"
+            ? .agent(OpenClawAgentEventPayload(
+                runId: runId, seq: 2, stream: "lifecycle", ts: 2, data: ["phase": AnyCodable("end")]))
+            : .chat(OpenClawChatEventPayload(
+                runId: runId, sessionKey: "main", state: "final", message: nil, errorMessage: nil))
+
+        let refresh = harness.vm.handleTransportEvent(event)
+        #expect(harness.vm.pendingRunCount == 0)
+        #expect(harness.vm.liveAssistantTextShape == text)
+        await refresh?.value
+        #expect(harness.vm.liveAssistantTextShape == nil)
+        #expect(harness.vm.streamingAssistantText == nil)
+        #expect(harness.vm.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            "Review the layout", text,
+        ])
+    }
+
     @Test @MainActor func `live text comparison preserves supported text types and block boundaries`() {
         let transport = ScriptedChatTransport(history: replayHistory())
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)

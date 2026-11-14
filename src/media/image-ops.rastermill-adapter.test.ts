@@ -142,10 +142,11 @@ describe("image ops Rastermill adapter", () => {
         modelPolicy: { maxSidePx: 1 },
       });
 
+      const { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } = await import("./image-processor-config.js");
       expect(createRastermill).toHaveBeenLastCalledWith(
         expect.objectContaining({
           limits: {
-            inputPixels: 40_000_000,
+            inputPixels: MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS,
             outputPixels: MAX_IMAGE_INPUT_PIXELS,
           },
         }),

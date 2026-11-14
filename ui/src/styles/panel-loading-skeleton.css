@@ -32,7 +32,7 @@ openclaw-panel-loading-skeleton {
     align-items: center;
     gap: 12px;
     text-align: center;
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
   }
 
   .desktop-spinner {
@@ -61,6 +61,29 @@ openclaw-panel-loading-skeleton {
 
   * {
     box-sizing: border-box;
+  }
+
+  /* Shadow-root parents cannot use document-global shimmer styles. */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--skeleton-base, var(--bg-muted));
+    border-radius: var(--radius-md);
+  }
+
+  .skeleton::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent calc(50% - var(--skeleton-sweep-width) / 2),
+      color-mix(in srgb, var(--text) var(--skeleton-highlight-strength), transparent) 50%,
+      transparent calc(50% + var(--skeleton-sweep-width) / 2)
+    );
+    content: "";
+    transform: translateX(-100%);
+    animation: shimmer var(--skeleton-duration) var(--skeleton-easing) infinite;
+    will-change: transform;
   }
 
   .line {
@@ -244,10 +267,25 @@ openclaw-panel-loading-skeleton {
     padding: 12px;
   }
 
+  @media (prefers-reduced-motion: reduce), (forced-colors: active) {
+    .skeleton::after {
+      animation: none !important;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .desktop-spinner {
       animation: none;
     }
+  }
+}
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
   }
 }
 

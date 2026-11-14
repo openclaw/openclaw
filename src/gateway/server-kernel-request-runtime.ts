@@ -9,6 +9,7 @@ import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-s
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
 import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
@@ -114,7 +115,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         shouldUseGatewayOwnerProfile({
           role: "operator",
           authMethod: runtime.getResolvedAuth().mode,
-          rolesConfigured: Boolean(getRuntimeConfig().gateway?.roles),
+          rolesConfigured: isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig()),
         })
       ) {
         try {

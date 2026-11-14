@@ -253,6 +253,77 @@ describe("Agents effective-tools read", () => {
     expect(document.activeElement).toBe(toggle);
   });
 
+  it.each([false, true])(
+    "retains the %s populated preview as unverified during refresh, then withdraws denial",
+    async (populated) => {
+      const next = deferred<ToolsEffectiveResult>();
+      const initial = {
+        ...effective("Accepted preview"),
+        ...(!populated ? { groups: [] } : {}),
+        notices: [{ id: "accepted", severity: "info" as const, message: "Accepted policy notice" }],
+      };
+      const view = await mountEffective(
+        vi
+          .fn<() => Promise<ToolsEffectiveResult>>()
+          .mockResolvedValueOnce(initial)
+          .mockReturnValue(next.promise),
+      );
+      await view.settleEffective();
+      openToolGroups(view.container);
+      const card = view.container.querySelector("#agent-tool-read")!;
+      const chip = view.container.querySelector<HTMLAnchorElement>(".agent-tools-runtime-chip");
+      chip?.focus();
+      if (populated) {
+        expect(card.textContent).toContain("Listed in preview via");
+      }
+      view.emit("sessions.changed", {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        reason: "patch",
+        session: { key: "agent:main:main", toolOverrides: { webSearch: false } },
+      });
+      await waitForSolid(() => expect(view.calls()).toHaveLength(2));
+      expect(view.container.querySelector(".agent-tools-runtime-chip")).toBe(chip);
+      if (chip) {
+        expect(chip.isConnected).toBe(true);
+        expect(document.activeElement).toBe(chip);
+      } else {
+        expect(view.container.textContent).toContain("No tools in this preview.");
+      }
+      expect(view.container.querySelector(".settings-loading-skeleton")).toBeNull();
+      expect(view.container.textContent).toContain("Loading preview…");
+      expect(view.container.textContent).not.toContain("Accepted policy notice");
+      expect(card.textContent).not.toContain("Listed in preview via");
+      next.reject(new Error("permission denied"));
+      await waitForSolid(() => expect(view.container.textContent).toContain("Unavailable"));
+      expect(preview(view.container)).toBeUndefined();
+      expect(view.container.textContent).not.toContain("No tools in this preview.");
+      expect(view.page.read().tools.effectivePreview).toBeNull();
+    },
+  );
+
+  it("withdraws a retained preview immediately on read-grant loss", async () => {
+    const next = deferred<ToolsEffectiveResult>();
+    const view = await mountEffective(
+      vi
+        .fn<() => Promise<ToolsEffectiveResult>>()
+        .mockResolvedValueOnce(effective("Accepted preview"))
+        .mockReturnValue(next.promise),
+    );
+    await view.settleEffective();
+    view.emit("sessions.changed", { sessionKey: "agent:main:main", reason: "patch" });
+    await waitForSolid(() => expect(view.calls()).toHaveLength(2));
+    emitGatewaySnapshot(view.currentGateway, {
+      ...snapshot(view.client),
+      hello: gatewayHelloForMethods([], []),
+    });
+    await waitForSolid(() => expect(preview(view.container)).toBeUndefined());
+    expect(view.page.read().tools.effectivePreview).toBeNull();
+    next.resolve(effective("Revoked preview"));
+    await view.settleEffective();
+    expect(preview(view.container)).toBeUndefined();
+  });
+
   it.each([
     { change: "reconnect", outcome: "success" },
     { change: "reconnect", outcome: "failure" },
@@ -333,7 +404,7 @@ describe("Agents effective-tools read", () => {
     );
     expect(preview(view.container)).toBeUndefined();
     expect(view.container.querySelector("#agent-tool-read")?.textContent).not.toContain(
-      "Included in preview",
+      "Listed in preview via",
     );
     next.resolve(effective("New session preview"));
     await waitForSolid(() => expect(preview(view.container)).toContain("New session preview"));
@@ -357,7 +428,7 @@ describe("Agents effective-tools read", () => {
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
     await waitForSolid(() => expect(preview(view.container)).toBeUndefined());
     expect(view.container.querySelector("#agent-tool-read")?.textContent).not.toContain(
-      "Included in preview",
+      "Listed in preview via",
     );
     next.resolve(effective("Current model preview"));
     await waitForSolid(() => expect(preview(view.container)).toContain("Current model preview"));

@@ -368,7 +368,9 @@ export async function prepareSandboxDependencyTemplate(params: {
       // Cleanup outlives cancellation. A failed retirement must preserve the template
       // reservation rather than publish or delete bytes a live builder can still write.
       try {
-        await retireSandboxDependencyTemplate(directory, params.rollbackGuard, started);
+        await timeWorktreePreparationPhase("templateRetire", () =>
+          retireSandboxDependencyTemplate(directory, params.rollbackGuard, started),
+        );
       } finally {
         try {
           await started?.cgroup.close();

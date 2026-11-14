@@ -223,10 +223,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   effectiveSessionsGrouping(): SidebarSessionsGrouping {
-    // Refreshes can temporarily invalidate the owner facet; retain the Person
-    // preference so it returns with the authoritative multi-owner list.
-    const grouping = this.sessionsGrouping;
-    return grouping === "person" && !this.sessionPeopleSortAvailable() ? "category" : grouping;
+    return this.sessionsGrouping;
   }
 
   setSessionSortMode(mode: SidebarSessionSortMode) {

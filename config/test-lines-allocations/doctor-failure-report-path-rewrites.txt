@@ -1,2 +1,0 @@
-24
-# Deterministic regression that doctor failure reports rewrite migration paths once per target, not once per issue (#194621).

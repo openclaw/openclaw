@@ -4,6 +4,7 @@ import {
   tryResolveCronJobEffectiveAgentId,
 } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
+import { resolveCronRunAdmissionSource } from "../../cron/run-authority.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import {
   createAccountCronScheduledToolPolicy,
@@ -18,6 +19,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronStoredJob,
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../../cron/types.js";
@@ -313,9 +315,15 @@ export function readCronCallerScope(
 
 /** Management access can reauthorize origin, but cannot lend another account native identity. */
 export function resolveCronRequesterProvenanceForJob(
-  job: Pick<CronJob, "owner">,
+  job: Pick<CronStoredJob, "owner" | "scheduledToolPolicy" | "payload" | "toolsAllowProvenance">,
   callerScope: CronCallerScope | undefined,
 ): CronToolsAllowProvenance | undefined {
+  // Management preserves an existing operator job; it does not adopt the
+  // admin chat as its requester. Use admission, not the trusted-policy label:
+  // legacy operator jobs may lack that label, and requester jobs may carry it.
+  if (callerScope?.manageAll && resolveCronRunAdmissionSource(job) === "operator-schedule") {
+    return undefined;
+  }
   const provenance = callerScope?.toolsAllowProvenance;
   if (!provenance?.channelRequester) {
     return provenance;

@@ -1,8 +1,10 @@
 /** Captures and revalidates the directory identity used by exec authorization. */
-import fs from "node:fs";
+import type fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import { hasMutableSymlinkPathComponentSync } from "./system-run-mutable-file-policy.js";
+import { realpathForExec } from "./exec-command-resolution.js";
+import { hasMutableSymlinkPathComponent } from "./system-run-mutable-file-policy.js";
 
 export const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
@@ -12,19 +14,19 @@ export type ApprovedCwdSnapshot = {
   stat: fs.BigIntStats;
 };
 
-export function captureApprovedCwdSnapshotSync(
+export async function captureApprovedCwdSnapshot(
   cwd: string,
-): { ok: true; snapshot: ApprovedCwdSnapshot } | { ok: false; message: string } {
+): Promise<{ ok: true; snapshot: ApprovedCwdSnapshot } | { ok: false; message: string }> {
   const requestedCwd = path.resolve(cwd);
   let cwdLstat: fs.BigIntStats;
   let cwdStat: fs.BigIntStats;
   let cwdReal: string;
   let cwdRealStat: fs.BigIntStats;
   try {
-    cwdLstat = fs.lstatSync(requestedCwd, { bigint: true });
-    cwdStat = fs.statSync(requestedCwd, { bigint: true });
-    cwdReal = fs.realpathSync(requestedCwd);
-    cwdRealStat = fs.statSync(cwdReal, { bigint: true });
+    cwdLstat = await fsp.lstat(requestedCwd, { bigint: true });
+    cwdStat = await fsp.stat(requestedCwd, { bigint: true });
+    cwdReal = await realpathForExec(requestedCwd);
+    cwdRealStat = await fsp.stat(cwdReal, { bigint: true });
   } catch {
     return {
       ok: false,
@@ -37,7 +39,7 @@ export function captureApprovedCwdSnapshotSync(
       message: "SYSTEM_RUN_DENIED: approval requires cwd to be a directory",
     };
   }
-  if (hasMutableSymlinkPathComponentSync(requestedCwd) || cwdLstat.isSymbolicLink()) {
+  if ((await hasMutableSymlinkPathComponent(requestedCwd)) || cwdLstat.isSymbolicLink()) {
     return {
       ok: false,
       message:
@@ -55,7 +57,9 @@ export function captureApprovedCwdSnapshotSync(
 }
 
 /** Rechecks the exact directory object immediately before process launch. */
-export function revalidateApprovedCwdSnapshot(snapshot: ApprovedCwdSnapshot): boolean {
-  const current = captureApprovedCwdSnapshotSync(snapshot.cwd);
+export async function revalidateApprovedCwdSnapshot(
+  snapshot: ApprovedCwdSnapshot,
+): Promise<boolean> {
+  const current = await captureApprovedCwdSnapshot(snapshot.cwd);
   return current.ok && sameFileIdentity(snapshot.stat, current.snapshot.stat);
 }

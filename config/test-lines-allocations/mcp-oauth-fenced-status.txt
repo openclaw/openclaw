@@ -1,2 +1,0 @@
-3
-# Regression proof that a fenced MCP OAuth grant reports that sign-in is required.

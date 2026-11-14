@@ -49,7 +49,6 @@ import {
   mergeOAuthRefreshPeerClaims,
   OAuthRefreshPeerFenceError,
   rollbackOAuthRefreshPeerClaims,
-  settleOAuthRefreshPeerClaims,
   type OAuthRefreshPeerClaim,
 } from "./oauth-refresh-peers.js";
 import { createOAuthRefreshQueue } from "./oauth-refresh-queue.js";
@@ -70,7 +69,8 @@ import {
   persistOAuthRefreshClaim,
   rollbackOAuthRefreshOwnerClaim,
   rollbackTransientOAuthRefreshClaim,
-  resolveAuthoritativeSharedOAuthCredentialUnderLock,
+  resolveOAuthAccessBesideStateOwner,
+  settleOAuthRefreshPeerClaimsUnderLock,
   settleOAuthRefreshClaim,
   type OAuthRefreshClaim,
   type OAuthRefreshFailureSettlement,
@@ -92,33 +92,6 @@ const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
 /** Create an independent OAuth refresh queue using the native provider operations. */
 export function createOAuthManager() {
   const refreshQueue = createOAuthRefreshQueue();
-
-  async function settlePeerClaimsUnderRefreshLock(params: {
-    claim: Extract<OAuthRefreshClaim, { kind: "claimed" }>;
-    claims: readonly OAuthRefreshPeerClaim[];
-    replacement: OAuthCredential;
-    validateCredential?: (credential: OAuthCredential) => void;
-  }): Promise<void> {
-    validateSettlementCredential(params.validateCredential, params.replacement);
-    if (params.claim.personalStore) {
-      return;
-    }
-    const authoritativeSharedCredential =
-      params.claim.authPath === resolveSharedAuthStorePath()
-        ? params.replacement
-        : await resolveAuthoritativeSharedOAuthCredentialUnderLock({
-            profileId: params.claim.profileId,
-            candidate: params.replacement,
-            validateCredential: params.validateCredential,
-          });
-    await settleOAuthRefreshPeerClaims({
-      profileId: params.claim.profileId,
-      fence: params.claim.fence,
-      claims: params.claims,
-      authoritativeSharedCredential,
-      replacement: params.replacement,
-    });
-  }
 
   async function claimOAuthRefresh(params: OAuthRefreshParams): Promise<OAuthRefreshClaim> {
     const personalProfile = isUserModelAuthProfileId(params.profileId);
@@ -579,7 +552,7 @@ export function createOAuthManager() {
             }
             if (supersedingOwner && cleanupErrors.length === 0) {
               try {
-                await settlePeerClaimsUnderRefreshLock({
+                await settleOAuthRefreshPeerClaimsUnderLock({
                   claim,
                   claims: activePeerClaims,
                   replacement: supersedingOwner,
@@ -738,7 +711,7 @@ export function createOAuthManager() {
               return null;
             }
             try {
-              await settlePeerClaimsUnderRefreshLock({
+              await settleOAuthRefreshPeerClaimsUnderLock({
                 claim,
                 claims: activePeerClaims,
                 replacement: claimSettlement.credential,
@@ -895,6 +868,10 @@ export function createOAuthManager() {
       hasUsableOAuthCredential(effectiveCredential)
     ) {
       return await buildValidatedOAuthAccess(effectiveCredential, params);
+    }
+    const besideStateOwner = await resolveOAuthAccessBesideStateOwner(effectiveCredential, params);
+    if (besideStateOwner) {
+      return besideStateOwner;
     }
 
     try {

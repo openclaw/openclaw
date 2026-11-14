@@ -45,11 +45,12 @@
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius-lg);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.25;
 }
 
-.agent-chat__goal-row {
+.agent-chat__goal-row,
+.chat-waiters__row {
   display: grid;
   grid-template-columns: var(--chat-stack-icon-size, 14px) minmax(0, 1fr) auto auto;
   align-items: center;
@@ -57,7 +58,8 @@
   column-gap: 8px;
 }
 
-.agent-chat__goal-icon {
+.agent-chat__goal-icon,
+.chat-waiters__icon {
   color: var(--chat-goal-status-color, var(--muted));
   display: inline-flex;
   align-items: center;
@@ -67,7 +69,8 @@
   flex-shrink: 0;
 }
 
-.agent-chat__goal-icon svg {
+.agent-chat__goal-icon svg,
+.chat-waiters__icon svg {
   width: var(--chat-stack-icon-size, 14px);
   height: var(--chat-stack-icon-size, 14px);
   stroke: currentColor;
@@ -86,7 +89,7 @@
 .agent-chat__goal-label {
   flex: 0 0 auto;
   color: var(--chat-goal-status-color, var(--chat-text));
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 400;
   line-height: 1.45;
 }
@@ -109,7 +112,8 @@
   grid-template-columns: var(--chat-stack-icon-size, 14px) minmax(0, 1fr) auto;
 }
 
-.agent-chat__goal-elapsed {
+.agent-chat__goal-elapsed,
+.chat-waiters__elapsed {
   flex-shrink: 0;
   color: var(--muted);
   font-feature-settings: "tnum" 1;
@@ -120,7 +124,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 2px;
+  gap: 4px;
 }
 
 .agent-chat__goal-command-actions {
@@ -284,7 +288,7 @@
     height: auto;
     gap: 4px;
     padding: 4px 8px;
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
     line-height: 1.2;
     color: var(--text);
     background: color-mix(in srgb, var(--text) 7%, transparent);
@@ -355,7 +359,7 @@
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-usage {
     color: color-mix(in srgb, var(--muted) 82%, transparent);
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-separator {
@@ -403,7 +407,7 @@
 }
 
 .agent-chat__goal-detail-objective {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -413,7 +417,7 @@
 .agent-chat__goal-detail-note,
 .agent-chat__goal-detail-meta {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -439,7 +443,8 @@
   width: 100%;
 }
 
-.agent-chat__goal-float .agent-chat__goal {
+.agent-chat__goal-float .agent-chat__goal,
+.chat-waiters {
   width: 100%;
   max-width: none;
   margin: 0;
@@ -449,6 +454,63 @@
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
   backdrop-filter: blur(8px);
+}
+
+/* Background commands the idle chat waits on; shares the goal card shell above. */
+.chat-waiters {
+  display: grid;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  font-size: 13px;
+}
+
+.chat-waiters__row {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+button.chat-waiters__row {
+  cursor: var(--cursor-action);
+
+  &:hover {
+    background: var(--bg-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -3px;
+  }
+}
+
+.chat-waiters__list {
+  border-top: 1px solid var(--chat-composer-hairline);
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.chat-waiters__label {
+  display: flex;
+  gap: 0.3em;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-waiters__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+
+  &[data-scrollable="true"] {
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  }
 }
 
 .agent-chat__goal-float
@@ -463,6 +525,7 @@
 }
 
 .agent-chat__goal-float .agent-chat__goal-row,
+.chat-waiters__row,
 .session-progress-card__summary {
   /* The surrounding card supplies the two border pixels. */
   min-height: calc(var(--chat-stack-header-height, 40px) - 2px);
@@ -541,8 +604,8 @@
 .session-progress-card__current {
   min-width: 0;
   overflow: hidden;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
   transition: color 140ms ease;
@@ -601,9 +664,9 @@
 .session-progress-card__summary-count {
   flex: none;
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
   transition: color 140ms ease;
 }
 
@@ -634,7 +697,7 @@
 .session-progress-card--composer .session-progress-card__heading {
   margin: 0;
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -643,7 +706,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -663,7 +726,7 @@
 
 .session-progress-card--composer .session-progress-card__step,
 .session-progress-card--composer .session-progress-card__markdown.sidebar-markdown {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .session-progress-card--composer .session-progress-card__steps {

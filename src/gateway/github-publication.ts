@@ -28,6 +28,7 @@ import {
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
+  resumeGitHubPublicationSessionRequests,
   type GitHubPublicationClaimRequest,
   type GitHubPublicationClaimRequestV2,
   type GitHubPublicationSessionRequest,
@@ -114,6 +115,7 @@ export type GitHubPublicationCoordinator = ReturnType<typeof createGitHubPublica
 export function createGitHubPublicationCoordinator(params: {
   placements: WorkerSessionPlacementStore;
   environments?: Parameters<typeof createRepositoryGitHubPublicationCoordinator>[0]["environments"];
+  prepareRepositoryIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent?: () => void;
   signal?: AbortSignal;
@@ -641,32 +643,15 @@ export function createGitHubPublicationCoordinator(params: {
     async resumeSessionRequests(
       isStopping?: () => boolean,
       isPendingEmpty?: (kind: "shared" | "repository") => boolean,
+      sharedRequestId?: string,
     ) {
-      const failures: unknown[] = [];
-      for (const coordinator of [methods, repository]) {
-        if (isStopping?.()) {
-          break;
-        }
-        if (coordinator === repository && isPendingEmpty?.("repository")) {
-          continue;
-        }
-        try {
-          await coordinator.resumeSessionRequests(
-            isStopping,
-            () => isPendingEmpty?.("shared") ?? false,
-          );
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length > 0) {
-        throw new AggregateError(
-          failures,
-          failures
-            .map((error) => (error instanceof Error ? error.message : String(error)))
-            .join("; "),
-        );
-      }
+      await resumeGitHubPublicationSessionRequests({
+        shared: methods,
+        repository,
+        isStopping,
+        isPendingEmpty,
+        sharedRequestId,
+      });
     },
     /** @deprecated Use deferOrphanedRequestsAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     deferOrphanedRequests(): void {

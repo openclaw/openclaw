@@ -14,6 +14,7 @@ import {
   resolveTelegramMessageCacheScope,
 } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
+import { parseTelegramAgentCallbackData } from "./native-command-callback-data.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
@@ -563,6 +564,26 @@ describe("Telegram registered action authority and input contracts", () => {
       expect(requests).toEqual([]);
     },
   );
+
+  it("renders typed callbacks in message-action edits as agent-owned controls", async () => {
+    const button = { label: "Pick", action: { type: "callback", value: "pick:a" } };
+    await invoke(
+      "edit",
+      {
+        chatId: "telegram:-1001:topic:77",
+        messageId: 456,
+        message: "Choose",
+        presentation: { blocks: [{ type: "buttons", buttons: [button] }] },
+      },
+      trusted,
+    );
+    const markup = requests.at(-1)?.fields.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    expect(parseTelegramAgentCallbackData(markup.inline_keyboard[0]?.[0]?.callback_data)).toBe(
+      "pick:a",
+    );
+  });
 
   it("rejects sending without a configured credential", async () => {
     cfg = {};

@@ -42,9 +42,15 @@ vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,
   managedWorktrees: {
     gc: () => forbiddenDefaultAdapter("worktree GC"),
+    maintainGit: () => forbiddenDefaultAdapter("worktree Git maintenance"),
     onWarmPoolNeeded: () => () => {},
     prewarm: () => forbiddenDefaultAdapter("worktree warm pool"),
   },
+}));
+
+// mock-isolation: Telemetry timers own no tool-usage work; retention has its database-boundary proof.
+vi.mock("../config/sessions/tool-usage.js", () => ({
+  pruneRegisteredAgentToolUsage: async () => {},
 }));
 
 // mock-isolation: Worker-free timers reject accidental default manifest database sweeps.
@@ -254,6 +260,8 @@ describe("gateway telemetry maintenance", () => {
         },
       });
       try {
+        // Finish startup cleanup before the simulated late wake holds channel admission.
+        await vi.advanceTimersByTimeAsync(2);
         vi.setSystemTime(Date.now() + 75_000);
         await vi.advanceTimersByTimeAsync(30_000);
         expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
@@ -270,6 +278,7 @@ describe("gateway telemetry maintenance", () => {
           new Error("Gateway health refresh owner is closed"),
         );
         state.broadcast.mockClear();
+        state.worktreeGc.mockClear();
         state.dedupe.set("retained-during-drain", { ts: 0, ok: true });
         thaw.resolve(true);
 

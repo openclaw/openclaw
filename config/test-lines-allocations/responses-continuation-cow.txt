@@ -1,2 +1,0 @@
-30
-# Frozen tool-result projection work count and opaque replay accessor evaluation parity.

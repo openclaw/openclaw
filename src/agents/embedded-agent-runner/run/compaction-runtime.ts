@@ -39,6 +39,7 @@ import {
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
+import type { EmbeddedAgentCompactResult } from "../types.js";
 import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accumulator.js";
 import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -228,6 +229,7 @@ async function executeRecoveryCompaction(
     maxAttempts: recovery.maxAttempts,
   };
   let observedCompactions = 0;
+  let failure: EmbeddedAgentCompactResult["failure"];
   const runtimeSettings = input.buildRuntimeSettings({
     tokenBudget: recovery.tokenBudget,
     ...(recovery.trigger === "overflow" ? { degradedReason: "context_overflow" } : {}),
@@ -253,7 +255,7 @@ async function executeRecoveryCompaction(
     runtimeContext,
     runtimeSettings,
   };
-  let result: CompactionResult;
+  let result: CompactionResult & Pick<EmbeddedAgentCompactResult, "failure">;
   try {
     result = await compactContextEngineWithSafetyTimeout(
       {
@@ -282,6 +284,9 @@ async function executeRecoveryCompaction(
                   observedCompactions += 1;
                   input.state.observeContextAccounting({ kind: "compaction", tokensAfter });
                 },
+                recordFailure: (recorded) => {
+                  failure = recorded;
+                },
               });
             }
             return input.contextEngine.compact(backendParams);
@@ -304,6 +309,8 @@ async function executeRecoveryCompaction(
     // Post-commit failure is not an unperformed compaction. Retry the observed
     // current context, but never adopt a failed backend's successor proposal.
     result = { ok: result.ok, compacted: true, reason: result.reason };
+  } else if (!result.compacted && failure) {
+    result = { ...result, failure };
   }
   const successor = resolveCompactionSuccessorTranscript(result);
   const target = result.result?.sessionTarget;
