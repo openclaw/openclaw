@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readOperatorAuthorityFailure } from "../infra/operator-authority-error.js";
 import { bindPluginGatewayAccessPolicy } from "../plugins/gateway-access-policy-registration.js";
@@ -19,6 +20,7 @@ import {
   resolvePreparedGatewayOperatorAccessAuthority,
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
+import { bindIndependentContinuationAuthority } from "./operator-run-authority.continuation.js";
 import { captureOperatorToolGatewayContinuationContext } from "./server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -191,4 +193,60 @@ it.each([
         rollbackStagedPluginRegistry(previous);
       }
     }),
+);
+
+it.each(["assertion", "abort"] as const)(
+  "keeps repeated independent bindings stable with %s revocation",
+  (revocation) => {
+    const controller = new AbortController();
+    const failure = new Error("original continuation source retired");
+    let current = true;
+    let checks = 0;
+    let holds = 0;
+    const original = createAdmittedRunOperatorAuthority({
+      profileId: "stable-continuation",
+      scopes: ["operator.read"],
+      signal: controller.signal,
+      assertCurrent: () => {
+        checks++;
+        if (!current) {
+          throw failure;
+        }
+      },
+      retain: () => {
+        holds++;
+        return () => {
+          holds--;
+        };
+      },
+    });
+    const first = bindIndependentContinuationAuthority(original);
+    expect(first).not.toBe(original);
+    expect(first.source).toBe(original.source);
+    expect(first.signal).toBe(controller.signal);
+    expect(first.scopes).toEqual(original.scopes);
+    expect(holds).toBe(0);
+    let continuation = first;
+    for (let hop = 0; hop < 3; hop++) {
+      continuation = bindIndependentContinuationAuthority(continuation);
+      expect(continuation).toBe(first);
+      continuation.assertCurrent();
+    }
+    expect(checks).toBe(3);
+    const release = continuation.retain!();
+    expect(holds).toBe(1);
+    release();
+    expect(holds).toBe(0);
+    if (revocation === "abort") {
+      controller.abort(failure);
+    } else {
+      current = false;
+    }
+    expect(() => continuation.assertCurrent()).toThrow(failure);
+    current = true;
+    expect(() => bindIndependentContinuationAuthority(continuation).assertCurrent()).toThrow(
+      failure,
+    );
+    expect(checks).toBe(revocation === "abort" ? 3 : 4);
+  },
 );
