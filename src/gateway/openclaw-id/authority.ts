@@ -30,6 +30,7 @@ import {
   ROOT_EPOCH,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import { listAdmitted, memberKeys } from "./authority-keys.js";
 import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { verifyBinding } from "./binding-check.js";
 import {
@@ -58,6 +59,7 @@ import {
 import { readMemberView, readOwnerView } from "./membership-views.js";
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
+import { createResetOperations } from "./reset-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
@@ -518,6 +520,8 @@ export function createOpenClawIdAuthority(
 
     ...createRebindOperations({ serialize, load, commit }),
 
+    ...createResetOperations({ serialize, load, commit }),
+
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(
       input: unknown,
@@ -828,18 +832,4 @@ function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): A
     return previous && previous.role !== member.role ? member.peer_keys : [];
   });
   return peerKeys.length > 0 ? [{ type: "disconnect", peer_keys: peerKeys }] : [];
-}
-
-// Every listed node, member or owner device key, admitted now or not.
-function memberKeys(state: AuthorityState): Set<IrohEndpointKey> {
-  return new Set<IrohEndpointKey>([
-    ...Object.values(state.members).flatMap((member) => member.peer_keys),
-    ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
-    ...Object.keys(state.nodes).filter(isIrohEndpointKey),
-  ]);
-}
-
-// Every candidate key that passes the protocol's admission rule at `now`.
-function listAdmitted(state: AuthorityState, now: number): IrohEndpointKey[] {
-  return [...memberKeys(state)].filter((key) => isAdmitted(state, key, now)).toSorted();
 }

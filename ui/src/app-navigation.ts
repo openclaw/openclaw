@@ -196,7 +196,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSecurity",
-    routes: ["security", "secrets", "approvals"],
+    routes: ["security", "openclaw-id", "secrets", "approvals"],
   },
   {
     labelKey: "nav.settingsGroupSystem",
@@ -356,6 +356,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   "memory-import": navigationPresentation("download", "memoryImport"),
   notifications: ["bell", "routeTitles.notifications", "subtitles.notifications"],
   security: navigationPresentation("shieldCheck", "security"),
+  "openclaw-id": navigationPresentation("key", "openclawId"),
   secrets: ["key", "tabs.secrets", "secretsStore.hint"],
   advanced: ["fileCode", "routeTitles.advanced", "subtitles.advanced"],
   debug: navigationPresentation("bug", "debug"),

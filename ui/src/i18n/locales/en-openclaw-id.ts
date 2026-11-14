@@ -76,7 +76,7 @@ const enOpenClawId = {
     kitUsedNotice: "Your recovery kit was used to add {device}",
     kitUsedNoticeUnknown: "Your recovery kit was used to add a device",
     kitUsedNoticeBody:
-      "If this wasn’t you, remove it in Your devices. Your recovery kit can still add devices: to stop it, relink this claw as a new claw on the computer that runs it.",
+      "If this wasn’t you, remove it in Your devices. Your recovery kit can still add devices: to stop it, use Reset owner access in Settings → OpenClaw ID on the computer that runs this claw.",
     signIn: "Sign in with OpenClaw ID",
     signInLocalOnly:
       "Sign in through Tailscale or another personal sign-in, or on the computer that runs this claw.",
@@ -128,6 +128,42 @@ const enOpenClawId = {
     needsLinkCodeDetail: "Publish them so your devices can reach this claw.",
     publishNewKeys: "Publish new keys",
     newKeysPublished: "New keys published",
+    settingsLink: "OpenClaw ID settings",
+    pageOff: "OpenClaw ID is off. Turn it on in Settings → Labs.",
+    pageUnavailable: "Connect to the Gateway to see this claw's OpenClaw ID.",
+    pageLoadFailed: "Couldn't read this claw's OpenClaw ID status.",
+    pageClaw: "This claw",
+    pageAddress: "Address",
+    pageNotLinked: "Remote access is off. Turn it on from the account menu.",
+    pageRemoteAccess: "Remote access",
+    pagePublication: "Discovery",
+    pagePublished: "Published",
+    pageNotPublished: "Not published yet",
+    pageDevicesDescription: "Owner browsers approved for this claw.",
+    pagePeople: "People",
+    pagePeopleDescription: "People who can reach this claw remotely.",
+    pageOpen: "Open",
+    pageKeys: "Keys",
+    pageMoveKeysDescription: "Replace this claw's connection keys using your recovery kit.",
+    pageMoveKeysLocalOnly:
+      "Moving to new keys is only available on the computer that runs this claw.",
+    resetOwnerAccess: "Reset owner access",
+    resetDescription:
+      "If your recovery kit is lost or leaked: make a new kit and remove every owner device, person and invite. Access on this computer, the claw's address and its data stay.",
+    resetLocalOnly: "Reset owner access is only available on the computer that runs this claw.",
+    resetAction: "Reset…",
+    resetBody:
+      "This removes {devices} owner device(s), {members} person(s), {nodes} node(s) and {invites} invite(s) from {host}. Their remote sessions close and their sign-ins stop working. Your old recovery kit stops working.",
+    resetConfirmLabel: "Type {name} to confirm",
+    resetMakeKit: "Make a new recovery kit",
+    resetKitBody:
+      "Save this new kit before you reset. It's shown only now and isn't stored on this computer.",
+    resetCommit: "Reset owner access",
+    resetDone: "Owner access reset. Set up your other browsers again with the new kit.",
+    resetDoneUnpublished:
+      "Owner access reset. Discovery doesn't have the new owner key yet; this claw keeps publishing it.",
+    resetUncertain:
+      "Couldn't confirm the reset. If Your devices now lists only this browser, the kit you saved is this claw's recovery kit.",
   },
 } satisfies TranslationMap;
 

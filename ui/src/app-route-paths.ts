@@ -66,6 +66,7 @@ const APP_ROUTE_DEFINITIONS = {
   "device-permissions": { path: "/settings/device/permissions" },
   notifications: { path: "/settings/notifications" },
   security: { path: "/settings/security" },
+  "openclaw-id": { path: "/settings/openclaw-id" },
   secrets: { path: "/settings/secrets" },
   advanced: { path: "/settings/advanced" },
   approvals: { path: "/settings/approvals" },

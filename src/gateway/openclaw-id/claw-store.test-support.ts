@@ -109,6 +109,14 @@ export function fullClaw(text = TEXT): StoredClaw {
     };
   }
   const bindingBody = { claw_id: id(1), hostname: text, k_srv: iroh(0), k_gw: ed(0) };
+  const binding = (signer: `ed25519:${string}`) => ({
+    v: 1 as const,
+    type: "ServerBinding" as const,
+    signer,
+    alg: "ed25519" as const,
+    sig,
+    body: { ...bindingBody, binding_seq: SEQ, root_epoch: 1 as const, issued_at: NOW },
+  });
   return {
     v: 1,
     claw_id: id(1),
@@ -119,13 +127,18 @@ export function fullClaw(text = TEXT): StoredClaw {
       Object.keys(authority.members).map((accountId) => [accountId, NOW]),
     ),
     owner_profile: { sub: text, email: text, name: text },
-    binding: {
-      v: 1,
-      type: "ServerBinding",
-      signer: ed(1),
-      alg: "ed25519",
-      sig,
-      body: { ...bindingBody, binding_seq: SEQ, root_epoch: 1, issued_at: NOW },
+    binding: binding(ed(1)),
+    reset: {
+      previous_root_pub: ed(2),
+      previous_binding: binding(ed(2)),
+      statement: {
+        v: 1,
+        type: "RootReset",
+        signer: ed(0),
+        alg: "ed25519",
+        sig,
+        body: { claw_id: id(1), new_root_pub: ed(1), binding_seq: SEQ, issued_at: NOW },
+      },
     },
     token_bindings: peers.map((peer, n) => {
       return { device_id: hex(n), role: "operator", peer_key: peer, bound_at: NOW };

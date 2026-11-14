@@ -4,6 +4,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   AuthorityState,
+  RootResetEvidence,
   SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { prepareCorePluginStateReplacement } from "../../plugin-state/plugin-state-store.js";
@@ -31,6 +32,11 @@ export type StoredClaw = {
   owner_profile?: { sub: string; email?: string; name?: string };
   /** The current ServerBinding, signed by R or an owner device. */
   binding: SignedStatement<"ServerBinding"> | null;
+  /**
+   * The last owner reset: the root and binding it replaced and the K_gw-signed RootReset. The
+   * descriptor carries it while `binding` is the one the reset created (discovery.md, "Owner reset").
+   */
+  reset?: RootResetEvidence;
   /**
    * What OpenClaw ID reported about each invite redemption (display only, never
    * authority) and how the invite ended, keyed by invite id.

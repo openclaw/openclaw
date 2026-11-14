@@ -1,6 +1,7 @@
 // `openclaw id`: OpenClaw ID remote access of the Gateway on this machine. `rebind`
-// moves the claw to new machine keys with its recovery kit; the Gateway accepts it only
-// from a direct-loopback client, never over the tunnel.
+// moves the claw to new machine keys with its recovery kit and `reset` replaces the owner
+// key with a new kit; the Gateway accepts both only from a direct-loopback client, never
+// over the tunnel.
 import { setTimeout as sleep } from "node:timers/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
@@ -324,6 +325,15 @@ export function registerIdCli(program: Command) {
       .option("--yes", "Skip the confirmation (needs --kit-stdin)", false)
       .option("--cancel", "Delete keys staged by an unfinished move", false),
   ).action(async (opts: RebindOpts) => await runRebind(opts));
+
+  id.command("reset")
+    .description(
+      "Reset owner access with a new recovery kit, removing every owner device, person and invite (on this machine only; works with the Gateway stopped)",
+    )
+    .action(async () => {
+      const { runReset } = await import("./id-cli-reset.js");
+      await runReset();
+    });
 
   addIdGatewayOptions(
     id

@@ -441,7 +441,7 @@ describe("approved OpenClaw ID account menu", () => {
       name: "Owner",
       detail: "owner@example.test · Owner",
     });
-    expect(menu(current).labels).toEqual(["Your devices"]);
+    expect(menu(current).labels).toEqual(["Your devices", "OpenClaw ID settings"]);
     expect(menu(current).text).toContain("End-to-end encryptedOwner phone · this device");
     expect(menu(current).text).not.toMatch(
       /reachable|crabd|People|\bAccess\b|Sign in|Regenerate|never-display/,
@@ -533,6 +533,7 @@ describe("approved OpenClaw ID account menu", () => {
         "Copy claw link",
         "Move to new keys",
         "Your devices",
+        "OpenClaw ID settings",
         "Sign out of OpenClaw ID",
       ]);
       expect(menu(current).text).toContain(`Remote access on${relayOnline ? "Online" : "Offline"}`);

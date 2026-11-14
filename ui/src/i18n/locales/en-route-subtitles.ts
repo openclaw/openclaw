@@ -49,6 +49,7 @@ const enRouteSubtitles = {
     memoryImport: "Bring Codex and Claude Code memory into an agent workspace.",
     notifications: "Choose when you get notifications.",
     security: "Command permissions, tool profiles, and access.",
+    openclawId: "This claw's remote access, owner keys and recovery.",
     advanced: "Manage all settings, including the raw config.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",

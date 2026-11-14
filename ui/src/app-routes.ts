@@ -57,6 +57,7 @@ import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { canonicalModelSetupLocation, page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
+import { page as openClawIdPage } from "./pages/openclaw-id/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.tsx";
 import { canonicalPluginsRouteLocation } from "./pages/plugins/route-data.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.tsx";
@@ -106,6 +107,7 @@ const APP_ROUTE_TREE = [
   channelsPage,
   cloudWorkersPage,
   connectionPage,
+  openClawIdPage,
   labsPage,
   aboutPage,
   lobsterdexPage,
