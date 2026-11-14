@@ -74,3 +74,26 @@ it("keeps unresolved peers in the saved config when setup adds a peer", async ()
     expect(next?.channels?.a2a?.peers?.fresh).toEqual({ token: "fresh-secret-value" });
   });
 });
+
+it.each(["old-inbound-token", PLACEHOLDER])(
+  "keeps outbound settings when setup replaces inbound token %s",
+  async (token) => {
+    const peer = {
+      token,
+      url: "https://peer.example.test/a2a/v1",
+      outboundToken: "${OPENCLAW_A2A_TEST_UNSET_OUTBOUND}",
+    };
+    await withPeers({ partner: peer }, (cfg) => {
+      const next = a2aChannelPlugin.setupContract?.applyAccountConfig({
+        cfg,
+        accountId: "default",
+        input: { peerName: "partner", peerToken: "new-inbound-token" },
+      });
+
+      expect(next?.channels?.a2a?.peers?.partner).toEqual({
+        ...peer,
+        token: "new-inbound-token",
+      });
+    });
+  },
+);

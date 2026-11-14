@@ -70,7 +70,12 @@ export const a2aChannelSetupPlugin = {
           patch: {
             ...(advertisedUrl ? { advertisedUrl } : {}),
             ...(peerName && peerToken
-              ? { peers: { ...currentPeers, [peerName]: { token: peerToken } } }
+              ? {
+                  peers: {
+                    ...currentPeers,
+                    [peerName]: { ...currentPeers?.[peerName], token: peerToken },
+                  },
+                }
               : {}),
           },
         });
