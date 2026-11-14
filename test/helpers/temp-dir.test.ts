@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../../src/test-utils/env.js";
+import { resolveTestTempRoot, withEnv } from "../../src/test-utils/env.js";
 import { resolveNativeFixtureShortPath } from "../scripts/native-boundary-fixture.js";
-import { cleanupTempDirs, makeTempDir, resolveTestTempRoot } from "./temp-dir.js";
+import { cleanupTempDirs, makeTempDir } from "./temp-dir.js";
 
 const tempDirs = new Set<string>();
 

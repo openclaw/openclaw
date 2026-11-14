@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
-import { resolveTestTempRoot } from "../../test/helpers/temp-dir.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
@@ -10,7 +9,7 @@ import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js
 import { acquireStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureEnv, withEnv } from "./env.js";
+import { captureEnv, resolveTestTempRoot, withEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 type ConfigRuntimeResettable = typeof configRuntime & {
