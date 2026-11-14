@@ -20,7 +20,6 @@ const enCron = {
     runQueued: "Run queued. Run ID: {runId}",
     adminRequired: "Only the owner with automation access or an admin can change this automation.",
     runNotStarted: {
-      notDue: "This automation is not due yet.",
       alreadyRunning: "This automation is already running.",
       recoveryPending: "The scheduler is recovering. Try again shortly.",
       invalidSpec: "Couldn’t start this automation. Check its schedule and instructions.",
@@ -87,7 +86,6 @@ const enCron = {
     actions: {
       runNow: "Start now",
       runNowJob: "Start now: {name}",
-      runIfDue: "Start if due",
       pauseJob: "Pause: {name}",
       resumeJob: "Resume: {name}",
       clone: "Clone",
