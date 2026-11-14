@@ -840,10 +840,19 @@ source-only follow-up, with no production leak claimed.
 ### Managed proxy credential-redaction proof
 
 At `7ebb510477ac76cb8f0224dd964c775c29625d37`, the startup redaction case
-rejects only a combined username/password substring. The candidate will inspect
-all logged messages for either distinct fixture credential while retaining the
-positive proxy-origin assertion. Baseline and independent username/password
-mutation proof are pending; no production leak is claimed.
+rejected only the combined username/password substring. It now uses distinct
+fixture credentials and checks each across every logged message, retaining the
+positive proxy-origin assertion. All 12 declarations / 13 cases remain. Test
+code changes by +8/-9 lines; production is unchanged.
+
+The baseline passes all 13 cases, including when the real startup owner is
+temporarily changed to log just the username or just the password in an extra
+message. The repair rejects each mutation in the intended redaction case while
+the other 12 pass. Restored production passes all 13 cases; temporary mutations
+were restored byte for byte. Independent preservation review retains startup,
+CA loading, inherited routing, loopback policy, environment restoration,
+overlapping ownership and shutdown proof. This closes the earlier source-only
+redaction assertion follow-up; no existing production leak is claimed.
 
 ## Pending qualification and proof repairs
 
