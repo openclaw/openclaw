@@ -7,7 +7,7 @@ import {
 import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
-import { compileSafeRegex } from "../security/safe-regex.js";
+import { compileSafeRegexSource } from "../security/safe-regex.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { matchCronStreamLines } from "./cron-stream-matcher.js";
@@ -580,7 +580,7 @@ export class CronStreamOutput {
 
   private compileMatcher(schedule: CronStreamSchedule): RegExp | undefined {
     return (schedule.mode ?? "line") === "match"
-      ? (compileSafeRegex(schedule.match ?? "") ?? undefined)
+      ? (compileSafeRegexSource(schedule.match ?? "").regex ?? undefined)
       : undefined;
   }
 

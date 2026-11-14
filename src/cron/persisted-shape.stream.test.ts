@@ -15,39 +15,23 @@ function streamCandidate(schedule: Record<string, unknown>) {
 }
 
 describe("getInvalidPersistedCronJobReason stream", () => {
-  it("accepts a well-formed stream job with and without batching fields", () => {
-    expect(getInvalidPersistedCronJobReason(streamCandidate({}))).toBeNull();
-    expect(
-      getInvalidPersistedCronJobReason(streamCandidate({ batchMs: 250, maxBatchBytes: 16_384 })),
-    ).toBeNull();
-  });
+  it.each([{}, { batchMs: 250, maxBatchBytes: 16_384 }, { mode: "match", match: "^ready\\ " }])(
+    "accepts a well-formed stream schedule %j",
+    (schedule) => {
+      expect(getInvalidPersistedCronJobReason(streamCandidate(schedule))).toBeNull();
+    },
+  );
 
-  it("quarantines non-integer or non-numeric batching values", () => {
-    expect(getInvalidPersistedCronJobReason(streamCandidate({ batchMs: 1.5 }))).toBe(
-      "invalid-schedule",
-    );
-    expect(getInvalidPersistedCronJobReason(streamCandidate({ batchMs: "250" }))).toBe(
-      "invalid-schedule",
-    );
-    expect(getInvalidPersistedCronJobReason(streamCandidate({ maxBatchBytes: Number.NaN }))).toBe(
-      "invalid-schedule",
-    );
-  });
+  it.each([{ batchMs: 1.5 }, { batchMs: "250" }, { maxBatchBytes: Number.NaN }])(
+    "quarantines invalid batching fields %j",
+    (schedule) => {
+      expect(getInvalidPersistedCronJobReason(streamCandidate(schedule))).toBe("invalid-schedule");
+    },
+  );
 
-  it("quarantines match-mode rows whose expression cannot fail closed", () => {
-    // compileSafeRegex rejects empty/blank patterns, so a hand-imported
-    // match: "" row is quarantined instead of matching every line.
-    expect(getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match: "" }))).toBe(
+  it.each(["", "  ", "^(a+)+$ "])("quarantines unusable match-mode regex %j", (match) => {
+    expect(getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match }))).toBe(
       "invalid-schedule",
     );
-    expect(getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match: "  " }))).toBe(
-      "invalid-schedule",
-    );
-    expect(
-      getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match: "^(a+)+$" })),
-    ).toBe("invalid-schedule");
-    expect(
-      getInvalidPersistedCronJobReason(streamCandidate({ mode: "match", match: "^ready" })),
-    ).toBeNull();
   });
 });

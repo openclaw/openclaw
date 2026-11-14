@@ -33,6 +33,14 @@ describe("cron stream matching lifecycle", () => {
     expect(fireBatch.mock.calls[0]?.[1]).toMatch(/^build-start x.*\[truncated\]$/u);
   });
 
+  it("matches a literal trailing space without accepting a longer prefix", async () => {
+    const { fake, fireBatch, watchers } = fixture({ minIntervalMs: 1 });
+    await watchers.start(createCronStreamMatchingJob("^ERROR "));
+    fake.inputs[0]?.onStdout?.(`ERRORLESS\nERROR ok ${"x".repeat(3_000)}\n`);
+    await vi.waitFor(() => expect(fireBatch).toHaveBeenCalledOnce(), { timeout: 5_000 });
+    expect(fireBatch.mock.calls[0]?.[1]).toMatch(/^ERROR ok .*\[truncated\]$/u);
+  });
+
   it("stops and records a matching timeout instead of silently dropping the event", async () => {
     vi.spyOn(matcher, "matchCronStreamLines").mockRejectedValueOnce(
       new WorkerTaskError("controlled matcher timeout", "timeout"),

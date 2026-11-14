@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseCodeModeScriptSyntax } from "../../agents/code-mode-script-syntax.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
-import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
+import { compileSafeRegexSource } from "../../security/safe-regex.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { assertCronActiveHours } from "../active-hours.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
@@ -227,7 +227,7 @@ export function assertExternalSourceScheduleSupport(
     if (typeof match !== "string" || !match) {
       throw new Error('cron stream match is required when mode="match"');
     }
-    const compiled = compileSafeRegexDetailed(match);
+    const compiled = compileSafeRegexSource(match);
     if (!compiled.regex) {
       throw new Error(`cron stream match is not a safe regular expression (${compiled.reason})`);
     }

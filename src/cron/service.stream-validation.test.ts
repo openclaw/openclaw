@@ -56,7 +56,7 @@ describe("cron stream schedule validation", () => {
     try {
       for (const [schedule, error] of [
         [{ mode: "match" }, "match is required"],
-        [{ mode: "match", match: "^(a+)+$" }, "unsafe-nested-repetition"],
+        [{ mode: "match", match: "^(a+)+$ " }, "unsafe-nested-repetition"],
         [{ match: "^ready" }, 'match requires mode="match"'],
       ] as const) {
         await expect(
@@ -83,12 +83,15 @@ describe("cron stream schedule validation", () => {
           schedule: {
             kind: "stream",
             command: ["echo"],
+            mode: "match",
+            match: "^ready\\ ",
             batchMs: 1,
             maxBatchBytes: 999_999,
           },
         }),
       );
       expect(job.schedule).toMatchObject({ batchMs: 50, maxBatchBytes: 65_536 });
+      expect(job.schedule).toHaveProperty("match", "^ready\\ ");
       await expect(
         cron.add(
           streamJob({
