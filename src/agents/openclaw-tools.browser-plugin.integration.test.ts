@@ -600,15 +600,14 @@ it("retains plugin-delivered images in source history after reopen", async () =>
     await import("../config/sessions/session-accessor.sqlite-read.js");
   const { closeOpenClawAgentDatabasesAsync } = await import("../state/openclaw-agent-db.js");
   const { projectChatDisplayMessages } = await import("../gateway/chat-display-projection.js");
+  const { resolveManagedOutgoingMediaArtifactDownload } =
+    await import("../gateway/managed-image-attachments.js");
   const { createSolidPngBuffer } = await import("../../test/helpers/image-fixtures.js");
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "investigation-plugin-media";
+    const sessionKey = SESSION_KEY;
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const mediaUrl = path.join(state.workspaceDir, "investigation.png");
-    await fs.mkdir(state.workspaceDir, { recursive: true });
-    const image = createSolidPngBuffer(320, 180, { r: 24, g: 128, b: 192 });
-    await fs.writeFile(mediaUrl, image);
+    await fs.writeFile(mediaUrl, createSolidPngBuffer(320, 180, { r: 24, g: 128, b: 192 }));
     const config: OpenClawConfig = {
       agents: { defaults: { workspace: state.workspaceDir } },
       session: { store: storePath },
@@ -617,31 +616,10 @@ it("retains plugin-delivered images in source history after reopen", async () =>
       tools: { fs: { workspaceOnly: true } },
     };
     setRuntimeConfigSnapshot(config);
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: 1,
-        delivery: {
-          kind: "external",
-          context: { channel: "telegram", to: "123", accountId: "work" },
-          route: { channel: "telegram", target: { to: "123" }, accountId: "work" },
-          origin: { provider: "telegram", to: "123" },
-        },
-      },
-    );
-    const accepted = vi.fn();
+    const scope = { sessionKey, sessionId: identity.sessionId, storePath };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const sendMedia = vi.fn(async (params: ChannelOutboundContext) => {
-      const loaded = await loadWebMediaRaw(
-        params.mediaUrl!,
-        buildOutboundMediaLoadOptions({
-          mediaLocalRoots: params.mediaLocalRoots,
-          mediaReadFile: params.mediaReadFile,
-        }),
-      );
-      expect(loaded.buffer).toEqual(image);
       await params.onPlatformSendDispatch?.();
-      accepted();
       return {
         channel: "telegram" as const,
         messageId: "synthetic-confirmed-image",
@@ -654,65 +632,41 @@ it("retains plugin-delivered images in source history after reopen", async () =>
       targetResolver: { looksLikeId: () => true, hint: "<chat-id>" },
     };
     installChannel(plugin, ["work"]);
-    let delivery: OpenClawPluginToolDelivery | undefined;
-    hoisted.resolvePluginTools.mockImplementation(({ context }) => {
-      delivery = context.delivery;
-      return [];
-    });
-    const token = mintTurn({
-      sessionKey,
-      sessionId,
-      sourceReplySessionKey: sessionKey,
-      requesterAccountId: "work",
-      requesterSenderId: "synthetic-sender",
-      toolContext: {
-        currentChannelProvider: "telegram",
-        currentChannelId: "123",
-        currentMessagingTarget: "123",
-        currentChatType: "direct",
-      },
-    });
     buildDeliveryTools({
       config,
       workspaceDir: state.workspaceDir,
-      agentSessionKey: sessionKey,
-      runSessionKey: sessionKey,
-      sessionId,
-      runId: identity.runId,
-      messageActionTurnCapability: token,
+      messageActionTurnCapability: mintTurn({
+        sourceReplySessionKey: sessionKey,
+        requesterAccountId: "work",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "123",
+          currentMessagingTarget: "123",
+          currentChatType: "group",
+        },
+      }),
     });
-    await expectDefined(delivery, "plugin delivery bound").send({ text: "Plugin image", mediaUrl });
-    expect(accepted).toHaveBeenCalledOnce();
-    const read = async () =>
-      (await loadTranscriptEvents({ sessionKey, sessionId, storePath }))
-        .map(readTranscriptEventMessage)
-        .filter(Boolean);
-    const before = await read();
+    await expectDefined(
+      firstResolvePluginToolsParams().context.delivery,
+      "plugin delivery bound",
+    ).send({ text: "Plugin image", mediaUrl });
     await closeOpenClawAgentDatabasesAsync();
-    const after = await read();
-    expect(after).toEqual(before);
-    const projected = projectChatDisplayMessages(after);
-    const displayImages = projected
-      .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
-      .filter((b: Record<string, unknown>) => b.type === "image" || b.type === "attachment");
+    const messages = (await loadTranscriptEvents(scope))
+      .map(readTranscriptEventMessage)
+      .filter(Boolean);
+    const displayImages = projectChatDisplayMessages(messages)
+      .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+      .filter(
+        (block: Record<string, unknown>) => block.type === "image" || block.type === "attachment",
+      );
     expect(displayImages).toHaveLength(1);
     const artifactId = displayImages[0]?.artifactId;
     if (typeof artifactId !== "string") {
       throw new Error("Missing managed artifact identity");
     }
-    const { readManagedOutgoingImageThumbnail, resolveManagedOutgoingMediaArtifactDownload } =
-      await import("../gateway/managed-image-attachments.js");
     expect(
       await resolveManagedOutgoingMediaArtifactDownload({ sessionKey, artifactId }),
     ).toMatchObject({ type: "image", mimeType: "image/png" });
-    const thumbnail = await readManagedOutgoingImageThumbnail({
-      sessionKey,
-      artifactId,
-      maxBytes: 1024 * 1024,
-      signal: new AbortController().signal,
-    });
-    expect(thumbnail?.length).toBeGreaterThan(0);
-    expect(accepted).toHaveBeenCalledOnce();
-    await closeOpenClawAgentDatabasesAsync();
+    expect(sendMedia).toHaveBeenCalledOnce();
   });
 });

@@ -16,17 +16,13 @@ import {
   appendExactAssistantMessageToSessionTranscript,
   type SessionTranscriptAssistantMessage,
 } from "../../config/sessions/transcript.js";
+import { resolveManagedImageOriginalPath } from "../../gateway/managed-image-attachments.custody.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { mirrorDeliveredSourceReplyToTranscript as mirror } from "./source-reply-mirror.js";
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-  resetPluginRuntimeStateForTest();
-});
+afterEach(clearRuntimeConfigSnapshot);
 
 async function withSource(
   run: (input: Parameters<typeof mirror>[0], read: () => Promise<unknown[]>) => Promise<void>,
@@ -40,17 +36,7 @@ async function withSource(
       agents: { defaults: { workspace: state.workspaceDir } },
     };
     setRuntimeConfigSnapshot(cfg);
-    const plugin = createOutboundTestPlugin({
-      id: "telegram",
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => ({ channel: "telegram", messageId: "unused" }),
-      },
-    });
-    plugin.messaging = { normalizeTarget: (target) => target };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
-    await fs.mkdir(state.workspaceDir, { recursive: true });
     const mediaUrl = path.join(state.workspaceDir, "chart.png");
     await fs.writeFile(mediaUrl, createSolidPngBuffer(2, 2, { r: 20, g: 100, b: 180 }));
     const input: Parameters<typeof mirror>[0] = {
@@ -129,10 +115,8 @@ it.each([false, true])("keeps relative media within the sender boundary (denied=
       const records = await listManagedImageRecordEntries({ sessionKey: input.sessionKey });
       expect(records).toHaveLength(denied ? 0 : 1);
       if (!denied) {
-        const { original } = expectDefined(records[0], "sender attachment").record;
-        expect(
-          await fs.readFile(path.join(original.mediaRoot, original.mediaSubdir, original.mediaId)),
-        ).toEqual(image);
+        const record = expectDefined(records[0], "sender attachment").record;
+        expect(await fs.readFile(resolveManagedImageOriginalPath(record))).toEqual(image);
       }
     } finally {
       await fs.rm(cwdDir, { recursive: true, force: true });
@@ -183,10 +167,12 @@ it.each(["sensitive", "reader-denied", "cancelled", "cancelled-during-preparatio
   (kind) =>
     withSource(async (input, read) => {
       const abort = new AbortController();
+      const payload = expectDefined(input.deliveredPayloads?.[0], "source payload");
+      if (kind.startsWith("cancelled")) {
+        input.abortSignal = abort.signal;
+      }
       if (kind === "sensitive") {
-        input.deliveredPayloads = expectDefined(input.deliveredPayloads, "source payloads").map(
-          (payload) => Object.assign({}, payload, { sensitiveMedia: true }),
-        );
+        input.deliveredPayloads = [{ ...payload, sensitiveMedia: true }];
       }
       if (kind === "reader-denied") {
         input.mediaAccess = {
@@ -198,17 +184,14 @@ it.each(["sensitive", "reader-denied", "cancelled", "cancelled-during-preparatio
       }
       if (kind === "cancelled") {
         abort.abort(new Error("cancelled"));
-        input.abortSignal = abort.signal;
       }
       if (kind === "cancelled-during-preparation") {
-        const payload = expectDefined(input.deliveredPayloads?.[0], "source payload");
         input.deliveredPayloads = [
           payload,
           { ...payload, mediaUrl: payload.mediaUrl + ".second.png" },
         ];
         const image = await fs.readFile(expectDefined(payload.mediaUrl, "source image"));
         let reads = 0;
-        input.abortSignal = abort.signal;
         input.mediaAccess = {
           ...input.mediaAccess,
           readFile: async () => {
@@ -248,15 +231,6 @@ it("retains committed attachment custody when the enclosing read is cancelled", 
     expect(records).toHaveLength(1);
     const record = expectDefined(records[0], "committed attachment").record;
     expect(record.messageId).toBeTruthy();
-    expect(
-      (
-        await fs.readFile(
-          path.join(
-            record.original.mediaRoot,
-            record.original.mediaSubdir,
-            record.original.mediaId,
-          ),
-        )
-      ).length,
-    ).toBeGreaterThan(0);
+    const saved = await fs.readFile(resolveManagedImageOriginalPath(record));
+    expect(saved.length).toBeGreaterThan(0);
   }));
