@@ -854,6 +854,13 @@ CA loading, inherited routing, loopback policy, environment restoration,
 overlapping ownership and shutdown proof. This closes the earlier source-only
 redaction assertion follow-up; no existing production leak is claimed.
 
+### External proxy loopback response proof
+
+At `08ae8c62b83ede02db3a8d2bc3ce36206008d253`, the external-proxy child-process
+case checks four response statuses but only one shared response-body substring.
+Qualification is pending for complete per-response payload assertions in the
+existing case. Both external-proxy declarations and their routing contracts remain.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
