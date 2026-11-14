@@ -1,11 +1,11 @@
 import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS as BUDGET } from "../config/cron-limits.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 
+const BUDGET = resolveGatewayLaneConcurrency({}).cron;
 const cronSnapshot = () => getCommandLaneSnapshot(CommandLane.CronNested);
 const hookSnapshot = () => getCommandLaneSnapshot(CommandLane.HookDispatch);
 const publish = (enabled: boolean) =>
@@ -92,3 +92,11 @@ it.each([false, true])(
     }
   },
 );
+
+it("widens only the automation lane to the agent limit with dynamic concurrency", () => {
+  const cfg = { hooks: { enabled: true }, agents: { defaults: { maxConcurrent: 12 } } };
+  expect(resolveGatewayLaneConcurrency(cfg)).toMatchObject({ cron: 8, hookDispatch: 8 });
+  expect(
+    resolveGatewayLaneConcurrency({ ...cfg, cron: { dynamicConcurrency: true } }),
+  ).toMatchObject({ cron: 12, hookDispatch: 8 });
+});

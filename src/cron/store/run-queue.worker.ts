@@ -77,7 +77,7 @@ function startsWithoutRunSlot(job: CronStoredJob, receiptId: string): boolean {
 }
 
 /** A fired condition waiting for a run slot: it holds neither a check nor a slot. */
-function awaitsRunSlot(job: CronStoredJob | undefined, receiptId: string): boolean {
+export function awaitsRunSlot(job: CronStoredJob | undefined, receiptId: string): boolean {
   return (
     job?.state.runningAtMs !== undefined &&
     job.state.runningReceiptId === receiptId &&

@@ -2,7 +2,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import * as work from "../process/gateway-work-admission.js";
+import { CommandLane } from "../process/lanes.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
@@ -408,5 +410,150 @@ it.each([
     await waitForCronRunQueue(state);
     stop(state);
     stop(replacement);
+  }
+});
+
+it.each([
+  ["eight automations at once by default", undefined, 8],
+  ["as many as the agent limit allows with dynamic concurrency", true, 12],
+])("runs %s", async (_name, dynamicConcurrency, expected) => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs(
+    Array.from({ length: 12 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+  );
+  const finish = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    cronConfig: { dynamicConcurrency },
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      started.push(job.id);
+      await finish.promise;
+      return { status: "ok" as const, summary: job.id };
+    },
+  });
+  setCommandLaneConcurrency(CommandLane.Main, 32);
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(expected));
+    await running.wake(state);
+    expect(started).toHaveLength(expected);
+  } finally {
+    finish.resolve();
+    await waitForCronRunQueue(state);
+    stop(state);
+  }
+});
+
+it("runs as many automations as the agent limit leaves free of conversations", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs(
+    Array.from({ length: 12 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+  );
+  const release = createDeferred();
+  const finish = createDeferred();
+  const turnEnds = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    cronConfig: { dynamicConcurrency: true },
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      await (started.push(job.id) === 1 ? release : finish).promise;
+      return { status: "ok" as const, summary: job.id };
+    },
+  });
+  // An agent limit of twelve with two conversation turns in progress leaves automation ten.
+  setCommandLaneConcurrency(CommandLane.Main, 12);
+  const turns = [turnEnds, finish].map((turn) =>
+    enqueueCommandInLane(CommandLane.Main, async () => await turn.promise),
+  );
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  const runningJobs = async () =>
+    (await loadCronStore(store.storePath)).jobs.filter((job) => job.state.runningAtMs).length;
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(10));
+    expect(await runningJobs()).toBe(10);
+
+    // A run ends: its slot goes to a queued automation, and the count stays at ten.
+    release.resolve();
+    await vi.waitFor(() => expect(started).toHaveLength(11));
+    expect(await runningJobs()).toBe(10);
+
+    // A conversation turn ends: the next tick gives its slot to the last queued automation.
+    turnEnds.resolve();
+    await turns[0];
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(12));
+  } finally {
+    release.resolve();
+    turnEnds.resolve();
+    finish.resolve();
+    await Promise.all(turns);
+    await waitForCronRunQueue(state);
+    stop(state);
+  }
+});
+
+it("runs a fired payload when a conversation turn ending frees a run slot", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const longs = Array.from({ length: 8 }, (_, index) => dueJob(`long-${index}`, nowMs, dueAtMs));
+  const watcher = Object.assign(dueJob("fires", nowMs, dueAtMs), {
+    schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
+    trigger: { script: "return { fire: true }" },
+  });
+  const store = await seedJobs([...longs, watcher]);
+  const finish = createDeferred();
+  const turnEnds = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    cronConfig: { dynamicConcurrency: true, triggers: { enabled: true } },
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      started.push(job.id);
+      if (job.id.startsWith("long-")) {
+        await finish.promise;
+      }
+      return { status: "ok" as const, summary: job.id };
+    },
+    evaluateCronTrigger: async () => ({ kind: "evaluated" as const, fire: true }),
+  });
+  // An agent limit of twelve with four conversation turns in progress leaves automation eight.
+  setCommandLaneConcurrency(CommandLane.Main, 12);
+  const turns = [turnEnds, finish, finish, finish].map((turn) =>
+    enqueueCommandInLane(CommandLane.Main, async () => await turn.promise),
+  );
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(async () =>
+      expect(
+        (await loadCronStore(store.storePath)).jobs.find((job) => job.id === "fires")?.state
+          .runSlotWaitReceiptId,
+      ).toEqual(expect.any(String)),
+    );
+    expect(started).not.toContain("fires");
+
+    // Only a conversation turn ends; the next periodic wake gives its slot to the fired payload.
+    turnEnds.resolve();
+    await turns[0];
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toContain("fires"));
+  } finally {
+    turnEnds.resolve();
+    finish.resolve();
+    await Promise.all(turns);
+    await waitForCronRunQueue(state);
+    stop(state);
   }
 });

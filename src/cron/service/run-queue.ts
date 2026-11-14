@@ -1,4 +1,3 @@
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
@@ -48,6 +47,7 @@ import {
   busyConversationCronJobIds,
   busyCronConversation,
   preparingCronAgentIds,
+  resolveCronRunSlots,
 } from "./scheduler-config.js";
 import {
   emit,
@@ -360,7 +360,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             storeKey: state.deps.storeKey,
             nowMs: state.deps.nowMs(),
             defaultAgentId: resolveCurrentDefaultAgentId(state),
-            maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+            maxConcurrentRuns: resolveCronRunSlots(state.deps.cronConfig),
             // Worker ticks wait for open Gateway admission; this drain must not activate timed
             // occurrences that a draining Gateway can only refuse.
             schedulingPaused: state.schedulingPaused || isGatewayRestartDraining(),
