@@ -392,9 +392,23 @@ async function runAgentDatabasePathWriteAdmission<T>(
       timing,
       (observed) => {
         observeBlockingWriter(pathname, observed);
+        // An active foreground writer must finish before cold discovery can settle.
+        // Borrow its retained identity rather than waiting behind that discovery.
+        const reentrantIdentity =
+          reentrant &&
+          retained &&
+          !admission.queues.get(retained.identity.canonicalPath)?.holder?.worker &&
+          isActiveStoreWriter(
+            admission.queues,
+            retained.identity.canonicalPath,
+            concurrentBoardReads ? new Set(["transcript"]) : undefined,
+          )
+            ? retained.identity
+            : undefined;
         // A multi-store acquisition already owns invocation order for every captured path.
-        return preparedIdentity
-          ? reserve(retained?.identity ?? preparedIdentity, observed)
+        const capturedIdentity = preparedIdentity ?? reentrantIdentity;
+        return capturedIdentity
+          ? reserve(retained?.identity ?? capturedIdentity, observed)
           : acquireAgentDatabaseWriter(
               retained?.identity,
               () => readDatabasePathIdentity(pathname),

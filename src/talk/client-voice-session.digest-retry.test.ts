@@ -12,9 +12,11 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import * as targetReads from "../config/sessions/session-transcript-read-worker-runtime.js";
 import { readSessionTranscriptBoundedMessageTailPageAsync } from "../gateway/session-transcript-readers.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { agentDatabaseWriteAdmissionState } from "../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
@@ -533,6 +535,63 @@ describe("client voice session lifecycle", () => {
     });
   });
   describe("startup", () => {
+    it("finishes concurrent cold Talk creation while the first writer prepares authority", async ({
+      signal,
+    }) => {
+      const storePath = path.join(harness.stateDir, "concurrent", "sessions.sqlite");
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      // Keep file identity stable while the first writer initializes its cold schema.
+      await fs.writeFile(storePath, "");
+      const firstEntered = createDeferred();
+      const releaseFirst = createDeferred();
+      const secondEntered = createDeferred();
+      const resolveTarget = targetReads.resolveSessionSqliteTargetInWorker;
+      let discoveries = 0;
+      using capture = vi.spyOn(targetReads, "resolveSessionSqliteTargetInWorker");
+      capture.mockImplementation((...args) => {
+        const pending = resolveTarget(...args);
+        if (++discoveries === 2) {
+          expect(agentDatabaseWriteAdmissionState.acquisition).toBeDefined();
+          secondEntered.resolve();
+        }
+        return pending;
+      });
+      const first = ensureClientVoiceAgentSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey: "agent:main:talk:first",
+        requester: Object.assign(() => {}, {
+          prepareSessionSource: async () => {
+            firstEntered.resolve();
+            await releaseFirst.promise;
+            return { checks: [], assertCurrent() {} };
+          },
+        }),
+      });
+      try {
+        await withinTest(firstEntered.promise, signal);
+        const second = ensureClientVoiceAgentSessionEntry({
+          agentId: "main",
+          storePath,
+          sessionKey: "agent:main:talk:second",
+        });
+        const completed = Promise.all([first, second]);
+        await withinTest(secondEntered.promise, signal);
+        releaseFirst.resolve();
+        const ids = await withinTest(completed, signal);
+        expect(ids.every(Boolean)).toBe(true);
+        expect(ids[0]).not.toBe(ids[1]);
+        for (const [index, name] of ["first", "second"].entries()) {
+          expect(
+            loadSessionEntry({ agentId: "main", storePath, sessionKey: `agent:main:talk:${name}` })
+              ?.sessionId,
+          ).toBe(ids[index]);
+        }
+      } finally {
+        releaseFirst.resolve();
+      }
+    });
+
     it("stamps required Talk creation once in a fresh agent", async () => {
       const agentId = "fresh";
       const target = { agentId, sessionKey: `agent:${agentId}:talk:new` };
