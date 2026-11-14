@@ -208,7 +208,7 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
     });
   });
 
-  it("persists and emits the canonical terminal timeout diagnostic", async () => {
+  it("persists and emits the real lane timeout cause in the terminal diagnostic", async () => {
     runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(new Error('Command lane "cron-nested" task timed out after 330000ms'), {
         name: "CommandLaneTaskTimeoutError",
@@ -221,7 +221,14 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
       status: "error",
       ...defaultModel,
       error: "cron: job execution timed out",
-      diagnostics: diagnostic("cron-setup", "error", "cron: job execution timed out"),
+      // The lane error says why it gave up; the diagnostic keeps that instead of repeating
+      // the generic operator text, which cannot distinguish a progress-idle kill from a
+      // task-budget kill or an operator abort.
+      diagnostics: diagnostic(
+        "cron-setup",
+        "error",
+        'Command lane "cron-nested" task timed out after 330000ms',
+      ),
     });
   });
 
