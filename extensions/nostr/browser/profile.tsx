@@ -140,13 +140,19 @@ export function createProfileCard(
           <SettingsRow
             title={t("channels.nostr.profile")}
             description={
-              hasDisplayedProfileData()
-                ? undefined
-                : t(configured() ? "channels.nostr.noProfileHint" : "channels.nostr.setupProfile")
+              !state().snapshot.canAdmin
+                ? t("channels.nostr.readOnlyProfile")
+                : hasDisplayedProfileData()
+                  ? undefined
+                  : t(configured() ? "channels.nostr.noProfileHint" : "channels.nostr.setupProfile")
             }
             control={
               configured() ? (
-                <button class="btn btn--sm" onClick={() => controller.edit(accountId(), profile())}>
+                <button
+                  class="btn btn--sm"
+                  disabled={!state().snapshot.canAdmin}
+                  onClick={() => controller.edit(accountId(), profile())}
+                >
                   {t("channels.nostr.editProfile")}
                 </button>
               ) : undefined

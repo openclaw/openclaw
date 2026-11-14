@@ -159,6 +159,23 @@ it("retains profile facts while refreshed snapshots update their values", () => 
   expect(key?.textContent).toBe("synthetic-public-key");
 });
 
+it("explains read-only profile access before opening an unsavable draft", () => {
+  f.click("Cancel");
+  f.update({ canAdmin: false });
+  expect(f.container.textContent).toContain("You need administrator access to edit this profile.");
+  expect(f.container.textContent).toContain("Alice");
+  expect(f.button("Edit Profile").disabled).toBe(true);
+  f.click("Edit Profile");
+  expect(f.input("name")).toBeNull();
+  expect(f.request).not.toHaveBeenCalled();
+
+  f.update({ canAdmin: true });
+  expect(f.container.textContent).not.toContain("You need administrator access");
+  expect(f.button("Edit Profile").disabled).toBe(false);
+  f.click("Edit Profile");
+  expect(f.input("name").value).toBe("Alice");
+});
+
 it("shows setup guidance until profile editing is available", () => {
   f.click("Cancel");
   f.update({ status: { configured: false, running: false } });

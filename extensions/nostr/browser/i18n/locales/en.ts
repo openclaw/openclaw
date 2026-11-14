@@ -26,6 +26,7 @@ export default {
       editProfile: "Edit Profile",
       profilePicture: "Profile picture",
       setupProfile: "Set up Nostr to add or edit a profile.",
+      readOnlyProfile: "You need administrator access to edit this profile.",
       noProfileHint: 'Click "Edit Profile" to add your name, bio, and avatar.',
       name: "Name",
       displayName: "Display Name",
