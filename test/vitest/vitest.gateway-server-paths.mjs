@@ -596,7 +596,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
-  "test/plugins/deep-research-recovery.gateway.test.ts",
 ];
 
 export const gatewayClientTestInclude = [
@@ -657,12 +656,6 @@ export const gatewayMethodsTestInclude = [
   "src/gateway/server-methods/**/*.test.ts",
   ...gatewayPluginTestFiles,
 ];
-export const gatewayMethodsTestExclude = [
-  ...gatewayDatabaseWorkerTestFiles,
-  ...gatewayMethodsIsolatedTestFiles,
-  ...databaseWorkerCoreTestFiles,
-];
-
 // Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
@@ -671,6 +664,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.subagent-prompt-recent.gateway.test.ts",
   // Native provider imports must not retain a previous file's retired shared-state owner.
   "src/gateway/setup-inference.first-signin.integration.test.ts",
+  "test/plugins/deep-research-recovery.gateway.test.ts",
   // Sibling threads can fork and retain listener sockets until exec on Linux.
   "src/gateway/server/plugin-legacy-listeners.test.ts",
   // Native source captures must not retain this fixture's forbidden process constructors.
@@ -711,6 +705,13 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
   "src/gateway/server.xai-fallback.test.ts",
+];
+
+export const gatewayMethodsTestExclude = [
+  ...gatewayDatabaseWorkerTestFiles,
+  ...gatewayMethodsIsolatedTestFiles,
+  ...gatewayServerIsolatedTestFiles,
+  ...databaseWorkerCoreTestFiles,
 ];
 
 export const gatewayCoreTestInclude = ["src/gateway/**/*.test.ts"];

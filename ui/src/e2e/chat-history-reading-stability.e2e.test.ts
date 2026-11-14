@@ -92,18 +92,18 @@ suite.define(() => {
         await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
         await expect
           .poll(() =>
-            thread.evaluate((element, loaded) => {
+            thread.evaluate((element) => {
               const pane = element.closest(".chat-pane-cache__pane--active") as HTMLElement & {
                 state: { chatMessages: unknown[] };
               };
               // The prepended prefix must own real scroll space before reading through it.
-              return (
-                pane.state.chatMessages.length === loaded &&
-                element.scrollTop > element.clientHeight
-              );
-            }, LOADED),
+              return {
+                messageCount: pane.state.chatMessages.length,
+                prefixOwnsScrollSpace: element.scrollTop > element.clientHeight,
+              };
+            }),
           )
-          .toBe(true);
+          .toEqual({ messageCount: LOADED, prefixOwnsScrollSpace: true });
         // Programmatic steps now sample reading through the loaded history.
         const frames = await thread.evaluate(async (element) => {
           const pane = element.closest(".chat-pane-cache__pane--active") as HTMLElement & {

@@ -533,15 +533,15 @@ describe("projects vitest config", () => {
     );
   });
 
-  it.each([
-    "test/plugins/deep-research-recovery.gateway.test.ts",
-    "src/gateway/server/ws-connection/connect-role-catalog.test.ts",
-  ])("routes %s through the Gateway database owner exactly once", (file) => {
-    const project = "test/vitest/vitest.gateway-database-workers.config.ts";
-    expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
-    expect(requireTestConfig(createGatewayDatabaseWorkersVitestConfig({})).pool).toBe("forks");
-    expect(requireTestConfig(createGatewayMethodsVitestConfig({})).exclude).toContain(file);
-  });
+  it.each(["src/gateway/server/ws-connection/connect-role-catalog.test.ts"])(
+    "routes %s through the Gateway database owner exactly once",
+    (file) => {
+      const project = "test/vitest/vitest.gateway-database-workers.config.ts";
+      expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
+      expect(requireTestConfig(createGatewayDatabaseWorkersVitestConfig({})).pool).toBe("forks");
+      expect(requireTestConfig(createGatewayMethodsVitestConfig({})).exclude).toContain(file);
+    },
+  );
 
   it.each([
     {

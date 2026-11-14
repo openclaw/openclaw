@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import * as sessionKeys from "../routing/session-key.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import { indexSessionRow } from "./session-row-projection-identities.js";
@@ -26,6 +27,36 @@ const target = {
   agentId: "main",
   storeTarget: { agentId: "main", storePath: "/synthetic/sessions.sqlite" },
 };
+
+it.each(["agent:main:subagent:ordinary", "agent:main:subagent:incognito-private"])(
+  "checks matching row lifecycles without reclassifying keys: %s",
+  (key) => {
+    const row = { ...records.create({ ...target, key }, original), entry: original };
+    const current = { ...row, entry: { ...original } };
+    const classify = vi.spyOn(sessionKeys, "isIncognitoSessionKey");
+    try {
+      for (let recipient = 0; recipient < 16; recipient++) {
+        expect(records.isCurrentGeneration(row, current)).toBe(true);
+      }
+      expect(classify).not.toHaveBeenCalled();
+      expect(records.isCurrentGeneration(row, undefined)).toBe(false);
+      expect(
+        records.isCurrentGeneration(row, { ...current, generation: Symbol("replacement") }),
+      ).toBe(false);
+      for (const entry of [
+        undefined,
+        { ...original, sessionId: "replacement" },
+        { ...original, lifecycleRevision: "replacement" },
+      ]) {
+        expect(records.isCurrentGeneration(row, { ...current, entry })).toBe(
+          key === "agent:main:subagent:ordinary",
+        );
+      }
+    } finally {
+      classify.mockRestore();
+    }
+  },
+);
 
 it("shares singleton index buckets without coupling alias collisions or removals", () => {
   const indexes = {

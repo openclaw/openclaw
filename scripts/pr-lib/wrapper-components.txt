@@ -2928,6 +2928,7 @@ src/infra/client-credential-store.ts
 src/infra/device-identity-material.ts
 src/infra/exec-approvals-config.ts
 src/commands/doctor-migration-backup-artifacts.ts
+src/commands/doctor-migration-backup-names.ts
 src/commands/doctor-migration-backup.ts
 src/commands/doctor-rehearsal-databases.ts
 src/commands/doctor-update-rehearsal-paths.ts
