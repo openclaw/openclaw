@@ -337,6 +337,9 @@ a concise automation-failed notice; continue setup in the same agent. Successful
 skill and MCP setup, absent optional files, and empty categories stay silent. There
 is no final setup receipt or second model recap. Declared package bootstrap still
 follows shared setup; MCP configuration alone does not prove a working connection.
+When offline Add keeps an agent after a later step fails, the agent gets the default
+`AGENTS.md`, `IDENTITY.md` and `USER.md`, and the package `BOOTSTRAP.md` is held
+back because its setup did not finish.
 
 `--dry-run --json` remains available for automation or local-source inspection.
 `--agent-id` selects an unused ID. `--workspace` selects a new path for local

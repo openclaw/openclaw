@@ -1,14 +1,25 @@
+import path from "node:path";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+} from "./workspace-bootstrap-policy.js";
+import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
+import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
 import {
   mergeWorkspaceSetupState,
   replaceWorkspaceAttestation,
   type WorkspaceAttestation,
 } from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
+import { loadWorkspaceTemplate } from "./workspace-template-load.js";
 
 const preparationQueues = resolveGlobalMap<string, StoreWriterQueue>(
   Symbol.for("openclaw.workspacePreparationQueues"),
@@ -29,6 +40,31 @@ export async function settleWorkspaceBootstrapDeferral(
   options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
 ): Promise<void> {
   await mergeWorkspaceSetupState(dir, { bootstrapDeferred: false }, undefined, options);
+}
+
+/**
+ * Give a kept agent whose initializer stopped early the ordinary default files.
+ * BOOTSTRAP.md and setup state stay with the initializer, so a later seed still applies.
+ */
+export async function seedDeferredWorkspaceDefaults(dir: string): Promise<void> {
+  const workspace = resolveUserPath(dir);
+  if (!(await readCanonicalWorkspaceStateSnapshot(workspace)).setup.bootstrapDeferred) {
+    return;
+  }
+  await runWorkspacePreparation(workspace, async (assertFilesystem) => {
+    for (const name of [
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+    ]) {
+      await publishBootstrapFile(
+        path.join(workspace, name),
+        () => loadWorkspaceTemplate(name),
+        assertFilesystem,
+      );
+    }
+  });
 }
 
 /** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
