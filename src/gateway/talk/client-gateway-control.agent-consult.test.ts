@@ -14,8 +14,13 @@ import {
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import {
+  replyMessageInjectionTargetOwner,
+  type ReplyToolAuthorityOverlay,
+} from "../../sessions/session-controller.contracts.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
+import { captureReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -35,8 +40,9 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
-vi.mock("../../agents/embedded-agent.js", () => ({
-  runEmbeddedAgent: mocks.runEmbeddedAgentCore,
+// mock-isolation: Keep consultation admission real; candidate execution publishes controlled backends.
+vi.mock("./agent-consult-execution.js", () => ({
+  runTalkAgentTurn: mocks.runEmbeddedAgentCore,
 }));
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),
@@ -118,7 +124,14 @@ function mockConsult(run: (params: ConsultParams) => Promise<void>) {
 async function projectSteering(params: ControlParams) {
   const overlay = params.getToolAuthorityOverlay?.();
   if (overlay) {
-    await params.prepareToolAuthorityOverlay?.(overlay);
+    const operation = params.runTarget
+      ? findSessionControllerOperationByRunId(params.runTarget.runId)
+      : undefined;
+    const target = captureReplyMessageInjectionTarget(operation);
+    if (!target) {
+      throw new Error("Talk steering has no current controller target");
+    }
+    await target[replyMessageInjectionTargetOwner].projectToolAuthorityFingerprintAsync(overlay);
   }
   return { ok: true, queued: true, message: "Steering accepted." };
 }
