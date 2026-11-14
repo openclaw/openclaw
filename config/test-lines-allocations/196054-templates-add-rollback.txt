@@ -1,0 +1,4 @@
+# Regression for CLI Template Add rollback: a failed Add removes the agent it
+# registered through the real config writer (other tests inject commitConfig).
+# Exact net growth for PR #196054.
+19

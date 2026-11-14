@@ -767,6 +767,25 @@ describe("stateless Template Add", () => {
     expect(existsSync(path.join(plan.agent.workspace, "USER.md"))).toBe(true);
   });
 
+  it("removes the new agent from the config file when Add fails after registering it", async () => {
+    const plan = await buildPlan();
+    vi.spyOn(cronInstall, "installTemplateCronJobsStateless").mockRejectedValueOnce(
+      new Error("scheduler unavailable"),
+    );
+
+    const result = await apply(plan, { commitConfig: undefined });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: false,
+      workspaceCreated: false,
+      error: { code: "add_failed", message: "scheduler unavailable" },
+    });
+    const written = JSON.parse(await readFile(path.join(stateDir, "openclaw.json"), "utf8"));
+    expect(Object.keys(written.agents.entries)).toEqual(["main"]);
+    expect(existsSync(plan.agent.workspace)).toBe(false);
+  });
+
   it("does not touch shared requirements when agent publication fails", async () => {
     const plan = await buildPlan();
     plan.actions.push({
