@@ -433,39 +433,63 @@ it("disables starting without write access", async () => {
   expect(dialog.textContent).toContain("needs write access");
 });
 
-it("runs, pauses, turns off and opens an On scribe from its detail", async () => {
-  const { render, ui, calls, open, load, page } = fixture({
-    sessions: reviewSession,
-    jobs: [reviewJob],
-  });
-  ui.s.scribe = "claim-consolidation";
-  const view = await render();
-  expect(view.textContent).toContain("1 recent run, all succeeded");
-  expect(view.querySelector(".scribe-run span")?.textContent).toBe("9 filed · 2 pages created");
-  expect(view.textContent).toContain("Alert after 2 failed runs");
-  expect(view.textContent).toMatch(/Weekly on Sunday, 3:45\sAM/);
-  buttonNamed(view, "Run now").click();
-  await flush();
-  expect(calls.at(-1)).toEqual(["cron.run", { id: "job-review", mode: "force" }]);
-  buttonNamed(view, "Pause").click();
-  await flush();
-  expect(calls.at(-1)).toEqual([
-    "cron.update",
-    { id: "job-review", patch: { enabled: false }, expectedConfigRevision: "rev-7" },
-  ]);
-  buttonNamed(view, "Open conversation").click();
-  expect(open).toHaveBeenCalledWith({ sessionKey: "s-review", agentId: "main" });
-  buttonNamed(view, "Turn off…").click();
-  const confirm = page.querySelector("dialog")!;
-  buttonNamed(confirm, "Turn off").click();
-  await vi.waitFor(() =>
+it.each([false, true])(
+  "runs, disables, enables and removes a scribe automation (running=%s)",
+  async (running) => {
+    const job = {
+      ...reviewJob,
+      state: { ...reviewJob.state, runningAtMs: running ? 1_793_080_000_000 : undefined },
+    };
+    const { render, ui, calls, open, load, page } = fixture({
+      sessions: reviewSession,
+      jobs: [job],
+    });
+    ui.s.scribe = "claim-consolidation";
+    let view = await render();
+    expect(view.textContent).toContain("1 recent run, all succeeded");
+    expect(view.querySelector(".scribe-run span")?.textContent).toBe("9 filed · 2 pages created");
+    expect(view.textContent).toContain("Alert after 2 failed runs");
+    expect(view.textContent).toMatch(/Weekly on Sunday, 3:45\sAM/);
+    buttonNamed(view, "Run now").click();
+    await flush();
+    expect(calls.at(-1)).toEqual(["cron.run", { id: "job-review", mode: "force" }]);
+    const disable = buttonNamed(view, running ? "Stop and disable" : "Disable");
+    expect(disable).toBeDefined();
+    disable.click();
+    await flush();
     expect(calls.at(-1)).toEqual([
-      "cron.remove",
-      { id: "job-review", expectedConfigRevision: "rev-7" },
-    ]),
-  );
-  expect(load).toHaveBeenCalled();
-});
+      "cron.update",
+      { id: "job-review", patch: { enabled: false }, expectedConfigRevision: "rev-7" },
+    ]);
+    expect(ui.announce).toHaveBeenCalledWith("Automation disabled for Knowledge Consolidation.");
+    job.enabled = false;
+    job.state.runningAtMs = undefined;
+    view = await render();
+    expect(view.querySelector(".scribe-status")?.textContent).toContain("Disabled");
+    buttonNamed(view, "Enable").click();
+    await flush();
+    expect(calls.at(-1)).toEqual([
+      "cron.update",
+      { id: job.id, patch: { enabled: true }, expectedConfigRevision: "rev-7" },
+    ]);
+    expect(ui.announce).toHaveBeenCalledWith("Automation enabled for Knowledge Consolidation.");
+    expect(calls.filter(([method]) => method === "cron.run")).toHaveLength(1);
+    job.enabled = true;
+    view = await render();
+    buttonNamed(view, "Open conversation").click();
+    expect(open).toHaveBeenCalledWith({ sessionKey: "s-review", agentId: "main" });
+    buttonNamed(view, "Remove automation…").click();
+    const confirm = page.querySelector("dialog")!;
+    buttonNamed(confirm, "Remove automation").click();
+    await vi.waitFor(() =>
+      expect(calls.at(-1)).toEqual([
+        "cron.remove",
+        { id: "job-review", expectedConfigRevision: "rev-7" },
+      ]),
+    );
+    expect(load).toHaveBeenCalled();
+  },
+);
 
 it("asks an earlier scribe's conversation to update it once and offers an edited one the current message", async () => {
   const runMessage = setupPrompt(reviewSetup).match(/```text\n([\s\S]+)\n```$/)![1]!;
