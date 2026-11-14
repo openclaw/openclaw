@@ -2176,7 +2176,6 @@
     "src/agents/agent-tools.before-tool-call.e2e.test.ts": 2,
     "src/agents/agent-tools.before-tool-call.integration.e2e.test.ts": 2,
     "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts": 14,
-    "src/agents/bash-tools.process.e2e.test.ts": 3,
     "src/agents/clawrouter-catalog-discovery.e2e.test.ts": 1,
     "src/agents/cli-runner.fault-sequences.e2e.test.ts": 5,
     "src/agents/embedded-agent-runner.e2e.test.ts": 5,
@@ -2397,10 +2396,7 @@
         "env": {
           "OPENCLAW_VITEST_MAX_WORKERS": "2"
         },
-        "includePatterns": [
-          "src/agents/runtime-plugins.context-engine.integration.test.ts",
-          "src/agents/simple-completion-runtime.plugin-scope.test.ts"
-        ],
+        "includePatterns": [],
         "pretestBuildMode": "runtime",
         "seconds": 10
       },
@@ -2431,10 +2427,7 @@
           "test/vitest/vitest.agents-core.config.ts"
         ],
         "env": {},
-        "includePatterns": [
-          "src/agents/runtime-plugins.context-engine.integration.test.ts",
-          "src/agents/simple-completion-runtime.plugin-scope.test.ts"
-        ],
+        "includePatterns": [],
         "pretestBuildMode": "runtime",
         "seconds": 8
       },

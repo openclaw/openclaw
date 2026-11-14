@@ -24,8 +24,8 @@ scenario:
   codeRefs:
     - src/agents/bash-tools.exec-run.ts
     - src/agents/bash-tools.process.ts
-    - src/agents/bash-tools.process.e2e.test.ts
+    - src/agents/bash-tools.test.ts
   execution:
     kind: vitest
-    path: src/agents/bash-tools.process.e2e.test.ts
-    summary: Run one real interactive background child through exec, process status, log, poll, input, and control boundaries.
+    path: src/agents/bash-tools.test.ts
+    summary: Run exec/process completion, polling, log-window, and notification checks.

@@ -383,7 +383,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/agents/agent-tools.delegated-authority.test.ts",
         "src/agents/session-placement-computer.test.ts",
-        "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
       ],
       preset: "runtime",
     },

@@ -363,7 +363,6 @@ describe("scheduled CodeQL input reuse", () => {
     ["docs/intro.md", []],
     [".github/workflows/docs.yml", ["actions"]],
     ["src/process/exec.ts", ["mcp-process-tool-boundary", "process-exec-boundary"]],
-    ["src/agents/bash-tools.exec-runtime.test.ts", []],
     ["src/process/exec.test.ts", []],
     ["src/infra/net/request.ts", ["network-ssrf-boundary"]],
     ["src/channels/.runtime.ts", ["channel-runtime-boundary"]],

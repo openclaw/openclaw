@@ -212,7 +212,7 @@ it.each(["node", "bun-all", "dual-all"] as const)(
       [
         [processConfig, infraConfig, agentsConfig],
         [nodeFile],
-        [bunFile, "src/agents/code-mode-node.lifecycle.test.ts"],
+        [bunFile],
         [...codeModeFiles, catalogWorkerFile],
       ],
     ] as const) {
