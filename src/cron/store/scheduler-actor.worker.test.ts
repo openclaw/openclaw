@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import { BroadcastChannel } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { MIN_CRON_RUN_SLOTS } from "../../config/cron-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -211,7 +211,7 @@ it.each(["every", "cron"] as const)(
       schedule: kind === "cron" ? cronSchedule : { kind: "every", everyMs: minute, anchorMs: now },
     });
     const jobs = [
-      ...Array.from({ length: MIN_CRON_RUN_SLOTS }, (_, index) =>
+      ...Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
         job(`blocker-${kind}-${index}`, now, {
           schedule: { kind: "every", everyMs: 60 * minute, anchorMs: now },
         }),
@@ -261,7 +261,7 @@ it("keeps startup work pending while its subscriber is paused", () => {
 });
 
 it("settles a removed queued request even when no queued job remains", () => {
-  const count = MIN_CRON_RUN_SLOTS + 1;
+  const count = DEFAULT_CRON_MAX_CONCURRENT_RUNS + 1;
   const scheduler = storedScheduler(
     "removed-queued-request",
     jobSeries("job", count, () => now - minute),
@@ -540,13 +540,13 @@ it("observes future deadlines without SQL wakes and retries an unacknowledged du
 
 it("looks again within a minute while a run waits for a run slot", async () => {
   const hour = 60 * minute;
-  const busy = ids("busy", MIN_CRON_RUN_SLOTS + 1).map((id) =>
+  const busy = ids("busy", DEFAULT_CRON_MAX_CONCURRENT_RUNS + 1).map((id) =>
     job(id, now - minute, { schedule: { kind: "every", everyMs: hour, anchorMs: now - minute } }),
   );
   const scheduler = storedScheduler("queued-run-wake", [...busy, job("idle", now + 10 * hour)]);
   using wakes = observeWakes(scheduler.channelName);
   const started = scheduler.start(now, immediate(busy.length));
-  expect(started.launches).toHaveLength(MIN_CRON_RUN_SLOTS);
+  expect(started.launches).toHaveLength(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
   // The next due job is ten hours away; the queued run is looked at again after a minute.
   expect(started.nextWakeAtMs).toBe(now + 10 * hour);
   await vi.advanceTimersByTimeAsync(minute);
