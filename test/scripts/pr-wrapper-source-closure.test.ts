@@ -16,6 +16,7 @@ const components = [
 ];
 
 const wrapperRoots = [
+  "scripts/pr-lib/integration-freshness.mts",
   "src/infra/gateway-state-owner.ts",
   "src/plugins/discovery.ts",
   "src/infra/sqlite-readonly-location.worker.ts",

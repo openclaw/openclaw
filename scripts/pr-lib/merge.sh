@@ -183,15 +183,22 @@ mainline_drift_requires_sync() (
 )
 
 verify_merge_candidate_tree() {
-  local main="$1" head="$2" tree main_tree
+  local main="$1" head="$2" local_only="${3:-false}" method="${4:-squash}" tree main_tree base identity mode=verify
   tree=$(pr_git merge-tree --write-tree "$main" "$head") || {
     merge_outcome_stop "cannot establish prepared-head merge tree (conflict or unavailable objects)"; return 1;
   }
   main_tree=$(pr_git rev-parse "$main^{tree}") || return 1
-  if [ "$tree" = "$main_tree" ]; then
+  if [ "$method" = squash ] && [ "$tree" = "$main_tree" ]; then
     echo "NO NET CHANGE: squash produces the current main tree. PR lifecycle is unresolved; no merge, comment, or cleanup. Inspect main history and PR intent."
     return 1
   fi
+  base=$(pr_git merge-base "$main" "$head") || return 1
+  identity="$base:$main:$head:$tree"
+  [ "${MERGE_STATIC_PROOF:-}" != "$identity" ] || return 0
+  [ "$local_only" != true ] || mode=local-only
+  node --import "$script_parent_dir/tsx.mjs" "$script_parent_dir/pr-lib/integration-freshness.mts" \
+    "$base" "$head" "$main" "$tree" "$mode" || return 1
+  MERGE_STATIC_PROOF="$identity"
 }
 
 # A recalculated projection can change after main advances. Recheck the selected
@@ -632,7 +639,7 @@ merge_run() {
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
   local provider_rejection="" stale_head_retirement="" async_failure="" qualified_pending_recovery=false
   local retired_auto_admin=false stale_admin_head=false qualified_immediate_recovery=false
-  local MERGE_REQUIRED_CHECKS_PASSED=false
+  local MERGE_REQUIRED_CHECKS_PASSED=false MERGE_STATIC_PROOF=""
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
@@ -1060,6 +1067,16 @@ merge_run() {
         merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN, UNSTABLE, BEHIND, or BLOCKED status"; return 1 ;;
     esac
   fi
+  if [ "$route" = auto ] || [ "$route" = queue ]; then
+    local static_base compiler_candidate
+    static_base=$(pr_git merge-base "$PR_MAIN_SHA" "$PREP_HEAD_SHA") || return 1
+    compiler_candidate=$(node --import "$script_parent_dir/tsx.mjs" "$script_parent_dir/pr-lib/integration-freshness.mts" \
+      "$static_base" "$PREP_HEAD_SHA" "$PR_MAIN_SHA" "$PR_MAIN_SHA" candidate) || return 1
+    if [ "$compiler_candidate" = true ]; then
+      echo "PENDING: compiler-input PR requires immediate admission; no auto-merge or queue request was submitted. Observe existing CI/review checks and rerun merge-run when immediate admission is available."
+      return 1
+    fi
+  fi
   if [ -n "$captured_body" ] && [ "$route" = queue ]; then
     merge_outcome_stop "--body-file requires a non-queue PR"
     return 1
@@ -1089,8 +1106,8 @@ merge_run() {
   verify_merge_route_projection "$pr" "$MERGE_OBSERVATION" "$route" "$strict_immediate_recovery" || return 1
   local observed_main
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
-  if [ "$merge_method" = squash ] && [ "$route" != queue ]; then
-    verify_merge_candidate_tree "$observed_main" "$PREP_HEAD_SHA" || return 1
+  if [ "$route" != queue ]; then
+    verify_merge_candidate_tree "$observed_main" "$PREP_HEAD_SHA" false "$merge_method" || return 1
   fi
   if [ -n "$recovery_oid" ]; then
     recovery_actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1

@@ -938,7 +938,7 @@ verify_merge_main_advance() {
   fi
   # The fixed CI/security proof remains bound to its verified main ancestor.
   # Prove the new composition without changing the pinned intent/audit anchor.
-  verify_merge_candidate_tree "$main" "$PREP_HEAD_SHA"
+  verify_merge_candidate_tree "$main" "$PREP_HEAD_SHA" "$local_only" "${merge_method:-squash}"
 }
 
 merge_outcome_stable() {

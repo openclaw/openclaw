@@ -76,6 +76,85 @@ function expectNoDispatch(f: ReturnType<typeof fixture>) {
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it.each(["auto", "queue"])(
+    "does not submit %s for compiler inputs whose eventual base is unknown",
+    (route) => {
+      const f = fixture();
+      const entries = f.git(["ls-tree", f.head]).replace("\towner.txt", "\towner.ts");
+      const tree = f.git(["mktree"], entries + "\n");
+      const head = f.commit(tree, [f.base]);
+      f.git([
+        "push",
+        "-q",
+        "--force",
+        "origin",
+        head + ":refs/pull/123/head",
+        head + ":refs/heads/topic",
+      ]);
+      f.git(["-C", f.worktree, "checkout", "-B", "pr-123-prep", head]);
+      f.prepare(head);
+      const state = f.state();
+      state.pr.headRefOid = head;
+      state.pr.mergeStateStatus = route === "auto" ? "BLOCKED" : "CLEAN";
+      state.pr.isMergeQueueEnabled = route === "queue";
+      f.save(state);
+      const run = proof.expectExit(f.run(route === "auto"), 1);
+      expect(run.output).toContain("PENDING: compiler-input PR requires immediate admission");
+      expectNoDispatch(f);
+    },
+  );
+  it.each(["merge", "rebase"])(
+    "requires integration proof for immediate %s when main is unchanged during admission",
+    (method) => {
+      const f = fixture();
+      const env = { GIT_INDEX_FILE: join(f.root, "compiler-index") };
+      const tree = (parent: string, files: Record<string, string>) => {
+        f.git(["read-tree", parent], undefined, f.repo, env);
+        for (const [name, content] of Object.entries(files)) {
+          const blob = f.git(["hash-object", "-w", "--stdin"], content);
+          f.git(
+            ["update-index", "--add", "--cacheinfo", "100644," + blob + "," + name],
+            undefined,
+            f.repo,
+            env,
+          );
+        }
+        return f.git(["write-tree"], undefined, f.repo, env);
+      };
+      const base = f.commit(
+        tree(f.base, { "retention.ts": "export const forceFullGc = () => true;\n" }),
+        [f.base],
+      );
+      const main = f.commit(tree(base, { "retention.ts": "export {};\n" }), [base]);
+      const head = f.commit(
+        tree(base, {
+          "consumer.ts":
+            "import { forceFullGc } from './retention.js';\nexport const collected = forceFullGc();\n",
+        }),
+        [base],
+      );
+      f.git([
+        "push",
+        "-q",
+        "--force",
+        "origin",
+        main + ":refs/heads/main",
+        head + ":refs/pull/123/head",
+        head + ":refs/heads/topic",
+      ]);
+      f.git(["-C", f.worktree, "checkout", "-B", "pr-123-prep", head]);
+      f.prepare(head, main);
+      const state = f.state();
+      state.pr.headRefOid = head;
+      f.save(state);
+      // This tiny repository has no supported compiler graph. Admission must
+      // request full-proof escalation, not dispatch without consulting the planner.
+      const run = proof.expectExit(f.run(false, f.repo, method), 1);
+      expect(run.output).toContain("Integration static plan requires full fallback");
+      expectNoDispatch(f);
+    },
+  );
+
   it("stops before intent when queue removal invalidates the captured squash body", () => {
     const f = proof.configuredFixture(fixture, {
       pr: { isMergeQueueEnabled: true },

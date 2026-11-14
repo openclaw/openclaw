@@ -19,6 +19,42 @@ title: "PR merge admission"
 - Before recording intent, `--auto-merge` selects immediate pinned squash for `MERGEABLE/CLEAN` or auto for `MERGEABLE/BEHIND` or `MERGEABLE/BLOCKED`, subject to all admission gates and queue policy. Accepted auto/queue requests are visible pending outcomes, not completion. The request carries `--match-head-commit`; confirmation still requires the exact attempted head. This is a submission-time head precondition, not a server-side freeze against later collaborator pushes; if GitHub merged the pushed head, use the explicit `merge-recover --merged-head <SHA>` [receipt route](/reference/scripts/merge-recovery). Existing or ambiguous requests are never automatically cancelled, re-armed, or followed by an immediate fallback; an explicitly investigated accepted auto request uses the [cancellation recovery](/reference/scripts/merge-recovery). Ordinary `gh pr merge` can enqueue when queue policy applies.
 - `--auto-merge` selects immediate squash for `MERGEABLE/UNSTABLE` only after one fresh `scripts/watch-pr-ci.mjs --completion rollup --once` pass at the exact prepared head exits GREEN; `--once` evaluates one attach and one rollup observation without waiting, and `--timeout` bounds only that pass's evidence reads. GitHub's rollup and merge projection retain runs superseded by a newer same workflow/event/job-name run on that head, such as a draft `opened` ClawSweeper Dispatch run after `ready_for_review`. The watcher's `classifyRollup` owns supersession; the pass also requires the attached `ci.yml` run to succeed. Any unsuperseded failure, hidden or paginated context, missing run identity, pending check, moved head, conflict, or watcher error refuses admission; the watcher's existing `auto-response` exclusion applies unchanged. This is a one-shot admission predicate, not a pinned snapshot fact: GitHub still enforces required checks at dispatch, the exact-head mutation pins the head, and the final stability reread pins the UNSTABLE projection. Pinning rollup contexts would extend the Octopool-allowlisted landing snapshot query and retained-outcome schema for a risk server enforcement already bounds. Accepted edge case: a new non-required failure on the same head between the pass and dispatch is not rechecked. Retained intents never rerun the predicate or redispatch; explicit recovery reruns admission.
 
+## Current-main static integration proof
+
+A conflict-free merge tree does not prove compiler compatibility. When both the
+prepared PR delta and main's delta from their merge base contain compiler inputs,
+merge admission materializes that exact merge tree in a disposable checkout and
+uses the existing changed-CI compiler planner for every immediate merge method
+(squash, merge, and rebase). Only squash rejects a no-net-change tree; an
+ancestry-recording merge still receives the applicable compiler proof. The proof
+identifies the merge base, current main, prepared head, and merge tree; it is reused only for that
+identity within the same admission attempt. Source files, TypeScript configs,
+package manifests, dependency locks, workspace settings, and npm settings count
+as compiler inputs. No path-overlap assumption is made: an export removal and a
+new consumer can live in different files.
+
+The checkout receives an offline, frozen, lifecycle-script-free dependency
+install using the prepared checkout's pnpm store. Missing cached dependencies or
+metadata refuse admission with a preparation error. Only the planner's affected
+graphs run, through the existing compiler/resource owner. Unsupported inputs,
+deletions, ambient declarations, or an incomplete graph selection require the
+planner's full fallback: admission stops and requests `prepare-sync-head` plus
+existing gates instead of silently starting a full suite. This does not replace
+live required-check, review, security, or admin-authority verification. A newly
+required proof in the final local-only authority window stops before dispatch;
+rerun admission rather than install or fetch after authority verification.
+
+Compiler-input PRs cannot submit asynchronous auto-merge or queue requests from
+this wrapper: such a request has no fixed eventual base to test. Admission
+returns `PENDING` without intent or dispatch; the caller retains ownership of
+observing the existing CI/review checks and rerunning admission when an immediate
+route is available. Noncompiler requests retain their existing routes. This is
+not a server-wide policy or a guarantee against all semantic interactions. In
+particular, GitHub has no base-SHA precondition: main can still advance in the
+small interval between the final observation and immediate merge. That race is
+accepted; head matching, live authority checks, and receipt verification remain
+unchanged.
+
 ## Complete check-suite reads
 
 Required-check admission keeps the complete suite inventory bounded to 1,000

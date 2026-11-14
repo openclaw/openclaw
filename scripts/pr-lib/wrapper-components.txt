@@ -2990,3 +2990,15 @@ src/config/sessions/session-context-seed.ts
 src/agents/code-mode-session-store-replay.ts
 src/config/sessions/session-transcript-maintenance-suffix.ts
 src/state/user-channel-authorization-reference.ts
+scripts/check-tsgo-core-boundary.mts
+scripts/lib/check-limits.mts
+scripts/lib/ci-static-check-evidence.mjs
+scripts/lib/dist-artifact-lock.mts
+scripts/lib/dist-artifact-ownership.mts
+scripts/lib/managed-memory-entrypoint.mts
+scripts/lib/managed-memory.mts
+scripts/lib/release-context.mjs
+scripts/lib/tsgo-performance.mts
+scripts/lib/tsgo-sparse-guard.mts
+scripts/run-tsgo-core-test-shards.mts
+scripts/run-tsgo.mts
