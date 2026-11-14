@@ -58,13 +58,8 @@ async function collectWorkerIdleGarbage(): Promise<void> {
       };
       // Every pool worker loads this module; load logging only on this rare path so
       // small workers stay inside their evaluated-module budgets.
-      void import("../logging/subsystem.js")
-        .then(({ createSubsystemLogger }) =>
-          createSubsystemLogger("worker/idle-gc").warn(
-            "slow idle worker garbage collection",
-            fields,
-          ),
-        )
+      void import("./worker-idle-gc-report.runtime.js")
+        .then(({ reportSlowIdleWorkerGc }) => reportSlowIdleWorkerGc(fields))
         .catch((error: unknown) => {
           process.emitWarning(error instanceof Error ? error : String(error));
         });
