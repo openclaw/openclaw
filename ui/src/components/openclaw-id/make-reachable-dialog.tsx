@@ -24,6 +24,7 @@ import type { RecoveryKitDetails } from "../../lib/openclaw-id/kit-export.ts";
 import {
   LINK_STEPS,
   runLinkSteps,
+  watchRelay,
   type LinkStep,
   type LinkStepState,
 } from "../../lib/openclaw-id/link-steps.ts";
@@ -47,6 +48,7 @@ import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { RecoveryKitForm } from "./recovery-kit-form.tsx";
 import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
 import { createSetupMotion } from "./setup-motion.ts";
+import { profileNotice, SetupProfileNotice, type ProfileNotice } from "./setup-profile-notice.tsx";
 
 function StepTooltip(props: { error: OpenClawIdUiError; failed: boolean }) {
   return (
@@ -154,12 +156,17 @@ const DEFAULT_CLAW_NAME = "claw";
  * claw, registration (possession proof and address reservation) and the relay
  * connection. Only signed statements reach the Gateway. Resolves true once linked.
  * When the Control UI is signed in to OpenClaw ID, the link code comes from the
- * account; otherwise (or if that fails) the owner pastes one.
+ * account; otherwise (or if that fails) the owner pastes one. With `linkProfile` (an admin
+ * on a personal sign-in), the commit also links that account to the admin's profile; if the
+ * Gateway does not, a note under the steps says so, offers Link your profile when a fresh
+ * sign-in can fix it, and the claw stays linked. The relay step keeps checking the claw's
+ * relay connection while the dialog stays open.
  */
 export function showMakeReachableDialog(params: {
   client: GatewayBrowserClient;
   loaderDomain: string;
   signedIn?: OpenClawIdSignedIn | null;
+  linkProfile?: boolean;
 }): Promise<boolean> {
   const ceremony = createOpenClawIdCeremony();
   // Closes when the feature turns off; the kit's secrets are dropped however it closes.
@@ -179,6 +186,7 @@ export function showMakeReachableDialog(params: {
       const [codeFromAccount, setCodeFromAccount] = createSignal(Boolean(params.signedIn));
       const [codeError, setCodeError] = createSignal<OpenClawIdUiError | null>(null);
       const [closeAttempt, setCloseAttempt] = createSignal<{ result: Promise<boolean> }>();
+      const [profile, setProfile] = createSignal<ProfileNotice | null>(null);
       const closeResult = createMemo(() => closeAttempt()?.result.then(() => null) ?? null);
       const nameRequest = () => ({
         enrollmentCode: enrollmentCode().trim(),
@@ -272,6 +280,8 @@ export function showMakeReachableDialog(params: {
           LinkStepState
         >,
       );
+      const reportStep = (id: LinkStep, state: LinkStepState) =>
+        setLinkStates((current) => ({ ...current, [id]: state }));
       // The four honest linking steps (lib/openclaw-id/link-steps.ts).
       const link = async (preparation: OpenClawIdLinkPreparation) => {
         if (modal.settled) {
@@ -279,6 +289,7 @@ export function showMakeReachableDialog(params: {
         }
         setStep({ kind: "linking", hostname: preparation.hostname });
         let signed: Awaited<ReturnType<typeof ceremony.sign>> | undefined;
+        let profileLink: string | null = null;
         try {
           const publication = await runLinkSteps(
             {
@@ -292,25 +303,41 @@ export function showMakeReachableDialog(params: {
               },
               commit: async () => {
                 lifetime.signal?.throwIfAborted();
+                const idToken = params.linkProfile ? params.signedIn?.idToken : undefined;
                 const result = await params.client.request<{
                   publication: OpenClawIdPublication | null;
+                  profileLink?: string | null;
                 }>("openclawId.authority", {
                   action: "commit",
                   ...signed,
                   enrollmentCode: nameRequest().enrollmentCode,
+                  ...(idToken ? { idToken } : {}),
                 });
                 announceOwnerDeviceKey();
+                profileLink = result.profileLink ?? null;
                 return result.publication;
               },
-              relayOnline: () => readRelayOnline(params.client),
             },
-            {
-              notPublished: (outcome) => publicationError(outcome).message,
-              relayOffline: t("openclawId.stepRelayOffline"),
-            },
-            (id, state) => setLinkStates((current) => ({ ...current, [id]: state })),
+            { notPublished: (outcome) => publicationError(outcome).message },
+            reportStep,
           );
+          if (params.linkProfile) {
+            setProfile(profileNotice(profileLink));
+          }
           setStep({ kind: "done", hostname: preparation.hostname, publication });
+          void watchRelay(
+            {
+              relayOnline: () => readRelayOnline(params.client),
+              sleep: (ms) =>
+                new Promise((resolve) => {
+                  setTimeout(resolve, ms);
+                }),
+              active: () => !modal.settled && !lifetime.signal?.aborted,
+              now: () => Date.now(),
+            },
+            t("openclawId.stepRelayOffline"),
+            reportStep,
+          );
         } catch (error) {
           ceremony.discard();
           setStep({
@@ -342,6 +369,7 @@ export function showMakeReachableDialog(params: {
         return "message" in state ? { message: state.message, detail: "" } : null;
       };
       const needsAttention = () =>
+        profile() !== null ||
         LINK_STEPS.some((id) => ["warning", "failed"].includes(linkStates()[id].state));
       const requestClose = async () => {
         if (step().kind === "linking" || modal.settled) {
@@ -660,6 +688,16 @@ export function showMakeReachableDialog(params: {
                           </For>
                         </ol>
                       </div>
+                      <Show when={current().kind === "done" && profile()}>
+                        {(notice) => (
+                          <SetupProfileNotice
+                            notice={notice()}
+                            client={params.client}
+                            active={() => !modal.settled}
+                            onChange={setProfile}
+                          />
+                        )}
+                      </Show>
                       <openclaw-modal-actions>
                         <Show when={stepOfKind(step(), "done")}>
                           {(done) => (

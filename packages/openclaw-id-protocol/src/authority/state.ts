@@ -21,6 +21,8 @@ import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../
  * How a write reached the Gateway.
  * - `tunnel`: from an authenticated device over the iroh tunnel (relayed or direct path).
  * - `local_operator`: authenticated **direct loopback** (never traffic from the tunnel child).
+ *   The Gateway also uses it for the link ceremony alone when an admin with a verified personal
+ *   identity runs it directly (never through the tunnel or the mailbox).
  * - `mailbox`: through Discovery's per-claw mailbox.
  */
 export type Channel = "tunnel" | "local_operator" | "mailbox";
@@ -81,7 +83,11 @@ export type InviteRecord = {
   created_by?: OwnerApprover;
 };
 
-/** An admitted node; it has no account, role, owner capabilities or approval descendants. */
+/**
+ * An admitted node; it has no account, role, owner capabilities or approval descendants. It was
+ * approved either from a node invite (`invite_id`) or together with an owner device
+ * (`owner_device`), whose removal removes it.
+ */
 export type NodeRecord = {
   description: NodeRedemptionBody["description"];
   label: string;
@@ -89,7 +95,9 @@ export type NodeRecord = {
   added_by: OwnerApprover;
   /** Last authenticated tunnel activity/admission (or initial approval). */
   last_seen: UnixSeconds;
-  invite_id: string;
+  invite_id?: string;
+  /** The owner device this node belongs to, by fingerprint of its D. */
+  owner_device?: KeyFingerprint;
 };
 
 /** Separate invite class; member proofs can never redeem it. */
@@ -188,7 +196,7 @@ export function certificateWindowError(
 }
 
 /**
- * "Make reachable" (spec section 4): pin R for good. Only over direct loopback,
+ * "Make reachable" (spec section 4): pin R for good. Only on the `local_operator` channel,
  * never over the tunnel, even though tunnel traffic reaches the Gateway on loopback.
  */
 export function linkClaw(

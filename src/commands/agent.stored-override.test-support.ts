@@ -47,6 +47,7 @@ export function registerAgentStoredOverrideTests({
     fallback?: boolean;
     expected?: string[];
     clear?: Array<keyof SessionEntry>;
+    nonChat?: boolean;
   };
   it.for<StoredModelCase>([
     {
@@ -100,6 +101,7 @@ export function registerAgentStoredOverrideTests({
       expected: ["anthropic/claude-opus-4-6"],
     },
     { name: "locked one-off rejection", source: "user", locked: true, oneoff: true },
+    { name: "non-chat pin under an exact allowlist", source: "user", nonChat: true },
   ])("respects stored model policy: $name", async (scenario) => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -149,10 +151,16 @@ export function registerAgentStoredOverrideTests({
         },
         models: Object.fromEntries(refs.map((ref) => [ref, {}])),
         ...(scenario.disallowed && { modelPolicy: { allow: [primary] } }),
+        ...(scenario.nonChat && { modelPolicy: { allow: [primary, storedRef] } }),
       });
       if (!scenario.oneoff) {
         mockModelCatalogOnce([
-          { provider, id: model, name: provider === "ollama" ? "Qwen 3.5" : "Opus" },
+          {
+            provider,
+            id: model,
+            name: provider === "ollama" ? "Qwen 3.5" : "Opus",
+            ...(scenario.nonChat ? { inference: { chat: false } } : {}),
+          },
           { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
           ...(!scenario.disallowed
             ? [
@@ -183,6 +191,20 @@ export function registerAgentStoredOverrideTests({
         sessionKey,
         ...(scenario.oneoff && { model: primary, allowModelOverride: true }),
       });
+      if (scenario.nonChat) {
+        await expect(command).rejects.toMatchObject({
+          reason: "format",
+          code: "model_chat_unsupported",
+          message: "This model doesn't support chat; pick another model.",
+        });
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        expect(readSessionStore<SessionEntry>(store)[sessionKey]).toMatchObject({
+          providerOverride: provider,
+          modelOverride: model,
+          modelOverrideSource: "user",
+        });
+        return;
+      }
       if (scenario.oneoff) {
         await expect(command).rejects.toMatchObject({
           name: "ModelSelectionLockedError",

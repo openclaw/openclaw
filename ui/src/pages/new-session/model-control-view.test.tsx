@@ -221,7 +221,9 @@ it("refreshes retained runtime labels, descriptions, and search without new prop
       search.dispatchEvent(new InputEvent("input", { bubbles: true }));
       installRoute("Synthetic runtime label", "Synthetic runtime detail");
       await waitForSolid(() =>
-        expect(option()?.closest("openclaw-tooltip")?.content).toBe("Synthetic runtime detail"),
+        expect(option()?.closest("openclaw-tooltip")?.content).toContain(
+          "Synthetic runtime detail",
+        ),
       );
       installRoute(
         "Synthetic runtime label",
@@ -237,7 +239,7 @@ it("refreshes retained runtime labels, descriptions, and search without new prop
       expect(translatedLabel).not.toBe(original.label);
       await waitForSolid(() => {
         expect(option()?.getAttribute("aria-label")).toContain(translatedLabel);
-        expect(option()?.closest("openclaw-tooltip")?.content).toBe(t(detailKey));
+        expect(option()?.closest("openclaw-tooltip")?.content).toContain(t(detailKey));
         expect(option()?.textContent).toContain(t(contextKey, { active: "1k", maximum: "2k" }));
       });
       search.value = translatedLabel;

@@ -7,6 +7,7 @@ import {
   hexToBytes,
   isEd25519PublicKey,
   isIrohEndpointKey,
+  isNodeDescription,
   isRandomId,
   ownerDeviceCertBody,
   sasCode,
@@ -19,6 +20,7 @@ import {
   type JsonValue,
   type MailboxMessage,
   type MailboxPayload,
+  type NodeDescription,
   type ReceiveMailResponse,
   type SasStart,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
@@ -44,6 +46,11 @@ type Attempt = {
 export type OwnerApprovalRequest = {
   id: string;
   label: string;
+  /**
+   * What the new device's node may use, when it also asked to run tools for the claw. Its node
+   * key and this surface are in the SAS commitment, so the compared code covers them.
+   */
+  tools?: { commands: string[]; caps: string[] };
   code?: string;
   busy: boolean;
   error?: string;
@@ -55,13 +62,46 @@ export type OwnerApprovalState = {
   requests: OwnerApprovalRequest[];
   error: string | null;
   ready: boolean;
+  /** The claw's hostname, once known; approval dialogs name the claw. */
+  hostname?: string;
 };
 
 const now = () => Math.floor(Date.now() / 1000);
+
+/**
+ * An app's node from a `start`: its key and the surface it asks for, both bound by the
+ * commitment. Undefined when absent (a browser); null when malformed, so the start is ignored.
+ */
+function appNode(
+  value: unknown,
+  devicePeerKey: string,
+): { peer_key: string; description: NodeDescription } | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  // SAFETY: the guard above rejected non-objects, null and arrays.
+  const { peer_key, description, ...rest } = value as Record<string, unknown>;
+  if (
+    Object.keys(rest).length > 0 ||
+    !isIrohEndpointKey(peer_key) ||
+    peer_key === devicePeerKey ||
+    !isNodeDescription(description)
+  ) {
+    return null;
+  }
+  return { peer_key, description };
+}
 const expiredRequest = "This device request expired or was cancelled.";
 
 /** Owns one cancellable mailbox reader and bounded SAS attempts for this original browser D. */
-export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () => void) {
+export function createOwnerApproval(
+  client: GatewayBrowserClient,
+  onRequest: () => void,
+  onKitUsed: (device: string | undefined) => void = () => {},
+) {
   const abort = new AbortController();
   const attempts = new Map<string, Attempt>();
   const expiredRequests = new Map<string, OwnerApprovalRequest>();
@@ -69,6 +109,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
   let mail: DeviceMail | undefined;
   let error: string | null = null;
   let cursor = "0";
+  let hostname: string | undefined;
   let started = false;
   let ownsLock = false;
   const lifetime = Promise.withResolvers<void>();
@@ -76,6 +117,14 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
   const projectRequest = (id: string, a: Attempt): OwnerApprovalRequest => ({
     id,
     label: a.start.label,
+    ...(a.start.node
+      ? {
+          tools: {
+            commands: [...a.start.node.description.commands],
+            caps: [...a.start.node.description.caps],
+          },
+        }
+      : {}),
     code: a.code,
     busy: a.busy,
     error: a.error ?? (a.expires <= now() ? expiredRequest : undefined),
@@ -146,6 +195,10 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
     ) {
       return;
     }
+    const node = appNode(d.node, d.peer_key);
+    if (node === null) {
+      return;
+    }
     const sender = await fingerprint(d.device_pub);
     if (message.from.device_fp !== sender) {
       return;
@@ -157,6 +210,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
         device_pub: d.device_pub,
         peer_key: d.peer_key,
         label: d.label,
+        ...(node ? { node } : {}),
       },
       commitment: d.commit,
       sender,
@@ -195,6 +249,12 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
   // Reveal must match N's commitment before computing the matching number.
   const receive = async (message: MailboxMessage) => {
     const p = message.payload;
+    if (p.kind === "notice" && p.event === "kit_used" && message.claw_id === mail!.clawId) {
+      // A hint only: name the device the Gateway now lists under that fingerprint, if any.
+      const ctx = await readOwnerApprovalContext(client);
+      onKitUsed(ctx.link.ownerDevices?.find((device) => device.deviceFp === p.ref)?.label);
+      return;
+    }
     if (p.kind !== "enrollment" || message.claw_id !== mail!.clawId) {
       return;
     }
@@ -264,6 +324,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
   const run = async () => {
     const { link } = await readOwnerApprovalContext(client);
     abort.signal.throwIfAborted();
+    hostname = link.hostname;
     if (!navigator.locks || !link.clawId) {
       throw new Error("This browser needs Web Locks to coordinate owner approval across tabs.");
     }
@@ -289,6 +350,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
       return {
         ready: Boolean(mail),
         error,
+        hostname,
         requests: [
           ...expiredRequests.values(),
           ...[...attempts].map(([id, a]) => projectRequest(id, a)),
@@ -387,7 +449,20 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
           {
             claw_id: mail!.clawId,
             seq: ctx.link.seq! + 1,
-            target: { op: "add_owner_device", cert },
+            target: {
+              op: "add_owner_device",
+              cert,
+              ...(a.start.node
+                ? {
+                    node: {
+                      // SAFETY: checked by isIrohEndpointKey when the start message was accepted.
+                      peer_key: a.start.node.peer_key as `iroh:${string}`,
+                      label: a.start.label,
+                      description: a.start.node.description,
+                    },
+                  }
+                : {}),
+            },
             issued_at: now(),
           },
           mail!.signer,

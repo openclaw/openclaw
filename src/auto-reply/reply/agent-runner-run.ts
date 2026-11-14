@@ -607,6 +607,7 @@ export async function runReplyAgent(
         replyOperation,
       );
       const result = await handleReplyAgentRunError(error, {
+        config: cfg,
         resolveVisibleReplyDelivery,
         userTurnAccepted: followupRun.userTurnTranscriptRecorder?.hasPersisted() === true,
         replyExpectation,
