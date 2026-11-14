@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolveNodeRuntimeExecutable } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
+  MAX_PROCESS_CONTAINMENT_MS,
   type PosixProcess,
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
@@ -450,3 +451,33 @@ describe.skipIf(process.platform !== "darwin")("Codex Darwin process inspector",
     });
   });
 });
+
+it.skipIf(process.platform !== "linux")(
+  "completes a full snapshot of a busy host within the default containment budget",
+  async (ctx) => {
+    ctx.onTestFinished(() => {
+      procfs.readFile.mockReset();
+      procfs.readdir.mockReset();
+      vi.restoreAllMocks();
+    });
+    // ~950 processes at ~3 ms each model a snapshot that exceeds the former 2 s budget.
+    const pids = Array.from({ length: 950 }, (_, index) => String(index + 1));
+    let monotonicNowMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicNowMs);
+    procfs.readdir.mockImplementation(() => pids);
+    procfs.readFile.mockImplementation((file) => {
+      if (file === "/proc/sys/kernel/random/boot_id") {
+        return "00000000-0000-0000-0000-000000000001";
+      }
+      monotonicNowMs += 3;
+      const pid = Number(file.split("/")[2]);
+      return `${pid} (codex) S 1 ${pid}${" 0".repeat(14)} 1 0 12345\n`;
+    });
+
+    const snapshot = await readCodexAppServerProcessSnapshot();
+
+    expect(snapshot).toHaveLength(950);
+    expect(monotonicNowMs).toBeGreaterThan(2_000);
+    expect(MAX_PROCESS_CONTAINMENT_MS).toBeGreaterThan(monotonicNowMs * 3);
+  },
+);
