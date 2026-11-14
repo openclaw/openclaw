@@ -635,7 +635,6 @@ describe("CI changed Node test plan", () => {
         "test/scripts/pr-merge-admission.test.ts",
         "test/scripts/pr-merge-outcome.test.ts",
         "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
-        "test/scripts/pr-merge-prior-ci.test.ts",
         "test/scripts/pr-merge-receipt.test.ts",
         "test/scripts/pr-merge-recovery.test.ts",
         "test/scripts/pr-merge-rest.test.ts",
@@ -691,10 +690,7 @@ describe("CI changed Node test plan", () => {
   it.each(["blacksmith", "github", "hybrid"])(
     "selects prior-CI shell fixtures from their owner without enabling unrelated tooling (%s)",
     (runnerBackend) => {
-      const targets = [
-        "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
-        "test/scripts/pr-merge-prior-ci.test.ts",
-      ];
+      const targets = ["test/scripts/pr-merge-prior-ci-artifact-build.test.ts"];
       const changedPaths = ["scripts/pr-lib/merge-prior-ci.mjs"];
       const options = {
         runnerBackend,

@@ -1,0 +1,60 @@
+# frozen_main	1b947c9a9f61c260219ddf0a6f281854600b7bdd
+# original_pr	198799
+# approved_source	8fe7b953d49ea4c22e727c7c8a1dbb2dd8ac6b6a
+rank	removed_lines	file	keeper_files	reason
+1218	815	src/cron/store.worker.test.ts	src/cron/store.test.ts;src/gateway/server-cron.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1324	791	src/daemon/inspect.startup.test.ts	src/daemon/inspect.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1329	790	src/gateway/server-methods/chat-send-reply-dispatch.test.ts	src/gateway/server.chat.gateway-server-chat-b.test.ts;src/gateway/server-chat.agent-events.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1414	772	src/gateway/server-methods/chat.abort-persistence.test.ts	src/gateway/server.chat.gateway-server-chat-b.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1483	762	src/gateway/server-methods/sessions-mutations.catalog-queue.test.ts	src/gateway/sessions-patch.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1311	793	src/gateway/server-methods/sessions.abort-embedded.test.ts	src/gateway/server-methods/sessions.abort-native-descendants.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1317	792	src/gateway/server.sessions.delete-lifecycle.test.ts	src/gateway/server.sessions.delete-worktree-lifecycle.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1411	773	src/gateway/session-row-projection.worker-read.test.ts	src/gateway/session-row-projection.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1222	814	src/gateway/session-utils.queued-collector.test.ts	src/gateway/session-utils.test.ts;src/agents/subagents/registry/subagent-control.test.ts;src/agents/subagents/registry/subagent-registry-lifecycle.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1428	770	src/gateway/worker-environments/local-workspace-template.test.ts	src/gateway/worker-environments/service-prepare.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1348	785	src/gateway/worker-environments/placement-dispatch-recovery-admission.test.ts	src/gateway/worker-environments/placement-dispatch-coordinator-reclaim.test.ts;src/gateway/worker-environments/placement-dispatch-authority.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1248	806	src/gateway/worker-environments/provider-provisioning-node.test.ts	src/gateway/worker-environments/provider-provisioning.replay.test.ts;src/gateway/worker-environments/provider-provisioning.cancellation.test.ts;src/gateway/worker-environments/provider-provisioning-node.owner.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1473	764	src/infra/database-engine/port-command.integration.test.ts	src/infra/database-engine/port-command.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1305	794	src/infra/package-update-activation-lifetime.test.ts	src/infra/package-update-activation-immutable.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1306	794	src/infra/update-migrated-finalize.worker.test.ts	src/cli/update-cli/update-command.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1450	768	src/node-host/invoke-system-run-plan.test.ts	src/node-host/invoke-system-run.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1325	791	src/node-host/runner.test.ts	src/node-host/worker-runtime.test.ts;src/node-host/invoke-system-run.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1318	792	src/plugins/plugin-cache.test.ts	src/plugins/plugin-cache.retention.test.ts;src/gateway/server-plugins.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1339	788	src/plugins/plugin-instance.test.ts	src/gateway/server-plugins.test.ts;src/gateway/server-reload-handlers.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1307	794	src/plugins/runtime.test.ts	src/gateway/server-plugins.test.ts;src/gateway/server-reload-handlers.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1219	815	src/plugins/runtime/runtime-llm.operator-model-policy.test.ts	src/plugins/runtime/runtime-llm.runtime.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1454	767	src/secrets/runtime-provider-and-media-surfaces.test.ts	src/secrets/runtime.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1349	785	src/sessions/user-turn-transcript.test.ts	src/sessions/user-turn-transcript.persistence.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1241	809	src/shared/usage-overview.test.ts	ui/src/e2e/usage-overview.e2e.test.ts;test/e2e/qa-lab/runtime/gateway-usage-overview-quarters.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1303	795	src/state/openclaw-agent-admission-order.diagnostic.test.ts	src/state/openclaw-agent-db.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1470	765	src/state/openclaw-agent-db.integrity-cache.test.ts	src/state/openclaw-agent-db.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1474	764	src/state/openclaw-state-db.wal.test.ts	src/state/openclaw-state-db.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1481	763	test/scripts/mobile-release.test.ts	test/scripts/mobile-release-ci.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1308	794	test/scripts/pr-merge-prior-ci.test.ts	test/scripts/pr-wrappers.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1239	810	test/scripts/release-tooling-identity.test.ts	test/scripts/full-release-validation-at-sha.test.ts;test/scripts/release-ci-summary.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1225	814	test/scripts/upgrade-survivor-systemd.test.ts	test/scripts/upgrade-survivor-assertions.test.ts;src/daemon/systemd.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1332	789	ui/src/components/browser/browser-panel-controller-input.test.ts	ui/src/components/browser/browser-panel-controller.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1211	817	ui/src/components/desktop/desktop-panel.test.ts	ui/src/components/desktop/desktop-panel-session.test.ts;ui/src/components/desktop/desktop-panel-presentation.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1235	774	ui/src/e2e/chat-model-controls.e2e.test.ts	ui/src/pages/chat/chat-view.test.ts;ui/src/pages/chat/chat-responsive.browser.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1500	760	ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts	ui/src/components/command-palette.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1319	792	ui/src/e2e/native-nav-sidebar-toggle.e2e.test.ts	ui/src/e2e/sidebar-customization.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1333	789	ui/src/e2e/native-plugin-ui.e2e.test.ts	ui/src/plugins/control-ui-runtime.test.ts;ui/src/e2e/native-plugin-navigation.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1242	809	ui/src/e2e/new-session-page.transition.e2e.test.ts	ui/src/pages/new-session/new-session-page.test.ts;ui/src/e2e/new-session-page.draft-handoff.e2e.test.ts;ui/src/e2e/new-session-page.responsive-welcome.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1334	789	ui/src/e2e/systems-workspace.e2e.test.ts	ui/src/pages/systems/systems-data.test.ts;ui/src/pages/systems/systems-refresh-failure.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1350	785	ui/src/lib/board/widget-sandbox-host.test.ts	ui/src/e2e/chat-widget-sandbox.e2e.test.ts;ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1475	764	ui/src/lib/sessions/index.test.ts	ui/src/lib/sessions/index-list.test.ts;ui/src/lib/sessions/index.event-refresh.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1476	764	ui/src/pages/chat/chat-pane-identity.test.ts	ui/src/pages/chat/chat-view.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1441	766	ui/src/pages/chat/chat-pending-inputs.test.ts	ui/src/pages/chat/chat-send.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1227	813	ui/src/pages/chat/components/chat-message-image-admission.test.tsx	ui/src/pages/chat/components/chat-image-loading.browser.test.tsx;ui/src/pages/chat/components/chat-cached-image.test.tsx	Approved file-level area consolidation; named final surviving keepers retained.
+1466	766	ui/src/pages/chat/components/chat-reply-attribution.test.ts	ui/src/pages/chat/chat-thread.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+1405	775	ui/src/pages/chat/components/chat-transcript-end-follow.browser.test.ts	ui/src/pages/chat/components/chat-transcript-scroll-ownership.test.tsx	Approved file-level area consolidation; named final surviving keepers retained.
+1471	0	test/e2e/qa-lab/runtime/gateway-rpc-chat.e2e.test.ts	test/e2e/qa-lab/runtime/gateway-rpc-chat.e2e.test.ts	Retained: Executable QA RPC scenario has no demonstrated same-role replacement; retained exact test and execution descriptor.
+1244	0	test/scripts/run-vitest.test.ts	test/scripts/run-vitest.test.ts	Retained: Live runner-outcome and routing fixtures require this exact runner suite; retained without speculative selector replacement.
+1304	0	apps/android/app/src/test/java/ai/openclaw/app/wear/WearProxyBridgeTest.kt	apps/android/app/src/test/java/ai/openclaw/app/wear/WearProxyBridgeTest.kt	Retained: New main cold peer discovery assertions retained.
+1212	0	apps/macos/Tests/OpenClawIPCTests/GatewayChannelConnectTests.swift	apps/macos/Tests/OpenClawIPCTests/GatewayChannelConnectTests.swift	Retained: New main coalesced connection failure assertions retained.
+1229	0	src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts	src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts	Retained: New main independent tool failure over compaction assertions retained.
+1490	0	src/infra/worker-task-pool.owned.test.ts	src/infra/worker-task-pool.owned.test.ts	Retained: New main burst idle-lifetime assertions retained.
+1336	0	packages/memory-host-sdk/src/host/memory-schema.test.ts	packages/memory-host-sdk/src/host/memory-schema.test.ts	Retained: Production deprecation-marking source names this contract suite; production pointer remains unchanged.
+# historical_fixture	Measured compact-job rows for upgrade-survivor-systemd and release-tooling-identity remain historical packing data, not executable selection.
+# workflow	Only the retired command-palette-search argument is removed from the CI step, its exact fixture and selection inventory.
+# keeper_chains	Ranks1248,1317,1348 resolve to final surviving suites rather than worker-retired intermediate keepers.

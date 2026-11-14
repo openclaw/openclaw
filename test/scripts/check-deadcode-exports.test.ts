@@ -214,7 +214,6 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
       "src/scripts/ci-changed-scope.windows.test.ts!",
       "src/scripts/ci-ios-screenshot-scope.test.ts!",
       "src/plugins/prune-docker-plugin-dist.test.ts!",
-      "src/infra/package-update-activation-lifetime.test.ts!",
     ];
     expectEntries(scriptRootWorkspace.entry, sourceTestConsumers);
     expectEntries(scriptRootWorkspace.project, sourceTestConsumers);

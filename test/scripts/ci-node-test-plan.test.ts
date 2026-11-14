@@ -3693,7 +3693,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "src/gateway/tool-resolution.terminal.test.ts",
         "src/gateway/worker-workspace-recovery-transcript.test.ts",
         "src/gateway/session-utils.queued-collector-admission.test.ts",
-        "src/gateway/session-utils.queued-collector.test.ts",
       ]),
     );
     expect(
@@ -3947,7 +3946,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         String.raw`src\plugins\tools.optional.test.ts`,
         "src/plugins/tools.optional.test.ts",
         PLUGIN_PRERELEASE_NPM_SPEC_TEST,
-        "src/plugins/runtime.test.ts",
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
         "src/plugins/loader.test.ts",
         "src/plugins/install.npm-spec.e2e.test.ts",
@@ -3955,7 +3953,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     };
     const shards = planTests(options);
     expect(shards.find((shard) => shard.shardName === "agentic-plugins")?.includePatterns).toEqual([
-      "src/plugins/runtime.test.ts",
       "src/plugins/tools.optional.test.ts",
     ]);
     expect(

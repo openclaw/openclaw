@@ -50,7 +50,6 @@ const sourceTestConsumerEntries = [
   "src/scripts/ci-changed-scope.windows.test.ts!",
   "src/scripts/ci-ios-screenshot-scope.test.ts!",
   "src/plugins/prune-docker-plugin-dist.test.ts!",
-  "src/infra/package-update-activation-lifetime.test.ts!",
 ] as const;
 
 const config = {

@@ -1059,17 +1059,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   {
-    testFile: "src/gateway/session-utils.queued-collector.test.ts",
-    watchGlobs: [
-      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-registry.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
-  {
     testFile: "src/gateway/talk/client-authority.test.ts",
     watchGlobs: [
       "src/config/sessions/session-entry-read.worker.ts",
@@ -1426,7 +1415,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/pr-merge-hosted.test.ts",
     "test/scripts/pr-merge-legacy-recovery.test.ts",
     "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
-    "test/scripts/pr-merge-prior-ci.test.ts",
     "test/scripts/pr-merge-qualified-refusal.test.ts",
     "test/scripts/pr-publication.test.ts",
     "test/scripts/pr-wrappers.test.ts",
