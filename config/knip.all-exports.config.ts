@@ -186,6 +186,10 @@ const workspaces = Object.fromEntries(
               "src/test-helpers/control-ui-projection-fixture.tsx!",
             ]
           : []),
+        // The compaction-floor test launches this retention probe as a Node subprocess.
+        ...(workspace === "packages/agent-core"
+          ? ["src/harness/compaction/compaction-floor.retention.test-support.ts!"]
+          : []),
         // Native builds load this private entry through the generator's temporary bundle.
         ...(workspace === "packages/gateway-protocol" ? ["scripts/native-codegen.ts!"] : []),
         // Compiler registries emit entry modules, including declarations

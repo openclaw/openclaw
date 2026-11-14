@@ -209,9 +209,7 @@ export interface CompactionContextProjection {
   resetKeptEntryIndices(startIndex: number, endIndex: number): Iterable<number>;
 }
 
-export function* iterateCompactionMessages(
-  source: CompactionAgentMessageSource,
-): Generator<AgentMessage> {
+function* iterateCompactionMessages(source: CompactionAgentMessageSource): Generator<AgentMessage> {
   for (let i = 0; i < source.length; i++) {
     const message = source.get(i);
     if (message) {

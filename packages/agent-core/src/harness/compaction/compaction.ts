@@ -52,7 +52,6 @@ export {
   type ContextUsageEstimate,
   prepareCompaction,
   prepareCompactionFromSource,
-  iterateCompactionMessages,
   type CompactionAgentMessageSource,
   type CompactionContextProjection,
   type IndexedCompactionPreparation,

@@ -18,7 +18,7 @@ import {
   user,
 } from "./shard-fixtures.test-support.js";
 import {
-  createSerializedConversationSource,
+  createConversationSerializationIndex,
   MAX_SUMMARY_INPUT_CHARS,
   serializeConversation,
   serializeConversationSourceWithinBudget,
@@ -128,17 +128,25 @@ describe("summary request input budget", () => {
     const count = 1_000;
     for (const budget of [0, 200, 300, 400, 1_000, 8_000, 160_000, 1_100_000]) {
       const rendered = new Set<number>();
-      const source = createSerializedConversationSource({
+      const messages = {
         length: count,
-        get(index) {
+        get(index: number) {
           expect(rendered.has(index)).toBe(false);
           rendered.add(index);
-          return { role: "user", content: `entry-${index} `.padEnd(1_000, "x"), timestamp: 0 };
+          return {
+            role: "user" as const,
+            content: `entry-${index} `.padEnd(1_000, "x"),
+            timestamp: 0,
+          };
         },
-      });
+      };
+      const serialization = createConversationSerializationIndex(messages);
+      for (let index = 0; index < messages.length; index++) {
+        serialization.append(index, messages.get(index));
+      }
       expect(rendered.size).toBe(count);
       rendered.clear();
-      const result = serializeConversationSourceWithinBudget(source, budget);
+      const result = serializeConversationSourceWithinBudget(serialization.source, budget);
       expect(rendered.size).toBe(count - result.omittedEntries);
       if (budget >= 1_000) {
         expect(result.text).toContain("entry-999");
