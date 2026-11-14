@@ -227,10 +227,16 @@ describe("sessions page agent-scope retirement", () => {
 });
 
 describe("session selection across roster refresh", () => {
-  it.each(["replaced", "replacement without IDs during confirmation", "removed"] as const)(
+  it.each([
+    "replaced",
+    "replacement without IDs during confirmation",
+    "removed",
+    "retained during confirmation",
+  ] as const)(
     "deletes only still-selected session identities after a row is %s",
     async (change) => {
       const missingIds = change === "replacement without IDs during confirmation";
+      const retained = change === "retained during confirmation";
       const confirmation = createDeferred<boolean>();
       const rows = Array.from({ length: 27 }, (_, index) =>
         sessionRow(`selection-${index}`, {
@@ -269,7 +275,7 @@ describe("session selection across roster refresh", () => {
 
         vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
         let deletion: ReturnType<typeof page.deleteSelected> | undefined;
-        if (missingIds) {
+        if (missingIds || retained) {
           deletion = page.deleteSelected();
           expect(showConfirmDialog).toHaveBeenCalledOnce();
         }
@@ -280,19 +286,27 @@ describe("session selection across roster refresh", () => {
             {
               ...original,
               label: "Replacement session",
-              sessionId: missingIds ? undefined : "replacement-generation",
+              sessionId: retained
+                ? original.sessionId
+                : missingIds
+                  ? undefined
+                  : "replacement-generation",
             },
             ...rows.slice(1),
           ];
         }
         await sessions.refreshList({ ...subscribe.mock.calls[0]![0], force: true });
         await page.updateComplete;
-        if (!missingIds) {
+        expect([...page.selectedSessions.keys()]).toEqual(
+          retained ? [original.key, stable.key] : [stable.key],
+        );
+        if (!missingIds && !retained) {
           deletion = page.deleteSelected();
         }
         confirmation.resolve(true);
         await deletion;
         expect(deletedTargets).toMatchObject([
+          ...(retained ? [{ key: original.key, expectedSessionId: original.sessionId }] : []),
           { key: stable.key, expectedSessionId: stable.sessionId },
         ]);
       } finally {
