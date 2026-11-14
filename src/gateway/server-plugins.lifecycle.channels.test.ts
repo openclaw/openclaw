@@ -20,6 +20,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { readHttp } from "./control-ui-fixture.test-support.js";
 import {
   INSTANCE_BINDING_PROBE_METHOD,
   installInstanceBindingProbeCoordinator,
@@ -385,22 +386,21 @@ it.each([false, true])(
     await maintenance.settled;
     const probe = async (accountId: string) => {
       const before = handledRequests.get(accountId) ?? 0;
-      let phase = "fetch";
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
+        // Reload assertions do not depend on idle sockets retained by startup probes.
+        const response = await readHttp(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
           method: "POST",
         });
-        phase = "body";
         return {
           status: response.status,
-          body: await response.text(),
-          registry: response.headers.get("x-webhook-registry"),
+          body: response.text,
+          registry: response.headers["x-webhook-registry"] ?? null,
         };
       } catch (error) {
         process.stderr.write(
           `[plugin-webhook-probe] ${JSON.stringify({
             accountId,
-            phase,
+            phase: "request",
             starts: [...starts],
             handlerEntered: (handledRequests.get(accountId) ?? 0) > before,
           })}\n`,

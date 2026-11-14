@@ -11,9 +11,13 @@ import {
 import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
-import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
-import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import {
+  acquireGatewayTestWebSocket,
+  onceMessage,
+  type GatewayTestMessage,
+} from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
@@ -43,6 +47,7 @@ import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
+import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -620,18 +625,8 @@ export function installGatewayTestHooks(
   });
 }
 
+export { onceMessage } from "../../test/helpers/gateway-websocket.js";
 export { getGatewayTestPort } from "./test-helpers.listener.js";
-
-type GatewayTestMessage = {
-  type?: string;
-  id?: string;
-  ok?: boolean;
-  event?: string;
-  payload?: Record<string, unknown> | null;
-  seq?: number;
-  stateVersion?: Record<string, unknown>;
-  [key: string]: unknown;
-};
 
 const CONNECT_CHALLENGE_NONCE_KEY = "__openclawTestConnectChallengeNonce";
 const CONNECT_CHALLENGE_TRACKED_KEY = "__openclawTestConnectChallengeTracked";
@@ -660,43 +655,6 @@ export function trackConnectChallengeNonce(ws: WebSocket): void {
     } catch {
       // ignore parse errors in nonce tracker
     }
-  });
-}
-
-export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
-  ws: WebSocket,
-  filter: (obj: T) => boolean,
-  // Full-suite runs can saturate the event loop (581+ files). Keep this high
-  // enough to avoid flaky RPC timeouts, but still fail fast when a response
-  // never arrives.
-  timeoutMs = 10_000,
-): Promise<T> {
-  // Keep the wait's caller in the stack when a timer eventually rejects it.
-  const timeoutError = new Error("timeout");
-  return new Promise<T>((resolve, reject) => {
-    function cleanup() {
-      clearTimeout(timer);
-      ws.off("message", handler);
-      ws.off("close", closeHandler);
-    }
-    function closeHandler(code: number, reason: Buffer) {
-      cleanup();
-      reject(new Error(`closed ${code}: ${reason.toString()}`));
-    }
-    function handler(data: RawData) {
-      const obj = JSON.parse(rawDataToString(data)) as T;
-      if (filter(obj)) {
-        cleanup();
-        resolve(obj);
-      }
-    }
-    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-      cleanup();
-      reject(timeoutError);
-    }, timeoutMs);
-    timer.unref?.();
-    ws.on("message", handler);
-    ws.once("close", closeHandler);
   });
 }
 
@@ -1167,6 +1125,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   }
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
+  const started = performance.now();
   const responsePromise = onceMessage<GatewayTestResponse<T | null | undefined>>(
     ws,
     responseForId(id),
@@ -1176,7 +1135,10 @@ export async function rpcReq<T extends Record<string, unknown>>(
   try {
     return await responsePromise;
   } catch (error) {
-    throw new Error(`Gateway test RPC ${method}: ${String(error)}`, { cause: error });
+    throw new Error(
+      `Gateway test RPC ${method}: ${String(error)}; elapsed ${Math.round(performance.now() - started)}ms; active roots: ${getActiveGatewayRootWorkHolders().join(", ") || "none"}`,
+      { cause: error },
+    );
   }
 }
 

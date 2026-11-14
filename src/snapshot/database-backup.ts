@@ -13,11 +13,8 @@ import {
   getScopedDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
-import {
-  readBackupEngine,
-  readBackupEngineImage,
-  type BackupEngine,
-} from "../infra/database-engine/physical-store.js";
+import { readBackupEngineImage } from "../infra/database-engine/physical-store-inspection.js";
+import { readBackupEngine, type BackupEngine } from "../infra/database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";

@@ -3,7 +3,7 @@ import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
-import { readBackupEngineImage } from "../infra/database-engine/physical-store.js";
+import { readBackupEngineImage } from "../infra/database-engine/physical-store-inspection.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import {
   withDatabasePortPostgres,

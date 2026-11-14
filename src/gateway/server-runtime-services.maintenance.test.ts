@@ -34,7 +34,31 @@ beforeEach(() => {
 afterEach(resetGatewayWorkAdmission);
 
 describe("post-ready maintenance scheduling", () => {
-  it("defers optional database work during recovery without delaying cron or timers", async () => {
+  it("runs optional maintenance with an unbounded process memory limit", async () => {
+    const constrainedMemory = vi.spyOn(process, "constrainedMemory").mockReturnValue(2 ** 64);
+    const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
+    scheduleGatewayPostReadyMaintenance(createPostReadyMaintenanceScheduleParams({ scheduler }));
+    try {
+      await clock.advanceBy(1);
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
+      expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
+    } finally {
+      await scheduler.stop();
+      availableMemory.mockRestore();
+      constrainedMemory.mockRestore();
+    }
+  });
+
+  it.each(["recovery", "memory pressure"])("defers optional work during %s", async (cause) => {
+    const constrainedMemory = vi
+      .spyOn(process, "constrainedMemory")
+      .mockReturnValue(cause === "memory pressure" ? 1024 ** 3 : 0);
+    const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
     const ready = createDeferredCore();
@@ -57,7 +81,9 @@ describe("post-ready maintenance scheduling", () => {
     try {
       const pending = clock.advanceBy(1);
       await Promise.resolve();
-      recovery = enqueueCommandInLane("background", () => finishRecovery.promise);
+      if (cause === "recovery") {
+        recovery = enqueueCommandInLane("background", () => finishRecovery.promise);
+      }
       ready.resolve();
       await pending;
       expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
@@ -65,8 +91,11 @@ describe("post-ready maintenance scheduling", () => {
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
       expect(startMaintenance).toHaveBeenCalledOnce();
       expect(cron.start).toHaveBeenCalledOnce();
+      await clock.advanceBy(1_000);
+      expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
       finishRecovery.resolve();
       await recovery;
+      availableMemory.mockReturnValue(1024 ** 3);
       await clock.advanceBy(1_000);
       await clock.advanceBy(1_000);
       expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
@@ -77,6 +106,8 @@ describe("post-ready maintenance scheduling", () => {
       finishRecovery.resolve();
       await recovery;
       await scheduler.stop();
+      availableMemory.mockRestore();
+      constrainedMemory.mockRestore();
     }
   });
 
