@@ -136,6 +136,28 @@ export function publishUserChannelPolicyInDatabase(
   return { profiles, channels };
 }
 
+/** True when publishing this policy would not change the stored machine-state row. */
+export function isUserChannelPolicyUnchanged(
+  db: EngineConnection,
+  policy: UserChannelAuthorizationPolicy,
+  configuredOwnersHash?: string,
+): boolean {
+  const row = readConfigMachineStateRowInDatabase(db, POLICY_KEY);
+  if (row === undefined) {
+    return false;
+  }
+  const previous = splitPolicy(JSON.parse(row.value_json));
+  if (!isDeepStrictEqual(previous.policy, policy)) {
+    return false;
+  }
+  const configured = configuredOwnersHash
+    ? previous.configured?.fingerprint === configuredOwnersHash
+      ? previous.configured
+      : { fingerprint: configuredOwnersHash, id: generateSecureUuid() }
+    : undefined;
+  return isDeepStrictEqual(previous.configured, configured);
+}
+
 /** The reference names this uninterrupted channel link; it carries no permission by itself. */
 export function authorizeUserChannelIdentityInDatabase(
   db: EngineConnection,

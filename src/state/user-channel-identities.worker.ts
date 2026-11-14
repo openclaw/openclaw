@@ -17,6 +17,7 @@ import {
   UserChannelIdentityConflictError,
   userChannelIdentitySubject,
   authorizeUserChannelIdentityInDatabase,
+  isUserChannelPolicyUnchanged,
   publishUserChannelPolicyInDatabase,
 } from "./user-channel-identities.js";
 import {
@@ -55,6 +56,13 @@ export function executeUserChannelIdentityChange(
   const subject = "identity" in input ? userChannelIdentitySubject(input.identity) : undefined;
   if (input.action !== "policy") {
     ensureUserProfilesSchema(options);
+  }
+  // An unchanged startup policy republication is a read: skip the write transaction.
+  if (
+    input.action === "policy" &&
+    isUserChannelPolicyUnchanged(options.database.db, input.policy, input.configuredOwnersHash)
+  ) {
+    return readUserChannelIdentityResult(() => ({ kind: "policy" as const }));
   }
   return retrySqliteWorkerAdmission(
     () => {
