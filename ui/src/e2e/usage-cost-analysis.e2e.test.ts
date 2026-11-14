@@ -244,7 +244,7 @@ suite.define(() => {
     },
   );
 
-  it.each(["recent-sort", "filtered", "recent-tab"])(
+  it.each(["recent-sort", "filtered"])(
     "selects the visible session range with Shift-click (%s)",
     async (scenario) => {
       const updatedAt = Date.now();
@@ -273,7 +273,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}usage`);
         const card = page.locator(".sessions-card");
-        let list = card.locator(".session-bars").first();
+        const list = card.locator(".session-bars").first();
         await expectTexts(
           list.locator(".session-bar-title"),
           sessions.map((session) => session.label),
@@ -281,20 +281,6 @@ suite.define(() => {
         if (scenario === "filtered") {
           await applyUsageQuery(page, "label:Visible");
           await expect.poll(() => list.locator(".session-bar-row").count()).toBe(3);
-        }
-        if (scenario === "recent-tab") {
-          for (const name of ["Visible C", "Visible A", "Visible B"]) {
-            await list.getByRole("button", { name, exact: true }).click();
-            await expectText(page.locator(".session-detail-title")).toBe(name);
-          }
-          await card.getByRole("button", { name: "Recently viewed", exact: true }).click();
-          list = card.locator(".session-bars--recent");
-          await expectTexts(list.locator(".session-bar-title"), [
-            "Visible B",
-            "Visible A",
-            "Visible C",
-          ]);
-          await card.getByRole("button", { name: "Clear selection", exact: true }).click();
         }
         const names = await list.locator(".session-bar-title").allTextContents();
         await list.getByRole("button", { name: names[0], exact: true }).click();

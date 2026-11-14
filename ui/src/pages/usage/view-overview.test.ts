@@ -273,28 +273,6 @@ describe("SessionsCard", () => {
       }),
     );
 
-  it("exposes the selected session view to assistive technology", () => {
-    const { usage, onChange } = usageState();
-    const view = mountSessions(() => [], usage, 0);
-
-    const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
-    const recent = view.getByRole<HTMLButtonElement>("button", {
-      name: "Recently viewed",
-      pressed: false,
-    });
-    recent.click();
-    flush();
-    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "recent" });
-    expect(view.getByRole("button", { name: "Recently viewed", pressed: true })).toBe(recent);
-    expect(view.getByRole("button", { name: "All", pressed: false })).toBe(all);
-
-    all.click();
-    flush();
-    expect(onChange).toHaveBeenLastCalledWith({ sessionsTab: "all" });
-    expect(view.getByRole("button", { name: "All", pressed: true })).toBe(all);
-    expect(view.getByRole("button", { name: "Recently viewed", pressed: false })).toBe(recent);
-  });
-
   it("preserves sort focus while waiting for the server to reorder rows", () => {
     const { usage, onChange } = usageState();
     const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
@@ -409,20 +387,13 @@ describe("SessionsCard", () => {
     }
   });
 
-  it("renders the server recent roster without changing its all-roster average", () => {
+  it("renders a server page without changing its full-roster average", () => {
     const overview = createUsageOverview({
       total: 2,
       tableSessionCount: 100,
       tableTotals: { tokens: 50000, cost: 100, errors: 7 },
     });
-    const usage = usageFixture(
-      { overview },
-      {},
-      {
-        sessionsTab: "recent",
-        recentSessions: ["A", "missing"],
-      },
-    );
+    const usage = usageFixture({ overview });
     const { container } = mountView(() =>
       SessionsCard({
         sessions: [session("B"), session("A")],

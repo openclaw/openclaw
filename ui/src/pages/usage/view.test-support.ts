@@ -94,8 +94,6 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       dailyChartMode: "total",
       sessionSort: "tokens",
       sessionSortDir: "desc",
-      recentSessions: [],
-      sessionsTab: "all",
       contextExpanded: false,
       headerPinned: false,
     },
