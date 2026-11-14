@@ -95,10 +95,20 @@ it.each([false, true])("passes image edit options and respects cancellation=%s",
     };
   });
   const directory = tempDirs.make("capability-image-edit-");
-  const inputPath = path.join(directory, "input.png");
+  const physical = path.join(directory, "physical");
+  await fs.mkdir(path.join(physical, "nested"), { recursive: true });
+  if (process.platform !== "win32") {
+    await fs.symlink("physical/nested", path.join(directory, "link"), "dir");
+  }
+  const inputPath = path.join(physical, "input.png");
+  const selectedInput =
+    process.platform === "win32"
+      ? path.relative(process.cwd(), inputPath)
+      : `${path.relative(process.cwd(), directory)}/link/../input.png`;
   const referencePath = path.join(directory, "reference.gif");
   const outputPath = path.join(directory, "output.png");
   await fs.writeFile(inputPath, png);
+  await fs.writeFile(path.join(directory, "input.png"), gif);
   await fs.writeFile(referencePath, gif);
   if (cancel) {
     await fs.writeFile(outputPath, gif);
@@ -123,10 +133,7 @@ it.each([false, true])("passes image edit options and respects cancellation=%s",
     runCapability(
       "image",
       "edit",
-      ...[path.relative(process.cwd(), inputPath), referencePath, inputPath].flatMap((file) => [
-        "--file",
-        file,
-      ]),
+      ...[selectedInput, referencePath, inputPath].flatMap((file) => ["--file", file]),
       ...Object.entries(options).flatMap(([key, value]) => [`--${key}`, value]),
       "--json",
     ),

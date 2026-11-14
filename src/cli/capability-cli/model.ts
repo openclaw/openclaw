@@ -27,6 +27,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { collectOption } from "../program/helpers.js";
+import { resolveMediaFilePath } from "./media-input-path.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
@@ -188,7 +189,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
           const imageFiles = await Promise.all(
             (files ?? []).map(async (filePath) => {
-              const resolvedPath = path.resolve(filePath);
+              const resolvedPath = await resolveMediaFilePath(filePath);
               const buffer = await fs.readFile(resolvedPath);
               const mimeType = normalizeMimeType(
                 await detectMime({
