@@ -8,7 +8,7 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 suite.define(() => {
-  it("keeps model options stable and welcome recents current through typing and row updates", async () => {
+  it("keeps model options stable through typing and row updates", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         models: [
@@ -103,12 +103,6 @@ suite.define(() => {
       await expect.poll(() => sidebarRow.textContent()).toContain("Background update j");
       expect((await gateway.getRequests()).slice(requestsBefore.length)).toEqual([]);
       await observation.dispose();
-      // Reveal catches up from the current owner, not a retained mutable roster.
-      await input.fill("");
-      const recent = page.locator(".agent-chat__recent-name").first();
-      await expect.poll(() => recent.textContent()).toBe("Background update j");
-      await updateRow("Visible recent update");
-      await expect.poll(() => recent.textContent()).toBe("Visible recent update");
     });
   });
 });

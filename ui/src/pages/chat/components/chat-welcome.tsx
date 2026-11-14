@@ -5,13 +5,11 @@ import { createBackgroundLayoutRef } from "../../../components/session-backgroun
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import "../../../components/openclaw-mascot.tsx";
 import { registerChatWelcomeEnglish } from "../../../i18n/locales/en-chat-welcome.ts";
-import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import {
   resolveAssistantDisplayAvatar,
   resolveWelcomeSuggestionKeys,
-  type WelcomeRecentSession,
   type WelcomeSuggestionAuth,
 } from "./chat-welcome.ts";
 
@@ -32,7 +30,6 @@ export type ChatWelcomeIdentityProps = {
   onModelSetup?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
-  onOpenSession?: (sessionKey: string) => void;
 };
 
 export type ChatWelcomeProps = {
@@ -40,9 +37,9 @@ export type ChatWelcomeProps = {
   assistantNameControl?: JSX.Element;
   /** Hint owned by the new-session draft flow. */
   hint?: JSX.Element;
-  /** Rendered between the hero and the recents (the new-session draft composer). */
+  /** Rendered below the hero (the new-session draft composer). */
   composer?: JSX.Element;
-  /** Hide recents and suggestions when the surrounding flow must stay ephemeral. */
+  /** Hide suggestions when the surrounding flow must stay ephemeral. */
   hideSecondaryContent?: boolean;
   /** Visually retire secondary content while the new-session draft is active. */
   fadeSecondaryContent?: boolean;
@@ -50,7 +47,8 @@ export type ChatWelcomeProps = {
 
 /** The new-session draft's welcome block. */
 export function ChatWelcome(
-  props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
+  /** Starter suggestions are for a first chat; the sidebar lists existing ones. */
+  props: ChatWelcomeProps & { hasRecentSessions?: boolean },
 ) {
   const welcomeRef = createBackgroundLayoutRef("welcome");
   return (
@@ -93,7 +91,7 @@ export function ChatWelcome(
           </div>
         </div>
         {props.composer}
-        <Show when={!props.hideSecondaryContent}>
+        <Show when={!props.hideSecondaryContent && !props.hasRecentSessions}>
           <div
             class={[
               "agent-chat__welcome-secondary",
@@ -105,48 +103,22 @@ export function ChatWelcome(
             inert={props.fadeSecondaryContent}
           >
             <div class="agent-chat__welcome-secondary-inner">
-              <Show
-                when={props.preparedRecents?.length}
-                fallback={
-                  <div class="agent-chat__suggestions">
-                    <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
-                      {(key) => (
-                        <button
-                          type="button"
-                          class="agent-chat__suggestion"
-                          onClick={() => {
-                            props.onDraftChange(t(key));
-                            props.onSend();
-                          }}
-                        >
-                          {t(key)}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                }
-              >
-                <div class="agent-chat__recents">
-                  <div class="agent-chat__recents-title">{t("chat.welcome.recentSessions")}</div>
-                  <For each={props.preparedRecents}>
-                    {(row) => (
-                      <button
-                        type="button"
-                        class="agent-chat__recent"
-                        onClick={() => props.onOpenSession?.(row.key)}
-                      >
-                        <span class="agent-chat__recent-name">{row.name}</span>
-                        <Show when={row.subtitle}>
-                          {(subtitle) => <span class="agent-chat__recent-sub">{subtitle()}</span>}
-                        </Show>
-                        <span class="agent-chat__recent-time">
-                          {formatRelativeTimestamp(row.updatedAt, { fallback: "" })}
-                        </span>
-                      </button>
-                    )}
-                  </For>
-                </div>
-              </Show>
+              <div class="agent-chat__suggestions">
+                <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
+                  {(key) => (
+                    <button
+                      type="button"
+                      class="agent-chat__suggestion"
+                      onClick={() => {
+                        props.onDraftChange(t(key));
+                        props.onSend();
+                      }}
+                    >
+                      {t(key)}
+                    </button>
+                  )}
+                </For>
+              </div>
             </div>
           </div>
         </Show>

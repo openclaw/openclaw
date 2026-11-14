@@ -24,18 +24,9 @@ function roster(rows: GatewaySessionRow[], revision = 1) {
   };
 }
 
-it("prepares recents only for their owner and scope, parks display facts, and retires subscriptions", async () => {
-  let rosterReads = 0;
-  let oldestAt = 1;
-  const oldest: GatewaySessionRow = {
-    ...row("old", "Oldest", oldestAt),
-    get updatedAt() {
-      rosterReads += 1;
-      return oldestAt;
-    },
-  };
-  const rows = Array.from({ length: 5 }, (_, i) => row(`recent-${i}`, `Recent ${i}`, 100 + i));
-  const first = roster([...rows, oldest]);
+it("offers starter suggestions only before the agent's first chat and retires subscriptions", async () => {
+  const rows = [row("recent", "Recent", 100)];
+  const first = roster(rows);
   let owner = first;
   const options: Parameters<typeof DraftWelcome>[0]["options"] = {
     assistantName: "Assistant",
@@ -51,57 +42,33 @@ it("prepares recents only for their owner and scope, parks display facts, and re
     setFrame({ sessions: owner, options });
     flush();
   };
-  const recentName = () => view.container.querySelector(".agent-chat__recent-name")?.textContent;
-  const displayed = () => [recentName(), rosterReads, owner.listeners.size];
-  expect(recentName()).toBe("Recent 4");
+  const suggestions = () => view.container.querySelectorAll(".agent-chat__suggestion").length;
+  expect(suggestions()).toBe(0);
   expect(first.listeners.size).toBe(1);
-  expect(rosterReads).toBeGreaterThan(0);
-  rosterReads = 0;
 
-  refresh({ assistantName: "Assistant refreshed" });
-  expect(view.container.querySelector("h2")?.textContent).toBe("Assistant refreshed");
-  expect(rosterReads).toBe(0);
+  // Faded content parks the roster; the reveal catches up once.
   refresh({ fadeSecondaryContent: true });
   expect(first.listeners.size).toBe(0);
-  oldest.label = "Moved newest";
-  oldestAt = 1000;
-  rows[4]!.label = "Changed while hidden";
+  rows.length = 0;
+  first.state.result = sessionsResult([], 2);
   first.publish();
-  for (const name of ["Typing a", "Typing ab", "Typing abc"]) {
-    refresh({ assistantName: name });
-  }
-  expect(displayed()).toEqual(["Recent 4", 0, 0]);
-
   refresh({ fadeSecondaryContent: false });
-  expect(rosterReads).toBeGreaterThan(0);
-  expect(recentName()).toBe("Moved newest");
-  expect(view.container.textContent).toContain("Changed while hidden");
-  oldest.label = "Visible newest";
-  first.publish();
-  flush();
-  expect(recentName()).toBe("Visible newest");
+  expect(suggestions()).toBeGreaterThan(0);
 
-  const second = roster([row("recent", "Other agent", 1, "other")], 2);
+  const second = roster([row("recent", "Other agent", 1, "other")], 3);
   owner = second;
   refresh({ sessionKey: "agent:other:main" });
-  await waitForSolid(() => expect(recentName()).toBe("Other agent"));
+  await waitForSolid(() => expect(suggestions()).toBe(0));
   expect(first.listeners.size).toBe(0);
   expect(second.listeners.size).toBe(1);
-  rosterReads = 0;
-  first.publish();
-  flush();
-  expect(displayed()).toEqual(["Other agent", 0, 1]);
   view.unmount();
   expect(second.listeners.size).toBe(0);
 });
 
-it("lists recent sessions instead of suggestions when any exist", () => {
-  const opened: string[] = [];
+it("does not count the current draft or channel sessions as earlier chats", () => {
   const owner = roster([
     row("current", "Current chat", 50),
-    { ...row("older", "Older chat", 10), pinned: true, pinnedAt: 5 },
     { key: "agent:main:discord:group:g-1456", kind: "group", channel: "discord", updatedAt: 90 },
-    row("newer", "Newer chat", 40),
   ]);
   const view = mountSolid(() => (
     <DraftWelcome
@@ -112,18 +79,11 @@ it("lists recent sessions instead of suggestions when any exist", () => {
         sessionKey: "agent:main:dashboard:current",
         onDraftChange: () => {},
         onSend: () => {},
-        onOpenSession: (key) => opened.push(key),
       }}
     />
   ));
-  expect(view.container.textContent).toContain("Recent sessions");
-  expect(view.container.querySelector(".agent-chat__suggestion")).toBeNull();
-  const rows = [...view.container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
-  expect(
-    rows.map((entry) => entry.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
-  ).toEqual(["Newer chat", "Older chat"]);
-  rows[0]!.click();
-  expect(opened).toEqual(["agent:main:dashboard:newer"]);
+  expect(view.container.querySelector(".agent-chat__suggestion")).not.toBeNull();
+  expect(view.container.textContent).not.toContain("Recent sessions");
 });
 
 it("inserts the displayed tour suggestion into the draft", () => {
