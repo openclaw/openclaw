@@ -17,7 +17,7 @@ import {
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import pMap from "p-map";
 import { Type } from "typebox";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, readErrorCause } from "../infra/errors.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 /**
  * Scans remote provider model catalogs for configured providers.
@@ -159,6 +159,15 @@ async function fetchOpenRouterModels(timeoutMs: number): Promise<OpenRouterModel
         res = await fetch(OPENROUTER_MODELS_URL, {
           headers: { Accept: "application/json" },
           signal,
+        }).catch((error: unknown) => {
+          if (signal?.aborted) {
+            throw error;
+          }
+          // fetch rejects with a bare "fetch failed"; the cause names the network failure.
+          throw new Error(
+            `OpenRouter /models request failed: ${formatErrorMessage(readErrorCause(error) ?? error)}. Check your network connection and retry.`,
+            { cause: error },
+          );
         });
         if (!res.ok) {
           throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);

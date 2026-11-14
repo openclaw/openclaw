@@ -1,0 +1,2 @@
+# Regression test checks models scan names the network failure instead of a bare "fetch failed".
+16

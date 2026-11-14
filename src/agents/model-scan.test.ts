@@ -103,6 +103,22 @@ describe("scanOpenRouterModels", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it("names the network failure when the catalog request cannot connect", async () => {
+    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND openrouter.ai"), {
+      code: "ENOTFOUND",
+    });
+    vi.stubGlobal(
+      "fetch",
+      withFetchPreconnect(async () => {
+        throw new TypeError("fetch failed", { cause });
+      }),
+    );
+
+    await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(
+      "OpenRouter /models request failed: getaddrinfo ENOTFOUND openrouter.ai. Check your network connection and retry.",
+    );
+  });
+
   it("bounds an oversized catalog success body and cancels the stream", async () => {
     const { response, state } = oversizedJsonResponse();
     useResponse(response);
