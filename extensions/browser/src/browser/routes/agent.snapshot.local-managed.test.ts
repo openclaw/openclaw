@@ -403,10 +403,13 @@ describe("browser agent snapshot timeout routing", () => {
     expect(cdp.captureScreenshot).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "headed launched browser", running: { headless: false, headlessSource: "request" } },
-    { name: "observed headed external browser", running: null },
-  ])("passes the actual launch mode for $name", async ({ running }) => {
+  it.each(
+    [
+      { name: "headed launched browser", running: { headless: false, headlessSource: "request" } },
+      { name: "observed headed external browser", running: null },
+    ].flatMap((scenario) => [false, true].map((connected) => ({ ...scenario, connected }))),
+  )("passes $name mode (Playwright=$connected)", async ({ running, connected }) => {
+    pwMocks.connected = connected;
     routeState.profileCtx.profile.headless = true;
     browserRuntime.profiles.set(routeState.profileCtx.profile.name, {
       running,
@@ -422,9 +425,8 @@ describe("browser agent snapshot timeout routing", () => {
     cdp.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
     const response = await screenshot();
     expect(response.statusCode).toBe(200);
-    expect(cdp.captureScreenshot).toHaveBeenCalledWith(
-      expect.objectContaining({ headless: false }),
-    );
+    const capture = connected ? pwMocks.takeScreenshotViaPlaywright : cdp.captureScreenshot;
+    expect(capture).toHaveBeenCalledWith(expect.objectContaining({ headless: false }));
   });
 
   it("rejects loose screenshot timeoutMs values before dispatching", async () => {

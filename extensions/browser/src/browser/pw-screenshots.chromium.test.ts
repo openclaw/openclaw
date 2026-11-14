@@ -498,3 +498,34 @@ it.for([
       showScrollbars,
     ),
 );
+
+it("captures a background tab after switching from raw CDP to Playwright", async () => {
+  await withBrowser(async (target, page, wsUrl) => {
+    await captureScreenshot({ wsUrl, headless: true });
+    const sibling = await page.context().newPage();
+    try {
+      await sibling.setContent("<h1>Sibling tab</h1>");
+      await snapshotRoleViaPlaywright(target);
+      const routes = snapshotRoutes(target);
+      for (const [route, options] of [
+        ["/screenshot", {}],
+        ["/screenshot", { labels: true }],
+        ["/snapshot", { labels: true }],
+      ] as const) {
+        await sibling.bringToFront();
+        const response = await routes(route, { ...options, timeoutMs: 5_000 });
+        const screenshot = response.body as { path?: string; imagePath?: string };
+        const imagePath = screenshot.path ?? screenshot.imagePath!;
+        try {
+          const buffer = await fs.readFile(imagePath);
+          expect(buffer.subarray(1, 4).toString()).toBe("PNG");
+          expect(sibling.isClosed()).toBe(false);
+        } finally {
+          await fs.rm(imagePath);
+        }
+      }
+    } finally {
+      await sibling.close();
+    }
+  });
+}, 30_000);
