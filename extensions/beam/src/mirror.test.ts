@@ -259,7 +259,7 @@ describe("createBeamMirrorRunner", () => {
     vi.useFakeTimers();
     const requestStarted = createDeferred<void>();
     const cleanup = beamTestBarrier(),
-      cancel = vi.fn();
+      cancel = vi.fn(() => new Promise<void>(() => {}));
     let signal: AbortSignal | undefined;
     const { warnings, logger } = fixture;
     vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async (options) => {
