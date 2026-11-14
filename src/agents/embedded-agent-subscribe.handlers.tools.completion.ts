@@ -174,6 +174,10 @@ export async function prepareToolExecutionEnd(
     !isToolError &&
     ctx.params.codeModeExecToolNames?.has(toolName) === true &&
     readToolResultDetails(sanitizedResult)?.status === "waiting";
+  const requiredActionUnresolved =
+    !isToolError &&
+    toolName === "ask_user" &&
+    readToolResultDetails(sanitizedResult)?.status === "action_unresolved";
   const resultRecord = asOptionalObjectRecord(result);
   const terminate =
     resultRecord !== undefined && "terminate" in resultRecord && resultRecord.terminate === true;
@@ -187,6 +191,7 @@ export async function prepareToolExecutionEnd(
     ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
     ...(codeModeSuspended ? { codeModeSuspended: true } : {}),
+    ...(requiredActionUnresolved ? { requiredActionUnresolved: true } : {}),
   };
   ctx.state.toolMetas.push(terminalMeta);
   const acceptedSessionSpawn =

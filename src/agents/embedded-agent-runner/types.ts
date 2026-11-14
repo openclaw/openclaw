@@ -49,6 +49,8 @@ export type EmbeddedAgentRunResult = {
   /** Current-input custody; unlike aggregate sends, this is reset when another input is admitted. */
   sourceReplyDeliveryState?: ReplyDeliveryState;
   didSendDeterministicApprovalPrompt?: boolean;
+  /** Settled ask_user requiredAction was unresolved; do not auto-continue a Goal. */
+  didEncounterUnresolvedRequiredAction?: true;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];

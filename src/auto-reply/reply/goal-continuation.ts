@@ -132,6 +132,7 @@ function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
     !meta.pendingToolCalls?.length &&
     !hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns) &&
     !result.didSendDeterministicApprovalPrompt &&
+    !result.didEncounterUnresolvedRequiredAction &&
     !result.payloads?.some((payload) => payload.isError)
   );
 }

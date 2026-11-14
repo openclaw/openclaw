@@ -715,6 +715,9 @@ async function completeEmbeddedRun(
       },
       ...copyAttemptDeliveryState(input.attempt),
       sourceReplyDeliveryState: input.prepared.sourceReplyDeliveryState,
+      ...(input.attempt.toolMetas.some((tool) => tool.requiredActionUnresolved === true)
+        ? { didEncounterUnresolvedRequiredAction: true as const }
+        : {}),
     },
   };
 }
