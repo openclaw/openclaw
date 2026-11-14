@@ -495,7 +495,16 @@ function resolveEmptyResponseRetryInstruction(
   }
 
   if (params.attempt.textToolCallAttempt) {
-    return TEXT_TOOL_CALL_RETRY_INSTRUCTION;
+    const recovery = params.attempt.textToolCallRecovery;
+    if (!recovery) {
+      return TEXT_TOOL_CALL_RETRY_INSTRUCTION;
+    }
+    const toolName = JSON.stringify(recovery.toolName);
+    return `${TEXT_TOOL_CALL_RETRY_INSTRUCTION} ${toolName} is deferred and is not directly callable in this run. Call the native ${recovery.dispatcherName} tool with id set to ${toolName} and all target parameters nested in args.${
+      recovery.describeToolName
+        ? ` If you need the input schema, call native ${recovery.describeToolName} with id set to ${toolName} first.`
+        : ""
+    }`;
   }
 
   // A tool-use stop with no structured call executed nothing; its text is not an answer.
