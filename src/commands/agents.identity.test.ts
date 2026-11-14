@@ -339,7 +339,9 @@ describe("agents helpers", () => {
     ]);
   });
 
-  it("adds distinct role and delimiter-bearing routes while upgrading account scope", () => {
+  it.each(["persisted", "same batch", "already scoped"])("upgrades account scope: %s", (source) => {
+    const persisted = source === "persisted";
+    const alreadyScoped = source === "already scoped";
     const channel = { agentId: "main", match: { channel: "telegram" } };
     const role = {
       agentId: "main",
@@ -347,6 +349,7 @@ describe("agents helpers", () => {
     };
     const upgraded = { agentId: "main", match: { channel: "telegram", accountId: "work" } };
     const added: AgentRouteBinding[] = [
+      { agentId: "main", match: { channel: "telegram", accountId: "default" } },
       { agentId: "work", match: { channel: "discord", accountId: "guild-a", guildId: "123" } },
       {
         agentId: "main",
@@ -362,10 +365,30 @@ describe("agents helpers", () => {
         },
       },
     ];
-    const result = applyAgentBindings({ bindings: [channel, role] }, [upgraded, ...added]);
-    expect(result.added).toStrictEqual(added);
-    expect(result.updated).toStrictEqual([upgraded]);
-    expect(result.config.bindings).toStrictEqual([upgraded, role, ...added]);
+    const result = applyAgentBindings(
+      { bindings: persisted ? [channel, role] : alreadyScoped ? [upgraded, role] : [role] },
+      [...(persisted ? [] : [channel]), upgraded, ...added],
+    );
+    expect(result.added).toStrictEqual(source === "same batch" ? [upgraded, ...added] : added);
+    expect(result.updated).toStrictEqual(persisted ? [upgraded] : []);
+    expect(result.skipped).toStrictEqual(alreadyScoped ? [upgraded] : []);
+    expect(result.config.bindings).toStrictEqual([
+      ...(source === "same batch" ? [role, upgraded] : [upgraded, role]),
+      ...added,
+    ]);
+  });
+
+  it("retains an explicitly requested default account beside a later scoped binding", () => {
+    const implicitDefault = { agentId: "main", match: { channel: "telegram" } };
+    const explicitDefault = {
+      agentId: "main",
+      match: { channel: "telegram", accountId: "default" },
+    };
+    const scoped = { agentId: "main", match: { channel: "telegram", accountId: "work" } };
+    const result = applyAgentBindings({}, [implicitDefault, explicitDefault, scoped]);
+    expect(result.config.bindings).toStrictEqual([explicitDefault, scoped]);
+    expect(result.added).toStrictEqual([explicitDefault, scoped]);
+    expect(result.updated).toStrictEqual([]);
   });
 
   it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
