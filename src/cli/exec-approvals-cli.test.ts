@@ -118,6 +118,23 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it("prints no grants list that lands after Ctrl+C", async () => {
+    const work = new AsyncWorkScope();
+    // The grants list read settles only after the command scope begins closing.
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.grants.list") {
+        work.beginClose();
+        return { grants: [] };
+      }
+      return [];
+    });
+
+    await work.run(() => runApprovalsCommand(["approvals", "grants", "list", "--json"]));
+
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it.each([
     ["get", ["approvals", "get"]],
     ["allowlist add", ["approvals", "allowlist", "add", "/usr/bin/uname"]],
