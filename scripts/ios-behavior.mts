@@ -405,10 +405,9 @@ function streamCase(keyboardUp: boolean): Case {
           0.95,
         );
         const hidden = hiddenBelowComposer(last);
-        // Teleports, backward motion, remounts and the end position are reported, not gated: as
-        // the final row replaces the live bubble, about one run in three flashes to the top for a
-        // frame or two and about one in three ends scrolled away from the reply until the reader
-        // scrolls (LazyVStack measures the run group at ~0 for one layout pass). Follow-up work.
+        // Teleports and backward motion are reported, not gated: in about one run in ten the
+        // transcript still flashes to the top for ~80 ms as the final row replaces the live bubble,
+        // and the reply's end dips ~40 pt for a frame as the working indicator leaves.
         return {
           metrics: {
             ...common,
@@ -419,6 +418,8 @@ function streamCase(keyboardUp: boolean): Case {
           gates: {
             ...setup,
             "reply followed while streaming (p95 ≤4 pt hidden)": (followLag ?? Infinity) <= 4,
+            "end in view after it finishes (≤4 pt hidden)": (hidden ?? Infinity) <= 4,
+            "no remounts": common.remounts === 0,
           },
         };
       }

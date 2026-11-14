@@ -195,6 +195,8 @@ jobs:
           OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
           OPENCLAW_E2E_WORKERS: "2"
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          # Reuse only deployment fixtures; retain every ordinary UI shard file.
+          OPENCLAW_UI_E2E_DEPLOYMENT_ARTIFACT_ROOT: ${{ github.workspace }}/dist/control-ui
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/repo-e2e-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}
           TARGET_REQUIRED_SCRIPT: ${{ matrix.target_script || '' }}
         run: |

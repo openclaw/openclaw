@@ -441,6 +441,12 @@ until their dependent enforcement changes land.
 
 ## Preflight
 
+Before dispatch, run `pnpm check:test-mock-exports --base <frozen-sha>` in the
+exact candidate checkout with frozen dependencies and approved isolation. A
+failure blocks dispatch; any candidate change requires a fresh check. FRV repeats
+the same guard before child fanout. Keep candidate execution outside trusted
+admission tooling.
+
 Before full matrix dispatch, run both `pnpm ui:i18n:check` and
 `pnpm native:i18n:check` against the frozen trusted target in approved isolation.
 Bind both results to that exact SHA. Report generated-locale drift as a warning
