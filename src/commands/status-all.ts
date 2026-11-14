@@ -9,6 +9,11 @@ import { withProgress, type ProgressReporter } from "../cli/progress.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { formatConfigIssueLine } from "../config/issue-format.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
+import {
+  resolveGatewayLogPaths,
+  resolveGatewayRestartLogPath,
+  resolveGatewaySupervisorLogPaths,
+} from "../daemon/restart-logs.js";
 import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -36,13 +41,12 @@ import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildWorkspaceSkillReadiness } from "../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import { formatDeliveryQueueHealthLine } from "./health-format.js";
-import { readStatusAllLogTails } from "./status-all-log-tails.js";
 import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
 } from "./status-all/channels-table.js";
 import { formatTimeAgo, redactStatusSecrets } from "./status-all/format.js";
-import { summarizeLogTail } from "./status-all/gateway.js";
+import { readFileTailLines, summarizeLogTail } from "./status-all/gateway.js";
 import {
   buildStatusAgentTableRows,
   buildStatusChannelDetailSections,
@@ -133,6 +137,27 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
       return typeof ts === "number" && Number.isFinite(ts) ? Math.max(max, ts) : max;
     }, 0);
   return latestTs > 0 ? Date.now() - latestTs : null;
+}
+
+async function readStatusAllLogTails() {
+  let logPaths;
+  try {
+    // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
+    logPaths =
+      process.platform === "darwin"
+        ? resolveGatewaySupervisorLogPaths(process.env)
+        : resolveGatewayLogPaths(process.env);
+  } catch {
+    return null;
+  }
+  const restartLogPath = resolveGatewayRestartLogPath(process.env);
+  const readStderr = process.platform !== "darwin";
+  const [stderrTail, stdoutTail, restartTail] = await Promise.all([
+    readStderr ? readFileTailLines(logPaths.stderrPath, 40) : [],
+    readFileTailLines(logPaths.stdoutPath, 40),
+    readFileTailLines(restartLogPath, 30),
+  ]);
+  return { logPaths, restartLogPath, readStderr, stderrTail, stdoutTail, restartTail };
 }
 
 async function resolveStatusAllLocalDiagnosis(params: {
@@ -717,6 +742,6 @@ export async function statusAllCommand(
     runtime.log(lines.join("\n"));
     progress.tick();
   }).catch((error: unknown) =>
-    reportStatusScanFailureUnlessInterrupted(error, runtime, opts?.timeoutMs),
+    reportStatusScanFailureUnlessInterrupted(error, runtime, opts.timeoutMs),
   );
 }
