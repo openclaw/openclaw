@@ -43,6 +43,62 @@ export type OpenClawIdLinkStatements = {
   binding: SignedStatement<"ServerBinding">;
 };
 
+/** What the Gateway asks a new root to sign for an owner reset (`openclawId.authority` reset_prepare). */
+export type OpenClawIdResetPreparation = Omit<OpenClawIdLinkPreparation, "binding_seq"> & {
+  root_pub: Ed25519PublicKey;
+  binding_seq: number;
+  owner_device_seq: number;
+  removes: { ownerDevices: number; members: number; nodes: number; invites: number };
+};
+
+// Signs the owner device (as MembershipChange add_owner_device at `seq`) and the binding with R.
+async function signWithRoot(
+  root: StatementSigner | undefined,
+  prep: Omit<OpenClawIdLinkPreparation, "binding_seq"> & { binding_seq: number },
+  seq: number,
+  device: StatementSigner,
+  deviceLabel: string,
+): Promise<OpenClawIdLinkStatements> {
+  if (!root) {
+    throw new Error("create the recovery kit first");
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const cert = await signStatement(
+    "OwnerDeviceCert",
+    {
+      device_pub: formatEd25519PublicKey(device.publicKey),
+      // This origin reaches the Gateway on loopback; it has no tunnel peer key.
+      peer_keys: [],
+      label: deviceLabel,
+      scope: "owner",
+      caps: [...OWNER_CAPABILITIES],
+      issued_at: now,
+      expires_at: null,
+      root_epoch: ROOT_EPOCH,
+    },
+    root,
+  );
+  const ownerDevice = await signStatement(
+    "MembershipChange",
+    { claw_id: prep.claw_id, seq, target: { op: "add_owner_device", cert }, issued_at: now },
+    root,
+  );
+  const binding = await signStatement(
+    "ServerBinding",
+    {
+      claw_id: prep.claw_id,
+      hostname: prep.hostname,
+      k_srv: prep.k_srv,
+      k_gw: prep.k_gw,
+      binding_seq: prep.binding_seq,
+      root_epoch: ROOT_EPOCH,
+      issued_at: now,
+    },
+    root,
+  );
+  return { rootPub: formatEd25519PublicKey(root.publicKey), ownerDevice, binding };
+}
+
 /** Holds S and R for one dialog; `discard` drops them. */
 export function createOpenClawIdCeremony() {
   let secret: Uint8Array | undefined;
@@ -86,44 +142,19 @@ export function createOpenClawIdCeremony() {
       device: StatementSigner,
       deviceLabel: string,
     ): Promise<OpenClawIdLinkStatements> {
-      if (!root) {
-        throw new Error("create the recovery kit first");
-      }
-      const now = Math.floor(Date.now() / 1000);
-      const cert = await signStatement(
-        "OwnerDeviceCert",
-        {
-          device_pub: formatEd25519PublicKey(device.publicKey),
-          // This origin reaches the Gateway on loopback; it has no tunnel peer key.
-          peer_keys: [],
-          label: deviceLabel,
-          scope: "owner",
-          caps: [...OWNER_CAPABILITIES],
-          issued_at: now,
-          expires_at: null,
-          root_epoch: ROOT_EPOCH,
-        },
-        root,
-      );
-      const ownerDevice = await signStatement(
-        "MembershipChange",
-        { claw_id: prep.claw_id, seq: 1, target: { op: "add_owner_device", cert }, issued_at: now },
-        root,
-      );
-      const binding = await signStatement(
-        "ServerBinding",
-        {
-          claw_id: prep.claw_id,
-          hostname: prep.hostname,
-          k_srv: prep.k_srv,
-          k_gw: prep.k_gw,
-          binding_seq: prep.binding_seq,
-          root_epoch: ROOT_EPOCH,
-          issued_at: now,
-        },
-        root,
-      );
-      return { rootPub: formatEd25519PublicKey(root.publicKey), ownerDevice, binding };
+      return await signWithRoot(root, prep, 1, device, deviceLabel);
+    },
+
+    /**
+     * Signs, with the new root R' of an owner reset, this browser's owner device (at the seq
+     * the reset leaves for it) and the binding that replaces the current one.
+     */
+    async signReset(
+      prep: OpenClawIdResetPreparation,
+      device: StatementSigner,
+      deviceLabel: string,
+    ): Promise<OpenClawIdLinkStatements> {
+      return await signWithRoot(root, prep, prep.owner_device_seq, device, deviceLabel);
     },
 
     /** Wipes S and drops R (the non-extractable key can only be dereferenced). */

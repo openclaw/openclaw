@@ -1051,6 +1051,7 @@ const startupEnglish = {
     modelSetup: "Models",
     memoryImport: "Import memory",
     security: "Privacy & security",
+    openclawId: "OpenClaw ID",
     secrets: "Secrets",
     debug: "Debug",
     logs: "Logs",

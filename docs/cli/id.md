@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for `openclaw id` (OpenClaw ID remote access status, moving a claw to new keys, publishing)"
+summary: "CLI reference for `openclaw id` (OpenClaw ID remote access status, moving a claw to new keys, resetting owner access, publishing)"
 read_when:
   - OpenClaw ID remote access is off because a key file is missing or replaced
   - You want to move a claw to new connection keys with its recovery kit
+  - Your recovery kit is lost or leaked and you want to reset owner access
 title: "OpenClaw ID"
 ---
 
@@ -11,7 +12,8 @@ title: "OpenClaw ID"
 OpenClaw ID remote access of the Gateway on this machine (an experimental Lab, see
 [Remote access with OpenClaw ID](/concepts/experimental-features#make-a-claw-reachable)).
 Run these commands on the computer that runs the claw: the Gateway accepts `rebind` only
-from a direct-loopback client, never over the tunnel or another network.
+from a direct-loopback client, never over the tunnel or another network. `reset` also works
+with the Gateway stopped.
 
 ## Common options
 
@@ -113,6 +115,45 @@ the move was stored but before it switched keys, it finishes the switch at its n
 
 A move does not review who has access. If you think a key leaked, also check **Your
 devices** and **People**.
+
+## Reset owner access
+
+```bash
+openclaw id reset
+```
+
+Replaces this claw's owner key with a new recovery kit, for a lost or leaked kit or a claw you
+no longer control remotely. It runs only on the computer that runs the claw, in an interactive
+terminal: when the Gateway is running the command goes through it over direct loopback, and
+with the Gateway stopped it edits the claw's local state while holding the Gateway's state
+lock. Anyone who can run commands on this computer can reset; that is the same trust as
+operator access.
+
+1. The command lists what the reset removes and asks you to type the claw's name.
+2. It makes a new recovery kit on this computer. The new owner key signs the claw's next
+   binding, and the kit is printed once. It is never stored, passed as an argument or written
+   to JSON output.
+3. The Gateway removes every owner device, person, node and invite, closes every remote session
+   and revokes the sign-ins issued over the tunnel. Access on this computer is unaffected.
+4. The claw keeps its id, address, connection keys and data. The Gateway signs a `RootReset`
+   with its current Gateway key and publishes it to Discovery with the new binding; no link code
+   is needed. With the Gateway stopped, that happens when it next starts.
+
+Your old recovery kit stops working. A browser that was set up for this claw shows "The owner
+reset access to this claw. Set up this browser again." and is set up again with the new kit.
+
+In the Control UI on this computer the same action is **Reset owner access** in
+**Settings → OpenClaw ID**. There, the browser you reset from becomes the first owner device
+under the new key. Over the tunnel or any other connection, the page says the action is only
+available on the computer that runs the claw, and the Gateway refuses it
+(`not_local_operator`).
+
+A reset is refused while a move to new keys is not published yet
+(`rebind_unpublished`: run `openclaw id publish --code <link-code>` first), and a move to new
+keys is refused while a reset is not published yet (`reset_unpublished`).
+
+If the command can't confirm the outcome, it prints the kit anyway and exits with code **2**:
+keep the kit until `openclaw id status` shows which owner key the claw has.
 
 ## Publish
 

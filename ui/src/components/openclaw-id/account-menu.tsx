@@ -37,6 +37,7 @@ const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const COPY_LINK = `${VALUE_PREFIX}copy-link`;
 const MOVE_KEYS = `${VALUE_PREFIX}move-keys`;
 const PUBLISH_KEYS = `${VALUE_PREFIX}publish-keys`;
+const SETTINGS = `${VALUE_PREFIX}settings`;
 
 /** Derives the compact account header without ever displaying an account ID. */
 export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
@@ -374,6 +375,9 @@ export function openClawIdMenuEntries(
   ) {
     entries.push(renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor"));
   }
+  if (status.link.linked && (status.owner || status.channel === "local_operator")) {
+    entries.push(renderSidebarMenuAction(SETTINGS, t("openclawId.settingsLink"), "settings"));
+  }
   return entries;
 }
 
@@ -476,6 +480,8 @@ export function selectOpenClawIdMenuValue(
     basePath: string;
     onKeysChanged?: () => void;
     onLinkCopied?: () => void;
+    /** Opens Settings → OpenClaw ID. */
+    onOpenSettings?: () => void;
   },
 ): boolean {
   if (!value.startsWith(VALUE_PREFIX) || !context.status || context.status.status.state === "off") {
@@ -486,6 +492,8 @@ export function selectOpenClawIdMenuValue(
     window.location.assign(
       `/_loader/?stay=1&view=${value === APPROVE_DEVICE ? "approve" : "devices"}`,
     );
+  } else if (value === SETTINGS) {
+    context.onOpenSettings?.();
   } else if (value === DEVICES && client && status?.owner) {
     openDialog(async () =>
       (await import("./owner-devices-dialog.tsx")).showOwnerDevicesDialog({ client }),
