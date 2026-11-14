@@ -378,15 +378,22 @@ function isOperatorCommandCronJob(job: CronJob): boolean {
 }
 
 /**
- * Whether the caller is a trusted job's recorded owner conversation. Visibility accepts owner
- * records written before account stamping; changing what runs needs the proven account.
+ * Whether the caller is a trusted job's owner conversation. Ownerless jobs use their exact
+ * conversation binding for lifecycle access only; changing what runs needs a proven account.
  */
 export function cronTrustedJobOwnedByCaller(
-  job: Pick<CronJob, "owner">,
+  job: Pick<CronJob, "owner" | "sessionKey" | "sessionTarget">,
   callerScope: Pick<CronCallerScope, "sessionKey" | "accountId">,
   options: { requireAccount?: boolean } = {},
 ): boolean {
   const sessionKey = callerScope.sessionKey?.trim();
+  if (!job.owner) {
+    return (
+      !options.requireAccount &&
+      Boolean(sessionKey) &&
+      (job.sessionKey?.trim() === sessionKey || job.sessionTarget === `session:${sessionKey}`)
+    );
+  }
   const ownerAccountId = job.owner?.accountId;
   return (
     Boolean(sessionKey) &&
