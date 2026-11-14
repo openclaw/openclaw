@@ -4,7 +4,9 @@ import { defineConfig } from "vitest/config";
 import { createUiE2eVitestConfig } from "../../../test/vitest/vitest.ui-e2e.config.ts";
 
 const base = createUiE2eVitestConfig();
-const projects = await Promise.all(base.test?.projects ?? []);
+const projects = await Promise.all(
+  (base.test?.projects ?? []).map((project) => Promise.resolve(project)),
+);
 export default defineConfig({
   ...base,
   test: {

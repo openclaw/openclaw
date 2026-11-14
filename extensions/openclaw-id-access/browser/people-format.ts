@@ -83,13 +83,13 @@ export function deviceApprover(
   if (!approver) {
     return "Approver unavailable";
   }
-  switch (approver.kind) {
-    case "invite":
-      return `Approved via invite ${approver.invite_id}`;
-    case "owner":
-      return approver.by === "root"
-        ? "Approved with the recovery key"
-        : `Approved by owner device ${ownerDevices.find((owner) => owner.deviceFp === approver.by)?.label ?? approver.by}`;
+  if (approver.kind === "invite") {
+    return `Approved via invite ${approver.invite_id}`;
+  }
+  if (approver.kind === "owner") {
+    return approver.by === "root"
+      ? "Approved with the recovery key"
+      : `Approved by owner device ${ownerDevices.find((owner) => owner.deviceFp === approver.by)?.label ?? approver.by}`;
   }
   return `Approved by ${memberDevices.find((member) => member.deviceFp === approver.device_fp)?.label ?? approver.device_fp}`;
 }
