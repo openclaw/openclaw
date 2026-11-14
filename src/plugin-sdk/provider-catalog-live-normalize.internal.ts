@@ -166,7 +166,7 @@ export function readLiveModelChatCapability(row: unknown): boolean | undefined {
   }
   if (
     outputModalities.includes("text") ||
-    (kind && /^(?:llm|vlm|text-generation|(?:image|audio|video)-text-to-text)$/i.test(kind))
+    (kind && /^(?:chat|llm|vlm|text-generation|(?:image|audio|video)-text-to-text)$/i.test(kind))
   ) {
     return true;
   }
