@@ -2,6 +2,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { formatCliCommand } from "../cli/command-format.js";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -178,7 +179,7 @@ export async function preflightBundledTemplatePlugin(params: {
           return {
             ok: false,
             code: "bundled_plugin_conflict",
-            message: `Plugin ${probe.pluginId} is already installed with different contents (installed version ${installed.version ?? "unknown"}; this Template bundles ${probe.version ?? "unknown"}). Template Add does not replace shared plugins. To use the bundled version, run "openclaw plugins install <folder> --force" with the ${dependency.path} folder from this Template release, then retry the Template Add.`,
+            message: `Plugin ${probe.pluginId} is already installed with different contents (installed version ${installed.version ?? "unknown"}; this Template bundles ${probe.version ?? "unknown"}). Template Add does not replace shared plugins. To use the bundled version, run "${formatCliCommand("openclaw plugins install <folder> --force", env)}" with the ${dependency.path} folder from this Template release, then retry the Template Add.`,
           };
         }
         return {
