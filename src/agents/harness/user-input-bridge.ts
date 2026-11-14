@@ -57,7 +57,9 @@ export function formatAgentHarnessUserInputPrompt(
   const formatText = options.formatText ?? ((text: string) => text);
   const lines = [options.intro ?? "Agent needs input:"];
   questions.forEach((question, index) => {
-    const prefix = questions.length > 1 ? `${index + 1}. ` : "";
+    // A numbered header would let markdown renderers merge it and the option
+    // lines below into one renumbered list; options number from 1 per question.
+    const prefix = questions.length > 1 ? `Question ${index + 1}: ` : "";
     lines.push("", `${prefix}${formatText(question.header)}`, formatText(question.question));
     if (question.isSecret) {
       lines.push(
@@ -114,8 +116,10 @@ function buildAgentHarnessQuestionPresentation(params: {
   // adapters can keep it while replacing the reply guidance below.
   const optionGuidance = [
     ...options.map(
-      (option) =>
-        `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
+      (option, optionIndex) =>
+        `${optionIndex + 1}. ${formatText(option.label)}${
+          option.description ? ` - ${formatText(option.description)}` : ""
+        }`,
     ),
     "",
     questionReplyGuidance(params.questions),
@@ -251,16 +255,21 @@ export function buildAgentHarnessUserInputAnswers(
   }
 
   const keyed = parseKeyedAnswers(inputText);
+  const keyedAnswers = questions.map(
+    (question, index) =>
+      keyed.get(question.id.toLowerCase()) ??
+      keyed.get(question.header.toLowerCase()) ??
+      keyed.get(question.question.toLowerCase()) ??
+      keyed.get(String(index + 1)),
+  );
+  // A line bound to one question by key cannot also answer another by position.
+  const keyedLines = new Set(keyedAnswers.map((keyedAnswer) => keyedAnswer?.line));
   // Unkeyed multi-question replies are positional. Preserve blank lines so a
   // skipped answer cannot shift every later response onto the wrong question.
   const fallbackLines = inputText.split(/\r?\n/).map((line) => line.trim());
   questions.forEach((question, index) => {
-    const key =
-      keyed.get(question.id.toLowerCase()) ??
-      keyed.get(question.header.toLowerCase()) ??
-      keyed.get(question.question.toLowerCase()) ??
-      keyed.get(String(index + 1));
-    const answer = key ?? fallbackLines[index] ?? "";
+    const answer =
+      keyedAnswers[index]?.value ?? (keyedLines.has(index) ? "" : (fallbackLines[index] ?? ""));
     answers[question.id] = {
       answers: answer ? normalizeAgentHarnessUserInputAnswers(answer, question) : [],
     };
@@ -325,17 +334,20 @@ function normalizeAgentHarnessUserInputOption(
   return selected ? (selected.value ?? selected.label) : undefined;
 }
 
-function parseKeyedAnswers(inputText: string): Map<string, string> {
-  const answers = new Map<string, string>();
-  for (const line of inputText.split(/\r?\n/)) {
-    const match = line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
+function parseKeyedAnswers(inputText: string): Map<string, { value: string; line: number }> {
+  const answers = new Map<string, { value: string; line: number }>();
+  for (const [lineIndex, line] of inputText.split(/\r?\n/).entries()) {
+    // Replies may number lines the way the prompt numbers questions ("1. Deny").
+    // Whitespace after the dot keeps decimals such as "1.5" positional.
+    const match =
+      line.match(/^\s*(\d+)\.\s+(.+?)\s*$/) ?? line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
     if (!match) {
       continue;
     }
     const key = match[1]?.trim().toLowerCase();
     const value = match[2]?.trim();
     if (key && value) {
-      answers.set(key, value);
+      answers.set(key, { value, line: lineIndex });
     }
   }
   return answers;
