@@ -53,6 +53,15 @@ describe("fal video generation provider", () => {
     expect(fetchGuardMock).not.toHaveBeenCalled();
   });
 
+  it("rejects an invalid configured baseUrl instead of submitting to hosted fal", async () => {
+    mockFalProviderRuntime();
+    await expectRejected(
+      { cfg: { models: { providers: { fal: { baseUrl: "https://[", models: [] } } } } },
+      "Invalid fal baseUrl: value is not a valid URL",
+    );
+    expect(fetchGuardMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { model: "fal-ai/minimax/video-01-live", ignored: ["aspectRatio", "resolution", "audio"] },
     { model: "fal-ai/heygen/v2/video-agent", ignored: ["aspectRatio", "resolution", "audio"] },

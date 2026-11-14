@@ -117,3 +117,11 @@ it("rejects Wan generation through a subscription endpoint", async () => {
 
   expect(postJsonRequestMock).not.toHaveBeenCalled();
 });
+
+it("rejects an invalid configured baseUrl instead of submitting to DashScope intl", async () => {
+  await expect(generateVideo({ cfg: qwenConfig("https://[") })).rejects.toThrow(
+    "Invalid Qwen baseUrl: value is not a valid URL",
+  );
+
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+});

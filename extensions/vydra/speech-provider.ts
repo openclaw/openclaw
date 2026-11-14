@@ -35,10 +35,9 @@ function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>) {
 function readVydraSpeechConfig(config: SpeechProviderConfig) {
   return {
     apiKey: normalizeOptionalString(config.apiKey),
-    baseUrl: normalizeVydraBaseUrl(
+    baseUrl:
       normalizeOptionalString(config.baseUrl) ??
-        normalizeOptionalString(process.env.VYDRA_BASE_URL),
-    ),
+      normalizeOptionalString(process.env.VYDRA_BASE_URL),
     model:
       normalizeOptionalString(config.model) ??
       normalizeOptionalString(process.env.VYDRA_TTS_MODEL) ??
@@ -84,7 +83,9 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
       const fetchFn = fetch;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: config.baseUrl,
+          // Normalized here, not in readVydraSpeechConfig: an invalid URL fails synthesis only,
+          // never the isConfigured/resolveConfig checks.
+          baseUrl: normalizeVydraBaseUrl(config.baseUrl),
           defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
           allowPrivateNetwork: false,
           defaultHeaders: {
