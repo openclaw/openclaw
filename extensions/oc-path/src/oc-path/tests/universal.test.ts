@@ -161,13 +161,7 @@ describe("setOcPath", () => {
       '{"models":{"provider/model":{"alias":"new"}}}',
       false,
     ],
-    [
-      '{"a":1,"b":{"c":2,"d":3},"e":4}',
-      "b.c",
-      "99",
-      '{"a":1,"b":{"c":99,"d":3},"e":4}',
-      false,
-    ],
+    ['{"a":1,"b":{"c":2,"d":3},"e":4}', "b.c", "99", '{"a":1,"b":{"c":99,"d":3},"e":4}', false],
     ['{"items":[1,2]}', "items.+", "3", '{"items":[1,2,3]}', false],
     ['{"items":[1,3]}', "items.+1", "2", '{"items":[1,2,3]}', false],
   ])("edits JSONC %s at %s", (raw, path, value, expected, valueJson) => {

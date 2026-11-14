@@ -44,7 +44,9 @@ describe("resolveEffectiveToolFsWorkspaceOnly", () => {
 describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
   it("allows root expansion by default when no restrictive profile is configured", () => {
     expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg: {}, agentId: "main" })).toBe(true);
-    expect(resolveEffectiveToolFsRootExpansionAllowed(policy({ alsoAllow: ["lobster"] }))).toBe(true);
+    expect(resolveEffectiveToolFsRootExpansionAllowed(policy({ alsoAllow: ["lobster"] }))).toBe(
+      true,
+    );
   });
 
   it("does not re-enable root expansion from tools.fs alone under messaging profile (#47487)", () => {

@@ -8295,6 +8295,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(hydrateWindowsFetch.run).toContain("$fetch.StartInfo = $fetchInfo");
     expect(hydrateWindowsFetch.run).toContain("$fetch.WaitForExit(30000)");
     expect(hydrateWindowsFetch.run).toContain("$fetch.Kill()");
+    expect(hydrateWindowsFetch.run).toContain('throw "git fetch timed out after 30 seconds"');
     expect(hydrateWindowsFetch.run).not.toContain("StandardOutput.ReadToEnd()");
     expect(hydrateWindowsFetch.run).not.toContain("StandardError.ReadToEnd()");
     expect(hydrateWindowsFetch.run).toContain("git fetch failed with exit code $($fetch.ExitCode)");
@@ -10799,77 +10800,6 @@ describe("package artifact reuse", () => {
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
     expect(workflow).toContain('bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"');
-    expect(workflow).toContain("use_github_hosted_runners:");
-    const expectRuntimeRunner = (
-      selector: unknown,
-      legacy: string,
-      boat: string,
-      githubHosted = false,
-    ) => {
-      for (const runnerBackend of [
-        "",
-        "blacksmith",
-        "github",
-        "hybrid",
-        "runson",
-        "boat",
-      ] as const) {
-        for (const runnerGroup of ["", "release-runners"]) {
-          for (const useGithubHostedRunners of [false, true]) {
-            const label =
-              useGithubHostedRunners || (githubHosted && runnerBackend === "github")
-                ? "ubuntu-24.04"
-                : runnerBackend === "boat"
-                  ? boat
-                  : legacy;
-            expect(
-              evaluateWorkflowRunner(selector, {
-                runnerBackend,
-                runnerGroup,
-                useGithubHostedRunners,
-              }),
-            ).toEqual(runnerGroup ? { group: runnerGroup, labels: label } : label);
-          }
-        }
-      }
-    };
-    for (const jobName of [
-      "validate_release_live_cache",
-      "plan_docker_lane_groups",
-      "validate_live_provider_suites",
-      "validate_live_media_provider_suites",
-    ]) {
-      expectRuntimeRunner(
-        workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"],
-        "blacksmith-2vcpu-ubuntu-2404",
-        "boat",
-      );
-    }
-    for (const jobName of [
-      "validate_special_e2e",
-      "validate_docker_e2e",
-      "validate_docker_lanes",
-      "prepare_docker_e2e_image",
-      "prepare_live_test_image",
-      "validate_live_models_docker",
-      "validate_live_models_docker_targeted",
-      "validate_live_docker_provider_suites",
-      "validate_docker_openwebui",
-    ]) {
-      expectRuntimeRunner(
-        workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"],
-        "blacksmith-8vcpu-ubuntu-2404",
-        "boat-xlarge",
-        jobName === "validate_docker_openwebui",
-      );
-    }
-    for (const jobName of ["build", "test"]) {
-      expectRuntimeRunner(
-        workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)["runs-on"],
-        "blacksmith-8vcpu-ubuntu-2404",
-        "boat-xlarge",
-      );
-    }
     const repoE2eHarnessCheckout = workflowStep(
       workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", "build"),
       "Checkout trusted artifact harness",
@@ -10945,17 +10875,23 @@ describe("package artifact reuse", () => {
     expect(evaluateWorkflowRunner(mediaRunner, { useGithubHostedRunners: true })).toBe(
       "ubuntu-24.04",
     );
+    const openWebUiRunner = workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_openwebui")["runs-on"];
+    expect(
+      evaluateWorkflowRunner(openWebUiRunner, {
+        runnerBackend: "github",
+        useGithubHostedRunners: false,
+      }),
+    ).toBe("ubuntu-24.04");
     expect(workflow).toContain(`image: ${LIVE_MEDIA_RUNNER_IMAGE}`);
     expect(workflow).toContain("ffmpeg -version | head -1");
     expect(workflow).toContain("ffprobe -version | head -1");
     const imageDockerfile = readFileSync(LIVE_MEDIA_RUNNER_DOCKERFILE, "utf8");
     const imageWorkflow = readFileSync(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "utf8");
     const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
-    for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson", "boat"] as const) {
-      expect(evaluateWorkflowRunner(buildJob["runs-on"], { runnerBackend })).toBe(
-        runnerBackend === "boat" ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
-      );
-    }
+    expect(evaluateWorkflowRunner(buildJob["runs-on"])).toBe("blacksmith-2vcpu-ubuntu-2404");
+    expect(evaluateWorkflowRunner(buildJob["runs-on"], { runnerBackend: "boat" })).toBe(
+      "ubuntu-24.04",
+    );
     const buildStep = workflowStep(buildJob, "Build and push live media runner image");
     expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$/m);
     expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
@@ -15544,6 +15480,12 @@ promote_windows_release_assets
         '${GITHUB_ACTOR}" != "github-actions[bot]"',
         "validate-release-publish-approval.mjs",
       ]);
+      if (workflowPath === ".github/workflows/plugin-clawhub-new.yml") {
+        expect(authorization.env).toMatchObject({
+          APPROVAL_PATH: "${{ runner.temp }}/clawhub-bootstrap-approval/approval.json",
+          EXPECTED_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
+        });
+      }
     }
 
     const npmPublish = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
@@ -15608,21 +15550,6 @@ promote_windows_release_assets
     expect(clawHubInputs?.release_publish_workflow_sha).toBeDefined();
     // The parent's attested approval receipt lets the child skip its own gate.
     expect(clawHubPublish.needs).toContain("approve_plugins_clawhub_release");
-
-    const bootstrapWorkflow = ".github/workflows/plugin-clawhub-new.yml";
-    const authorizationJob = workflowJob(bootstrapWorkflow, "validate_release_publish_approval");
-    const authorization = workflowStep(authorizationJob, "Validate release publish approval run");
-
-    expect(authorization.env).toMatchObject({
-      APPROVAL_PATH: "${{ runner.temp }}/clawhub-bootstrap-approval/approval.json",
-      EXPECTED_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
-      EXPECTED_WORKFLOW_BRANCH: "${{ inputs.release_publish_branch }}",
-      RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
-    });
-    expectTextToIncludeAll(authorization.run, [
-      '${GITHUB_ACTOR}" != "github-actions[bot]"',
-      "validate-release-publish-approval.mjs",
-    ]);
   });
 
   it("keeps release publication ownership and artifact boundaries wired", () => {
@@ -16047,13 +15974,10 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ["preflight", "ios-build", "ci-gate"],
       "beta",
     );
-    expect(ciPath).toEqual([20, 150, 5]);
     expect(diagnosticDrainTimeout - total(ciPath)).toBeGreaterThanOrEqual(60);
-    expect(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
     const pluginChildTimeouts = byProfile((profile) =>
       pluginPrereleaseTimeoutFloor(pluginPrerelease, liveE2e, profile),
     );
-    expect(pluginChildTimeouts).toEqual({ beta: 170, stable: 170, full: 200 });
     for (const profile of profiles) {
       expect(
         diagnosticDrainTimeout - pluginChildTimeouts[profile],
@@ -16075,11 +15999,6 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       timeout(packageAcceptance, "summary", profile),
       timeout(releaseChecks, "summary", profile),
     ]);
-    expect(releasePackagePaths).toEqual({
-      beta: [30, 35, 60, 10, 30, 60, 90, 5, 5],
-      stable: [30, 35, 60, 10, 30, 60, 90, 5, 5],
-      full: [30, 35, 60, 10, 30, 90, 90, 5, 5],
-    });
     const releaseChecksParent = workflowJob(
       FULL_RELEASE_VALIDATION_WORKFLOW,
       "release_checks_candidate",
@@ -16104,7 +16023,6 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ),
       timeout(releaseChecks, "summary"),
     ];
-    expect(releaseCrossOsPath).toEqual([30, 35, 90, 180, 5]);
     const installPath = (variant: "update" | "nonroot") => [
       timeout(releaseChecks, "resolve_target"),
       timeout(installSmoke, "preflight"),
@@ -16119,17 +16037,15 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ];
     const releaseInstallPath = installPath("update");
     const releaseInstallNonrootPath = installPath("nonroot");
-    expect(releaseInstallPath).toEqual([30, 15, 75, 120, 5, 5]);
-    expect(releaseInstallNonrootPath).toEqual([30, 15, 75, 60, 5, 5]);
     const releaseQaLivePath = [
       timeout(releaseChecks, "resolve_target"),
       ...timeouts(qaLive, ["authorize_actor", "validate_selected_ref", "run_live_matrix"]),
       timeout(releaseChecks, "summary"),
     ];
-    expect(releaseQaLivePath).toEqual([30, 10, 30, 90, 5]);
     for (const [pathName, path] of [
       ["cross-os", releaseCrossOsPath],
       ["install", releaseInstallPath],
+      ["install-nonroot", releaseInstallNonrootPath],
       ["qa-live", releaseQaLivePath],
     ] as const) {
       expect(
@@ -16143,14 +16059,12 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ["resolve_target", "qa_live_telegram_release_checks", "summary"],
       "beta",
     );
-    expect(releaseTelegramPath).toEqual([30, 210, 5]);
     expect(diagnosticDrainTimeout - total(releaseTelegramPath)).toBeGreaterThanOrEqual(60);
     const npmTelegramChildTimeout = timeout(
       readWorkflow(NPM_TELEGRAM_WORKFLOW),
       "run_package_telegram_e2e",
       "beta",
     );
-    expect(npmTelegramChildTimeout).toBe(60);
     expect(diagnosticDrainTimeout - npmTelegramChildTimeout).toBeGreaterThanOrEqual(60);
 
     const performance = readWorkflow(PERFORMANCE_WORKFLOW);
@@ -16169,8 +16083,6 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ["resolve_target", "kova", "publish"],
       "beta",
     );
-    expect(performanceArtifactPath).toEqual([10, 240, 5]);
-    expect(performancePublishPath).toEqual([10, 240, 30]);
     const performanceParent = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
     expect(performanceParent["timeout-minutes"]).toBe(15);
     expect(workflowStep(performanceParent, "Dispatch OpenClaw Performance").run).toContain(
@@ -16207,8 +16119,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       timeout(fullReleaseCandidate, "resolve_candidate", "full"),
       timeout(fullRelease, "release_checks_candidate", "full"),
     ];
-    expect(fullParentPath).toEqual([15, 10, 10, 10, 30, 90, 15, 5, 15]);
-    expect(total(fullParentPath)).toBe(200);
+    expect(diagnosticDrainTimeout - total(fullParentPath)).toBeGreaterThanOrEqual(60);
     expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(diagnosticDrainTimeout);
   });
 

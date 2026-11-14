@@ -1307,32 +1307,6 @@ EOF
 
   defineInstallerNpmConfigContract(installerContract);
 
-  it("uses OPENCLAW_HOME for git defaults", () => {
-    const tmp = tempDirs.make("openclaw-install-home-");
-    const osHome = join(tmp, "os-home");
-    const openclawHome = join(tmp, "openclaw-home");
-    mkdirSync(osHome, { recursive: true });
-    mkdirSync(openclawHome, { recursive: true });
-
-    const result = runInstallShell(
-      [
-        `cd ${JSON.stringify(process.cwd())}`,
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        'printf "git=%s\\n" "$GIT_DIR"',
-      ].join("\n"),
-      {
-        HOME: osHome,
-        OPENCLAW_HOME: openclawHome,
-        OPENCLAW_GIT_DIR: undefined,
-        TERM: "dumb",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    const output = result.stdout;
-    expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
-  });
-
   it.each([
     {
       args: "--install-method git --git-dir /first --dir '/target with spaces'",
@@ -1357,12 +1331,18 @@ EOF
       name: "uses the detected checkout when no target is explicit",
     },
     {
+      args: "--install-method git",
+      detected: false,
+      expected: "/effective-home/openclaw",
+      name: "uses OPENCLAW_HOME for git defaults",
+    },
+    {
       args: "--install-method git --git-dir ''",
       envGitDir: "/env-target",
       expected: "/detected-checkout",
       name: "treats an empty CLI target as non-explicit",
     },
-  ])("selects the git install target: $name", ({ args, envGitDir, expected }) => {
+  ])("selects the git install target: $name", ({ args, envGitDir, expected, detected = true }) => {
     const result = runInstallShell(
       `
         source "${SCRIPT_PATH}"
@@ -1371,7 +1351,7 @@ EOF
         print_installer_banner() { :; }
         print_gum_status() { :; }
         detect_os_or_die() { OS=linux; }
-        detect_openclaw_checkout() { printf '/detected-checkout\\n'; }
+        detect_openclaw_checkout() { ${detected ? "printf '/detected-checkout\\n'" : "return 1"}; }
         show_install_plan() { :; }
         check_existing_openclaw() { return 1; }
         load_nvm_for_node_detection() { :; }
@@ -3396,8 +3376,6 @@ EOF
 });
 
 describe("install.sh macOS Homebrew Node behavior", () => {
-  const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
-
   it("aborts before brew link when Homebrew node installation fails at runtime", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -3566,12 +3544,6 @@ exit 0
     const observed = readFileSync(stdinLog, "utf8").trim();
     expect(observed).toBe(isolate ? "devnull" : "other");
     expect(readFileSync(inputLog, "utf8")).toBe(isolate ? "" : input);
-    expect(script).toContain("needs_stdin_isolation; then");
-    expect(script).toContain(
-      isolate
-        ? '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?'
-        : '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
-    );
   });
 });
 

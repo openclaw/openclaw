@@ -1455,6 +1455,15 @@ it.todo("retains todo coverage");
       boat: {},
       github: {},
     });
+    // Neither runner profile owns both children of any complete parent.
+    const splitProfiles = runs.map((run) => ({
+      ...run,
+      logs: run.logs.filter((_log, index) => index === 0 || index === 5),
+    }));
+    const incomplete = refitTestTimings(splitProfiles).timings.compactGroupSeconds;
+    expect(incomplete.blacksmith).not.toHaveProperty(parentShardName);
+    expect(incomplete.github).not.toHaveProperty(parentShardName);
+    expectCompact(splitProfiles, { [parentShardName]: 167 }, previous);
   });
 
   it("does not promote selected PR generations into full-parent samples", () => {
@@ -1535,32 +1544,6 @@ it.todo("retains todo coverage");
     }
     const main = runs.map((run) => Object.assign({}, run, { pullRequestMergeRef: false }));
     expectCompact(main, { [parent]: 600, [child]: 40 }, previous);
-  });
-
-  it("does not invent a complete parent measurement across runner profiles", () => {
-    const common = {
-      parentShardName: "agentic-control-plane-agent-chat",
-      configs: ["test/vitest/vitest.gateway-server.config.ts"],
-    };
-    const generation = splitTimingGeneration({
-      ...common,
-      stripes: [["a.test.ts"], ["b.test.ts"]],
-    });
-    const runs = [1, 2, 3].map((id) =>
-      timingRun(id, [
-        timingLog(compactLog(100, generation.timingKeys[0]!)),
-        timingLog(compactLog(200, generation.timingKeys[1]!), "ubuntu-24.04"),
-      ]),
-    );
-    const result = refitTestTimings(runs).timings.compactGroupSeconds;
-    expect(result.blacksmith).not.toHaveProperty(common.parentShardName);
-    expect(result.github).not.toHaveProperty(common.parentShardName);
-    const previous = compactBaseline({ [common.parentShardName]: 500 });
-    expect(
-      refitTestTimings(runs, previous).timings.compactGroupSeconds.blacksmith[
-        common.parentShardName
-      ],
-    ).toBe(500);
   });
 
   it.each([false, true])(
@@ -1763,7 +1746,7 @@ describe("CI timing sampler provenance", () => {
           log,
           ...overrides,
         });
-      const fixture = createSamplerFixture({
+      const fixtureOptions = {
         observedAt: "2026-08-28T12:01:00.000Z",
         runs: source === "main" ? sourceRuns : [samplerRun(2), samplerRun(3)],
         ...(source === "release" ? { releaseRuns: sourceRuns } : {}),
@@ -1775,7 +1758,8 @@ describe("CI timing sampler provenance", () => {
           sourceJob(51, 5),
           ...(source === "main" ? [] : [samplerJob(21, 2), samplerJob(31, 3)]),
         ],
-      });
+      };
+      const fixture = createSamplerFixture(fixtureOptions);
       const result = invoke(fixture);
       const timings = readTimings(fixture);
       expect(
@@ -1795,28 +1779,22 @@ describe("CI timing sampler provenance", () => {
       for (const requestUrl of requests.filter((url) => url.includes("/workflows/"))) {
         expectWindow(requestUrl);
       }
+      if (source === "tooling") {
+        reject(
+          createSamplerFixture({
+            ...fixtureOptions,
+            runs: [],
+            toolingRuns: sourceRuns.slice(0, 1),
+          }),
+          `Requested tooling run 1 has jobs completed after frozen UTC cutoff ${sampleNow}.`,
+          true,
+          false,
+          2,
+          [1],
+        );
+      }
     },
   );
-
-  it("refuses an explicitly requested tooling run that completes after the frozen cutoff", () => {
-    const fixture = createSamplerFixture({
-      observedAt: "2026-08-28T12:01:00.000Z",
-      runs: [],
-      toolingRuns: [samplerRun(1, { event: "pull_request" })],
-      jobs: [
-        samplerJob(11, 1, { log: samplerToolingLog(40) }),
-        samplerJob(12, 1, { completed_at: "2026-08-28T12:00:30.000Z" }),
-      ],
-    });
-    reject(
-      fixture,
-      `Requested tooling run 1 has jobs completed after frozen UTC cutoff ${sampleNow}.`,
-      true,
-      false,
-      2,
-      [1],
-    );
-  });
 
   it("rejects corrupt provenance even when an earlier job is beyond the frozen cutoff", () => {
     const fixture = createSamplerFixture({

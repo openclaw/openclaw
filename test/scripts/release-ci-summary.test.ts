@@ -51,7 +51,6 @@ import {
   restoreOriginalPublicationAdmission,
   resolveManifestChildOriginAttempt,
   runReleaseCiGh,
-  selectExactChildRun,
   selectExactChildRunFromPages,
   selectManifestArtifact,
   selectManifestParentJob,
@@ -2853,60 +2852,13 @@ describe("release CI summary child correlation", () => {
     ).toThrow("full release parent run binding mismatch");
   });
 
-  it("ignores same-SHA and nearby-name runs without the exact parent dispatch binding", () => {
-    const expected = "OpenClaw Performance full-release-validation-29090000000-3";
-    const exact = {
-      display_title: expected,
-      event: "workflow_dispatch",
-      head_branch: "main",
-      head_sha: "a".repeat(40),
-      id: 303,
-    };
-    expect(
-      selectExactChildRun(
-        [
-          {
-            display_title: "OpenClaw Performance",
-            event: "workflow_dispatch",
-            head_branch: "main",
-            head_sha: exact.head_sha,
-            id: 101,
-          },
-          { ...exact, event: "push", id: 202 },
-          exact,
-        ],
-        expected,
-        "main",
-      ),
-    ).toBe(exact);
-  });
-
-  it("fails closed on duplicate exact dispatch bindings and ignores branch collisions", () => {
-    const expected = "CI full-release-validation-29090000000-3-ci";
-    const exact = {
-      display_title: expected,
-      event: "workflow_dispatch",
-      head_branch: "main",
-      id: 1,
-    };
-    expect(
-      selectExactChildRun(
-        [{ ...exact, head_branch: "release/2026.7.1", id: 0 }, exact],
-        expected,
-        "main",
-      ),
-    ).toBe(exact);
-    expect(() => selectExactChildRun([exact, { ...exact, id: 2 }], expected, "main")).toThrow(
-      "multiple child runs have exact dispatch title and branch",
-    );
-  });
-
   it("returns one exact child after a full bounded pagination scan", () => {
     const expected = "OpenClaw Performance full-release-validation-29090000000-3";
     const exact = {
       display_title: expected,
       event: "workflow_dispatch",
       head_branch: "main",
+      head_sha: "a".repeat(40),
       id: 999,
     };
     const pages = Array.from({ length: 10 }, (_, pageIndex) =>
@@ -2917,9 +2869,16 @@ describe("release CI summary child correlation", () => {
         id: pageIndex * 100 + runIndex,
       })),
     );
+    const firstPage = expectDefined(pages[0], "first child run page");
+    firstPage[0] = { ...exact, display_title: "OpenClaw Performance", id: 1001 };
+    firstPage[1] = { ...exact, event: "push", id: 1002 };
+    firstPage[2] = { ...exact, head_branch: "release/2026.7.1", id: 1003 };
     expectDefined(pages[9], "last child run page")[99] = exact;
 
     expect(selectExactChildRunFromPages(pages, expected, "main")).toBe(exact);
+    expect(() =>
+      selectExactChildRunFromPages([[exact, { ...exact, id: 1004 }]], expected, "main"),
+    ).toThrow("multiple child runs have exact dispatch title and branch");
     expectDefined(pages[0], "first child run page")[0] = { ...exact, id: 1001 };
     expect(() => selectExactChildRunFromPages(pages, expected, "main")).toThrow(
       "multiple child runs have exact dispatch title and branch",

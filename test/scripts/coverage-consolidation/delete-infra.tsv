@@ -1,0 +1,2 @@
+removed_file	baseline_lines	keeper_file	keeper_case	retained_failure_classes
+src/infra/device-pairing-worker.benchmark.test.ts	93	src/infra/device-pairing-worker.test.ts	keeps public list, lookup, and pending bytes while executing no host queries	Exact serialized public list and read-only list parity, descending approval order, exact paired lookup including full node/token fields, and no main-thread synchronous SQL; removed opt-in 5000-device/50-caller timing report asserted no timing bound.

@@ -1126,27 +1126,6 @@ describe("chat voice controls", () => {
     expect(preview.muted).toBe(true);
   });
 
-  it("stops active voice input without sending a composed draft", () => {
-    const onSend = vi.fn();
-    const onToggleRealtimeTalk = vi.fn();
-    const container = renderChatView({
-      draft: "Keep this draft",
-      realtimeTalkActive: true,
-      onSend,
-      onToggleRealtimeTalk,
-    });
-
-    const stop = requireElement(
-      container,
-      '[aria-label="Stop voice input"]',
-      "stop voice input button",
-    );
-    stop.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(1);
-    expect(onSend).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["connecting", "Connecting voice input…"],
     ["thinking", "Asking the agent…"],
@@ -1208,7 +1187,10 @@ describe("chat voice controls", () => {
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
     const inputLevel = new RealtimeTalkLevelSignal();
     const onToggleRealtimeTalk = vi.fn();
+    const onSend = vi.fn();
     const container = renderChatView({
+      draft: "Keep this draft",
+      onSend,
       realtimeTalkActive: true,
       realtimeTalkStatus: "listening",
       realtimeTalkInputLevel: inputLevel,
@@ -1233,6 +1215,7 @@ describe("chat voice controls", () => {
         "Stop voice input",
       ).click();
       expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
+      expect(onSend).not.toHaveBeenCalled();
     } finally {
       disposeChatView(container);
       container.remove();

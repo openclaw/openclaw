@@ -2493,7 +2493,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-channels.ownership.test.ts",
   "src/gateway/server-chat-metadata-lifecycle.catalog-renewal.test.ts",
   "src/gateway/server-chat-metadata-lifecycle.integration.test.ts",
-  "src/gateway/server-chat-metadata-lifecycle.rebuild.test.ts",
   "src/gateway/server-chat.agent-events.test.ts",
   "src/gateway/server-templates-monitors.test.ts",
   "src/gateway/server-close.agent-databases.test.ts",

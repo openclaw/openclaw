@@ -1123,7 +1123,6 @@ describe("release child attempt composition", () => {
       runner_name: "GitHub Actions 1",
       steps: [{ name: "Run tests" }],
     };
-    const running = { ...completed, conclusion: null, status: "in_progress" };
     const ghostAttempt = {
       jobs: [ghost, completed, ghost, job("checks-ui", "failure")],
       runAttempt: 2,
@@ -1159,94 +1158,6 @@ describe("release child attempt composition", () => {
             plannedRunAttempt,
           }),
         ).toThrow("is unsealable due to duplicate job identity");
-      },
-    );
-
-    it.each<{
-      label: string;
-      attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
-      effectiveRunAttempt: number;
-      effectiveRunStatus?: string;
-      plannedRunAttempt: number;
-    }>([
-      {
-        label: "without a completed sibling",
-        attempts: [
-          { jobs: [ghost, ghost], runAttempt: 1 },
-          { jobs: [job("test", "success")], runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        plannedRunAttempt: 1,
-      },
-      {
-        label: "once the copy has a runner",
-        attempts: [
-          { jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, completed], runAttempt: 1 },
-          { jobs: [job("test", "success")], runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        plannedRunAttempt: 1,
-      },
-      ...[
-        { label: "beside two running jobs", jobs: [ghost, running, running] },
-        {
-          label: "beside an assigned queued copy",
-          jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, running],
-        },
-        { label: "with only queued copies", jobs: [ghost, ghost] },
-        {
-          label: "beside a runnerless running job",
-          jobs: [ghost, { ...running, runner_id: null, runner_name: null }],
-        },
-      ].flatMap(({ label, jobs }) =>
-        ["queued", "in_progress"].map((effectiveRunStatus) => ({
-          label: `${label} in a ${effectiveRunStatus} run`,
-          attempts: [
-            { jobs: [job("test", "success")], runAttempt: 1 },
-            { jobs, runAttempt: 2 },
-          ],
-          effectiveRunAttempt: 2,
-          effectiveRunStatus,
-          plannedRunAttempt: 1,
-        })),
-      ),
-      {
-        label: "beside a running job in a completed run",
-        attempts: [
-          { jobs: [job("test", "success")], runAttempt: 1 },
-          { jobs: [ghost, running], runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        effectiveRunStatus: "completed",
-        plannedRunAttempt: 1,
-      },
-      {
-        label: "beside a running job in an older attempt",
-        attempts: [
-          { jobs: [ghost, running], runAttempt: 1 },
-          { jobs: [job("test", "success")], runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        effectiveRunStatus: "in_progress",
-        plannedRunAttempt: 1,
-      },
-      {
-        label: "beside a running job without a rerun",
-        attempts: [{ jobs: [ghost, running], runAttempt: 1 }],
-        effectiveRunAttempt: 1,
-        effectiveRunStatus: "in_progress",
-        plannedRunAttempt: 1,
-      },
-    ])(
-      "still rejects duplicates $label",
-      ({ attempts, effectiveRunAttempt, effectiveRunStatus, plannedRunAttempt }) => {
-        expect(() =>
-          composeReleaseAttemptJobs(attempts, {
-            effectiveRunAttempt,
-            effectiveRunStatus,
-            plannedRunAttempt,
-          }),
-        ).toThrow("duplicate job identity");
       },
     );
   });

@@ -6,13 +6,17 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { listProjectRegistry, registerProjectRegistry } from "../../projects/project-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as repositoryWorkspaces from "../../state/session-repository-workspaces.js";
@@ -112,11 +116,20 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         worktree: index === 0 ? { id: "w", branch: "b", repoRoot: "/work/folder-0" } : undefined,
       });
     }
-    seed("agent:main:other", {
-      updatedAt: 1_000,
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-      spawnedCwd: "/work/private-bob",
-    });
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        for (let index = 0; index < 4_096; index++) {
+          writeSessionEntry(database, `agent:main:other-${index}`, {
+            sessionId: `other-${index}`,
+            updatedAt: 1_000 + index,
+            archivedAt: 1,
+            createdActor: { type: "human", source: "profile", id: "profile-bob" },
+            spawnedCwd: "/work/private-bob",
+          });
+        }
+      },
+      { agentId: "main" },
+    );
     await replaceSessionEntry(
       {
         agentId: "main",
@@ -172,6 +185,16 @@ test("projects.list returns only the caller's deterministic resolved recents", a
           /\buser_profile(?:s|_emails|_identities)\b/u.test(statement),
         ),
       ).toEqual([]);
+    }
+    {
+      const entries = Object.entries;
+      using enumeration = vi.spyOn(Object, "entries").mockImplementation((value) => {
+        expect(Object.hasOwn(value, "agent:main:other-0")).toBe(false);
+        return entries(value);
+      });
+      for (let round = 0; round < 7; round++) {
+        expectRecents(await list(), expectedRecents);
+      }
     }
     seed("agent:main:updated-recent", {
       sessionId: "updated-recent",

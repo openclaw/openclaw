@@ -1,0 +1,2 @@
+removed_file	baseline_lines	removed_case	removed_lines	keeper_file	keeper_case	retained_failure_classes
+src/gateway/server-reload-handlers.test.ts	4788	rejects an ownerless context cache reload before runtime commit	18	src/gateway/server-reload-handlers.test.ts	rejects ownerless irreversible plans but applies safe hot plans [workspace]	Ownerless workspace/context reload refuses irreversible hot publication before state, context cache, secrets or policy commit; workspace candidate and no-context-refresh assertion retained in the managed write boundary.

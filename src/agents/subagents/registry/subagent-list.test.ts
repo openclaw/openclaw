@@ -159,20 +159,18 @@ describe("buildSubagentList", () => {
       const storePath = state.statePath("shared-{agentId}.sqlite");
       const cfg: OpenClawConfig = { session: { store: storePath } };
       const now = Date.now();
-      const runs = ["main", "research"].map(
-        (childAgentId): SubagentRunRecord => ({
-          runId: `run-${childAgentId}`,
-          childSessionKey: "global",
-          childAgentId,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: childAgentId,
-          model: "openai/run-fallback",
-          cleanup: "keep",
-          createdAt: now,
-          execution: { status: "running", startedAt: now },
-        }),
-      );
+      const runs = ["main", "research"].map((childAgentId): SubagentRunRecord => ({
+        runId: `run-${childAgentId}`,
+        childSessionKey: "global",
+        childAgentId,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: childAgentId,
+        model: "openai/run-fallback",
+        cleanup: "keep",
+        createdAt: now,
+        execution: { status: "running", startedAt: now },
+      }));
       for (const run of runs) {
         await replaceSessionEntry(
           {
@@ -211,22 +209,20 @@ describe("buildSubagentList", () => {
         { agentId: "research", name: "missing", ended: false },
         { agentId: "main", name: "main-global", ended: false, raw: true },
         { agentId: "research", name: "research-global", ended: false, raw: true },
-      ].map(
-        ({ agentId, name, ended, raw }, index): SubagentRunRecord => ({
-          runId: `run-${name}`,
-          childSessionKey: raw ? "global" : `agent:${agentId}:subagent:${name}`,
-          childAgentId: raw ? agentId : undefined,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: name,
-          model: "openai/run-fallback",
-          cleanup: "keep",
-          createdAt: now - 1000 - index,
-          execution: ended
-            ? { status: "terminal", endedAt: now - 100, outcome: { status: "ok" } }
-            : { status: "running", startedAt: now - 1000 - index },
-        }),
-      );
+      ].map(({ agentId, name, ended, raw }, index): SubagentRunRecord => ({
+        runId: `run-${name}`,
+        childSessionKey: raw ? "global" : `agent:${agentId}:subagent:${name}`,
+        childAgentId: raw ? agentId : undefined,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: name,
+        model: "openai/run-fallback",
+        cleanup: "keep",
+        createdAt: now - 1000 - index,
+        execution: ended
+          ? { status: "terminal", endedAt: now - 100, outcome: { status: "ok" } }
+          : { status: "running", startedAt: now - 1000 - index },
+      }));
       for (const run of runs.filter((entry) => entry.task !== "missing")) {
         await replaceSessionEntry(
           { sessionKey: run.childSessionKey, agentId: run.childAgentId },

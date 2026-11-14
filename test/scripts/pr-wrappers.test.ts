@@ -912,6 +912,17 @@ exit "$status"
       main: false,
       nested: true,
     },
+    ...["", selectedHead].map((replacement) => ({
+      name: `pre-dispatch refusal (replacement=${replacement})`,
+      args: [
+        ...recoveryArgs,
+        "--pre-dispatch-refusal",
+        "proof",
+        ...(replacement ? ["--replacement-head", replacement] : []),
+      ],
+      fields: { outcome: outcomeOid, replacement, refusal: "proof" },
+      nested: true,
+    })),
     {
       name: "observed head for auto retirement",
       args: [...recoveryArgs, "--observed-head", selectedHead, "--cancel-auto"],
@@ -953,6 +964,9 @@ exit "$status"
     }
     if (expected.admin) {
       expected.admin = join(caller, expected.admin);
+    }
+    if (expected.refusal) {
+      expected.refusal = join(caller, expected.refusal);
     }
     const result = runWrapper(fixture, args, "canonical", nested ? { cwd: caller } : {});
     expect(result, result.stderr).toMatchObject({ status: 0, stdout: expectedDispatch(expected) });
@@ -1010,32 +1024,6 @@ exit "$status"
       expect(result.status, `${args.join(" ")}\n${result.stdout}${result.stderr}`).toBe(2);
       expect(result.stdout).toContain("Usage:");
     }
-  });
-
-  itPosix("pins pre-dispatch-refusal evidence relative to the original caller", () => {
-    const flag = "pre-dispatch-refusal";
-    const { fixture, caller } = mergeDispatchFixture();
-    const args = [
-      "merge-recover",
-      "123",
-      outcomeOid,
-      "--confirmed-operator-recovery",
-      `--${flag}`,
-      "proof",
-    ];
-    const missing = runWrapper(fixture, args, "canonical", { cwd: caller });
-    expect(missing.status, missing.stdout + missing.stderr).toBe(0);
-    const result = runWrapper(fixture, [...args, "--replacement-head", selectedHead], "canonical", {
-      cwd: caller,
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      expectedDispatch({
-        outcome: outcomeOid,
-        replacement: selectedHead,
-        refusal: join(caller, "proof"),
-      }),
-    );
   });
 
   itPosix("authenticates dependency-cache recovery without packages or developer authority", () => {
