@@ -447,17 +447,18 @@ describe("handleLineWebhookEvents", () => {
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to push when the pairing reply was not delivered", async () => {
+  it.each([
+    ["was not delivered", new Error("provider delivery rejected"), 1],
+    ["may have been delivered", Object.assign(new Error("aborted"), { name: "AbortError" }), 0],
+  ])("pushes the pairing challenge only when the reply %s", async (_, error, pushes) => {
     pairingDeliveryMocks.invokePairingReply = true;
-    pairingDeliveryMocks.replyMessageLine.mockRejectedValueOnce(
-      new Error("provider delivery rejected"),
-    );
+    pairingDeliveryMocks.replyMessageLine.mockRejectedValueOnce(error);
     await createHarness({ dmPolicy: "pairing" }).receive(
-      textEvent("pairing-final", "pairing-user", "pairing-final-event"),
+      textEvent("pairing-final", "pairing-user", `pairing-final-event-${pushes}`),
     );
 
     expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledOnce();
-    expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(1);
+    expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(pushes);
   });
 
   it("does not authorize DM senders from another account's pairing-store entries", async () => {
@@ -592,13 +593,15 @@ describe("handleLineWebhookEvents", () => {
     },
   );
 
+  const partial = Object.assign(new Error("partial"), { code: "CHANNEL_PARTIAL_DELIVERY" });
   it.each([
-    { revoked: false, partial: false, pushed: true },
-    { revoked: true, partial: false, pushed: false },
-    { revoked: false, partial: true, pushed: false },
+    { revoked: false, error: new Error("rejected"), pushed: true },
+    { revoked: true, error: new Error("rejected"), pushed: false },
+    { revoked: false, error: partial, pushed: false },
+    { revoked: false, error: new TypeError("fetch failed"), pushed: false },
   ])(
-    "rechecks notice fallback after reply failure revoked=$revoked partial=$partial",
-    async ({ revoked, partial, pushed }) => {
+    "rechecks notice fallback after reply failure revoked=$revoked error=$error.message",
+    async ({ revoked, error, pushed }) => {
       const { receive, processMessage } = createHarness({ dmPolicy: "pairing" });
       readAllowFromStoreMock.mockResolvedValue([questionUser]);
       resolveLineQuestionPostbackMock.mockResolvedValueOnce({ status: "already-terminal" });
@@ -606,13 +609,10 @@ describe("handleLineWebhookEvents", () => {
         if (revoked) {
           readAllowFromStoreMock.mockResolvedValue([]);
         }
-        throw Object.assign(
-          new Error("reply failed"),
-          partial ? { code: "CHANNEL_PARTIAL_DELIVERY" } : {},
-        );
+        throw error;
       });
       pairingDeliveryMocks.pushMessageLine.mockResolvedValueOnce(undefined);
-      await receive(noticeEvent(`notice-fallback-${revoked}-${partial}`));
+      await receive(noticeEvent(`notice-fallback-${revoked}-${error.message}`));
       expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledOnce();
       expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(pushed ? 1 : 0);
       expect(upsertPairingRequestMock).not.toHaveBeenCalled();
