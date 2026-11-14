@@ -78,7 +78,7 @@ export class AgentSelectionRequiredError extends Error {
 export type ResolvedAgentConfig = {
   name?: string;
   description?: string;
-  conversationStarters?: AgentEntry["conversationStarters"];
+  recommendedPrompts?: AgentEntry["recommendedPrompts"];
   workspace?: string;
   workspaceFileMode?: AgentEntry["workspaceFileMode"];
   agentDir?: string;
@@ -456,7 +456,7 @@ export function resolveAgentConfig(
   return {
     name: entry.name,
     description: entry.description,
-    conversationStarters: entry.conversationStarters,
+    recommendedPrompts: entry.recommendedPrompts,
     workspace: entry.workspace,
     workspaceFileMode: entry.workspaceFileMode ?? agentDefaults?.workspaceFileMode,
     agentDir: entry.agentDir,

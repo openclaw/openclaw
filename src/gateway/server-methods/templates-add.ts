@@ -265,7 +265,9 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
               new Set([options.client.connId]),
             );
           }
-          await startAgentOnboardingConversation(options, agentId, sessionKey, "template");
+          if (!params.initialPrompt) {
+            await startAgentOnboardingConversation(options, agentId, sessionKey, "template");
+          }
         },
         onSetupEvent: async (event) => {
           assertCurrent();
@@ -351,6 +353,31 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           });
         },
       });
+      // BOOTSTRAP.md is seeded only after the shared installer finishes. The
+      // selected-task opening must run here, not in the earlier agent-ready hook.
+      if (params.initialPrompt && result.status === "complete" && result.sessionKey) {
+        try {
+          await startAgentOnboardingConversation(
+            options,
+            result.agentId,
+            result.sessionKey,
+            "template",
+            params.initialPrompt,
+          );
+        } catch {
+          respond(true, {
+            ...result,
+            status: "partial",
+            agentRetained: true,
+            error: {
+              code: "template_setup_failed",
+              message:
+                "Installation finished, but setup did not produce an opening reply. Continue in the retained agent conversation; do not add another copy.",
+            },
+          });
+          return;
+        }
+      }
       respond(true, result);
     } catch (error) {
       log.error(

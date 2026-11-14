@@ -2,6 +2,7 @@ import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalo
 import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
+import { RecommendedPromptsSchema } from "./zod-schema.recommended-prompts.js";
 
 export const WorkspaceFileModeSchema = z.enum(["0600", "0620", "0640", "0660"], {
   error:
@@ -90,7 +91,7 @@ export const AgentEntryBaseSchema = z.strictObject({
   id: z.string(),
   name: z.string().optional(),
   description: z.string().optional(),
-  conversationStarters: z.array(z.string().trim().min(1)).optional(),
+  recommendedPrompts: RecommendedPromptsSchema.optional(),
   workspace: z.string().optional(),
   workspaceFileMode: WorkspaceFileModeSchema.optional(),
   cwd: z.string().optional(),

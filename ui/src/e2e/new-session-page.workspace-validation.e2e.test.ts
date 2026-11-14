@@ -873,7 +873,7 @@ suite.define(() => {
               {
                 ...agent("research", "Research", "/home/peter/research"),
                 description: "Researches project decisions.",
-                conversationStarters: ["Research a decision"],
+                recommendedPrompts: ["Research a decision"],
               },
             ],
             defaultId: "main",

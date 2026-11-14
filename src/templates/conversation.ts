@@ -5,3 +5,13 @@ export const TEMPLATE_AGENT_OPENING_MESSAGE = [
   "Do not claim integrations or schedules are ready: the installer has not confirmed them yet. If useful, mention briefly that setup is continuing while you are here.",
   "Do not ask the user to choose a role or reconfigure the personality already provided by the Template.",
 ].join("\n\n");
+
+/** One ordinary agent conversation owns bootstrap and the explicitly selected task. */
+export function templateAgentSetupMessage(initialPrompt: string): string {
+  return [
+    "This Template has finished installation. Use your workspace instructions and SOUL personality. Do not repeat work already completed by the shared installer.",
+    "First complete BOOTSTRAP.md, if present. Ask any required setup questions and wait for the user's answers; continue bootstrap across replies as needed. Do not skip setup to carry out the selected task.",
+    "Once bootstrap is complete, address the initial prompt the user selected below. If bootstrap is already complete or absent, address it now. This is the user's deferred task, not a replacement for bootstrap. Normal tool permissions and approvals still apply.",
+    "Selected initial prompt: " + JSON.stringify(initialPrompt),
+  ].join("\n\n");
+}

@@ -113,7 +113,7 @@ describe("stateless Template Add", () => {
         "agent:",
         "  id: briefing",
         "  description: Follows your repositories.",
-        "  conversationStarters:",
+        "  recommendedPrompts:",
         "    - Set up a repository",
         "    - Brief me on recent changes",
         "---",
@@ -131,7 +131,7 @@ describe("stateless Template Add", () => {
     expect(config.agents.entries).toMatchObject({
       briefing: {
         description: "Follows your repositories.",
-        conversationStarters: ["Set up a repository", "Brief me on recent changes"],
+        recommendedPrompts: ["Set up a repository", "Brief me on recent changes"],
       },
     });
   });

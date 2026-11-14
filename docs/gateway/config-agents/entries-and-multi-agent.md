@@ -103,7 +103,7 @@ for provider examples and precedence.
 
 ## Chat welcome
 
-Set optional `description` and `conversationStarters` on an agent entry to
+Set optional `description` and `recommendedPrompts` on an agent entry to
 customize the Control UI's new-chat welcome screen:
 
 ```json5
@@ -112,7 +112,7 @@ customize the Control UI's new-chat welcome screen:
     entries: {
       briefing: {
         description: "Follows your repositories and briefs you on meaningful changes, proposals, and decisions.",
-        conversationStarters: [
+        recommendedPrompts: [
           "Set up a repository",
           "Brief me on recent changes",
           "Show my tracked projects",
@@ -137,7 +137,10 @@ chats. Model setup still takes precedence, and terminal targets keep their own
 welcome guidance rather than borrowing an agent's metadata.
 
 [Templates](/cli/templates#welcome-description-and-conversation-starters) declare
-the same fields under `agent` in `CLAW.md`, not in a profile file.
+the same fields under `agent` in `CLAW.md`, not in a profile file. Recommended
+prompts share plugin metadata limits: at most three strings, each at most 128
+Unicode code points; whitespace is normalized. The Template install page also
+allows choosing a prompt to address after bootstrap completes.
 
 ## Multi-agent routing
 

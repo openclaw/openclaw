@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { writeConfigFile } from "../../config/io.runtime.js";
 import { registerRuntimeConfigWriteListener } from "../../config/runtime-snapshot.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
@@ -163,6 +163,7 @@ async function addTemplate(
   fixture: Fixture,
   client: GatewayClient,
   context = templateContext(fixture, client),
+  initialPrompt?: string,
 ) {
   // Direct handler fixtures represent an admitted socket; real handshakes are covered by Gateway E2E.
   await ensureCanonicalGatewayOwnerProfile("Synthetic Template owner");
@@ -184,7 +185,7 @@ async function addTemplate(
       required: null,
     });
   }
-  const params = { source: { packageName, version } };
+  const params = { source: { packageName, version }, ...(initialPrompt ? { initialPrompt } : {}) };
   const respond = vi.fn<RespondFn>();
   await templatesAddHandlers["templates.add.apply"]!({
     req: { type: "req", id: "template-inference", method: "templates.add.apply", params },
@@ -195,11 +196,12 @@ async function addTemplate(
     hasCurrentClientAuthority: () => !client.invalidated,
     isWebchatConnect: () => false,
   });
-  expect(greeting).toHaveBeenCalledWith(
+  expect(greeting, JSON.stringify(respond.mock.calls)).toHaveBeenCalledWith(
     expect.anything(),
     agentId,
     `agent:${agentId}:main`,
     "template",
+    ...(initialPrompt ? [initialPrompt] : []),
   );
   expect(respond).toHaveBeenCalledOnce();
   const [ok, result, error] = respond.mock.calls[0]!;
@@ -209,6 +211,50 @@ async function addTemplate(
   );
   return result;
 }
+
+it.each([false, true])(
+  "starts selected work only after bootstrap is seeded, retaining installation on opening failure (%s)",
+  async (failOpening) => {
+    await withFixture(async (fixture) => {
+      const bootstrap =
+        "# First-run setup\nAsk which repository to track and wait for the answer.\n";
+      await remoteTemplate({ "CLAW.md": manifest, "BOOTSTRAP.md": bootstrap });
+      await withTemplateRuntime(fixture, async () => {
+        greeting.mockClear();
+        greeting.mockImplementationOnce(async () => {
+          expect(
+            await fs.readFile(
+              path.join(resolveAgentWorkspaceDir(fixture.getConfig(), agentId), "BOOTSTRAP.md"),
+              "utf8",
+            ),
+          ).toBe(bootstrap);
+          expect((await fixture.status()).jobs).toBe(1);
+          if (failOpening) {
+            throw new Error("Opening model unavailable");
+          }
+        });
+        const result = await addTemplate(
+          fixture,
+          {
+            connId: "template-selection",
+            invalidated: false,
+            connect: gatewayConnect(["operator.admin"]),
+          },
+          undefined,
+          "Set up a repository",
+        );
+        expect(greeting).toHaveBeenCalledOnce();
+        expect(result).toMatchObject({ agentId, status: failOpening ? "partial" : "complete" });
+        if (failOpening) {
+          expect(result).toMatchObject({
+            agentRetained: true,
+            error: { code: "template_setup_failed" },
+          });
+        }
+      });
+    });
+  },
+);
 
 it.each([false, true])(
   "fresh Template Add captures the host account privately and refuses replaced authority (replace: %s)",

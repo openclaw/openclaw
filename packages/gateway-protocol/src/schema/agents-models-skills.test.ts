@@ -12,12 +12,12 @@ it.each([
     S.AgentSummarySchema,
     [
       { id: "briefing" },
-      { id: "briefing", description: "Follows repositories.", conversationStarters: ["Brief me"] },
-      { id: "briefing", conversationStarters: [] },
+      { id: "briefing", description: "Follows repositories.", recommendedPrompts: ["Brief me"] },
+      { id: "briefing", recommendedPrompts: [] },
     ],
     [
-      { id: "briefing", conversationStarters: "Brief me" },
-      { id: "briefing", conversationStarters: [""] },
+      { id: "briefing", recommendedPrompts: "Brief me" },
+      { id: "briefing", recommendedPrompts: [""] },
     ],
   ],
   [

@@ -67,8 +67,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
   "agents.entries.*.description":
     "Optional agent purpose shown on the Control UI chat welcome screen.",
-  "agents.entries.*.conversationStarters":
-    "Optional plain-text user prompts shown on the chat welcome screen. Clicking a starter submits it; omitted or empty uses default suggestions.",
+  "agents.entries.*.recommendedPrompts":
+    "Optional plain-text prompts shown on the chat welcome and Template install screens. Up to three entries, each at most 128 Unicode code points after whitespace normalization. Clicking a welcome prompt submits it; omitted or empty uses defaults.",
   "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.entries.*.nativeRuntimeConsent":

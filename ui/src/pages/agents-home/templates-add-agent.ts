@@ -26,6 +26,7 @@ export async function addTemplateAgent(
   source: TemplateCatalogSource,
   plan: TemplateAddReviewPlan,
   acknowledgeClawHubRisk: boolean,
+  initialPrompt?: string,
 ) {
   const client = context.gateway.snapshot.client;
   const scopeKey = gatewayPresentationScope(context.gateway).key;
@@ -168,6 +169,7 @@ export async function addTemplateAgent(
     try {
       const result = await applyTemplateAdd(client, source, {
         reviewPlan: plan,
+        initialPrompt,
         acknowledgeClawHubRisk,
         onSent: (id) => {
           requestId = id;

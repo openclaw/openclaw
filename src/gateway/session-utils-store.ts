@@ -589,8 +589,8 @@ export async function listAgentsForGateway(
         ...(options?.includeSystem ? { kind: entry.kind } : {}),
         name: entry.name,
         ...(description ? { description } : {}),
-        ...(agentConfig?.conversationStarters?.length
-          ? { conversationStarters: agentConfig.conversationStarters }
+        ...(agentConfig?.recommendedPrompts?.length
+          ? { recommendedPrompts: agentConfig.recommendedPrompts }
           : {}),
         identity: identityById.get(id),
         workspace,

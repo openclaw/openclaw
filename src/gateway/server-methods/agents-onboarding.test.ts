@@ -300,3 +300,28 @@ it("reports failed Template opening admission instead of completing silently", a
     startAgentOnboardingConversation(invocation(), "scout", "agent:scout:home", "template"),
   ).rejects.toThrow("Fixture model unavailable");
 });
+
+it("starts selected Template work with bootstrap context and normal tool permissions", async () => {
+  sendInternalChat
+    .mockReset()
+    .mockImplementation(async (request: GatewayRequestHandlerOptions) =>
+      request.respond(true, { status: "started" }),
+    );
+  await startAgentOnboardingConversation(
+    invocation(),
+    "scout",
+    "agent:scout:home",
+    "template",
+    "Set up a repository",
+  );
+  const [request, , internal] = sendInternalChat.mock.calls[0]!;
+  expect(request.params.message).toContain("First complete BOOTSTRAP.md");
+  expect(request.params.message).toContain("wait for the user's answers");
+  expect(request.params.message).toContain('Selected initial prompt: "Set up a repository"');
+  expect(internal).toEqual({ transcript: { display: false } });
+  expect(waitForAgentJob).toHaveBeenCalledWith({
+    runId: "agents.create:scout:template-setup",
+    source: "chat",
+    timeoutMs: 120_000,
+  });
+});

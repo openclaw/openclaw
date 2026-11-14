@@ -70,12 +70,12 @@ it("uses selected-agent copy and keeps custom starters beside recents without se
     {
       id: "briefing",
       description: "Follows your repositories.",
-      conversationStarters: ["Set up a repository", "Show my tracked projects"],
+      recommendedPrompts: ["Set up a repository", "Show my tracked projects"],
     },
     {
       id: "research",
       description: "Researches questions.",
-      conversationStarters: ["Explore a topic"],
+      recommendedPrompts: ["Explore a topic"],
     },
     { id: "plain" },
   ];
@@ -127,7 +127,7 @@ it.each(["incognito", "model setup"])("preserves %s behavior with agent metadata
     <ChatWelcome
       currentAgentId="briefing"
       description="Tracks repositories."
-      conversationStarters={["Brief me"]}
+      recommendedPrompts={["Brief me"]}
       assistantName="Briefing"
       assistantAvatar={null}
       hideSecondaryContent={variant === "incognito"}

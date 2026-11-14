@@ -10,6 +10,7 @@ import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
+import { PluginRecommendedPrompts } from "../plugins/recommended-prompts.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplateAddReviewPlan } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
@@ -366,6 +367,15 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                             }
                           >
                             <Show when={view().readDetail()}>
+                              <PluginRecommendedPrompts
+                                id={selected().packageName}
+                                name={detail()?.agentName ?? selected().displayName}
+                                iconUrl={detail()?.iconUrl}
+                                prompts={detail()?.recommendedPrompts}
+                                disabled={!canAdd()}
+                                busy={view().applying}
+                                onSelect={(prompt) => void view().onSelectPrompt(prompt)}
+                              />
                               <TemplateContents view={view()} />
                             </Show>
                           </Loading>

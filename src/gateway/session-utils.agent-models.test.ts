@@ -29,7 +29,7 @@ test("projects welcome metadata only for its configured agent", async () => {
       entries: {
         briefing: {
           description: " Follows your repositories. ",
-          conversationStarters: ["Set up a repository", "Brief me"],
+          recommendedPrompts: ["Set up a repository", "Brief me"],
         },
         plain: {},
       },
@@ -37,11 +37,11 @@ test("projects welcome metadata only for its configured agent", async () => {
   });
   expect(agents.find((agent) => agent.id === "briefing")).toMatchObject({
     description: "Follows your repositories.",
-    conversationStarters: ["Set up a repository", "Brief me"],
+    recommendedPrompts: ["Set up a repository", "Brief me"],
   });
   const plain = agents.find((agent) => agent.id === "plain");
   expect(plain).not.toHaveProperty("description");
-  expect(plain).not.toHaveProperty("conversationStarters");
+  expect(plain).not.toHaveProperty("recommendedPrompts");
 });
 
 type ModelCase = {

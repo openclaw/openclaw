@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { PluginDeclaredSurfaceSchema, PluginOperatorGrantsSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
+import { RecommendedPromptsSchema, RecommendedPromptSchema } from "./recommended-prompts.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 const TemplatePackageName = Type.String({
@@ -115,6 +116,7 @@ export const TemplatesCatalogDetailSchema = closedObject({
   version: NonEmptyString,
   agentName: Type.Optional(NonEmptyString),
   agentDescription: Type.Optional(Type.String()),
+  recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
   workspaceFiles: Type.Integer({ minimum: 0 }),
   skills: Type.Integer({ minimum: 0 }),
   plugins: Type.Integer({ minimum: 0 }),
@@ -285,6 +287,7 @@ export const TemplatesAddPlanParamsSchema = closedObject({
 });
 
 export const TemplatesAddApplyParamsSchema = closedObject({
+  initialPrompt: Type.Optional(RecommendedPromptSchema),
   source: TemplateCatalogCoordinateSchema,
   agentId: Type.Optional(NonEmptyString),
   planIntegrity: Type.Optional(NonEmptyString),

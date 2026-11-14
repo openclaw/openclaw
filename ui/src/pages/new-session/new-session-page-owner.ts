@@ -483,7 +483,7 @@ export class NewSessionPageOwner {
     return {
       currentAgentId: this.place.agentId,
       description: welcomeAgent?.description,
-      conversationStarters: welcomeAgent?.conversationStarters,
+      recommendedPrompts: welcomeAgent?.recommendedPrompts,
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),

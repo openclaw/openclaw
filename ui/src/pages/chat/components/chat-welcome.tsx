@@ -47,14 +47,14 @@ export type ChatWelcomeProps = {
   /** Visually retire secondary content while the new-session draft is active. */
   fadeSecondaryContent?: boolean;
 } & ChatWelcomeIdentityProps &
-  Pick<AgentsListResult["agents"][number], "description" | "conversationStarters">;
+  Pick<AgentsListResult["agents"][number], "description" | "recommendedPrompts">;
 
 /** The new-session draft's welcome block. */
 export function ChatWelcome(
   props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
 ) {
   const welcomeRef = createBackgroundLayoutRef("welcome");
-  const customStarters = () => props.conversationStarters ?? [];
+  const customStarters = () => props.recommendedPrompts ?? [];
   return (
     <Show
       when={!props.modelSetupRequired}

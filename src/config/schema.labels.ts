@@ -99,7 +99,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.captureContent": "OpenTelemetry Content Capture",
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
   "agents.entries.*.description": "Description",
-  "agents.entries.*.conversationStarters": "Conversation Starters",
+  "agents.entries.*.recommendedPrompts": "Recommended Prompts",
   "agents.entries.*.identity.avatar": "Identity Avatar",
   "agents.entries.*.skills": "Agent Skill Filter",
   "agents.entries.*.cwd": "Agent Working Directory",

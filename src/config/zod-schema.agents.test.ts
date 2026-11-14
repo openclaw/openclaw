@@ -2,24 +2,30 @@ import { describe, expect, it } from "vitest";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-describe("agent conversation starters", () => {
+describe("agent recommended prompts", () => {
+  it("shares plugin whitespace and Unicode limits", () => {
+    const recommendedPrompts = ["  Brief\n me  ", "🦞".repeat(128)];
+    expect(AgentsSchema.parse({ entries: { briefing: { recommendedPrompts } } })).toMatchObject({
+      entries: { briefing: { recommendedPrompts: ["Brief me", "🦞".repeat(128)] } },
+    });
+  });
   it.each([undefined, [], ["Brief me", "Set up a repository"]])(
     "accepts optional starters %j",
-    (conversationStarters) => {
+    (recommendedPrompts) => {
       const result = AgentsSchema.safeParse({
-        entries: { briefing: { description: "Follows repositories.", conversationStarters } },
+        entries: { briefing: { description: "Follows repositories.", recommendedPrompts } },
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data).toMatchObject({ entries: { briefing: { conversationStarters } } });
+        expect(result.data).toMatchObject({ entries: { briefing: { recommendedPrompts } } });
       }
     },
   );
-  it.each(["Brief me", [""], ["   "], [12]])(
+  it.each(["Brief me", [""], ["   "], [12], ["a", "b", "c", "d"], ["x".repeat(129)]])(
     "rejects invalid starters %j",
-    (conversationStarters) => {
+    (recommendedPrompts) => {
       expect(
-        AgentsSchema.safeParse({ entries: { briefing: { conversationStarters } } }).success,
+        AgentsSchema.safeParse({ entries: { briefing: { recommendedPrompts } } }).success,
       ).toBe(false);
     },
   );

@@ -120,6 +120,7 @@ export async function applyTemplateAdd(
   source: TemplateCatalogSource,
   options: {
     acknowledgeClawHubRisk?: boolean;
+    initialPrompt?: string;
     reviewPlan?: TemplateAddReviewPlan;
     onSent?: (requestId: string) => void;
   } = {},
@@ -129,6 +130,7 @@ export async function applyTemplateAdd(
     "templates.add.apply",
     {
       source,
+      ...(options.initialPrompt ? { initialPrompt: options.initialPrompt } : {}),
       ...(options.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(plan
         ? {

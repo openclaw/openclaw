@@ -210,6 +210,61 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     return { page, gateway };
   }
 
+  it.each([viewports[0], viewports[3]])(
+    "offers authored setup prompts on the $name install page",
+    async (viewport) => {
+      const { page, gateway } = await fixture(viewport);
+      const recommendedPrompts = [
+        "Set up a repository",
+        "Brief me on recent changes",
+        "Show my tracked projects",
+      ];
+      await gateway.setMethodResponse("templates.catalog.detail", {
+        detail: {
+          ...workflowOperator,
+          version: "1.2.0",
+          agentName: "Project briefing",
+          agentDescription:
+            "Follows your repositories and briefs you on meaningful changes, proposals, and decisions.",
+          recommendedPrompts,
+          workspaceFiles: 1,
+          skills: 0,
+          plugins: 0,
+          mcpServers: 0,
+          scheduledJobs: 0,
+          contents: {
+            instructions: [
+              {
+                name: "BOOTSTRAP.md",
+                source: "BOOTSTRAP.md",
+                excerpt: "Ask which repository to track, then wait for the answer.",
+              },
+            ],
+            skills: [],
+            integrations: [],
+            automations: [],
+          },
+        } satisfies ClawHubTemplateCatalogDetail,
+      });
+      const detail = await openDetail(page);
+      await capture(page, "recommended-prompts-" + viewport.name, detail);
+      const prompts = detail.locator(".plugin-recommended-prompts__prompt");
+      expect(await prompts.count()).toBe(3);
+      expect(
+        await detail
+          .locator(".plugin-recommended-prompts__text > span:last-child")
+          .allTextContents(),
+      ).toEqual(recommendedPrompts);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      await prompts.first().click();
+      await expect
+        .poll(async () => (await gateway.getRequests("templates.add.apply"))[0]?.params)
+        .toMatchObject({ initialPrompt: recommendedPrompts[0] });
+    },
+  );
+
   it.each([
     { name: "desktop", width: 1200, height: 697 },
     { name: "tall-desktop", width: 1440, height: 1200 },

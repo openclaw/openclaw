@@ -33,7 +33,7 @@ export type GatewayAgentRow = Pick<
   | "kind"
   | "name"
   | "description"
-  | "conversationStarters"
+  | "recommendedPrompts"
   | "identity"
   | "workspace"
   | "workspaceGit"

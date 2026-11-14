@@ -13,7 +13,7 @@ const suite = createNewSessionPageE2eSuite();
 const openPage = createPageOpener(suite);
 const description =
   "Follows your repositories and briefs you on meaningful changes, proposals, and decisions.";
-const conversationStarters = [
+const recommendedPrompts = [
   "Set up a repository",
   "Brief me on recent changes",
   "Show my tracked projects",
@@ -34,7 +34,7 @@ suite.define(() => {
               name: "Project briefing",
               identity: { emoji: "📋" },
               description,
-              conversationStarters,
+              recommendedPrompts,
             },
           ],
         },
@@ -60,7 +60,7 @@ suite.define(() => {
       await writeFile(path.join(suite.artifactDir, "welcome-desktop.png"), frame.png);
     }
     expect(await page.locator(".agent-chat__welcome").textContent()).toContain(description);
-    expect(await suggestions.allTextContents()).toEqual(conversationStarters);
+    expect(await suggestions.allTextContents()).toEqual(recommendedPrompts);
     expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     const incognito = page.getByRole("switch", { name: "Incognito" });
