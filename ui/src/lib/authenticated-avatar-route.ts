@@ -96,7 +96,7 @@ async function fetchAvatarRoute(
     // instead of silently leaving the caller on its fallback forever.
     for (const authToken of !gatewayContext && authTokens.length > 0 ? authTokens : [""]) {
       const response = gatewayContext
-        ? await fetchGatewayContextResource(url, 5_000, entry.controller.signal)
+        ? await fetchGatewayContextResource(url, 5_000, entry.controller.signal, "image")
         : await fetchControlUiResource(url, {
             ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
             signal: entry.controller.signal,
