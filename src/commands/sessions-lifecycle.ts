@@ -15,6 +15,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { SESSION_ARCHIVE_REQUEST_TIMEOUT_MS } from "../shared/session-archive-timeout.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 
@@ -39,7 +40,8 @@ type SessionsLifecycleStatus =
   | "would_archive"
   | "would_delete"
   | "not_found"
-  | "failed";
+  | "failed"
+  | "interrupted";
 
 type SessionsLifecycleResult = {
   key: string;
@@ -82,6 +84,18 @@ function notFoundResult(key: string, agent?: string): SessionsLifecycleResult {
   };
 }
 
+// A key whose lookup or mutation never started because Ctrl+C fired is not
+// evidence that the session is missing or failed. It gets its own status so
+// batch output never misclassifies unattempted work.
+function interruptedResult(key: string): SessionsLifecycleResult {
+  return {
+    key,
+    ok: false,
+    status: "interrupted",
+    error: "Operation was interrupted before this session was handled.",
+  };
+}
+
 const WORKTREE_PRESERVATION_REASON_COPY = {
   "owner-mismatch": "registered to another owner",
   busy: "still in use by a live run or another cleanup",
@@ -95,6 +109,7 @@ async function listRequestedSessions(
   agent: string | undefined,
   rpcOptions: SessionsLifecycleRpcOptions,
 ) {
+  const signal = getAsyncWorkSignal();
   const targets: Array<{ index: number; session: SessionsListRow }> = [];
   const results = keys.map((key): SessionsLifecycleResult | undefined =>
     notFoundResult(key, agent),
@@ -103,12 +118,23 @@ async function listRequestedSessions(
     if (!key) {
       continue;
     }
+    if (signal?.aborted) {
+      // Keys we never looked up must not be reported as missing; their
+      // preinitialized not_found slots are rewritten as interrupted.
+      for (let restIndex = index; restIndex < keys.length; restIndex++) {
+        const rest = keys[restIndex];
+        if (rest) {
+          results[restIndex] = interruptedResult(rest);
+        }
+      }
+      break;
+    }
     try {
       const response = (await callGatewayFromCliWithTransport(
         "sessions.describe",
         rpcOptions,
         { key, ...(agent ? { agentId: agent } : {}) },
-        { defaultTimeoutMs: 30_000 },
+        { defaultTimeoutMs: 30_000, signal },
       )) as SessionsDescribeResult;
       if (!response || !("session" in response)) {
         throw new Error("Gateway returned an invalid sessions.describe response.");
@@ -135,6 +161,9 @@ function outputLifecycleResults(
   deletedSessions?: ReadonlyMap<SessionsLifecycleResult, SessionsListRow>,
 ): void {
   const ok = results.every((result) => result.ok);
+  // An interrupted batch is not a complete success, but it is not a command
+  // failure either: Ctrl+C already chose the exit; the SIGINT handler exits 130.
+  const interrupted = results.some((result) => result.status === "interrupted");
   if (json) {
     writeRuntimeJson(
       runtime,
@@ -190,6 +219,7 @@ function outputLifecycleResults(
           break;
         case "not_found":
         case "failed":
+        case "interrupted":
           runtime.error(
             `${operation} ${key}: ${sanitizeTerminalText(result.error ?? "Unknown failure.")}`,
           );
@@ -197,7 +227,7 @@ function outputLifecycleResults(
       }
     }
   }
-  if (!ok) {
+  if (!ok && !interrupted) {
     runtime.exit(1);
   }
 }
@@ -276,7 +306,18 @@ export async function sessionsLifecycleCommand(
     }
   }
 
+  const lifecycleSignal = getAsyncWorkSignal();
   for (const { index, session } of validTargets) {
+    if (lifecycleSignal?.aborted) {
+      // Targets never admitted are not failed; record the interruption so the
+      // partial batch is not reported as a complete success.
+      for (const { index: restIndex, session: restSession } of validTargets) {
+        if (restIndex >= index && results[restIndex] === undefined) {
+          results[restIndex] = interruptedResult(restSession.key);
+        }
+      }
+      break;
+    }
     if (operation === "archive" && session.archived === true) {
       results[index] = { key: session.key, ok: true, status: "already_archived" };
       continue;
@@ -312,6 +353,8 @@ export async function sessionsLifecycleCommand(
                 ...(session.archived === true ? { archivedOnly: true } : {}),
               }),
         },
+        // An admitted mutation must keep its reply: cancellation only stops the
+        // next request, never aborts a deletion/archive whose receipt may settle.
         { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
       );
       if (operation === "archive") {
