@@ -1,6 +1,7 @@
 // Channels status --fail-on-unhealthy tests cover terminal-disconnect exit codes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// mock-isolation: The status command awaits readiness; the test drives snapshots directly.
 vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
   waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
 }));
@@ -10,14 +11,17 @@ const mocks = vi.hoisted(() => ({
   withProgress: vi.fn(async (_opts: unknown, run: () => Promise<unknown>) => await run()),
 }));
 
+// mock-isolation: callGateway is replaced by a per-test snapshot stub, not the real transport.
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => mocks.callGateway(opts),
 }));
 
+// mock-isolation: progress output is not under test; run the callback inline.
 vi.mock("../cli/progress.js", () => ({
   withProgress: (opts: unknown, run: () => Promise<unknown>) => mocks.withProgress(opts, run),
 }));
 
+// mock-isolation: the renderer is replaced to pin exact human-readable lines.
 vi.mock("./channels/status.runtime.js", () => ({
   formatGatewayChannelsStatusLines: () => ["Gateway reachable.", "WhatsApp default: stopped"],
   renderChannelsStatusFallback: vi.fn(async () => {}),

@@ -1,4 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../../cli/daemon-cli/restart-health.constants.js";
@@ -93,10 +94,7 @@ export async function channelsStatusCommand(
     const unhealthyAccounts = unhealthyHelpers?.collectUnhealthyChannelAccounts(payload) ?? [];
     if (opts.json) {
       if (failOnUnhealthy) {
-        const output =
-          payload && typeof payload === "object" && !Array.isArray(payload)
-            ? { ...(payload as Record<string, unknown>), unhealthyAccounts }
-            : payload;
+        const output = isRecord(payload) ? { ...payload, unhealthyAccounts } : payload;
         writeRuntimeJson(runtime, output);
       } else {
         writeRuntimeJson(runtime, payload);

@@ -27,6 +27,7 @@ export function collectUnhealthyChannelAccounts(
   if (!payload || typeof payload !== "object") {
     return [];
   }
+  // SAFETY: the typeof guard above confines payload to a string-keyed record.
   const accountsByChannel = (payload as Record<string, unknown>).channelAccounts;
   if (!accountsByChannel || typeof accountsByChannel !== "object") {
     return [];
@@ -40,6 +41,7 @@ export function collectUnhealthyChannelAccounts(
       if (!account || typeof account !== "object") {
         continue;
       }
+      // SAFETY: the typeof guard above admits an account record; its fields are read defensively.
       const snapshot = account as ChannelAccountSnapshot;
       if (snapshot.enabled === false || snapshot.configured === false) {
         continue;
