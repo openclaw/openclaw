@@ -545,10 +545,11 @@ class MainViewModel internal constructor(
   internal val sessionRosterHasMore: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.sessionRosterHasMore }
   internal val sessionRosterLoadingMore: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.sessionRosterLoadingMore }
   internal val sessionRosterLoadFailed: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.sessionRosterLoadFailed }
+  internal val sessionRosterListedArchived: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.sessionRosterListedArchived }
 
   internal fun refreshSessionGroups() = ensureRuntime().chat.refreshSessionGroups()
 
-  internal suspend fun loadMoreChatSessions(): Boolean = ensureRuntime().chat.loadMoreSessions()
+  internal suspend fun loadMoreChatSessions(archived: Boolean = false): Boolean = ensureRuntime().chat.loadMoreSessions(archived)
 
   val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
   val sidebarPageOrder: StateFlow<List<String>> = prefs.sidebarPageOrder

@@ -484,6 +484,7 @@ internal fun OpenClawSidebar(
   val rosterHasMore by viewModel.sessionRosterHasMore.collectAsState()
   val rosterLoadingMore by viewModel.sessionRosterLoadingMore.collectAsState()
   val rosterLoadFailed by viewModel.sessionRosterLoadFailed.collectAsState()
+  val rosterListedArchived by viewModel.sessionRosterListedArchived.collectAsState()
   val storedGroups = (groupCatalog.names + localGroups).distinct()
   val questions by viewModel.chatQuestions.collectAsState()
   val approvalInbox by viewModel.execApprovalInbox.collectAsState()
@@ -980,7 +981,9 @@ internal fun OpenClawSidebar(
             if (catalogState.loading) SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
             catalogErrorText?.let { SidebarCatalogStatus(it, palette) }
           }
-          if (rosterHasMore) {
+          // The sidebar lists the recent roster; the paging slot may belong to
+          // an archived Threads listing, whose continuation must not page here.
+          if (rosterHasMore && !rosterListedArchived) {
             if (rosterLoadFailed) {
               SidebarCatalogStatus(nativeString("Could not load more sessions. Try again."), palette)
             }
