@@ -205,3 +205,45 @@ function LightboxImageDownload(props: {
     </button>
   );
 }
+
+export function LightboxZoomControls(props: {
+  focusableRef: FocusableRef;
+  canZoom: boolean;
+  scale: number;
+  maxScale: number;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
+}) {
+  return (
+    <div class="zoom-controls">
+      <LightboxAction
+        focusableRef={props.focusableRef}
+        class="zoom-control"
+        label="chat.imageLightbox.zoomOut"
+        disabled={!props.canZoom || props.scale <= 1}
+        action={props.zoomOut}
+      >
+        −
+      </LightboxAction>
+      <LightboxAction
+        focusableRef={props.focusableRef}
+        class="zoom-control zoom-level"
+        label="chat.imageLightbox.resetZoom"
+        disabled={!props.canZoom || props.scale === 1}
+        action={props.resetZoom}
+      >
+        {Math.round(props.scale * 100)}%
+      </LightboxAction>
+      <LightboxAction
+        focusableRef={props.focusableRef}
+        class="zoom-control"
+        label="chat.imageLightbox.zoomIn"
+        disabled={!props.canZoom || props.scale >= props.maxScale}
+        action={props.zoomIn}
+      >
+        +
+      </LightboxAction>
+    </div>
+  );
+}

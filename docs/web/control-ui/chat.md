@@ -383,6 +383,11 @@ Tap an image to open the zoomable viewer. The existing preview stays visible
 while a sharper, screen-sized rendition loads. If that request fails, **Retry**
 loads it again without replacing the preview or opening another tab. Swiping to
 a gallery image loads that selection, not the rest of the gallery in advance.
+The viewer includes images from the loaded part of the current conversation.
+Use the arrow buttons or Left/Right keys to step through them, or select a
+thumbnail in the bottom strip to jump directly. The current thumbnail stays
+highlighted and scrolls into view. Thumbnails load small previews as they become
+visible; browsing does not fetch earlier conversation history.
 Hover over a managed image, or focus it with the keyboard, to reveal **Copy image**
 and **Download image** inside its lower-right corner. Devices without hover keep
 these controls visible. Selecting the image itself still opens the viewer.

@@ -22,6 +22,8 @@ export type ImageLightboxItem = {
 export type ImageLightboxGallery = {
   index: number;
   items: readonly ((retryFailed?: boolean) => Promise<ImageLightboxItem | null>)[];
+  /** Small previews only; these loaders never resolve the viewer rendition or original. */
+  thumbnails?: readonly { title: string; load: () => Promise<ImageLightboxItem | null> }[];
 };
 export type ImageLightboxProps = {
   connectVideo?: ImageLightboxItem["connectVideo"];
