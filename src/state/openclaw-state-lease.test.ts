@@ -95,7 +95,6 @@ describe("OpenClaw state lease", () => {
           import { withOpenClawStateLease } from ${JSON.stringify(leaseModuleUrl.href)};
           import {
             closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
             openOpenClawStateDatabase,
           } from ${JSON.stringify(stateDbModuleUrl.href)};
           import { loggingState } from ${JSON.stringify(loggingStateModuleUrl.href)};
