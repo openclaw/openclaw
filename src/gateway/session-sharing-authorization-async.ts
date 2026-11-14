@@ -413,6 +413,8 @@ export async function resolveSessionMutationAuthorizationAsync(
         }
       };
       const readSource = initialFacts.readSource;
+      let previousFacts: typeof initialFacts | undefined;
+      let preparedRead: import("./session-sharing-read.js").PreparedMutationSharing;
       preparedTargets.push({
         ...target,
         storageTarget: retained.storageTarget,
@@ -422,7 +424,11 @@ export async function resolveSessionMutationAuthorizationAsync(
         prepareRead: retained.prepareRead,
         read: () => {
           const facts = readCurrent();
-          return {
+          if (facts === previousFacts) {
+            return preparedRead;
+          }
+          previousFacts = facts;
+          return (preparedRead = {
             target: facts.target && { ...facts.target, readSource },
             storageTarget: retained.storageTarget,
             members: [],
@@ -430,7 +436,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             assertCurrent: () => {
               readCurrent();
             },
-          };
+          });
         },
       });
     }

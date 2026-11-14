@@ -170,6 +170,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-run-authority.principal.test.ts",
   "src/gateway/operator-run-authority.reconnect.test.ts",
   "src/gateway/operator-run-authority.worker.test.ts",
+  "src/gateway/operator-run-recovery.access-policy.test.ts",
   "src/gateway/operator-run-recovery.channel.test.ts",
   "src/gateway/operator-run-recovery.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
@@ -295,6 +296,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-restart-resume.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",
+  "src/gateway/session-row-projection.accepted-facts.test.ts",
   "src/gateway/session-row-projection.actor.test.ts",
   "src/gateway/session-row-projection.backfill.test.ts",
   "src/gateway/session-row-projection.foreground.test.ts",
@@ -709,7 +711,7 @@ export const gatewayCoreTestExclude = [
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-export const gatewayServerExcludedTestFiles = ["src/gateway/gateway.test.ts"];
+export const gatewayServerExcludedTestFiles = [];
 
 const gatewayServerBackedHttpTestFileSet = new Set(gatewayServerBackedHttpTestFiles);
 const gatewayServerExcludedTestFileSet = new Set(gatewayServerExcludedTestFiles);

@@ -250,26 +250,26 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/gateway/session-utils.search.test.ts",
     watchGlobs: ["src/agents/identity-file.worker.ts"],
   },
-  ...[
-    "src/gateway/worker-environments/worker-turn-launcher-media.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/gateway/worker-environments/placement-lifecycle.worker.ts",
-      "src/gateway/worker-environments/placement-turn-claims.worker.ts",
-    ],
-  })),
-  ...[
-    "src/gateway/worker-environments/worker-turn-launcher-media.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/gateway/worker-environments/store.kernel.ts",
-      "src/gateway/worker-environments/store.worker.ts",
-      "src/state/openclaw-state-worker-registry.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  })),
+  ...["src/gateway/worker-environments/worker-turn-launcher-media.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/gateway/worker-environments/placement-lifecycle.worker.ts",
+        "src/gateway/worker-environments/placement-turn-claims.worker.ts",
+      ],
+    }),
+  ),
+  ...["src/gateway/worker-environments/worker-turn-launcher-media.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/gateway/worker-environments/store.kernel.ts",
+        "src/gateway/worker-environments/store.worker.ts",
+        "src/state/openclaw-state-worker-registry.ts",
+        "src/state/openclaw-state.worker.ts",
+      ],
+    }),
+  ),
   {
     testFile: "test/scripts/crabbox-wrapper.test.ts",
     watchGlobs: [
@@ -340,15 +340,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/codex/src/session-catalog-native-performance.test.ts",
     watchGlobs: ["pnpm-lock.yaml"],
   },
-  ...[
-    "extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-    ],
-  })),
+  ...["extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/config/sessions/session-transcript-reconcile.worker.ts",
+        "src/config/sessions/session-transcript.worker.ts",
+      ],
+    }),
+  ),
   ...[
     "extensions/diffs/src/store.test.ts",
     "extensions/diffs/src/tool.test.ts",
@@ -400,10 +400,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/team-reports/src/store.test.ts",
     watchGlobs: ["extensions/team-reports/src/store.worker.ts"],
   },
-  ...["extensions/workboard/src/dispatcher.test.ts"].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["extensions/workboard/src/sqlite-store.worker.ts"],
-  })),
   {
     testFile: "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
     watchGlobs: [
@@ -467,10 +463,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   {
-    testFile: "src/agents/model-auth.profiles.test.ts",
-    watchGlobs: ["src/agents/auth-profiles/store.worker.ts"],
-  },
-  {
     testFile: "src/agents/sandbox/registry-read.test.ts",
     watchGlobs: [
       "src/agents/sandbox/registry-write.worker.ts",
@@ -491,17 +483,17 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-store.worker.ts",
     ],
   })),
-  ...[
-    "src/agents/sessions/session-manager-model-context.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/agents/sessions/session-manager-metadata.worker.ts",
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-    ],
-  })),
+  ...["src/agents/sessions/session-manager-model-context.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/agents/sessions/session-manager-metadata.worker.ts",
+        "src/config/sessions/session-transcript-reconcile.worker.ts",
+        "src/config/sessions/session-transcript.worker.ts",
+        "src/infra/sqlite-store.worker.ts",
+      ],
+    }),
+  ),
   ...[
     "src/agents/shell-snapshot.broker.test.ts",
     "src/process/spawn-broker/cleanup.test.ts",
@@ -780,14 +772,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-agent-execution.worker.ts",
     ],
   })),
-  {
-    testFile: "src/config/sessions/session-accessor.sqlite-deletion.test.ts",
-    watchGlobs: [
-      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-    ],
-  },
   ...[
     "src/config/sessions/session-accessor.sqlite-participants.test.ts",
     "src/config/sessions/session-logical-entry-read.worker.test.ts",
@@ -1598,13 +1582,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   {
-    testFile: "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
-    watchGlobs: [
-      "extensions/memory-core/src/memory/manager-index.worker.ts",
-      "extensions/memory-core/src/memory/manager-publication.worker.ts",
-    ],
-  },
-  {
     testFile: "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
     watchGlobs: ["src/index.ts"],
   },
@@ -1943,10 +1920,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: ["scripts/lib/declaration-stage.mts"],
   })),
-  {
-    testFile: "test/scripts/pr-worktree-containment.test.ts",
-    watchGlobs: ["scripts/pr-lib/worktree.sh"],
-  },
   {
     testFile: "test/scripts/vitest-worker-artifacts.ci.test.ts",
     watchGlobs: ["scripts/ci-run-node-test-shard.mts"],
