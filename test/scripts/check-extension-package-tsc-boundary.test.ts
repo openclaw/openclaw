@@ -26,6 +26,7 @@ import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import { resolveNativeDeclarationFixtureSources } from "./native-declaration-fixture-sources.js";
 
 const tempRoots = createTempDirTracker();
 let receipts: FixtureReceiptChannel;
@@ -193,6 +194,7 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
     "packages/normalization-core/package.json",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/plugins/package-entrypoints.ts",
+    ...resolveNativeDeclarationFixtureSources(),
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });

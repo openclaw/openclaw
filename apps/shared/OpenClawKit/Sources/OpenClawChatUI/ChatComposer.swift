@@ -979,92 +979,95 @@ extension OpenClawChatComposer {
         return body
     }
 
-    private var slashCommandPanel: some View {
-        let query = self.slashQuery ?? ""
-        let matches = self.viewModel.slashCommandMatches(
-            query: query,
-            filter: .all)
-        return VStack(alignment: .leading, spacing: 0) {
-            if self.viewModel.isLoadingSlashCommands, self.viewModel.slashCommands.isEmpty {
-                HStack(spacing: 10) {
-                    ProgressView()
-                    Text("Loading commands")
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 96)
-            } else if let error = self.viewModel.slashCommandsErrorText,
-                      self.viewModel.slashCommands.isEmpty
-            {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Commands unavailable")
-                        .font(OpenClawChatTypography.footnoteSemiBold)
-                    Text(error)
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                    Button {
-                        self.viewModel.refreshSlashCommands()
-                    } label: {
-                        Text("Retry")
-                            .font(OpenClawChatTypography.captionSemiBold)
+    var slashCommandPanel: some View {
+        // Query and catalog reads belong to the panel body, not the surrounding composer.
+        ChatComposerSection {
+            let query = self.slashQuery ?? ""
+            let matches = self.viewModel.slashCommandMatches(
+                query: query,
+                filter: .all)
+            VStack(alignment: .leading, spacing: 0) {
+                if self.viewModel.isLoadingSlashCommands, self.viewModel.slashCommands.isEmpty {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Loading commands")
+                            .font(OpenClawChatTypography.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if matches.isEmpty {
-                Text("No matching commands")
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 96)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(matches.enumerated()), id: \.element.id) { index, command in
-                                Button {
-                                    self.selectSlashCommand(command)
-                                } label: {
-                                    self.slashCommandRow(
-                                        command,
-                                        isHighlighted: self.usesSlashKeyboardHighlight
-                                            && index == self.slashHighlightIndex)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(command.displayInvocation)
-                                .id(index)
-                                .onHover { hovering in
-                                    if hovering {
-                                        self.slashHighlightIndex = index
+                } else if let error = self.viewModel.slashCommandsErrorText,
+                          self.viewModel.slashCommands.isEmpty
+                {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Commands unavailable")
+                            .font(OpenClawChatTypography.footnoteSemiBold)
+                        Text(error)
+                            .font(OpenClawChatTypography.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                        Button {
+                            self.viewModel.refreshSlashCommands()
+                        } label: {
+                            Text("Retry")
+                                .font(OpenClawChatTypography.captionSemiBold)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else if matches.isEmpty {
+                    Text("No matching commands")
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 96)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 2) {
+                                ForEach(Array(matches.enumerated()), id: \.element.id) { index, command in
+                                    Button {
+                                        self.selectSlashCommand(command)
+                                    } label: {
+                                        self.slashCommandRow(
+                                            command,
+                                            isHighlighted: self.usesSlashKeyboardHighlight
+                                                && index == self.slashHighlightIndex)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel(command.displayInvocation)
+                                    .id(index)
+                                    .onHover { hovering in
+                                        if hovering {
+                                            self.slashHighlightIndex = index
+                                        }
                                     }
                                 }
                             }
+                            .padding(8)
                         }
-                        .padding(8)
+                        .onChange(of: self.slashHighlightIndex) { _, index in
+                            proxy.scrollTo(index)
+                        }
                     }
-                    .onChange(of: self.slashHighlightIndex) { _, index in
-                        proxy.scrollTo(index)
-                    }
-                }
-                .frame(maxHeight: .infinity)
-                .overlay(alignment: .bottom) {
-                    if matches.count > 4 {
-                        self.slashCommandScrollAffordance
+                    .frame(maxHeight: .infinity)
+                    .overlay(alignment: .bottom) {
+                        if matches.count > 4 {
+                            self.slashCommandScrollAffordance
+                        }
                     }
                 }
             }
+            .frame(height: 340)
+            .background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
         }
-        .frame(height: 340)
-        .background(
-            .regularMaterial,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
     }
 
     private func slashCommandRow(

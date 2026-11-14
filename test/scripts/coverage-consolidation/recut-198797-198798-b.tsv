@@ -4,7 +4,7 @@ original_pr	rank	removed_lines	file	keeper_files	reason
 198797	1100	841	src/agents/isolated-completion.test.ts	src/commands/agent.test.ts;src/agents/models.profiles.live.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 198797	889	903	test/scripts/full-release-validation-at-sha.candidate.test.ts	test/scripts/full-release-validation-at-sha.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 198797	1094	843	test/scripts/pr-worktree-containment.test.ts	test/scripts/pr-wrappers.test.ts;test/scripts/pr-main-refresh.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
-198797	1097	842	test/scripts/test-projects-routing.test.ts	test/scripts/test-projects.test.ts;test/scripts/ci-node-test-plan.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+198797	1097	0	test/scripts/test-projects-routing.test.ts	test/scripts/test-projects-routing.test.ts	Retained frozen-main suite and regression assertions added after the approved deletion source.
 198797	1095	843	test/scripts/ui.test.ts	test/scripts/ui-real-gateway-runner.test.ts;test/scripts/test-projects.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 198797	1086	845	ui/src/components/browser/browser-panel.test.ts	ui/src/e2e/browser-route-handoff.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 198797	1067	850	ui/src/components/session-organizer-batch-mutations.test.ts	ui/src/pages/sessions/sessions-page.test.ts;src/gateway/sessions-patch.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
@@ -15,7 +15,7 @@ original_pr	rank	removed_lines	file	keeper_files	reason
 198797	896	900	ui/src/e2e/model-providers.e2e.test.ts	ui/src/pages/model-providers/model-providers-page.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 198797	828	923	ui/src/e2e/session-management.archive.e2e.test.ts	ui/src/pages/chat/chat-state.test.ts;ui/src/e2e/session-management.sidebar-reconnect.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 198797	1068	850	ui/src/lib/session-pull-requests.test.ts	src/gateway/control-ui-session-prs-own.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
-198797	1087	845	ui/src/pages/channels/view.test.tsx	ui/src/e2e/channels-explicit-save.e2e.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
+198797	1087	0	ui/src/pages/channels/view.test.tsx	ui/src/pages/channels/view.test.tsx	Retained frozen-main suite and regression assertions added after the approved deletion source.
 198797	829	923	ui/src/pages/chat/chat-page-retained-sessions.test.ts	ui/src/e2e/session-management.sidebar-reconnect.e2e.test.ts;ui/src/pages/chat/chat-view.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 198797	1099	842	ui/src/pages/chat/components/chat-message.test.tsx	ui/src/pages/chat/chat-view.test.ts	Approved file-level area consolidation; named final surviving keepers retained.
 198797	836	918	ui/src/pages/chat/tool-stream.node.test.ts	ui/src/pages/chat/chat-view.test.ts;ui/src/pages/chat/chat-state.test.ts	Approved file-level area consolidation; named final surviving keepers retained.

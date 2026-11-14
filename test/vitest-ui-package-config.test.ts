@@ -323,24 +323,25 @@ export default {
         const [standalone, embedded, topLevel, testOption] = reports;
         const uiRoot = path.join(process.cwd(), "ui");
         const browserProject = (projectRoot: string) =>
-          (browser === "chromium" ? [browser, "chromium-mock-registry"] : [browser]).map(
-            (name) => ({
-              name,
-              isolate: name === "chromium-mock-registry",
-              root: projectRoot,
-              viteRoot: projectRoot,
-              setupFiles: [path.join(projectRoot, "src/test-helpers/dom.setup.ts")],
-            }),
-          );
+          [browser, `${browser}-mock-registry`].map((name) => ({
+            name,
+            isolate: name === `${browser}-mock-registry`,
+            root: projectRoot,
+            viteRoot: projectRoot,
+            setupFiles: [path.join(projectRoot, "src/test-helpers/dom.setup.ts")],
+          }));
         expect(standalone?.projects).toEqual(browserProject(uiRoot));
         expect(new Set(standalone?.files).size).toBe(standalone?.files.length);
-        if (browser === "chromium") {
-          for (const file of [
-            "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
+        expect(standalone?.files).toContain(
+          path.join(
+            uiRoot,
             "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
-          ]) {
-            expect(standalone?.files).toContain(path.join(uiRoot, file));
-          }
+          ),
+        );
+        if (browser === "chromium") {
+          expect(standalone?.files).toContain(
+            path.join(uiRoot, "src/pages/chat/chat-pane-frame-updates.browser.test.tsx"),
+          );
         }
         expect(standalone?.files).toContain(
           path.join(

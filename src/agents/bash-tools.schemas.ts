@@ -37,7 +37,8 @@ export const execSchema = Type.Object({
   ),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds before returning an ordinary-command handle; default 10000.",
+      description:
+        "Milliseconds before returning an ordinary-command handle; default 10000, max 120000.",
     }),
   ),
   awaitResults: Type.Optional(

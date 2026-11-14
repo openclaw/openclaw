@@ -377,6 +377,43 @@ describe("new-session composer keyboard submission", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["MacIntel", false, ["⏎", "⌘⏎"]],
+    ["MacIntel", true, ["⌘⏎", "⌘⇧⏎"]],
+    ["Win32", false, ["Enter", "CtrlEnter"]],
+    ["Win32", true, ["CtrlEnter", "Ctrl⇧Enter"]],
+  ] as const)(
+    "shows start keycaps on %s with modifier mode=%s",
+    (platform, requiresModifier, keys) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const { composer } = renderComposer({ requiresModifier, onBackgroundSubmit: vi.fn() });
+      const tooltip = composer.querySelector(".new-session-page__start-submit")!.parentElement!;
+      const hints = tooltip.querySelector('[slot="content"]');
+      expect(hints?.textContent).toContain("Send");
+      expect(hints?.textContent).toContain("Background");
+      expect(Array.from(hints?.querySelectorAll("kbd") ?? [], (key) => key.textContent)).toEqual(
+        keys,
+      );
+    },
+  );
+
+  it("omits the background hint when background start is unavailable", () => {
+    const { composer } = renderComposer();
+    const tooltip = composer.querySelector(".new-session-page__start-submit")!.parentElement!;
+    expect(tooltip.querySelectorAll("kbd")).toHaveLength(1);
+    expect(tooltip.textContent).not.toContain("Background");
+  });
+
+  it.each([
+    { submitDisabledReason: "Pick a device" },
+    { submitting: true },
+    { nativeTerminal: true },
+  ])("preserves the start status instead of shortcuts for %j", (options) => {
+    const { composer } = renderComposer({ ...options, onBackgroundSubmit: vi.fn() });
+    const tooltip = composer.querySelector(".new-session-page__start-submit")!.parentElement!;
+    expect(tooltip.querySelector('[slot="content"]')).toBeNull();
+  });
+
   describe.each([false, true])("submission keys on mobile=%s", (mobile) => {
     beforeEach(() => {
       vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");

@@ -205,7 +205,7 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
         let response = try await self.http.send(request)
         try Task.checkCancellation()
         guard (200...299).contains(response.status) else {
-            throw OpenClawIDDiscoveryAccountError(status: response.status, code: Self.errorCode(response.body))
+            throw OpenClawIDNodeEnrollmentError.discoveryRejected(response.status)
         }
         return response.body
     }
@@ -213,18 +213,4 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
     private static func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
         do { return try JSONDecoder().decode(type, from: data) } catch { throw OpenClawIDNodeEnrollmentError.malformed }
     }
-
-    /// Discovery's error `code` only; the message is never surfaced.
-    private static func errorCode(_ data: Data) -> String? {
-        struct Failure: Decodable { struct Details: Decodable { let code: String }
-            let error: Details
-        }
-        return try? JSONDecoder().decode(Failure.self, from: data).error.code
-    }
-}
-
-/// A refused Discovery call: HTTP status and the protocol's error code, never remote text.
-public struct OpenClawIDDiscoveryAccountError: Error, Sendable, Equatable {
-    public let status: Int
-    public let code: String?
 }

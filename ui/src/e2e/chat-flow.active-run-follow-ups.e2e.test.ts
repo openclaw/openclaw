@@ -26,6 +26,7 @@ import {
   installMockGateway,
   requireRecord,
   requireString,
+  scrollChatThreadToTop,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
@@ -547,24 +548,25 @@ suite.define(() => {
       hasText: "Terminal response paragraph 1.",
     });
     await streamingBubble.waitFor();
-    const steerBubble = page.locator(".chat-group.user", { hasText: steerText }).last();
-    const steerElement = await steerBubble.elementHandle();
-    // Scrolling between separate protocol reads can make adjacent rows appear to overlap.
-    const [steerBounds, streamingBounds] = await streamingBubble.evaluate(
-      (streaming, steer) =>
-        [steer, streaming].map((element) => {
-          if (!element?.isConnected || element.getClientRects().length === 0) {
-            return null;
+    // Reader scrolling retires end-follow before measuring the virtualized boundary.
+    await scrollChatThreadToTop(page);
+    await expect
+      .poll(() =>
+        transcript.evaluate((thread, expectedSteerText) => {
+          const steer = Array.from(thread.querySelectorAll(".chat-group.user")).findLast((row) =>
+            row.textContent?.includes(expectedSteerText),
+          );
+          const streaming = Array.from(thread.querySelectorAll(".chat-bubble.streaming")).find(
+            (row) => row.textContent?.includes("Terminal response paragraph 1."),
+          );
+          if (!steer?.getClientRects().length || !streaming?.getClientRects().length) {
+            return false;
           }
-          const { y, height } = element.getBoundingClientRect();
-          return { y, height };
-        }),
-      steerElement,
-    );
-    await steerElement?.dispose();
-    expect(steerBounds).not.toBeNull();
-    expect(streamingBounds).not.toBeNull();
-    expect(streamingBounds!.y).toBeGreaterThanOrEqual(steerBounds!.y + steerBounds!.height - 1);
+          // Query both current nodes and measure them in one browser turn.
+          return streaming.getBoundingClientRect().y >= steer.getBoundingClientRect().bottom - 1;
+        }, steerText),
+      )
+      .toBe(true);
     const durableFinalMessage = textMessage("assistant", finalText, {
       __openclaw: { id: "ui4-final", seq: 5, runId },
     });

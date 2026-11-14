@@ -3496,6 +3496,7 @@
       "test/scripts/test-live.test.ts": 1,
       "test/scripts/test-perf-budget.test.ts": 1,
       "test/scripts/test-projects-empty-native.test.ts": 71,
+      "test/scripts/test-projects-routing.test.ts": 62,
       "test/scripts/test-projects.test.ts": 68,
       "test/scripts/test-report-utils.test.ts": 2,
       "test/scripts/test-skip-inventory.test.ts": 1,
