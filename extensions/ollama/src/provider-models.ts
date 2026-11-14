@@ -144,6 +144,8 @@ const OLLAMA_FAILED_SHOW_INFO: OllamaModelShowInfo = Object.freeze({
 });
 
 type OllamaModelRequestOptions = {
+  /** Setup binds the selected connection's resolved auth and transport policy once. */
+  fetchWithGuard?: typeof fetchWithSsrFGuard;
   apiKey?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -229,7 +231,7 @@ export async function readOllamaModelShowInfo(
   if (opts?.apiKey) {
     headers.Authorization = `Bearer ${opts.apiKey}`;
   }
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await (opts?.fetchWithGuard ?? fetchWithSsrFGuard)({
     url: `${normalizedApiBase}/api/show`,
     init: {
       method: "POST",
@@ -325,7 +327,7 @@ async function queryOllamaModelShowInfoCached(
   const normalizedApiBase = resolveOllamaApiBase(apiBase);
   const cacheKey = buildOllamaModelShowCacheKey(normalizedApiBase, model, opts?.apiKey);
   // Caller-owned deadlines and cancellation must not affect a shared catalog probe.
-  if (!cacheKey || opts?.timeoutMs !== undefined || opts?.signal) {
+  if (!cacheKey || opts?.timeoutMs !== undefined || opts?.signal || opts?.fetchWithGuard) {
     return await queryOllamaModelShowInfo(normalizedApiBase, model.name, opts);
   }
 
@@ -553,7 +555,7 @@ async function fetchOllamaModelRows(params: {
   try {
     const apiBase = resolveOllamaApiBase(params.baseUrl);
     const auditContext = `ollama-provider-models.${params.endpoint}`;
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await (params.opts?.fetchWithGuard ?? fetchWithSsrFGuard)({
       url: `${apiBase}/api/${params.endpoint}`,
       init: {
         headers: params.opts?.apiKey

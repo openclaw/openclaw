@@ -1,7 +1,8 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderAuthContext, ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
@@ -27,6 +28,7 @@ import {
   resolveOllamaApiBase,
   type OllamaModelWithContext,
 } from "./provider-models.js";
+import { isSavedOllamaEndpoint, resolveOllamaSetupFetch } from "./setup-connection.js";
 import {
   buildOllamaModelsConfig,
   discoverOllamaModelsForSetup,
@@ -91,10 +93,11 @@ function buildOllamaCloudSigninLines(signinUrl?: string): string[] {
 
 export async function checkOllamaCloudAuth(
   baseUrl: string,
+  fetchWithGuard: typeof fetchWithSsrFGuard = fetchWithSsrFGuard,
 ): Promise<{ signedIn: boolean; signinUrl?: string }> {
   try {
     const apiBase = resolveOllamaApiBase(baseUrl);
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithGuard({
       url: `${apiBase}/api/me`,
       init: {
         method: "POST",
@@ -141,9 +144,15 @@ function applyOllamaProviderConfig(
       providers: {
         ...cfg.models?.providers,
         ollama: capLocalOllamaProviderContext({
+          ...cfg.models?.providers?.ollama,
+          ...(!isSavedOllamaEndpoint(cfg.models?.providers?.ollama, baseUrl)
+            ? { auth: undefined, headers: undefined, request: undefined, localService: undefined }
+            : {}),
           baseUrl,
           api: "ollama",
-          apiKey: OLLAMA_DEFAULT_API_KEY,
+          apiKey: isSavedOllamaEndpoint(cfg.models?.providers?.ollama, baseUrl)
+            ? cfg.models?.providers?.ollama?.apiKey
+            : OLLAMA_DEFAULT_API_KEY,
           models: buildOllamaModelsConfig(modelNames, discoveredModelsByName),
         }),
       },
@@ -154,11 +163,16 @@ function applyOllamaProviderConfig(
 async function promptForOllamaBaseUrl(
   prompter: WizardPrompter,
   env: NodeJS.ProcessEnv = process.env,
+  existing?: ModelProviderConfig,
 ): Promise<string> {
-  const defaultBaseUrl = resolveOllamaSetupDefaultBaseUrl(env);
+  const savedBaseUrl = readProviderBaseUrl(existing);
+  const defaultBaseUrl = resolveOllamaApiBase(
+    savedBaseUrl ?? resolveOllamaSetupDefaultBaseUrl(env),
+  );
   const baseUrlRaw = await prompter.text({
     message: "Ollama base URL",
-    // Prefilling the default makes typed input append to it; hint it and use it for blank input.
+    // Only prefill a saved connection; fresh setup keeps the default as a hint.
+    ...(savedBaseUrl ? { initialValue: defaultBaseUrl } : {}),
     placeholder: defaultBaseUrl,
     validate: (value) =>
       isHostedOllamaCloud(value.trim()) ? OLLAMA_HOSTED_BASE_URL_MESSAGE : undefined,
@@ -166,11 +180,31 @@ async function promptForOllamaBaseUrl(
   return resolveOllamaApiBase((baseUrlRaw.trim() || defaultBaseUrl).replace(/\/+$/, ""));
 }
 
+export async function runOllamaInteractiveSetup(ctx: ProviderAuthContext) {
+  const result = await promptAndConfigureOllama({
+    cfg: ctx.config,
+    env: ctx.env,
+    prompter: ctx.prompter,
+    existingProfiles: ctx.existingProfiles,
+    agentDir: ctx.agentDir,
+    assertCurrent: ctx.assertCurrent,
+    signal: ctx.signal,
+  });
+  return {
+    profiles: [],
+    configPatch: result.config,
+    ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
+  };
+}
+
 export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   prompter: WizardPrompter;
   signal?: AbortSignal;
+  agentDir?: string;
+  existingProfiles?: ProviderAuthContext["existingProfiles"];
+  assertCurrent?: () => void;
 }) {
   const mode = (await params.prompter.select({
     message: "Ollama mode",
@@ -184,11 +218,13 @@ export async function promptAndConfigureOllama(params: {
     ],
   })) as OllamaInteractiveMode;
   const { cfg, prompter, env, signal } = params;
-  const baseUrl = await promptForOllamaBaseUrl(prompter, env);
+  const baseUrl = await promptForOllamaBaseUrl(prompter, env, cfg.models?.providers?.ollama);
+  const fetchWithGuard = await resolveOllamaSetupFetch({ ...params, baseUrl });
   let discovery = await discoverOllamaModelsForSetup({
     baseUrl,
     includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[mode].includeCloudModels,
     inspectTools: true,
+    fetchWithGuard,
     ...(signal ? { signal } : {}),
   });
 
@@ -206,6 +242,7 @@ export async function promptAndConfigureOllama(params: {
       baseUrl,
       includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[mode].includeCloudModels,
       inspectTools: true,
+      fetchWithGuard,
       ...(signal ? { signal } : {}),
     });
   }
@@ -244,7 +281,15 @@ export async function promptAndConfigureOllama(params: {
       initialValue: false,
     });
     if (shouldPullRecommended) {
-      if (!(await pullOllamaModel(baseUrl, OLLAMA_RECOMMENDED_TOOLS_MODEL, prompter, signal))) {
+      if (
+        !(await pullOllamaModel(
+          baseUrl,
+          OLLAMA_RECOMMENDED_TOOLS_MODEL,
+          prompter,
+          signal,
+          fetchWithGuard,
+        ))
+      ) {
         throw new WizardCancelledError("Failed to download recommended Ollama model");
       }
       signal?.throwIfAborted();
@@ -252,6 +297,7 @@ export async function promptAndConfigureOllama(params: {
         baseUrl,
         [{ name: OLLAMA_RECOMMENDED_TOOLS_MODEL }],
         signal,
+        fetchWithGuard,
       );
       // Unlike the pre-existing-model scan, a just-pulled model that cannot be
       // verified is a hard failure: configuring it unenriched would silently
@@ -276,7 +322,9 @@ export async function promptAndConfigureOllama(params: {
       return OLLAMA_SUGGESTED_MODELS_LOCAL;
     }
 
-    const auth = await checkOllamaCloudAuth(baseUrl);
+    const auth = await checkOllamaCloudAuth(baseUrl, fetchWithGuard);
+    signal?.throwIfAborted();
+    params.assertCurrent?.();
     if (auth.signedIn) {
       return mergeUniqueModelNames(
         OLLAMA_SUGGESTED_MODELS_LOCAL,
