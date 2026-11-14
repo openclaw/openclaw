@@ -122,6 +122,7 @@ class TemplatesCatalogModel {
         (plan) => {
           if (this.gateway.isCurrent(scope) && revision === this.detailRevision && !this.disposed) {
             this.preparedPlan = plan;
+            this.addError = plan.blockers[0]?.message ?? null;
           }
         },
         (error: unknown) => {
@@ -274,6 +275,12 @@ class TemplatesCatalogModel {
       }
       this.preparedPlan = plan;
       this.reviewPlan = plan;
+      // The Gateway refuses a blocked review; do not open a chat it would discard.
+      const blocker = plan.blockers[0];
+      if (blocker) {
+        this.addError = blocker.message;
+        return;
+      }
       if (plan.riskAcknowledgementRequired && !this.riskAcknowledged) {
         this.consentWarning = plan.trustWarning ?? t("templatesCatalog.addFailed");
         this.showReview();
@@ -360,7 +367,7 @@ class TemplatesCatalogModel {
       canStartAdd: this.canAdd(),
       consentWarning: this.consentWarning,
       reviewPlan: this.reviewPlan,
-      canAdd: this.preparedPlan !== null && this.canAdd(),
+      canAdd: this.preparedPlan?.blockers.length === 0 && this.canAdd(),
       onOpenPreview: (kind, name) => void this.openPreview(kind, name),
       onBack: () => this.back(),
       onRetryDetail: () => this.loadDetail(),
