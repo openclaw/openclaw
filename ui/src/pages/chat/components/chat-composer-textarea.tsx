@@ -12,6 +12,7 @@ import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import {
   handleTextareaOverflowInteraction,
   handleTextareaOverflowScroll,
+  paneDomId,
 } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { ComposerPluginPromptSlot } from "./chat-composer-plugin-prompt-slot.tsx";
@@ -64,9 +65,19 @@ export function renderComposerTextarea(
       }
     };
   });
+  const inputId = paneDomId(composer.paneId, "composer-input");
   return (
     <>
+      {/* Safari AutoFill guesses a field's type from nearby page text unless a label
+          element names it; aria-label does not stop that guess, and autocomplete="off"
+          does not either. Without this label, contact words in the transcript (a
+          streaming reply sits right above the composer) put AutoFill Contact over
+          the iPhone keyboard. */}
+      <label class="sr-only" for={inputId}>
+        {t("chat.composer.composerInput")}
+      </label>
       <textarea
+        id={inputId}
         data-composer-mentions={JSON.stringify(composer.mentions)}
         ref={[textareaRef, editorRef]}
 
@@ -147,7 +158,6 @@ export function renderComposerTextarea(
             handleChatAttachmentPaste(event, composer);
           }
         }}
-        aria-label={t("chat.composer.composerInput")}
         placeholder={context().dictation?.active ? "" : view.placeholder}
         rows="1"
       />
