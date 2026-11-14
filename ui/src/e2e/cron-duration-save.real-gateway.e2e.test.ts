@@ -225,10 +225,19 @@ catalogSuite.define(() => {
               }
             }
             // Exercise reads after real publication, not config changes during an in-flight read.
-            // Keep the Gateway's notifications intact and in their original order.
-            if (awaitCatalogPublication && catalogChange) {
+            // Once a notification is held, hold subsequent events too: forwarding a
+            // later sequence (for example skills.changed) would force a gap reconnect.
+            // Responses still flow so publication and in-flight reads can complete.
+            if (
+              awaitCatalogPublication &&
+              (catalogChange || (pendingNotifications.length > 0 && frame.type === "event"))
+            ) {
               traceCatalog(
-                frame.event === "config.changed" ? "config-changed-held" : "metadata-changed-held",
+                frame.event === "config.changed"
+                  ? "config-changed-held"
+                  : frame.event === "chat.metadata.changed"
+                    ? "metadata-changed-held"
+                    : "subsequent-event-held",
               );
               pendingNotifications.push(() => socket.send(message));
               if (
