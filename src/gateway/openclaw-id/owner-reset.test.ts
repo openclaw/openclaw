@@ -355,7 +355,7 @@ describe("owner reset", () => {
     expect(after.reset).toBeUndefined();
   });
 
-  it("chains a second reset to the published binding until Discovery has the first", async () => {
+  it("refuses a second reset until Discovery confirmed the first, even after a partial publish", async () => {
     const claw = await populatedClaw();
     const { service } = serviceFor(claw.authority, { enabled: true }, claw.stateDir);
     await service.resetOwner(
@@ -363,22 +363,22 @@ describe("owner reset", () => {
       "local_operator",
       (await signReset(await prepared(service))).input,
     );
-    const second = await signReset(await prepared(service));
-    expect(await service.resetOwner("commit", "local_operator", second.input)).toMatchObject({
-      ok: true,
-      bindingSeq: 3,
+    // The descriptor may have landed without its snapshot: binding 2 stays unconfirmed here.
+    expect(await claw.authority.prepareReset()).toMatchObject({
+      ok: false,
+      code: "reset_unpublished",
     });
-    const after = (await claw.store.read())!;
-    expect(after.reset?.previous_binding).toEqual(claw.before.binding);
-    expect(after.reset?.statement.body.binding_seq).toBe(3);
     expect(
-      await verifyRootReset(
-        { root_pub: claw.before.authority!.anchor.root_pub, binding: claw.before.binding! },
-        after.reset!.statement,
-        { root_pub: second.input.root_pub, binding: after.binding! },
-        { now: nowSeconds() },
-      ),
-    ).toMatchObject({ ok: true });
+      await service.resetOwner("commit", "local_operator", {
+        root_pub: undefined,
+        binding: undefined,
+      }),
+    ).toMatchObject({
+      ok: false,
+      code: "reset_unpublished",
+    });
+    await claw.authority.recordDiscovery({ published_binding_seq: 2 });
+    expect(await claw.authority.prepareReset()).toMatchObject({ binding_seq: 3 });
   });
 
   it("is refused while a move to new keys is unpublished, and a move waits for the reset", async () => {
