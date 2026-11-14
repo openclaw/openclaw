@@ -1,0 +1,5 @@
+# Slack native streaming final-delivery fixes: regressions for a progress boundary that stops the
+# stream under the final reply's appends, and for msg_too_long on the answer and on the closeout
+# stop (answer posted through the normal reply path, rejected first start released, established
+# stream still stoppable). Shared stream harness for those cases. Exact net growth.
+174

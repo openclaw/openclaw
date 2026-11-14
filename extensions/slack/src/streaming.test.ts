@@ -7,6 +7,7 @@ import {
   appendSlackStream,
   markSlackStreamFallbackDelivered,
   markSlackStreamsStopped,
+  SlackStreamMessageTooLongError,
   SlackStreamNotDeliveredError,
   startSlackStream,
   stopSlackStream,
@@ -296,5 +297,80 @@ describe("stopSlackStream finalize error handling", () => {
 
     expect(startStream).toHaveBeenCalledOnce();
     expect(stopStream).toHaveBeenCalledWith(stoppedPayload);
+  });
+});
+
+describe("msg_too_long handling", () => {
+  it("classifies a rejected append as not delivered and leaves the stream open", async () => {
+    const { client, append, stop } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      ...target,
+      chunks: [{ type: "plan_update", title: "Thinking" }],
+    });
+    append.mockRejectedValueOnce(slackApiError("msg_too_long"));
+
+    const thrown = await appendSlackStream({ session, text: "the answer", chunks: [] }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(thrown).toBeInstanceOf(SlackStreamMessageTooLongError);
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect(thrown).toMatchObject({ slackCode: "msg_too_long", pendingText: "the answer" });
+    expect(session).toMatchObject({ stopped: false, delivered: true });
+
+    markSlackStreamFallbackDelivered(session);
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
+    expect(stop).toHaveBeenCalledExactlyOnceWith(stoppedPayload);
+  });
+
+  it("keeps an established stream stoppable after msg_too_long", async () => {
+    const { client, append } = createNativeStreamClient();
+    const session = await startTextStream(client, "visible text");
+    append.mockRejectedValueOnce(slackApiError("msg_too_long"));
+    await expect(
+      appendSlackStream({ session, chunks: [{ type: "plan_update", title: "x" }] }),
+    ).rejects.toBeInstanceOf(SlackStreamMessageTooLongError);
+
+    markSlackStreamsStopped(client, "C123", [streamTs]);
+    expect(session).toMatchObject({ stopped: true, stoppedBySlack: true });
+  });
+
+  it("releases a first start Slack rejected with msg_too_long", async () => {
+    const { client, start } = createNativeStreamClient();
+    start.mockRejectedValueOnce(slackApiError("msg_too_long"));
+    // The listener's session set is private; observe it through the Set it is added to.
+    const add = vi.spyOn(Set.prototype, "add");
+
+    const thrown = await startSlackStream({
+      client,
+      ...target,
+      text: "the answer",
+      chunks: [{ type: "plan_update", title: "Thinking" }],
+    }).catch((err: unknown) => err);
+    const sessionSets = add.mock.contexts.filter((set, index): set is Set<unknown> => {
+      const value: unknown = add.mock.calls[index]?.[0];
+      return (
+        set instanceof Set && typeof value === "object" && value !== null && "streamer" in value
+      );
+    });
+    add.mockRestore();
+
+    expect(thrown).toBeInstanceOf(SlackStreamMessageTooLongError);
+    expect(thrown).toHaveProperty("pendingText", "the answer");
+    expect(sessionSets.map((sessions) => sessions.size)).toEqual([0]);
+  });
+
+  it("classifies a rejected stop the same way", async () => {
+    const { client, stop } = createNativeStreamClient();
+    const session = await startTextStream(client, "visible text");
+    stop.mockRejectedValueOnce(slackApiError("msg_too_long"));
+
+    await expect(
+      stopSlackStream({
+        session,
+        chunks: [{ type: "task_update", id: "t", title: "x", status: "complete" }],
+      }),
+    ).rejects.toBeInstanceOf(SlackStreamMessageTooLongError);
   });
 });

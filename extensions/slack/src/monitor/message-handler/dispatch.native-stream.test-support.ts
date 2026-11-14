@@ -38,8 +38,15 @@ const mocks = vi.hoisted(() => {
       this.name = "SlackStreamNotDeliveredError";
     }
   }
+  class TestSlackStreamMessageTooLongError extends TestSlackStreamNotDeliveredError {
+    constructor(pendingText: string) {
+      super(pendingText, "msg_too_long");
+      this.name = "SlackStreamMessageTooLongError";
+    }
+  }
   return {
     TestSlackStreamNotDeliveredError,
+    TestSlackStreamMessageTooLongError,
     appendSlackStream: vi.fn(async (_input?: unknown) => {}),
     startSlackStream: vi.fn(async (_input?: unknown): Promise<Record<string, unknown>> => ({})),
     stopSlackStream: vi.fn(async (_params?: unknown) => ({}) as { messageId?: string }),
@@ -56,6 +63,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+export const TestSlackStreamMessageTooLongError = mocks.TestSlackStreamMessageTooLongError;
 export const appendSlackStreamMock = mocks.appendSlackStream;
 export const startSlackStreamMock = mocks.startSlackStream;
 export const stopSlackStreamMock = mocks.stopSlackStream;
@@ -187,6 +195,7 @@ vi.mock("../../streaming.js", () => ({
     session.pendingText = "";
     session.stopped = !session.delivered;
   },
+  SlackStreamMessageTooLongError: mocks.TestSlackStreamMessageTooLongError,
   SlackStreamNotDeliveredError: mocks.TestSlackStreamNotDeliveredError,
   appendSlackStream: mocks.appendSlackStream,
   startSlackStream: async (input: unknown) =>
@@ -369,6 +378,12 @@ export function expectNativeStreamText(text: string, count = 1) {
     (call) => requireRecord(call[0], "native stream call").text === text,
   );
   expect(matches).toHaveLength(count);
+}
+
+export function expectDeliverReplyCall(index: number, text: string) {
+  const params = requireRecord(deliverRepliesMock.mock.calls[index]?.[0], "deliverReplies call");
+  expect(params.replyThreadTs).toBe(THREAD_TS);
+  expect(params.replies).toEqual([{ text }]);
 }
 
 export function sleepRealMs(ms: number): Promise<void> {
