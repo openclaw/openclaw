@@ -146,7 +146,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
         }
         // A provider flag pins execution, rather than selecting the tool's fallback.
         const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
-        const resolved = resolveWebFetchDefinition({
+        const resolved = await resolveWebFetchDefinition({
           config: cfg,
           providerId: provider,
         });

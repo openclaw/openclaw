@@ -20,6 +20,7 @@ import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-s
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { acquirePluginToolInspectionRegistry } from "./tools.js";
 import { readToolTestEvents } from "./tools.test-support.js";
+import { resolveRuntimeWebFetchProvidersAsync } from "./web-fetch-providers.runtime.js";
 import { resolveRuntimeWebSearchProviders } from "./web-search-providers.runtime.js";
 
 afterEach(() => {
@@ -35,9 +36,11 @@ function writeToolPlugin(params: {
   workspaceAccess?: boolean | "execute";
   factoryReadsWorkspace?: boolean;
   webSearchProviderId?: string;
+  webFetchProviderId?: string;
 }): string {
   const toolName = `${params.id}_tool`;
-  const { webSearchProviderId } = params;
+  const webProviderId = params.webFetchProviderId ?? params.webSearchProviderId;
+  const webProviderKind = params.webFetchProviderId === undefined ? "Search" : "Fetch";
   fs.mkdirSync(params.root, { recursive: true });
   const writeJson = (name: string, value: unknown) =>
     fs.writeFileSync(path.join(params.root, name), JSON.stringify(value));
@@ -50,7 +53,7 @@ function writeToolPlugin(params: {
     id: params.id,
     contracts: {
       tools: [toolName],
-      ...(webSearchProviderId ? { webSearchProviders: [webSearchProviderId.trim()] } : {}),
+      ...(webProviderId ? { [`web${webProviderKind}Providers`]: [webProviderId.trim()] } : {}),
     },
     configSchema: { type: "object", additionalProperties: false },
   });
@@ -64,12 +67,12 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   event("register", { mode: api.registrationMode });
   api.lifecycle.onDispose(() => event("dispose"));
   if (${params.failure === "registration"}) throw new Error("fixture admission failed");
-  if (${webSearchProviderId !== undefined}) {
-    api.registerWebSearchProvider({
-      id: ${JSON.stringify(webSearchProviderId)}, label: "Inspection search", hint: "Synthetic search",
+  if (${webProviderId !== undefined}) {
+    api.registerWeb${webProviderKind}Provider({
+      id: ${JSON.stringify(webProviderId)}, label: "Inspection web provider", hint: "Synthetic provider",
       envVars: [], placeholder: "", signupUrl: "https://example.com", credentialPath: "",
       getCredentialValue() {}, setCredentialValue() {},
-      createTool() { throw new Error("Inspection must not execute search providers"); }
+      createTool() { throw new Error("Inspection must not execute web providers"); }
     });
   }
   api.registerTool((context) => {
@@ -412,3 +415,43 @@ it.each(["a-first", "z-second"])(
     });
   },
 );
+
+it("rejects pending supplemental fetch discovery after inspection release", async () => {
+  await withInspectionState(async (state) => {
+    const events = state.path("released-fetch-events.jsonl");
+    const ids = ["selected", "supplemental"];
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      plugins: pluginConfig(
+        ids.map((id) =>
+          writeToolPlugin({
+            root: state.path("plugins", id),
+            id,
+            events,
+            webFetchProviderId: id,
+          }),
+        ),
+        ids,
+      ),
+    };
+    const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
+    await using inspection = await inspectionLease({
+      loadContext,
+      scopes: [toolScope(config, state.workspaceDir, ["selected_tool"], "main")],
+    });
+    assert(inspection.registry, "Expected the selected inspection registry");
+    const pending = withPluginRuntimeRegistryScope(inspection.registry, () =>
+      resolveRuntimeWebFetchProvidersAsync({
+        config,
+        onlyPluginIds: ids,
+        manifestRecords: loadContext.manifestRegistry?.plugins,
+      }),
+    );
+    const rejected = expect(pending).rejects.toThrow(
+      /Plugin (?:inventory has retired|tool inspection has been released)/,
+    );
+    await inspection.release();
+    await rejected;
+    expect(readEvents(events, "register").map(({ plugin }) => plugin)).toEqual(["selected"]);
+  });
+});
