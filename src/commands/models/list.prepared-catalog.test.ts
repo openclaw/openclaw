@@ -272,13 +272,16 @@ describe("models list published transport", () => {
       count: 1,
       providerOutcomes,
     });
-    expect(runtime.error.mock.calls.flat()).toEqual(
+    const errors = runtime.error.mock.calls.flat().map(String);
+    expect(errors).toEqual(
       expect.arrayContaining([
         expect.stringContaining("could not refresh all providers"),
-        expect.stringContaining("rejected for xai (profile work\\nnext)"),
-        expect.stringContaining("unavailable for offline"),
+        "Model discovery authentication was rejected for xai (profile work\\nnext). Open Models in the Control UI to check sign-in and catalog access, then run openclaw models list --refresh.",
+        "Model discovery is unavailable for offline. Run openclaw models list --refresh; if it still fails, check the provider in Models in the Control UI.",
       ]),
     );
+    expect(errors.filter((message) => message.includes("rejected for xai"))).toHaveLength(1);
+    expect(errors.filter((message) => message.includes("unavailable for offline"))).toHaveLength(1);
     expect(JSON.stringify(runtime.error.mock.calls)).not.toContain("synthetic-private");
   });
 

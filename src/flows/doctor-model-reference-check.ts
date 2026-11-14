@@ -79,7 +79,7 @@ export const modelReferenceCheck: HealthCheck = {
     for (const warning of getModelCatalogWarnings(catalog)) {
       findings.push({
         checkId: "core/doctor/model-references",
-        severity: "warning",
+        severity: warning.status === "unavailable" ? "info" : "warning",
         source: "doctor",
         target: warning.ref,
         message: warning.message,
