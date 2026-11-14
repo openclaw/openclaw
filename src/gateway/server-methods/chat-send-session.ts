@@ -18,6 +18,7 @@ import {
   findNormalizedProviderValue,
   parseModelRef,
 } from "../../agents/model-selection-normalize.js";
+import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   prepareSessionCapabilityRead,
@@ -83,6 +84,7 @@ function chatSendPreparationConfig(
   const defaults = cfg.agents?.defaults;
   const agent = resolveAgentEntry(cfg, agentId);
   const selected = resolveSessionModelRef(cfg, entry, agentId);
+  const modelPolicy = resolveConfiguredModelPolicyAllow({ cfg, agentId });
   const fallbacks =
     modelFallbackOverrideFromAvailability(
       resolveModelFallbackAvailability({
@@ -132,8 +134,12 @@ function chatSendPreparationConfig(
     agentModel: agent?.model,
     defaultModels: defaults?.models,
     agentModels: agent?.models,
-    defaultModelPolicy: defaults?.modelPolicy,
-    agentModelPolicy: agent?.modelPolicy,
+    // The canonical repair path normalizes legacy/default policy without losing
+    // the agent/default alias owner. Empty allowlists are unrestricted in either scope.
+    modelPolicy: {
+      refs: modelPolicy.refs,
+      owner: modelPolicy.refs.length > 0 ? modelPolicy.repairConfigPath : null,
+    },
     runtime: agent?.runtime,
     models: { mode: cfg.models?.mode, providers },
     auth: cfg.auth,
