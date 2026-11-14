@@ -36,7 +36,10 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
   if (!document.fonts) {
     Object.defineProperty(document, "fonts", {
       configurable: true,
-      value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
+      value: Object.assign(new EventTarget(), {
+        ready: Promise.resolve(),
+        load: () => Promise.resolve([]),
+      }),
     });
   }
 
