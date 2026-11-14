@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
   tail: vi.fn(),
   compact: vi.fn(),
+  artifacts: vi.fn(),
   lifecycle: vi.fn(),
   exportTrajectory: vi.fn(),
   ownerLoaded: vi.fn(),
@@ -38,6 +39,11 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
+});
+// mock-isolation: Capture lazy loading without reading artifact storage.
+vi.mock("../../commands/sessions-artifacts.js", () => {
+  mocks.ownerLoaded();
+  return { sessionsArtifactsCommand: mocks.artifacts };
 });
 vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
@@ -104,6 +110,11 @@ it.each([
     "--max-lines must be a positive integer.",
   ],
   [`sessions compact ${key} --timeout 0 --json`, mocks.compact, timeoutError],
+  [
+    `sessions --store /tmp/other.sqlite artifacts ${key}`,
+    mocks.artifacts,
+    "`sessions artifacts` does not support the parent `sessions` option --store; the gateway resolves the artifact scope from the session key and --run.",
+  ],
 ] as const)("rejects %s before loading the session owner", async (args, owner, message) => {
   const execution = run(args);
   await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
@@ -174,6 +185,18 @@ it.each([
   if (owner === mocks.list) {
     expect(mocks.setVerbose).toHaveBeenCalledWith(true);
   }
+});
+
+it("forwards sessions artifacts selectors to the command", async () => {
+  await run(`sessions --json artifacts ${key} art-1 --run run-9 --agent work --output out.png`);
+  expectOptions(mocks.artifacts, {
+    sessionKey: key,
+    artifactId: "art-1",
+    run: "run-9",
+    agent: "work",
+    output: "out.png",
+    json: true,
+  });
 });
 
 it("compact inherits parent agent and JSON options (#91378)", async () => {
