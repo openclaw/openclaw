@@ -165,8 +165,8 @@ it("selects the pinned darwin/x64 asset", () => {
     arch: "x64",
     backend: "cpu",
     archive: "tar.gz",
-    name: "llama-b10809-bin-macos-x64.tar.gz",
-    sha256: "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
+    name: "llama-b12110-bin-macos-x64.tar.gz",
+    sha256: "c8094268b6bf62f4998f0e45656fd9f5e2d4afb6b1cd0044d761db64be1dd47d",
   });
 });
 

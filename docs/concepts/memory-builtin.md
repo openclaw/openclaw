@@ -104,12 +104,17 @@ openclaw plugins install @openclaw/llama-cpp-provider
       provider: "local",
       fallback: "none",
       local: {
-        modelPath: "~/.openclaw/models/llama.cpp/hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+        modelPath: "hf:ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
       },
     },
   },
 }
 ```
+
+This selects EmbeddingGemma 2 explicitly. Existing managed local-memory routers
+retain their previous embedding model through Doctor; see
+[upgrading local embeddings](/plugins/llama-cpp#upgrading-local-embeddings) before
+changing the model of an existing index.
 
 ## Supported embedding providers
 

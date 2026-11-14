@@ -224,6 +224,18 @@ describe("llama.cpp provider plugin", () => {
     expect(mocks.ensureModel).not.toHaveBeenCalled();
     expect(mocks.prepareServer).not.toHaveBeenCalled();
   });
+  it("requires an explicit embedding model for direct-model services", async () => {
+    const service = expectDefined(fixture.providerConfig.localService, "local service");
+    const modelPath = "/models/previous-embedding.gguf";
+    service.args = ["--model", modelPath, "--embedding"];
+    await expect(createEmbedding(fixture.options)).rejects.toThrow("memory.search.local.modelPath");
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.genericCreate).not.toHaveBeenCalled();
+    const result = await createEmbedding({ ...fixture.options, local: { modelPath } });
+    expect(result.provider?.model).toBe(modelPath);
+    expectCall(mocks.ensureModel, { source: modelPath });
+    expectCall(mocks.prepareServer, { localService: service });
+  });
   it.each([undefined, "/models/custom-embedding.gguf"])(
     "routes managed embeddings and preserves media residency (%s)",
     async (modelPath) => {
@@ -397,5 +409,26 @@ describe("llama.cpp provider plugin", () => {
       cacheKeyData: { provider: "local", model, ...(custom ? { outputDimensionality: 512 } : {}) },
       aliases: custom ? [] : expect.arrayContaining(aliases),
     });
+  });
+
+  it("keeps the previous embedding space separate when upgrading the default", () => {
+    const modelCacheDir = path.join(os.tmpdir(), "managed-llama-models");
+    fixture.providerConfig.params = { modelCacheDir };
+    const previousModel =
+      "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
+    const previousFile = "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf";
+    const current = resolveIndexIdentity?.(fixture.options);
+    expect(current?.model).toBe("hf:ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf");
+    for (const modelPath of [
+      previousModel,
+      previousFile,
+      path.join(modelCacheDir, previousFile),
+      path.join(resolveLegacyLlamaCppModelCacheDir(), previousFile),
+    ]) {
+      const previous = resolveIndexIdentity?.({ ...fixture.options, local: { modelPath } });
+      expect(previous?.model).toBe(previousModel);
+      expect(previous?.cacheKeyData).toEqual({ provider: "local", model: previousModel });
+      expect(current?.aliases?.some((alias) => alias.model === modelPath)).toBe(false);
+    }
   });
 });

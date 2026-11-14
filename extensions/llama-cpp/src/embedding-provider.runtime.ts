@@ -20,6 +20,7 @@ import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
   reconcileManagedLlamaServer as reconcileLocalService,
+  resolveLlamaCppPresetPath,
 } from "./managed-server.js";
 import { resolveLlamaCppMediaModels } from "./media-config.js";
 import { formatLlamaServerRuntimeError } from "./runtime-error.js";
@@ -39,6 +40,13 @@ async function prepareEmbeddingServer(
   embeddingSource: string,
 ): Promise<void> {
   const provider = resolveManagedLlamaCppProviderConfig(options.config);
+  // Direct commands do not consume the managed preset, so a new default cannot
+  // replace their loaded model or safely identify its existing vector space.
+  if (!resolveLlamaCppPresetPath(provider.localService) && !options.local?.modelPath?.trim()) {
+    throw new Error(
+      "Direct-model llama.cpp services require memory.search.local.modelPath to identify the model actually loaded by the service. Set it to that model, or rerun managed llama.cpp setup before using the default embedding model.",
+    );
+  }
   const mediaModels = resolveLlamaCppMediaModels(provider);
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
   const embeddingModelPath = await ensureLlamaCppModel({

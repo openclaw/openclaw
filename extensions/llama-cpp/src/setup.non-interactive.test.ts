@@ -4,6 +4,7 @@ import { Command } from "commander";
 import type { ProviderAuthMethodNonInteractiveContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { normalizeCompatibilityConfig } from "../doctor-contract-api.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { DEFAULT_LLAMA_CPP_EMBEDDING_MODEL } from "./defaults.js";
 import { mocks, tempRoot } from "./setup.test-support.js";
@@ -68,6 +69,10 @@ describe("managed llama.cpp non-interactive onboarding", () => {
 
     const result = await setup(ctx);
 
+    expect(result?.memory?.search?.local?.modelPath).toBe(
+      "hf:ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
+    );
+
     expect(result?.models?.providers?.["llama-cpp"]).toMatchObject({
       baseUrl: "http://127.0.0.1:19432/v1",
       api: "openai-completions",
@@ -117,8 +122,43 @@ describe("managed llama.cpp non-interactive onboarding", () => {
     );
   });
 
+  it.each([undefined, "hf:ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf"])(
+    "preserves existing implicit models during setup and honors explicit opt-in: %s",
+    async (modelPath) => {
+      const ctx = setupContext();
+      ctx.config.models = {
+        providers: {
+          "llama-cpp": {
+            baseUrl: "http://127.0.0.1:19432/v1",
+            models: [],
+            localService: {
+              command: "/custom/llama-server",
+              args: ["--models-preset", "/models.ini"],
+            },
+          },
+        },
+      };
+      ctx.config.memory = { search: { provider: "local", local: { modelPath } } };
+      const result = await setup(ctx);
+      const expected =
+        modelPath ??
+        "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
+      expect(result?.memory?.search?.local?.modelPath).toBe(expected);
+      expect(mocks.ensureModel).toHaveBeenCalledWith(expect.objectContaining({ source: expected }));
+      expect(normalizeCompatibilityConfig({ cfg: result! })).toEqual({
+        config: result,
+        changes: [],
+      });
+    },
+  );
+
   it.each([
     { name: "unconfigured local memory", config: {}, error: "Set memory.search.provider" },
+    {
+      name: "explicit keyword-only memory",
+      config: { memory: { search: { provider: "none", fallback: "local" } } },
+      error: "Set memory.search.provider",
+    },
     {
       name: "disabled local memory",
       config: { memory: { search: { enabled: false, provider: "local" as const } } },
