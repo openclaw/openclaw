@@ -130,7 +130,7 @@ describe("google provider policy public artifact", () => {
 
   it("preserves normalized Gemini 3 aliases when catalog reasoning metadata is stale", () => {
     expect(thinking("google/gemini-3-pro")).toEqual({
-      levels: [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }],
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "adaptive" }, { id: "high" }],
       preserveWhenCatalogReasoningFalse: true,
     });
   });
