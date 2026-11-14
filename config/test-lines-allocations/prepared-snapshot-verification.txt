@@ -1,0 +1,3 @@
+430
+# Exact net feature regressions: 14 crabbox-worker-project.test.ts, 26 crabbox-worker-snapshot-verifier.test.ts, 1 crabbox-worker-warm-image.test-support.ts, 353 project-snapshot-caches.test.ts, 5 worker-git-scripts.test.ts, 31 workspace-sync-manifest.test.ts.
+# Real A-to-B cache normalization, full cross-root pre-deletion rejection, read-only verification and capture safety; no inherited main debt.

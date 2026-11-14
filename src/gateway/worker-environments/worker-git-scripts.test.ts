@@ -134,7 +134,12 @@ it("runs opaque-source project setup with worker-local Git isolation", async () 
     Buffer,
     performance,
     process: {
-      env: { PATH: "worker-tools", HOME: home, GH_TOKEN: "unrelated-token" },
+      env: {
+        PATH: "worker-tools",
+        HOME: home,
+        GH_TOKEN: "unrelated-token",
+        OPENCLAW_INTERNAL_WORKSPACE_MANIFEST_READ_ONLY: "1",
+      },
       umask: () => {},
       exitCode: 0,
       stdout: { write: () => {} },

@@ -38,11 +38,12 @@ function serializeManifest(baseCommit, entries) {
   });
 }`;
 
-export const REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS = String.raw`function publishManifest(manifestRoot, manifest) {
+export const REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS = String.raw`function publishManifest(manifestRoot, manifest, persist = true) {
   if (Buffer.byteLength(manifest) > MAX_WORKSPACE_MANIFEST_BYTES) {
     fail("worker workspace manifest exceeds its serialized byte limit");
   }
   const digest = crypto.createHash("sha256").update(manifest).digest("hex");
+  if (!persist) return digest;
   const manifestPath = path.join(manifestRoot, digest + ".json");
   const temporaryPath = manifestPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
   fs.writeFileSync(temporaryPath, manifest, { encoding: "utf8", flag: "wx", mode: 0o600 });

@@ -107,6 +107,18 @@ function captureFailure(receipt: unknown, result: Partial<SpawnResult> = {}) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it("refuses native capture when project snapshot verification rejects", async () => {
+    const f = projectFixture();
+    const prepareSnapshot = vi.fn(async () => {
+      throw new Error("Unapproved snapshot cache");
+    });
+    Object.assign(f.options.project, { prepareSnapshot });
+    await expect(f.provision()).rejects.toThrow("Unapproved snapshot cache");
+    expect(prepareSnapshot).toHaveBeenCalledOnce();
+    expect(f.count("create")).toBe(0);
+    expect(f.options.beginNodeEnrollment).not.toHaveBeenCalled();
+  });
+
   it("skips refused native captures across restart until the refresh interval expires", async () => {
     const now = 1_800_000_000_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -721,6 +733,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(await f.allocation()).toMatchObject({ phase: "prepared", choice: { kind: "cold" } });
       expect((await warmImage())?.capture).toBeUndefined();
+      await destroyAndWait(f.provider, { leaseId: f.leaseId, profile: PROFILE });
+      expect(f.count("create")).toBe(0);
     },
   );
 

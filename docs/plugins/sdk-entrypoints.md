@@ -596,3 +596,9 @@ entries in place from a caller-owned child environment. Copy inherited values
 first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+The host supplies `project.prepareSnapshot({ runScript })` for prepared projects in
+`WorkerProvider.provision` options. The host binds this capability to the current
+project preparation. Crabbox requires it for prepared-project capture. Providers call it only for their claimed disposable source,
+after runtime preparation and scrubbing, before native image capture. It verifies
+and normalizes that project's caches; `inspectPreparedWorkspace` remains read-only.
