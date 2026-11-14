@@ -1,4 +1,3 @@
-import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
 
@@ -62,12 +61,12 @@ export class CustomThemeImportOwner {
     this.update({ message: { kind: "error", text: message } });
   }
 
-  import(params: {
+  import<Theme extends { label: string }>(params: {
     config: RuntimeConfigState;
     hasCustomTheme: boolean;
     readTheme: () => ThemeName;
-    load: (url: string) => Promise<ImportedCustomTheme>;
-    apply: (theme: ImportedCustomTheme, activate: boolean) => void;
+    load: (url: string) => Promise<Theme>;
+    apply: (theme: Theme, activate: boolean) => void;
     messages: {
       blocked: (reason: "loading" | "unsaved") => string;
       imported: (label: string) => string;

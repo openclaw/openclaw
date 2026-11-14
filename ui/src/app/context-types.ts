@@ -1,5 +1,6 @@
 import type { RouteLocation, Router } from "@openclaw/uirouter";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
+import type { ThemesGetResult } from "../../../packages/gateway-protocol/src/schema/themes.ts";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -45,6 +46,7 @@ export type ApplicationTheme = {
   readonly branding: ThemeBranding;
   readonly catalog?: ThemeCatalogSnapshot;
   retryCatalog?: () => void;
+  rememberTheme?: (result: ThemesGetResult) => void;
   readonly settings: UiPreferences;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";

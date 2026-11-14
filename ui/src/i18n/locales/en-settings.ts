@@ -1994,7 +1994,7 @@ const enSettings = {
       importedTheme: "Imported theme",
       import: "Import",
       importedFrom: "Imported from tweakcn: {name}",
-      importHint: "Import a tweakcn theme for this browser",
+      importHint: "Import a tweakcn theme",
       importFromTweakcn: "Import from tweakcn",
       tweakcnInstructions:
         "Open tweakcn.com, choose or create a theme, click Share, then paste the copied theme link here. Share links, editor URLs, registry URLs, theme IDs, and default theme names like amethyst-haze are accepted.",

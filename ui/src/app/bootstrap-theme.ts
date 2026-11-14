@@ -7,6 +7,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
+import { saveCustomThemeToProfile, profileThemeWriter } from "./custom-theme-profile.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
 import {
@@ -196,6 +197,41 @@ export function createApplicationTheme(
     }
   };
 
+  // Earlier tweakcn imports live only in this browser. Move one to the signed-in profile;
+  // a failed save keeps it here and retries on the next connection.
+  let adoptionClient: unknown = null;
+  const adoptBrowserImport = () => {
+    const client = profileThemeWriter(gateway.snapshot);
+    const customTheme = settings.customTheme;
+    const scope = gateway.connection.gatewayUrl;
+    if (disposed || !customTheme || !client || client === adoptionClient) {
+      return;
+    }
+    adoptionClient = client;
+    saveCustomThemeToProfile(client, customTheme).then(
+      (saved) => {
+        if (
+          disposed ||
+          gateway.snapshot.client !== client ||
+          gateway.connection.gatewayUrl !== scope ||
+          settings.customTheme?.importedAt !== customTheme.importedAt
+        ) {
+          return;
+        }
+        catalog?.remember(saved);
+        patchSettings(
+          {
+            gatewayUrl: scope,
+            customTheme: undefined,
+            ...(settings.theme === "custom" ? { theme: saved.theme.id } : {}),
+          },
+          { selectGateway: false },
+        );
+      },
+      () => undefined,
+    );
+  };
+
   const detachSystemThemeListener = () => {
     systemThemeCleanup?.();
     systemThemeCleanup = undefined;
@@ -225,6 +261,7 @@ export function createApplicationTheme(
     settings = next;
     if (changed) {
       void loadCatalog();
+      adoptBrowserImport();
     }
     if (appearanceChanged) {
       publish();
@@ -254,6 +291,7 @@ export function createApplicationTheme(
   // Connection changes refresh scoped preferences and the document's theme owner.
   const stopGateway = gateway.subscribe(() => {
     void loadCatalog();
+    adoptBrowserImport();
     if (settings.gatewayUrl !== gateway.connection.gatewayUrl) {
       refresh();
     }
@@ -293,6 +331,9 @@ export function createApplicationTheme(
     refresh,
     retryCatalog() {
       void (catalog?.refresh() ?? loadCatalog());
+    },
+    rememberTheme(result) {
+      catalog?.remember(result);
     },
     subscribe: listeners.subscribe,
     dispose() {

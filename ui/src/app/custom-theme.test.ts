@@ -1,18 +1,22 @@
 // @vitest-environment node
 // Control UI tests cover custom theme behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ThemeDefinition } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import {
   createImportedCustomThemeFixture as createImportedTheme,
   createTweakcnThemePayload as createTweakcnPayload,
 } from "../test-helpers/custom-theme.ts";
+import { saveCustomThemeToProfile } from "./custom-theme-profile.ts";
 import {
   describeThemeLabel,
   parseImportedCustomTheme,
   syncCustomThemeStyleTag,
 } from "./custom-theme.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
+import { normalizeThemePalette } from "./theme-palette.ts";
 
 describe("custom theme localized validation", () => {
   it("routes validation through the lazy importer without translating token names", async () => {
@@ -234,6 +238,33 @@ describe("custom theme import helpers", () => {
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
     ).rejects.toThrow("Unsupported tweakcn token");
+  });
+
+  it("saves the original tweakcn palette as a personal theme definition", async () => {
+    const payload = createTweakcnPayload();
+    payload.cssVars.theme["font-sans"] = `${"Inter, ".repeat(20)}sans-serif`;
+    vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(payload)));
+    const imported = await importCustomThemeFromUrl("cmlhfpjhw000004l4f4ax3m7z");
+    const request = vi.fn(async (_method: string, _params: unknown) => ({}));
+
+    await saveCustomThemeToProfile({ request } as unknown as GatewayBrowserClient, imported);
+
+    const [method, params] = request.mock.calls[0]!;
+    const { id, definition } = params as { id: string; definition: ThemeDefinition };
+    expect([method, id]).toEqual(["themes.import", "tweakcn-cmlhfpjhw000004l4f4ax3m7z"]);
+    expect(definition).toMatchObject({
+      name: "Light Green",
+      description: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      dark: { ...payload.cssVars.dark },
+    });
+    // The over-long font stack exceeds the portable limit, so OpenClaw's fonts apply.
+    expect(Object.keys(definition.dark!)).not.toContain("font-sans");
+    expect(normalizeThemePalette("dark", definition.dark!, undefined)).toEqual({
+      ...imported.dark,
+      "font-body": expect.stringContaining("Inter"),
+      "font-display": expect.stringContaining("Inter"),
+      mono: expect.stringContaining("JetBrains Mono"),
+    });
   });
 
   it("parses stored imported themes and rejects malformed records", () => {

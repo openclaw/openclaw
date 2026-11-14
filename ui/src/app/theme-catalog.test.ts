@@ -18,6 +18,7 @@ import {
   createThemePaletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
+import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
@@ -707,6 +708,41 @@ it("preserves startup palette validation errors until Settings can localize them
   try {
     await vi.waitFor(() => expect(applicationTheme.catalog?.error).toBeInstanceOf(Error));
     expect(applicationTheme.catalog?.error).toMatchObject({ message: "background" });
+  } finally {
+    applicationTheme.dispose();
+    gateway.stop();
+  }
+});
+
+it("moves a browser tweakcn import into the signed-in profile", async () => {
+  patchSettings({ theme: "custom", customTheme: createImportedCustomThemeFixture() });
+  const { gateway, current } = createGatewayStoreTestStore();
+  const applicationTheme = createApplicationTheme(loadSettings(), gateway);
+  gateway.start();
+  current().request.mockImplementation(async (method, params) =>
+    method === "users.self"
+      ? selfProfile("first")
+      : method === "themes.import"
+        ? { ...builtinCatalog([]), theme: { id: `user/${(params as { id: string }).id}` } }
+        : builtinCatalog([]),
+  );
+  current().testOptions.onHello?.({
+    ...GATEWAY_STORE_TEST_HELLO,
+    auth: { role: "operator", scopes: ["operator.write"] },
+    snapshot: { presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "first" } }] },
+  });
+  try {
+    await vi.waitFor(() => expect(loadSettings().customTheme).toBeUndefined());
+    expect(current().request.mock.calls.filter(([method]) => method === "themes.import")).toEqual([
+      [
+        "themes.import",
+        {
+          id: "tweakcn-cmlhfpjhw000004l4f4ax3m7z",
+          definition: expect.objectContaining({ name: "Light Green" }),
+        },
+      ],
+    ]);
+    expect(applicationTheme.settings.theme).toBe("user/tweakcn-cmlhfpjhw000004l4f4ax3m7z");
   } finally {
     applicationTheme.dispose();
     gateway.stop();

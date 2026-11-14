@@ -18,11 +18,18 @@ import * as customTheme from "./custom-theme-import.ts";
 
 const importCustomThemeFromUrl = vi.fn<typeof customTheme.importCustomThemeFromUrl>();
 
-function customThemeContext() {
+function customThemeContext(profile?: { request: ReturnType<typeof vi.fn> }) {
   return {
     gateway: {
       connection: { gatewayUrl: "ws://gateway.test" },
-      snapshot: { phase: "connected", selfUser: null },
+      snapshot: profile
+        ? {
+            phase: "connected",
+            client: profile,
+            selfUser: { id: "profile-a" },
+            hello: { auth: { role: "operator", scopes: ["operator.write"] } },
+          }
+        : { phase: "connected", selfUser: null },
     },
     runtimeConfig: {
       state: {
@@ -32,13 +39,16 @@ function customThemeContext() {
       },
       patchForm: vi.fn(),
     },
-    theme: { recordServerSelection: vi.fn(), refresh: vi.fn() },
+    theme: { recordServerSelection: vi.fn(), refresh: vi.fn(), rememberTheme: vi.fn() },
   } as unknown as ApplicationContext;
 }
 
-function createCustomThemePage(settings: Partial<UiSettings> = {}) {
+function createCustomThemePage(
+  settings: Partial<UiSettings> = {},
+  profile?: Parameters<typeof customThemeContext>[0],
+) {
   patchSettings(settings);
-  const context = customThemeContext();
+  const context = customThemeContext(profile);
   const page = mountConfigPageState(context, { pageId: "appearance" });
   return { page, context, props: page.state.configProps };
 }
@@ -218,6 +228,38 @@ it("retires a pending import when a full-config edit begins", async () => {
     kind: "error",
     text: "You have unsaved changes",
   });
+});
+
+it("saves a signed-in import as a personal theme instead of browser storage", async () => {
+  const saved = { application: "saved", theme: { id: "user/tweakcn-amethyst-haze" } };
+  const request = vi.fn(async () => saved);
+  importCustomThemeFromUrl.mockResolvedValueOnce(customThemeFixture("Amethyst-Haze"));
+  const { props, context } = createCustomThemePage(
+    { theme: "claw", customTheme: undefined },
+    { request },
+  );
+  props().onCustomThemeImportUrlChange("amethyst-haze");
+  await props().onImportCustomTheme();
+  flush();
+
+  expect(request).toHaveBeenCalledWith("themes.import", {
+    id: "tweakcn-amethyst-haze",
+    definition: expect.objectContaining({
+      name: "Amethyst-Haze",
+      description: "https://tweakcn.com/themes/Amethyst-Haze",
+    }),
+  });
+  // The saved palette reaches the theme owner before selection, so Claw never flashes.
+  expect(context.theme.rememberTheme).toHaveBeenCalledWith(saved);
+  expect(props().customThemeImportMessage).toEqual({
+    kind: "success",
+    text: "Imported Amethyst-Haze.",
+  });
+  // A fresh settings read holds only the profile selection, never the palette.
+  expect([loadSettings().theme, loadSettings().customTheme]).toEqual([
+    "user/tweakcn-amethyst-haze",
+    undefined,
+  ]);
 });
 
 it("retires an import when the page disconnects", async () => {
