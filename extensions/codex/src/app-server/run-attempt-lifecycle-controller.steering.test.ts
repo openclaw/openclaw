@@ -110,6 +110,43 @@ describe("Codex steering terminal delivery", () => {
     },
   );
 
+  it("reopens correction steering after consuming input submitted before the prior final reply", async () => {
+    await using h = createTerminalReleaseHarness();
+    const inputB = h.steeringQueue.queue("Input B", { debounceMs: 0 });
+    await yieldImmediate();
+    expect(h.request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
+
+    h.controller.recordDynamicToolResult(
+      dynamicToolResult("answer-a", {
+        success: true,
+        terminate: true,
+        finalSourceReplyDelivered: true,
+      }),
+    );
+    expect(h.state.acceptsSteering).toBe(false);
+
+    await h.notify({
+      method: "item/completed",
+      params: {
+        ...scope,
+        item: {
+          type: "userMessage",
+          id: "input-b",
+          clientId: "openclaw:turn-1:steer:1",
+          content: [{ type: "text", text: "Input B" }],
+        },
+      },
+    });
+    await inputB;
+    expect(h.state.acceptsSteering).toBe(true);
+
+    const inputC = h.steeringQueue.queue("Correction C", { debounceMs: 0 });
+    await yieldImmediate();
+    expect(h.request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(2);
+    expect(h.steeringQueue.confirmConsumed("openclaw:turn-1:steer:2")).toBe(true);
+    await inputC;
+  });
+
   it.each([false, true])(
     "keeps authored siblings from ending a steered final batch (independent yield: %s)",
     async (withYield) => {

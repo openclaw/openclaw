@@ -33,6 +33,13 @@ export function createTerminalReleaseHarness(options?: {
     [];
   const state = {
     completed: false,
+    terminalTurnNotificationQueued: false,
+    finalSourceReplyDelivered: false,
+    get acceptsSteering() {
+      return (
+        !this.completed && !this.finalSourceReplyDelivered && !this.terminalTurnNotificationQueued
+      );
+    },
     activeAppServerTurnRequests: 0,
     activeLocalProjections: 0,
     currentTurnHadNonTerminalDynamicToolResult: false,
