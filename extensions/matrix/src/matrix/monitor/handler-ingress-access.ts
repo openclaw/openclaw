@@ -176,6 +176,7 @@ export async function resolveMatrixIngressAccess(config: {
   const roomUsers = roomConfig?.users ?? [];
   const { liveCfg, liveDmAllowFrom, liveGroupAllowFrom } = await resolveLiveAccountAllowlists();
   const accessState = await resolveMatrixMonitorAccessState({
+    cfg: liveCfg,
     allowFrom: liveDmAllowFrom,
     storeAllowFrom,
     dmPolicy,
