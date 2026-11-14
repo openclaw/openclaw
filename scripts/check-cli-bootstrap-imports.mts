@@ -8,6 +8,7 @@ import type { Node as AcornNode } from "acorn";
 import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_ENTRY_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { checkWorkerModuleBudget } from "./check-worker-module-budget.mjs";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
@@ -565,7 +566,13 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
     ...collectCliBootstrapExternalImportErrors(params),
     ...collectGatewayRunChunkBudgetErrors(params),
     ...collectNativeHookRelayBundleErrors(params),
-    ...collectWorkerDeployArtifactErrors(params),
+    // A runtime-only build may skip the sealed bundle; an emitted one is always checked.
+    ...(process.env.OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE === "0" &&
+    !fs.existsSync(
+      path.resolve(params.rootDir ?? process.cwd(), "dist/worker", WORKER_BUNDLE_ENTRY_PATH),
+    )
+      ? []
+      : collectWorkerDeployArtifactErrors(params)),
   ];
   const errors = findings.filter((finding) => typeof finding === "string");
   const limitsFailed = reportLimitViolations(

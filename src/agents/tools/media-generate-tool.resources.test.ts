@@ -31,6 +31,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { observeMediaGenerationSettlement } from "../media-generation-activity.observer.test-support.js";
 import {
   admitMediaHandle,
   resetGeneratedMediaTaskActivityForTests,
@@ -300,8 +301,22 @@ it.each([false, true])(
         delivered: true,
         path: "direct",
       });
-      const completed = vi.spyOn(imageGenerationTaskLifecycle, "completeTaskRun");
-      const failed = vi.spyOn(imageGenerationTaskLifecycle, "failTaskRun");
+      const completeTaskRun = imageGenerationTaskLifecycle.completeTaskRun.bind(
+        imageGenerationTaskLifecycle,
+      );
+      const failTaskRun = imageGenerationTaskLifecycle.failTaskRun.bind(
+        imageGenerationTaskLifecycle,
+      );
+      const completed = vi
+        .spyOn(imageGenerationTaskLifecycle, "completeTaskRun")
+        .mockImplementation(completeTaskRun);
+      const failed = vi
+        .spyOn(imageGenerationTaskLifecycle, "failTaskRun")
+        .mockImplementation(failTaskRun);
+      const settlement = observeMediaGenerationSettlement({
+        completeOperation: completed,
+        failOperation: failed,
+      });
       const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
       let started = 0;
       try {
@@ -346,15 +361,16 @@ it.each([false, true])(
             task: { taskId: asRecord(review.details)?.taskId },
           });
           fixture.resumeProvider.resolve();
-          await vi.waitFor(() => expect(fixture.connections[0]!.generated).toBe(2));
+          fixture.resumeGeneration.resolve();
+          // Await both real terminal publications, not a one-second provider-start race.
+          expect(await settlement.wait(2)).toEqual(["succeeded", "succeeded"]);
+          expect(fixture.connections[0]!.generated).toBe(2);
           expect(failed).not.toHaveBeenCalled();
         });
       } finally {
         fixture.resumeProvider.resolve();
         fixture.resumeGeneration.resolve();
-        await vi.waitFor(() =>
-          expect(completed.mock.calls.length + failed.mock.calls.length).toBe(started),
-        );
+        await settlement.wait(started);
         await acquired.release();
         await vi.waitFor(() => expect(fixture.connections[0]!.disposals).toBe(1));
         clearRuntimeConfigSnapshot();

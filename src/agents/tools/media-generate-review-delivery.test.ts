@@ -7,7 +7,10 @@ import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as channelMessage from "../../channels/message/runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as entryReader from "../../config/sessions/session-entry-read-runtime.js";
 import * as managedMedia from "../../gateway/managed-image-attachments.js";
@@ -220,9 +223,10 @@ it.each(["review", "automatic-retired"] as const)(
       await requester(state);
       const file = (name: string) => state.statePath("media", "tool-image-generation", name);
       await fs.mkdir(path.dirname(file("older.png")), { recursive: true });
-      for (const name of ["older.png", "review.png", "automatic.png"]) {
+      for (const name of ["older.png", "review.png"]) {
         await fs.writeFile(file(name), createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 }));
       }
+      const visibleSend = vi.spyOn(channelMessage, "sendDurableMessageBatchCore");
       const reviewWake = vi
         .spyOn(direct, "sendSubagentAnnounceDirectly")
         .mockRejectedValue(new Error("synthetic reviewer wake failure"));
@@ -271,12 +275,23 @@ it.each(["review", "automatic-retired"] as const)(
           status: "ok",
           statusLabel: "generated",
           result: "Generated one candidate",
+          attachments: [
+            { type: "image", path: file("review.png"), mimeType: "image/png", name: "review.png" },
+          ],
           mediaUrls: [file("review.png")],
         }),
       ).rejects.toThrow("synthetic reviewer wake failure");
       lifecycle.completeTaskRun({ handle: sibling, count: 1 });
       expect(reviewWake).toHaveBeenCalledOnce();
       const reviewerInput = reviewWake.mock.calls[0]?.[0];
+      expect(reviewerInput?.inputAttachments).toEqual([
+        {
+          type: "image",
+          mimeType: "image/png",
+          fileName: "review.png",
+          content: createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 }).toString("base64"),
+        },
+      ]);
       expect(reviewerInput?.internalEvents?.[0]?.result).toContain("held privately for review");
       expect(reviewerInput?.internalEvents?.[0]).not.toHaveProperty("attachments");
       expect(reviewerInput?.internalEvents?.[0]).not.toHaveProperty("mediaUrls");
@@ -298,8 +313,9 @@ it.each(["review", "automatic-retired"] as const)(
       const siblingFiles = siblingCandidate.expectedMediaUrls ?? [];
       expect(reviewerInput?.internalEvents?.[0]?.result).toContain(siblingFiles[0]);
       const old = new Date(Date.now() - 3 * 24 * 60 * 60_000);
+      const originalFiles = (await fs.readdir(path.dirname(file("older.png")))).map(file);
       await Promise.all(
-        [...olderFiles, ...siblingFiles, file("older.png"), file("review.png")].map((filePath) =>
+        [...olderFiles, ...siblingFiles, ...originalFiles].map((filePath) =>
           fs.utimes(filePath, old, old),
         ),
       );
@@ -355,6 +371,14 @@ it.each(["review", "automatic-retired"] as const)(
       expect(
         (await view.execute("inspect-held-candidate", { path: references[0] })).content,
       ).toContainEqual(expect.objectContaining({ type: "image" }));
+      expect(visibleSend).not.toHaveBeenCalled();
+      assert(sibling.requesterTranscript);
+      expect(await loadTranscriptEvents(sibling.requesterTranscript)).not.toContainEqual(
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ role: "assistant" }),
+        }),
+      );
       await expect(
         decide({ action: "deliver", taskId: older.taskId, sessionKey, agentId: "main" }),
       ).resolves.toMatchObject({ details: { status: "superseded" } });
@@ -363,6 +387,11 @@ it.each(["review", "automatic-retired"] as const)(
       ).resolves.toMatchObject({ details: { status: "approved" } });
 
       const automatic = await task();
+      // This later provider output does not exist during the earlier cleanup.
+      await fs.writeFile(
+        file("automatic.png"),
+        createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 }),
+      );
       await expect(
         lifecycle.wakeTaskCompletion({
           handle: automatic,
