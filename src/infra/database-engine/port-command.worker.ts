@@ -14,7 +14,8 @@ import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
 import { getScopedDatabaseEngineSelection } from "./context.js";
-import { readBackupEngine, readBackupEngineImage } from "./physical-store.js";
+import { readBackupEngineImage } from "./physical-store-inspection.js";
+import { readBackupEngine } from "./physical-store.js";
 import {
   assertDatabasePortNamespaceOwner,
   databasePortProviders,
