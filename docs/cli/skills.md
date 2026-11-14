@@ -169,6 +169,7 @@ nor the acknowledgement overrides `block` or a policy failure.
 Notes:
 
 Press Ctrl-C to cancel a pending search or Trending request without printing results afterward.
+The same cancellation applies to pending `verify` and `verify --card` reads.
 
 | Flag/behavior                    | Description                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
