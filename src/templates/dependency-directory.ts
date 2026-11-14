@@ -15,7 +15,7 @@ import {
 } from "./source-limits.js";
 
 export type TemplateDirectorySnapshot = {
-  files: Array<{ path: string; byteLength: number; digest: string }>;
+  files: Array<{ path: string; byteLength: number; digest: string; executable: boolean }>;
   byteLength: number;
   digest: string;
 };
@@ -97,6 +97,7 @@ export async function snapshotTemplateDependencyDirectory(params: {
       path,
       byteLength: read.buffer.byteLength,
       digest: digestTemplateBytes(read.buffer),
+      executable: (read.stat.mode & 0o111) !== 0,
     });
   }
   return { files, byteLength, digest: digestTemplateValue(files) };
@@ -134,7 +135,7 @@ export async function materializeTemplateDependencyDirectory(params: {
         throw new Error("Bundled dependency changed while preparing installation.");
       }
       await mkdir(join(directory, dirname(file.path)), { recursive: true });
-      await target.create(file.path, read.buffer);
+      await target.create(file.path, read.buffer, { mode: file.executable ? 0o700 : 0o600 });
     }
     const afterCopy = await snapshotTemplateDependencyDirectory(params);
     if (afterCopy.digest !== params.snapshot.digest) {

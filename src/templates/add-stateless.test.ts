@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { chmod, cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -103,7 +104,7 @@ describe("stateless Template Add", () => {
     });
   };
 
-  it("builds a declared skill folder and discovers its exact supporting bytes after Add", async () => {
+  it("builds a declared skill folder and preserves supporting bytes and executability after Add", async () => {
     const root = path.join(stateDir, "source");
     const skill = path.join(root, "bundles", "incident-guide");
     await mkdir(path.join(skill, "references"), { recursive: true });
@@ -113,6 +114,9 @@ describe("stateless Template Add", () => {
     );
     const supporting = Buffer.from([0, 255, 17, 128]);
     await writeFile(path.join(skill, "references", "checklist.txt"), supporting);
+    await writeFile(path.join(skill, "check.sh"), "#!/bin/sh\nprintf template-script-ok\n", {
+      mode: 0o755,
+    });
     await mkdir(path.join(root, "undeclared"));
     await writeFile(
       path.join(root, "undeclared", "SKILL.md"),
@@ -134,6 +138,7 @@ describe("stateless Template Add", () => {
     expect(built.files).toEqual([
       "CLAW.md",
       "bundles/incident-guide/SKILL.md",
+      "bundles/incident-guide/check.sh",
       "bundles/incident-guide/references/checklist.txt",
       "package.json",
     ]);
@@ -150,6 +155,19 @@ describe("stateless Template Add", () => {
         path.join(plan.agent.workspace, "skills", "incident-guide", "references", "checklist.txt"),
       ),
     ).toEqual(supporting);
+    if (process.platform !== "win32") {
+      expect((await stat(path.join(artifact.packageRoot, "package.json"))).mode & 0o777).toBe(
+        0o644,
+      );
+      const installed = path.join(plan.agent.workspace, "skills", "incident-guide");
+      expect((await stat(path.join(installed, "check.sh"))).mode & 0o100).toBe(0o100);
+      expect((await stat(path.join(installed, "references", "checklist.txt"))).mode & 0o111).toBe(
+        0,
+      );
+      expect(execFileSync(path.join(installed, "check.sh"), { encoding: "utf8" })).toBe(
+        "template-script-ok",
+      );
+    }
     const loaded = await prepareWorkspaceSkillEntries(plan.agent.workspace, {
       config,
       workspaceOnly: true,
@@ -255,7 +273,7 @@ describe("stateless Template Add", () => {
     }
   });
 
-  it.each(["bytes", "membership"])(
+  it.each(process.platform === "win32" ? ["bytes", "membership"] : ["bytes", "membership", "mode"])(
     "refuses a bundled skill whose %s changed after Add review",
     async (change) => {
       const root = path.join(stateDir, "source");
@@ -274,10 +292,14 @@ describe("stateless Template Add", () => {
       source = read;
       const plan = await buildPlan();
       expect(plan.blockers).toEqual([]);
-      await writeFile(
-        path.join(skill, change === "membership" ? "added.txt" : "SKILL.md"),
-        "changed after review",
-      );
+      if (change === "mode") {
+        await chmod(path.join(skill, "SKILL.md"), 0o700);
+      } else {
+        await writeFile(
+          path.join(skill, change === "membership" ? "added.txt" : "SKILL.md"),
+          "changed after review",
+        );
+      }
       const result = await apply(plan);
       expect(result.status).toBe("partial");
       expect(config.agents.entries).not.toHaveProperty("checked-agent");
