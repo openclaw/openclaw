@@ -66,8 +66,17 @@ it("applies wildcard sender restrictions although a fork has no sender", async (
 
 describe("assertSessionForkRunSucceeded", () => {
   type Result = Parameters<typeof assertSessionForkRunSucceeded>[0];
-  const review = (meta: Omit<Result["meta"], "durationMs">, payloads?: Result["payloads"]) =>
-    expect(() => assertSessionForkRunSucceeded({ meta: { durationMs: 1, ...meta }, payloads }));
+  const review = (
+    meta: Omit<Result["meta"], "durationMs">,
+    payloads?: Result["payloads"],
+    assertSourceCurrent?: () => void,
+  ) =>
+    expect(() =>
+      assertSessionForkRunSucceeded(
+        { meta: { durationMs: 1, ...meta }, payloads },
+        assertSourceCurrent,
+      ),
+    );
   it("does not fail a fork whose tool calls were denied or errored", () => {
     const warning = setReplyPayloadMetadata(
       { isError: true, text: "⚠️ skill_workshop failed: View it first." },
@@ -94,5 +103,18 @@ describe("assertSessionForkRunSucceeded", () => {
       "529 overloaded",
     );
     review({ aborted: true }).toThrow("aborted");
+  });
+
+  it("retains a source fence instead of replacing it with terminal result text", () => {
+    const sourceFailure = Object.assign(new Error("Completed-turn transcript anchor changed"), {
+      name: "SessionTranscriptReadFenceError",
+    });
+    review(
+      { error: { kind: "incomplete_turn", message: "admitted run authority is inactive" } },
+      undefined,
+      () => {
+        throw sourceFailure;
+      },
+    ).toThrow(sourceFailure);
   });
 });

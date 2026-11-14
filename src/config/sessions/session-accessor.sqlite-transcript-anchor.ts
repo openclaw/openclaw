@@ -26,7 +26,7 @@ import {
 import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import {
-  sameTranscriptEntryAnchor,
+  transcriptEntryAnchorMismatch,
   type TranscriptEntryAnchor,
 } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -89,15 +89,14 @@ export function assertSessionTranscriptContextAnchorInDatabase(
   if (expectedAuthority) {
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
-      selectActiveTranscriptEntryAnchor(params)
-        .innerJoin(
-          canonicalSessionValidationQuery(database, { metadata: true })
-            .where("session_nodes.session_key", "=", through.sessionKey)
-            .as("authority"),
-          "authority.current_session_id",
-          "identity.session_id",
+      canonicalSessionValidationQuery(database, { metadata: true })
+        .where("session_nodes.session_key", "=", through.sessionKey)
+        .leftJoin(
+          selectActiveTranscriptEntryAnchor(params).select("identity.session_id").as("anchor"),
+          "anchor.session_id",
+          "session_nodes.current_session_id",
         )
-        .selectAll("authority"),
+        .selectAll("anchor"),
     );
     const entry =
       row && validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read");
@@ -110,15 +109,22 @@ export function assertSessionTranscriptContextAnchorInDatabase(
         "Session transcript source was deleted, replaced, or changed lifecycle or permissions.",
       );
     }
+    const sequence = row?.seq;
     current = createTranscriptEntryAnchor({
       ...params,
-      row: row && { ...row, generation: row.generation ?? null },
+      row:
+        sequence == null
+          ? undefined
+          : { ...row, seq: sequence, generation: row.generation ?? null },
     });
   } else {
     current = readActiveTranscriptEntryAnchorInTransaction(params);
   }
-  if (!sameTranscriptEntryAnchor(through, current)) {
-    throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
+  const mismatch = transcriptEntryAnchorMismatch(through, current);
+  if (mismatch) {
+    throw new SessionTranscriptReadFenceError(
+      `Completed-turn transcript anchor changed (${mismatch})`,
+    );
   }
 }
 
