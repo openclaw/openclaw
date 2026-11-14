@@ -150,7 +150,8 @@ available on the computer that runs the claw, and the Gateway refuses it
 
 A reset is refused while a move to new keys is not published yet
 (`rebind_unpublished`: run `openclaw id publish --code <link-code>` first), and a move to new
-keys is refused while a reset is not published yet (`reset_unpublished`).
+keys, or another reset, is refused while a reset is not published yet (`reset_unpublished`);
+the Gateway keeps publishing it on its own.
 
 If the command can't confirm the outcome, it prints the kit anyway and exits with code **2**:
 keep the kit until `openclaw id status` shows which owner key the claw has.

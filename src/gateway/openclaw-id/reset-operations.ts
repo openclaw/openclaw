@@ -69,18 +69,23 @@ function linkedRecord(record: StoredClaw | undefined): LinkedRecord | AuthorityR
     return refusal("not_linked", "this claw is not linked");
   }
   const bindingSeq = record.binding.body.binding_seq;
-  // Discovery still holds the binding a re-bind replaced, with another K_gw: a RootReset signed
-  // by the new K_gw would not chain to it. Publishing the move first keeps the reset verifiable.
+  // Discovery accepts a reset only from the binding it stores. Until the current binding is
+  // confirmed published, this computer can't tell which one that is (a descriptor can land
+  // before its snapshot fails), so a reset waits for the earlier move or reset to publish.
   if (
     record.discovery.owner_account_id &&
     record.discovery.published_binding_seq < bindingSeq &&
-    bindingSeq > 1 &&
-    pendingReset(record) === undefined
+    bindingSeq > 1
   ) {
-    return refusal(
-      "rebind_unpublished",
-      "publish the move to new keys first (openclaw id publish --code <link-code>), then reset",
-    );
+    return pendingReset(record)
+      ? refusal(
+          "reset_unpublished",
+          "the last owner reset isn't published yet: wait for it (openclaw id status), then reset",
+        )
+      : refusal(
+          "rebind_unpublished",
+          "publish the move to new keys first (openclaw id publish --code <link-code>), then reset",
+        );
   }
   return {
     ...record,
@@ -90,10 +95,7 @@ function linkedRecord(record: StoredClaw | undefined): LinkedRecord | AuthorityR
   };
 }
 
-/**
- * The reset evidence of the current binding while Discovery has not published it. A second
- * reset before then chains to the same published predecessor, the binding Discovery stores.
- */
+/** The reset evidence of the current binding while Discovery has not confirmed it. */
 export function pendingReset(record: StoredClaw): RootResetEvidence | undefined {
   const bindingSeq = record.binding?.body.binding_seq;
   return record.reset?.statement.body.binding_seq === bindingSeq &&
@@ -243,7 +245,6 @@ export function createResetOperations(owner: {
           },
           gateway,
         );
-        const previous = pendingReset(record);
         assertCurrent?.();
         await commit(
           {
@@ -251,8 +252,8 @@ export function createResetOperations(owner: {
             authority: state,
             binding: binding.statement,
             reset: {
-              previous_root_pub: previous?.previous_root_pub ?? record.authority.anchor.root_pub,
-              previous_binding: previous?.previous_binding ?? record.binding,
+              previous_root_pub: record.authority.anchor.root_pub,
+              previous_binding: record.binding,
               statement,
             },
             invite_reports: {},
