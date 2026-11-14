@@ -19,11 +19,10 @@ import {
   transformWorkerDarwinNativeLoader,
   type WorkerNativeAsset,
 } from "./fs-safe-worker-native-assets.mts";
+import { exactIdFilter } from "./rolldown-id-filter.mts";
 
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
 export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
-
-import { exactIdFilter } from "./rolldown-id-filter.mts";
 
 const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path8.default.join(__dirname, "..");
     packageJSON = require(import_path8.default.join(packageRoot, "package.json"));
