@@ -39,6 +39,7 @@ describe("blind system prompt", () => {
       buildAgentSystemPrompt({
         // The configured spelling is a symlink; bootstrap files report the resolved path.
         workspaceDir: alias,
+        canonicalWorkspaceDir: real,
         runtimeInfo: runtimeInfo(alias, blind),
         contextFiles: [{ path: path.join(real, "AGENTS.md"), content: "Use the house style." }],
         workspaceNotes: [`Notes live in ${alias}/notes.`],
@@ -54,7 +55,7 @@ describe("blind system prompt", () => {
       "session=agent:relay-check:subagent:5b1c",
       `repo=${alias}`,
       `Working directory: ${alias}`,
-      path.join(real, "AGENTS.md"),
+      "## AGENTS.md",
     ]) {
       expect(ordinary).toContain(fact);
     }
@@ -77,7 +78,7 @@ describe("blind system prompt", () => {
     expect(blind).toContain(
       "Working directory: <workspace>\n<workspace> stands for a withheld path; use paths relative to the working directory.",
     );
-    expect(blind).toContain("## <workspace>/AGENTS.md");
+    expect(blind).toContain("## AGENTS.md");
     expect(blind).toContain("Use the house style.");
     expect(blind).toContain("Notes live in <workspace>/notes.");
     expect(blind).toContain(
