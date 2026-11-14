@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { gatewayCredentialScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatConfigReadFailureForCli } from "../cli/config-validation-output.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
 import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
@@ -78,6 +79,11 @@ async function runSetupWizardOnce(
   const initialAuthority = await readSetupConfigAuthority();
   const snapshot = initialAuthority.snapshot;
   let assertConfigCurrent = initialAuthority.assertCurrent;
+  const readFailure = formatConfigReadFailureForCli(snapshot);
+  if (readFailure) {
+    await prompter.outro(readFailure);
+    return runtime.exit(1);
+  }
   let currentSetupSnapshot = snapshot;
   let baseConfig: OpenClawConfig = snapshot.valid
     ? (snapshot.runtimeConfig ?? snapshot.config)
@@ -239,7 +245,8 @@ async function runSetupWizardOnce(
           const latest = await readSetupConfigFileSnapshot();
           if (!latest.valid) {
             throw new Error(
-              "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+              formatConfigReadFailureForCli(latest) ??
+                "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
             );
           }
           const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
@@ -278,7 +285,8 @@ async function runSetupWizardOnce(
     const migratedSnapshot = migratedAuthority.snapshot;
     if (!migratedSnapshot.valid) {
       throw new Error(
-        "Migration produced an invalid OpenClaw config. Run `openclaw doctor --fix` to apply supported repairs.",
+        formatConfigReadFailureForCli(migratedSnapshot) ??
+          "Migration produced an invalid OpenClaw config. Run `openclaw doctor --fix` to apply supported repairs.",
       );
     }
     currentSetupSnapshot = migratedSnapshot;

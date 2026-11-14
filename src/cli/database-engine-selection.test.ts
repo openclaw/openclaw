@@ -94,6 +94,12 @@ describe("one-shot CLI engine selection", () => {
     ["recommendation mutation", ["onboard", "recommendations", "refresh"]],
     ["include"],
     ["missing include", undefined, "CONFIG_READ_FAILED", "Config could not be read at"],
+    [
+      "scripted setup missing include",
+      ["setup", "--non-interactive", "--accept-risk", "--json"],
+      "CONFIG_READ_FAILED",
+      "Config could not be read at",
+    ],
   ])(
     "preserves %s failure diagnostics before selecting storage",
     async (

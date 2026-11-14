@@ -9,6 +9,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatConfigReadFailureForCli } from "../cli/config-validation-output.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -229,6 +230,12 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
 
     const prepared = await readConfigFileSnapshotForWrite();
     const snapshot = prepared.snapshot;
+    const readFailure = formatConfigReadFailureForCli(snapshot);
+    if (readFailure) {
+      outro(readFailure);
+      runtime.exit(1);
+      return;
+    }
     // Keep only path ownership across the interactive wizard. Each commit re-reads under
     // the mutation lock and must use that fresh snapshot's env/include conflict facts.
     const configWriteOwnership = {

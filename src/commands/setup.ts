@@ -7,6 +7,10 @@ import {
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  formatConfigReadFailureForCli,
+  writeInvalidConfigCliJson,
+} from "../cli/config-validation-output.js";
 import { runWithLocalStateOwner, type OwnerRequest } from "../cli/local-state-owner.js";
 import {
   configIncludeOwnsAgentRoster,
@@ -18,7 +22,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import { displayPath, isRecord, resolveUserPath, shortenHomePath } from "../utils.js";
+import { displayPath, isRecord, resolveUserPath } from "../utils.js";
 
 type SetupOptions = { workspace?: string; skipBootstrap?: boolean; json?: boolean };
 
@@ -44,21 +48,15 @@ async function readSetupConfig(
   const io = createConfigIO();
   const prepared = await io.readConfigFileSnapshotForWrite(read);
   const snapshot = prepared.snapshot;
-  if (!snapshot.exists || snapshot.valid) {
+  if (snapshot.valid) {
     return { ...prepared, configPath: io.configPath };
   }
   if (opts?.json) {
-    const [{ formatCliJsonFailure }, { normalizeConfigIssues }] = await Promise.all([
-      import("../cli/failure-output.js"),
-      import("../config/issue-format.js"),
-    ]);
-    writeRuntimeJson(runtime, {
-      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(io.configPath)}`),
-      issues: normalizeConfigIssues(snapshot.issues),
-    });
+    writeInvalidConfigCliJson(runtime, snapshot);
   }
   runtime.error(
-    `Config invalid at ${(await import("../config/logging.js")).formatConfigFilePath(io.configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
+    formatConfigReadFailureForCli(snapshot) ??
+      `Config invalid at ${(await import("../config/logging.js")).formatConfigFilePath(io.configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
   );
   runtime.exit(1);
   return undefined;
