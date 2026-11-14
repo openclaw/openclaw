@@ -67,6 +67,9 @@ suite.define(() => {
         const region = page.getByRole("region", { name: "Prompt preview", exact: true });
         await region.focus();
         await page.keyboard.press("End");
+        expect(await region.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
+          "solid",
+        );
         await expect.poll(() => region.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         expect(await preview.textContent()).toContain("End of fictional garden instructions.");
         await input.fill(prompt + "\nEdited.");
