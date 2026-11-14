@@ -5,7 +5,6 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
@@ -41,33 +40,24 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
   const diskSpace = (bavail: number) =>
     vi.spyOn(fsSync, "statfsSync").mockReturnValue(f.statfsFixture({ bavail, bsize: 1024 * 1024 }));
 
-  it("reports low disk space before target lookup and persists it after admission", async () => {
+  it("refuses a package update whose install volume cannot hold the staged package", async () => {
     await f.mockPackageInstallAtCaseDir();
-    const historyBefore = f.listUpdateRuns();
+    vi.mocked(f.fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
+      version: /^\d/u.test(target) ? target : "9999.0.0",
+      nodeEngine: ">=22.19.0",
+      unpackedSize: 100 * 1024 * 1024,
+    }));
     diskSpace(256);
-    const targetLookups: Array<{ output: string; history: UpdateRunRecord[] }> = [];
-    const resolveTag = vi.mocked(f.resolveNpmChannelTag).getMockImplementation()!;
-    vi.mocked(f.resolveNpmChannelTag).mockImplementation(async (...args) => {
-      targetLookups.push({
-        output: f.getLogOutput(),
-        history: f.listUpdateRuns(),
-      });
-      return await resolveTag(...args);
-    });
 
-    await f.updateCommand({ yes: true });
+    await expect(f.updateCommand({ yes: true, json: true })).rejects.toMatchObject({ code: 1 });
 
-    expect(targetLookups).toContainEqual({
-      output: expect.stringContaining("Low disk space near"),
-      history: historyBefore,
+    expect(f.lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "preflight-insufficient-space",
+      run: { origin: { cause: "disk-full" } },
     });
-    expectLatestStep({
-      step: "warning:disk-space-preflight",
-      status: "completed",
-      detail: expect.stringContaining("256 MiB available"),
-    });
-    f.expectPackageInstallSpec("openclaw@9999.0.0");
-    expect(f.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expect(latestRun()).toMatchObject({ status: "failed", reason: "preflight-insufficient-space" });
+    expect(f.packageInstallCommandCall()).toBeUndefined();
   });
 
   it("records runtime retention while it runs and settles its outcome", async () => {
@@ -249,7 +239,7 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
       }),
       ...historyBefore,
     ]);
-    expect(f.getErrorOutput()).toContain("activation database backup or rollback cannot fit");
+    expect(f.getErrorOutput()).toContain("Update refused: Update database backup needs ");
     expect(f.getErrorOutput()).toContain("(33554432 bytes) is available");
     expect(f.getErrorOutput()).toContain("SQLite family");
   });

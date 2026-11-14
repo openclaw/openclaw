@@ -181,11 +181,8 @@ export async function assessInitialUpdateSnapshotCapacity(
         ...step,
         durationMs: Date.now() - started,
         exitCode: 1,
-        stderrTail: [
-          "snapshot-capacity-insufficient: activation database backup or rollback cannot fit before validation.",
-          error.message,
-          ...diagnostics,
-        ].join("\n"),
+        // The first line is the operator's instruction; the update refuses on it unchanged.
+        stderrTail: [`Update refused: ${error.message}`, ...diagnostics].join("\n"),
       };
     }
     return {

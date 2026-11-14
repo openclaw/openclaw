@@ -2,6 +2,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import {
   formatUpdateActivationTimeoutGuidance,
+  isUpdatePrerequisiteRefusal,
   isVerifiedUpdateRollback,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
   UPDATE_FOREIGN_DESTINATION_REASON,
@@ -279,6 +280,13 @@ export function renderUpdateRunReport(
     (run.reason === "node-runtime-preflight" ||
       run.reason === "preflight-node-runtime-incompatible");
   const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
+  // A fresh prerequisite refusal leads with its producer's refusal block: the problem line,
+  // then the owner's recovery steps. Saved records keep the historical-advice layout below.
+  const refusalBlock =
+    run.status === "failed" && isUpdatePrerequisiteRefusal(run.reason) && opts.nextAction
+      ? opts.nextAction.split("\n\n")[0]?.split("\n")
+      : undefined;
+  const refusalLine = refusalBlock?.[0]?.match(/^Update refused: .+/u)?.[0];
   let headline: string;
   switch (run.status) {
     case "succeeded": {
@@ -297,9 +305,11 @@ export function renderUpdateRunReport(
         ? "ℹ️ OpenClaw abandoned update reconciled."
         : run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
           ? `ℹ️ OpenClaw update abandoned: ${reason}.`
-          : runtimeCheckFailed
-            ? "⚠️ OpenClaw could not complete the update. A required system check failed."
-            : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
+          : refusalLine
+            ? `⚠️ ${refusalLine}`
+            : runtimeCheckFailed
+              ? "⚠️ OpenClaw could not complete the update. A required system check failed."
+              : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -536,7 +546,22 @@ export function renderUpdateRunReport(
               ].filter((line): line is string => Boolean(line)),
             ),
           ];
+  // The terminal record owner stamps the cause; the Control UI loads this renderer.
+  if (run.status !== "succeeded" && run.origin.cause) {
+    lines.unshift(`Cause: ${run.origin.cause}`);
+  }
   const next = hints.at(-1);
+  if (refusalLine) {
+    // The terminal shows only the instruction; the saved report keeps every detail.
+    const details = ["Details:", `Reason code: ${reason}`, ...lines, ...hints].join("\n");
+    const steps = refusalBlock?.slice(1) ?? [];
+    const lead = bounded([headline, ...steps].join("\n"), 1100);
+    return {
+      headline,
+      lines: steps,
+      markdown: `${lead}\n\n${bounded(details, markdownLimit - lead.length - 2)}`,
+    };
+  }
   if (runtimeCheckFailed || run.reason === "doctor-maintenance-pending") {
     // Keep the owner's selected action ahead of the diagnostic dump, including
     // historical-advice qualifications. Neither this layout nor truncation selects recovery.

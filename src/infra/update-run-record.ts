@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/gateway-protocol/src/schema/update-runs.js";
+import { classifyUpdateRunCause } from "./update-run-cause.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
@@ -202,6 +203,11 @@ export function finishUpdateRunRecord(
   if (result.nextAction !== undefined) {
     record.origin.nextAction = result.nextAction;
   }
+  record.origin.cause = classifyUpdateRunCause({
+    status: record.status,
+    reason: record.reason,
+    facts: record.steps.flatMap((step) => step.failureFacts ?? []),
+  });
   record.finishedAtMs = now;
   record.after = { ...record.after, ...result.after };
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;

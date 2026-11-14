@@ -33,6 +33,24 @@ export const UPDATE_RUN_STEP_STATUSES = [
   "skipped",
 ] as const;
 
+/** Why a finished update attempt ended. A closed set, so reports never redact it. */
+export const UPDATE_RUN_CAUSES = [
+  "none",
+  "node-unsupported",
+  "git-unsupported",
+  "disk-full",
+  "permission-denied",
+  "network",
+  "config-invalid",
+  "install-failed",
+  "state-migration-failed",
+  "plugin-failed",
+  "service-failed",
+  "interrupted",
+  "refused",
+  "unknown",
+] as const;
+
 export const UPDATE_NPM_ERROR_CODES = [
   "ETARGET",
   "E404",

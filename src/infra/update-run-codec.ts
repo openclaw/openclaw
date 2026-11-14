@@ -319,6 +319,8 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     "candidateVersion",
     "installedVersion",
     "fallbackReason",
+    // A closed enum: halving it would make the stored record fail validation on read.
+    "cause",
   ]);
   const minimumDiagnostics = JSON.stringify(
     mapJsonText(diagnostics, (text, key) => (key && preservedTextFields.has(key) ? text : "")),
