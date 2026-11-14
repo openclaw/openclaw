@@ -267,7 +267,7 @@ function validatePublicationEvidence(options, evidence) {
         ? "v" + sourceAdmission.projection.version
         : undefined);
     if (
-      !publicationAdmission ||
+      (manifest.publicationAdmissionContract && !publicationAdmission) ||
       (!expectedPublicationSelection &&
         !expectedPublicationOperation &&
         !expectedCoreNpmPublication) ||
