@@ -8,6 +8,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   runProviderDynamicModel: vi.fn(),
 }));
 
+// mock-isolation: Candidate construction does not load provider normalization runtimes.
 vi.mock("./model-discovery-normalize.js", () => ({
   createDiscoveredAgentModelNormalizer: () => (value: Model) => ({
     ...value,
