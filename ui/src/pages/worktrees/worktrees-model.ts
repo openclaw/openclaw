@@ -263,6 +263,15 @@ export class WorktreesModel {
     }
   }
 
+  setCreateRepository(repoRoot: string) {
+    if (repoRoot.trim() !== this.createRepoRoot.trim()) {
+      this.branchesRequest.cancel();
+      this.update({ createRepoRoot: repoRoot, createBaseRef: "", createBranches: [] });
+    } else {
+      this.update({ createRepoRoot: repoRoot });
+    }
+  }
+
   async loadCreateBranches() {
     this.branchesRequest.cancel();
     const scope = this.gateway.capture();

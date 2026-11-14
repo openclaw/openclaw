@@ -33,6 +33,7 @@ import {
 import { sessionHubTabs } from "../sessions/session-hub-tabs.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
+import { WorktreeReferenceChoice } from "./reference-choice.tsx";
 import { WorktreesModel } from "./worktrees-model.ts";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
@@ -94,6 +95,13 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
     await Promise.resolve();
     return present(captured, operation, result, retired);
   }
+  const repositories = createMemo(() =>
+    [...new Set(view().records.map((record) => record.repoRoot))].map((value) => ({
+      value,
+      label: pathDisplayName(value),
+      description: value,
+    })),
+  );
   const operation = () => pending().operation() ?? view().operation;
   const busy = () => operation() !== null || view().operationPending;
 
@@ -174,20 +182,17 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
               <SettingsRow
                 title={t("worktrees.repo")}
                 control={
-                  <input
-                    class="settings-input"
-                    type="text"
-                    aria-label={t("worktrees.repo")}
-                    disabled={operation() === "create"}
+                  <WorktreeReferenceChoice
+                    id="worktrees-create-repo"
+                    label={t("worktrees.repo")}
                     value={view().createRepoRoot}
-                    onInput={(event) => model.update({ createRepoRoot: event.currentTarget.value })}
-                    onChange={(event) => {
-                      model.update({
-                        createRepoRoot: event.currentTarget.value,
-                        createBaseRef: "",
-                      });
-                      void model.loadCreateBranches();
-                    }}
+                    options={repositories()}
+                    emptyLabel={t("worktrees.chooseRepository")}
+                    customLabel={t("worktrees.customRepository")}
+                    scope={scope()}
+                    disabled={operation() === "create"}
+                    onInput={(value) => model.setCreateRepository(value)}
+                    onCommit={() => void model.loadCreateBranches()}
                   />
                 }
               />
@@ -209,21 +214,17 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                 title={t("worktrees.baseBranch")}
                 control={
                   <>
-                    <input
-                      class="settings-input"
-                      type="text"
-                      aria-label={t("worktrees.baseBranch")}
-                      disabled={operation() === "create"}
-                      placeholder={t("worktrees.baseBranchPlaceholder")}
-                      list="worktrees-create-branches"
+                    <WorktreeReferenceChoice
+                      id="worktrees-base-ref"
+                      label={t("worktrees.baseBranch")}
                       value={view().createBaseRef}
-                      onInput={(event) =>
-                        model.update({ createBaseRef: event.currentTarget.value })
-                      }
+                      options={view().createBranches.map((value) => ({ value, label: value }))}
+                      emptyLabel={t("worktrees.baseBranchPlaceholder")}
+                      customLabel={t("worktrees.customRef")}
+                      scope={view().createRepoRoot}
+                      disabled={operation() === "create"}
+                      onInput={(createBaseRef) => model.update({ createBaseRef })}
                     />
-                    <datalist id="worktrees-create-branches">
-                      <For each={view().createBranches}>{(name) => <option value={name} />}</For>
-                    </datalist>
                     {view().createBranchesRefreshing ? (
                       <span role="status">{t("common.refreshing")}</span>
                     ) : undefined}
