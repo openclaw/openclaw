@@ -152,7 +152,15 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
             true,
           ),
         };
-        return underlying(model, context, sharingOptions);
+        // SIWC runs on the Platform route, where the transport's session_id affinity
+        // header is off by default and the catalog guard drops a configured opt-in. The
+        // subscription backend keys its prompt cache on that header, so opt this route in;
+        // the transport still honours caller headers and cache-disabled turns.
+        const sharingModel =
+          model.compat && "sendSessionIdHeader" in model.compat
+            ? model
+            : { ...model, compat: { ...model.compat, sendSessionIdHeader: true } };
+        return underlying(sharingModel, context, sharingOptions);
       },
     };
   }
