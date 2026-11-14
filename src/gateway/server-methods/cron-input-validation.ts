@@ -27,11 +27,13 @@ import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-targe
 import {
   acquireCronInferenceAuthorization,
   captureCronInferenceBinding,
+  resolveCronInferenceModel,
 } from "../../cron/inference-binding.runtime.js";
 import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
 } from "../../cron/isolated-agent/delivery-target.js";
+import { isCronGmailHookSessionTurn } from "../../cron/isolated-agent/model-selection.js";
 import { resolveCarriedCronModelSelection } from "../../cron/isolated-agent/session-carried-model.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -46,13 +48,11 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveHookExternalContentSource } from "../../security/external-content-source.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { readGatewayDeviceSourceAuthority } from "../device-revocation.js";
@@ -385,11 +385,10 @@ export async function captureCronCreatorSession(
               tryResolveAmbientOwnerAgentId(cfg),
             ),
             model: job.payload.model,
-            isGmailHook:
-              (job.payload.externalContentSource ??
-                resolveHookExternalContentSource(
-                  parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
-                )) === "gmail",
+            isGmailHook: isCronGmailHookSessionTurn(
+              job.payload.externalContentSource,
+              executionSessionKey,
+            ),
             sessionEntry: callerScope ? creatorSession : undefined,
             executionSessionEntry: executionSession?.entry,
             runtimeSessionEntry,
@@ -495,6 +494,65 @@ export async function captureCronCreatorSession(
   }
 }
 
+/**
+ * An edit records no account its caller did not select, so it must not store an enabled job
+ * whose every run the unrecorded-account guard refuses. Create-time capture resolves that
+ * account from the same inputs the run uses; a resolved stored account proves the refusal.
+ */
+async function assertCronEditKeepsRunnableInference(
+  job: CronStoredJob,
+  cfg: OpenClawConfig,
+  agentId: string,
+): Promise<void> {
+  if (
+    job.inferenceBinding ||
+    !job.enabled ||
+    job.sessionTarget === "main" ||
+    job.payload.kind !== "agentTurn"
+  ) {
+    return;
+  }
+  const executionKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
+  const executionEntry = executionKey
+    ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
+    : undefined;
+  const selection = {
+    cfg,
+    agentId,
+    model: job.payload.model,
+    // Session-target runs read Gmail hook policy from their target, as create does.
+    isGmailHook: isCronGmailHookSessionTurn(job.payload.externalContentSource, executionKey ?? ""),
+    executionSessionEntry: executionEntry,
+  };
+  let unrecorded: Awaited<ReturnType<typeof captureCronInferenceBinding>>;
+  let modelRef: string;
+  try {
+    unrecorded = await captureCronInferenceBinding({
+      ...selection,
+      // A session-target run uses its target conversation's account selection.
+      sessionEntry: executionEntry,
+      runtimeSessionEntry: await loadCronRuntimeSessionEntry({
+        cfg,
+        job,
+        agentId,
+        executionEntry,
+      }),
+    });
+    if (!unrecorded) {
+      return;
+    }
+    const { model } = await resolveCronInferenceModel(selection);
+    modelRef = `${model.provider}/${model.model}`;
+  } catch {
+    // Not this guard's refusal: the run reports any other resolution failure itself.
+    return;
+  }
+  throw new Error(
+    `This edit would leave the automation without a recorded inference account, so runtime ${unrecorded.runtime} would refuse every run with stored account ${unrecorded.profileId}. ` +
+      `Select the account in the edit with model ${modelRef}@${unrecorded.profileId}, or disable the automation.`,
+  );
+}
+
 /** Only an explicitly selected account changes an existing job’s inference ownership. */
 export async function captureCronUpdatedInferenceBinding(
   nextJob: CronStoredJob,
@@ -537,6 +595,7 @@ export async function captureCronUpdatedInferenceBinding(
         disposeInferenceAuthorization: () => authority.dispose(),
       };
     }
+    await assertCronEditKeepsRunnableInference(nextJob, cfg, agentId);
     return undefined;
   }
   // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
