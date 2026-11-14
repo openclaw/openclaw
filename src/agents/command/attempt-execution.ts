@@ -60,6 +60,10 @@ import {
   isSubagentAnnounceCompletionHandoff,
   isTrustedSubagentCompletionHandoffForRun,
 } from "../subagents/announce/subagent-announce-handoff.js";
+import {
+  toRelayOnlyCompletionInternalEvents,
+  toRelayOnlyCompletionText,
+} from "../subagents/completion/subagent-completion-instructions.js";
 import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-session-store.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
@@ -231,6 +235,18 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       cliExecutionProvider,
       completionNeedsMessageDelivery,
     });
+  // A restricted completion relay runs without an execution surface (tools
+  // disabled or a message-only allowlist). The shared continuation guidance in
+  // the announce prompt would then invite blocked tool attempts and let the model
+  // launder this turn's authority loss into a reported child failure, so rescope
+  // it to relay-only wording that keeps the child outcome and records follow-up.
+  const completionRelayOnly = isSubagentAnnounceHandoff && !completionRetainsRequesterTools;
+  const relayPrompt = completionRelayOnly
+    ? toRelayOnlyCompletionText(effectivePrompt)
+    : effectivePrompt;
+  const relayInternalEvents = completionRelayOnly
+    ? toRelayOnlyCompletionInternalEvents(params.opts.internalEvents)
+    : params.opts.internalEvents;
   // Collector output is mandatory result transport, even on a narrowed tool
   // surface. The CLI grant is minted from this list and enforced exactly on the
   // loopback server, so a plugin-launched or cron-continued collector needs the
@@ -385,7 +401,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
           : resolvedPrompt;
         const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
           ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
-          : effectivePrompt;
+          : relayPrompt;
         const cliTranscriptPrompt =
           continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
             ? continuationTranscriptBody
@@ -460,7 +476,8 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             params.sessionAgentId,
           );
         await prepareCliSessionBinding();
-        const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
+        const internalEvents = relayInternalEvents;
+        const { runtimeContextFragments: supplementalContext } = params.opts;
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.
         let result: EmbeddedAgentRunResult;
@@ -647,7 +664,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
       agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
-    prompt: effectivePrompt,
+    prompt: relayPrompt,
     transcriptPrompt: continuationTranscriptBody,
     // CLI retries cannot replay a persisted turn after orphan-user repair removes it.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
@@ -677,7 +694,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       ? params.opts.trustedInternalHandoff
       : undefined,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
-    internalEvents: params.opts.internalEvents,
+    internalEvents: relayInternalEvents,
     runtimeContextFragments: params.opts.runtimeContextFragments,
     requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,
