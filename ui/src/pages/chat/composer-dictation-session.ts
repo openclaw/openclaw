@@ -33,7 +33,7 @@ type DictationSessionResult = {
 };
 
 type ComposerDictationSessionCallbacks = {
-  onError: (message: string, preservesText: boolean) => void;
+  onError: (message: string, preservesText: boolean) => void | (() => void);
   onLevel?: (level: number) => void;
   onTranscriptChange: () => void;
   onReady: () => void;
@@ -84,6 +84,7 @@ export class ComposerDictationSession {
   private stopped = false;
   private discarded = false;
   private failed = false;
+  dismissFailure: (() => void) | undefined;
   private gatewayDisconnected = false;
   private settleLateFinalDrain: ((discard: boolean) => void) | null = null;
   private pauseFinalDrain: (() => void) | null = null;
@@ -282,7 +283,12 @@ export class ComposerDictationSession {
         this.pendingAudio.push(audio);
       }
       this.startPromise = this.createRemote();
-      return await this.finish();
+      const transcript = await this.finish();
+      if (transcript) {
+        this.dismissFailure?.();
+        this.dismissFailure = undefined;
+      }
+      return transcript;
     } finally {
       this.retrying = false;
     }
@@ -359,7 +365,8 @@ export class ComposerDictationSession {
     }
     this.failed = true;
     this.settleLateFinalDrain?.(false);
-    this.callbacks.onError(message, this.hasTranscript());
+    this.dismissFailure?.();
+    this.dismissFailure = this.callbacks.onError(message, this.hasTranscript()) || undefined;
   }
 
   private hasTranscript(): boolean {

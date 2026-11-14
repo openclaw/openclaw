@@ -724,6 +724,100 @@ describe("ComposerDictationOwner", () => {
     },
   );
 
+  it("reports a disconnect while preparing a dictation session", async () => {
+    const pending = createDeferred<string>();
+    const { controller, options, onError } = createHarness({
+      prepareSession: () => pending.promise,
+    });
+    expect(controller.startDirect()).toBe(true);
+    controller.update({ ...options, connected: false });
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      "Dictation stopped because the Gateway disconnected.",
+      { kind: "interrupted", preservesText: false },
+    );
+    expect(controller.locksComposer).toBe(false);
+    pending.resolve("agent:main:prepared");
+    await vi.dynamicImportSettled();
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("replaces only this recording notice across repeated failed attempts", async () => {
+    const dismissFirst = vi.fn();
+    const dismissRetry = vi.fn();
+    const onError = vi.fn().mockReturnValueOnce(dismissFirst).mockReturnValueOnce(dismissRetry);
+    const { controller } = createHarness({ onError });
+    await startDirect(controller);
+    captureAudio();
+    const failed = controller.finishActive();
+    emit({ type: "error", message: "First failure" });
+    await failed;
+    const failedRetry = controller.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    emit({ type: "error", message: "Different retry failure" });
+    await expect(failedRetry).resolves.toBe(false);
+    expect(dismissFirst).toHaveBeenCalledOnce();
+    expect(dismissRetry).not.toHaveBeenCalled();
+    const successfulRetry = controller.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    transcript("Recovered third attempt");
+    emit({ type: "close", reason: "completed" });
+    await expect(successfulRetry).resolves.toBe(true);
+    expect(dismissFirst).toHaveBeenCalledOnce();
+    expect(dismissRetry).toHaveBeenCalledOnce();
+  });
+
+  it("resolves an active recording disconnect notice after successful retry", async () => {
+    const dismiss = vi.fn();
+    const { controller, options, onCommit } = createHarness({ onError: () => dismiss });
+    await startDirect(controller);
+    captureAudio();
+    controller.update({ ...options, connected: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.recovery).toBeDefined();
+    expect(dismiss).not.toHaveBeenCalled();
+    controller.update(options);
+    const retried = controller.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    transcript("Recovered after reconnect");
+    emit({ type: "close", reason: "completed" });
+    await expect(retried).resolves.toBe(true);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("Recovered after reconnect", true);
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+
+  it.each(["success", "error", "cancel"])(
+    "resolves the recording notice only after retry %s",
+    async (outcome) => {
+      const dismiss = vi.fn();
+      const dismissRetry = vi.fn();
+      const onError = vi.fn().mockReturnValueOnce(dismiss).mockReturnValueOnce(dismissRetry);
+      const { controller, onCommit } = createHarness({ onError });
+      await startDirect(controller);
+      captureAudio();
+      const failed = controller.finishActive();
+      emit({ type: "error", message: "First transcription failed" });
+      await failed;
+      const retried = controller.retry();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dismiss).not.toHaveBeenCalled();
+      if (outcome === "success") {
+        transcript("Recovered words");
+        emit({ type: "close", reason: "completed" });
+      } else if (outcome === "error") {
+        emit({ type: "error", message: "Retry failed" });
+      } else {
+        controller.cancel();
+        transcript("Discarded words");
+      }
+      await expect(retried).resolves.toBe(outcome === "success");
+      expect(dismiss).toHaveBeenCalledTimes(outcome === "cancel" ? 0 : 1);
+      expect(dismissRetry).not.toHaveBeenCalled();
+      if (outcome !== "success") {
+        expect(onCommit).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("discards retained audio when the draft changes during retry admission", async () => {
     const { controller, options, onCommit } = createHarness({ draftKey: "original" });
     await startDirect(controller);

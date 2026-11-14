@@ -26,7 +26,7 @@ type ComposerDictationOwnerOptions = {
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
   onCommit: (text: string, late?: true) => void;
-  onError: (message: string, failure: ComposerDictationFailure) => void;
+  onError: (message: string, failure: ComposerDictationFailure) => void | (() => void);
   onTap?: () => void;
   onDictationUnavailable?: () => void;
 };
@@ -165,13 +165,17 @@ export class ComposerDictationOwner extends EventTarget {
     }
     if (this.phase !== "idle" && !this.canHold()) {
       const keepFinal = this.active && !options.connected;
-      const preservesText = keepFinal ? (this.session?.markGatewayDisconnected() ?? false) : false;
+      const session = this.session;
+      const preservesText = keepFinal ? (session?.markGatewayDisconnected() ?? false) : false;
       void this.stop({ commit: keepFinal });
       if (keepFinal) {
-        options.onError(t("chat.composer.dictationDisconnected"), {
+        const dismiss = options.onError(t("chat.composer.dictationDisconnected"), {
           kind: "interrupted",
           preservesText,
         });
+        if (session) {
+          session.dismissFailure = dismiss || undefined;
+        }
       }
     }
   }
@@ -369,7 +373,7 @@ export class ComposerDictationOwner extends EventTarget {
               return;
             }
             try {
-              this.options.onError(message, { kind: "interrupted", preservesText });
+              return this.options.onError(message, { kind: "interrupted", preservesText });
             } finally {
               if (this.session === session) {
                 void this.stop({ commit: true });

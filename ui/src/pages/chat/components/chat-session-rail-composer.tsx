@@ -90,7 +90,11 @@ export function SessionRailComposer(props: {
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
     canCommit: () => props.connected,
     onMessage: (message) => props.onDraftChange?.(message.slice(0, SIDE_CHAT_QUESTION_MAX_LENGTH)),
-    onError: (message) => showToast({ severity: "error", message }),
+    onError: (message) => {
+      const notice = new AbortController();
+      showToast({ severity: "error", message, signal: notice.signal });
+      return () => notice.abort();
+    },
     onSubmit: () => props.submit(),
   });
   const dictation = projectOwner(dictationControl, (owner) => owner);
