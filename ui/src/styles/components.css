@@ -3012,26 +3012,14 @@ select.data-table-pagination__size {
   line-height: 1;
 }
 
-/* A phone has no keys to teach; the switch takes the whole dock. */
+/* Keep the compact mode tabs on phones, without keyboard-only hints. */
 @media (max-width: 560px) {
-  /* 8px on every side of the taller tabs keeps them concentric. */
   .cmd-palette__dock {
     padding-inline: 8px;
   }
 
   .cmd-palette__keys {
     display: none;
-  }
-
-  .cmd-palette__mode-tabs {
-    display: flex;
-    flex: 1;
-  }
-
-  .cmd-palette__mode {
-    flex: 1;
-    height: 40px;
-    border-radius: calc(12px * var(--openclaw-corner-radius-scale));
   }
 }
 
