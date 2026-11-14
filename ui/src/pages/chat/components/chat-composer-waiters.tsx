@@ -6,18 +6,12 @@ import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../../lib/reactive/projection.ts";
+import { isChatRunWorking } from "../chat-run-working.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
-import "./chat-composer-waiters.css";
+import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type Waiter = Pick<SessionProcessSummary, "instanceId" | "name" | "startedAt">;
-
-function WaiterIcon() {
-  return (
-    <span class="chat-waiters__icon" aria-hidden="true">
-      <span class="session-run-spinner" />
-    </span>
-  );
-}
+type Open = ChatComposerProps["onOpenProcesses"];
 
 function WaiterName(props: { name: string }) {
   const overflow = useScrollState(true, false, { revision: () => props.name });
@@ -35,40 +29,29 @@ function WaitingOn(props: { name: string }) {
   );
   return (
     <span class="chat-waiters__label">
-      <Show when={parts()[0]}>
-        <span class="chat-waiters__lead">{parts()[0]}</span>
-      </Show>
+      {parts()[0]}
       <WaiterName name={props.name} />
-      <Show when={parts()[1]}>
-        <span class="chat-waiters__lead">{parts()[1]}</span>
-      </Show>
+      {parts()[1]}
     </span>
   );
 }
 
-function WaiterRow(props: {
-  waiter: Waiter;
-  nested?: boolean;
-  onOpen?: (instanceId: string) => void;
-}) {
+function WaiterRow(props: { waiter: Waiter; nested?: boolean; onOpen: Open }) {
   const content = () => (
     <>
-      <Show
-        when={!props.nested}
-        fallback={
-          <span class="chat-waiters__icon" aria-hidden="true">
-            <Icon name="squareTerminal" />
-          </span>
-        }
-      >
-        <WaiterIcon />
-      </Show>
-      <Show when={!props.nested} fallback={<WaiterName name={props.waiter.name} />}>
+      <span class="chat-waiters__icon" aria-hidden="true">
+        {props.nested ? <Icon name="squareTerminal" /> : <span class="session-run-spinner" />}
+      </span>
+      {props.nested ? (
+        <WaiterName name={props.waiter.name} />
+      ) : (
         <WaitingOn name={props.waiter.name} />
-      </Show>
+      )}
       <ElapsedTime class="chat-waiters__elapsed" startMs={props.waiter.startedAt} />
       <Show when={props.onOpen}>
-        <Icon class="chat-waiters__chevron" name="chevronRight" />
+        <span class="chat-waiters__icon" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
       </Show>
     </>
   );
@@ -87,17 +70,7 @@ function WaiterRow(props: {
   );
 }
 
-/**
- * Background commands this idle chat waits on. Their exit continues the chat,
- * so the user can see what is pending and open its live output.
- */
-export function ChatComposerWaiters(props: {
-  sessionKey: string;
-  agentId: string;
-  /** A running turn owns the status line; the observation stays warm meanwhile. */
-  hidden: boolean;
-  onOpen?: (instanceId: string) => void;
-}) {
+function Waiters(props: { composer: ChatComposerProps }) {
   const app = useApplication();
   let publish = () => {};
   // The shared observation owner keeps reads, events and polling; this view only filters.
@@ -106,7 +79,11 @@ export function ChatComposerWaiters(props: {
   publish = view.publish;
   // The caller remounts this view per session, so its identity is fixed for the owner's life.
   onSettled(() => {
-    data.sync({ sessionKey: props.sessionKey, agentId: props.agentId, presented: true });
+    data.sync({
+      sessionKey: props.composer.sessionKey,
+      agentId: props.composer.currentAgentId,
+      presented: true,
+    });
     return () => {
       view.dispose();
       data.dispose();
@@ -121,46 +98,59 @@ export function ChatComposerWaiters(props: {
   const [open, setOpen] = createSignal(false);
   const listId = createUniqueId();
   return (
-    <Show when={!props.hidden && waiters().length}>
-      <div class="agent-chat__waiters-float">
-        <section class="chat-waiters" aria-label={t("chat.processesPanel.waitingTitle")}>
-          <Show
-            when={waiters().length === 1 ? waiters()[0] : undefined}
-            fallback={
-              <>
-                <button
-                  class="chat-waiters__row chat-waiters__summary"
-                  type="button"
-                  aria-expanded={open() ? "true" : "false"}
-                  aria-controls={listId}
-                  onClick={() => setOpen(!open())}
-                >
-                  <WaiterIcon />
-                  <span class="chat-waiters__label">
-                    {t("chat.processesPanel.waitingOnCount", { count: String(waiters().length) })}
-                  </span>
-                  <ElapsedTime class="chat-waiters__elapsed" startMs={waiters()[0]!.startedAt} />
-                  <Icon
-                    class="chat-waiters__chevron"
-                    name={open() ? "chevronDown" : "chevronRight"}
-                  />
-                </button>
-                <div id={listId} class="chat-waiters__list" role="list" hidden={!open()}>
-                  <For each={waiters()} keyed={(waiter) => waiter.instanceId}>
-                    {(waiter) => (
-                      <div role="listitem">
-                        <WaiterRow waiter={waiter()} nested onOpen={props.onOpen} />
-                      </div>
-                    )}
-                  </For>
-                </div>
-              </>
-            }
-          >
-            {(waiter) => <WaiterRow waiter={waiter()} onOpen={props.onOpen} />}
-          </Show>
-        </section>
-      </div>
+    // A running turn owns the status line; the observation stays warm meanwhile.
+    <Show when={!isChatRunWorking(props.composer) && waiters().length}>
+      <section class="chat-waiters" aria-label={t("chat.processesPanel.waitingTitle")}>
+        <Show
+          when={waiters().length === 1 ? waiters()[0] : undefined}
+          fallback={
+            <>
+              <button
+                class="chat-waiters__row"
+                type="button"
+                aria-expanded={open() ? "true" : "false"}
+                aria-controls={listId}
+                onClick={() => setOpen(!open())}
+              >
+                <span class="chat-waiters__icon" aria-hidden="true">
+                  <span class="session-run-spinner" />
+                </span>
+                <span class="chat-waiters__label">
+                  {t("chat.processesPanel.waitingOnCount", { count: String(waiters().length) })}
+                </span>
+                <ElapsedTime class="chat-waiters__elapsed" startMs={waiters()[0]!.startedAt} />
+                <span class="chat-waiters__icon" aria-hidden="true">
+                  <Icon name={open() ? "chevronDown" : "chevronRight"} />
+                </span>
+              </button>
+              <div id={listId} class="chat-waiters__list" role="list" hidden={!open()}>
+                <For each={waiters()} keyed={(waiter) => waiter.instanceId}>
+                  {(waiter) => (
+                    <div role="listitem">
+                      <WaiterRow waiter={waiter()} nested onOpen={props.composer.onOpenProcesses} />
+                    </div>
+                  )}
+                </For>
+              </div>
+            </>
+          }
+        >
+          {(waiter) => <WaiterRow waiter={waiter()} onOpen={props.composer.onOpenProcesses} />}
+        </Show>
+      </section>
+    </Show>
+  );
+}
+
+/**
+ * Background commands this idle chat waits on. Their exit continues the chat,
+ * so the user can see what is pending and open its live output.
+ */
+export function ChatComposerWaiters(props: { composer: ChatComposerProps }) {
+  const identity = () => JSON.stringify([props.composer.currentAgentId, props.composer.sessionKey]);
+  return (
+    <Show when={identity()} keyed>
+      {(_identity: string) => <Waiters composer={props.composer} />}
     </Show>
   );
 }

@@ -10,6 +10,7 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createComposerProps } from "../chat-composer.test-support.ts";
 import { ChatComposerWaiters } from "./chat-composer-waiters.tsx";
 
 const row = (processId: string, extra: Partial<SessionsProcessesListResult["processes"][0]>) => ({
@@ -43,17 +44,13 @@ it("shows only processes that will continue the chat and opens their output", as
     disposeSidebarContextLifecycles();
   });
   const onOpen = vi.fn();
-  const view = mountSolid(
-    () => (
-      <ChatComposerWaiters
-        sessionKey="agent:main:main"
-        agentId="main"
-        hidden={false}
-        onOpen={onOpen}
-      />
-    ),
-    { wrapper: provider.wrapper },
-  );
+  const composer = createComposerProps({
+    sessionKey: "agent:main:main",
+    onOpenProcesses: onOpen,
+  });
+  const view = mountSolid(() => <ChatComposerWaiters composer={composer} />, {
+    wrapper: provider.wrapper,
+  });
   await waitForSolid(() => expect(view.getByRole("button")).toBeTruthy());
   const only = view.getByRole("button");
   expect(only.textContent).toContain("Waiting on");

@@ -54,24 +54,10 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
 
 export function ComposerWaiters(view: { composer: ChatComposerProps }) {
   return (
-    <Show
-      when={
-        (view.composer.selectedSession?.backgroundProcessCount ?? 0) > 0 && view.composer.sessionKey
-          ? JSON.stringify([view.composer.currentAgentId, view.composer.sessionKey])
-          : undefined
-      }
-      keyed
-    >
-      {(_identity: string) => (
-        <ChatLazyBoundary>
-          <ChatComposerWaiters
-            sessionKey={view.composer.sessionKey}
-            agentId={view.composer.currentAgentId}
-            hidden={isChatRunWorking(view.composer)}
-            onOpen={view.composer.onOpenProcess}
-          />
-        </ChatLazyBoundary>
-      )}
+    <Show when={view.composer.selectedSession?.backgroundProcessCount}>
+      <ChatLazyBoundary>
+        <ChatComposerWaiters composer={view.composer} />
+      </ChatLazyBoundary>
     </Show>
   );
 }

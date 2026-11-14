@@ -291,7 +291,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
       onOpenProcesses: ownsSubagentsPanel ? this.showDetailsProcess : undefined,
-      onOpenProcess: ownsSubagentsPanel ? this.showProcess : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {
