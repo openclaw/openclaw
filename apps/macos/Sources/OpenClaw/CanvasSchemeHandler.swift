@@ -40,15 +40,15 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 
     private func response(for url: URL) -> (mime: String, data: Data) {
         guard url.scheme == CanvasScheme.scheme else {
-            return self.html("Invalid scheme.")
+            return Self.html("Invalid scheme.")
         }
         guard let session = url.host, !session.isEmpty else {
-            return self.html("Missing session.")
+            return Self.html("Missing session.")
         }
 
         // Keep session component safe; don't allow slashes or traversal.
         if session.contains("/") || session.contains("..") {
-            return self.html("Invalid session.")
+            return Self.html("Invalid session.")
         }
 
         let sessionRoot = self.root.appendingPathComponent(session, isDirectory: true)
@@ -60,7 +60,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         path = path.removingPercentEncoding ?? path
 
         guard let fileURL = self.resolveFileURL(sessionRoot: sessionRoot, requestPath: path) else {
-            return self.html("Not Found", title: "Canvas: 404")
+            return Self.html("Not Found", title: "Canvas: 404")
         }
 
         // Resolve symlinks before enforcing the session-root boundary so links inside
@@ -68,7 +68,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         let resolvedRoot = sessionRoot.resolvingSymlinksInPath().standardizedFileURL
         let resolvedFile = fileURL.resolvingSymlinksInPath().standardizedFileURL
         guard self.isFileURL(resolvedFile, withinDirectory: resolvedRoot) else {
-            return self.html("Forbidden", title: "Canvas: 403")
+            return Self.html("Forbidden", title: "Canvas: 403")
         }
 
         do {
@@ -81,7 +81,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             canvasLogger
                 .error(
                     "failed reading \(failedPath, privacy: .public): \(errorText, privacy: .public)")
-            return self.html("Failed to read file.", title: "Canvas error")
+            return Self.html("Failed to read file.", title: "Canvas error")
         }
     }
 
@@ -105,7 +105,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         return fileURL.path == rootURL.path || fileURL.path.hasPrefix(rootPath)
     }
 
-    private func html(_ body: String, title: String = "Canvas") -> (mime: String, data: Data) {
+    static func html(_ body: String, title: String = "Canvas") -> (mime: String, data: Data) {
         let html = """
         <!doctype html>
         <html>

@@ -31,6 +31,8 @@ actor MacNodeRuntime {
     private var computerInputReleaseGeneration: UInt64 = 0
     private var activeDesktopInvokes: [String: MacDesktopAvailabilityCoordinator.Permit] = [:]
     private var mainSessionKey: String = "main"
+    /// The last logical Canvas target (app-local URL or hosted path), so a bare present can retry it.
+    private var lastCanvasTarget: String?
 
     init(
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
@@ -78,6 +80,9 @@ actor MacNodeRuntime {
     func updateMainSessionKey(_ sessionKey: String) {
         let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if trimmed != self.mainSessionKey {
+            self.lastCanvasTarget = nil
+        }
         self.mainSessionKey = trimmed
     }
 
@@ -409,14 +414,22 @@ extension MacNodeRuntime {
                 target = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON).url
                 placement = nil
             }
-            let effectiveURL = try await resolveCanvasTarget(target)
             let sessionKey = self.mainSessionKey
-            try await MainActor.run {
-                _ = try CanvasManager.shared.show(
-                    sessionKey: sessionKey,
-                    path: effectiveURL,
-                    placement: placement)
+            let services = await self.mainActorServices()
+            var effectiveURL = try await resolveCanvasTarget(target)
+            if let target {
+                self.lastCanvasTarget = target
+            } else if await services.canvasIsShowingLoadFailure(sessionKey: sessionKey) {
+                // "Present it again" on the failure card: a bare present retries the last logical target.
+                // Resolving it again gives a hosted document a current capability, not the URL that failed.
+                if let lastCanvasTarget = self.lastCanvasTarget {
+                    effectiveURL = try await self.resolveCanvasTarget(lastCanvasTarget)
+                } else {
+                    // The panel was created without a target and showed its default page.
+                    effectiveURL = "/"
+                }
             }
+            try await services.showCanvas(sessionKey: sessionKey, path: effectiveURL, placement: placement)
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
             let sessionKey = self.mainSessionKey

@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 enum CanvasScheme {
     static let scheme = "openclaw-canvas"
@@ -29,7 +30,21 @@ enum CanvasScheme {
         case "woff": "font/woff"
         case "ttf": "font/ttf"
         case "wasm": "application/wasm"
-        default: "application/octet-stream"
+        // WebKit will not display application/octet-stream in a frame, so documents need real types.
+        case "txt", "text", "md", "markdown", "csv", "log": "text/plain"
+        case "pdf": "application/pdf"
+        default: self.systemMimeType(forExtension: ext.lowercased())
         }
+    }
+
+    /// Extensions outside the list above come from the system type database. Text-like types are served
+    /// as plain text so they display; types WebKit cannot show keep the generic binary type.
+    private static func systemMimeType(forExtension ext: String) -> String {
+        let binary = "application/octet-stream"
+        guard let type = UTType(filenameExtension: ext), !type.isDynamic else { return binary }
+        if type.conforms(to: .text) {
+            return "text/plain"
+        }
+        return type.preferredMIMEType ?? binary
     }
 }
