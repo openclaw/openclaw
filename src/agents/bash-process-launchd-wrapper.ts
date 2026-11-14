@@ -86,14 +86,9 @@ child.once("error", (error) => {
 });
 if (child.pid !== undefined) {
   pgid = child.pid;
-  try {
-    save({ phase: "running", pgid, wrapperPid: process.pid, startedAt });
-  } catch (error) {
-    // Without a recorded group nothing could find or stop the command later.
-    signalGroup("SIGKILL");
-    pgid = undefined;
-    failStart(error);
-  }
+  // Accepted edge case: if this write fails (disk full), the wrapper dies and the command
+  // runs on unsupervised; the Gateway reports its outcome as unknown.
+  save({ phase: "running", pgid, startedAt });
   child.once("exit", (code, signal) => {
     exit = { code, signal };
     drain();

@@ -147,7 +147,8 @@ or missing job. `process kill` signals the wrapper, which stops the group (SIGTE
 SIGKILL after 10 seconds). macOS has no cgroups: a descendant that leaves the process
 group (for example `setsid`, `tmux new -d`, or a self-daemonizing program) is neither
 waited for nor stopped. If the wrapper itself is killed, the registry checks the recorded
-group and reports the outcome as unknown once it is empty. The job runs as its own
+group and reports the outcome as unknown once it is empty; `process kill` can no longer
+stop that group and reports the stop as unconfirmed. The job runs as its own
 process for macOS privacy permissions, so access the Gateway or app was granted (for
 example Full Disk Access) may not apply to a durable command.
 

@@ -117,11 +117,8 @@ it("checks the recorded process group after the wrapper is killed", async () => 
   expect(await read(Date.now())).toMatchObject({ state: "exited", result: "supervisor-lost" });
 });
 
-async function runWrapper(
-  command: string,
-  timeoutMs = 0,
-  statusPath = path.join(dir, "status.json"),
-) {
+async function runWrapper(command: string, timeoutMs = 0) {
+  const statusPath = path.join(dir, "status.json");
   const wrapper = path.join(dir, "wrapper.cjs");
   const spec = path.join(dir, "spec.json");
   const logPath = path.join(dir, "out.log");
@@ -139,17 +136,14 @@ async function runWrapper(
       killGraceMs: 500,
     }),
   );
-  const [code] = await once(
-    spawnChild(process.execPath, [wrapper, spec], { stdio: "ignore" }),
-    "exit",
-  );
+  await once(spawnChild(process.execPath, [wrapper, spec], { stdio: "ignore" }), "exit");
   await expect(fs.stat(spec)).rejects.toThrow();
-  const recorded = await fs.readFile(statusPath, "utf8").catch(() => "null");
-  return { code, status: JSON.parse(recorded), log: await fs.readFile(logPath, "utf8") };
+  const recorded = JSON.parse(await fs.readFile(statusPath, "utf8"));
+  return { status: recorded, log: await fs.readFile(logPath, "utf8") };
 }
 
 it("wrapper records the exit after the whole group ends and enforces the timeout", async () => {
-  const run = await runWrapper('echo "$SECRET-out"; (sleep 1; echo child-done) & exit 7');
+  const run = await runWrapper('echo "$SECRET-out"; (sleep 0.2; echo child-done) & exit 7');
   expect(run.status).toMatchObject({
     phase: "exited",
     exitCode: 7,
@@ -157,23 +151,9 @@ it("wrapper records the exit after the whole group ends and enforces the timeout
     reason: "exit",
   });
   expect(run.log).toBe("s-out\nchild-done\n");
-  expect(run.status.durationMs).toBeGreaterThanOrEqual(900);
+  expect(run.status.durationMs).toBeGreaterThanOrEqual(150);
   const timeout = await runWrapper("trap '' TERM; sleep 30 & wait", 300);
   const signal = expect.stringMatching(/^SIG(TERM|KILL)$/);
   expect(timeout.status).toMatchObject({ reason: "overall-timeout", exitSignal: signal });
   expect(timeout.status.durationMs).toBeLessThan(5000);
-});
-
-it("wrapper stops the command when it cannot record the process group", async () => {
-  const run = await runWrapper(
-    `sleep 1; touch ${path.join(dir, "ran")}`,
-    0,
-    path.join(dir, "missing", "s.json"),
-  );
-  expect(run.code).not.toBe(0);
-  await new Promise((resolve) => {
-    setTimeout(resolve, 1500);
-  });
-  await expect(fs.stat(path.join(dir, "ran"))).rejects.toThrow();
-  expect(run.log).toContain("Durable process failed to start");
 });

@@ -168,7 +168,7 @@ async function readDurableProcess(label: string): Promise<DurableProcessObservat
     return { state: "missing" };
   }
   // Loaded without a PID or status file: launchd has not started the wrapper yet. A
-  // nonzero last exit status proves it ran and failed before reading its spec.
+  // nonzero last exit status proves the wrapper ended before recording the command's group.
   return job.status === 0
     ? { state: "running" }
     : {
@@ -177,7 +177,7 @@ async function readDurableProcess(label: string): Promise<DurableProcessObservat
         exitSignal: null,
         reason: "spawn-error",
         result: `launchd-status-${job.status}`,
-        note: `\nDurable process supervisor failed to start (launchd status ${job.status}).\n`,
+        note: LOST_NOTE,
       };
 }
 
@@ -243,36 +243,24 @@ async function launchDurableProcess(params: DurableLaunchOptions): Promise<{ uni
 async function stopDurableProcess(label: string, options: StopOptions = {}): Promise<void> {
   assertLabel(label);
   const deadline = Date.now() + KILL_GRACE_MS + 5_000;
-  let signalled = false,
-    orphanSince: number | undefined;
-  const signalGroup = (pgid: number, signal: NodeJS.Signals) => {
-    try {
-      process.kill(-pgid, signal);
-    } catch {}
-  };
+  let signalled = false;
   // A job still starting has nothing to signal yet; keep checking until it can be stopped.
-  while ((await readDurableProcess(label)).state === "running") {
-    const job = await listJob(label);
-    const status = await readStatus(label);
-    if (status?.phase === "exited") {
-      return;
-    }
-    if (job?.pid && !signalled) {
+  // Accepted edge case: once the wrapper is gone (killed from outside), nothing here signals
+  // its orphaned group; stop reports unconfirmed, and the run settles as unknown when it ends.
+  let observed = await readDurableProcess(label);
+  while (observed.state === "running") {
+    if (observed.pid && !signalled) {
       const reply = await command(
         ["launchctl", "kill", "SIGTERM", `${domain()}/${label}`],
         options,
       );
       signalled = reply.exitCode === 0;
-    } else if (!job?.pid && status?.phase === "running" && groupAlive(status)) {
-      // No wrapper is left to escalate; signal the recorded group directly.
-      options.assertCurrent?.();
-      orphanSince ??= Date.now();
-      signalGroup(status.pgid, Date.now() - orphanSince >= KILL_GRACE_MS ? "SIGKILL" : "SIGTERM");
     }
     if (Date.now() > deadline) {
       throw failure();
     }
     await sleep(250);
+    observed = await readDurableProcess(label);
   }
 }
 
