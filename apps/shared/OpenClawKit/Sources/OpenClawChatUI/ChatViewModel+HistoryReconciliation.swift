@@ -340,22 +340,22 @@ extension OpenClawChatViewModel {
         return start..<end
     }
 
-    func hasCanonicalFinalMessageMatching(
+    func canonicalFinalMessageIndex(
         _ message: OpenClawChatMessage,
-        scope: RunMessageScope) -> Bool
+        scope: RunMessageScope) -> Int?
     {
-        guard let key = Self.finalMessageReconciliationKey(for: message) else { return false }
-        guard self.isCurrentSession(scope.session) else { return false }
+        guard let key = Self.finalMessageReconciliationKey(for: message) else { return nil }
+        guard self.isCurrentSession(scope.session) else { return nil }
         if let runId = Self.finalMessageRunID(for: message) {
-            return self.messages.contains { existing in
+            return self.messages.firstIndex { existing in
                 self.provisionalFinalMessagesByID[existing.id] == nil &&
                     Self.finalMessageRunID(for: existing) == runId
             }
         }
         let searchRange = Self.messageRange(after: scope.latestUserTurn, in: self.messages)
-        guard !searchRange.isEmpty else { return false }
+        guard !searchRange.isEmpty else { return nil }
 
-        return self.messages[searchRange].contains { existing in
+        return self.messages[searchRange].firstIndex { existing in
             self.provisionalFinalMessagesByID[existing.id] == nil &&
                 ChatPayloadDecoding.trimmedNonEmptyString(existing.transcriptRunID) == nil &&
                 Self.finalMessageReconciliationKey(for: existing) == key
@@ -748,6 +748,7 @@ extension OpenClawChatViewModel {
         self.historyRefresh = nil
         self.completedHistoryRefresh = nil
         self.historyDeltaCursor = nil
+        self.resetHistoryPages()
         if replacingCanonicalHistory { self.historyRouteLocalUserEchoIDs = [] }
         self.historyRequiresCanonicalReplacement = self.historyRequiresCanonicalReplacement || replacingCanonicalHistory
         self.historyCursorGeneration &+= 1
@@ -910,6 +911,13 @@ extension OpenClawChatViewModel {
             request.id >= self.latestAppliedRunSnapshotRequestID &&
             unmatchedProvisionalFinalIDs.isEmpty &&
             (isDelta || !preservingOptimisticLocalMessages || !incoming.isEmpty)
+        if !isDelta {
+            let olderHistory = self.olderHistory.replacingTip(
+                previous: self.messages,
+                next: nextMessages,
+                olderCursor: payload.olderCursor)
+            if olderHistory != self.olderHistory { self.olderHistory = olderHistory }
+        }
         replaceMessages(nextMessages, narrationSettled: narrationSettled)
         confirmOutboxCommands(in: incoming)
         self.prunePendingLocalUserEchoMessageIDs()

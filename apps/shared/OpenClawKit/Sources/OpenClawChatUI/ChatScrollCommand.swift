@@ -1,12 +1,15 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
-/// The view's own one-shot positioning always runs in a nil-animation transaction, so
-/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
-/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
-func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
+/// Reader navigation releases following; keyboard avoidance alone keeps the live-edge pin.
+func chatReaderScrollReleasesFollow(_ phase: ScrollPhase, keyboardTransition: Bool = false) -> Bool {
     switch phase {
-    case .interacting, .animating:
+    case .interacting:
         true
+    case .animating:
+        !keyboardTransition
     case .idle, .tracking, .decelerating:
         false
     @unknown default:
@@ -28,6 +31,12 @@ final class ChatScrollFollowState {
     var isAtLiveEdge = true
     var isUserScrolling = false
     var hasNewerContentBelow = false
+    #if os(iOS)
+    @ObservationIgnored weak var transcriptScroller: UIScrollView?
+    var isKeyboardTransitioning = false
+    let readerAnchor = ChatReaderRunAnchor()
+    let pageAnchor = ChatReaderPageAnchor()
+    #endif
 }
 
 /// Keeps the end of the transcript in view while it follows the latest content.
@@ -41,6 +50,9 @@ struct ChatScrollFollowAnchorModifier: ViewModifier {
     @State private var position = ScrollPosition()
 
     func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+        #else
         content
             .defaultScrollAnchor(self.follows ? .bottom : nil, for: .sizeChanges)
             .scrollPosition(self.$position)
@@ -48,6 +60,7 @@ struct ChatScrollFollowAnchorModifier: ViewModifier {
                 guard self.follows else { return }
                 withTransaction(Transaction(animation: nil)) { self.position.scrollTo(edge: .bottom) }
             }
+        #endif
     }
 
     private var follows: Bool {
@@ -113,6 +126,10 @@ struct ChatScrollCommandModifier: ViewModifier {
     let currentSessionTarget: @MainActor () -> OpenClawChatSessionTarget
 
     func body(content: Content) -> some View {
+        self.proxyContent(content)
+    }
+
+    private func proxyContent(_ content: Content) -> some View {
         ScrollViewReader { proxy in
             content.onChange(of: self.command.pending) { _, request in
                 guard let request else { return }
