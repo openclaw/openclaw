@@ -121,6 +121,7 @@ final class MacNodeModeCoordinator: NSObject {
     private var lastObservedPaused: Bool
     private var lastObservedComputerControlEnabled: Bool
     private var lastObservedComputerControlProvider: ComputerControlProvider
+    private var peekabooComputerUseGeneration = UUID()
     private let runtime: MacNodeRuntime
     private let session: GatewayNodeSession
     private let endpointProvider: @Sendable () async throws -> GatewayConnection.EndpointSnapshot
@@ -364,6 +365,9 @@ final class MacNodeModeCoordinator: NSObject {
         self.lastObservedPaused = isPaused
         self.lastObservedComputerControlEnabled = computerControlEnabled
         self.lastObservedComputerControlProvider = computerControlProvider
+        if providerChanged {
+            self.peekabooComputerUseGeneration = UUID()
+        }
 
         if shouldRevoke {
             self.enqueueRouteInvalidation(mode: providerChanged ? .workerRestart : .reconnectRefresh)
@@ -590,7 +594,7 @@ final class MacNodeModeCoordinator: NSObject {
             scopes: [],
             caps: caps,
             commands: commands,
-            computerUse: Self.computerUseDescriptor(
+            computerUse: self.computerUseDescriptor(
                 provider: provider,
                 commands: commands,
                 workerManifest: workerManifest),
@@ -1279,7 +1283,7 @@ extension MacNodeModeCoordinator {
             pathEnv: manifest.pathEnv)
     }
 
-    nonisolated static func computerUseDescriptor(
+    func computerUseDescriptor(
         provider: ComputerControlProvider,
         commands: [String],
         workerManifest: MacNodeHostManifest?) -> OpenClawProtocol.AnyCodable?
@@ -1288,7 +1292,8 @@ extension MacNodeModeCoordinator {
               commands.contains(OpenClawComputerCommand.act.rawValue)
         else { return nil }
         return switch provider {
-        case .peekaboo: ComputerControlProvider.peekabooComputerUseDescriptor
+        case .peekaboo:
+            ComputerControlProvider.peekabooComputerUseDescriptor(generation: self.peekabooComputerUseGeneration)
         case .cua: workerManifest?.computerUse
         }
     }
