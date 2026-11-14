@@ -1,6 +1,6 @@
 import { createControlUiSessionRow } from "./control-ui-session-fixtures.ts";
 
-export function createControlUiWorkboardSessionRow(
+export function createControlUiMockSessionRow(
   key: string,
   label: string,
   updatedAt: number,
