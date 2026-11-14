@@ -130,7 +130,10 @@ function shapeTargetError(
     if (!effectiveGatewayUrl) {
       return error;
     }
-    const hostname = new URL(effectiveGatewayUrl).hostname;
+    // A malformed explicit --url reaches this error path before any connect attempt
+    // (it fails the secure-ws check), so parse defensively instead of crashing the
+    // error handler and masking the underlying message.
+    const hostname = URL.parse(effectiveGatewayUrl)?.hostname ?? "";
     const displayGatewayUrl = projectGatewayUrlForDiagnostics(effectiveGatewayUrl);
     const tailscaleHint = hostname.endsWith(".ts.net")
       ? " For this .ts.net host, check that Tailscale is connected and the gateway is reachable on your tailnet."

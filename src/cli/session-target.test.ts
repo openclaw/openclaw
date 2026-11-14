@@ -34,4 +34,22 @@ describe("session target connection errors", () => {
     expect(String(error)).not.toContain("tailnet");
     expect(String(error)).not.toContain("SSH tunnel");
   });
+
+  it("shapes a malformed explicit gateway URL without crashing or masking the security error", async () => {
+    callGatewayMock.mockRejectedValue(
+      new Error(
+        'SECURITY ERROR: Gateway URL "not a valid url" uses plaintext ws:// to a non-loopback address.',
+      ),
+    );
+
+    let error: unknown;
+    try {
+      await resolveSessionTarget({ raw: "agent:ops:main", gateway: { url: "not a valid url" } });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(TypeError);
+    expect(String(error)).toContain("SECURITY ERROR");
+  });
 });
