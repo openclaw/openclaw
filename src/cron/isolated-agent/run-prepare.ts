@@ -12,7 +12,6 @@ import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-st
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -30,7 +29,6 @@ import {
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronExecutionActor } from "../human-owner.js";
 import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
-import { readCronOperatorSnapshotForRun } from "../operator-source-snapshot.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
@@ -44,6 +42,7 @@ import {
 import { prepareCronAutomationPrompt } from "./run-automation-context.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
 import { resolveCronAgentConfig } from "./run-config.js";
+import { prepareCronCreatorSandbox } from "./run-creator-sandbox.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
   resolveCronDeliveryContext,
@@ -229,10 +228,8 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     const now = Date.now();
     // A child run never runs looser than its parent.
     const sandbox =
-      resolveCreatorSandbox(runtimeCfg, {
-        actor: cronExecutionActor(input.job),
-        openclawIdPrincipal: readCronOperatorSnapshotForRun(input.job)?.openclawIdPrincipal,
-      }) ?? input.occurrence.childParent?.sandbox;
+      (await prepareCronCreatorSandbox(runtimeCfg, input.job, input.abortSignal)) ??
+      input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession: MutableCronSession = await prepareCronSession({
       cfg: runtimeCfg,
