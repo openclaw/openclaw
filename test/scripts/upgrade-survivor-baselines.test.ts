@@ -336,11 +336,11 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
           group.published_upgrade_survivor_scenarios,
         ]),
       ).toEqual([
+        ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
         ["openclaw@2026.9.2", "legacy-operator-state"],
         ["openclaw@2026.9.1", "legacy-operator-state"],
         ["openclaw@2026.8.35", "legacy-operator-state"],
         ["openclaw@2026.6.34", "legacy-operator-state"],
-        ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
       ]);
     }
     expect(readJsonLines(calls)).toEqual([

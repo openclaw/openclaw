@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import * as io from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const scenarios = ["legacy-operator-state", "base"];
+const scenarios = ["base", "legacy-operator-state"];
 const read = (file: string) => readFileSync(file, "utf8");
 type Install = { prefix: string };
 const baseline = (version: number, status: string) => ({
@@ -92,8 +92,9 @@ it.each(["version", "runtime"] as const)("skips unusable %s baselines with evide
       group.published_upgrade_survivor_scenarios,
     ]),
   ).toEqual([
-    ...scenarios.map((scenario) => ["published-upgrade-survivor", "openclaw@2026.8.34", scenario]),
+    ["published-upgrade-survivor", "openclaw@2026.8.34", "base"],
     ["onboard", undefined, undefined],
+    ["published-upgrade-survivor", "openclaw@2026.8.34", "legacy-operator-state"],
   ]);
   expect(fixture.report.baselines).toHaveLength(2);
   expect(fixture.report.baselines).toEqual(

@@ -42,8 +42,8 @@ it("retains the reported 9.4 sibling-import cell when current-version baselines 
   expect(groups.every((group) => group.docker_lanes === "published-upgrade-survivor")).toBe(true);
   expect(cells(groups)).toEqual([
     ["openclaw@2026.9.3", "base"],
-    ["openclaw@2026.9.3", "legacy-operator-state"],
     ["openclaw@2026.9.4", "custom-plugin-siblings"],
+    ["openclaw@2026.9.3", "legacy-operator-state"],
   ]);
 });
 
@@ -103,12 +103,14 @@ it("admits long update jobs before an expanded scenario matrix without changing 
   const scenarios = "reported-issues";
   const groups = planGroups(lanes, baselines, scenarios);
   expect(groups.length).toBeGreaterThan(32);
-  expect(groups[0]?.timeout_minutes).toBe(75);
-  expect(groups.slice(0, 3).map((group) => group.docker_lanes)).toEqual([
-    "update-restart-auth",
+  expect(
+    groups.find((group) => group.docker_lanes === "update-restart-auth")?.timeout_minutes,
+  ).toBe(75);
+  expect(groups.slice(0, 2).map((group) => group.docker_lanes)).toEqual([
     "plugin-update",
-    "root-managed-vps-upgrade",
+    "update-restart-auth",
   ]);
+  expect(groups[2]?.published_upgrade_survivor_scenarios).toBe("base");
   expect([
     ...new Set(
       groups
@@ -171,4 +173,41 @@ it.each([
       expect(group.timeout_minutes).toBe(90);
     }
   }
+});
+
+it("keeps the measured 90-row coverage while shortening the capped matrix tail", async () => {
+  const { createHash } = await import("node:crypto");
+  const { execFileSync } = await import("node:child_process");
+  const { default: measured } = await import("./fixtures/targeted-docker-scheduling.json");
+  const groups: Group[] = JSON.parse(
+    execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        LANES: measured.options.lanes,
+        GROUP_SIZE: "1",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: measured.options.upgradeSurvivorBaseline,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: "all-scenarios",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: measured.options.upgradeSurvivorBaselines,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: measured.options.upgradeSurvivorScenarios,
+      },
+    }),
+  );
+  // Captured before the scheduling change: every row, label, baseline, scenario
+  // and timeout must survive. Order alone is allowed to change.
+  const coverage = groups.toSorted((a, b) => a.label.localeCompare(b.label));
+  expect(createHash("sha256").update(JSON.stringify(coverage)).digest("hex")).toBe(
+    measured.coverageSha256,
+  );
+  expect(groups).toHaveLength(90);
+  const seconds = new Map(Object.entries(measured.secondsByLabel));
+  const workers = Array<number>(32).fill(0);
+  for (const group of groups) {
+    const duration = seconds.get(group.label);
+    expect(duration).toBeDefined();
+    workers[workers.indexOf(Math.min(...workers))]! += duration!;
+  }
+  // Fixed-duration list scheduling, not a live-runtime qualification. The old
+  // planner needs 60.30 minutes; leave headroom for coarse, reusable estimates.
+  expect(Math.max(...workers) / 60).toBeLessThan(57);
 });
