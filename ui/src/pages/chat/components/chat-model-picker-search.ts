@@ -1,5 +1,5 @@
 import { createContext, createSignal, createUniqueId, onCleanup, onSettled } from "solid-js";
-import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
+import { findMenuShortcut, registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 
 export type ChatModelSearchRow = {
@@ -213,18 +213,15 @@ export function handleModelPickerKeydown(event: KeyboardEvent): void {
   ) {
     return;
   }
-  if (event.key === "/" && state.input) {
-    event.preventDefault();
-    event.stopPropagation();
-    state.input.focus({ preventScroll: true });
-    return;
-  }
-  if (!/^[1-9]$/u.test(event.key)) {
+  const target = findMenuShortcut(details, event.key);
+  if (!target) {
     return;
   }
   event.preventDefault();
-  const row = state.view?.selectable()[Number(event.key) - 1]?.row;
-  if (row) {
-    state.rows.get(row.key)?.click();
+  event.stopPropagation();
+  if (target instanceof HTMLInputElement) {
+    target.focus({ preventScroll: true });
+  } else {
+    target.click();
   }
 }
