@@ -66,15 +66,24 @@ export async function runTemplatesAddThroughOwner(
     );
   }
   if (plan.blockers.length > 0) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, plan);
-    } else {
-      for (const blocker of plan.blockers) {
-        runtime.error(redactSensitiveText(sanitizeTerminalText(blocker.message)));
+    // A retained Template agent (kept after an interrupted Add) surfaces as an
+    // agent id collision. When the operator names that agent with --agent-id,
+    // continue to apply so the Gateway can restore the kept agent and session
+    // instead of treating the collision as a hard failure.
+    const recoverableCollision =
+      opts.agentId !== undefined &&
+      plan.blockers.some((blocker) => blocker.code === "agent_id_collision");
+    if (!recoverableCollision) {
+      if (opts.json) {
+        writeRuntimeJson(runtime, plan);
+      } else {
+        for (const blocker of plan.blockers) {
+          runtime.error(redactSensitiveText(sanitizeTerminalText(blocker.message)));
+        }
       }
+      runtime.exit(1);
+      return;
     }
-    runtime.exit(1);
-    return;
   }
   const plugins = plan.pluginReviews.filter((review) => review.ownerAction === "install");
   const warnings = [

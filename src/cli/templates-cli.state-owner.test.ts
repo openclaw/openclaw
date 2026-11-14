@@ -240,6 +240,49 @@ describe("Template Add CLI state ownership", () => {
     },
   );
 
+  it("resumes a kept Template agent through apply when the plan reports an agent id collision", async () => {
+    plan.blockers = [
+      {
+        code: "agent_id_collision",
+        path: "$.agent.id",
+        message: 'Agent id "demo" already exists; Templates never merge into existing agents.',
+      },
+      {
+        code: "configured_access_unavailable",
+        path: "$.agent.id",
+        message: "Configured access cannot be reviewed while this agent ID is in use.",
+      },
+    ];
+    plan.target.agentId = "demo";
+    // The --agent-id option is forwarded to the plan request, so the shared plan
+    // handler (which asserts the bare source) needs the narrower expectation here.
+    fixture.handlers["templates.add.plan"] = async ({ params, respond }) => {
+      expect(params).toEqual({
+        source: { packageName: "@acme/demo", version: "1.2.3" },
+        agentId: "demo",
+      });
+      respond(true, plan);
+    };
+    await fixture.startOwner();
+    const before = await snapshotTree(root);
+    // The CLI resolves the catalog to the retained source and re-runs apply,
+    // which restores the kept agent and session instead of exiting on the plan blockers.
+    await runTemplatesAddCommand("@acme/demo", { agentId: "demo", json: true });
+    expect(applied).toEqual([
+      {
+        source: { packageName: "@acme/demo", version: "1.2.3" },
+        agentId: "demo",
+        planIntegrity: "reviewed-plan",
+        acknowledgeCapabilities: [],
+        acknowledgeSkillWarnings: [],
+      },
+    ]);
+    expect(output).toEqual([
+      { agentId: "demo", status: "complete", readiness: { ready: true, requirements: [] } },
+    ]);
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
   it.each(["partial", "partial-human", "lost-reply"])(
     "retains the owner's %s outcome without replay or local cleanup",
     async (kind) => {
