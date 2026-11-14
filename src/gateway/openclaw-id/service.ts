@@ -26,32 +26,24 @@ import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
+import { createMemberRolePresetActivation } from "./member-role-presets.js";
 import { createOwnerExpiryTimer } from "./owner-expiry.js";
 import { armLocalExpiry, createPeopleExpiry, ownerLifecycleEvents } from "./owner-lifecycle.js";
 import { createPublicationRetry } from "./publication-retry.js";
 import type { PublishOutcome } from "./publisher.js";
+import { createRebindPublication } from "./rebind-publication.js";
 import { signOutTunnelPeer } from "./remote-signout.js";
 import { createServiceGatewayKey } from "./service-gateway-key.js";
+import { createServiceRebindOwner } from "./service-rebind-owner.js";
 import { appliedConfigKey, resolveSettings, sameSettings } from "./service-settings.js";
+import { openClawIdTunnelStatus, type OpenClawIdStatus } from "./service-status.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
-import type { BoundKeyRefusal } from "./tunnel-child/keyfile.js";
-import { notifyOpenClawIdTunnelPrincipalsChanged } from "./tunnel-principal.js";
+import {
+  isOpenClawIdTunnelPrincipalAdmitted,
+  notifyOpenClawIdTunnelPrincipalsChanged,
+} from "./tunnel-principal.js";
 import type { TunnelRuntime } from "./tunnel-runtime.js";
-import type { TunnelSupervisorStatus } from "./tunnel-supervisor.js";
-
-/** What the Control UI and `openclaw status` show for OpenClaw ID. */
-export type OpenClawIdStatus =
-  | { state: "off" }
-  | { state: "unconfigured"; missing: Array<keyof GatewayOpenClawIdConfig> }
-  | { state: "on"; tunnel: TunnelSupervisorStatus }
-  /**
-   * The claw is linked but no key file holds a key its binding names (the endpoint key
-   * K_srv or the Gateway key K_gw). Remote access is off and nothing is created or
-   * signed with another key; the Gateway keeps running for local use.
-   */
-  | { state: "keys_refused"; key: "endpoint" | "gateway"; reason: BoundKeyRefusal }
-  | { state: "failed"; reason: string };
 
 /** Side effects of membership changes that other Gateway owners perform. */
 export type OpenClawIdEffects = {
@@ -106,10 +98,14 @@ export function createOpenClawIdService(params: {
   /** The Gateway's primary HTTP listener; relayed requests are handed to it. */
   getGatewayServer: () => HttpServer | undefined;
   log: OpenClawIdLogger;
+  /** Startup's already-reconciled activation owner, including any write failure. */
+  memberRolePresets?: ReturnType<typeof createMemberRolePresetActivation>;
   /** Test seam for the persisted authority. */
   createAuthority?: () => Promise<OpenClawIdAuthority>;
 }) {
   let status: OpenClawIdStatus = { state: "off" };
+  const memberRolePresets =
+    params.memberRolePresets ?? createMemberRolePresetActivation(params.log);
   let appliedKey: string | undefined;
   let runtime: TunnelRuntime | undefined;
   let authority: OpenClawIdAuthority | undefined;
@@ -118,6 +114,7 @@ export function createOpenClawIdService(params: {
   // K_srv selected by linking or seen in a binding. Keep it when uncertain storage
   // withdraws authority, so a child restart cannot create another endpoint identity.
   let lastBoundEndpointKey: string | undefined;
+  const rebindPublication = createRebindPublication();
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
   let mailbox: { stop(): void } | undefined;
@@ -198,12 +195,6 @@ export function createOpenClawIdService(params: {
 
   const gatewayKey = createServiceGatewayKey({ getStateDir: params.getStateDir, getAuthority });
 
-  // A tunnel child that refused its endpoint key reports why; otherwise remote access is on.
-  const tunnelStatus = (tunnel: TunnelSupervisorStatus): OpenClawIdStatus =>
-    tunnel.state === "key_refused"
-      ? { state: "keys_refused", key: "endpoint", reason: tunnel.reason }
-      : { state: "on", tunnel };
-
   // Local membership needs inactivity upkeep even when remote access cannot start.
   const armOwnerExpiry = (owner: OpenClawIdAuthority) =>
     armLocalExpiry(owner, () => stopAuthorityChanges, params.getConfig, ownerExpiry);
@@ -249,6 +240,7 @@ export function createOpenClawIdService(params: {
 
   const reconcile = async () => {
     const config = params.getConfig();
+    await memberRolePresets.reconcile(!closed && isOpenClawIdEnabled(config));
     // A reconcile queued behind a full stop leaves this Gateway's lifetime closed.
     if (closed || !config || !isOpenClawIdEnabled(config)) {
       stopLocalAuthority();
@@ -299,11 +291,11 @@ export function createOpenClawIdService(params: {
             authority?.current()?.binding?.body.k_srv ?? lastBoundEndpointKey),
         log: params.log,
         onStatus: (tunnel) => {
-          status = tunnelStatus(tunnel);
+          status = openClawIdTunnelStatus(tunnel);
         },
         handleApi: handleTunnelApi,
       });
-      status = tunnelStatus(runtime.supervisor.status());
+      status = openClawIdTunnelStatus(runtime.supervisor.status());
       appliedKey = appliedConfigKey(config);
       await startMailbox();
       await revokeBoundTokens(await (await getAuthority()).orphanedTokens());
@@ -342,9 +334,11 @@ export function createOpenClawIdService(params: {
       // Nothing is published under another key; the request stays pending.
       const { reason: code, message } = key.refused;
       lastPublish = { state: "failed", code, message, retryable: false };
+      peopleChanged();
       return lastPublish;
     }
     const { signer } = key;
+    const code = rebindPublication.code(enrollmentCode);
     if (signal.aborted || !isOpenClawIdEnabled(params.getConfig())) {
       return undefined;
     }
@@ -360,13 +354,17 @@ export function createOpenClawIdService(params: {
         relayUrl: config.relayUrl,
         client,
         signer,
-        ...(enrollmentCode ? { enrollmentCode } : {}),
+        enrollmentCode: code,
       }));
     lastPublish = outcome;
+    peopleChanged();
     if (outcome.state === "published") {
-      await (
-        await getAuthority()
-      ).recordDiscovery({
+      const bindingSeq = record.binding?.body.binding_seq ?? 0;
+      if (rebindPublication.published(bindingSeq, record.discovery.published_binding_seq)) {
+        const event = { type: "notify_owners", event: "rebind", ref: `${bindingSeq}` } as const;
+        void notifyOwners([event]).catch((error: unknown) => params.log.warn(String(error)));
+      }
+      await owner.recordDiscovery({
         owner_account_id: outcome.ownerAccountId,
         published_binding_seq: record.binding?.body.binding_seq ?? 0,
         published_snapshot_seq: outcome.snapshotSeq,
@@ -510,6 +508,7 @@ export function createOpenClawIdService(params: {
 
   // Only disabling the feature or closing this Gateway ends its local membership source.
   const stopLocalAuthority = () => {
+    rebindOwner.stop();
     ownerExpiry.stop();
     peopleExpiry.stop();
     stopAuthorityChanges?.();
@@ -590,7 +589,8 @@ export function createOpenClawIdService(params: {
     const { handleTunnelApiRequest } = await import("./tunnel-api.js");
     const owner = await getAuthority();
     await handleTunnelApiRequest(req, res, peerKey, {
-      membership: (key) => owner.ownerView(key),
+      isAdmitted: async (key) => isOpenClawIdTunnelPrincipalAdmitted(await owner.resolvePeer(key)),
+      membership: async (key) => (await owner.memberView(key)) ?? (await owner.ownerView(key)),
       prepareOwnerCheck: (key) => owner.prepareOwnerPeerCheck(key),
       submit: async (statement) => applyResult(await owner.submit(statement, "tunnel")),
       registerInvite: async (input) => {
@@ -647,6 +647,17 @@ export function createOpenClawIdService(params: {
     getAuthority,
   });
 
+  const restartForRebind = () => stopRuntime().then(reconcile);
+  const rebindOwner = createServiceRebindOwner({
+    ...params,
+    getAuthority,
+    gatewayKey,
+    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    holdCode: rebindPublication.hold,
+    restartRemoteAccess: () =>
+      (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
+  });
+
   localPrincipals.publish();
 
   return {
@@ -674,10 +685,9 @@ export function createOpenClawIdService(params: {
       queue = queue.then(reconcile, reconcile);
       return queue;
     },
+    observeConfigApplication: memberRolePresets.observeConfigApplication,
     /** Current status; never touches the network. */
-    status(): OpenClawIdStatus {
-      return status;
-    },
+    status: () => memberRolePresets.status(status),
 
     /**
      * What any admitted client may read about the link: whether the claw is linked,
@@ -719,7 +729,7 @@ export function createOpenClawIdService(params: {
      */
     async prepareLink(
       channel: Channel | undefined,
-      request: ClawNameRequest,
+      request: ClawNameRequest & { guard?: () => void },
     ): Promise<LinkPreparation | AuthorityRefusal> {
       const checked = await checkClawName(channel, request);
       if ("ok" in checked) {
@@ -735,16 +745,20 @@ export function createOpenClawIdService(params: {
       const { pub } = await gatewayKey.load();
       return await (
         await getAuthority()
-      ).prepareLink({ kSrv, kGw: pub, hostname: checked.hostname });
+      ).prepareLink({ kSrv, kGw: pub, hostname: checked.hostname, guard: request.guard });
     },
 
     checkClawName,
 
-    /** Step 2: pin fp(R), admit owner device D1, store the binding, then publish. */
+    /**
+     * Step 2: pin fp(R), admit owner device D1, store the binding, then publish.
+     * `guard` throws once the caller's live ceremony authority is gone; checked at the write.
+     */
     async commitLink(
       channel: Channel | undefined,
       input: LinkCommit,
       enrollmentCode?: string,
+      guard?: () => void,
     ): Promise<(AuthorityAccepted & { publication?: PublishOutcome }) | AuthorityRefusal> {
       const kSrv = runningServerKey();
       if (!kSrv) {
@@ -754,7 +768,7 @@ export function createOpenClawIdService(params: {
       // A link write can persist and then lose both its acknowledgement and reconciliation.
       // Retain the running identity before awaiting settlement, not only after success.
       lastBoundEndpointKey = kSrv;
-      const result = await (await getAuthority()).commitLink(input, channel, { kSrv, kGw });
+      const result = await (await getAuthority()).commitLink(input, channel, { kSrv, kGw, guard });
       if (!result.ok) {
         return result;
       }
@@ -769,9 +783,11 @@ export function createOpenClawIdService(params: {
       return { ...result, ...(publication ? { publication } : {}) };
     },
 
-    /** Retries publication, for example with an enrollment code obtained after linking. */
+    rebind: rebindOwner.run,
+
+    /** Retries publication with a code (after linking, or `needs_link_code`) held until success. */
     async publish(enrollmentCode?: string): Promise<PublishOutcome | undefined> {
-      return await publicationRetry.publishDirect(() => publish(enrollmentCode));
+      return await publicationRetry.publishAdopted(() => publish(enrollmentCode));
     },
 
     /** Applies an owner-signed statement sent directly by a client (never the mailbox). */

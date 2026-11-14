@@ -1,3 +1,0 @@
-# Extend real projection/fork coverage: bounded ancestry, explicit depth override,
-# complete nearby PR range after base fetch, and unchanged shared shallow metadata.
-37

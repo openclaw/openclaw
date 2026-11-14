@@ -67,6 +67,20 @@ describe("app-tool-stream run usage", () => {
     ]);
   });
 
+  it("shows the bounded-context warning for a run this pane does not own", () => {
+    const warning = { phase: "context_bounded", message: "Older history is omitted." };
+    const viewer = usageHarness();
+    expect(viewer.send(1, "compaction", warning, "channel-run")).toBe(true);
+    expect(viewer.host.guardianNotices).toMatchObject([
+      { kind: "warning", source: "system", message: "Older history is omitted." },
+    ]);
+
+    // The run's status reply already shows it in the pane that started the run.
+    const owner = usageHarness({ chatRunId: "client-run" });
+    expect(owner.send(1, "compaction", warning)).toBe(true);
+    expect(owner.host.guardianNotices).toEqual([]);
+  });
+
   it.each([false, true])(
     "replaces pending Guardian reviews with decisions (strict=%s)",
     (strict) => {

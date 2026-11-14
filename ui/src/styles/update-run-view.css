@@ -24,7 +24,7 @@
 
 .update-run-view__heading h3 {
   color: var(--text-strong);
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
   line-height: 1.5;
 }
 
@@ -38,7 +38,7 @@
 .update-run-view__step-status,
 .update-run-view__diagnostics summary > span {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .update-run-view__phases,
@@ -63,7 +63,7 @@
   padding: 5px 8px;
   border-radius: var(--radius-sm);
   overflow-wrap: anywhere;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .update-run-view__mark {
@@ -74,7 +74,7 @@
 
 .update-run-view__step-status {
   margin-left: auto;
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 
 .update-run-view__step--in_progress {
@@ -107,7 +107,7 @@
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .update-run-view__step-list > summary,
@@ -146,7 +146,7 @@
   background: var(--bg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -158,13 +158,13 @@
   display: grid;
   grid-template-columns: 14px 1fr;
   gap: 3px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .update-run-view__oracle small {
   grid-column: 2;
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 
 .update-run-view__report {
@@ -172,7 +172,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--panel);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 

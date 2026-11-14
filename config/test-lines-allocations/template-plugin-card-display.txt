@@ -1,0 +1,6 @@
+# Verified plugin-card delivery crosses independently owned boundaries:
+# message-tool verification, Gateway transcript projection, UI run admission,
+# history/live/live-before-adoption rendering, and lazy-card loading/navigation.
+# Keep the ownership/finality exclusions and the public stream-identity contract.
+# 516 net lines minus the standard 400-line allowance; no test assertions removed.
+116

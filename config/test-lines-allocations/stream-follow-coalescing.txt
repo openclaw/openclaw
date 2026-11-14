@@ -1,2 +1,0 @@
-# Extend existing follow coverage for coalesced updates and initial native Activity following.
-2

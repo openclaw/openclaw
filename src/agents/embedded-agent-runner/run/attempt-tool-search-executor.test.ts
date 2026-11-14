@@ -34,6 +34,7 @@ function createExecutorHarness(prepareArguments: NonNullable<AnyAgentTool["prepa
       executor({
         tool,
         toolName: "memory_search",
+        toolId: "openclaw:memory-core:memory_search",
         source: "openclaw",
         sourceName: "memory-core",
         toolCallId: "call",

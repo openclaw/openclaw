@@ -331,6 +331,8 @@ async function agentRowCounts(page: Page) {
 async function revealAgentOption(page: Page, agentId: string) {
   const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
   if (agentId === "data-agent-0299") {
+    // End edits a focused search field; the list's own surface jumps to the last row.
+    await picker.locator('[role="listbox"]').focus();
     await page.keyboard.press("End");
     await waitForAgentOptions(page);
     await page.waitForFunction((id) => {
@@ -343,10 +345,17 @@ async function revealAgentOption(page: Page, agentId: string) {
           document.activeElement?.getAttribute("aria-activedescendant") === option.id)
       );
     }, agentId);
-  } else if (await picker.locator(".header-search__toggle").count()) {
-    await picker.locator(".header-search__toggle").click();
-    await picker.locator("input.picker-select__search").fill(agentId);
-    await waitForAgentOptions(page, 1);
+  } else {
+    // Bundles with a collapsed header search expose a Search action first.
+    const toggle = picker.locator(".header-search__toggle");
+    if (await toggle.count()) {
+      await toggle.click();
+    }
+    const search = picker.locator("input.picker-select__search");
+    if (await search.count()) {
+      await search.fill(agentId);
+      await waitForAgentOptions(page, 1);
+    }
   }
   const option = picker.locator(`[data-agent-option][value="${agentId}"]`);
   await option.waitFor({ state: "visible" });

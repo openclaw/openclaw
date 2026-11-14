@@ -1,7 +1,6 @@
 import type {
   CompactionPreparation,
-  CompactionResult,
-  CompactionDetails,
+  CompactionFallbackInput,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { SummarizationConversationSource } from "../../../packages/agent-core/src/harness/compaction/summarization-completion.js";
 
@@ -30,8 +29,7 @@ export type PreparedCompactionFacts = {
     latestAskInRetainedTurn: boolean;
     requiredAskContext: string;
   };
-  fallback?: CompactionResult<CompactionDetails>;
-  fallbackError?: string;
+  fallback: CompactionFallbackInput;
 };
 export type PreparedCompaction = PreparedCompactionFacts & {
   history: SummarizationConversationSource;

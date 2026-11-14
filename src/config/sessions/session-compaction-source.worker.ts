@@ -2,7 +2,7 @@ import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { getMessageFromEntryForCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import {
   prepareCompactionFromSource,
-  compactWithoutSummary,
+  prepareCompactionFallback,
   type CompactionAgentMessageSource,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
@@ -16,14 +16,17 @@ import {
   type SafeguardMessageFacts,
   type SafeguardMessageSource,
 } from "../../agents/agent-hooks/compaction-safeguard-source.js";
-import { SAFETY_MARGIN, sanitizeCompactionMessages } from "../../agents/compaction-planning.js";
+import { sanitizeCompactionMessages } from "../../agents/compaction-planning.js";
 import { createRealConversationClassifier } from "../../agents/compaction-real-conversation.js";
 import {
   assertCompactionRequestCanFit,
   resolveCompactionRetentionBudget,
-  estimateCompactionHistoryTokens,
   estimateCompactedRequestTokens,
 } from "../../agents/sessions/compaction/request-budget.js";
+import {
+  SAFETY_MARGIN,
+  estimateCompactionHistoryTokens,
+} from "../../agents/sessions/context-token-pressure.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -280,7 +283,7 @@ function planCompactionSource(
           SAFETY_MARGIN,
       ) - 1;
   }
-  const fallback = compactWithoutSummary(preparation);
+  const fallback = prepareCompactionFallback(preparation);
   const {
     messagesToSummarize,
     turnPrefixMessages,
@@ -330,7 +333,7 @@ function planCompactionSource(
         estimatedTokens,
         hasRealConversation,
         safeguard: safeguardFacts,
-        ...(fallback.ok ? { fallback: fallback.value } : { fallbackError: fallback.error.message }),
+        fallback,
       },
     },
     sources: {

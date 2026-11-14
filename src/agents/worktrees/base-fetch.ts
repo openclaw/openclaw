@@ -1,8 +1,11 @@
-import { gitNullConfigPath, requireGitCommandOutput } from "../../infra/git-exec.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { quoteGitConfig, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { appendGitConfig } from "../../infra/git-maintenance-env.js";
 import { withGitObjectStoreTransport } from "../../infra/git-object-store-transport.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { commandError, requireGit, runGit } from "./git.js";
 
@@ -12,7 +15,10 @@ const ADVERTISED_HEAD = /^ref: refs\/heads\/(.+)\tHEAD\r?$(?:\n([a-f0-9]{40,64})
 export async function fetchRemoteDefault(
   repoRoot: string,
   options: NonNullable<Parameters<typeof runGit>[2]>,
+  transport?: { cwd: string; remote: string; filter?: string },
 ): Promise<ResolvedWorktreeBase & { branch: string }> {
+  const transportRoot = transport?.cwd ?? repoRoot;
+  const remote = transport?.remote ?? "origin";
   const cached = await runGit(
     repoRoot,
     ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
@@ -21,7 +27,7 @@ export async function fetchRemoteDefault(
   if (cached.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
   }
-  const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
+  const advertised = await runGit(transportRoot, ["ls-remote", "--symref", remote, "HEAD"], {
     ...options,
     timeoutMs: 30_000,
   });
@@ -69,8 +75,9 @@ export async function fetchRemoteDefault(
       "--no-recurse-submodules",
       "--no-tags",
       "--refmap=",
+      ...(transport?.filter ? [`--filter=${transport.filter}`] : []),
       ...(cachedCommit ? [`--negotiation-tip=${cachedCommit}`] : []),
-      "origin",
+      remote,
       `+refs/heads/${branch}:${remoteRef}`,
     ];
     const fetchOptions = { ...options, timeoutMs: 60_000 };
@@ -80,6 +87,7 @@ export async function fetchRemoteDefault(
       cachedCommit,
       args,
       fetchOptions,
+      transportRoot,
     );
     if (fetched.cleanup === "uncertain") {
       throw new CommandProcessCleanupError();
@@ -125,54 +133,20 @@ export async function fetchRemoteDefault(
   };
 }
 
-/** Keep origin's effective transport policy, without enumerating unrelated source refs. */
+/** Keep the selected transport policy, publishing through the source ref owner. */
 async function fetchDefaultWithIsolatedRefs(
   repoRoot: string,
   remoteRef: string,
   previous: string | undefined,
   args: string[],
   options: NonNullable<Parameters<typeof runGit>[2]>,
+  transportRoot: string,
 ) {
-  // Resolve conditional includes against the source worktree before changing Git metadata.
-  const config = await requireGit(repoRoot, ["config", "--null", "--list", "--includes"], options);
-  const entries: [string, string][] = [];
-  for (const field of config.split("\0").filter(Boolean)) {
-    const separator = field.indexOf("\n");
-    const key = separator < 0 ? field : field.slice(0, separator);
-    if (/^(?:include(?:if)?\.|core\.(?:bare|worktree)$|extensions\.refstorage$)/iu.test(key)) {
-      continue;
-    }
-    entries.push([key, separator < 0 ? "true" : field.slice(separator + 1)]);
-  }
-  if (!entries.some(([key]) => key === "remote.origin.url")) {
-    // Legacy remote files belong to the source metadata, not the temporary transport.
-    entries.push([
-      "remote.origin.url",
-      await requireGit(repoRoot, ["ls-remote", "--get-url", "origin"], options),
-    ]);
-  }
-  return await withGitObjectStoreTransport(
+  return await withIsolatedWorktreeGitTransport(
+    transportRoot,
     repoRoot,
-    (cwd, command) => requireGit(cwd, command, options),
-    async (staging, objects) => {
-      const transport = {
-        ...options,
-        refMutationDirectory: staging,
-        env: appendGitConfig(
-          {
-            ...options.env,
-            GIT_DIR: staging,
-            GIT_COMMON_DIR: staging,
-            GIT_WORK_TREE: repoRoot,
-            GIT_OBJECT_DIRECTORY: objects,
-            GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_PARAMETERS: undefined,
-            GIT_CONFIG_COUNT: "0",
-          },
-          [...entries, ["core.bare", "true"], ["core.alternateRefsCommand", "true"]],
-        ),
-      };
+    options,
+    async (transport) => {
       const fetched = await runGit(repoRoot, args, transport);
       if (fetched.cleanup === "uncertain") {
         throw new CommandProcessCleanupError();
@@ -187,6 +161,84 @@ async function fetchDefaultWithIsolatedRefs(
         ["update-ref", remoteRef, commit, ...(previous ? [previous] : [])],
         options,
       );
+    },
+  );
+}
+
+/** Preserve the selected remote's configuration without scanning unrelated session refs. */
+export async function withIsolatedWorktreeGitTransport<T>(
+  transportRoot: string,
+  repoRoot: string,
+  options: NonNullable<Parameters<typeof runGit>[2]>,
+  run: (transport: NonNullable<Parameters<typeof runGit>[2]>) => Promise<T>,
+  remote = "origin",
+): Promise<T> {
+  // Resolve conditional includes against the transport before changing Git metadata.
+  const config = await requireGit(
+    transportRoot,
+    [
+      "config",
+      "--null",
+      "--includes",
+      "--get-regexp",
+      `^((core|extensions|url|http|credential|protocol|fetch|transfer|ssh|pack|index|fsck)\\.|safe\\.directory$|remote\\.${escapeRegExp(remote)}\\.)`,
+    ],
+    options,
+  );
+  const entries: [string, string][] = [];
+  for (const field of config.split("\0").filter(Boolean)) {
+    const separator = field.indexOf("\n");
+    const key = separator < 0 ? field : field.slice(0, separator);
+    if (/^(?:core\.(?:bare|worktree)|extensions\.refstorage)$/iu.test(key)) {
+      continue;
+    }
+    entries.push([key, separator < 0 ? "true" : field.slice(separator + 1)]);
+  }
+  if (!entries.some(([key]) => key === `remote.${remote}.url`)) {
+    // Legacy remote files belong to the selected transport's original metadata.
+    entries.push([
+      `remote.${remote}.url`,
+      await requireGit(transportRoot, ["ls-remote", "--get-url", remote], options),
+    ]);
+  }
+  return await withGitObjectStoreTransport(
+    transportRoot,
+    (cwd, command) => requireGit(cwd, command, options),
+    async (staging, objects) => {
+      // Keep resolved transport policy in protected config scope, never proportional-size env.
+      const configPath = path.join(staging, "transport.config");
+      await fs.writeFile(
+        configPath,
+        entries
+          .map(([key, value]) => {
+            const [, section, subsection, name] = /^([^.]+)\.(?:(.*)\.)?([^.]+)$/u.exec(key)!;
+            return `[${section}${subsection === undefined ? "" : ` ${quoteGitConfig(subsection)}`}]\n${name}=${quoteGitConfig(value)}\n`;
+          })
+          .join(""),
+        { mode: 0o600 },
+      );
+      const transport = {
+        ...options,
+        refMutationDirectory: staging,
+        env: appendGitConfig(
+          {
+            ...options.env,
+            GIT_DIR: staging,
+            GIT_COMMON_DIR: staging,
+            GIT_WORK_TREE: repoRoot,
+            GIT_OBJECT_DIRECTORY: objects,
+            GIT_CONFIG_GLOBAL: configPath,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_PARAMETERS: undefined,
+            GIT_CONFIG_COUNT: "0",
+          },
+          [
+            ["core.bare", "true"],
+            ["core.alternateRefsCommand", "true"],
+          ],
+        ),
+      };
+      return await run(transport);
     },
   );
 }

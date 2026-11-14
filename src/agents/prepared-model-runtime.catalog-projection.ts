@@ -38,12 +38,14 @@ export function createPreparedModelCatalogProjection(params: {
     let sourceCatalog = catalog;
     if (acquiredProviders) {
       // Retained siblings cannot hide captured rows before this provider is acquired.
-      // Successful empty discovery still owns its inventory.
+      // Successful empty discovery still owns its chat inventory. Typed-only rows come
+      // from the manifest, never from chat discovery, so acquisition cannot replace them.
       const unacquired = (entries: typeof catalog.entries) =>
         entries.filter(
           (entry) =>
             !entry.nativeRuntime &&
-            !acquiredProviders.has(params.normalizeProvider(entry.provider)),
+            (entry.inference?.chat === false ||
+              !acquiredProviders.has(params.normalizeProvider(entry.provider))),
         );
       sourceCatalog = {
         ...catalog,

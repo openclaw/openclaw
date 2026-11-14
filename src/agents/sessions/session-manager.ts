@@ -53,6 +53,7 @@ import { readSessionManagerCompaction } from "./session-manager-compaction-read.
 import {
   sessionManagerOpenCompaction,
   sessionManagerOpenTranscriptCohort,
+  sessionManagerReleaseTranscript,
 } from "./session-manager-core.js";
 import {
   sessionManagerReadInitialContext,
@@ -122,6 +123,11 @@ export class SessionManager extends SessionManagerBranching {
   ) {
     super(cwd, persistenceTarget, loadedEntries, boundedContext, version);
     this.retainTranscriptWriter();
+  }
+
+  override [sessionManagerReleaseTranscript](): void {
+    this.preparedInitialContext = undefined;
+    super[sessionManagerReleaseTranscript]();
   }
 
   [sessionManagerReadTranscriptStart]() {
@@ -770,4 +776,4 @@ export class SessionManager extends SessionManagerBranching {
   }
 }
 
-export type { ReadonlySessionManager } from "./session-manager-core.js";
+export type { ReadonlySessionManager } from "./session-manager-readonly.js";

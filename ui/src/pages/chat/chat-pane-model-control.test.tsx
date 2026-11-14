@@ -8,6 +8,11 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { makeChatPageHost } from "./chat-pending-inputs.test-support.ts";
 import { refreshPageChat, retireChatMetadataRequests } from "./chat-state-refresh.ts";
+import {
+  createSlashMenu,
+  type SlashMenuHost,
+} from "./components/chat-composer-slash-menu-state.ts";
+import { SlashMenu } from "./components/chat-composer-slash-menu.tsx";
 import * as catalogPresentation from "./components/chat-model-catalog-presentation.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
@@ -189,4 +194,38 @@ it("presents the saved selection before admission and replaces it with the live 
   });
   await waitForSolid(() => expect(trigger()?.textContent).toContain("Live model"));
   expect(view.container.querySelector("[data-composer-catalog-state=stale]")).toBeNull();
+});
+
+it("keeps the saved model visible in slash commands while the live catalog is retired", async () => {
+  const initial = {
+    ...createComposerControlsFixture().model,
+    snapshot: saved,
+    modelCatalogState: { hasSnapshot: false, status: "loading" as const, retired: true },
+  };
+  const host: SlashMenuHost = {
+    paneId: "saved-model-slash",
+    getDraft: () => "/model",
+    commitDraft: vi.fn(),
+    getTextarea: () => null,
+    resolveArgOptions: () => [],
+    runCommand: vi.fn(),
+    canRun: () => true,
+  };
+  let menu!: ReturnType<typeof createSlashMenu>;
+  const view = mountSolid(() => {
+    menu = createSlashMenu();
+    return (
+      <>
+        <ChatPaneModelControl model={initial} />
+        <SlashMenu menu={menu} host={host} draft="/model" model={initial} />
+      </>
+    );
+  });
+  menu.update("/model", host);
+  await import("./components/chat-composer-slash-menu-options.tsx");
+  await waitForSolid(() => expect(view.container.querySelector('[aria-busy="true"]')).toBeNull());
+  expect(view.container.querySelector("[data-chat-model-select]")?.textContent).toContain(
+    "Saved model",
+  );
+  expect(view.container.querySelector(".slash-menu-value")?.textContent).toBe("Saved model");
 });

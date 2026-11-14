@@ -6,12 +6,14 @@ import { PersonAvatarLink } from "../../../components/person-activity-link-solid
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { ShortcutHint } from "../../../components/solid/kbd.tsx";
 import { MobileNavToggle } from "../../../components/solid/mobile-nav-toggle.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import "../../../components/tooltip.ts";
 import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
@@ -160,7 +162,7 @@ function ChatPaneHeaderChrome(
         "chat-pane__header",
         {
           "chat-pane__header--mobile": props.mergedChrome,
-          "chat-pane__header--agent": Boolean(props.agent),
+          "chat-pane__header--agent": Boolean(props.agent) && props.mergedChrome,
           "chat-pane__header--closable": props.onClosePane !== undefined,
           "chat-pane__header--stacked-status":
             props.narrow &&
@@ -175,9 +177,13 @@ function ChatPaneHeaderChrome(
     >
       <div class="chat-pane__header-leading">
         <Show when={props.mergedChrome}>
-          <openclaw-tooltip
-            prop:content={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
-          >
+          <openclaw-tooltip>
+            <span slot="content">
+              <ShortcutHint
+                label={props.navDrawerOpen ? t("nav.collapse") : t("nav.expand")}
+                combo={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
+              />
+            </span>
             <MobileNavToggle
               class="chat-pane__nav-toggle"
               open={props.navDrawerOpen ?? false}
@@ -185,8 +191,7 @@ function ChatPaneHeaderChrome(
             />
           </openclaw-tooltip>
         </Show>
-        {/* Roster mode has no session crumbs beside the agent pill; rename still edits inline. */}
-        <Show when={!props.agent || props.editing}>
+        <Show when={!props.agent || !props.mergedChrome || props.editing}>
           <IdentityCrumbs {...props} />
         </Show>
         <Show when={!props.mergedChrome}>
@@ -261,7 +266,7 @@ function ChatPaneHeaderChrome(
           {(placement) => <ChatPanePlacement {...placement()} />}
         </Show>
       </div>
-      <Show when={props.agent}>
+      <Show when={props.mergedChrome ? props.agent : undefined}>
         {(agent) => (
           <div class="chat-pane__header-agent">
             <AgentCrumb {...props} agent={agent()} />
@@ -369,7 +374,7 @@ function ChatPaneHeaderChrome(
           <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
           <Show when={incognito()}>
             <openclaw-tooltip
-              prop:content={t("sessionsView.incognitoDescription")}
+              prop:content={t("sessionsView.incognitoDescriptionTooltip")}
               placement="bottom"
               prop:openOnClick={true}
             >
@@ -455,6 +460,7 @@ function ChatPaneHeaderChrome(
             class="chat-pane__close"
             icon="x"
             label={t("chat.splitView.closePane")}
+            tooltip={false}
             disabled={props.actionsDisabled}
             onClick={() => props.onClosePane?.(props.paneId)}
           />

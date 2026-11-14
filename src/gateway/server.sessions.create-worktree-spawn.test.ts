@@ -250,8 +250,9 @@ test.each([
   ["registered", false],
   ["github", false],
 ] as const)(
-  "required visible spawn selects %s project (managed worktree: %s)",
+  "required visible spawn selects %s project (requested worktree: %s)",
   async (source, worktree) => {
+    const managedWorktree = worktree || source === "github";
     const { entry: parent } = await createManagedProjectParent(true);
     const projectName = worktree ? "tool-selected-project" : "sandbox-external-project";
     const otherRepository = await createRepository(state.root, projectName);
@@ -266,7 +267,7 @@ test.each([
     try {
       const result = await spawn({
         // Sandbox rejection must not await unrelated automatic title generation.
-        label: worktree ? "Selected project child" : "Rejected project child",
+        label: managedWorktree ? "Selected project child" : "Rejected project child",
         ...(source === "registered"
           ? { projectId: project.id }
           : source === "github"
@@ -294,7 +295,7 @@ test.each([
         await settleWorkspaceRuns(context, storePath, childKey);
       }
       const child = childKey ? readEntry(childKey) : undefined;
-      if (!worktree && source === "registered") {
+      if (!managedWorktree) {
         expect(creationError).toMatchObject({
           message: expect.stringContaining("outside the sandboxed agent workspace"),
         });

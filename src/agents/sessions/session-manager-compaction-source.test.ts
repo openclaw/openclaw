@@ -1,6 +1,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { getMessageFromEntryForCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
+import { commitCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { serializeConversationWithinBudget } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
@@ -10,7 +11,9 @@ import type { SessionCompactionSourceConsumer } from "../../config/sessions/sess
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { compactionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { sanitizeCompactionMessages } from "../compaction-planning.js";
+import { settleCompactionSafeguardCancellation } from "../compaction-summary-refusal.js";
 import { textStream } from "./agent-session-boundary.test-support.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
@@ -24,7 +27,7 @@ import {
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
 } from "./compaction/request-budget.js";
-import { setPreparedCompaction } from "./prepared-compaction.js";
+import { resolveCompactionFallback, setPreparedCompaction } from "./prepared-compaction.js";
 import {
   assistantText,
   sessionScope,
@@ -149,6 +152,16 @@ it("keeps old payloads in the worker while serving different summary budgets and
             ]);
             expect(JSON.stringify(plan).length).toBeLessThan(30_000);
             expect(plan.facts.preparation.settings.maxSummaryChars).toBe(maxSummaryChars);
+            // The host has no removed payloads; worker facts must preserve the deterministic floor.
+            const committed = commitCompactionSummary(
+              { summary: "Archive summary" },
+              { ...plan.facts.preparation, messagesToSummarize: [], turnPrefixMessages: [] },
+              false,
+            );
+            expect(committed).toContain("Summarize the archive");
+            if (maxSummaryChars !== 1_000) {
+              expect(committed).toContain("Archive item 23");
+            }
             const preserved = plan.facts.safeguard.preservedTurnsSection.text;
             expect(preserved.length).toBeLessThanOrEqual((maxSummaryChars ?? 16_000) / 2);
             if (maxSummaryChars === 48_000) {
@@ -275,7 +288,7 @@ it("fits a worker-prepared manual summary to the foreground budget created after
     const manager = await SessionManager.openAsync(scope);
     await manager.appendMessageAsync({
       role: "user",
-      content: "Archive project decisions.",
+      content: "Archive project decisions. " + "Keep the migration requirements. ".repeat(200),
       timestamp: 1,
     });
     await manager.appendMessageAsync(createAssistant(model, "Archived decisions. ".repeat(1000)));
@@ -292,6 +305,20 @@ it("fits a worker-prepared manual summary to the foreground budget created after
         },
         async (plan, source) => {
           expect(source.requestTokenLimit).toBeUndefined();
+          const fallback = resolveCompactionFallback(
+            {
+              ...plan.facts.preparation,
+              summaryTokenBudget: 256,
+              messagesToSummarize: [],
+              turnPrefixMessages: [],
+            },
+            source,
+          );
+          expect(fallback.ok).toBe(true);
+          if (fallback.ok) {
+            expect(fallback.value.summary.length).toBeLessThan(1024);
+            expect(fallback.value.summary).toContain("removed without a summary");
+          }
           const tail = SessionManager[sessionManagerFromCompactionSource](
             scope,
             [plan.header, ...plan.retained],
@@ -333,6 +360,54 @@ it("fits a worker-prepared manual summary to the foreground budget created after
               .getBranch()
               .findLast((entry) => entry.type === "compaction"),
           ).toMatchObject({ summary: result.summary });
+        },
+      );
+    });
+  }));
+
+it("records a failed required fallback after short worker reads settle", () =>
+  withTranscriptState("bounded-compaction-failed-fallback", async ({ scope }) => {
+    const manager = await SessionManager.openAsync(scope);
+    await manager.appendMessageAsync(makeUserMessage("Archive project decisions", 1));
+    await manager.appendMessageAsync(assistantText("Archived decisions. ".repeat(1000)));
+    await manager.appendMessageAsync(makeUserMessage("Continue", 3));
+    await withSessionTranscriptReadSource(scope, async (read) => {
+      await read.owner.withCompactionSource(
+        {
+          target: scope,
+          resolvedScope: read.resolved,
+          expectedIdentity: read.expectedIdentity,
+          settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+          manual: true,
+          safeguard: { recentTurnsPreserve: 3, qualityGuardEnabled: false },
+        },
+        async (plan, source) => {
+          const tail = SessionManager[sessionManagerFromCompactionSource](
+            scope,
+            [plan.header, ...plan.retained],
+            plan.version,
+            process.cwd(),
+          );
+          // A fallback that cannot fit must still record the failed required attempt.
+          setPreparedCompaction(tail, source);
+          setCompactionSafeguardCancellation(tail, "Summary failed", new Error("Summary failed"));
+          await expect(
+            settleCompactionSafeguardCancellation(
+              tail,
+              {
+                ...plan.facts.preparation,
+                summaryTokenBudget: 0,
+                messagesToSummarize: [],
+                turnPrefixMessages: [],
+              },
+              { signal: new AbortController().signal, requestRequiresCompaction: true },
+            ),
+          ).resolves.toBeUndefined();
+          const reopened = await SessionManager.openAsync(scope);
+          expect(reopened.getBranch().at(-1)).toMatchObject({
+            type: "custom",
+            data: { required: true, outcome: "cancelled" },
+          });
         },
       );
     });

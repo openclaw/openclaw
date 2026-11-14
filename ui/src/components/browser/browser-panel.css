@@ -24,7 +24,7 @@ openclaw-browser-panel {
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--muted);
-    font-size: var(--control-ui-text-xs);
+    font-size: 11px;
   }
 
   .bp-toolbar[data-mobile="true"] {
@@ -38,8 +38,8 @@ openclaw-browser-panel {
     border-bottom: 1px solid var(--border-strong);
     background: color-mix(in srgb, var(--bg) 55%, var(--bg-elevated));
     color: var(--muted);
-    font-size: var(--control-ui-text-md);
-    line-height: calc(18px * var(--control-ui-text-scale));
+    font-size: 14px;
+    line-height: 18px;
   }
   .bp-toolbar[data-mobile="true"] .bp-toolbar-group {
     display: inline-flex;
@@ -101,6 +101,7 @@ openclaw-browser-panel {
     outline-offset: 1px;
   }
   .bp-toolbar .bp-toolbar-location {
+    position: relative;
     display: flex;
     flex: 1;
     min-width: 0;
@@ -113,9 +114,43 @@ openclaw-browser-panel {
     align-self: stretch;
     min-height: var(--session-rail-target);
   }
+  .bp-toolbar .bp-toolbar-hint {
+    position: absolute;
+    inset: calc(100% + 6px) 0 auto;
+    z-index: 2;
+    padding: 6px 10px;
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
+    color: var(--danger);
+    font-size: 12px;
+    line-height: 16px;
+  }
+  .bp-toolbar .bp-toolbar-go {
+    position: absolute;
+    inset: calc(100% + 6px) 0 auto;
+    z-index: 2;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
+    color: var(--text);
+    font-size: 12px;
+    line-height: 16px;
+    text-align: start;
+  }
+  /* The "Go to" option belongs to the address being typed: hidden once focus leaves it. */
+  .bp-toolbar .bp-toolbar-location:not(:focus-within) .bp-toolbar-go {
+    display: none;
+  }
   .bp-toolbar .bp-toolbar-location:focus-within {
     outline: 1px solid var(--muted);
     outline-offset: 2px;
+  }
+  .bp-toolbar .bp-toolbar-location[data-invalid="true"] {
+    outline-color: var(--danger);
   }
   .bp-toolbar .bp-toolbar-favicon {
     display: flex;
@@ -212,7 +247,7 @@ openclaw-browser-panel {
     line-height: 36px;
   }
   .bp-toolbar[data-mobile="true"] .bp-url {
-    font-size: var(--control-ui-text-lg);
+    font-size: 16px;
   }
   .bp-annotatebar .bp-btn > svg {
     width: 16px;
@@ -224,7 +259,7 @@ openclaw-browser-panel {
     align-items: center;
     gap: 8px;
     padding: 5px 10px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     color: var(--muted);
     border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--accent) 7%, transparent);
@@ -240,7 +275,7 @@ openclaw-browser-panel {
     border: 1px solid var(--border);
     background: transparent;
     color: var(--text);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     font-family: inherit;
     border-radius: var(--radius-sm);
     padding: 3px 10px;
@@ -317,7 +352,7 @@ openclaw-browser-panel {
     border: 1px solid var(--border);
     background: var(--bg);
     box-shadow: var(--shadow-md);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     pointer-events: none;
   }
   .bp-tooltip__title {
@@ -356,13 +391,13 @@ openclaw-browser-panel {
     gap: 10px;
     height: 100%;
     padding: 20px;
-    font-size: calc(12.5px * var(--control-ui-text-scale));
+    font-size: 12.5px;
     color: var(--muted);
     text-align: center;
   }
   .bp-note {
     padding: 6px 12px;
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     color: var(--muted);
     border-bottom: 1px solid var(--border);
   }

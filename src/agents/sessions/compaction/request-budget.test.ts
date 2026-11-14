@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { fitCompactionSummary } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import {
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
+  replayTokenBudget,
   withCompactionQueuedContext,
 } from "./request-budget.js";
 
@@ -93,4 +95,29 @@ describe("createCompactionRequestBudget", () => {
       pendingQueuedContextTokens: 0,
     });
   });
+});
+
+it("keeps a replay summary fitted to its budget inside the window", () => {
+  const session = {
+    agent: { state: { systemPrompt: "Keep the project requirements. ".repeat(250) } },
+  };
+  const window = { contextWindow: 5_000, reserveTokens: 400 };
+  const replay = (summary: string) => [
+    { role: "compactionSummary" as const, summary, tokensBefore: 0, timestamp: 0 },
+    { role: "user" as const, content: "recent prompt", timestamp: 1 },
+  ];
+  const budget = replayTokenBudget(session, window, window, replay(""));
+  const fitted = fitCompactionSummary(
+    budget,
+    (chars) => ({ summary: "word ".repeat(chars) }),
+    9_000,
+  );
+  if (!fitted.ok) {
+    throw fitted.error;
+  }
+  const requestBudget = createCompactionRequestBudget({ ...window, ...session.agent.state });
+  expect(
+    estimateCompactedRequestTokens(replay(fitted.value.summary), requestBudget),
+  ).toBeLessThanOrEqual(4_600);
+  expect(replayTokenBudget(session, {}, window, replay(""))).toBeUndefined();
 });

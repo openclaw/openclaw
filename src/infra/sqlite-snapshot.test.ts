@@ -6,7 +6,10 @@ import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { assert, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import {
+  createPrivateSqliteDirectory,
+  resolvePrivateSqliteSnapshotStagingRoot,
+} from "./sqlite-private-directory.js";
 import {
   exclusiveCopyPublication,
   useSnapshotFixture,
@@ -51,6 +54,7 @@ function isDirectoryOpen(flags: string | number | undefined): boolean {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   __setFsSafeTestHooksForTest(undefined);
   durabilityTestState.publish = undefined;
   durabilityTestState.publicationSyncUnsupported = false;
@@ -350,7 +354,14 @@ describe("createVerifiedSqliteSnapshot", () => {
         }) as typeof fsSync.lstatSync);
       }
 
-      await expectSnapshotSuccess({ sourcePath, targetPath });
+      const stages: string[] = [];
+      await expectSnapshotSuccess({
+        sourcePath,
+        targetPath,
+        onStage: (stage, phase) => stages.push(`${stage}:${phase}`),
+      });
+      expect(stages).toContain("source-acquisition:start");
+      expect(stages).toContain("source-acquisition:done");
       expect(hidJournal).toBe(hideJournal);
       assert(sourceBefore.equals(await fs.readFile(sourcePath)), "source");
       assert(journalBefore.equals(await fs.readFile(`${sourcePath}-journal`)), "journal");
@@ -488,6 +499,62 @@ describe("createVerifiedSqliteSnapshot", () => {
       expect(await fs.readlink(linkedSource)).toBe(sourcePath);
       expect(await fs.readFile(sourcePath)).toEqual(before);
       expect(query("SELECT value FROM records")).toEqual([{ value: "preserved" }]);
+    },
+  );
+
+  it.each([false, true])(
+    "reports source acquisition before isolated snapshot work (preserve=%s)",
+    async (preserveSourceArtifacts) => {
+      execSource("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('retained');");
+      const stages: Array<[string, string, number]> = [];
+      await snapshot({
+        sourceAcquisition: {
+          mode: "isolated-process",
+          stagingRoot: tempDir,
+          preserveSourceArtifacts,
+        },
+        onStage: (stage, phase, bytes) => stages.push([stage, phase, bytes]),
+      });
+      expect(stages[0]).toEqual(["source-acquisition", "start", expect.any(Number)]);
+      expect(stages).toContainEqual(["source-acquisition", "done", expect.any(Number)]);
+    },
+  );
+
+  it.each([false, true])(
+    "cleans isolated acquisition when progress completion fails (preserve=%s)",
+    async (preserveSourceArtifacts) => {
+      execSource("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('retained');");
+      const before = await fs.readdir(tempDir);
+      await expectSnapshotFailureWithoutTarget(/progress completion failed/u, {
+        sourceAcquisition: {
+          mode: "isolated-process",
+          stagingRoot: tempDir,
+          preserveSourceArtifacts,
+        },
+        onStage: (stage, phase) => {
+          if (stage === "source-acquisition" && phase === "done") {
+            throw new Error("progress completion failed");
+          }
+        },
+      });
+      expect(await fs.readdir(tempDir)).toEqual(before);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "cleans hot-journal preparation when progress completion fails",
+    async () => {
+      createHotRollbackJournal(sourcePath);
+      vi.stubEnv("XDG_CACHE_HOME", path.join(tempDir, "cache"));
+      const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
+      await expectSnapshotFailureWithoutTarget(/progress completion failed/u, {
+        onStage: (stage, phase) => {
+          if (stage === "source-acquisition" && phase === "done") {
+            throw new Error("progress completion failed");
+          }
+        },
+      });
+      expect(await fs.readdir(stagingRoot)).toEqual([]);
     },
   );
 

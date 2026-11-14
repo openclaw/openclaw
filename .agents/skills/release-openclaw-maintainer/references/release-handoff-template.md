@@ -18,6 +18,8 @@ operator steering. Do not preserve superseded scope.
 - version decision: `<explicit version | approved resolved version>`
 - preparation/backport authority: `<instruction and approved set or selection scope>`
 - publication authority: `<held | beta management default | explicit approval; source and scope>`
+- channel/contact restrictions: `<none | exact operator restriction and affected operations>`
+- approved gate exceptions: `<none | pinned P policy grant, version/job/attempt scope; failed or not-run disposition>`
 - intake: `<open | frozen; pending approved changes or next-release queue>`
 - handoff: `<predecessor stopped writing; successor acknowledgement or pending>`
 - next checkpoint: `<candidate approval | publication | recovery | closeout>`
@@ -99,7 +101,10 @@ ClawHub or native apps.
 | Post-docs release body    | `<approved bundle, release ID, fresh body read and verified update>`     | `<action>`             |
 
 A successful publish parent does not complete detached ClawHub verification or
-macOS. Preserve their exact identities and advance ready independent work while
+macOS. ClawHub starts at its existing dispatch point and never blocks core,
+GitHub finalization, main closeout, or the retrospective PR. Give pending or
+failed ClawHub work an owner and next action, without calling it complete.
+Preserve their exact identities and advance ready independent work while
 another surface waits. Staging is not public ClawHub byte verification; npm
 `latest` is not GitHub Latest verification. Use the owning platform/recovery
 reference for commands rather than redispatching the release parent.

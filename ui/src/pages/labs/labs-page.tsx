@@ -10,7 +10,6 @@ import {
   Loading,
   onSettled,
 } from "solid-js";
-import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { ErrorDetails } from "../../components/config-error.tsx";
 import {
   LearnMoreLink,
@@ -27,13 +26,11 @@ import {
   currentConfigObject,
   resolveEditableSnapshotConfig,
 } from "../../lib/config/config-state-model.ts";
-import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
-import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import { resolveLabFeatureState, type LabFeature } from "./labs-feature-state.ts";
 import { labFeatureMergePatch, labFeatureResetPatch, LAB_FEATURES } from "./labs-registry.ts";
 
@@ -231,25 +228,6 @@ export function LabsPage() {
       gateway: { controlUi: { experimental: { composerPredictions: { model } } } },
     });
   }
-  function PluginSettingsLink(props: { pluginId: string; featureTitle: string }) {
-    const location = () =>
-      pluginDetailLocation(
-        { pathname: pathForPluginSettings(props.pluginId, context.basePath), search: "" },
-        true,
-      );
-    return (
-      <a
-        class="btn btn--sm oc-action oc-action-ghost"
-        href={`${location().pathname}${location().search}`}
-        aria-label={t("labsPage.configureFeature", { name: props.featureTitle })}
-        onClick={(event: MouseEvent) =>
-          handleNavigationClick(event, () => context.navigate("plugin-settings", location()))
-        }
-      >
-        {t("labsPage.configure")}
-      </a>
-    );
-  }
   function FeatureRow(props: { feature: LabFeature }) {
     const featureState = () => resolveLabFeatureState(editableConfig(), props.feature);
     const checked = () => {
@@ -295,14 +273,6 @@ export function LabsPage() {
             }
             saving={savingFeatureId() === props.feature.id}
             onChange={(enabled) => setFeatureEnabled(props.feature, enabled)}
-            actions={
-              props.feature.settingsPluginId ? (
-                <PluginSettingsLink
-                  pluginId={props.feature.settingsPluginId}
-                  featureTitle={props.feature.title()}
-                />
-              ) : undefined
-            }
             description={
               <>
                 {props.feature.description()}

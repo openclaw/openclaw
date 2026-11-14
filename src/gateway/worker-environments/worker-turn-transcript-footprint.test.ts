@@ -154,7 +154,6 @@ describe("Gateway worker-turn selected transcript preparation", () => {
           inactiveLoadedMessages: 0,
         });
         if (recorder) {
-          // Input policy runs after credential/media preparation, before the recorder writes.
           expect(recorder.hasPersisted()).toBe(false);
           expect(recorder.getAdmissionReceipt()).toBeUndefined();
         }

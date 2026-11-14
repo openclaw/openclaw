@@ -13,8 +13,19 @@ import {
 import type { IconName } from "../../components/icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatCommandsEnglish } from "../../i18n/locales/en-chat-commands.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerEnglishCatalog } from "../reactive/i18n.ts";
 
 registerChatCommandsEnglish();
+registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatGoalsEnglish);
+registerEnglishCatalog(registerSessionMenuEnglish);
+registerEnglishCatalog(registerSessionOrganizationEnglish);
+registerEnglishCatalog(registerModelControlsEnglish);
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -44,6 +55,38 @@ export type SlashCommandDef = {
   skillReferenceable?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
+
+const COMMAND_TITLE_KEYS: Readonly<Record<string, string>> = {
+  new: "chat.runControls.newSession",
+  fork: "sessionsView.forkSession",
+  name: "sessionsView.renameSession",
+  goal: "chat.goals.composerMode",
+  agents: "chat.commands.categories.agents",
+  tools: "chat.commands.categories.tools",
+  context: "chat.sidePanel.context",
+  subagents: "chat.sidePanel.subagents",
+  queue: "chat.runControls.queue",
+  verbose: "sessionsView.verbose",
+  reasoning: "sessionsView.reasoning",
+  stop: "chat.runControls.stop",
+  reset: "common.reset",
+  compact: "chat.composer.contextUsage.compact",
+  model: "chat.commands.categories.model",
+  think: "chat.modelControls.effort",
+  fast: "chat.modelControls.speed",
+  steer: "chat.queue.steer",
+};
+
+export function getSlashCommandTitle(
+  command: SlashCommandDef,
+  translate: typeof t = t,
+): string | undefined {
+  if (command.source === "skill") {
+    return command.skillDisplayName;
+  }
+  const key = command.source !== "plugin" ? COMMAND_TITLE_KEYS[command.key] : undefined;
+  return key ? translate(key) : undefined;
+}
 
 type LocalArgChoice = string | { value: string; label: string };
 
@@ -346,17 +389,22 @@ const TIER_ORDER: Record<SlashCommandTier, number> = {
 const NON_MATCHING_COMMAND_RANK = 4;
 
 function getSlashCommandRelevance(command: SlashCommandDef, filter: string): number {
-  const names = [command.name, ...(command.aliases ?? [])].map(normalizeLowercaseStringOrEmpty);
-  if (names.some((name) => name === filter)) {
+  const query = filter.normalize("NFC");
+  const names = [command.name, ...(command.aliases ?? []), getSlashCommandTitle(command)].map(
+    (name) => normalizeLowercaseStringOrEmpty(name).normalize("NFC"),
+  );
+  if (names.some((name) => name === query)) {
     return 0;
   }
-  if (names.some((name) => name.startsWith(filter))) {
+  if (names.some((name) => name.startsWith(query))) {
     return 1;
   }
-  if (names.some((name) => name.includes(filter))) {
+  if (names.some((name) => name.includes(query))) {
     return 2;
   }
-  return normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(filter)
+  return normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command))
+    .normalize("NFC")
+    .includes(query)
     ? 3
     : NON_MATCHING_COMMAND_RANK;
 }

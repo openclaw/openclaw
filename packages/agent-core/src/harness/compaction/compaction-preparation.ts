@@ -16,13 +16,18 @@ import {
   parseCompactionDetails,
 } from "./compaction-details.js";
 import type { CompactionEntrySource } from "./compaction-entry-source.js";
+import {
+  stripSummaryFloor,
+  prepareCompactionFloor,
+  prepareCompactionFloorMessage,
+} from "./compaction-floor.js";
 import type { CompactionPreparation, CompactionSettings } from "./compaction.js";
 import {
   createFileOps,
   extractFileOpsFromFacts,
   prepareFileOperationMessage,
   findLatestCompactionUserMessage,
-  getCompactionContent,
+  extractCompactionMessageText,
   mergeSummaryFileOperations,
 } from "./utils.js";
 
@@ -120,11 +125,8 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
 
 function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
-  const message = findLatestCompactionUserMessage(
-    messages,
-    (candidate) => getCompactionContent(candidate.content).text,
-  );
-  const source = message ? getCompactionContent(message.content).text.trim() : "";
+  const message = findLatestCompactionUserMessage(messages, extractCompactionMessageText);
+  const source = message ? extractCompactionMessageText(message) : "";
   if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
     return source || undefined;
   }
@@ -333,7 +335,8 @@ export function prepareCompactionFromSource(
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
     const prevBoundary = pathEntries.get(prevBoundaryIndex);
-    previousSummary = prevBoundary?.type === "compaction" ? prevBoundary.summary : undefined;
+    previousSummary =
+      prevBoundary?.type === "compaction" ? stripSummaryFloor(prevBoundary.summary) : undefined;
     if (prevBoundary?.type === "compaction") {
       const details = parseCompactionDetails(prevBoundary.details);
       previousLatestUnresolvedUserRequest = details?.latestUnresolvedUserRequest;
@@ -362,6 +365,9 @@ export function prepareCompactionFromSource(
         get: (index) => pathEntries.get(index + prevBoundaryIndex + 1),
         tokens: pathEntries.tokens
           ? (index) => pathEntries.tokens?.(index + prevBoundaryIndex + 1) ?? 0
+          : undefined,
+        floor: pathEntries.floor
+          ? (index) => pathEntries.floor?.(index + prevBoundaryIndex + 1)
           : undefined,
         fileOperations: pathEntries.fileOperations
           ? (index) => pathEntries.fileOperations?.(index + prevBoundaryIndex + 1)
@@ -535,7 +541,7 @@ export function prepareCompactionFromSource(
     if (
       entry?.type === "message" &&
       entry.message.role === "user" &&
-      getCompactionContent(entry.message.content).text.trim()
+      extractCompactionMessageText(entry.message)
     ) {
       turnPrefixSourceAskIndex = index;
       break;
@@ -554,11 +560,32 @@ export function prepareCompactionFromSource(
         : history.get(index - resetPreludeSource.length),
   };
   const turnPrefixMessages = indexedMessages(effectiveEntries, prefixIndices);
+  function* floorFacts() {
+    for (const [entries, indices] of [
+      [pathEntries, resetPreludeIndices],
+      [effectiveEntries, [...historyIndices, ...prefixIndices]],
+    ] as const) {
+      for (const index of indices) {
+        const fact = entries.floor?.(index);
+        if (fact) {
+          yield fact;
+          continue;
+        }
+        const entry = entries.get(index);
+        const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
+        if (message) {
+          yield prepareCompactionFloorMessage(message);
+        }
+      }
+    }
+  }
+  const floor = prepareCompactionFloor(floorFacts());
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
     return ok(undefined);
   }
   return ok({
     firstKeptEntryId,
+    floor,
     messagesToSummarize,
     turnPrefixMessages,
     turnPrefixSourceAskIndex,

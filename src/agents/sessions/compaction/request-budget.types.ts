@@ -17,4 +17,6 @@ export type CompactionRequestConstraints = Readonly<{
   /** Source of the active run, including after its input has been processed. */
   requestFromEntryId?: string;
   pendingUserEntryId?: string;
+  /** The pending request cannot run until this compaction commits. */
+  requestRequiresCompaction?: true;
 }>;

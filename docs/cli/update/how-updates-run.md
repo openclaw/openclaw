@@ -362,6 +362,11 @@ literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
 
+When both the installed updater and the candidate support
+[candidate-owned rehearsal](/cli/update#candidate-owned-rehearsal), the candidate
+runs these checks itself with its own budgets and reports each step to the
+updater. Otherwise the installed updater runs them.
+
 Plugin snapshots verify inventoried bytes with SHA-256. Native companion captures
 may add or remove hard links while the old Gateway serves; link-only metadata
 changes do not invalidate unchanged files on Windows or POSIX, including
@@ -606,7 +611,19 @@ The update report records the measured SQLite and plugin sizes, the total
 required space, the checked destinations and their available space, and the
 selected location and reason. If none fits, snapshot preparation refuses before
 copying with `snapshot-capacity-insufficient` and explains how to free space or
-set `TMPDIR`. A path that cannot be allocated is recorded and skipped; if all
+set `TMPDIR`.
+
+When space is short and [`update cleanup`](/cli/update/repair-and-recovery#update-cleanup)
+already counts some recovery copies from earlier updates as retirable, an
+interactive `openclaw update` lists them with their sizes and asks whether to
+remove them permanently, defaulting to no. On yes, the running Gateway, or the
+updater itself when no Gateway runs, retires them and the update checks space
+again before it changes anything. `--yes`, `--json`, updates without a terminal,
+and Control UI updates never remove them; their refusal names the reclaimable
+size and the next step instead. Git updates make this offer before they start;
+their later pre-staging check still decides whether to refuse.
+
+A path that cannot be allocated is recorded and skipped; if all
 fitting paths are unusable, `snapshot-location-unavailable` names their path or
 permission errors. Capacity checks do not reserve space against concurrent writes.
 The copy worker uses the inventoried plugin plan. If an install record, plugin

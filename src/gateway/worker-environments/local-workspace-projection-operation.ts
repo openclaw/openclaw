@@ -1,4 +1,5 @@
 import type {
+  LocalWorkspacePausePhase,
   LocalWorkspacePauseReason,
   quiesceLocalWorkspace,
 } from "../../agents/sandbox/local-workspace-quiescence.js";
@@ -31,9 +32,11 @@ export async function runLocalWorkspaceProjection<T>(
     provision?: boolean;
     reason?: LocalWorkspacePauseReason;
     snapshotCapture?: boolean;
+    onPhase?: (phase: LocalWorkspacePausePhase | "capturePreparation") => void;
   } = {},
 ) {
   owner.assertCurrent();
+  options.onPhase?.("operation");
   let previous = store.get();
   // A reset may recover its prior result; another session incarnation cannot adopt it.
   if (
@@ -65,13 +68,13 @@ export async function runLocalWorkspaceProjection<T>(
           resume: () => resume(),
           capture: async (consume) => {
             await pause();
-            quiescence?.markPhase("capture");
+            markPhase("capture");
             const selected = capture;
             capture = undefined;
             captured ||= Boolean(selected);
             await (selected ? selected(consume) : consume());
           },
-          markPhase: (phase) => quiescence?.markPhase(phase),
+          markPhase: (phase) => markPhase(phase),
         }
       : undefined,
   );
@@ -86,9 +89,16 @@ export async function runLocalWorkspaceProjection<T>(
     commitGuard: () => void operations.current(),
   };
   let quiescence: Awaited<ReturnType<typeof quiesceLocalWorkspace>> | undefined;
+  const markPhase = (phase: LocalWorkspacePausePhase) => {
+    quiescence?.markPhase(phase);
+    options.onPhase?.(phase);
+  };
   let paused = false;
   const diagnostics: LocalWorkspaceCaptureDiagnostics = { reason: "adaptive-direct" };
   const resume = async () => {
+    if (paused) {
+      options.onPhase?.("resume");
+    }
     const started = performance.now();
     try {
       await quiescence?.resume();
@@ -101,6 +111,7 @@ export async function runLocalWorkspaceProjection<T>(
     if (paused) {
       return;
     }
+    options.onPhase?.("pause");
     quiescence =
       previous && !options.provision
         ? await timeWorktreePreparationPhase("runtimeQuiesce", () =>
@@ -119,8 +130,10 @@ export async function runLocalWorkspaceProjection<T>(
         : undefined;
     paused = Boolean(quiescence);
     diagnostics.pausedAt = performance.now();
+    options.onPhase?.("operation");
   };
   const useCapture = reconcile || (options.reason === "checkpoint" && options.snapshotCapture);
+  options.onPhase?.("capturePreparation");
   let capture =
     previous?.baseline_ref && useCapture
       ? await prepareLocalWorkspaceCheckpointCapture(
@@ -131,18 +144,25 @@ export async function runLocalWorkspaceProjection<T>(
           diagnostics,
         )
       : undefined;
-  await pause();
+  // The checkpoint probe selects snapshots only after excluding pending recovery.
+  // Atomic exports need no freeze; other callbacks retain frozen guest custody.
+  if (!capture || options.reason !== "checkpoint") {
+    await pause();
+  }
   let accepted = false;
   try {
     const result = await run(
       operations,
-      quiescence && {
+      (quiescence || capture) && {
         get retired() {
-          return quiescence!.retired;
+          return quiescence?.retired ?? false;
         },
-        retire: () => quiescence!.retire(),
+        retire: async () => {
+          await pause();
+          await quiescence?.retire();
+        },
         resume,
-        markPhase: (phase) => quiescence!.markPhase(phase),
+        markPhase,
       },
       capture,
     );
@@ -173,6 +193,7 @@ export async function runLocalWorkspaceProjection<T>(
         }
       }
       if (previous && (options.reason === "checkpoint" || captured)) {
+        options.onPhase?.("cleanup");
         if (accepted) {
           await retireLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
         } else {

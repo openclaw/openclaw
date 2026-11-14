@@ -1,2 +1,0 @@
-458
-# OpenClaw ID lost-key regressions: real-Gateway proof for both keys, the key rule matrix, the withdrawn-authority restart and initial-link/later-write uncertainty after a durable binding.

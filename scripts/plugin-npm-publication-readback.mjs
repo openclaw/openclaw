@@ -20,6 +20,7 @@ import {
 } from "./plugin-npm-prepared-release.mjs";
 import { verifyPluginPublicationArtifact } from "./plugin-publication-artifact.mjs";
 import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
+import { validateCorePluginDeferrals } from "./release-approval-receipt.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 
 const WORKFLOW = ".github/workflows/plugin-npm-release.yml";
@@ -339,6 +340,21 @@ export async function createPluginNpmPublicationReadback(options) {
     `plugin-npm-plan-${runId}-${planner.run_attempt}`,
     "npm-publication-plan.json",
   );
+  // The exact trusted planner verifies the complete qualified roster and reads
+  // these declarations from its live, human-approved parent receipt. They are
+  // distinct from both published skips and automatic ENEEDAUTH checkpoints.
+  const coreDeferrals = plan.coreDeferrals?.length
+    ? validateCorePluginDeferrals(plan.coreDeferrals, {
+        targetSha: sourceSha,
+        releaseTag: `v${packages[0]?.version}`,
+        npmDistTag: options.npmDistTag ?? "beta",
+      })
+    : [];
+  const deferredPackages = coreDeferrals.map((deferred) => {
+    const entry = packages.find((candidate) => candidate.packageName === deferred.packageName);
+    requireValue(entry, "Deferred npm package is outside the frozen roster.");
+    return entry;
+  });
   const identities = (entries) => {
     requireValue(Array.isArray(entries) && entries.length <= 256, "Invalid npm planning roster.");
     const values = entries.map((entry) =>
@@ -350,8 +366,9 @@ export async function createPluginNpmPublicationReadback(options) {
   requireValue(
     plan.sourceSha === sourceSha &&
       JSON.stringify(identities(plan.all)) === JSON.stringify(identities(packages)) &&
-      JSON.stringify(identities([...plan.candidates, ...plan.skippedPublished])) ===
-        JSON.stringify(identities(packages)),
+      JSON.stringify(
+        identities([...plan.candidates, ...plan.skippedPublished, ...deferredPackages]),
+      ) === JSON.stringify(identities(packages)),
     "Resolved npm publication plan differs from the frozen package roster.",
   );
   requireValue(
@@ -382,6 +399,31 @@ export async function createPluginNpmPublicationReadback(options) {
         "Qualified plugin version differs from the parent release version.",
       );
       const job = publishers.get(`${JOB_PREFIX}${packageName})`);
+      const coreDeferral = coreDeferrals.find((deferred) => deferred.packageName === packageName);
+      if (coreDeferral) {
+        requireValue(!job, "Explicitly deferred package unexpectedly has a publisher job.");
+        const { alreadyPublished, supersededBy } = await verifyPublishedNpmRegistry({
+          packageName,
+          version: releaseVersion,
+          publishTags: [releaseDistTag],
+          allowMissing: true,
+          fetchImpl: options.fetchImpl,
+        });
+        evidence.push({
+          ...coreDeferral,
+          verification: alreadyPublished ? "published-registry" : "operator-deferred-auth",
+          supersededBy,
+          childRunId: runId,
+          planAttempt: planner.run_attempt,
+          planArtifactId: planMetadata.id,
+        });
+        return {
+          disposition: alreadyPublished ? "published" : "deferred-auth",
+          note: alreadyPublished
+            ? `${packageName}@${releaseVersion} is public after its explicit deferral; original failure ${coreDeferral.evidence}.`
+            : `${packageName}@${releaseVersion} explicitly deferred: ${coreDeferral.reason}; original failure ${coreDeferral.evidence}. Publication is not asserted.`,
+        };
+      }
       if (!job) {
         requireValue(
           skipped.has(packageName),

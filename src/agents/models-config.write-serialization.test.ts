@@ -217,19 +217,21 @@ it("refreshes prices only for the published agent", async ({ home }) => {
   const options = {
     pluginMetadataSnapshot: { ...createPluginMetadataSnapshotFixture(), workspaceDir: home },
   };
-  const price = (agentDir: string) =>
-    resolveModelCostConfig({
-      config,
-      agentDir,
-      provider: "fixture",
-      model: "priced",
-      allowPluginNormalization: false,
-    })?.input;
+  const price = async (agentDir: string) =>
+    (
+      await resolveModelCostConfig({
+        config,
+        agentDir,
+        provider: "fixture",
+        model: "priced",
+        allowPluginNormalization: false,
+      })
+    )?.input;
   await ensureOpenClawModelsJson(config, firstDir, options);
   await ensureOpenClawModelsJson(configFor(5), secondDir, options);
-  expect([price(firstDir), price(secondDir)]).toEqual([1, 5]);
-  const firstFingerprint = resolveModelCostConfigFingerprint(config, firstDir);
-  const secondFingerprint = resolveModelCostConfigFingerprint(config, secondDir);
+  expect([await price(firstDir), await price(secondDir)]).toEqual([1, 5]);
+  const firstFingerprint = await resolveModelCostConfigFingerprint(config, firstDir);
+  const secondFingerprint = await resolveModelCostConfigFingerprint(config, secondDir);
 
   const updated = await ensureOpenClawModelsJson(configFor(9), firstDir, options);
 
@@ -237,9 +239,9 @@ it("refreshes prices only for the published agent", async ({ home }) => {
   expect(await readGeneratedModelsJson(firstDir)).toEqual({
     providers: configFor(9).models.providers,
   });
-  expect([price(firstDir), price(secondDir)]).toEqual([9, 5]);
-  expect(resolveModelCostConfigFingerprint(config, firstDir)).not.toBe(firstFingerprint);
-  expect(resolveModelCostConfigFingerprint(config, secondDir)).toBe(secondFingerprint);
+  expect([await price(firstDir), await price(secondDir)]).toEqual([9, 5]);
+  expect(await resolveModelCostConfigFingerprint(config, firstDir)).not.toBe(firstFingerprint);
+  expect(await resolveModelCostConfigFingerprint(config, secondDir)).toBe(secondFingerprint);
 });
 
 it("publishes live catalog refreshes without retaining their configurations", async ({

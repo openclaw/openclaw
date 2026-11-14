@@ -178,6 +178,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       selectedTargetFiles.delete(missing);
     }
     writeFixtures(selectedTargetFiles);
+    writeFixture(
+      "scripts/ci-changed-scope.mjs",
+      reexport("hasMlxNativeProofInputs", "scripts/ci-changed-scope.mjs"),
+    );
     if (options.bunTestRuntime) {
       const inspection = options.nativeBunInspection;
       writeScript(
@@ -355,7 +359,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       if (!options.changedCoreTestSupport) {
         writeFixture(
           "scripts/changed-lanes.mts",
-          reexport("detectChangedLanes", "scripts/changed-lanes.mts"),
+          reexport("detectChangedLanes, detectChangedLanesForPaths", "scripts/changed-lanes.mts"),
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection
@@ -588,6 +592,8 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "release-version.mjs",
       "ci-ios-smoke-plan.mjs",
       "ci-blacksmith-capacity.mjs",
+      "ci-node-test-capacity.mts",
+      "vitest-shard-metadata.mts",
       "ci-skills-python-plan.mjs",
       "changed-path-facts.mjs",
     ]) {

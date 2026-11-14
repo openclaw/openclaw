@@ -166,7 +166,7 @@ describe("Models page catalog publication", () => {
       expect(page.querySelector('[data-provider-id="openai"]')?.textContent).toContain("Ready"),
     );
     expect(page.querySelector(".model-providers__checking")).toBeNull();
-    expect(displayedCatalog(page)?.pendingProviders).toBeUndefined();
+    await waitForSolid(() => expect(displayedCatalog(page)?.pendingProviders).toBeUndefined());
     expect(readPublished).toHaveBeenCalledTimes(2);
   });
 
@@ -451,6 +451,24 @@ describe("Models page catalog publication", () => {
     expect(discover).toHaveBeenCalledOnce();
   });
 
+  it("keeps saved defaults usable while discovery continues in the background", async () => {
+    const { context, readPublished, runtimeConfig } = createCatalogHarness();
+    readPublished.mockReturnValue({ ...preparedCatalog, pendingProviders: ["openai"] });
+    const page = appendPage(context);
+    await waitForProviders(page, savedModelConfig);
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
+
+    page.view.props.onPrimaryChange("openai/prepared-utility");
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await drainPageUpdates(page);
+
+    expect(
+      modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
+        ?.disabled,
+    ).toBe(false);
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
+  });
+
   it.each(["utility"] as const)(
     "Models page %s picker opens without a request and preserves saved choices as publication completes",
     async (role) => {
@@ -469,9 +487,7 @@ describe("Models page catalog publication", () => {
         requestsAfterLoad,
       );
       expect(discover).not.toHaveBeenCalled();
-      expect(
-        page.querySelector('.model-providers__catalog-progress[role="status"]'),
-      ).not.toBeNull();
+      expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
       expect(
         chatModelPickers(page).map(
           (picker) => picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled,
@@ -542,7 +558,6 @@ describe("Models page catalog publication", () => {
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
       const utility = modelPicker(page, "utility");
-      utility.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
       await utility.updateComplete;
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();
@@ -586,7 +601,7 @@ describe("Models page catalog publication", () => {
         page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
       ).toContain("Couldn’t load more models. Try again."),
     );
-    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     await openModelPicker(page);
     expect(displayedCatalog(page)?.models).toEqual([]);
     const selected: (string | null | undefined)[] = [];
@@ -645,9 +660,7 @@ describe("Models page catalog publication", () => {
     await retryCatalog(page);
     expect(discover).toHaveBeenCalledTimes(2);
     await waitForSolid(() =>
-      expect(
-        page.querySelector('.model-providers__catalog-progress[role="status"]'),
-      ).not.toBeNull(),
+      expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull(),
     );
     expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).toBeNull();
     expect(modelPicker(page, "primary")).toBe(retainedPicker);
@@ -789,7 +802,7 @@ describe("Models page catalog publication", () => {
 
     await drainPageUpdates(page);
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
-    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).toBeNull();
     await openModelPicker(page, "fallback");
     expect(discover).toHaveBeenCalledTimes(2);

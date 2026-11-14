@@ -282,7 +282,8 @@ export function messageMarkdownRenderOptions(
   return {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
-    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
+    codeBlockInteraction:
+      role === "assistant" ? "interactive" : role === "user" ? "wrap" : "static",
     fileLinks: true,
     humanMentions: markdown === preparation.displayMarkdown ? preparation.humanMentions : undefined,
     interactiveImages: opts.onOpenImage !== undefined,
@@ -351,6 +352,9 @@ export function prepareGroupedMessage(
     assistantViewBlocks.length !== 0 ||
     inlineViewBlocks.length !== 0;
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
+  const templatePluginCards = normalizedMessage.content.filter(
+    (item) => item.type === "template_plugin_install",
+  );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? `_Reasoning:_\n\n${extractedThinking}` : null;
@@ -412,10 +416,12 @@ export function prepareGroupedMessage(
     !hasToolCards &&
     !hasMediaContent &&
     clawHubCards.length === 0 &&
+    templatePluginCards.length === 0 &&
     !normalizedMessage.replyTarget;
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
+  const toolMessageExpanded =
+    opts.isToolMessageExpanded?.(toolMessageDisclosureId, toolCards[0]) ?? false;
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const standaloneToolPayload =
     isStandaloneToolMessage &&
@@ -479,6 +485,7 @@ export function prepareGroupedMessage(
     assistantViewBlocks,
     inlineViewBlocks,
     clawHubCards,
+    templatePluginCards,
     reasoningMarkdown,
     markdown,
     markdownRenderOptions,

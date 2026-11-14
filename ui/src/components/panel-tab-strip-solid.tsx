@@ -69,7 +69,6 @@ function NewControl<T extends SolidPanelTabStripTab>(props: {
             type="button"
             data-new-tab-action={props.strip.newTabAction ? "" : undefined}
             disabled={props.strip.newDisabled}
-            title={props.strip.newLabel}
             aria-label={props.strip.newLabel}
             onClick={() => props.strip.onNew()}
           >
