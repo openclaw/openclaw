@@ -23,12 +23,6 @@ export function setVisibility(page: Page, state: "hidden" | "visible", dispatchP
   );
 }
 
-export function scrollRemainder(target: Locator) {
-  return target.evaluate(
-    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
-  );
-}
-
 export function styles(target: Locator, properties: string[]) {
   return target.evaluate((element, names) => {
     const style = getComputedStyle(element);
