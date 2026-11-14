@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -9,6 +10,9 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
+import { selectAttachments } from "../../media-understanding/attachments.select.js";
+import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import {
   createSqliteTranscriptTarget,
   persistUserTurnTranscript,
@@ -81,7 +85,6 @@ describe("prepareChatSendUserTurn audio", () => {
     "persists a configured %s voice transcript in its canonical user turn",
     async (_name, id, mode) => {
       const clientInfo = createClientInfo({ id, mode });
-      mockPersistence();
       mockTranscript("transcribed voice");
       setRuntimeConfigSnapshot({});
       const scope = {
@@ -106,19 +109,54 @@ describe("prepareChatSendUserTurn audio", () => {
           mediaPathOffloads: [
             {
               path: "/state/media/inbound/voice.ogg",
+              url: "media://inbound/voice.ogg",
               contentType: "audio/ogg",
               fileName: "voice.ogg",
             },
+            {
+              path: "/state/media/inbound/unselected.ogg",
+              url: "media://inbound/unselected.ogg",
+              contentType: "audio/ogg",
+            },
           ],
-          offloadedRefs: [voiceRef()],
+          offloadedRefs: [
+            { ...voiceRef("photo.png"), kind: "image", mimeType: "image/png", sourceIndex: 0 },
+            { ...voiceRef(), sourceIndex: 1 },
+            { ...voiceRef("unselected.ogg"), sourceIndex: 2 },
+          ],
         },
       });
       const input = await prepared.readInput();
       expect(input.text).toBe("raw message\nHeard: transcribed voice");
+      expect(input.media).toMatchObject([
+        { url: "media://inbound/photo.png", kind: "image" },
+        { url: "media://inbound/voice.ogg", transcribed: true },
+        { url: "media://inbound/unselected.ogg" },
+      ]);
+      expect(input.media?.[0]).not.toHaveProperty("transcribed");
+      expect(input.media?.[2]).not.toHaveProperty("transcribed");
+      expect(input.mediaImageLayout).toEqual({ slots: [{ kind: "offloaded", factIndex: 0 }] });
       const target = createSqliteTranscriptTarget({ dir: tempDirs.make() });
       await persistUserTurnTranscript({ ...target, input, updateMode: "none" });
       const [reloaded] = await readTranscriptMessages(target);
-      expect(reloaded?.content).toBe("raw message\nHeard: transcribed voice");
+      assert(reloaded, "canonical user turn must be persisted");
+      expect(reloaded.content).toBe("raw message\nHeard: transcribed voice");
+      expect(reloaded).toMatchObject({
+        __openclaw: {
+          media: [
+            { url: "media://inbound/photo.png", kind: "image" },
+            { url: "media://inbound/voice.ogg", transcribed: true },
+            { url: "media://inbound/unselected.ogg" },
+          ],
+        },
+      });
+      const recovered = selectAttachments({
+        capability: "audio",
+        attachments: normalizeAttachments({ media: readPersistedMediaFacts(reloaded) }),
+      });
+      expect(recovered.selected.map((attachment) => attachment.url)).toEqual([
+        "media://inbound/unselected.ogg",
+      ]);
       prepared.applyApprovedText(requireInputText(input));
       expect(prepared.ctx.Body).toBe("raw message\nHeard: transcribed voice");
       expect(prepared.ctx.BodyForAgent).toContain(
@@ -190,8 +228,8 @@ describe("prepareChatSendUserTurn audio", () => {
     expect(input.text).toBe("caption\nHeard: support transcript");
     expect(prepared.ctx.AgentId).toBe("support");
     expect(selectedPaths).toEqual({
-      agentDir: "/state/agents/support",
-      workspaceDir: "/work/support",
+      agentDir: path.resolve("/state/agents/support"),
+      workspaceDir: path.resolve("/work/support"),
     });
   });
 
