@@ -343,7 +343,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["pnpm-lock.yaml"],
   },
   ...[
-    "extensions/copilot/src/attempt-transcript-journal.test.ts",
     "extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,

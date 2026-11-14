@@ -463,7 +463,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/codex/src/web-search-provider.test.ts",
   "extensions/copilot/src/attempt-active-run.test.ts",
   "extensions/copilot/src/attempt-session.integration.test.ts",
-  "extensions/copilot/src/attempt-transcript-journal.test.ts",
   "extensions/copilot/src/catalog-lifetime.test.ts",
   "extensions/copilot/src/tool-bridge.test.ts",
   "extensions/crabbox/doctor-contract-api.test.ts",

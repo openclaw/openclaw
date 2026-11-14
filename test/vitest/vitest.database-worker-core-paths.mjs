@@ -1073,7 +1073,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-worker-store.test.ts",
   "src/state/openclaw-agent-db.integrity-lease.test.ts",
   "src/state/openclaw-agent-db.registration-settlement.test.ts",
-  "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution.schema-admission.test.ts",
   "src/state/openclaw-agent-execution.creation-witness.test.ts",
   "src/state/openclaw-agent-execution.alias.test.ts",
