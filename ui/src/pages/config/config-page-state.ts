@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { saveImportedTheme } from "../../app/custom-theme-profile.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -524,9 +525,9 @@ export function createConfigPage(
           config: context.runtimeConfig.state,
           hasCustomTheme: Boolean(settings().customTheme),
           readTheme: () => settings().theme,
-          load: importCustomThemeFromUrl,
-          apply: (customTheme, activate) =>
-            preferences.apply({ customTheme }, activate ? "custom" : settings().theme),
+          load: async (url) => saveImportedTheme(await importCustomThemeFromUrl(url), context),
+          apply: ({ patch, themeId }, activate) =>
+            preferences.apply(patch, activate ? themeId : settings().theme),
           messages: {
             blocked: (reason) =>
               t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),

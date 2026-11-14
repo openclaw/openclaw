@@ -276,6 +276,7 @@ export function createThemeCatalog(
       return definitions.get(id);
     },
     refresh,
+    remember: rememberDefinition,
     dispose() {
       disposed = true;
       retireReads();
