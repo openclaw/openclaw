@@ -464,7 +464,9 @@ test.for([
   await completion(signal);
   // Each turn names the run that launched its commands; later exits may finish in any order.
   const observed = calls.map((params) => ({
-    jobs: (params.prompt.match(/BATCH_\d/g) ?? []).map((job) => Number(job.slice(6))).toSorted(),
+    jobs: (params.prompt.match(/BATCH_\d/g) ?? [])
+      .map((job) => Number(job.slice(6)))
+      .toSorted((a, b) => a - b),
     runId: params.inputProvenance?.runId,
   }));
   expect(observed[0]?.jobs).toEqual([1]);
