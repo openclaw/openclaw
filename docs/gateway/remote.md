@@ -126,6 +126,11 @@ keeps its own authentication and permissions:
   Recovery-kit secrets are generated and exported in the browser, not downloaded
   from the Gateway.
 
+**Settings → Profile → Identity** shows the OpenClaw ID linked to your personal
+profile, including when you connect through the OpenClaw ID tunnel. Reading that
+saved link does not enable linking or unlinking over the tunnel; use a personal
+sign-in such as Tailscale to change the link.
+
 **Removing someone in People revokes their OpenClaw ID access only.** It closes
 their OpenClaw ID connections, cancels their active or queued runs from those
 connections, and revokes the associated device tokens. It does not remove them

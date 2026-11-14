@@ -25,7 +25,10 @@ import type { OpenClawIdAccount } from "../openclaw-id/claw-store.js";
 import { decodeInviteProfile, decodeInviteProofKey } from "../openclaw-id/invites-view.js";
 import { resolveOpenClawIdOwnerAccount } from "../openclaw-id/owner-account.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
-import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
+import {
+  hasCurrentPersonalGatewaySource,
+  resolveAuthenticatedPersonalGatewayProfileId,
+} from "./gateway-personal-caller.js";
 import {
   auditRemoteAccessSetup,
   prepareRemoteAccessSetup,
@@ -395,7 +398,8 @@ async function linkVerifiedAccount(
 // - link_held: links the same way with the ID token this browser still holds from such a
 //   sign-in (OCF-530), so Link after sign-in needs no second code. `sign_in_not_held` tells
 //   the browser to fall back to device_begin with `link`;
-// - link_status: the OpenClaw ID accounts linked to this connection's profile;
+// - link_status: the accounts linked to this personal profile, including over the tunnel;
+//   reading a saved link does not require permission to start a new device sign-in;
 // - unlink: removes them; owner devices return to the shared owner.
 async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
   const config = opts.context.getRuntimeConfig().gateway?.openclawId;
@@ -404,8 +408,9 @@ async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
     return;
   }
   const params = isRecord(opts.params) ? opts.params : {};
-  const owner = opts.client?.authenticatedUserProfile?.profileId;
-  if (resolveOpenClawIdSignInRoute(opts.client) !== "device" || !owner) {
+  const owner = resolveAuthenticatedPersonalGatewayProfileId(opts.client);
+  const route = resolveOpenClawIdSignInRoute(opts.client);
+  if (!owner || (params.action !== "link_status" && route !== "device")) {
     refuse(opts, {
       code: "not_personal_connection",
       detail: "Sign in with OpenClaw ID through a personal sign-in such as Tailscale",
@@ -459,15 +464,15 @@ async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
       return;
     }
     if (params.action === "link_status") {
+      const action = await preparePersonalProfileAction(opts);
       const { readOpenClawIdLinksOfProfile } =
         await import("../../state/user-profile-openclaw-id.js");
+      const links = await readOpenClawIdLinksOfProfile(action.owner);
+      action.assertCurrent();
       const ownerAccount = resolveOpenClawIdOwnerAccount();
       // Account IDs stay on the Gateway; the row shows each email and the claw role.
       opts.respond(true, {
-        linked: (await readOpenClawIdLinksOfProfile(owner)).map((link) => ({
-          email: link.email,
-          owner: link.accountId === ownerAccount,
-        })),
+        linked: links.map(({ email, accountId }) => ({ email, owner: accountId === ownerAccount })),
       });
       return;
     }

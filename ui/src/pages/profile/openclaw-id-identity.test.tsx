@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -56,6 +57,21 @@ it("shows the linked account with its claw role and unlinks it", async () => {
   expect(view.getByText("Link")).toBeDefined();
 });
 
+it("shows an existing link without offering mutations over the tunnel", async () => {
+  const request = vi.fn(async (method: string) =>
+    method === "openclawId.status"
+      ? { ...status(null), channel: "tunnel" }
+      : { linked: [{ email: "josh@id.test", owner: true }] },
+  ) as unknown as GatewayBrowserClient["request"];
+  const view = mount(request);
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain("josh@id.test · Owner of studio"),
+  );
+  expect(view.queryByText("Unlink")).toBeNull();
+  expect(view.queryByText("Link")).toBeNull();
+  expect(view.container.textContent).not.toContain("Link over a personal sign-in");
+});
+
 it.each([
   ["the claw's own computer (popup sign-in)", status("popup")],
   ["a connection without a personal sign-in", status(null)],
@@ -68,7 +84,26 @@ it.each([
     expect(view.container.textContent).toContain("Link over a personal sign-in"),
   );
   expect(view.queryByText("Link")).toBeNull();
-  expect(request).not.toHaveBeenCalledWith("openclawId.account", expect.anything());
+  expect(request).toHaveBeenCalledWith("openclawId.account", { action: "link_status" });
+});
+
+it("keeps personal-sign-in guidance when the Gateway refuses a shared connection", async () => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "openclawId.status") {
+      return status(null);
+    }
+    throw new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "Personal connection required",
+      details: { code: "not_personal_connection" },
+    });
+  }) as unknown as GatewayBrowserClient["request"];
+  const view = mount(request);
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain("Link over a personal sign-in"),
+  );
+  expect(view.queryByText("Retry")).toBeNull();
+  expect(view.queryByText("Link")).toBeNull();
 });
 
 it("is absent while the Labs switch is off", async () => {
