@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getInternalToolTurnCompletion,
+  getInternalToolTurnInputScope,
   setInternalToolTurnCompletion,
 } from "../../../../packages/agent-core/src/internal-hooks.js";
 import {
@@ -8,6 +9,7 @@ import {
   resolveAgentAssistantTurnId,
 } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
+import { readEmbeddedMessageDeliveryFact } from "../../embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   resolveMessageToolSourceReplyFinal,
@@ -100,10 +102,24 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
   };
 }
 
+function isCompletedMessageToolOnlySourceReply(params: {
+  context: AfterToolCallContext;
+  hookResult?: AfterToolCallResult;
+  final: boolean;
+}): boolean {
+  const deliveryFact =
+    readEmbeddedMessageDeliveryFact(
+      readToolResultDetails(params.context.result)?.messageDelivery,
+    ) ?? readEmbeddedMessageDeliveryFact(readToolResultDetails(params.hookResult)?.messageDelivery);
+  const isError = params.hookResult?.isError ?? params.context.isError;
+  return params.final && !isError && deliveryFact?.sourceReplyDelivered === true;
+}
+
 export function installMessageToolTerminalHook(
   params: MessageToolTerminalRoute & {
     agent: Agent;
     onDeliveredSourceReply?: () => void;
+    onCompletedSourceReply?: (isCurrent?: () => boolean) => void;
   },
 ): void {
   const finalReplyInputs = new Set<object>();
@@ -122,6 +138,7 @@ export function installMessageToolTerminalHook(
   const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
   params.agent.afterToolCall = async (context, signal) => {
     const inputScope = getAgentToolInputScope(context);
+    const completionOwner = getInternalToolTurnCompletion(params.agent);
     // Capture private cell identity before presentation can replace or reject its result.
     nestedCompletion.observe(context.result);
     const toolName = context.toolCall.name;
@@ -154,6 +171,7 @@ export function installMessageToolTerminalHook(
       });
     // Presentation hooks cannot revoke delivery or finality already committed by the tool.
     let delivered = isDelivered();
+    const completed = isCompletedMessageToolOnlySourceReply({ context, final });
     let hookResult: AfterToolCallResult | undefined;
     try {
       hookResult = await previousAfterToolCall?.(context, signal);
@@ -164,6 +182,15 @@ export function installMessageToolTerminalHook(
           finalReplyInputs.add(inputScope);
         }
         params.onDeliveredSourceReply?.();
+        if (completed || isCompletedMessageToolOnlySourceReply({ context, hookResult, final })) {
+          params.onCompletedSourceReply?.(
+            () =>
+              !inputScope ||
+              Boolean(
+                completionOwner && getInternalToolTurnInputScope(completionOwner) === inputScope,
+              ),
+          );
+        }
       }
     }
     return delivered && final ? { ...hookResult, terminate: true } : hookResult;
