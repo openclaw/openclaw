@@ -119,7 +119,7 @@ schedule or timing changes keep operator authority. Any other change
 from the owner conversation, such as the name, prompt, tools, trigger, delivery,
 failure alerts or session target, drops the job to that conversation's own authority. If its owner record has no account, those
 changes need a Gateway owner or an operator, or a new automation. Only a Gateway
-owner or an operator can write its scratch.
+owner, an operator or the automation's own runs can write its scratch.
 
 ```bash
 # List enabled jobs
