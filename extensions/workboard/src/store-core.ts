@@ -25,7 +25,6 @@ import {
   appendEvent,
 } from "./store-card-helpers.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
-import { normalizeWithoutEvidence, withStoredEvidence } from "./store-evidence.js";
 import type {
   WorkboardCardPatch,
   WorkboardCommentInput,
@@ -59,6 +58,7 @@ import {
 import { readCards } from "./store-read.js";
 import { resolveLifecycleStatusWrite, settleManualStatusTransition } from "./store-status-write.js";
 import { normalizeCappedStringList } from "./store-string-lists.js";
+import { normalizeWithoutVerifications, withStoredVerifications } from "./store-verification.js";
 
 export class WorkboardCoreStore extends WorkboardBoardStore {
   private lastNotificationSequence = 0;
@@ -121,11 +121,10 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     if (!ownedPatch) {
       return { card: current, updated: false };
     }
-    const { ownedLaunch, ownedEvidence, ...patch } = ownedPatch;
+    const { ownedLaunch, ...patch } = ownedPatch;
     const card = await this.updateCard(current, patch, {
       ...options,
       automationLaunch: ownedLaunch,
-      automationEvidence: ownedEvidence,
       expectedUpdatedAt: current.updatedAt,
     });
     return { card, updated: card.updatedAt !== current.updatedAt };
@@ -322,7 +321,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowMetadataDependencyLinks: false, allowArchivedAt: false },
+      { allowDependencyLinks: false, allowArchivedAt: false },
     );
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
@@ -488,7 +487,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
           ? existing.execution
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
-    let metadata = normalizeWithoutEvidence(effectivePatch.metadata, existing, options);
+    let metadata = normalizeWithoutVerifications(effectivePatch.metadata, existing, options);
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
       ({ execution, metadata } = settleManualStatusTransition({
         existing,
@@ -562,7 +561,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       ...(startedAt ? { startedAt } : {}),
       ...(completedAt ? { completedAt } : {}),
     });
-    next.metadata = withStoredEvidence(
+    next.metadata = withStoredVerifications(
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
       existing,
       options,

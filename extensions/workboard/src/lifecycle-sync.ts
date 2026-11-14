@@ -151,9 +151,6 @@ async function syncWorkboardLifecycleEvent(params: {
         sourceUpdatedAt: params.observation.sourceUpdatedAt,
         stale: params.observation.stale,
         now: params.now,
-        ...(params.observation.state === "succeeded" || params.observation.state === "failed"
-          ? { observedOutcome: params.observation.state }
-          : {}),
         ...(params.source.sessionKey
           ? {
               association: {

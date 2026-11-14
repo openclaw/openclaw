@@ -458,7 +458,7 @@ do not need it: each worker run is granted `workboard_heartbeat`,
 | `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                                                       |
 | `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                                                                 |
 | `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                                                          |
-| `workboard_verify`                                                                                                                               | Record what a checker checked on a card and what it concluded. Evidence only; see Result evidence.                                                                                                                              |
+| `workboard_verify`                                                                                                                               | Record what a checker checked on a card and what it concluded. Evidence only; see Verification.                                                                                                                                 |
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                                                               |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                                                            |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                                                              |
@@ -507,41 +507,28 @@ attempt cannot settle it again. Unblocking and promoting the card leaves it
 observations are logged with the card and attempt IDs. Explicitly linking a
 different session still allows that session's lifecycle to synchronize.
 
-### Result evidence
+### Verification
 
-Cards can carry optional result evidence in `metadata.automation.evidence`, kept
-apart by who produced it. Completion never waits on it, proof statuses keep their
-meaning, and dependency scheduling ignores it. Cards without evidence behave exactly
-as before.
+A checker can record what it checked on a card and what it concluded with
+`workboard_verify`. Proof stays what the worker reports and attempts stay the card's
+run history; a verification can name the proof, artifact, or run it checked.
 
-- **Claim** (`kind: "claim"`): something the worker says its result does. Pass
-  `claims: [{ statement, proofId? }]` (up to 4) to `workboard_complete`. Workboard
-  stamps `claimedBy` with the caller and `runId` with the card's run. A claim says
-  nothing about whether it holds.
-- **Observation** (`kind: "observation"`): a run outcome the execution system
-  observed. Only Workboard's session lifecycle sync writes these, when a linked
-  session's run ends (`source: "session-lifecycle"`, `outcome: "succeeded" | "failed"`,
-  with `sessionKey` and `runId`; the first report of a run wins). Agents cannot write them. Runs whose end event was
-  missed have no observation; Workboard does not infer one from `done`, a passed
-  proof, or a timestamp.
-- **Verification** (`kind: "verification"`): a check by an identified checker,
-  written with `workboard_verify`. It records `scope` (what was checked),
-  `outcome` (`confirmed`, `disputed`, or `inconclusive`), an optional `claimId`,
-  `proofId`, `artifactId`, or `runId` it covered, and an optional note and http(s)
-  URL. Workboard stamps `checkerId` with the caller and sets `checkedOwnWork` when
-  that caller is the card's assignee, claim owner, or a claim author. `false` only
-  means no match was found; it does not establish independence. A verification
-  never changes the card's status, including a `disputed` one on a `done` card.
+Each verification records `scope` (what was checked), `outcome` (`confirmed`,
+`disputed`, or `inconclusive`), an optional `proofId`, `artifactId`, or `runId` it
+covered, and an optional note and http(s) URL. Workboard stamps `checkerId` with the
+caller and sets `checkedOwnWork` when that caller is the card's assignee, session, or
+claim owner. `false` only means no match was found; it does not establish
+independence.
 
-Generic metadata writes (`workboard_create`, `workboard.cards.update`) cannot add
-evidence, and Gateway `workboard.cards.complete` rejects `claims` because it has no
-agent identity to stamp. A card keeps the 4 newest records of each kind, within about
-6 KiB in total. Evidence only uses room the card's other records leave: when the
-card is near its 24 KiB metadata budget, Workboard drops the oldest evidence first,
-never proof, attempts, comments, or artifacts. Claims and observations that cannot
-fit are dropped without failing completion; `workboard_verify` returns an error
-instead. Workboard versions
-before this one ignore the field and may drop it on their next write to the card.
+Verifications live in `metadata.automation.verifications`. Completion never waits on
+them, proof statuses keep their meaning, dependency scheduling ignores them, and a
+`disputed` verification on a `done` card leaves it `done`. Generic metadata writes
+(`workboard_create`, `workboard.cards.update`) cannot add, edit, or remove them. A card
+keeps its 4 newest verifications, and only in room its other records leave: when the
+card is near its 24 KiB metadata budget, Workboard drops the oldest verification
+first, never proof, attempts, comments, or artifacts. `workboard_verify` returns an
+error when a new verification cannot fit. Workboard versions before this one ignore
+the field and may drop it on their next write to the card.
 
 ## Dispatch
 
