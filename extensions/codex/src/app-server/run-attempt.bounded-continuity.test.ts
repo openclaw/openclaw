@@ -182,8 +182,15 @@ describe("Codex bounded assistant continuity", () => {
     });
     const wrappedPluginSystemContext = (text: string) =>
       `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
-    expect(requestParams(harness, "thread/start").developerInstructions).toContain(
-      `custom codex system\n\n${wrappedPluginSystemContext("pre system")}\n\n${wrappedPluginSystemContext("post system")}`,
+    const pluginSystemContexts = `${wrappedPluginSystemContext("pre system")}\n\n${wrappedPluginSystemContext("post system")}`;
+    const developerInstructions = requestParams(harness, "thread/start").developerInstructions;
+    assert(typeof developerInstructions === "string");
+    // Plugin system context rides after the immutable thread policy, which can carry more
+    // than the hook's system prompt; each part is applied once.
+    expect(developerInstructions.split("custom codex system")).toHaveLength(2);
+    expect(developerInstructions.split(pluginSystemContexts)).toHaveLength(2);
+    expect(developerInstructions.indexOf("custom codex system")).toBeLessThan(
+      developerInstructions.indexOf(pluginSystemContexts),
     );
     expect(requestParams(harness, "turn/start").input).toEqual([
       { type: "text", text: expectedInput, text_elements: [] },

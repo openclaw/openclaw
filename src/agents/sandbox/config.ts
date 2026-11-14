@@ -84,9 +84,7 @@ function resolveSandboxDockerConfig(
     agentEnv: agentDocker?.env,
   });
 
-  const ulimits = agentDocker?.ulimits
-    ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
-    : globalDocker?.ulimits;
+  const ulimits = { core: "0", ...globalDocker?.ulimits, ...agentDocker?.ulimits };
 
   const binds = [...(globalDocker?.binds ?? []), ...(agentDocker?.binds ?? [])];
 

@@ -331,6 +331,24 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
 
+Use `--fresh-browser` to start a new browser process for every observation when
+the host cannot reliably reuse a process after closing a context. Apply it to
+every comparison arm. The manifest records this mode; do not pool it with
+reused-process runs because browser caches and compilation state differ. Warm
+boot still reloads within the observation's own context.
+
+`bench-control-ui-rpc-payloads.ts` seeds each compiled Gateway with the storage
+owners from that Gateway's source checkout. The source root defaults to the
+parent of `dist/` for the selected `--entry`; use `--fixture-source-root` and
+`--compare-fixture-source-root` for other layouts. Each source HEAD must match
+its runtime's `build-info.json` commit before fixture writes begin. Each worker's
+`report.json` records `fixtureSource` with the root, commit, and schema versions.
+Its `--fresh-browser` mode also starts a separate browser process per sample on
+every comparison arm and records `freshBrowser`. Each sample still owns a fresh
+context, with warm reloads and route visits inside that context. Process caches
+therefore differ from the default reused-browser mode; compare and report the
+two modes separately.
+
 Continuous gestures are opt-in with `--steps gestures`: pointer sweeps and wheel
 scrolling over Sidebar, Chat, Advanced Settings and Sessions; transcript selection
 across the virtual window and within a message; sidebar/split dividers; window
@@ -880,6 +898,8 @@ Its default measures a cold document. Add `--warm-reload` to load the same docum
 to composer and transcript readiness first, then measure its reload in the same
 browser context. Warm-up requests and CPU are excluded. This mode cannot be
 combined with `--service-worker`.
+Use `--viewport mobile` for a 390×844 touch viewport; the default desktop viewport
+is 1440×1100. The summary records the viewport alongside each comparison.
 
 Compare the emitted files of two adjacent builds with
 `node scripts/compare-control-ui-update-cache.ts --base-dir <build-A>

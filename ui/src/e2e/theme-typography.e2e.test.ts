@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-chat-history-fixtures.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -8,7 +9,6 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
-import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectFileAction } from "./chat-file-actions.test-support.ts";
@@ -97,6 +97,23 @@ suite.define(() => {
     await selectPickerValue(ui, "theme");
     await selectPickerValue(chat, "theme");
     await expect.poll(families).toEqual(initial);
+  });
+
+  // macOS stem darkening keeps light sans chat faces from rendering thin; app
+  // chrome keeps the body's antialiased smoothing.
+  it.each(["claw", "absolutely"])("keeps auto smoothing on %s chat prose only", async (theme) => {
+    const { page } = await openThemedChat(theme, "dark", {
+      historyMessages: [historyMessage("assistant", "Readable chat prose", Date.now())],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const prose = page.locator(".chat-thread .chat-text").first();
+    await expect.poll(() => prose.textContent()).toContain("Readable chat prose");
+    const smoothing = (locator: Locator) =>
+      locator.evaluate((element) =>
+        getComputedStyle(element).getPropertyValue("-webkit-font-smoothing"),
+      );
+    expect(await smoothing(prose)).toBe("auto");
+    expect(await smoothing(page.locator("body"))).toBe("antialiased");
   });
 
   // #137473: compare incremental input pixels with a whole-value assignment.

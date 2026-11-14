@@ -361,15 +361,15 @@ describe("plugins cli list", () => {
     "reports persisted replacement differences after stale refresh (json=%s)",
     async (json) => {
       refreshRegistry.mockResolvedValue({ plugins: [] });
-      const differences = mockRegistryInspection(
-        "/plugins/demo/index.js",
-        "/plugins/demo/dist/index.js",
-      );
+      const differences = mockRegistryInspection("/plugins/demo/old.js", "/plugins/demo/new.js");
       const command = plugins("registry", "--refresh", ...(json ? ["--json"] : []));
       if (!json) {
-        await expect(command).rejects.toThrow(
-          /demo: record changed; persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
-        );
+        await expect(command).rejects.toMatchObject({
+          name: "ExpectedCliError",
+          humanOutput: expect.stringMatching(
+            /demo: record changed; persisted \/plugins\/demo\/old\.js; derived \/plugins\/demo\/new\.js.*openclaw plugins registry --refresh/su,
+          ),
+        });
         return;
       }
       await expect(command).rejects.toThrow();

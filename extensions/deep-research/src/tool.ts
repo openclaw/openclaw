@@ -8,6 +8,10 @@ import type { ResearchJobs } from "./jobs.js";
 import { managedClient } from "./managed.js";
 import { parseValue } from "./validation.js";
 
+// The whole start/resume envelope stays under the 32 KiB nested tool-activity limit, with headroom
+// for invocation provenance; beyond that limit the transcript replaces it with an omission notice.
+const RESULT_ENVELOPE_BYTES = 24_000;
+
 export function createResearchTool(
   api: OpenClawPluginApi,
   context: OpenClawPluginToolContext<2>,
@@ -62,16 +66,41 @@ export function createResearchTool(
         current.assertInvocationCurrent();
         signal?.throwIfAborted();
         // The same immutable stored result is returned on retries. No channel send is replayed.
-        return jsonResult({
-          version: 1,
-          jobId: job.id,
-          state: job.state,
-          progress: job.progress,
-          ...(input.action === "result" || input.action === "start" || input.action === "resume"
-            ? { result: job.result }
-            : {}),
+        const status = { version: 1, jobId: job.id, state: job.state, progress: job.progress };
+        if (input.action === "result") {
+          return jsonResult({ ...status, result: job.result });
+        }
+        if (input.action !== "start" && input.action !== "resume") {
+          return jsonResult(status);
+        }
+        // Start/resume results stay compact; `result` returns retained source text.
+        const hint = 'Call action "result" with this jobId for the complete retained result.';
+        const withResult = jsonResult({
+          ...status,
+          result: compactResult(job.result),
+          fullResult: hint,
         });
+        return Buffer.byteLength(JSON.stringify(withResult)) <= RESULT_ENVELOPE_BYTES
+          ? withResult
+          : jsonResult({ ...status, fullResult: hint });
       });
     },
+  };
+}
+
+// Drops retained source text from a start/resume result; the report and findings stay intact.
+function compactResult(result: unknown): unknown {
+  if (!result || typeof result !== "object" || !("sources" in result)) {
+    return result;
+  }
+  const sources = Array.isArray(result.sources) ? result.sources : [];
+  return {
+    ...result,
+    sources: sources.map((source: unknown) => {
+      if (!source || typeof source !== "object") {
+        return source;
+      }
+      return Object.fromEntries(Object.entries(source).filter(([key]) => key !== "text"));
+    }),
   };
 }

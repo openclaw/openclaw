@@ -5,14 +5,13 @@ import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 registerCronEnglish();
 
 const NOT_STARTED_MESSAGES = new Map([
-  ["not-due", "cron.runNotStarted.notDue"],
   ["already-running", "cron.runNotStarted.alreadyRunning"],
   ["invalid-spec", "cron.runNotStarted.invalidSpec"],
   ["stopped", "cron.runNotStarted.stopped"],
 ]);
 
 // The job is fine and the request was answered; every other reason needs the operator.
-const NOTICE_REASONS = new Set(["not-due", "already-running"]);
+const NOTICE_REASONS = new Set(["already-running"]);
 
 export function isCronRunNotStartedNotice(result: CronRunResult): boolean {
   return "reason" in result && NOTICE_REASONS.has(result.reason);

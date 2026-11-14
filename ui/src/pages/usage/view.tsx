@@ -1,5 +1,4 @@
 import { For, Show, createMemo, onSettled } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -8,9 +7,8 @@ import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../styles/usage.css";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
-import { UsageMosaic } from "./metrics-view.tsx";
 import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
-import { renderUsageEmptyState } from "./page-shell.tsx";
+import { UsageEmptyState } from "./page-shell.tsx";
 import { createUsagePhoneLayout } from "./phone-layout.ts";
 import { buildProviderSeries } from "./provider-series.ts";
 import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
@@ -148,7 +146,7 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
     };
   });
   // Zero totals are normal while idle; an error must keep its own explanation.
-  const isEmpty = () => overview().isEmpty && !loading() && !props.data.error;
+  const isEmpty = () => overview().isEmpty && !props.data.error;
   const showAnalytics = () => overview().hasOverviewData && !isEmpty();
   const keepAnalytics = () =>
     showAnalytics() || (retainedCharts() && Boolean(retainedChartSnapshot()));
@@ -166,6 +164,7 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
         <section class="usage-header-section">
           <div class={["usage-header", { pinned: props.display.headerPinned && !phone() }]}>
             {controls.toolbar()}
+            {controls.appliedFilters()}
 
             {/* Carapace summary strip: fixed cells, so placeholders and loaded totals share one layout. */}
             <div class="usage-summary-strip">
@@ -183,26 +182,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               ) : (
                 <div class="usage-summary-strip__actions">
                   {controls.partialStatus()}
-                  <button
-                    class={[
-                      "btn btn--sm btn--icon usage-pin-btn",
-                      { active: props.display.headerPinned },
-                    ]}
-                    aria-label={
-                      props.display.headerPinned
-                        ? t("usage.filters.pinned")
-                        : t("usage.filters.pin")
-                    }
-                    aria-pressed={props.display.headerPinned ? "true" : "false"}
-                    title={
-                      props.display.headerPinned
-                        ? t("usage.filters.pinned")
-                        : t("usage.filters.pin")
-                    }
-                    onClick={() => props.callbacks.filters.onToggleHeaderPinned()}
-                  >
-                    <Icon name={props.display.headerPinned ? "pinOff" : "pin"} />
-                  </button>
                   <Menu
                     id="usage-export"
                     label={t("usage.export.label")}
@@ -258,7 +237,10 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             </div>
           ) : undefined
         ) : isEmpty() ? (
-          renderUsageEmptyState(() => void props.callbacks.filters.onRefresh())
+          <UsageEmptyState
+            loading={loading()}
+            onRefresh={() => void props.callbacks.filters.onRefresh()}
+          />
         ) : undefined}
         <Show when={showAnalytics() || retainedCharts()}>
           {(_shown) => (
@@ -273,9 +255,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
                 selectedDays={props.filters.selectedDays}
                 chartMode={props.display.chartMode}
                 dailyChartMode={props.display.dailyChartMode}
-                onDailyChartModeChange={(dailyChartMode) =>
-                  props.callbacks.display.onChange({ dailyChartMode })
-                }
                 onSelectDay={props.callbacks.filters.onSelectDay}
                 providerSeries={providerSeries()}
                 range={{
@@ -345,13 +324,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             inert={!showAnalytics()}
             style={{ display: showAnalytics() ? "contents" : "none" }}
           >
-            <UsageMosaic
-              overview={analyticsData().overview}
-              timeZone={props.filters.timeZone}
-              selectedHours={props.filters.selectedHours}
-              onSelectHour={props.callbacks.filters.onSelectHour}
-            />
-
             <UsageSessionsGrid
               usage={props}
               reveal={reveal}

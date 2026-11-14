@@ -201,3 +201,20 @@ export function isStableReleaseVersionAtLeast(version, minimum) {
     (compareReleaseVersions(version, minimum) ?? -1) >= 0
   );
 }
+
+/** @param {unknown} reason @returns {string} */
+export function validateRetiredLineReason(reason) {
+  if (
+    typeof reason !== "string" ||
+    !reason.trim() ||
+    reason.length > 1000 ||
+    Array.from(reason).some(
+      (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+    )
+  ) {
+    throw new Error(
+      "Retired-line publication requires a single-line maintainer reason of at most 1000 characters.",
+    );
+  }
+  return reason;
+}

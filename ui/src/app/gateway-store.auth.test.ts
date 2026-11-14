@@ -269,7 +269,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
         rejectStaleBuild();
       }
       expect(fetchMock).toHaveBeenCalledOnce();
-      expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("HEAD");
+      expect(
+        new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("X-OpenClaw-Reachability-Probe"),
+      ).toBe("1");
       probe.resolve(new Response(null, { status: 200 }));
       if (handoff === "retired") {
         await nextTurn();

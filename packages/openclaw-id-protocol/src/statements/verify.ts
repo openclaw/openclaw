@@ -1,5 +1,10 @@
 // Signature and authority verification for signed statements.
-import type { Ed25519PublicKey } from "../keys.js";
+import {
+  formatEd25519PublicKey,
+  rawPublicKey,
+  type Ed25519PublicKey,
+  type IrohEndpointKey,
+} from "../keys.js";
 import { hasValidSignature } from "./envelope.js";
 import type {
   OwnerCapability,
@@ -18,12 +23,18 @@ export type TrustAnchor = { root_pub: Ed25519PublicKey };
  */
 export type OwnerDeviceLookup = (devicePub: Ed25519PublicKey) => OwnerCapability[] | undefined;
 
+/** A listed member's account and peer key, looked up by its signing key D. */
+export type MemberDeviceLookup = (
+  devicePub: Ed25519PublicKey,
+) => { account_id: string; peer_key: IrohEndpointKey } | undefined;
+
 /** Verifier inputs that are not part of the statement. */
 export type VerifyOptions = {
   /** Current time, unix seconds. */
   now: UnixSeconds;
   /** The claw's current owner devices. Without it, only R's signatures verify. */
   owners?: OwnerDeviceLookup;
+  members?: MemberDeviceLookup;
   /** Tolerated clock skew for `issued_at` in seconds. Default 300. */
   clockSkew?: number;
 };
@@ -32,6 +43,12 @@ export type VerifyOptions = {
 export type Authority =
   | { kind: "root" }
   | { kind: "owner_device"; device_pub: Ed25519PublicKey; caps: OwnerCapability[] }
+  | {
+      kind: "member_device";
+      account_id: string;
+      device_pub: Ed25519PublicKey;
+      peer_key: IrohEndpointKey;
+    }
   | { kind: "gateway" }
   | { kind: "self" };
 
@@ -79,6 +96,7 @@ export type OwnerSignedType =
   | "OwnerDeviceCert"
   | "ServerBinding"
   | "InviteCap"
+  | "NodeInviteCap"
   | "MembershipChange"
   | "Revocation";
 
@@ -90,6 +108,7 @@ const REQUIRED_CAPABILITY: Record<
 > = {
   OwnerDeviceCert: "approve_device",
   InviteCap: "invite",
+  NodeInviteCap: "invite",
   MembershipChange: "manage_members",
   Revocation: null,
 };
@@ -129,6 +148,18 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
   }
   const caps = options.owners?.(statement.signer);
   if (!caps) {
+    if (statement.type === "MembershipChange") {
+      // SAFETY: the statement type fixes its validated body.
+      const op = (statement as SignedStatement<"MembershipChange">).body.target.op;
+      const member = options.members?.(statement.signer);
+      if (member && (op === "add_member_device" || op === "revoke_device")) {
+        return {
+          ok: true,
+          statement,
+          authority: { kind: "member_device", device_pub: statement.signer, ...member },
+        };
+      }
+    }
     return failure("not_an_owner", "signer is neither R nor a current owner device of this claw");
   }
   // SAFETY: the ServerBinding member of the union returned above.
@@ -194,6 +225,19 @@ export async function verifyInviteRedemptionSignature(
 ): Promise<VerifyResult<"InviteRedemption">> {
   if (statement.signer !== statement.body.device_pub) {
     return failure("wrong_signer", "redemption must be signed by its own device key");
+  }
+  if (!(await hasValidSignature(statement))) {
+    return failure("bad_signature", "envelope signature does not verify");
+  }
+  return { ok: true, statement, authority: { kind: "self" } };
+}
+
+/** A node redemption proves possession of the exact W it asks to admit. */
+export async function verifyNodeRedemptionSignature(
+  statement: SignedStatement<"NodeRedemption">,
+): Promise<VerifyResult<"NodeRedemption">> {
+  if (statement.signer !== formatEd25519PublicKey(rawPublicKey(statement.body.peer_key))) {
+    return failure("wrong_signer", "node redemption must be signed by its own peer key");
   }
   if (!(await hasValidSignature(statement))) {
     return failure("bad_signature", "envelope signature does not verify");

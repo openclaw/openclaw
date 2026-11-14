@@ -36,14 +36,30 @@ describe("cronFailureDetailLines", () => {
   });
 
   it.each([
-    [{ kind: "command-exit", exitCode: 7 } as const, "Cause: command exited with code 7"],
-    [{ kind: "command-timeout", mode: "wall-clock" } as const, "Cause: command timed out"],
+    [{ kind: "command-exit", exitCode: 7 } as const, ["Cause: command exited with code 7"]],
+    [{ kind: "command-timeout", mode: "wall-clock" } as const, ["Cause: command timed out"]],
     [
       { kind: "command-timeout", mode: "no-output" } as const,
-      "Cause: command stopped after producing no output",
+      ["Cause: command stopped after producing no output"],
     ],
-  ])("renders closed command detail %#", (detail, expected) => {
-    expect(cronFailureDetailLines(undefined, detail)).toEqual([expected]);
+    [
+      { kind: "agent-stall", classification: "blocked_tool_call" } as const,
+      [
+        "Cause: blocked_tool_call",
+        "The agent was blocked waiting on a tool call that made no progress.",
+        "Review the tool's permissions and any blocked invocation, then rerun the automation.",
+      ],
+    ],
+    [
+      { kind: "agent-stall", classification: "other_cause" } as const,
+      [
+        "Cause: other_cause",
+        "The agent run was stopped because its session became stuck.",
+        "Check the automation history for details, then rerun if appropriate.",
+      ],
+    ],
+  ])("renders closed producer detail %#", (detail, expected) => {
+    expect(cronFailureDetailLines(undefined, detail)).toEqual(expected);
   });
 
   it("labels script failures by their producer", () => {

@@ -6,7 +6,7 @@ import { withBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { createRouteFixture } from "./request.test-support.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
-function setup(engine: "chromium" | "lightpanda" = "lightpanda") {
+function setup(engine: "chromium" | "lightpanda" | "kitesurf" = "lightpanda") {
   const profile = makeBrowserProfile({
     name: "selected",
     engine,
@@ -54,8 +54,37 @@ describe("browser engine route admission", () => {
     },
   );
 
+  it.each(["/pdf", "/download", "/hooks/file-chooser", "/set/media"])(
+    "rejects unqualified Kitesurf operation %s before reaching the browser",
+    async (path) => {
+      const { ctx, ensureTabAvailable, routes, request } = setup("kitesurf");
+      registerBrowserRoutes(routes.app, ctx);
+      const response = await request("post", path, {});
+      expect(response.statusCode).toBe(501);
+      expect(response.body).toMatchObject({
+        engine: "kitesurf",
+        code: "BROWSER_CAPABILITY_UNSUPPORTED",
+      });
+      expect(ensureTabAvailable).not.toHaveBeenCalled();
+    },
+  );
+
+  it("answers operator input on Lightpanda with the panel's per-action fallback code", async () => {
+    const { ctx, ensureTabAvailable, routes, request } = setup();
+    registerBrowserRoutes(routes.app, ctx);
+    const response = await request("post", "/operator/input", {
+      body: { inputs: [{ kind: "press", key: "a" }] },
+      query: { profile: "selected" },
+    });
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toMatchObject({ code: "OPERATOR_INPUT_UNSUPPORTED" });
+    expect(ensureTabAvailable).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["lightpanda", "post", "/act", { body: { kind: "click", ref: "e1" } }],
+    ["kitesurf", "post", "/act", { body: { kind: "click", ref: "e1" } }],
+    ["kitesurf", "post", "/screenshot", {}],
     ["chromium", "post", "/act", { body: { kind: "wait", selector: "main" } }],
     ...[undefined, " FALSE "].map(
       (labels) =>
@@ -76,7 +105,7 @@ describe("browser engine route admission", () => {
     expect(adapter).toHaveBeenCalledOnce();
   });
 
-  it.each(["chromium", "lightpanda"] as const)(
+  it.each(["chromium", "lightpanda", "kitesurf"] as const)(
     "applies %s policy to future routes",
     async (engine) => {
       const { ctx, routes, request } = setup(engine);

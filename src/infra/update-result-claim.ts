@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
 import { writeConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -19,14 +19,10 @@ const UNREPORTED_REASONS = new Set(["abandoned", "superseded", "owner_required"]
 // One bounded singleton, not an outbox. All identity and times remain local.
 type ClaimState = { eligible: string[]; attempted: string[]; lastAttemptAt?: number };
 
-function isRunIdList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-
 function readClaimState(db: EngineConnection): ClaimState | undefined {
   const row = readConfigMachineStateRowInDatabase(db, STATE_KEY);
   const value: unknown = row ? JSON.parse(row.value_json) : undefined;
-  if (!isRecord(value) || !isRunIdList(value.eligible) || !isRunIdList(value.attempted)) {
+  if (!isRecord(value) || !isStringArray(value.eligible) || !isStringArray(value.attempted)) {
     return undefined;
   }
   return {

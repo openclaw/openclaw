@@ -100,24 +100,24 @@ describe("wrapFetchWithAbortSignal", () => {
     expect((getSeenInit() as (RequestInit & { duplex?: string }) | undefined)?.duplex).toBe("half");
   });
 
-  it("converts foreign abort signals to native controllers", async () => {
-    const { fetchImpl, getSeenInit } = createSeenInitFetch();
-    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
-
+  it("converts foreign signals and preserves cancellation after headers", async () => {
+    let seenSignal: AbortSignal | null | undefined;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seenSignal = init?.signal;
+        return new Response(new ReadableStream<Uint8Array>());
+      }),
+    );
     const { fakeSignal, triggerAbort } = createForeignSignalHarness();
-
-    const promise = wrapped("https://example.com", { signal: fakeSignal });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    const seenSignal = getSeenInit()?.signal;
+    const response = await wrapFetchWithAbortSignal(fetchImpl)("https://example.com", {
+      signal: fakeSignal,
+    });
     expect(seenSignal).toBeInstanceOf(AbortSignal);
-    expect(seenSignal).not.toBe(fakeSignal);
-
+    const read = response.body!.getReader().read();
     triggerAbort();
     expect(seenSignal?.aborted).toBe(true);
-
-    await promise;
+    await expect(read).rejects.toMatchObject({ name: "AbortError" });
   });
-
   it("does not emit an extra unhandled rejection when wrapped fetch rejects", async () => {
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {

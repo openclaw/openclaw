@@ -223,6 +223,56 @@ describe("portable research", () => {
     expect(io.complete).toHaveBeenCalledTimes(1);
     expect(io.search).not.toHaveBeenCalled();
   });
+  it("keeps verified findings when a model reply lists more items than the schema allows", async () => {
+    const { io, evidence, verdict } = fixture();
+    const extra = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, index) => `${prefix} ${index}`);
+    const responses = [
+      { questions: extra("river question", 6) },
+      {
+        findings: [{ statement: "The river is 12 km long.", evidence: [evidence] }],
+        gaps: [],
+        queries: extra("follow-up", 6),
+      },
+      { verdicts: [verdict], unanswered: extra("open question", 10) },
+    ];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
+    const result = await runPortableResearch(
+      { question: "How long is the river?", budget: { modelCalls: 3 } },
+      io,
+    );
+    expect(result.findings).toMatchObject([{ statement: "The river is 12 km long." }]);
+    expect(result.gaps).not.toContain(
+      "Research response did not satisfy the evidence contract; no repair call was made.",
+    );
+    expect(vi.mocked(io.search).mock.calls.length).toBeLessThanOrEqual(4);
+    expect(result.gaps.filter((gap) => gap.startsWith("open question"))).toHaveLength(8);
+  });
+  it("rejects an audit that repeats a verdict instead of trimming away its contradiction", async () => {
+    const { io, evidence } = fixture();
+    const supported = { index: 0, verdict: "supported", reason: "Direct evidence" };
+    const responses = [
+      { questions: ["river length"] },
+      {
+        findings: [{ statement: "The river is 12 km long.", evidence: [evidence] }],
+        gaps: [],
+        queries: [],
+      },
+      {
+        verdicts: [
+          ...Array.from({ length: 12 }, (_, index) => ({ ...supported, index })),
+          { index: 0, verdict: "contradicted", reason: "Later measurement" },
+        ],
+        unanswered: [],
+      },
+    ];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(responses.shift()) }));
+    const result = await runPortableResearch({ question: "How long is the river?" }, io);
+    expect(result.findings).toEqual([]);
+    expect(result.gaps).toContain(
+      "Research response did not satisfy the evidence contract; no repair call was made.",
+    );
+  });
   it.each(["unsupported", "contradicted"])(
     "reaudits retained findings on later rounds without erasing them on an %s sample",
     async (verdict) => {
@@ -310,16 +360,16 @@ describe("portable research", () => {
     },
   );
 
-  it("bounds page titles before they enter extraction and audit prompts", async () => {
-    const { io } = fixture();
-    io.fetch = async (url) => ({
-      url,
-      title: "Malicious\nHeading" + "x".repeat(1_000),
-      text: "The measured river length is 12 km.",
-    });
+  it("cuts titles on whole characters and keeps findings sharing a display prefix", async () => {
+    const { io, evidence, verdict } = fixture();
+    const head = `Malicious\nHeading${"x".repeat(238)}\u{1f600}${"x".repeat(743)}`;
+    io.fetch = async (url) => ({ url, title: head, text: evidence.quote });
+    const findings = ["b", "c"].map((end) => ({ statement: head + end, evidence: [evidence] }));
+    const audit = { verdicts: [verdict, { ...verdict, index: 1 }], unanswered: [] };
+    const replies = [{ questions: ["q"] }, { findings, gaps: [], queries: [] }, audit];
+    io.complete = vi.fn(async () => ({ text: JSON.stringify(replies.shift()) }));
     const result = await runPortableResearch({ question: "River length" }, io);
-    expect(result.sources[0]?.title).toHaveLength(256);
-    expect(result.sources[0]?.title).not.toContain("\n");
-    expect(vi.mocked(io.complete).mock.calls[1]?.[0]).not.toContain("x".repeat(257));
+    expect(result.sources[0]?.title).toBe(`Malicious Heading${"x".repeat(238)}`);
+    expect(result.findings).toMatchObject(findings);
   });
 });

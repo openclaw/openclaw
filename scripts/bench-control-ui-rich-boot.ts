@@ -30,6 +30,7 @@ const { values } = parseArgs({
     "boot-state": { type: "string" },
     "boot-route": { type: "string", default: "chat" },
     engines: { type: "string" },
+    viewport: { type: "string", default: "desktop" },
     "observe-after-ready-ms": { type: "string", default: "3000" },
     output: { type: "string", default: ".artifacts/control-ui-rich-boot" },
     pairs: { type: "string", default: "20" },
@@ -78,6 +79,12 @@ if (
   throw new Error("warm-reload conflicts with boot-state");
 }
 const engines = (values.engines ?? "chromium").split(",");
+const viewportName = values.viewport;
+if (viewportName !== "desktop" && viewportName !== "mobile") {
+  throw new Error("viewport must be desktop or mobile");
+}
+const viewport =
+  viewportName === "mobile" ? { width: 390, height: 844 } : { width: 1440, height: 1100 };
 if (engines.some((engine) => !["chromium", "webkit", "firefox"].includes(engine))) {
   throw new Error("engines must be a comma-separated list of chromium, webkit, firefox");
 }
@@ -263,7 +270,9 @@ try {
           const buildId = currentBuild.buildId;
           let servedBuildId = buildId;
           const context = await browser.newContext({
-            viewport: { width: 1440, height: 1100 },
+            viewport,
+            isMobile: viewportName === "mobile",
+            hasTouch: viewportName === "mobile",
             colorScheme: "light",
             serviceWorkers: values["service-worker"] ? "allow" : "block",
             ignoreHTTPSErrors: Boolean(proxy),
@@ -859,6 +868,7 @@ try {
                         : "completed+active rich run",
                   bootStates,
                   engines,
+                  viewport: { name: viewportName, ...viewport },
                   previous,
                   previousHead,
                   networkProfile: legacyProfile

@@ -95,7 +95,7 @@ function buildFallbackNick(nick: string): string {
   const seq = ++nickCollisionFallbackSeq;
   const suffix = seq === 1 ? "_" : `_${seq}`;
   const maxNickLen = 30;
-  if (base.length >= maxNickLen) {
+  if (base.length + suffix.length > maxNickLen) {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
   }
   return `${base}${suffix}`;
@@ -218,7 +218,8 @@ export async function connectIrcClient(options: IrcClientOptions) {
   const sendPrivmsg = async (target: string, text: string, replyTo?: string) => {
     const effect = captureEffectAuthority();
     const normalizedTarget = sanitizeIrcTarget(target);
-    const cleaned = sanitizeIrcOutboundText(text);
+    const message = text.replace(/\r\n|[\r\t]/g, " ");
+    const cleaned = sanitizeIrcOutboundText(message);
     if (!cleaned) {
       throw new Error("Message must be non-empty for IRC sends");
     }
@@ -229,7 +230,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
     const lineOverheadBytes =
       relayPrefixBytes + Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
-    let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
+    let remaining = replyTo ? sanitizeIrcOutboundText(`${message}\n\n[reply:${replyTo}]`) : cleaned;
     const chunks: string[] = [];
     while (remaining.length > 0) {
       const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();

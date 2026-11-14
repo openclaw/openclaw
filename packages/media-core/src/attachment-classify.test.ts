@@ -12,10 +12,7 @@ it.each([
 
 describe("classifyAttachmentBytes", () => {
   const completeUtf8 = Buffer.from("验证".repeat(700), "utf8");
-  const png = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
-    "base64",
-  );
+  const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 
   it.each([
     ["input truncated mid-character at 4,096 bytes", completeUtf8.subarray(0, 4096)],
@@ -56,6 +53,8 @@ describe("classifyAttachmentBytes", () => {
   it.each([
     ["image/png", png, "image"],
     ["application/zip", Buffer.from("PK\u0003\u0004payload"), "archive"],
+    ["application/x-sqlite3", Buffer.from("SQLite format 3".padEnd(4096, "\0")), "binary"],
+    ["application/x-sqlite3", Buffer.from("SQLite format 3\0".padEnd(4096, "A")), "binary"],
   ] as const)("keeps byte-detected %s ahead of a text filename", async (mime, buffer, kind) => {
     const result = await classifyAttachmentBytes({ buffer, name: "spoof.txt" });
     expect(result).toEqual({ mime, class: kind });

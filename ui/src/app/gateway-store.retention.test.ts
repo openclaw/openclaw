@@ -33,6 +33,19 @@ describe("Gateway presentation retention", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["operator.read", "operator.sessions.read"])("opens Home with %s only", (scope) => {
+    const reader = hello();
+    reader.auth = { role: "operator", scopes: [scope] };
+    reader.features = { methods: ["chat.history"] };
+    store.current().testOptions.onHello?.(reader);
+    expect(isHomePanelAvailable(store.gateway)).toBe(true);
+    store.current().testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry: true });
+    expect(isHomePanelAvailable(store.gateway)).toBe(true);
+    reader.auth = { role: "operator", scopes: [] };
+    store.current().testOptions.onHello?.(reader);
+    expect(isHomePanelAvailable(store.gateway)).toBe(false);
+  });
+
   it.each([true, false])("retains display facts on transport close (willRetry=%s)", (willRetry) => {
     const accepted = store.gateway.snapshot.hello;
     const capabilities = store.gateway.snapshot.pluginCapabilities;

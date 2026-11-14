@@ -327,11 +327,11 @@ describe("chat composer queue reordering", () => {
       new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }),
     );
     expect(editingMentions).toEqual([{ profileId: "second-alex", start: 0, end: 5 }]);
-    expect(container.textContent).toContain("Will notify: @Alex");
+    expect(container.textContent).toContain("Notify or invite: @Alex");
     container.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
     expect(editingMentions).toEqual([]);
     expect(editor.value).toBe("@Alex");
-    expect(container.textContent).not.toContain("Will notify:");
+    expect(container.textContent).not.toContain("Notify or invite:");
   });
 
   it("projects applying settings once and preserves the steer affordance", () => {

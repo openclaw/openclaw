@@ -236,6 +236,12 @@ ownerSuite.define(() => {
           await confirmation
             .getByRole("button", { name: `Switch to 127.0.0.1:${ownerPort}`, exact: true })
             .click();
+          const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+          await agentScope.locator(".agent-select__trigger").click();
+          await agentScope
+            .locator(".agent-select__option[data-agent-option]")
+            .filter({ hasText: "All agents" })
+            .click();
           // The dismissed dialog can leave the pointer over a row and lift its title.
           await page.mouse.move(0, 0);
 
@@ -482,6 +488,9 @@ suite.define(() => {
               ]);
               await page.goto(new URL("usage", suite.server.baseUrl).toString());
               await waitForControlUiGatewayReady(page);
+              const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+              await agentScope.locator(".agent-select__trigger").click();
+              await agentScope.locator('[data-agent-option][value="opus"]').click();
               const selected = page.locator(
                 `.session-bar-row[title="${key}"] .session-bar-selection`,
               );
@@ -489,11 +498,13 @@ suite.define(() => {
               const panel = page.locator(".session-detail-panel");
               const readDetails = async () => ({
                 timeline: (await panel.locator(".timeseries-summary").allTextContents()).join("\n"),
-                conversation: await panel.locator(".session-log-content").allTextContents(),
+                openConversation: await panel
+                  .getByRole("link", { name: "Open conversation", exact: true })
+                  .count(),
               });
               await expect.poll(readDetails).toEqual({
                 timeline: expect.stringContaining("200"),
-                conversation: ["Original reply 1", "Original reply 2"],
+                openConversation: 1,
               });
               const initialOverview = observedOverviews.findLast(
                 (overview) => overview.session?.sessionId === originalId,
@@ -580,17 +591,12 @@ suite.define(() => {
               try {
                 await expect.poll(readDetails).toEqual({
                   timeline: pointCount === 1 ? "" : expect.stringContaining("600"),
-                  conversation: Array.from(
-                    { length: pointCount },
-                    (_, index) => `Replacement reply ${index + 1}`,
-                  ),
+                  openConversation: 1,
                 });
                 expect(await panel.locator(".timeseries-summary__range").count()).toBe(0);
               } finally {
                 await page.mouse.up();
                 await capture(page, "02-replacement-instance-details.png");
-                await panel.locator(".session-logs-compact").scrollIntoViewIfNeeded();
-                await capture(page, "03-replacement-instance-conversation.png");
                 if (captureUiProof) {
                   await writeFile(
                     path.join(suite.artifactDir, "instance-replacement.json"),
@@ -617,10 +623,22 @@ suite.define(() => {
                 await dragTimelineRange(page, 0.25);
                 await page.mouse.up();
                 await expect
-                  .poll(() => panel.locator(".session-log-content").allTextContents())
-                  .toEqual(["Replacement reply 1"]);
+                  .poll(() =>
+                    panel
+                      .locator(".session-summary-card .session-summary-value")
+                      .first()
+                      .textContent(),
+                  )
+                  .toBe("1");
                 await panel.getByRole("button", { name: "Reset", exact: true }).click();
-                await expect.poll(() => panel.locator(".session-log-content").count()).toBe(2);
+                await expect
+                  .poll(() =>
+                    panel
+                      .locator(".session-summary-card .session-summary-value")
+                      .first()
+                      .textContent(),
+                  )
+                  .toBe("2");
               }
               expect(connections).toBe(selectedConnections);
               expect(pageErrors).toEqual([]);

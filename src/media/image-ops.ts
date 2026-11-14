@@ -8,7 +8,11 @@ import {
   type ImageMetadata,
 } from "rastermill";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
-import { convertBmpToPngWithWorker, createImageProcessor } from "./image-processor.js";
+import {
+  convertBmpToPngWithWorker,
+  createImageProcessor,
+  createImageProcessorWithPixelLimits,
+} from "./image-processor.js";
 
 export { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 export { createImageProcessor } from "./image-processor.js";
@@ -33,6 +37,8 @@ type ResizeToJpegParams = {
   maxSide: number;
   quality: number;
   withoutEnlargement?: boolean;
+  /** Widens source admission for an owner whose output is a bounded downscale. */
+  maxInputPixels?: number;
 };
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
@@ -110,20 +116,31 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
 /** Resizes or encodes image bytes as JPEG through the shared image processor. */
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
   return (
-    await encodeImage(params.buffer, {
-      format: "jpeg",
-      resize: {
-        maxSide: params.maxSide,
-        enlarge: params.withoutEnlargement === false,
+    await encodeImage(
+      params.buffer,
+      {
+        format: "jpeg",
+        resize: {
+          maxSide: params.maxSide,
+          enlarge: params.withoutEnlargement === false,
+        },
+        quality: params.quality,
       },
-      quality: params.quality,
-    })
+      createImageProcessorWithPixelLimits({
+        inputPixels: params.maxInputPixels ?? MAX_IMAGE_INPUT_PIXELS,
+        outputPixels: MAX_IMAGE_INPUT_PIXELS,
+      }),
+    )
   ).data;
 }
 
-async function encodeImage(buffer: Buffer, options: EncodeOptions): Promise<EncodedImage> {
+async function encodeImage(
+  buffer: Buffer,
+  options: EncodeOptions,
+  processor = createImageProcessor(),
+): Promise<EncodedImage> {
   try {
-    return await createImageProcessor().encode(buffer, options);
+    return await processor.encode(buffer, options);
   } catch (error) {
     if (error instanceof RastermillUnavailableError) {
       throw new ImageProcessorUnavailableError(error.message, error.causes);

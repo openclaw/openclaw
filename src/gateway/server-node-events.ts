@@ -11,7 +11,7 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { updatePairedDevicePresence } from "../infra/device-pairing.js";
@@ -83,7 +83,7 @@ type VoiceTranscriptReservation = {
 const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
-type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
+type NodeAgentCommandInput = Parameters<typeof agentCommandFromGatewayIngress>[0];
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
@@ -371,8 +371,9 @@ async function handlePreparedNodeEvent(
             sessionKey: canonicalKey,
             clientRunId: runId,
           });
-          return agentCommandFromIngress(
+          return agentCommandFromGatewayIngress(
             {
+              assertTurnAdmissionCurrent: opts?.assertAgentTurnCurrent,
               runId,
               message: text,
               sessionId,
@@ -481,7 +482,7 @@ async function handlePreparedNodeEvent(
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: ctx.logGateway,
             supportsInlineImages,
-            // server-node-events dispatches via agentCommandFromIngress which
+            // server-node-events dispatches via agentCommandFromGatewayIngress which
             // has no structured media wiring; reject non-image attachments
             // explicitly rather than saving them where the agent cannot reach them.
             acceptNonImage: false,
@@ -629,6 +630,7 @@ async function handlePreparedNodeEvent(
 
       source?.assertCurrent();
       const nodeAgentInput: NodeAgentCommandInput = {
+        assertTurnAdmissionCurrent: opts?.assertAgentTurnCurrent,
         runId: sessionId,
         message,
         images,

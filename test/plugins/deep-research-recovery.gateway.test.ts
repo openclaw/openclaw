@@ -725,7 +725,6 @@ it.each([
           });
           expect(submits).toBe(0);
         } else if (scenario === "ambiguous") {
-          const rejection = expect(pending).rejects.toThrow();
           await Promise.race([
             entered.promise,
             pending.then(() => {
@@ -734,7 +733,7 @@ it.each([
           ]);
           await services?.stop({ strict: true });
           release.resolve();
-          await rejection;
+          await expect(pending).rejects.toThrow();
         } else {
           const first = await pending;
           expect(first.details).toMatchObject({ state: "paused" });
@@ -882,7 +881,9 @@ it.each([
             // Start disposal before remote completion; do not wait on its in-flight consumer.
             const instance = getPluginInstance(google);
             assert.ok(instance);
-            const disposing = instance.dispose();
+            const disposing = instance.dispose(async () => {
+              await services?.stop({ pluginIds: new Set([google.id]), strict: true });
+            });
             release.resolve();
             await disposing;
           } else {

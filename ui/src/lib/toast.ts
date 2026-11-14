@@ -32,6 +32,8 @@ export type ToastOptions = {
   onAction?: (event?: MouseEvent) => void;
   onDismiss?: (reason: ToastDismissReason) => void;
   durationMs?: number;
+  /** Removes the toast once what it offers was resolved elsewhere. */
+  signal?: AbortSignal;
 };
 
 export type ToastPlacement = "top-center" | "top-right";
@@ -271,6 +273,9 @@ class ToastOwner {
   }
 
   show(options: ToastOptions) {
+    if (options.signal?.aborted) {
+      return;
+    }
     const lane = toastLane(options);
     // A panel holds one notice; other lanes deduplicate by explicit identity or unkeyed copy.
     for (const toast of this.live) {
@@ -287,8 +292,12 @@ class ToastOwner {
         this.finish(toast, "replaced");
       }
     }
+    const id = nextToastId++;
+    if (options.signal) {
+      listen(options.signal, "abort", () => this.dismiss(id, "dismiss"), { once: true });
+    }
     this.live.unshift({
-      id: nextToastId++,
+      id,
       options,
       lane,
       remainingMs: options.durationMs ?? TOAST_DURATION_MS[options.severity ?? "neutral"],

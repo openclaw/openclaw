@@ -43,6 +43,7 @@ import {
   type DatabaseFileIdentity,
 } from "../../../infra/sqlite-worker-identity.js";
 import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-attribution.js";
+import { withArtifactPreservingStateReads } from "../../../state/artifact-preserving-state-reads.js";
 import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly-open.js";
@@ -51,12 +52,16 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../../../state/openclaw-agent-db.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-maintenance-context.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  readCustodiedDrainedSqliteSource,
+} from "../../../state/openclaw-state-maintenance-context.js";
 import { chunkItems } from "../../../utils/chunk-items.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
+import { doctorMigrationBackupPath } from "../../doctor-migration-backup-names.js";
 import {
   inspectLegacyRestartTombstone,
   migrateLegacySessionEntryState,
@@ -158,6 +163,15 @@ export async function scanDoctorSessionEntryRecords(
       return scan(databaseOptions, expectedIdentity);
     }
     assertSourceCurrent();
+    if (readCustodiedDrainedSqliteSource(scope.storePath)) {
+      // The backup owner has already drained WAL under the same maintenance custody.
+      const inPlace = withArtifactPreservingStateReads(
+        () => scan(databaseOptions, expectedIdentity),
+        { agentDatabases: true },
+      );
+      assertSourceCurrent();
+      return inPlace;
+    }
     // The child pins the original source identity; the reader keeps its private identity.
     await using capturedSnapshot = {
       preparation: startSqliteReadOnlyLocationAsync(scope.storePath, {
@@ -241,7 +255,7 @@ export async function repairLegacySessionRunOutcomes(
     const { createVerifiedSqliteSnapshot } = await import("../../../infra/sqlite-snapshot.js");
     await createVerifiedSqliteSnapshot({
       sourcePath: scope.storePath,
-      targetPath: `${scope.storePath}.pre-startup-migration-restart-recovery-${randomUUID()}.bak`,
+      targetPath: doctorMigrationBackupPath(scope.storePath, randomUUID(), "restart-recovery"),
       preserveRowIds: true,
       beforePublish: assertRepairCurrent,
     });

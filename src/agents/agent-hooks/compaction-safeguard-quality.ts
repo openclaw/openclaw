@@ -2,6 +2,7 @@
 import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
 import type {
   CompactionSummarizationInstructions,
@@ -32,6 +33,16 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
 
+const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
+const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
+
+export function resolveQualityGuardMaxRetries(value: number | undefined): number {
+  return Math.min(
+    MAX_QUALITY_GUARD_MAX_RETRIES,
+    Math.max(0, Math.floor(value ?? DEFAULT_QUALITY_GUARD_MAX_RETRIES)),
+  );
+}
+
 export function resolveSummaryReserveTokens(
   requestedReserveTokens: number,
   model: NonNullable<Parameters<typeof summarizeCompactionHistory>[0]["model"]>,
@@ -47,12 +58,44 @@ export function resolveSummaryReserveTokens(
 }
 
 /** Demotes canonical headings when a summary is embedded as supporting context. */
-export function nestRequiredSummaryHeadings(text: string): string {
+function nestRequiredSummaryHeadings(text: string): string {
   return text.replace(/^##[ \t]+\S.*$/gmu, (heading) =>
     REQUIRED_SUMMARY_SECTIONS.some((required) => required === heading.trim())
       ? heading.replace("##", "###")
       : heading,
   );
+}
+
+const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
+
+function nestMarkdownHeadings(text: string): string {
+  return text.replace(/^##(?=[ \t]+\S)/gmu, "###");
+}
+
+export function normalizeLegacySplitTurnSummary(summary: string | undefined): string | undefined {
+  const splitTurnStart = summary?.indexOf(SPLIT_TURN_SECTION_HEADING) ?? -1;
+  if (!summary || splitTurnStart < 0) {
+    return summary;
+  }
+  const splitTurnContentStart = splitTurnStart + SPLIT_TURN_SECTION_HEADING.length;
+  // Shipped safeguard summaries nested a second complete summary after this owned boundary.
+  // Demote its headings only in the next model input; the persisted old boundary stays untouched.
+  return `${summary.slice(0, splitTurnContentStart)}${nestRequiredSummaryHeadings(summary.slice(splitTurnContentStart))}`;
+}
+
+export function formatGeneratedSplitTurnSection(
+  summary: string,
+  onTruncated: () => void,
+  maxChars: number,
+): string {
+  const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
+  const summaryBudget = maxChars - heading.length;
+  const nestedSummary = nestMarkdownHeadings(summary);
+  const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
+  if (cappedSummary.length < nestedSummary.length) {
+    onTruncated();
+  }
+  return `${heading}${cappedSummary}`;
 }
 
 /** Wraps operator-provided compaction instruction text as untrusted prompt data. */
@@ -400,19 +443,26 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
 }
 
 /** Extracts likely exact identifiers that summaries should preserve literally. */
-export function extractOpaqueIdentifiers(text: string): string[] {
-  // Decimal/scientific syntax is unambiguous numeric data, including unit suffixes. Integer tokens
-  // with letters remain opaque because the suffix may be part of an exact identifier.
-  return uniqueStrings(
-    Array.from(
-      text.matchAll(
-        /(https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5})|(?:(?:(?:\d+\.\d+|\.\d+)(?:[eE][+-]?\d+)?|\d+\.[eE][+-]?\d+|\d+\.?[eE][+-]\d+|(?![A-Fa-f0-9]{8,}(?![A-Fa-f0-9]))\d+\.?[eE]\d+)(?:(?=[A-Za-z]+(?![A-Za-z0-9]))(?=[A-Za-z]*[G-Zg-z])[A-Za-z]+)?(?![A-Za-z0-9])|(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*(?:[A-Fa-f0-9]{8,}|\d{6,}))([A-Za-z0-9_-]+))/g,
-      ),
-      (match) => match[1] ?? match[2] ?? "",
-    )
-      .map((value) => normalizeOpaqueIdentifier(sanitizeExtractedIdentifier(value)))
-      .filter((value) => value.length >= 4),
-  ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
+export function extractOpaqueIdentifiers(input: string | Iterable<string>): string[] {
+  const identifiers = new Set<string>();
+  // Message boundaries are whitespace separators, never part of an identifier.
+  // Consume one payload at a time and stop at the existing audit limit.
+  for (const text of typeof input === "string" ? [input] : input) {
+    for (const match of text.matchAll(
+      /(https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5})|(?:(?:(?:\d+\.\d+|\.\d+)(?:[eE][+-]?\d+)?|\d+\.[eE][+-]?\d+|\d+\.?[eE][+-]\d+|(?![A-Fa-f0-9]{8,}(?![A-Fa-f0-9]))\d+\.?[eE]\d+)(?:(?=[A-Za-z]+(?![A-Za-z0-9]))(?=[A-Za-z]*[G-Zg-z])[A-Za-z]+)?(?![A-Za-z0-9])|(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*(?:[A-Fa-f0-9]{8,}|\d{6,}))([A-Za-z0-9_-]+))/g,
+    )) {
+      const value = normalizeOpaqueIdentifier(
+        sanitizeExtractedIdentifier(match[1] ?? match[2] ?? ""),
+      );
+      if (value.length >= 4) {
+        identifiers.add(value);
+        if (identifiers.size === MAX_EXTRACTED_IDENTIFIERS) {
+          return [...identifiers];
+        }
+      }
+    }
+  }
+  return [...identifiers];
 }
 
 function tokenizeAskOverlapText(text: string, includeFallbackTokens = false): string[] {

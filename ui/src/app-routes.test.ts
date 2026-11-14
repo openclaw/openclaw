@@ -137,6 +137,11 @@ it.each([
   ["/ui/settings?keep=1#anchor", "/ui/chat?keep=1#anchor"],
   ["/ui/communications?section=%20channels%20&drop=1#anchor", "/ui/settings/channels#anchor"],
   ["/ui/automation?section=plugins&drop=1#anchor", "/ui/settings/plugins?tab=advanced#anchor"],
+  ["/ui/settings/plugins/discover?query=calendar#featured", "/ui/plugins?query=calendar#featured"],
+  [
+    "/ui/plugins/ch_QG9wZW5jbGF3L2xpbmVhcg?probe=1#catalog",
+    "/ui/plugins/openclaw/linear?probe=1#catalog",
+  ],
 ])("canonicalizes bookmark and history entry %s", async (requestedUrl, expectedUrl) => {
   const location = (url: string) => {
     const parsed = new URL(url, "https://control.test");

@@ -33,20 +33,18 @@ import type {
 } from "../ui/src/api/types.ts";
 import { activityPulseBoundaries } from "../ui/src/pages/activity/activity-pulse-window.ts";
 import type { ActivityTimeFilter } from "../ui/src/pages/activity/session-activity.ts";
+import { createControlUiChatHistoryMessage as chatHistoryMessage } from "../ui/src/test-helpers/control-ui-chat-history-fixtures.ts";
 import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   createControlUiMockSameOriginGatewayScript,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createControlUiMockSessionRow as sessionRow } from "../ui/src/test-helpers/control-ui-mock-session-row.ts";
 import {
   prepareNativePluginMockGatewayScenario,
   type NativeControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
-import {
-  createControlUiChatHistoryMessage as chatHistoryMessage,
-  createControlUiMockSessionRow as sessionRow,
-} from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture.ts";
 import { buildWorkboardMocks } from "../ui/src/test-helpers/control-ui-workboard-fixtures.ts";
 import { installWorkboardBoardMock } from "../ui/src/test-helpers/control-ui-workboard-mocks.ts";

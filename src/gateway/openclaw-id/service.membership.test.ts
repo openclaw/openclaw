@@ -156,6 +156,10 @@ describe("Gateway membership authority and enforcement", () => {
         devices: [
           {
             peerKey: bob,
+            deviceFp: null,
+            label: `Device (${(await fingerprint(bob)).slice(3, 11)})`,
+            approvedBy: null,
+            lastSeen: expect.any(Number),
             connections: 1,
             lastSeenAt: 1_700_000_000_000,
             runs: [{ runId: "r1", sessionKey: "s1" }],
@@ -268,6 +272,7 @@ describe("Gateway membership authority and enforcement", () => {
       {
         submit: (statement) => claw.authority.submit(statement, "mailbox"),
         redeem: (redemption, identity) => claw.authority.redeem(redemption, identity),
+        redeemNode: (redemption) => claw.authority.redeemNode(redemption),
       },
     );
     expect(result).toMatchObject({ ok: false, code: "not_direct" });

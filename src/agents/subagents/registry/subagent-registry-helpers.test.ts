@@ -16,6 +16,7 @@ import {
   safeRemoveAttachmentsDir,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 function createRunEntry(overrides: Omit<SubagentRunRecordOverrides, "runId"> = {}) {
   return createSubagentRunRecord({
     runId: "run-1",
@@ -158,20 +159,20 @@ describe("safeRemoveAttachmentsDir", () => {
 });
 
 describe("logAnnounceGiveUp", () => {
-  it.each([
-    [
-      "gateway timeout\nphase: routed dispatch failed",
-      'deliveryError="gateway timeout phase: routed dispatch failed"',
-      "\n",
-    ],
-    [`${"x".repeat(1_999)}🚀tail`, `${"x".repeat(1_999)}…`, "\uD83D"],
-  ])(
-    "keeps delivery errors bounded and on one well-formed log line (%s)",
-    (lastError, included, excluded) => {
-      using log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-      logAnnounceGiveUp(createRunEntry({ delivery: { status: "failed", lastError } }), "expiry");
-      expect(log).toHaveBeenCalledWith(expect.stringContaining(included));
-      expect(String(log.mock.calls[0]?.[0])).not.toContain(excluded);
-    },
-  );
+  it("records the run, requester and full failure in the Gateway logger", () => {
+    using log = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+    const lastError = `gateway timeout\n${"detail ".repeat(400)}🚀`;
+    const entry = createRunEntry({ delivery: { status: "failed", lastError } });
+    logAnnounceGiveUp(entry, "permanent_failure");
+    expect(log).toHaveBeenCalledWith(
+      "Subagent announce give up",
+      expect.objectContaining({
+        reason: "permanent_failure",
+        runId: entry.runId,
+        childSessionKey: entry.childSessionKey,
+        requesterSessionKey: entry.requesterSessionKey,
+        deliveryError: lastError,
+      }),
+    );
+  });
 });

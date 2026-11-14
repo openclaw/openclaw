@@ -21,7 +21,7 @@ def _extract_frontmatter(content: str) -> Optional[str]:
     if not lines or lines[0].strip() != "---":
         return None
     for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
+        if lines[i].rstrip() == "---":
             return "\n".join(lines[1:i])
     return None
 
@@ -51,6 +51,12 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
             if current_key is None:
                 return None
             current_value = parsed[current_key]
+            if not block_scalar:
+                if not current_value:
+                    stripped = _strip_scalar_comment(stripped)
+                elif not current_value.startswith(("'", '"')):
+                    # Quotes on a plain scalar's continuation are literal text.
+                    stripped = re.sub(r"[ \t]+#.*$", "", stripped)
             parsed[current_key] = f"{current_value}\n{stripped}" if current_value else stripped
             continue
 
@@ -84,7 +90,7 @@ def validate_skill(skill_path):
 
     try:
         content = skill_md.read_text(encoding="utf-8-sig")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         return False, f"Could not read SKILL.md: {e}"
 
     frontmatter_text = _extract_frontmatter(content)
@@ -122,7 +128,7 @@ def validate_skill(skill_path):
     unexpected_keys = set(frontmatter.keys()) - allowed_properties
     if unexpected_keys:
         allowed = ", ".join(sorted(allowed_properties))
-        unexpected = ", ".join(sorted(unexpected_keys))
+        unexpected = ", ".join(sorted(str(key) for key in unexpected_keys))
         return (
             False,
             f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. Allowed properties are: {allowed}",

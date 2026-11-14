@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -47,13 +48,22 @@ export function registerUsersCli(program: Command) {
       .command("list")
       .description("List durable user profiles")
       .action(async (opts: UsersCliOpts) => {
-        const result = await callGatewayFromCli(
-          "users.list",
-          opts,
-          {},
-          { scopes: ["operator.read"] },
-        );
-        writeUsersList(result, opts.json === true);
+        const signal = getAsyncWorkSignal();
+        try {
+          const result = await callGatewayFromCli(
+            "users.list",
+            opts,
+            {},
+            { scopes: ["operator.read"], signal },
+          );
+          if (!signal?.aborted) {
+            writeUsersList(result, opts.json === true);
+          }
+        } catch (error) {
+          if (!signal?.aborted) {
+            throw error;
+          }
+        }
       }),
   );
 

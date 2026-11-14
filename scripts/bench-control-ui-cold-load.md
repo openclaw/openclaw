@@ -54,6 +54,41 @@ The measured journey includes the driver gaps between gestures; it is not
 single-wheel latency. Mobile retains the programmatic scrollport jump because
 Playwright's mobile WebKit driver does not support wheel input.
 
+The explicit desktop `completed-direct-run-{400,2000}-wheel` scenarios use the
+same completed-run fixtures as the interpolated `-scroll` scenarios. They send
+90 trusted wheel commands per direction, targeting 60 Hz with a delta of 0.75
+viewport height; this is a sustained wheel sequence, not OS kinetic momentum.
+Reports separate offered/accepted commands from browser-observed events and
+actual scroll distance. Coverage uses the first-to-last movement window, with
+the preceding frame gap and first-input-to-movement latency retained; stationary
+tail zero/partial coverage and final coverage are reported separately. The
+scenario drains commands and waits for stable scrolling without forcing an
+endpoint. These are geometric row-box observations, not painted-content proof.
+
+For transcript geometry attribution, add `--transcript-layout-audit`
+to a separate run. This records native scroll writes and offsets,
+retained-row coordinates, visible bubble IDs and text rectangles, streaming block
+coordinates, and mutation ancestry beside each observation, plus a bounded JPEG
+filmstrip in Chromium, Firefox, and WebKit. The capture adds layout reads and is
+not timing evidence. Geometry describes DOM readiness, not painted coverage;
+inspect the filmstrip for blank, partial, or stale content. Image counts are not
+display refresh counts. Firefox and WebKit image clocks have an approximate
+initial alignment with the DOM clock. Layout-shift sources retain their
+row identity at observer delivery, before virtualization can remove them.
+
+For separate paint attribution, add `--transcript-paint-marker` with
+`--transcript-layout-audit`. A small bottom-left canvas encodes each JavaScript
+scroll-write revision in the captured pixels; the audit records its mapping to
+the requested and actual offsets. The marker adds paint work and can alter the
+captured path. Use unmarked filmstrips for blank-frame acceptance and marked
+captures only to resolve frame/offset identity.
+
+`streaming-645-deltas` types into the composer every 500 ms. Use the explicit
+`streaming-645-deltas-no-input` scenario to measure the same reply without typing.
+Report both CLS and `allShiftSum`: recent input excludes shifts from CLS, including
+ordinary Markdown word wrapping and growing tables. A zero CLS while typing does
+not prove that content stayed still; compare the filmstrip and source rectangles.
+
 ## Native browser work and composited layers
 
 Use the same production route and interaction scenarios with `--native-audit`
@@ -875,6 +910,15 @@ counts; thread CPU does not measure compositor presentation or server work.
 modules and mapping coverage. It gzips source-mapped generated ranges independently,
 so those scores identify expensive modules but are not additive transfer costs;
 the existing shipped gzip sidecars remain the route budget authority.
+
+Run the absolute checker as well as `ui:check-performance:base`: a passing delta
+against the base does not prove the artifact fits its fixed ceilings. The document
+budget includes early locale preload metadata and the self-contained recovery
+shell. Locale namespace data uses one content generation per language so those
+hints stay compact without delaying translated Chat behind another request.
+Changing any namespace invalidates that language's namespace set; base catalogs
+and config hints retain their own chunk identities. Generated data assets have
+no source maps, so module attribution reports their bytes as unmapped.
 
 Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
 (after unloading the app), local storage and session storage. `--gateway-http`

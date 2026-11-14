@@ -55,6 +55,18 @@ export function deferImages() {
   return images;
 }
 
+/** Act bodies, with operator input bursts expanded into one act-shaped entry per input. */
+export function browserRequestActions(
+  envelope: { path?: unknown; body?: Record<string, unknown> } | undefined,
+): Array<Record<string, unknown> | undefined> {
+  if (envelope?.path !== "/operator/input") {
+    return envelope?.path === "/act" ? [envelope.body] : [];
+  }
+  const inputs = Array.isArray(envelope.body?.inputs) ? envelope.body.inputs : [];
+  const targetId = envelope.body?.targetId;
+  return inputs.map((input: Record<string, unknown>) => Object.assign({}, input, { targetId }));
+}
+
 // Strict dispatch keeps each scenario's permitted requests explicit.
 export function panelScenario(
   targetId: string | undefined,
@@ -81,8 +93,8 @@ export function panelScenario(
       .map(([, envelope]) => envelope as Envelope)
       .filter((envelope) => envelope.path === path);
   const actions = (kind: string) =>
-    calls("/act")
-      .map(({ body }) => body)
+    gateway.request.mock.calls
+      .flatMap(([, envelope]) => browserRequestActions(envelope as Envelope))
       .filter((body) => body?.kind === kind);
   return { ...gateway, host, controller, calls, actions };
 }

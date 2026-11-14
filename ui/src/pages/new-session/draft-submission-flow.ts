@@ -267,14 +267,13 @@ export class DraftSubmissionFlow {
   }
 
   /** Audience retirement needs an explicit choice; other gates follow a submit attempt. */
-  blockedSubmitNotice(): string | undefined {
+  blockedSubmitNotice(options: { includePageRendered?: boolean } = {}): string | undefined {
     const block = this.submitBlock();
     if (block?.gate === "draft-unavailable") {
       return block.reason;
     }
-    return this.blockedSubmitAttempt && block && !PAGE_RENDERED_GATES.has(block.gate)
-      ? block.reason
-      : undefined;
+    const showNotice = options.includePageRendered || !PAGE_RENDERED_GATES.has(block?.gate ?? "");
+    return this.blockedSubmitAttempt && showNotice ? block?.reason : undefined;
   }
 
   private buildDraftSessionCreateParams = (options: DraftSessionCreateOverrides = {}) =>
@@ -430,15 +429,21 @@ export class DraftSubmissionFlow {
     const requestSignal = this.sessionStartup.captureRequest();
     const submittedDraft = this.draftPersistence.captureSubmission();
     const submittedMessage = this.startedSession.messageForTurn(context, input.agentId, input.turn);
+    // Background starts belong to their own chat route, not a preview on /new.
+    // Keep the source composer in place until admission consumes its draft.
+    const foregroundMessage = background ? null : submittedMessage;
+    if (background) {
+      this.startedSession.clearSubmission();
+    }
     const retainSubmittedSession = this.startedSession.captureSubmission(
       context,
       input.agentId,
-      submittedMessage,
+      foregroundMessage,
       () => !requestSignal.aborted,
     );
     // The draft keeps custody until creation succeeds; this snapshot only makes
     // foreground submission visible while the Gateway is still admitting it.
-    this.activeSubmission = { phase: "creating", message: submittedMessage };
+    this.activeSubmission = { phase: "creating", message: foregroundMessage };
     this.error = null;
     this.place.browser.close();
     this.callbacks.closeTransientUi();

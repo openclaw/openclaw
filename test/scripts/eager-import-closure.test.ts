@@ -27,6 +27,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
 import {
+  anchoredStdio,
   copyPrRoutingWrapperSources,
   copyPrWrapperSources,
   linkPrWrapperDependencies,
@@ -333,7 +334,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
               OPENCLAW_PR_ANCHOR_CREATOR_PID: String(process.pid),
               OPENCLAW_PR_ANCHOR_FD: "9",
             },
-            stdio: ["ignore", "pipe", "pipe", ...Array<"ignore">(6).fill("ignore"), descriptor],
+            stdio: anchoredStdio(descriptor),
           },
         );
       const result = materialize();

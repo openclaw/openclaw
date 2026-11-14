@@ -1,6 +1,11 @@
 import "../../styles/skill-reader-dialog.css";
 import type { JSX } from "@solidjs/web";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SkillLibraryModel } from "./library-state.ts";
 
@@ -35,7 +40,13 @@ export function LibraryDialog(props: {
             void props.library.importFiles(current().importSelection);
           }
         }}
+        onCompositionEnd={recordCompositionEnd}
+        onFocusOut={clearCompositionEnd}
+        onKeyUp={clearCompositionEnd}
         onKeyDown={(event) => {
+          if (isComposingKeyboardEvent(event)) {
+            return;
+          }
           if (
             props.editor &&
             (event.ctrlKey || event.metaKey) &&

@@ -176,10 +176,9 @@ export async function waitForControlUiSettingsTakeover(
   pathname = "/settings/appearance",
 ): Promise<{ search: Locator; sidebar: Locator }> {
   await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
-  const appSidebar = page.locator("openclaw-app-sidebar");
   const sidebar = page.locator(".settings-sidebar");
   const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-  await appSidebar.waitFor({ state: "detached" });
+  await page.locator(".sidebar-shell").waitFor({ state: "hidden" });
   await search.waitFor({ state: "visible" });
   return { search, sidebar };
 }
@@ -737,6 +736,7 @@ function installControlUiMockGateway(
     {
       rows: canonicalSessionRows,
       mainKey: scenario.mainSessionKey,
+      models: scenario.models,
     },
     isRecord,
   );
@@ -2073,7 +2073,8 @@ function installControlUiMockGateway(
         event: "connect.challenge",
         payload: {
           nonce: "control-ui-e2e-nonce",
-          ts: Date.now(),
+          // Playwright can expose fractional Date.now() inside virtual timer callbacks.
+          ts: Math.trunc(Date.now()),
           capabilities: scenario.connectCapabilities,
         },
         type: "event",
@@ -2288,13 +2289,8 @@ function installControlUiMockGateway(
     setOperatorScopes(scopes) {
       scenario.operatorScopes = [...scopes];
     },
-    getSessionRow(key) {
-      const row = sessions.sessionInfo(key);
-      if (!row) {
-        throw new Error(`Mock Gateway did not return session ${key}`);
-      }
-      return row;
-    },
+    getSessionRow: sessions.requireSessionInfo,
+    setSessionRow: sessions.replaceCanonicalRow,
     setRequestHandler(method, handler) {
       requestHandlers.set(method, handler);
     },
@@ -2384,9 +2380,7 @@ function installControlUiMockGateway(
       isViteHmr ||
       scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))
     ) {
-      return protocols === undefined
-        ? new NativeWebSocket(resolvedUrl)
-        : new NativeWebSocket(resolvedUrl, protocols);
+      return new NativeWebSocket(resolvedUrl, protocols);
     }
     return new MockWebSocket(resolvedUrl);
   };

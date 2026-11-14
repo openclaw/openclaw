@@ -1,17 +1,18 @@
-// Membership API for owner devices that reach the claw over the tunnel (the
+// Membership API for admitted devices that reach the claw over the tunnel (the
 // browser loader's Service Worker, which is not a Gateway WebSocket client).
-// Only requests relayed by the tunnel child reach it, so the caller is an
-// admitted device whose key W the QUIC handshake authenticated. Every write is
-// a signed statement the authority verifies itself (spec sections 6 and 7);
-// this layer only decodes JSON and maps refusals to HTTP.
+// Only requests relayed by the tunnel child reach it. The QUIC handshake
+// authenticates the device key W; this layer checks admission before dispatch,
+// decodes JSON and maps refusals to HTTP. Membership writes carry signed
+// statements the authority verifies itself (spec sections 6 and 7).
 //
-//   GET  /_openclaw-id/v1/membership  owner devices: seq, binding, active owner certs, members, invites
+//   GET  /_openclaw-id/v1/membership  account-scoped member view, or full owner view
 //   POST /_openclaw-id/v1/statements  { statement }            MembershipChange, Revocation
 //   POST /_openclaw-id/v1/invites     { cap, proof_key }       InviteCap plus base64url proof key
+//   POST /_openclaw-id/v1/node-invites { cap, proof_key }      NodeInviteCap plus proof key
 //   POST /_openclaw-id/v1/signout     no body                 end this peer's browser credentials
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AuthorityAccepted, AuthorityRefusal } from "./authority.js";
-import { decodeInviteProofKey } from "./invites-view.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
+import { decodeInviteProfile, decodeInviteProofKey } from "./invites-view.js";
 
 /** Path prefix the tunnel API owns on the claw origin. */
 const TUNNEL_API_PREFIX = "/_openclaw-id/v1/";
@@ -20,22 +21,35 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 /** What the tunnel API needs from the Gateway's OpenClaw ID owner. */
 export type TunnelApiOwner = {
-  /** The membership view for an owner device's peer key; undefined for anyone else. */
+  /** Resolves current membership and applies the Gateway's role admission policy. */
+  isAdmitted: (peerKey: string) => Promise<boolean>;
+  /** The full owner view or account-scoped member view; undefined for nodes. */
   membership: (peerKey: string) => Promise<unknown>;
+  /** Loads owner authority once; the returned check is synchronous and live. */
+  prepareOwnerCheck: (peerKey: string) => Promise<() => boolean>;
   /** Applies a signed statement received over the tunnel. */
   submit: (statement: unknown) => Promise<AuthorityAccepted | AuthorityRefusal>;
   /** Registers an owner-signed InviteCap with its proof key. */
   registerInvite: (input: {
     cap: unknown;
     proofKey: Uint8Array;
+    existingProfileId?: string;
   }) => Promise<AuthorityAccepted | AuthorityRefusal>;
+  /** Registers an owner-signed NodeInviteCap with its proof key. */
+  registerNodeInvite: (
+    input: {
+      cap: unknown;
+      proofKey: Uint8Array;
+    },
+    isCallerOwner: () => boolean,
+  ) => Promise<AuthorityAccepted | AuthorityRefusal>;
   /** Current membership seq, reported after a write so clients can sign the next change. */
   seq: () => Promise<number>;
   /** Revokes browser tokens and closes RPC connections for the authenticated peer only. */
   signOut: (peerKey: string) => Promise<boolean>;
 };
 
-type Route = "membership" | "statements" | "invites" | "signout";
+type Route = "membership" | "statements" | "invites" | "node-invites" | "signout";
 
 // Refusal code -> HTTP status. Clients match `error.code`, never the status or message.
 function refusalStatus(code: string): number {
@@ -93,7 +107,11 @@ function routeOf(url: string | undefined): Route | undefined {
     return undefined;
   }
   const name = pathname.slice(TUNNEL_API_PREFIX.length);
-  return name === "membership" || name === "statements" || name === "invites" || name === "signout"
+  return name === "membership" ||
+    name === "statements" ||
+    name === "invites" ||
+    name === "node-invites" ||
+    name === "signout"
     ? name
     : undefined;
 }
@@ -117,7 +135,7 @@ export function isTunnelApiRequest(req: IncomingMessage): boolean {
 }
 
 /**
- * Serves one tunnel API request from the admitted device `peerKey`. The caller
+ * Serves one tunnel API request from the authenticated device `peerKey`. The caller
  * has already checked the request came through the tunnel child.
  */
 export async function handleTunnelApiRequest(
@@ -126,6 +144,10 @@ export async function handleTunnelApiRequest(
   peerKey: string,
   owner: TunnelApiOwner,
 ): Promise<void> {
+  if (!(await owner.isAdmitted(peerKey))) {
+    sendError(res, 403, "not_admitted", "this device is not admitted");
+    return;
+  }
   const route = routeOf(req.url);
   if (!route) {
     sendError(res, 404, "not_found", "no such OpenClaw ID endpoint");
@@ -140,7 +162,7 @@ export async function handleTunnelApiRequest(
   if (route === "membership") {
     const view = await owner.membership(peerKey);
     if (!view) {
-      sendError(res, 403, "not_owner_device", "only owner devices read membership");
+      sendError(res, 403, "not_member_device", "only owner or member devices read membership");
       return;
     }
     sendJson(res, 200, view);
@@ -172,5 +194,27 @@ export async function handleTunnelApiRequest(
     sendError(res, 400, "malformed", "cap and a 32-byte base64url proof_key are required");
     return;
   }
-  await answerWrite(res, owner, await owner.registerInvite({ cap: body.cap, proofKey }));
+  const isOwner = await owner.prepareOwnerCheck(peerKey);
+  if (!isOwner()) {
+    sendError(res, 403, "not_owner_device", "only owner devices register invites");
+    return;
+  }
+  if (route === "node-invites") {
+    await answerWrite(
+      res,
+      owner,
+      await owner.registerNodeInvite({ cap: body.cap, proofKey }, isOwner),
+    );
+    return;
+  }
+  const profile = decodeInviteProfile(body.existingProfileId);
+  if ("ok" in profile) {
+    sendError(res, 400, profile.code, profile.detail);
+    return;
+  }
+  await answerWrite(
+    res,
+    owner,
+    await owner.registerInvite({ cap: body.cap, proofKey, ...profile }),
+  );
 }

@@ -85,9 +85,13 @@ suite.define(() => {
     });
 
     await page.goto(suite.server.baseUrl);
-    await page.clock.runFor(1);
     const recovery = page.locator('.gateway-connection-view[data-connection-state="reconnecting"]');
-    await recovery.waitFor();
+    await expect
+      .poll(async () => {
+        await page.clock.runFor(1);
+        return recovery.isVisible();
+      })
+      .toBe(true);
     expect((await recovery.getByRole("heading").textContent())?.trim()).toBe("Still connecting");
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await gateway.getRequests("connect")).toHaveLength(0);

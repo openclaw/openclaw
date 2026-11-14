@@ -37,6 +37,18 @@ enum ScreenshotFixtureMode {
     static var progressCardEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-progress-card-fixture")
     }
+
+    /// Two long chats, so switching between them proves where the reader lands.
+    static var chatSwitchEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-chat-switch-fixture")
+    }
+
+    /// Holds the model catalog, the last step of a chat's load, like a slow Gateway.
+    static var slowModelCatalogEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-slow-model-catalog-fixture")
+    }
+
+    static let chatSwitchSecondSessionKey = "agent:main:launch-plan"
 }
 
 struct LocalChatFixture {
@@ -168,6 +180,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             sessionSettingsAvailable: true,
             modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
             effortMutationAvailable: true,
+            verboseMutationAvailable: true,
             webSearchBaseEnabled: true,
             webSearchAvailable: true,
             skills: [
@@ -359,6 +372,9 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         sessionKey _: String,
         agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
     {
+        if ScreenshotFixtureMode.slowModelCatalogEnabled {
+            try await Task.sleep(for: .seconds(6))
+        }
         let choices = try await self.listModels(agentID: agentID)
         return OpenClawChatModelCatalogSnapshot(
             choices: choices,
@@ -404,6 +420,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 status: "running",
                 hasActiveRun: true))
         }
+        if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
         if archived {
             sessions = []
         }
@@ -581,6 +598,9 @@ private actor LocalFixtureChatStore {
                 text: "OPENCLAW_HELPER_SESSION",
                 timestamp: 1,
                 transcriptMessageID: "fixture-helper-answer")]
+        } else if ScreenshotFixtureMode.chatSwitchEnabled {
+            Self.chatSwitchTranscript(
+                secondSession: normalizedSessionKey == ScreenshotFixtureMode.chatSwitchSecondSessionKey)
         } else {
             self.messages
         }
@@ -862,10 +882,24 @@ private actor LocalFixtureChatStore {
             toolOverrides: self.toolOverrides)
         entry.visibility = .shared
         entry.sharingRole = .owner
+        var sessions = [entry]
+        if ScreenshotFixtureMode.chatSwitchEnabled {
+            sessions[0].displayName = "Release checklist"
+            sessions.append(OpenClawChatSessionEntry(
+                key: ScreenshotFixtureMode.chatSwitchSecondSessionKey,
+                kind: "chat",
+                displayName: "Launch plan",
+                surface: "ios",
+                updatedAt: Date().timeIntervalSince1970 * 1000 - 60000,
+                sessionId: "\(self.fixture.sessionIDPrefix)-launch-plan",
+                modelProvider: self.fixture.modelProvider,
+                model: self.modelID,
+                contextTokens: 128_000))
+        }
         return OpenClawChatSessionsListResponse(
             ts: Date().timeIntervalSince1970 * 1000,
             path: nil,
-            count: 1,
+            count: sessions.count,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: self.fixture.modelProvider,
                 model: self.fixture.modelID,
@@ -875,7 +909,7 @@ private actor LocalFixtureChatStore {
                 thinkingDefault: "auto",
                 mainSessionKey: self.fixture.sessionKey,
                 modelSelectionTarget: self.fixtureModelSelectionTarget),
-            sessions: [entry])
+            sessions: sessions)
     }
 
     private var fixtureModelSelectionTarget: String {
@@ -1217,7 +1251,15 @@ private actor LocalFixtureChatStore {
                         type: "toolCall",
                         id: "fixture-exec",
                         name: "exec",
-                        arguments: AnyCodable(["command": "printf ready"])),
+                        arguments: AnyCodable(
+                            ProcessInfo.processInfo.arguments.contains("--openclaw-command-purpose-fixture")
+                                ? ["command": "printf ready", "title": "Check local readiness"]
+                                : ["command": "printf ready"])),
+                    OpenClawChatMessageContent(
+                        type: "tool_result",
+                        content: AnyCodable([["type": "text", "text": "ready"]]),
+                        id: "fixture-exec",
+                        name: "exec"),
                     OpenClawChatMessageContent(
                         type: "toolCall",
                         id: "fixture-no-result",
@@ -1234,13 +1276,6 @@ private actor LocalFixtureChatStore {
                 stopReason: "toolUse"),
             OpenClawChatMessage(
                 role: "toolResult",
-                content: [OpenClawChatMessageContent(type: "text", text: "ready")],
-                timestamp: now + 2,
-                transcriptMessageID: "fixture-step-result",
-                toolCallId: "fixture-exec",
-                toolName: "exec"),
-            OpenClawChatMessage(
-                role: "toolResult",
                 content: [OpenClawChatMessageContent(type: "text", text: "complete")],
                 timestamp: now + 3,
                 transcriptMessageID: "fixture-success-result",
@@ -1252,6 +1287,32 @@ private actor LocalFixtureChatStore {
                 timestamp: now + 4,
                 transcriptMessageID: "fixture-step-answer"),
         ]
+    }
+
+    /// Each chat is several screens tall; its first and latest rows carry markers.
+    private static func chatSwitchTranscript(secondSession: Bool) -> [OpenClawChatMessage] {
+        let id = secondSession ? "B" : "A"
+        let topic = secondSession ? "launch plan" : "release checklist"
+        let paragraph = String(repeating: "Notes for the \(topic), kept here for later review. ", count: 14)
+        var messages: [OpenClawChatMessage] = []
+        for turn in 0..<8 {
+            messages.append(self.message(
+                role: "user",
+                text: turn == 0 ? "OPENCLAW_SWITCH_\(id)_FIRST" : "Next step \(turn) for the \(topic)?",
+                timestamp: Double(1_800_000_000_000 + turn * 2000),
+                transcriptMessageID: "fixture-switch-\(id)-user-\(turn)"))
+            messages.append(self.message(
+                role: "assistant",
+                text: paragraph,
+                timestamp: Double(1_800_000_001_000 + turn * 2000),
+                transcriptMessageID: "fixture-switch-\(id)-answer-\(turn)"))
+        }
+        messages.append(self.message(
+            role: "assistant",
+            text: "OPENCLAW_SWITCH_\(id)_LATEST",
+            timestamp: 1_800_000_100_000,
+            transcriptMessageID: "fixture-switch-\(id)-latest"))
+        return messages
     }
 
     private static func message(
@@ -1283,5 +1344,106 @@ private actor LocalFixtureChatStore {
 extension ScreenshotFixtureMode {
     static var holdsInitialChatRun: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-hold-initial-chat-run")
+    }
+}
+
+/// This fixture uses only local, launch-argument-selected data; no operator Gateway requests.
+extension ScreenshotFixtureMode {
+    static var groupControlsEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-group-controls-fixture")
+    }
+}
+
+enum DrawerGroupFixture {
+    static let store = DrawerGroupFixtureStore()
+
+    @MainActor
+    static func connection() -> OpenClawSessionMenuConnection {
+        var connection = OpenClawSessionMenuConnection(
+            methods: [
+                "sessions.groups.list",
+                "sessions.groups.put",
+                "sessions.groups.rename",
+                "sessions.groups.delete",
+                "sessions.groups.defaults",
+                "sessions.groups.update",
+                "sessions.create",
+            ],
+            scopes: ["operator.admin"],
+            isCurrent: { ScreenshotFixtureMode.groupControlsEnabled },
+            request: { try await self.store.request($0) })
+        connection.groupDefaultsBrowser = OpenClawGroupDefaultsBrowser(
+            listDirectory: { _ in FsListDirResult(path: "/work", home: "/work", entries: []) },
+            inspectRepository: { _ in .git })
+        return connection
+    }
+}
+
+actor DrawerGroupFixtureStore {
+    private var names = ["Projects", "Research"]
+    private var rows = [
+        OpenClawChatSessionEntry(
+            key: "agent:main:dashboard:fixture-project", displayName: "Project notes", category: "Projects"),
+        OpenClawChatSessionEntry(
+            key: "agent:main:dashboard:fixture-research", displayName: "Research notes", category: "Research"),
+    ]
+    private var cwd = "/work/repo"
+    private var worktree = true
+    private var catalogReads = 0
+    private var readsAtDefaults = 0
+
+    func sessions() -> [OpenClawChatSessionEntry] {
+        self.rows
+    }
+
+    func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
+        let name = request.params["name"]?.value as? String ?? ""
+        switch request.method {
+        case "sessions.groups.list": self.catalogReads += 1
+        case "sessions.groups.put":
+            if ProcessInfo.processInfo.arguments.contains("--openclaw-failed-group-change-fixture") {
+                throw NSError(domain: "DrawerGroupFixture", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Fixture group mutation rejected",
+                ])
+            }
+            // Keep this local mutation pending long enough to inspect the header's progress indicator.
+            try await Task.sleep(for: .seconds(5))
+            guard self.catalogReads > self.readsAtDefaults else { throw URLError(.badServerResponse) }
+            // AnyCodable retains array elements as AnyCodable after decoding, and native arrays when constructed.
+            let raw = request.params["names"]?.value
+            self.names = raw as? [String] ?? (raw as? [AnyCodable] ?? []).compactMap { $0.value as? String }
+        case "sessions.groups.rename":
+            let next = request.params["to"]?.value as? String ?? ""
+            self.names = self.names.map { $0 == name ? next : $0 }
+            for index in self.rows.indices where self.rows[index].category == name {
+                self.rows[index].category = next
+            }
+        case "sessions.groups.delete":
+            self.names.removeAll { $0 == name }
+            for index in self.rows.indices where self.rows[index].category == name {
+                self.rows[index].category = nil
+            }
+        case "sessions.groups.defaults":
+            self.readsAtDefaults = self.catalogReads
+            return try JSONSerialization.data(withJSONObject: ["defaults": self.names.map {
+                ["name": $0, "cwd": self.cwd, "worktree": self.worktree] as [String: Any]
+            }])
+        case "sessions.groups.update":
+            self.cwd = request.params["cwd"]?.value as? String ?? ""
+            self.worktree = request.params["worktree"]?.value as? Bool ?? false
+            return Data(#"{"ok":true}"#.utf8)
+        case "sessions.create":
+            guard request.params["cwd"]?.value as? String == self.cwd,
+                  request.params["worktree"]?.value as? Bool == self.worktree
+            else { throw URLError(.badServerResponse) }
+            let key = request.params["key"]?.value as? String ?? ""
+            let category = request.params["category"]?.value as? String
+            self.rows.append(OpenClawChatSessionEntry(key: key, displayName: "New grouped session", category: category))
+            return try JSONEncoder().encode(OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: key))
+        default: throw URLError(.unsupportedURL)
+        }
+        return try JSONSerialization.data(withJSONObject: [
+            "ok": true, "groups": self.names.enumerated().map { ["name": $0.element, "position": $0.offset] },
+        ])
     }
 }

@@ -168,7 +168,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         toolName: "exec",
         args: { command: "pnpm test" },
         result: {
-          content: [{ type: "text", text: '{\n  "output": "ok",\n  "exit_code": 0\n}' }],
+          content: [{ type: "text", text: '{"output":"ok","exit_code":0}' }],
           details: { output: "ok", exit_code: 0 },
         },
       }),

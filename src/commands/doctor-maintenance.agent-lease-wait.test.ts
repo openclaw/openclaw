@@ -14,6 +14,7 @@ import {
   GATEWAY_SHUTDOWN_RESERVE_MS,
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../infra/gateway-shutdown-budget.js";
+import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js";
 import {
   acquireGatewayStateOwner,
   resolveGatewayStateOwnerPath,
@@ -329,6 +330,20 @@ function holdForegroundState(published: boolean) {
 it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
   "settles the foreground state owner before update Doctor admission: %s",
   async (outcome) => {
+    const heartbeatStops: Promise<void>[] = [];
+    const startHeartbeat = stateOwnerHeartbeat.startGatewayStateOwnerHeartbeat;
+    vi.spyOn(stateOwnerHeartbeat, "startGatewayStateOwnerHeartbeat").mockImplementation(
+      (...args) => {
+        const heartbeat = startHeartbeat(...args);
+        const stop = heartbeat.stop;
+        vi.spyOn(heartbeat, "stop").mockImplementation(() => {
+          const stopped = stop();
+          heartbeatStops.push(stopped);
+          return stopped;
+        });
+        return heartbeat;
+      },
+    );
     const { databasePath, predecessor } = holdForegroundState(outcome !== "rowless-released");
     const before = fs.readFileSync(databasePath);
     let authorized = true;
@@ -385,6 +400,8 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
       }
       const completed = await doctor.result;
       await ("maintenance" in completed ? completed.maintenance?.release() : undefined);
+      // Lease release is synchronous; its requested heartbeat shutdown still owns a deadline.
+      await Promise.all(heartbeatStops);
       if (outcome === "rowless-released") {
         expect(vi.getTimerCount()).toBe(0);
       }

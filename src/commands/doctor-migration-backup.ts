@@ -69,6 +69,7 @@ import {
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import { doctorMigrationBackupPath } from "./doctor-migration-backup-names.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
@@ -100,7 +101,7 @@ export function captureFreshDoctorMigrationTables(
   try {
     backup = createScopedMigrationSnapshotSync(db, {
       sourcePath: options.path,
-      targetPath: `${options.path}.pre-startup-migration-${backupId}.scoped.bak`,
+      targetPath: doctorMigrationBackupPath(options.path, backupId, "scoped"),
       tables: options.tables,
       assertCurrent,
     });
@@ -457,9 +458,9 @@ export async function backupDoctorSqliteDatabases(params: {
   };
   const changes: string[] = [];
   const fullTargetFor = (sourcePath: string) =>
-    `${sourcePath}.pre-startup-migration-${backupId}.bak`;
+    doctorMigrationBackupPath(sourcePath, backupId, "full");
   const scopedTargetFor = (sourcePath: string) =>
-    `${sourcePath}.pre-startup-migration-${backupId}.scoped.bak`;
+    doctorMigrationBackupPath(sourcePath, backupId, "scoped");
   const targets = new Map<string, string>();
   for (const { path: sourcePath } of inventory) {
     const full = fullTargetFor(sourcePath);

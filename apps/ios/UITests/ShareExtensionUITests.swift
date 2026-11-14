@@ -4,6 +4,7 @@ import XCTest
 /// Drives the real share-sheet path: Photos -> share -> OpenClaw compose card.
 /// The ordinary case expects an unpaired simulator. Integration cases opt in
 /// to manually prepared, task-owned fixtures; see apps/ios/README.md.
+@MainActor
 final class ShareExtensionUITests: XCTestCase {
     override func setUp() {
         super.setUp()
@@ -58,42 +59,8 @@ final class ShareExtensionUITests: XCTestCase {
     }
 
     private func exerciseShare(mode: String?) throws {
-        let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
-        addUIInterruptionMonitor(withDescription: "Photos notifications") { alert in
-            for title in ["Don’t Allow", "Don't Allow", "Not Now"] where alert.buttons[title].exists {
-                alert.buttons[title].tap()
-                return true
-            }
-            return false
-        }
-        photos.launch()
-        photos.tap()
-
-        // Photos intermittently shows a "What's New" splash on launch.
-        let continueButton = photos.buttons["Continue"].firstMatch
-        if continueButton.waitForExistence(timeout: 3) {
-            continueButton.tap()
-        }
-
-        // Photos restores its last view on launch; only drill into the grid when
-        // no photo detail (with its Share button) is already on screen.
+        let photos = try openOpenClawPhotoShareSheet()
         let shareButton = photos.buttons["Share"].firstMatch
-        if !shareButton.waitForExistence(timeout: 5) {
-            try openFirstPhoto(in: photos)
-            if !shareButton.waitForExistence(timeout: 5) {
-                try openFirstPhoto(in: photos)
-            }
-            XCTAssertTrue(shareButton.waitForExistence(timeout: 10), "Photo detail share button missing")
-        }
-        tapShareButton(shareButton, in: photos)
-
-        // Target the share-sheet app cell explicitly; label-only matching can hit
-        // other OpenClaw builds installed on the same simulator.
-        let openClawOption = photos.cells.matching(identifier: "shareCell")
-            .matching(NSPredicate(format: "label BEGINSWITH 'OpenClaw'"))
-            .firstMatch
-        XCTAssertTrue(openClawOption.waitForExistence(timeout: 10), "OpenClaw missing from share sheet")
-        openClawOption.tap()
 
         let draft = photos.textViews["share-compose.draft"]
         let send = photos.buttons["share-compose.send"]
@@ -185,6 +152,70 @@ final class ShareExtensionUITests: XCTestCase {
         XCTAssertTrue(shareButton.waitForExistence(timeout: 10), "Share sheet did not dismiss on cancel")
     }
 
+    private func waitFor(_ element: XCUIElement, enabled: Bool, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "isEnabled == %@", NSNumber(value: enabled))
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func waitForNonExistence(of element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "exists == false")
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func attachScreenshot(of app: XCUIApplication, named name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        self.add(attachment)
+    }
+}
+
+@MainActor
+extension XCTestCase {
+    /// Shared Photos entry point for disconnected compose and paired-delivery proof.
+    func openOpenClawPhotoShareSheet() throws -> XCUIApplication {
+        let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
+        addUIInterruptionMonitor(withDescription: "Photos notifications") { alert in
+            for title in ["Don’t Allow", "Don't Allow", "Not Now"] where alert.buttons[title].exists {
+                alert.buttons[title].tap()
+                return true
+            }
+            return false
+        }
+        photos.launch()
+        photos.tap()
+
+        // Photos intermittently shows a "What's New" splash on launch.
+        let continueButton = photos.buttons["Continue"].firstMatch
+        if continueButton.waitForExistence(timeout: 3) {
+            continueButton.tap()
+        }
+
+        // Photos restores its last view on launch; only drill into the grid when
+        // no photo detail (with its Share button) is already on screen.
+        let shareButton = photos.buttons["Share"].firstMatch
+        if !shareButton.waitForExistence(timeout: 5) {
+            try self.openFirstPhoto(in: photos)
+            if !shareButton.waitForExistence(timeout: 5) {
+                try self.openFirstPhoto(in: photos)
+            }
+            XCTAssertTrue(shareButton.waitForExistence(timeout: 10), "Photo detail share button missing")
+        }
+        self.tapShareButton(shareButton, in: photos)
+
+        // Target the share-sheet app cell explicitly; label-only matching can hit
+        // other OpenClaw builds installed on the same simulator.
+        let openClawOption = photos.cells.matching(identifier: "shareCell")
+            .matching(NSPredicate(format: "label BEGINSWITH 'OpenClaw'"))
+            .firstMatch
+        XCTAssertTrue(openClawOption.waitForExistence(timeout: 10), "OpenClaw missing from share sheet")
+        openClawOption.tap()
+
+        return photos
+    }
+
     private func openFirstPhoto(in photos: XCUIApplication) throws {
         let photoGrid = photos.buttons["all_photos_grid"]
         if photoGrid.waitForExistence(timeout: 5) {
@@ -218,24 +249,5 @@ final class ShareExtensionUITests: XCTestCase {
             dy: buttonFrame.midY / windowFrame.height
         )
         photos.coordinate(withNormalizedOffset: point).tap()
-    }
-
-    private func waitFor(_ element: XCUIElement, enabled: Bool, timeout: TimeInterval) -> Bool {
-        let predicate = NSPredicate(format: "isEnabled == %@", NSNumber(value: enabled))
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
-        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
-    }
-
-    private func waitForNonExistence(of element: XCUIElement, timeout: TimeInterval) -> Bool {
-        let predicate = NSPredicate(format: "exists == false")
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
-        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
-    }
-
-    private func attachScreenshot(of app: XCUIApplication, named name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 }

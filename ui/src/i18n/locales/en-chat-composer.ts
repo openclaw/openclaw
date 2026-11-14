@@ -1,17 +1,15 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const catalog = {
   chat: {
     view: {
-      activityDetails: "View activity details",
       workingDetails: "Agent is working. View details",
     },
     composer: {
       composerInput: "Chat composer",
-      usePrediction: "Use suggestion",
-      predictionShortcut: "Tab",
-      dismissPrediction: "Dismiss suggestion",
+      predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
@@ -77,6 +75,8 @@ const catalog = {
         inputShort: "In",
         outputShort: "Out",
         costShort: "Cost",
+        sessionTotal: "Session total",
+        unpriced: "Unpriced",
         quotaAccountUnknown: "Quota account unknown",
         openUsage: "Open usage dashboard",
         resets: "Resets {time}",
@@ -139,6 +139,7 @@ const catalog = {
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
       dictationFinalizing: "Finishing dictation…",
       dictationListening: "Listening…",
+      dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
@@ -192,7 +193,7 @@ const catalog = {
       retryQueuedMessage: "Retry queued message",
       discard: "Discard",
       discardPendingMessage:
-        "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
+        "Discard this local copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       resume: "Resume",
@@ -205,11 +206,12 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
+        followup: "Queued",
         applyingSettings: "Applying session settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
         pausedByStop: "Queue paused",
-        pausedByStopReason: "You stopped the run",
+        pausedByStopReason: "You requested a stop",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         needsReview: "Needs review",
@@ -228,8 +230,9 @@ const catalog = {
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
       rejected: "Mention search rejected. Check access or use another session.",
       limit: "You can mention up to 10 people per message.",
-      selectedLabel: "Will notify",
-      selected: "Will notify: {names}",
+      selectedLabel: "Notify or invite",
+      selected: "Notify or invite: {names}",
+      invite: "Guest invitations require the session creator or an admin.",
       remove: "Remove mention",
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",
@@ -311,8 +314,7 @@ const catalog = {
       openOriginal: "Open original",
       compressToFit: "Compress to fit",
       retryCompression: "Retry compression",
-      compressionHint:
-        "Video is too large. Compress a copy on this device; the original stays unchanged.",
+      compressionHint: "Compress a smaller copy on this device. The original is unchanged.",
       compressing: "Compressing · {progress}%",
       compressionUnsupported: "This browser cannot compress this video.",
       compressionTooLarge: "Video is still too large. Try a smaller file.",
@@ -384,34 +386,6 @@ const catalog = {
   },
 } satisfies TranslationMap;
 
-export const registerChatComposerEnglish = Object.assign(
-  () => {
-    const {
-      view,
-      composer,
-      queue,
-      mentions,
-      permissions,
-      voice,
-      sendErrors,
-      attachments,
-      privateDraftReload,
-      progressLabels,
-      ...outboxRecovery
-    } = catalog.chat;
-    Object.assign(en.chat, outboxRecovery);
-    Object.assign(en.chat.view, view);
-    const { menu, ...composerLabels } = composer;
-    Object.assign(en.chat.composer, composerLabels);
-    en.chat.composer.menu ??= menu;
-    Object.assign(en.chat.queue, queue);
-    Object.assign(en.chat.mentions, mentions);
-    Object.assign(en.chat.permissions, permissions);
-    Object.assign(en.chat.voice, voice);
-    Object.assign(en.chat.sendErrors, sendErrors);
-    Object.assign(en.chat.attachments, attachments);
-    Object.assign(en.chat.privateDraftReload, privateDraftReload);
-    Object.assign(en.chat.progressLabels, progressLabels);
-  },
-  { catalog },
-);
+export const registerChatComposerEnglish = Object.assign(() => mergeCatalog(en, catalog), {
+  catalog,
+});
