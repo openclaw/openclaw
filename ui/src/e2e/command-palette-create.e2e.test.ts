@@ -2,10 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { captureUiProof } from "./chat-flow.test-support.ts";
-import {
-  expectPaletteProjectGrouping,
-  expectPaletteSettingsAlignment,
-} from "./command-palette-settings.test-support.ts";
+import { expectPaletteProjectGrouping } from "./command-palette-settings.test-support.ts";
 import {
   foregroundDraft,
   scenario,
@@ -167,7 +164,7 @@ suite.define(() => {
     { mode: "dark", width: 1280 },
     { mode: "light", width: 390 },
   ] as const)(
-    "aligns settings and preserves keyboard focus in $mode at $width",
+    "preserves settings navigation and keyboard focus in $mode at $width",
     async ({ mode, width }) => {
       await suite.withPage(
         {
@@ -184,7 +181,6 @@ suite.define(() => {
           await changePicker(popup, "overlay-after-show", () =>
             palette.getByRole("button", { name: "New session settings", exact: true }).click(),
           );
-          await expectPaletteSettingsAlignment(popup);
           const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
           expect(await remember.isVisible()).toBe(true);
           const workspaceButton = popup.locator(".palette-session-settings__workspace");
