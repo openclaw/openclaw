@@ -246,6 +246,7 @@ EOF
         grep) set -- "$@" rev-list --objects --no-walk --missing=print ;;
         diff) set -- "$@" diff ;;
         log) set -- "$@" log ;;
+        blame) set -- "$@" log -m --root ;;
         *) set -- "$@" log -m ;;
       esac
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
@@ -266,13 +267,17 @@ EOF
         }
         { if ((scanned += length($0) + 1) > 8388608) exit }
         /^\\?/ { add(substr($1, 2), "100644") }
-        /^:[0-7]+ [0-7]+ [0-9a-f]+ [0-9a-f]+ / {
+        /^:+[0-7]+ / {
           if (query == "history_paths") {
             path = substr($0, index($0, "\\t") + 1)
             # Git-quoted names cannot enter the line-delimited pathspec batch.
             if (path ~ /^"/) exit
             add(":(top,literal)" path, substr($1, 2))
-          } else { add($3, substr($1, 2)); add($4, $2) }
+          } else {
+            parents = match($0, /[0-7]/) - 1
+            for (i=1; i<=parents+1; i++)
+              add($(parents+1+i), i == 1 ? substr($1, parents+1) : $i)
+          }
         }
         /^complete$/ { complete=1 }
         END { if (!complete) print "skip"; else for (oid in seen) print oid }

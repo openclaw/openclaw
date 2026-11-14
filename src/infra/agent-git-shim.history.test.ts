@@ -16,7 +16,7 @@ async function historyFixture(
   root: string,
   versions = 12,
   append = true,
-  options: { rename?: boolean; unchangedRange?: boolean } = {},
+  options: { rename?: boolean; unchangedRange?: boolean; merge?: boolean } = {},
 ) {
   const env = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
@@ -72,6 +72,44 @@ async function historyFixture(
       ]);
       file = next;
     }
+  }
+  if (options.merge) {
+    git(origin, ["branch", "side", "HEAD~1"]);
+    for (const branch of ["main", "side"]) {
+      git(origin, ["checkout", branch]);
+      await fs.writeFile(path.join(origin, file), `${branch} content\n`);
+      git(origin, [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-am",
+        branch,
+      ]);
+    }
+    git(origin, ["checkout", "main"]);
+    git(origin, [
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "merge",
+      "--no-commit",
+      "-s",
+      "ours",
+      "side",
+    ]);
+    await fs.writeFile(path.join(origin, file), "merged content\n");
+    git(origin, [
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-am",
+      "merge",
+    ]);
   }
   git(root, ["clone", "--filter=blob:none", "--no-checkout", pathToFileURL(origin).href, seed]);
   const seedHead = git(origin, ["rev-parse", "HEAD"]).trim();
@@ -368,11 +406,31 @@ it.skipIf(process.platform === "win32")(
       const { origin, file, git, reader } = await historyFixture(root, 12, true, {
         unchangedRange: true,
       });
-      const { invoke, newPacks } = await reader();
-      const args = ["blame", "HEAD~3..HEAD~1", "--", file];
-      const result = await invoke(args);
-      expect.soft(result.code, result.stderr).toBe(0);
-      expect.soft(result.stdout).toBe(git(origin, args));
-      expect(await newPacks()).toHaveLength(1);
+      for (const args of [
+        ["blame", "HEAD~3..HEAD~1", "--", file],
+        ["-c", "log.showRoot=false", "blame", "HEAD~11", "--", file],
+      ]) {
+        const { invoke, newPacks } = await reader();
+        const result = await invoke(args);
+        expect.soft(result.code, result.stderr).toBe(0);
+        expect.soft(result.stdout).toBe(git(origin, args));
+        expect.soft(await newPacks()).toHaveLength(1);
+      }
     }),
+);
+
+it.skipIf(process.platform === "win32")("prepares every parent of a combined merge diff", () =>
+  withTempDir("agent-git-combined-diff-", async (root) => {
+    const { origin, file, git, reader } = await historyFixture(root, 12, true, { merge: true });
+    for (const revisions of [["HEAD^!"], ["HEAD", "HEAD^1", "HEAD^2"]]) {
+      const { invoke, newPacks } = await reader();
+      const args = ["diff", ...revisions, "--", file];
+      const result = await invoke(args);
+      const expected = git(origin, args);
+      expect(expected).toContain("diff --cc");
+      expect.soft(result.code, result.stderr).toBe(0);
+      expect.soft(result.stdout).toBe(expected);
+      expect.soft(await newPacks()).toHaveLength(1);
+    }
+  }),
 );
