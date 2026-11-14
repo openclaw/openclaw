@@ -4,6 +4,11 @@ import {
   containsAsciiControlCharacter,
   normalizeStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
+import {
+  appendCapturedOutput,
+  createCapturedOutputBuffers,
+  finalizeCapturedOutput,
+} from "../process/exec-output.js";
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
 import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
@@ -11,6 +16,9 @@ import { probeTcpListener, tryListenOnPort } from "./ports-probe.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
 import { resolveSshClient } from "./ssh-client.js";
 import { parseTcpPort } from "./tcp-port.js";
+
+// Keep the newest startup diagnostics without retaining a noisy SSH process lifetime.
+const SSH_STARTUP_DIAGNOSTIC_MAX_BYTES = 64 * 1024;
 
 export type SshParsedTarget = {
   user?: string;
@@ -193,7 +201,7 @@ export async function startSshPortForward(opts: {
     throw createAbortError("SSH tunnel start aborted", { cause: opts.signal.reason });
   }
 
-  const stderr: string[] = [];
+  const stderr = createCapturedOutputBuffers();
   const child = spawn(sshPath, args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -202,7 +210,9 @@ export async function startSshPortForward(opts: {
   // stream error cannot become an uncaught exception during active use or teardown.
   stderrStream?.on("error", () => {});
   stderrStream?.setEncoding("utf8");
-  stderrStream?.on("data", (chunk: string) => stderr.push(chunk));
+  const collectStderr = (chunk: string) =>
+    appendCapturedOutput(stderr, chunk, SSH_STARTUP_DIAGNOSTIC_MAX_BYTES, "tail");
+  stderrStream?.on("data", collectStderr);
 
   let active = true;
   const exited = new Promise<void>((resolve) => {
@@ -268,10 +278,20 @@ export async function startSshPortForward(opts: {
       throw err;
     }
     // Pipe chunks can split diagnostic lines; normalize only after joining them.
-    const lines = normalizeStringEntries(stderr.join("").split("\n"));
+    const diagnostic = finalizeCapturedOutput(stderr, "tail", true).toString("utf8");
+    const lines = normalizeStringEntries(diagnostic.split("\n"));
+    if (stderr.truncatedBytes > 0) {
+      lines.unshift(`[SSH startup diagnostics truncated: ${stderr.truncatedBytes} bytes omitted]`);
+    }
     const suffix = lines.length > 0 ? `\n${lines.join("\n")}` : "";
     throw new Error(`${formatErrorMessage(err)}${suffix}`, { cause: err });
   }
+
+  // After admission, no caller consumes startup diagnostics. Drain without retaining them.
+  stderrStream?.off("data", collectStderr);
+  stderr.chunks = [];
+  stderr.bytes = 0;
+  stderrStream?.resume();
 
   if (opts.signal) {
     // Keep cancellation attached until this exact child exits. Removing it at

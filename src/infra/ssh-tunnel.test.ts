@@ -462,28 +462,46 @@ describe("startSshPortForward", () => {
     expect(performance.now() - started).toBeGreaterThanOrEqual(200);
   });
 
-  it("preserves diagnostic lines split across stderr chunks at startup failure", async () => {
-    const child = syntheticChild("close", 255);
-    vi.spyOn(net, "connect").mockImplementation(() => new net.Socket());
-    cleanups.push(() => {
-      child.stderr.destroy();
-    });
-    mocks.spawn.mockImplementationOnce(() => {
-      queueMicrotask(() => {
-        child.stderr.write("Warning: file /tmp/qa clé ");
-        child.stderr.write("name not found.\r");
-        child.stderr.write("\nFinal diagnostic without newline");
-        child.stderr.end();
-        child.emit("exit", 255, null);
+  it.each([false, true])(
+    "preserves split startup diagnostics with a bounded tail (noisy=%s)",
+    async (noisy) => {
+      const child = syntheticChild("close", 255);
+      vi.spyOn(net, "connect").mockImplementation(() => new net.Socket());
+      cleanups.push(() => {
+        child.stderr.destroy();
       });
-      return child;
-    });
-    await expect(
-      startTunnel(43210, { target: "synthetic.example", timeoutMs: 250 }),
-    ).rejects.toThrow(
-      "ssh exited (255)\nWarning: file /tmp/qa clé name not found.\nFinal diagnostic without newline",
-    );
-  });
+      mocks.spawn.mockImplementationOnce(() => {
+        queueMicrotask(() => {
+          if (noisy) {
+            child.stderr.write("🌍".repeat(20_000) + "\n");
+          }
+          child.stderr.write("Warning: file /tmp/qa clé ");
+          child.stderr.write("name not found.\r");
+          child.stderr.write("\nFinal diagnostic without newline");
+          child.stderr.end();
+          child.emit("exit", 255, null);
+        });
+        return child;
+      });
+      const error = await startTunnel(43210, { target: "synthetic.example", timeoutMs: 250 }).catch(
+        (failure: unknown) => failure,
+      );
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toContain("ssh exited (255)");
+      expect(message).toMatch(
+        /Warning: file \/tmp\/qa clé name not found\.\nFinal diagnostic without newline$/,
+      );
+      expect(message).not.toContain("�");
+      expect(Buffer.byteLength(message)).toBeLessThan(65 * 1024);
+      expect(message.includes("diagnostics truncated")).toBe(noisy);
+      if (!noisy) {
+        expect(message).toBe(
+          "ssh exited (255)\nWarning: file /tmp/qa clé name not found.\nFinal diagnostic without newline",
+        );
+      }
+    },
+  );
 
   it.each(["active", "teardown"] as const)(
     "does not crash when stderr errors while the tunnel is %s",
