@@ -66,14 +66,14 @@ function insightCard(container: ParentNode, title: string): Element | undefined 
   );
 }
 
-function averageCostSummary(container: ParentNode) {
-  const hint = container.querySelector("#usage-summary-hint-average-cost");
+function costSummary(container: ParentNode) {
+  const hint = container.querySelector("#usage-summary-hint-cost");
+  const badge = [...container.querySelectorAll(".usage-metric-badge")].find((entry) =>
+    entry.querySelector("small")?.textContent?.startsWith("Cost"),
+  );
   return {
     hint: hint?.parentElement?.querySelector('[slot="content"]')?.textContent?.trim(),
-    value: hint
-      ?.closest(".usage-summary-card")
-      ?.querySelector(".usage-summary-value")
-      ?.textContent?.trim(),
+    value: badge?.querySelector("strong")?.textContent?.trim(),
   };
 }
 
@@ -212,16 +212,14 @@ describe("renderUsage", () => {
         container,
       );
       for (const { filters, missing, value } of [
-        { filters: clearedFilters, missing: true, value: "$0.03" },
+        { filters: clearedFilters, missing: true, value: "$0.20" },
         { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
-        { filters: clearedFilters, missing: true, value: "$0.03" },
+        { filters: clearedFilters, missing: true, value: "$0.20" },
       ]) {
         setFilters(filters);
         flush();
-        expect(averageCostSummary(container)).toEqual({
-          hint: missing
-            ? "Known cost, including estimates, divided by all user and agent messages. Some usage has no cost data."
-            : "Known cost, including estimates, divided by all user and agent messages.",
+        expect(costSummary(container)).toEqual({
+          hint: missing ? "Some usage has no cost data." : undefined,
           value,
         });
       }

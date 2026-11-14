@@ -28,10 +28,7 @@ function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () =
         return currentAggregates();
       },
       stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
-      showCostHint: false,
       errorHours: [],
-      sessionCount: 1,
-      totalSessions: 1,
     }),
   );
 }
@@ -56,8 +53,8 @@ describe("UsageInsights", () => {
     expect(text(cacheCard, ".usage-summary-value")).toBe("30.0%");
     expect(text(cacheCard, ".usage-summary-sub")).toBe("300 cached · 1.0K prompt");
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
-    expect(buttons).toHaveLength(5);
-    expect(tooltips).toHaveLength(5);
+    expect(buttons).toHaveLength(3);
+    expect(tooltips).toHaveLength(3);
     expect(
       [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -130,10 +127,7 @@ describe("UsageInsights", () => {
             ],
           },
           stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
-          showCostHint: false,
           errorHours: [],
-          sessionCount: 1,
-          totalSessions: 1,
         }),
       { container },
     );
