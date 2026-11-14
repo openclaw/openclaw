@@ -111,7 +111,7 @@ function buildAnnounceReplyInstruction(params: {
   if (params.requesterIsSubagent) {
     return `${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Convert the reviewed outcome into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
   }
-  return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update unless this exact result is already visible to the user in this same turn. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim.`;
+  return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update with only what the user has not seen yet: if this result (its text or files) was already delivered to the user earlier in this conversation, by you or by the subagent (for example through the message tool), do not repeat it or re-attach its files; at most confirm it in one short sentence. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim.`;
 }
 
 type SubagentAnnounceFlowParams = Omit<PendingFinalDeliveryPayload, "requesterDisplayKey"> & {
