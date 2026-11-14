@@ -80,7 +80,11 @@ export function runGatewayPendingWorkContinuation<T>(params: {
   ) {
     return null;
   }
-  if (params.method === "question.resolve" || params.method === "question.get") {
+  if (
+    params.method === "question.resolve" ||
+    params.method === "question.get" ||
+    params.method === "question.engage"
+  ) {
     const questionManager = params.context.questionManager;
     return questionManager && canSelectQuestion(questionManager, request.id, params.client)
       ? questionManager.runPendingContinuation(request.id, params.run)
