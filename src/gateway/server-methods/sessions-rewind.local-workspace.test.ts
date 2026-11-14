@@ -115,20 +115,16 @@ it.each([
                   .mockReturnValue(false)
               : undefined;
           try {
-            const database = toDatabaseOptions(resolveSqliteScope(scope));
             // A lagging active-path projection must not turn an invalid selection into a
             // retired runtime: the preflight reconciles through the projection owner and
             // still refuses before the workspace is touched.
-            const lag = () => {
-              if (failure !== "invalid lagging projection") {
-                return;
-              }
+            const lag = () =>
+              failure === "invalid lagging projection" &&
               runOpenClawAgentWriteTransaction(
                 (current) =>
                   markSessionTranscriptIndexDirtyInTransaction(current.db, scope.sessionId),
-                database,
+                toDatabaseOptions(resolveSqliteScope(scope)),
               );
-            };
             for (const [invalidMethod, entryId, message] of [
               ["sessions.rewind", "missing", "message entry not found"],
               ["sessions.rewind", "assistant-1", "entry is not a user message"],

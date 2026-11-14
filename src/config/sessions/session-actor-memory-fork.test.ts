@@ -177,7 +177,6 @@ describe("memory actor fork and cut", () => {
       expectedState,
       mode: "rewind" as const,
     };
-    // A delta reader's cursor, captured before the cut.
     const drained = await readMemory(storage(parent), "session.history.raw-delta", { limits: {} });
     assert(drained.kind === "page", "Raw delta page failed");
     const rewind = await commitMemory(storage(parent), "session.messageCut", { intent });
@@ -194,9 +193,8 @@ describe("memory actor fork and cut", () => {
       sessionId: "parent-session",
     });
     expect(rewind.entry.lifecycleRevision).not.toBe(expectedState.lifecycleRevision);
-    // The appended control rotates the transcript generation, as the SQLite path
-    // does, so a cursor from before the cut is refused instead of being resumed
-    // as an ordinary append cursor on a transcript whose tail moved.
+    // The appended control rotates the transcript generation, as SQLite does, so a
+    // cursor captured before the cut is refused instead of resuming as an append.
     expect(
       await readMemory(storage(parent), "session.history.raw-delta", {
         limits: { cursor: drained.cursor },

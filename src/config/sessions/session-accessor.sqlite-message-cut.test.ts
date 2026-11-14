@@ -59,6 +59,11 @@ async function retainLegacyCheckpoints(
   return checkpoints;
 }
 
+const activeMessageIds = (scope: Parameters<typeof readMessages>[0]) =>
+  readMessages(scope).flatMap(({ event }) =>
+    event && typeof event === "object" && "id" in event ? [event.id] : [],
+  );
+
 function expectEditorResult(result: unknown, key: string) {
   expect(result).toMatchObject({
     status: "created",
@@ -324,23 +329,14 @@ it("repoints an oversized transcript without a rebuilding wait", async () => {
 
   const result = await rewind(params);
   assert(result.status === "created");
-  const targetScope = { ...scope, sessionId: result.entry.sessionId };
-  expect(readMessages(targetScope)).toHaveLength(2);
-  expect(
-    readPage(
-      { agentId, env: scope.env, sessionId: result.entry.sessionId },
-      {
-        maxMessages: 0,
-        offset: 0,
-      },
-    ).totalMessages,
-  ).toBe(2);
+  const target = { agentId, env: scope.env, sessionId: result.entry.sessionId };
+  expect(activeMessageIds(target)).toEqual(["user-1", "assistant-1"]);
+  expect(readPage(target, { maxMessages: 0, offset: 0 }).totalMessages).toBe(2);
 });
 
-// A selected branch can hold more payload than the projection may hydrate inside
-// one transaction. The repoint refuses by retained bytes, not only by row count,
-// so a branch of large events cannot materialize inside the shared database
-// worker: the streaming reconcile owner publishes it instead.
+// The repoint refuses by retained bytes, not only by row count, so a branch of
+// large events cannot materialize inside the shared database worker: the
+// streaming reconcile owner publishes it instead.
 it("switches to an oversized branch without hydrating it in one transaction", async () => {
   const { env, scope } = await createSession();
   await appendEvent(scope, {
@@ -354,9 +350,9 @@ it("switches to an oversized branch without hydrating it in one transaction", as
 
   // The append made the oversized row the active leaf; leave it, then select it
   // again so the repoint has to plan that whole branch back onto the active path.
-  const left = await switchBranch({ agentId, env, sessionKey, leafEntryId: "assistant-2" });
-  expect(left).toMatchObject({ status: "created" });
+  const select = (leafEntryId: string) => switchBranch({ agentId, env, sessionKey, leafEntryId });
   const stateDir = env.OPENCLAW_STATE_DIR as string;
+  expect(await select("assistant-2")).toMatchObject({ status: "created" });
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
   const planned = (leafEventId: string) =>
     prepareRepoint(openOpenClawAgentDatabase({ agentId, env }).db, scope.sessionId, leafEventId);
@@ -364,28 +360,16 @@ it("switches to an oversized branch without hydrating it in one transaction", as
   // the retained-byte bound and not a lagging projection.
   expect(planned("assistant-2")).toBeDefined();
   expect(planned("oversized-branch-tip")).toBeUndefined();
-  const switched = await switchBranch({
-    agentId,
-    env,
-    sessionKey,
-    leafEntryId: "oversized-branch-tip",
-  });
 
-  expect(switched).toMatchObject({ status: "created" });
-  assert(switched.status === "created");
+  expect(await select("oversized-branch-tip")).toMatchObject({ status: "created" });
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-  expect(
-    readMessages(scope).flatMap(({ event }) =>
-      event && typeof event === "object" && "id" in event ? [event.id] : [],
-    ),
-  ).toEqual(["user-1", "off-path-user"]);
+  expect(activeMessageIds(scope)).toEqual(["user-1", "off-path-user"]);
 });
 
-// Older appenders wrote canonical rows with no `parentId` at all. The canonical
-// tree hangs such a row off whichever leaf was active when it was written, so
-// `u1 -> a1` followed by a parentless `u2` keeps all three on the active path.
-// Rewinding u2 must therefore restore a1, which the raw payload parent (null)
-// does not name: that selected an empty branch and dropped u1 and a1.
+// Older appenders wrote canonical rows with no `parentId`. The canonical tree
+// hangs such a row off the then-active leaf, so `u1 -> a1` plus a parentless
+// `u2` keeps all three active, and rewinding u2 must restore a1: the raw payload
+// parent (null) does not name it and selected an empty branch instead.
 it("rewinds a parentless continuation to its canonical predecessor", async () => {
   const stateDir = tempDirs.make("openclaw-message-cut-parentless-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -398,26 +382,18 @@ it("rewinds a parentless continuation to its canonical predecessor", async () =>
     lifecycleRevision: "parentless-revision",
     updatedAt: startedAt,
   });
-  await appendEvent(scope, {
-    type: "session",
-    version: 3,
-    id: sessionId,
-    timestamp: new Date(startedAt).toISOString(),
-  });
-  await appendMessage(scope, {
-    eventId: "u1",
-    parentId: null,
-    message: { role: "user", content: "first prompt" },
-    now: startedAt + 1_000,
-  });
-  await appendMessage(scope, {
-    eventId: "a1",
-    parentId: "u1",
-    message: { role: "assistant", content: "first answer" },
-    now: startedAt + 2_000,
-  });
-  // Only an older appender produces a canonical row with no `parentId` key, so
-  // this one is written through the store's in-transaction append owner.
+  for (const [eventId, parentId, role] of [
+    ["u1", null, "user"],
+    ["a1", "u1", "assistant"],
+  ] as const) {
+    await appendMessage(scope, {
+      eventId,
+      parentId,
+      message: { role, content: eventId },
+      now: startedAt + 1_000,
+    });
+  }
+  // No async writer emits a parentless canonical row; use the append owner.
   runOpenClawAgentWriteTransaction(
     (database) =>
       appendTranscriptEventsInTransaction(database, { ...resolveSqliteScope(scope), sessionId }, [
@@ -431,21 +407,16 @@ it("rewinds a parentless continuation to its canonical predecessor", async () =>
     toDatabaseOptions(resolveSqliteScope(scope)),
   );
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-  const activeIds = () =>
-    readMessages(scope).flatMap(({ event }) =>
-      event && typeof event === "object" && "id" in event ? [event.id] : [],
-    );
-  expect(activeIds()).toEqual(["u1", "a1", "u2"]);
+  expect(activeMessageIds(scope)).toEqual(["u1", "a1", "u2"]);
 
   const result = await rewind(
     { agentId, env, sessionKey: key, entryId: "u2" },
     { sessionId, lifecycleRevision: "parentless-revision" },
   );
 
-  expect(result).toMatchObject({ status: "created" });
-  assert(result.status === "created");
+  assert(result.status === "created", `rewind refused: ${result.status}`);
   expect(result.entry.sessionId).toBe(sessionId);
-  expect(activeIds()).toEqual(["u1", "a1"]);
+  expect(activeMessageIds(scope)).toEqual(["u1", "a1"]);
 });
 
 it("forks an exact active-path prefix without changing the source", async () => {
