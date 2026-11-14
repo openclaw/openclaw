@@ -776,6 +776,57 @@ exit "$status"
     }
   });
 
+  itPosix.each(["ls", "ci-dispatch", "gc"])(
+    "materializes installed dependencies without a PR workflow binding for %s",
+    (command) => {
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+      const parked = fixture.gitText(["rev-parse", "HEAD"]);
+      fixture.write(
+        "scripts/pr-lib/worktree.sh",
+        readScript(join(fixture.canonical, "scripts/pr-lib/worktree.sh")) +
+          "\nlist_pr_worktrees() { echo listed; }\ngc_pr_worktrees() { echo collected; }\n",
+      );
+      fixture.commit(["scripts/pr-lib/worktree.sh"], true);
+      // Both callers differ from current main. Its extracted wrapper must reenter
+      // dependency admission even though advisory/GC commands have no PR binding.
+      fixture.git(fixture.canonical, ["checkout", "--detach", parked]);
+      const libraryTrees = [parked, fixture.localRevision, "refs/remotes/origin/main"].map(
+        (revision) => fixture.gitText(["rev-parse", `${revision}:scripts/pr-lib`]),
+      );
+      expect(new Set(libraryTrees).size).toBe(3);
+      const args =
+        command === "ci-dispatch"
+          ? [command, "123"]
+          : command === "gc"
+            ? [command, "--dry-run"]
+            : [command];
+      const policy = delegatingGitFixture(fixture.root, fixture.env);
+      const result = runWrapper(fixture, args, "linked", { env: policy.env });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      // Qualified installed packages must not calculate a frozen-install identity.
+      expect(readFileSync(policy.calls, "utf8")).not.toMatch(
+        /\bshow [a-f0-9]{40}:scripts\/pr-lib\/dependency-inputs\.json\b/u,
+      );
+      expect(result.stderr).toContain(
+        "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
+      );
+      expect(result.stdout).toBe(
+        command === "ls"
+          ? "listed\n"
+          : command === "gc"
+            ? "collected\n"
+            : "canonical wrapper executed\n",
+      );
+      expect(
+        fixture.gitText([
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/openclaw/pr-workflow-bindings/",
+        ]),
+      ).toBe("");
+    },
+  );
+
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     rmSync(join(fixture.bin, "rg"));
@@ -2224,8 +2275,8 @@ if (extract.status !== 0) throw new Error(extract.stderr);
 const fd = openSync(anchor, "r");
 const stdio = ["pipe", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", "ignore", "ignore", fd];
 const owner = join(anchor, "scripts/pr-lib/materialize-dependencies.mjs");
-const bootstrap = readFileSync(join(anchor, "scripts/pr"), "utf8").split("<<'EOF_TOOLING'\\n")[1].split("\\nEOF_TOOLING")[0];
-const installed = spawnSync(process.execPath, ["--input-type=module", "-", owner, process.cwd(), join(anchor, "node_modules"), revision, join(anchor, "scripts/pr-lib/cache-lifetime.mjs")], { input: bootstrap, encoding: "utf8", stdio });
+const bootstrap = readFileSync(join(anchor, "scripts/pr"), "utf8").split("<<'EOF_WRAPPER_GIT'\\n")[1].split("\\nEOF_WRAPPER_GIT")[0];
+const installed = spawnSync(process.execPath, ["--input-type=module", "-", process.env.OPENCLAW_PR_GIT, "materialize-dependencies", process.cwd(), revision, owner, join(anchor, "node_modules"), join(anchor, "scripts/pr-lib/cache-lifetime.mjs")], { input: bootstrap, encoding: "utf8", stdio });
 if (installed.status !== 0) throw new Error(installed.stderr);
 const receiptPrefix = "Using frozen scripts/pr dependency installation: ";
 const installation = installed.stderr.split(String.fromCharCode(10)).find(line => line.startsWith(receiptPrefix))?.slice(receiptPrefix.length);
@@ -2504,17 +2555,19 @@ closeSync(fd);
           ]).stdout,
         );
         const bootstrap = readScript(join(anchor, "scripts/pr"))
-          .split("<<'EOF_TOOLING'\n")[1]!
-          .split("\nEOF_TOOLING")[0]!;
+          .split("<<'EOF_WRAPPER_GIT'\n")[1]!
+          .split("\nEOF_WRAPPER_GIT")[0]!;
         const result = createdRun(
           anchor,
           [
             "--input-type=module",
             "-",
-            owner,
+            guard.env.OPENCLAW_PR_GIT,
+            "materialize-dependencies",
             fixture.canonical,
-            join(anchor, "node_modules"),
             revision,
+            owner,
+            join(anchor, "node_modules"),
             join(anchor, "scripts/pr-lib/cache-lifetime.mjs"),
           ],
           bootstrap,
@@ -2912,8 +2965,8 @@ esac
     writeExecutable(
       join(fixture.bin, "node"),
       `#!/bin/sh
-if [ "$1" = --input-type=module ] && [ "$2" = - ] && [ "\${5##*/}" = node_modules ]; then
-  printf 'not a directory\\n' > "$5"
+if [ "$1" = --input-type=module ] && [ "$2" = - ] && [ "$4" = materialize-dependencies ] && [ "\${8##*/}" = node_modules ]; then
+  printf 'not a directory\\n' > "$8"
 fi
 exec "$OPENCLAW_TEST_NODE" "$@"
 `,

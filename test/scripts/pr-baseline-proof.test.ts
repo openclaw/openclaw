@@ -1,12 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   readlinkSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -542,13 +544,10 @@ function observePublication(f: ReturnType<typeof createBaselineFixture>) {
 type ObservedFixture = ReturnType<typeof fixture> | ReturnType<typeof boundFixture>;
 
 function nativeState(f: ObservedFixture) {
-  const binding = existsSync(f.local("prepare-baseline.json"))
-    ? JSON.parse(f.readLocal("prepare-baseline.json").toString())
-    : null;
-  const archives = new Set<string>([
-    ...(binding ? [binding.archive] : []),
-    ...Object.keys(binding?.sourceAdmission?.evidence ?? {}),
-  ]);
+  // Include orphan archives too: a refusal must not stage evidence before validation.
+  const archives = readdirSync(f.local(""))
+    .filter((name) => name.startsWith("prep-evidence."))
+    .map((name) => ".local/" + name);
   const worktree = createHash("sha256");
   for (const path of f.prepGit("ls-files", "-z").split("\0").filter(Boolean).toSorted()) {
     const absolute = join(f.worktree, path);
@@ -1072,8 +1071,10 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
       f.writeLocal("source-review.json", JSON.stringify(review));
       replace("--expected-review", f.oid("source-review.json"));
     }
+    const before = nativeState(f);
     const result = f.run(command, args, f.extra);
     expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(nativeState(f)).toEqual(before);
     const error = result.stdout + result.stderr;
     const expected =
       fault === "wrong-review"
@@ -1086,7 +1087,7 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
               ? /verify-commit/u
               : fault === "stale-lease"
                 ? /PR head changed|PR identity changed/u
-                : /Proof publication requires|workflow continuation changed|does not exist/u;
+                : /Proof publication requires|workflow continuation changed|does not exist|Untrusted workflow source|Invalid workflow source|Git read failed/u;
     expect(error).toMatch(expected);
     f.expectSnapshot(f.before);
     expect(existsSync(f.local("prepare-baseline.json"))).toBe(false);
@@ -1241,4 +1242,280 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     expect(f.prepGit("rev-parse", "HEAD")).toBe(target);
     expect(existsSync(f.effects)).toBe(false);
   });
+});
+
+// This isolated repository's complete install read set is explicit. The native
+// producer still checks its digest/runtime; no admission flag substitutes a key.
+function equivalentMain(f: ReturnType<typeof fixture>, drift?: (repo: string) => void) {
+  const rows = f
+    .git(f.repo, "ls-tree", "-r", "-z", "HEAD")
+    .split("\0")
+    .filter(Boolean)
+    .filter((row) => !row.endsWith("\tscripts/pr-lib/dependency-inputs.json"));
+  const runtime = spawnSync(
+    "node",
+    [
+      "-p",
+      "JSON.stringify({platform:process.platform,arch:process.arch,modules:process.versions.modules})",
+    ],
+    { env: f.env, encoding: "utf8" },
+  );
+  expect(runtime.status, runtime.stderr).toBe(0);
+  writeFileSync(
+    join(f.repo, "scripts/pr-lib/dependency-inputs.json"),
+    JSON.stringify({
+      files: rows.map((row) => row.split("\t")[1]),
+      directories: [],
+      presence: ["src"],
+      auditSha256: createHash("sha256").update(rows.join("\0")).digest("hex"),
+      runtime: JSON.parse(runtime.stdout),
+    }),
+  );
+  f.git(f.repo, "commit", "-qam", "test: qualify complete fixture install inputs");
+  const workflow = f.git(f.repo, "rev-parse", "HEAD");
+  writeFileSync(join(f.repo, "unrelated-source.txt"), "unrelated source advance\n");
+  drift?.(f.repo);
+  f.git(f.repo, "add", "-A");
+  f.git(f.repo, "commit", "-qm", "test: advance canonical main");
+  const main = f.git(f.repo, "rev-parse", "HEAD");
+  f.git(f.repo, "fetch", "-q", "origin", "main");
+  const review = structuredClone(f.review);
+  review.correction.proofPublication.workflowSource = workflow;
+  // Real reviews exceed the old generic 4 KiB descriptor budget.
+  review.issueValidation.summary = "Independently checked source and pending proof. ".repeat(320);
+  f.writeLocal("source-review.json", JSON.stringify(review, null, 2) + "\n");
+  const args = f.args.map((value, index) =>
+    f.args[index - 1] === "--baseline"
+      ? main
+      : f.args[index - 1] === "--expected-review"
+        ? f.oid("source-review.json")
+        : value,
+  );
+  return { workflow, main, args };
+}
+
+function mutateAfterPreparation(f: ObservedFixture, mutation: string) {
+  const marker = join(f.root, "prepared-inputs");
+  const hook = join(f.root, "prepared-input-hook.mjs");
+  writeFileSync(
+    hook,
+    "import fs from 'node:fs';\n" +
+      "if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'proof-source') " +
+      "process.on('exit', status => { if (status === 0) fs.writeFileSync(" +
+      JSON.stringify(marker) +
+      ", 'ready'); });\n",
+  );
+  const gh = join(f.root, "bin/gh");
+  writeFileSync(
+    gh,
+    readFileSync(gh, "utf8").replace(
+      "const args = process.argv.slice(2);",
+      "const args = process.argv.slice(2);\nif (fs.existsSync(" +
+        JSON.stringify(marker) +
+        ")) { " +
+        "fs.unlinkSync(" +
+        JSON.stringify(marker) +
+        "); " +
+        mutation +
+        " }",
+    ),
+  );
+  return { ...f.extra, NODE_OPTIONS: "--import=" + hook };
+}
+
+describePosix("reviewed workflow equivalence for initial proof admission", () => {
+  it("keeps the reviewed workflow when unrelated current main advances", () => {
+    const f = fixture();
+    const { workflow, main, args } = equivalentMain(f);
+    const review = f.readLocal("source-review.json");
+    expect(review.byteLength).toBeGreaterThan(13_000);
+    const result = f.run(command, args, f.extra);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const record = JSON.parse(f.readLocal("prepare-baseline.json").toString());
+    expect(record.proofSource.workflowSource).toBe(workflow);
+    expect(record.proofSource.workflowAdmission).toMatchObject({
+      version: 1,
+      workflowSource: workflow,
+      currentMain: main,
+      reviewOid: f.oid("source-review.json"),
+    });
+    expect(readFileSync(join(f.worktree, record.archive, "baseline-source-review.json"))).toEqual(
+      review,
+    );
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.published);
+    expect(f.prepGit("show", "-s", "--format=%P", "HEAD")).toBe(f.source + " " + main);
+    f.prepGit("verify-commit", f.prepGit("rev-parse", "HEAD"));
+    f.expectAbsent("prep.env", "gates.env", "review-transition.json");
+    expect(f.readLocal("correction-review.json").toString()).toContain('"NEEDS WORK"');
+  });
+
+  it.each([
+    "manifest-add",
+    "manifest-remove",
+    "missing-component",
+    "blob",
+    "type",
+    "mode",
+    "generated-runtime",
+    "dependency",
+    "install-input",
+    "runtime-policy",
+    "policy",
+    "unsupported-runtime",
+  ])("refuses %s drift without staging preparation evidence", (fault) => {
+    const f = fixture();
+    if (fault === "install-input") {
+      // The wrapper fixture omits this real prepare hook. Include it before the
+      // audit so drift exercises dependency identity outside the wrapper closure.
+      const path = "scripts/prepare-git-hooks.mjs";
+      writeFileSync(join(f.repo, path), readFileSync(path));
+      f.git(f.repo, "add", path);
+      f.git(f.repo, "commit", "-qm", "test: include the prepare hook in fixture install inputs");
+    }
+    const selected = equivalentMain(f, (repo) => {
+      const append = (path: string, value = "\n") =>
+        writeFileSync(join(repo, path), readFileSync(join(repo, path), "utf8") + value);
+      if (fault === "manifest-add") {
+        writeFileSync(join(repo, "extra-policy.md"), "extra policy\n");
+        append("scripts/pr-lib/wrapper-components.txt", "extra-policy.md\n");
+      } else if (fault === "manifest-remove") {
+        const manifest = join(repo, "scripts/pr-lib/wrapper-components.txt");
+        writeFileSync(manifest, readFileSync(manifest, "utf8").replace("CONTRIBUTING.md\n", ""));
+      } else if (fault === "missing-component") {
+        unlinkSync(join(repo, "CONTRIBUTING.md"));
+      } else if (fault === "type") {
+        unlinkSync(join(repo, "AGENTS.md"));
+        symlinkSync("CONTRIBUTING.md", join(repo, "AGENTS.md"));
+      } else if (fault === "mode") {
+        chmodSync(join(repo, "CONTRIBUTING.md"), 0o755);
+      } else if (fault === "dependency") {
+        writeFileSync(join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+      } else if (fault === "unsupported-runtime") {
+        const path = join(repo, "scripts/pr-lib/dependency-inputs.json");
+        const audit = JSON.parse(readFileSync(path, "utf8"));
+        audit.runtime.modules = "unsupported";
+        writeFileSync(path, JSON.stringify(audit));
+      } else {
+        append(
+          fault === "blob"
+            ? "scripts/pr-lib/incoming-review.mjs"
+            : fault === "generated-runtime"
+              ? "runtime-process-scripts.generated.mjs"
+              : fault === "install-input"
+                ? "scripts/prepare-git-hooks.mjs"
+                : fault === "runtime-policy"
+                  ? "node-version.mjs"
+                  : "AGENTS.md",
+        );
+      }
+    });
+    const before = nativeState(f);
+    const result = f.run(command, selected.args, f.extra);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stdout + result.stderr).toMatch(
+      /workflow differs|unsupported workflow component|Incomplete.*inventory/u,
+    );
+    expect(nativeState(f)).toEqual(before);
+  });
+
+  it("retains the full-tree fallback when the existing install audit is unqualified", () => {
+    const f = fixture();
+    writeFileSync(join(f.repo, "unrelated-source.txt"), "new source\n");
+    f.git(f.repo, "add", ".");
+    f.git(f.repo, "commit", "-qm", "test: unqualified dependency input advance");
+    f.git(f.repo, "fetch", "-q", "origin", "main");
+    const before = nativeState(f);
+    const result = f.run(command, f.args, f.extra);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "workflow differs from current main code, dependency or runtime policy",
+    );
+    expect(nativeState(f)).toEqual(before);
+  });
+
+  it("refuses changed selected filesystem executable bits before staging evidence", () => {
+    const f = fixture();
+    const selected = equivalentMain(f);
+    const before = nativeState(f);
+    const marker = join(f.root, "mode-tampered");
+    const hook = join(f.root, "selected-mode-hook.mjs");
+    writeFileSync(
+      hook,
+      `import fs from "node:fs";
+import path from "node:path";
+if (process.argv[3] === "verify-proof" && !fs.existsSync(${JSON.stringify(marker)})) {
+  const file = path.join(process.argv[6], "CONTRIBUTING.md");
+  fs.chmodSync(file, fs.statSync(file).mode ^ 0o100);
+  fs.writeFileSync(${JSON.stringify(marker)}, file);
+}
+`,
+    );
+    const result = f.run(command, selected.args, { ...f.extra, NODE_OPTIONS: "--import=" + hook });
+    expect(existsSync(marker)).toBe(true);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("Anchor executable mode differs");
+    expect(nativeState(f)).toEqual(before);
+  });
+
+  it("refuses an ignored target collision before retaining preparation evidence", () => {
+    const f = fixture();
+    const selected = equivalentMain(f);
+    const ignored = join(f.root, "ignored-paths");
+    writeFileSync(ignored, "/unrelated-source.txt\n");
+    f.git(f.repo, "config", "core.excludesFile", ignored);
+    const collision = join(f.worktree, "unrelated-source.txt");
+    writeFileSync(collision, "retained ignored input\n");
+    expect(f.prepGit("check-ignore", "unrelated-source.txt")).toBe("unrelated-source.txt");
+    const before = nativeState(f);
+    const result = f.run(command, selected.args, f.extra);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("ignored file 'unrelated-source.txt' would be overwritten");
+    expect(readFileSync(collision, "utf8")).toBe("retained ignored input\n");
+    expect(nativeState(f)).toEqual(before);
+  });
+
+  it.each(["review", "context", "receipt", "retention-membership"])(
+    "refuses changed %s across native admission",
+    (fault) => {
+      const f = fixture();
+      const before = nativeState(f);
+      const name =
+        fault === "review"
+          ? "source-review.json"
+          : fault === "context"
+            ? "prep-context.env"
+            : fault === "receipt"
+              ? "prepare-push-result.env"
+              : "gates-injected.log";
+      const mutation =
+        "fs.appendFileSync(" + JSON.stringify(f.local(name)) + ", " + JSON.stringify("\n") + ");";
+      let extra;
+      if (fault === "review") {
+        const hook = join(f.root, "supervisor-review-hook.mjs");
+        writeFileSync(
+          hook,
+          "import fs from 'node:fs'; if (process.argv[1]?.endsWith('/process-group-runner.mjs')) { " +
+            mutation +
+            " }",
+        );
+        extra = { ...f.extra, NODE_OPTIONS: "--import=" + hook };
+      } else {
+        extra = mutateAfterPreparation(f, mutation);
+      }
+      const result = f.run(command, f.args, extra);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout + result.stderr).toMatch(
+        /Selected proof source review changed|Proof preparation input changed|Proof retention inventory changed/u,
+      );
+      const after = nativeState(f);
+      expect(after).toEqual({
+        ...before,
+        files: {
+          ...before.files,
+          ...(["context", "receipt"].includes(fault) ? { [name]: f.oid(name) } : {}),
+        },
+      });
+    },
+  );
 });

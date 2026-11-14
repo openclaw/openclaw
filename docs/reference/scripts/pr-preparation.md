@@ -131,11 +131,28 @@ scripts/pr prepare-baseline-refresh <PR> --for-proof \
   --baseline <canonical-main-SHA>
 ```
 
-This explicit producer invocation selects authenticated current official-main
-workflow code through the existing native selection descriptor and private
-qualification fetch. It does not replace the retained workflow binding. Land
-and independently review this capability first; an unlanded wrapper cannot admit
-itself, and developer-wrapper opt-in still grants no authority.
+For initial admission, the wrapper reads and hashes the exact source-review bytes
+once and selects their reviewed workflow commit. Under the operation lock, it
+fetches fresh official main and requires the reviewed commit to be its ancestor.
+Both revisions must have identical complete workflow manifests and expanded
+path/type/mode/blob inventories, including governing policy, and identical frozen
+dependency/install/runtime identities. Invalid dependency audits, unsupported
+runtimes, or tracked build output retain the conservative full-tree identity;
+even an unrelated source advance can then require a fresh review. The selected
+files must match their Git bytes and executable modes.
+
+The existing held descriptor carries those review bytes and the fresh comparison
+across supervision. The signed baseline binding records both commits and the
+comparison identity as historical evidence, never reusable admission authority.
+Complete source, review, predecessor, publication and custody checks finish before
+creating retained preparation evidence. The owner rechecks input bytes, absence
+and retention membership after live observations, then retains those checked
+inputs. A refused preflight leaves active evidence and existing archives intact.
+
+This does not replace the retained workflow binding or relax later publication,
+recovery or merge admission. Land and independently review this capability first;
+an unlanded wrapper cannot admit itself, and developer-wrapper opt-in still grants
+no authority.
 
 The source review must be a fresh independent exact-source correction review with
 that same typed pending-proof authorization, incoming review, workflow source,

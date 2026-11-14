@@ -725,13 +725,23 @@ function other(lineageCompletion: typeof lineageWriter) {
       expected.filter((name) => name !== "dependencyCacheRoot"),
     );
     for (const disconnected of [
-      replaceFixture(wrapper, '"$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<', '"" <<'),
-      replaceFixture(wrapper, "pathToFileURL(process.argv[6])", "pathToFileURL(process.argv[5])"),
+      replaceFixture(
+        wrapper,
+        '    "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"\n}',
+        '    ""\n}',
+      ),
+      replaceFixture(wrapper, "[owner, destination, lifetime]", "[owner, lifetime, destination]"),
+      replaceFixture(wrapper, "pathToFileURL(lifetime)", "pathToFileURL(destination)"),
       replaceFixture(wrapper, "const { claimCreatedAnchor,", "// const { claimCreatedAnchor,"),
       replaceFixture(
         wrapper,
-        '  node --input-type=module - "$1"',
-        '  # node --input-type=module - "$1"',
+        "  pr_batch_wrapper_git materialize-dependencies",
+        "  # pr_batch_wrapper_git materialize-dependencies",
+      ),
+      replaceFixture(
+        wrapper,
+        '  node --input-type=module - "$GIT_EXEC" "$@"',
+        '  # node --input-type=module - "$GIT_EXEC" "$@"',
       ),
     ]) {
       expect(compile(disconnected)).toEqual(["recoverDependencyCache"]);

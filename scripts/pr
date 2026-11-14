@@ -175,6 +175,9 @@ pr_read_workflow_successor_request "$@" || {
 # Lexical baseline admission precedes source selection and lock acquisition.
 # The admitted workflow rechecks semantic identities against its owned checkout.
 PR_BASELINE_FOR_PROOF=0
+PR_BASELINE_SOURCE_REVIEW=""
+PR_BASELINE_EXPECTED_REVIEW=""
+PR_BASELINE_EXPECTED_HEAD=""
 pr_preflight_baseline_arguments() {
   local command="${1-}" proof=false seen=" " option value
   if [ "$command" = prepare-baseline-signing-continue ]; then
@@ -193,6 +196,11 @@ pr_preflight_baseline_arguments() {
     fi
     [ "$#" -ge 2 ] && [ -n "$2" ] || return 2
     value="$2"
+    case "$option" in
+      --source-review) PR_BASELINE_SOURCE_REVIEW="$value" ;;
+      --expected-review) PR_BASELINE_EXPECTED_REVIEW="$value" ;;
+      --expected-head) PR_BASELINE_EXPECTED_HEAD="$value" ;;
+    esac
     case "$option" in
       --expected-head|--baseline|--expected-tree|--expected-review|--predecessor-head|--predecessor-binding|--incoming-head|--incoming-review|--publication-oid)
         [[ "$value" =~ ^[a-f0-9]{40}$ ]] || return 2 ;;
@@ -226,8 +234,8 @@ PR_WORKFLOW_RECOVERY_OUTCOME=""
 PR_WORKFLOW_RECOVERY_HEAD=""
 PR_WORKFLOW_RECOVERY_ACTION=merge
 PR_WORKFLOW_ADMISSION=0
-# This one producer invocation uses authenticated current-main code; the retained
-# workflow binding stays unchanged until an independently reviewed successor.
+# Initial proof admission may use reviewed code equivalent to authenticated main.
+# The retained workflow binding stays unchanged until a reviewed successor.
 if [ "$requested_subcommand" = prepare-baseline-refresh ] && [ "$PR_BASELINE_FOR_PROOF" = 1 ]; then
   PR_WORKFLOW_ADMISSION=proof-baseline
 fi
@@ -288,8 +296,12 @@ pr_read_current_workflow_request "$@" || {
 # This bootstrap cannot load helpers from an unverified extracted tree.
 pr_batch_wrapper_git() {
   node --input-type=module - "$GIT_EXEC" "$@" <<'EOF_WRAPPER_GIT'
-import { spawnSync } from "node:child_process";
-import { fstatSync, lstatSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync,
+  readFileSync, readdirSync, readlinkSync, readSync, realpathSync, rmSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const [binary, operation, repository, revision, ...paths] = process.argv.slice(2);
@@ -322,6 +334,76 @@ function repositoryContext() {
     if (!identity || url && (url.username && url.protocol !== "ssh:" || url.password)) throw new Error("Invalid repository identity");
     return { owner, identity };
 }
+function workflowClosure(source) {
+  const manifest = git(repository, ["show", `${source}:scripts/pr-lib/wrapper-components.txt`]);
+  const inventory = manifest.toString("utf8").trimEnd().split("\n");
+  if (!Buffer.from(manifest.toString("utf8")).equals(manifest) || !inventory.length ||
+      inventory.some(path => !path || path.startsWith(":") || path.split("/").some(part => !part || part === "." || part === ".."))) {
+    throw new Error("Invalid workflow component inventory");
+  }
+  const rows = git(repository, ["ls-tree", "-r", "-z", "--full-tree", source, "--", "scripts/pr", "scripts/pr-lib", ...inventory]);
+  const entries = rows.toString("utf8").split("\0");
+  if (!Buffer.from(rows.toString("utf8")).equals(rows) || entries.pop() !== "" ||
+      entries.some(row => !/^(100644|100755) blob [a-f0-9]+\t[^\0]+$/.test(row)) ||
+      inventory.some(path => !entries.some(row => row.endsWith(`\t${path}`) || row.split("\t")[1].startsWith(`${path}/`)))) {
+    throw new Error("Incomplete or unsupported workflow component inventory");
+  }
+  return Buffer.concat([manifest, Buffer.from("\0"), rows]);
+}
+function dependencyKey(rows, tree, audit) {
+  let identity = tree;
+  if (audit && [audit.files, audit.directories, audit.presence].every(value =>
+      Array.isArray(value) && value.every(path => typeof path === "string")) &&
+      audit.runtime?.platform === process.platform && audit.runtime.arch === process.arch &&
+      audit.runtime.modules === process.versions.modules) {
+    const names = rows.map((row) => row.slice(row.indexOf("\t") + 1));
+    const codeInputs = [...audit.files, ...audit.directories];
+    const inputs = rows.filter((row, index) => {
+      const name = names[index];
+      return audit.files.includes(name) ||
+        name === "pnpm-lock.yaml" || name.startsWith("patches/") ||
+        /(?:^|\/)(?:package\.json|\.npmrc|\.pnpmfile\.[cm]js|pnpm-workspace\.yaml)$/.test(name) ||
+        (name.endsWith("/tsconfig.json") && codeInputs.some((input) =>
+          input.startsWith(name.slice(0, -"tsconfig.json".length)))) ||
+        (audit.directories.some((directory) => name.startsWith(`${directory}/`)) &&
+          /\.(?:ts|mts|mjs|js|json)$/.test(name) && !/\.(?:test|spec)\./.test(name));
+    });
+    // Changed executable inputs may read new source paths. Keep the original
+    // full-tree contract until their read set (including dependency hooks) is audited.
+    const digest = createHash("sha256").update(inputs.join("\0")).digest("hex");
+    if (digest === audit.auditSha256 && !names.some((name) => name.startsWith("dist/"))) {
+      identity = [inputs, audit.presence.map((path) =>
+        names.some((name) => name === path || name.startsWith(`${path}/`)))];
+    }
+  }
+  return createHash("sha256").update(JSON.stringify([
+    identity, process.platform, process.arch, process.versions.modules,
+  ])).digest("hex");
+}
+
+function dependencyIdentity(source) {
+  const rows = git(repository, ["ls-tree", "-r", "-z", source]).toString("utf8").split("\0").filter(Boolean);
+  const tree = git(repository, ["rev-parse", `${source}^{tree}`]).toString("utf8").trim();
+  let audit = null;
+  try { audit = JSON.parse(git(repository, ["show", `${source}:scripts/pr-lib/dependency-inputs.json`])); } catch {}
+  return dependencyKey(rows, tree, audit);
+}
+function workflowContext() {
+  const held = fstatSync(8);
+  // The sealed descriptor also carries the once-read source review for baseline admission.
+  if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o777) !== 0o400 || held.nlink !== 0 ||
+      held.size < 1 || held.size > 16 * 1024 * 1024 || `${held.dev}:${held.ino}` !== process.env.OPENCLAW_PR_WORKFLOW_CONTEXT) {
+    throw new Error("Invalid workflow selection descriptor");
+  }
+  const bytes = Buffer.alloc(held.size);
+  if (readSync(8, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error("Incomplete workflow selection");
+  const selection = JSON.parse(bytes.toString("utf8"));
+  if (held.size > 4096 && !(selection.admission === "proof-baseline" && typeof selection.proof?.review === "string")) {
+    throw new Error("Oversized workflow selection descriptor");
+  }
+  return selection;
+}
+
 try {
   if (operation.startsWith("workflow-")) {
     if (!/^[1-9][0-9]*$/.test(revision)) throw new Error("Invalid workflow PR");
@@ -410,6 +492,29 @@ try {
         throw new Error("Current workflow first admission requires no retained outcome; reconcile through the bound workflow");
       }
     };
+    const requireProofWorkflow = (source, proof, anchor = "refs/remotes/origin/main") => {
+      const main = run(["rev-parse", "--verify", `${anchor}^{commit}`]);
+      requireAdmission(main, anchor);
+      requireSource(source, main);
+      const closure = workflowClosure(source);
+      const dependencies = dependencyIdentity(source);
+      if (!closure.equals(workflowClosure(main)) || dependencies !== dependencyIdentity(main)) {
+        throw new Error("Reviewed proof workflow differs from current main code, dependency or runtime policy");
+      }
+      const stat = lstatSync(proof.path);
+      if (!stat.isFile() || Object.entries(proof.identity).some(([key, value]) => stat[key] !== value)) {
+        throw new Error("Selected proof source review changed");
+      }
+      const bytes = Buffer.from(proof.review, "base64");
+      if (bytes.toString("base64") !== proof.review || !oid.test(proof.reviewOid) ||
+          git(repository, ["hash-object", "--no-filters", "--stdin"], bytes).toString("utf8").trim() !== proof.reviewOid ||
+          JSON.parse(bytes).correction?.proofPublication?.workflowSource !== source) {
+        throw new Error("Selected proof source review changed");
+      }
+      return { version: 1, workflowSource: source, currentMain: main, reviewOid: proof.reviewOid,
+        closureSha256: createHash("sha256").update(closure).digest("hex"), dependencyKey: dependencies,
+        runtime: { platform: process.platform, arch: process.arch, modules: process.versions.modules } };
+    };
     const requireSuccessor = (source, value, anchor = "refs/remotes/origin/main") => {
       const request = JSON.parse(value);
       const keys = ["binding", "from", "head", "hostedHead", ...(request.purpose === "proof" ? ["purpose"] : []), "review", "to", "tree"];
@@ -449,7 +554,44 @@ try {
         throw new Error("Current workflow recovery requires nonqueue auto retirement, confirmed cancelled auto replacement, or an unaccepted same-head REST admin intent");
       }
     };
-    if (operation === "workflow-history") {
+    if (operation === "workflow-proof-select") {
+      const [creator, reviewPath, reviewOid, head] = paths;
+      const worktree = join(repository, ".worktrees", `pr-${revision}`);
+      let proof;
+      let source = run(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"]);
+      requireAdmission(source);
+      // Retained transitions and completed requests keep their existing recovery owner.
+      // Only a new source admission selects code from the independently reviewed bytes.
+      if (!lstatSync(join(worktree, ".local/review-transition.json"), { throwIfNoEntry: false }) &&
+          git(worktree, ["rev-parse", "HEAD"]).toString("utf8").trim() === head) {
+        const path = reviewPath || join(worktree, ".local/correction-review.json");
+        const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        let bytes, identity;
+        try {
+          const before = fstatSync(fd);
+          if (!before.isFile() || before.size > 8 * 1024 * 1024) throw new Error("Invalid proof source review file");
+          bytes = readFileSync(fd);
+          const after = fstatSync(fd);
+          identity = Object.fromEntries(["dev", "ino", "size", "mtimeMs", "ctimeMs"].map(key => [key, after[key]]));
+          if (["size", "mtimeMs", "ctimeMs"].some(key => before[key] !== after[key])) throw new Error("Selected proof source review changed");
+        } finally { closeSync(fd); }
+        if (git(repository, ["hash-object", "--no-filters", "--stdin"], bytes).toString("utf8").trim() !== reviewOid) {
+          throw new Error("Selected proof source review changed");
+        }
+        source = JSON.parse(bytes).correction?.proofPublication?.workflowSource;
+        proof = { review: bytes.toString("base64"), reviewOid, path, identity };
+        requireProofWorkflow(source, proof);
+      }
+      process.stdout.write(JSON.stringify({ version: 1, owner, repository: identity, pr: revision, source,
+        binding: current.oid, creator, bootstrap: false, admission: "proof-baseline", ...(proof ? { proof } : {}) }));
+    } else if (operation === "workflow-proof-seal") {
+      const selection = workflowContext();
+      if (!selection.proof || selection.source !== paths[0] || selection.binding !== current?.oid ||
+          selection.owner !== owner || selection.repository !== identity || selection.pr !== revision ||
+          selection.admission !== "proof-baseline") throw new Error("Proof workflow invocation changed");
+      const provenance = requireProofWorkflow(selection.source, selection.proof, paths[1]);
+      process.stdout.write(JSON.stringify({ ...selection, creator: paths[2], proof: { ...selection.proof, provenance } }));
+    } else if (operation === "workflow-history") {
       const historical = readAt(paths[0]);
       if (historical.source !== paths[1]) throw new Error("Historical workflow source changed");
       process.stdout.write(historical.source);
@@ -530,14 +672,7 @@ try {
         ...(outcome ? { recovery: { outcome, replacementHead, action } } : {}), ...(isCurrentAdmission(admission) ? { admission: admission === "1" ? true : admission } : {}),
         ...(successor ? { successor: JSON.parse(successor) } : {}) }));
     } else if (operation === "workflow-context-read") {
-      const held = fstatSync(8);
-      if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o777) !== 0o400 || held.nlink !== 0 ||
-          held.size < 1 || held.size > 4096 || `${held.dev}:${held.ino}` !== process.env.OPENCLAW_PR_WORKFLOW_CONTEXT) {
-        throw new Error("Invalid workflow selection descriptor");
-      }
-      const bytes = Buffer.alloc(held.size);
-      if (readSync(8, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error("Incomplete workflow selection");
-      const selection = JSON.parse(bytes.toString("utf8"));
+      const selection = workflowContext();
       const [creator, supervisor, outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge"] = paths;
       if (successor) {
         if (JSON.stringify(selection.successor) !== successor || selection.bootstrap || outcome || admission !== "0") {
@@ -547,7 +682,8 @@ try {
       }
       if (isCurrentAdmission(admission)) {
         if (selection.admission !== (admission === "1" ? true : admission) || selection.bootstrap || outcome) throw new Error("Workflow admission selection changed across handoff");
-        requireAdmission(selection.source);
+        if (admission === "proof-baseline" && selection.proof) requireProofWorkflow(selection.source, selection.proof);
+        else requireAdmission(selection.source);
       }
       if (outcome) {
         if (JSON.stringify(selection.recovery) !== JSON.stringify({ outcome, replacementHead, action }) || selection.bootstrap) {
@@ -557,10 +693,11 @@ try {
       }
       const supervised = selection.creator === supervisor && process.env.OPENCLAW_PR_DEDICATED_PROCESS_GROUP === "1" &&
         process.env.OPENCLAW_PR_LOCK_NOTIFY_FD === "3" && process.env.OPENCLAW_PR_LOCK_SUPERVISOR_PID === supervisor;
-      const keys = ["binding", "bootstrap", "creator", "owner", "pr", "repository", "source", "version", ...(outcome ? ["recovery"] : []), ...(isCurrentAdmission(admission) ? ["admission"] : []), ...(successor ? ["successor"] : [])].sort();
+      const keys = ["binding", "bootstrap", "creator", "owner", "pr", "repository", "source", "version", ...(outcome ? ["recovery"] : []), ...(isCurrentAdmission(admission) ? ["admission"] : []), ...(successor ? ["successor"] : []), ...(selection.proof ? ["proof"] : [])].sort();
       if (JSON.stringify(Object.keys(selection).sort()) !== JSON.stringify(keys) ||
           selection.version !== 1 || selection.owner !== owner || selection.repository !== identity || selection.pr !== revision ||
           typeof selection.bootstrap !== "boolean" ||
+          (selection.proof && admission !== "proof-baseline") ||
           !oid.test(selection.source) || (selection.creator !== creator && !supervised) ||
           selection.binding !== (current?.oid ?? "") || !successor && !isCurrentAdmission(admission) && !outcome && !selection.bootstrap && current && current.source !== selection.source) {
         throw new Error("Workflow selection changed across handoff");
@@ -582,13 +719,9 @@ try {
         if (ancestry.error || ancestry.signal || ![0, 1].includes(ancestry.status)) throw new Error("Cannot qualify canonical bootstrap");
         selected = ancestry.status === 0 ? bootstrap : main;
       }
-      const closure = source => {
-        const inventory = run(["show", `${source}:scripts/pr-lib/wrapper-components.txt`]).split("\n");
-        return git(repository, ["ls-tree", "-r", "-z", "--full-tree", source, "--", "scripts/pr", "scripts/pr-lib", ...inventory]);
-      };
       // Loaded helpers belong to the captured bootstrap, even if files move
       // during acquisition. Compare immutable closures before admitting it.
-      if (!closure(bootstrap).equals(closure(selected))) {
+      if (!workflowClosure(bootstrap).equals(workflowClosure(selected))) {
         throw new Error(`Cold workflow source differs from the running canonical wrapper ${bootstrap}; selected source ${selected}`);
       }
       process.stdout.write(selected);
@@ -597,6 +730,8 @@ try {
       if (successor) {
         if (outcome || admission !== "0") throw new Error("Conflicting workflow successor admission");
         requireSuccessor(source, successor, anchor);
+      } else if (admission === "proof-baseline" && workflowContext().proof) {
+        requireProofWorkflow(source, workflowContext().proof, anchor);
       } else if (isCurrentAdmission(admission)) requireAdmission(source, anchor);
       else if (outcome) requireRecovery(source, outcome, replacementHead, anchor, action);
       if (!oid.test(source) || (current?.oid ?? "") !== expected || !successor && !isCurrentAdmission(admission) && !outcome && current && current.source !== source) {
@@ -618,6 +753,158 @@ try {
       requireSource(current.source, paths[1]);
       run(["update-ref", "--no-deref", "-d", ref, current.oid]);
     } else throw new Error("Unknown workflow operation");
+  } else if (operation === "materialize-dependencies") {
+    const [owner, destination, lifetime] = paths;
+    function dependencyRepository(url, root) {
+      if (/^(?:\.?\.?\/|\/)/.test(url)) return realpathSync(resolve(root, url));
+      const parsed = new URL(url.replace(/^git@([^:]+):/, "ssh://git@$1/"));
+      if (parsed.protocol === "file:") return realpathSync(decodeURIComponent(parsed.pathname));
+      return `${parsed.hostname.toLowerCase()}/${parsed.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "").toLowerCase()}`;
+    }
+
+    const { claimCreatedAnchor, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, stageDependencyCache, sweepDependencyCaches, privateDependencyDonor, withDependencyCacheLock } = await import((await import("node:url")).pathToFileURL(lifetime));
+    const { bindGitInvocation } = await import((await import("node:url")).pathToFileURL(join(dirname(lifetime), "git-invocation.mjs")));
+
+
+    function materializeDependencies(owner, canonicalPath, destination, revision) {
+      if (process.env.OPENCLAW_PR_CACHE_COLLECTION_PID !== String(process.ppid)) {
+        try { sweepDependencyCaches(); }
+        catch (error) { console.error(`Warning: retaining PR dependency cache entries: ${error.message}`); }
+      }
+      const canonical = realpathSync(canonicalPath);
+      destination = resolve(destination);
+      const gitBinary = process.env.OPENCLAW_PR_GIT;
+      const git = (root, args) => execFileSync(gitBinary, ["-C", root, ...args], {
+        encoding: "utf8", timeout: 300_000, maxBuffer: 32 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trimEnd();
+      const config = (root, key, type = "--path") => {
+        const result = spawnSync(gitBinary, ["-C", root, "config", type, "--get", key], {
+          encoding: "utf8", timeout: 300_000,
+        });
+        if (result.status === 1) return "";
+        if (result.status !== 0) throw new Error(`Cannot read Git setting ${key} in ${root}.`);
+        return result.stdout.trim();
+      };
+      const requested = process.env.OPENCLAW_PR_TOOLING_ROOT || config(canonical, "openclaw.pr.toolingRoot");
+      const root = realpathSync(resolve(canonical, requested || "."));
+      if (requested) {
+        if (git(root, ["rev-parse", "--is-inside-work-tree"]) !== "true" ||
+            realpathSync(git(root, ["rev-parse", "--show-toplevel"])) !== root ||
+            config(root, "core.sparseCheckout", "--bool") === "true" ||
+            dependencyRepository(git(root, ["remote", "get-url", "origin"]), root) !==
+              dependencyRepository(git(canonical, ["remote", "get-url", "origin"]), canonical)) {
+          throw new Error(`Tooling root must be a full Git work tree of this repository: ${root}`);
+        }
+        console.error(`scripts/pr tooling root: ${root}`);
+      }
+      const materialize = (installed, target) => {
+        const result = spawnSync(process.execPath, [owner, join(installed, "node_modules"), target], {
+          encoding: "utf8", stdio: ["ignore", "inherit", "pipe"],
+        });
+        if (result.stderr) process.stderr.write(result.stderr);
+        if (result.error) throw result.error;
+        // Historical anchors returned 1 instead of 78 for the same refusal.
+        const drift = result.status === 78 || (result.status === 1 &&
+          /^Installed scripts\/pr dependency '[^\r\n]+' has version [^\r\n]+; the trust anchor requires [^\r\n]+\.$/m.test(result.stderr));
+        if (result.status !== 0 && !drift) throw new Error(`Dependency materialization failed in ${target}.`);
+        return result.status === 0;
+      };
+      const preflight = (installed) => {
+        try { return privateDependencyDonor(installed, destination); }
+        catch (error) {
+          throw new Error(`Dependency materialization failed in ${destination}: ${error.message}`, { cause: error });
+        }
+      };
+      // Supervised reentry inherits pins, not the creator's FD9. Let the selected
+      // helper validate those pins before considering any external private donor.
+      if (existsSync(destination)) {
+        preflight(dirname(destination));
+        if (materialize(dirname(destination), destination)) return;
+      }
+      const privateDonor = preflight(root);
+      if (!privateDonor && materialize(root, destination)) return;
+
+      // The wrapper has already authenticated this source and verified its extracted
+      // inventory. Recheck ancestry and manifest identity before executing install hooks.
+      if (!/^[a-f0-9]{40}$/.test(revision ?? "")) throw new Error("Missing verified dependency anchor.");
+      git(canonical, ["merge-base", "--is-ancestor", revision, "refs/remotes/origin/main"]);
+      for (const name of ["package.json", "packages/markdown-core/package.json"]) {
+        const path = join(dirname(destination), name);
+        if (name !== "package.json" && !existsSync(path)) continue;
+        if (readFileSync(path, "utf8").trimEnd() !== git(canonical, ["show", `${revision}:${name}`])) {
+          throw new Error(`Dependency manifest differs from verified anchor: ${name}`);
+        }
+      }
+      const sourceRows = git(canonical, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean);
+      const key = dependencyIdentity(revision);
+      if (!/^[a-f0-9]{64}$/.test(key)) throw new Error("Missing verified dependency identity.");
+      const cache = dependencyCacheRoot();
+      const entry = join(cache, key);
+      const anchor = claimCreatedAnchor(dirname(destination), process.ppid);
+      const use = (lock) => holdDependencyCache(lock, entry, anchor);
+      if (!withDependencyCacheLock(cache, use)) {
+        const stage = withDependencyCacheLock(cache, lock => stageDependencyCache(lock, entry, anchor));
+        try {
+          const archive = join(stage, ".pr-source.tar");
+          git(canonical, ["archive", "--format=tar", `--output=${archive}`, revision]);
+          execFileSync("tar", ["-xf", archive, "-C", stage]);
+          rmSync(archive);
+          // Verify archive bytes, including symlinks, before any package lifecycle runs.
+          const sourcePaths = new Set();
+          for (const row of sourceRows) {
+            const match = /^(100644|100755|120000) blob ([a-f0-9]{40})\t([^\0]+)$/.exec(row);
+            if (!match) throw new Error("Unsupported frozen install source entry.");
+            const [, mode, oid, name] = match;
+            sourcePaths.add(name);
+            const path = join(stage, name);
+            const stat = lstatSync(path);
+            const data = mode === "120000"
+              ? stat.isSymbolicLink() ? Buffer.from(readlinkSync(path)) : null
+              : stat.isFile() && Boolean(stat.mode & 0o100) === (mode === "100755") ? readFileSync(path) : null;
+            if (!data || createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex") !== oid) {
+              throw new Error(`Frozen install source differs: ${name}`);
+            }
+          }
+          const verifyInventory = (directory, prefix = "") => {
+            for (const child of readdirSync(directory)) {
+              const name = prefix + child;
+              const path = join(directory, child);
+              if (lstatSync(path).isDirectory()) verifyInventory(path, `${name}/`);
+              else if (!sourcePaths.has(name)) throw new Error(`Unexpected frozen install source: ${name}`);
+            }
+          };
+          verifyInventory(stage);
+          console.error(`Installing frozen scripts/pr dependencies for ${revision}.`);
+          const bin = join(stage, ".pr-bin");
+          mkdirSync(bin, { mode: 0o700 });
+          const { env: installEnv } = bindGitInvocation(bin, gitBinary);
+          // Lifecycle Git calls must not inherit a hook's checkout or index ownership.
+          for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete installEnv[name];
+          const installed = spawnSync("pnpm", ["-C", stage, "install", "--frozen-lockfile", "--prefer-offline"], {
+            stdio: "inherit", env: installEnv,
+          });
+          rmSync(bin, { recursive: true });
+          if (installed.error) throw installed.error;
+          // Validation writes pins; keep them outside the install that will move.
+          const check = join(stage, ".pr-dependency-check");
+          if (installed.status !== 0 || !materialize(stage, check)) {
+            throw new Error("Frozen dependency installation failed.");
+          }
+          rmSync(check, { recursive: true });
+          withDependencyCacheLock(cache, (lock) => publishDependencyCache(lock, stage, entry, anchor));
+        } finally {
+          rmSync(stage, { recursive: true, force: true });
+        }
+      }
+      // The durable hold protects the installation while projection runs; a child
+      // helper must never keep the global metadata mutex across process execution.
+      if (!materialize(entry, destination)) throw new Error("Cached dependencies do not match the trust anchor.");
+      console.error(`Using frozen scripts/pr dependency installation: ${entry}`);
+    }
+    materializeDependencies(owner, repository, destination, revision);
+  } else if (operation === "dependency-key") {
+    process.stdout.write(dependencyIdentity(revision));
   } else if (operation === "bootstrap-source" || operation === "bootstrap-cache-recovery-source") {
     if (operation === "bootstrap-cache-recovery-source" && !officialOrigin()) {
       throw new Error("Cache recovery requires the official OpenClaw repository origin");
@@ -692,7 +979,7 @@ try {
       const [head, anchor] = rows.slice(index * 2, index * 2 + 2);
       return !oid.test(head) || !oid.test(anchor) || head !== anchor;
     }).join("\n"));
-  } else if (operation === "verify") {
+  } else if (operation === "verify" || operation === "verify-proof") {
     const [directory, ...components] = paths;
     const listing = git(repository, ["ls-tree", "-r", "-z", "--full-tree", revision, "--", ...components]);
     const text = listing.toString("utf8");
@@ -719,7 +1006,9 @@ try {
           directories.add(parent);
         }
       }
-      if (!lstatSync(join(directory, path)).isFile()) throw new Error("Non-regular anchor file");
+      const stat = lstatSync(join(directory, path));
+      if (!stat.isFile()) throw new Error("Non-regular anchor file");
+      if (operation === "verify-proof" && Boolean(stat.mode & 0o100) !== (entry[1] === "100755")) throw new Error("Anchor executable mode differs");
       names.add(path);
       expected.push(hash);
     }
@@ -734,7 +1023,8 @@ try {
     throw new Error("Unknown wrapper Git operation");
   }
 } catch (error) {
-  if (operation.startsWith("workflow-") || operation.startsWith("bootstrap-")) console.error(error.message);
+  if (operation === "materialize-dependencies") console.error(`Dependency materialization refused: ${error.message}`);
+  else if (operation === "verify-proof" || operation.startsWith("workflow-") || operation.startsWith("bootstrap-")) console.error(error.message);
   process.exitCode = 1;
 }
 EOF_WRAPPER_GIT
@@ -748,12 +1038,23 @@ PR_WORKFLOW_RECOVERY_PROVENANCE=""
 PR_WORKFLOW_ADMISSION_PROVENANCE=""
 PR_WORKFLOW_TRUST_ANCHOR="refs/remotes/origin/main"
 pr_read_workflow_binding() {
-  local classification binding tracking_status=0
+  local classification binding tracking_status=0 selected_proof=0
   classification=$(pr_subcommand_classification "$requested_subcommand" 2>/dev/null || true)
   [ "$classification" = landing ] || return 0
   case "$requested_subcommand" in gc | lock-recover | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
   [[ "${2-}" =~ ^[1-9][0-9]*$ ]] || return 0
   PR_WORKFLOW_PR="$2"
+  if [ "${PR_WORKFLOW_ADMISSION:-0}" = proof-baseline ] && [ -z "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ]; then
+    local context review_path="$PR_BASELINE_SOURCE_REVIEW"
+    if [ -n "$review_path" ]; then review_path=$(node -p 'require("node:path").resolve(process.argv[1])' "$review_path") || return 1; fi
+    context=$(mktemp "${TMPDIR:-/tmp}/openclaw-pr-selection.XXXXXX") || return 1
+    if ! pr_batch_wrapper_git workflow-proof-select "$canonical_repo_root" "$PR_WORKFLOW_PR" "$$" \
+      "$review_path" "$PR_BASELINE_EXPECTED_REVIEW" "$PR_BASELINE_EXPECTED_HEAD" > "$context" || ! chmod 400 "$context"; then
+      rm -f "$context"; return 1
+    fi
+    hold_pr_workflow_context "$context" || return 1
+    selected_proof=1
+  fi
   if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ]; then
     binding=$(pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" "$PR_WORKFLOW_PR" "$$" "$PPID" \
       "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}") || return 1
@@ -794,17 +1095,18 @@ pr_read_workflow_binding() {
   if [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ]; then
     [ "$script_self" = "$canonical_repo_root/scripts/pr" ] || return 1
   fi
-  if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ] || [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ]; then
+  if { [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ] && [ "$selected_proof" = 0 ]; } || [ "$PR_WORKFLOW_BOOTSTRAP" = 1 ]; then
     verify_pr_workflow_source "$PR_WORKFLOW_SOURCE_REVISION" "$script_parent_dir/.." || return 1
   fi
 }
 
 verify_pr_workflow_source() {
-  local inventory component
+  local inventory component operation=verify
+  [ "${PR_WORKFLOW_ADMISSION:-0}" != proof-baseline ] || operation=verify-proof
   local components=(scripts/pr scripts/pr-lib)
   inventory=$(pr_git -C "$canonical_repo_root" show "$1:scripts/pr-lib/wrapper-components.txt") || return 1
   while IFS= read -r component; do components+=("$component"); done <<< "$inventory"
-  pr_batch_wrapper_git verify "$canonical_repo_root" "$1" "$2" "${components[@]}"
+  pr_batch_wrapper_git "$operation" "$canonical_repo_root" "$1" "$2" "${components[@]}"
 }
 
 hold_pr_workflow_selection() {
@@ -818,6 +1120,11 @@ hold_pr_workflow_selection() {
     rm -f "$context"
     return 1
   fi
+  hold_pr_workflow_context "$context"
+}
+
+hold_pr_workflow_context() {
+  local context="$1"
   # FD 8 carries selection; FD 9 remains the archive cleanup owner.
   # Positional reads keep exec/child reentry independent of shared FD offsets.
   exec 8< "$context"
@@ -847,11 +1154,24 @@ admit_pr_workflow_binding() {
     if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" != 0 ] || [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
       # Current main is selected only for this operation. Keep the historical
       # binding intact so normal reconciliation still uses its admitted source.
-      verify_pr_workflow_source "$main" "$script_parent_dir/.." || {
-        echo "Current main workflow changed; rerun recovery from current main. Preserving $qualification_ref." >&2
-        return 1
-      }
-      selected="$main"
+      if [ "${PR_WORKFLOW_ADMISSION:-0}" = proof-baseline ] &&
+        node -e 'const fs=require("node:fs");const b=Buffer.alloc(fs.fstatSync(8).size);fs.readSync(8,b,0,b.length,0);process.exit(JSON.parse(b).proof ? 0 : 1)'; then
+        local proof_context
+        proof_context=$(mktemp "${TMPDIR:-/tmp}/openclaw-pr-selection.XXXXXX") || return 1
+        if ! pr_batch_wrapper_git workflow-proof-seal "$canonical_repo_root" "$1" \
+          "$PR_WORKFLOW_SOURCE_REVISION" "$main" "$$" > "$proof_context" || ! chmod 400 "$proof_context"; then
+          rm -f "$proof_context"; return 1
+        fi
+        hold_pr_workflow_context "$proof_context" || return 1
+        selected="$PR_WORKFLOW_SOURCE_REVISION"
+        PR_MAIN_SHA="$main"
+      else
+        verify_pr_workflow_source "$main" "$script_parent_dir/.." || {
+          echo "Current main workflow changed; rerun recovery from current main. Preserving $qualification_ref." >&2
+          return 1
+        }
+        selected="$main"
+      fi
     elif ! selected=$(pr_batch_wrapper_git workflow-cold-select "$canonical_repo_root" "$1" \
       "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$main"); then
       echo "Cold workflow qualification failed; use the admitted source from a qualified checkout. Preserving $qualification_ref." >&2
@@ -882,8 +1202,10 @@ admit_pr_workflow_binding() {
     pr_operation_lock_owner_is_current "$canonical_repo_root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
     pr_git -C "$canonical_repo_root" update-ref --no-deref -d "$qualification_ref" "$main" || return 1
   fi
-  exec 8<&-
-  unset OPENCLAW_PR_WORKFLOW_CONTEXT
+  if [ "${PR_WORKFLOW_ADMISSION:-0}" != proof-baseline ]; then
+    exec 8<&-
+    unset OPENCLAW_PR_WORKFLOW_CONTEXT
+  fi
 }
 
 # Parent helpers are a separate trust decision from the retained workflow.
@@ -987,201 +1309,11 @@ pr_materialize_dependencies() {
   case "$requested_subcommand" in workspace | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
   pr_verify_bootstrap || { echo "Refusing unauthenticated parent dependency helpers." >&2; return 1; }
   pr_collect_dependencies "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"
-  node --input-type=module - "$1" "$canonical_repo_root" "$2" "${3:-${PR_WORKFLOW_SOURCE_REVISION:-}}" "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<'EOF_TOOLING'
-import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  readlinkSync, realpathSync, rmSync,
-} from "node:fs";
-import { dirname, join, resolve } from "node:path";
-
-function repository(url, root) {
-  if (/^(?:\.?\.?\/|\/)/.test(url)) return realpathSync(resolve(root, url));
-  const parsed = new URL(url.replace(/^git@([^:]+):/, "ssh://git@$1/"));
-  if (parsed.protocol === "file:") return realpathSync(decodeURIComponent(parsed.pathname));
-  return `${parsed.hostname.toLowerCase()}/${parsed.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "").toLowerCase()}`;
-}
-
-const { claimCreatedAnchor, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, stageDependencyCache, sweepDependencyCaches, privateDependencyDonor, withDependencyCacheLock } = await import((await import("node:url")).pathToFileURL(process.argv[6]));
-const { bindGitInvocation } = await import((await import("node:url")).pathToFileURL(join(dirname(process.argv[6]), "git-invocation.mjs")));
-
-function dependencyKey(rows, tree, audit) {
-  let identity = tree;
-  if (audit && audit.runtime.platform === process.platform && audit.runtime.arch === process.arch &&
-      audit.runtime.modules === process.versions.modules) {
-    const names = rows.map((row) => row.slice(row.indexOf("\t") + 1));
-    const codeInputs = [...audit.files, ...audit.directories];
-    const inputs = rows.filter((row, index) => {
-      const name = names[index];
-      return audit.files.includes(name) ||
-        name === "pnpm-lock.yaml" || name.startsWith("patches/") ||
-        /(?:^|\/)(?:package\.json|\.npmrc|\.pnpmfile\.[cm]js|pnpm-workspace\.yaml)$/.test(name) ||
-        (name.endsWith("/tsconfig.json") && codeInputs.some((input) =>
-          input.startsWith(name.slice(0, -"tsconfig.json".length)))) ||
-        (audit.directories.some((directory) => name.startsWith(`${directory}/`)) &&
-          /\.(?:ts|mts|mjs|js|json)$/.test(name) && !/\.(?:test|spec)\./.test(name));
-    });
-    // Changed executable inputs may read new source paths. Keep the original
-    // full-tree contract until their read set (including dependency hooks) is audited.
-    const digest = createHash("sha256").update(inputs.join("\0")).digest("hex");
-    if (digest === audit.auditSha256 && !names.some((name) => name.startsWith("dist/"))) {
-      identity = [inputs, audit.presence.map((path) =>
-        names.some((name) => name === path || name.startsWith(`${path}/`)))];
-    }
-  }
-  return createHash("sha256").update(JSON.stringify([
-    identity, process.platform, process.arch, process.versions.modules,
-  ])).digest("hex");
-}
-
-function materializeDependencies(owner, canonicalPath, destination, revision) {
-  if (process.env.OPENCLAW_PR_CACHE_COLLECTION_PID !== String(process.ppid)) {
-    try { sweepDependencyCaches(); }
-    catch (error) { console.error(`Warning: retaining PR dependency cache entries: ${error.message}`); }
-  }
-  const canonical = realpathSync(canonicalPath);
-  destination = resolve(destination);
-  const gitBinary = process.env.OPENCLAW_PR_GIT;
-  const git = (root, args) => execFileSync(gitBinary, ["-C", root, ...args], {
-    encoding: "utf8", timeout: 300_000, maxBuffer: 32 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trimEnd();
-  const config = (root, key, type = "--path") => {
-    const result = spawnSync(gitBinary, ["-C", root, "config", type, "--get", key], {
-      encoding: "utf8", timeout: 300_000,
-    });
-    if (result.status === 1) return "";
-    if (result.status !== 0) throw new Error(`Cannot read Git setting ${key} in ${root}.`);
-    return result.stdout.trim();
-  };
-  const requested = process.env.OPENCLAW_PR_TOOLING_ROOT || config(canonical, "openclaw.pr.toolingRoot");
-  const root = realpathSync(resolve(canonical, requested || "."));
-  if (requested) {
-    if (git(root, ["rev-parse", "--is-inside-work-tree"]) !== "true" ||
-        realpathSync(git(root, ["rev-parse", "--show-toplevel"])) !== root ||
-        config(root, "core.sparseCheckout", "--bool") === "true" ||
-        repository(git(root, ["remote", "get-url", "origin"]), root) !==
-          repository(git(canonical, ["remote", "get-url", "origin"]), canonical)) {
-      throw new Error(`Tooling root must be a full Git work tree of this repository: ${root}`);
-    }
-    console.error(`scripts/pr tooling root: ${root}`);
-  }
-  const materialize = (installed, target) => {
-    const result = spawnSync(process.execPath, [owner, join(installed, "node_modules"), target], {
-      encoding: "utf8", stdio: ["ignore", "inherit", "pipe"],
-    });
-    if (result.stderr) process.stderr.write(result.stderr);
-    if (result.error) throw result.error;
-    // Historical anchors returned 1 instead of 78 for the same refusal.
-    const drift = result.status === 78 || (result.status === 1 &&
-      /^Installed scripts\/pr dependency '[^\r\n]+' has version [^\r\n]+; the trust anchor requires [^\r\n]+\.$/m.test(result.stderr));
-    if (result.status !== 0 && !drift) throw new Error(`Dependency materialization failed in ${target}.`);
-    return result.status === 0;
-  };
-  const preflight = (installed) => {
-    try { return privateDependencyDonor(installed, destination); }
-    catch (error) {
-      throw new Error(`Dependency materialization failed in ${destination}: ${error.message}`, { cause: error });
-    }
-  };
-  // Supervised reentry inherits pins, not the creator's FD9. Let the selected
-  // helper validate those pins before considering any external private donor.
-  if (existsSync(destination)) {
-    preflight(dirname(destination));
-    if (materialize(dirname(destination), destination)) return;
-  }
-  const privateDonor = preflight(root);
-  if (!privateDonor && materialize(root, destination)) return;
-
-  // The wrapper has already authenticated this source and verified its extracted
-  // inventory. Recheck ancestry and manifest identity before executing install hooks.
-  if (!/^[a-f0-9]{40}$/.test(revision ?? "")) throw new Error("Missing verified dependency anchor.");
-  git(canonical, ["merge-base", "--is-ancestor", revision, "refs/remotes/origin/main"]);
-  for (const name of ["package.json", "packages/markdown-core/package.json"]) {
-    const path = join(dirname(destination), name);
-    if (name !== "package.json" && !existsSync(path)) continue;
-    if (readFileSync(path, "utf8").trimEnd() !== git(canonical, ["show", `${revision}:${name}`])) {
-      throw new Error(`Dependency manifest differs from verified anchor: ${name}`);
-    }
-  }
-  const tree = git(canonical, ["rev-parse", `${revision}^{tree}`]);
-  const sourceRows = git(canonical, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean);
-  const auditPath = join(dirname(owner), "dependency-inputs.json");
-  // Older retained wrappers without a read-set audit keep full-tree isolation.
-  const audit = existsSync(auditPath) ? JSON.parse(readFileSync(auditPath, "utf8")) : null;
-  const key = dependencyKey(sourceRows, tree, audit);
-  const cache = dependencyCacheRoot();
-  const entry = join(cache, key);
-  const anchor = claimCreatedAnchor(dirname(destination), process.ppid);
-  const use = (lock) => holdDependencyCache(lock, entry, anchor);
-  if (!withDependencyCacheLock(cache, use)) {
-    const stage = withDependencyCacheLock(cache, lock => stageDependencyCache(lock, entry, anchor));
-    try {
-      const archive = join(stage, ".pr-source.tar");
-      git(canonical, ["archive", "--format=tar", `--output=${archive}`, revision]);
-      execFileSync("tar", ["-xf", archive, "-C", stage]);
-      rmSync(archive);
-      // Verify archive bytes, including symlinks, before any package lifecycle runs.
-      const sourcePaths = new Set();
-      for (const row of sourceRows) {
-        const match = /^(100644|100755|120000) blob ([a-f0-9]{40})\t([^\0]+)$/.exec(row);
-        if (!match) throw new Error("Unsupported frozen install source entry.");
-        const [, mode, oid, name] = match;
-        sourcePaths.add(name);
-        const path = join(stage, name);
-        const stat = lstatSync(path);
-        const data = mode === "120000"
-          ? stat.isSymbolicLink() ? Buffer.from(readlinkSync(path)) : null
-          : stat.isFile() && Boolean(stat.mode & 0o100) === (mode === "100755") ? readFileSync(path) : null;
-        if (!data || createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex") !== oid) {
-          throw new Error(`Frozen install source differs: ${name}`);
-        }
-      }
-      const verifyInventory = (directory, prefix = "") => {
-        for (const child of readdirSync(directory)) {
-          const name = prefix + child;
-          const path = join(directory, child);
-          if (lstatSync(path).isDirectory()) verifyInventory(path, `${name}/`);
-          else if (!sourcePaths.has(name)) throw new Error(`Unexpected frozen install source: ${name}`);
-        }
-      };
-      verifyInventory(stage);
-      console.error(`Installing frozen scripts/pr dependencies for ${revision}.`);
-      const bin = join(stage, ".pr-bin");
-      mkdirSync(bin, { mode: 0o700 });
-      const { env: installEnv } = bindGitInvocation(bin, gitBinary);
-      // Lifecycle Git calls must not inherit a hook's checkout or index ownership.
-      for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete installEnv[name];
-      const installed = spawnSync("pnpm", ["-C", stage, "install", "--frozen-lockfile", "--prefer-offline"], {
-        stdio: "inherit", env: installEnv,
-      });
-      rmSync(bin, { recursive: true });
-      if (installed.error) throw installed.error;
-      // Validation writes pins; keep them outside the install that will move.
-      const check = join(stage, ".pr-dependency-check");
-      if (installed.status !== 0 || !materialize(stage, check)) {
-        throw new Error("Frozen dependency installation failed.");
-      }
-      rmSync(check, { recursive: true });
-      withDependencyCacheLock(cache, (lock) => publishDependencyCache(lock, stage, entry, anchor));
-    } finally {
-      rmSync(stage, { recursive: true, force: true });
-    }
-  }
-  // The durable hold protects the installation while projection runs; a child
-  // helper must never keep the global metadata mutex across process execution.
-  if (!materialize(entry, destination)) throw new Error("Cached dependencies do not match the trust anchor.");
-  console.error(`Using frozen scripts/pr dependency installation: ${entry}`);
-}
-
-try {
-  materializeDependencies(...process.argv.slice(2));
-} catch (error) {
-  console.error(`Dependency materialization refused: ${error.message}`);
-  process.exitCode = 1;
-}
-EOF_TOOLING
+  # Only frozen installation needs a source-tree key. The shared owner computes
+  # it after installed reuse returns and frozen-install source admission succeeds.
+  pr_batch_wrapper_git materialize-dependencies "$canonical_repo_root" \
+    "${3:-${PR_WORKFLOW_SOURCE_REVISION:-}}" "$1" "$2" \
+    "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"
 }
 
 # Select trusted wrapper code independently from the canonical repository root;
@@ -1220,7 +1352,7 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
   # Older parents pin only their own dependency set. The anchored child owns
   # completing its installation before any loader, supervisor, or lock starts.
   pr_materialize_dependencies "$script_parent_dir/pr-lib/materialize-dependencies.mjs" \
-    "$script_parent_dir/../node_modules"
+    "$script_parent_dir/../node_modules" "$pr_bootstrap_revision"
 elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
   # Establish recovery authority before bootstrap or cleanup can import helpers.
