@@ -86,6 +86,7 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             <button
               class={["btn", { primary: props.enabling, danger: !props.enabling }]}
               disabled={props.disabled || saving()}
+              aria-busy={saving() ? "true" : undefined}
               onClick={confirm}
             >
               {saving() ? t("dreaming.toggleConfirmation.saving") : confirmLabel()}
