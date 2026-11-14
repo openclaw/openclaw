@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 
 // Exercise the stdlib driver with fake tools/frames, never models, Swift, or network.
 const program = String.raw`
-import base64, hashlib, importlib.util, io, json, os, re, shutil, signal, stat, struct, sys, tempfile, time, unittest
+import ast, base64, hashlib, importlib.util, io, json, os, re, shutil, signal, stat, struct, subprocess, sys, tempfile, time, unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,12 +16,14 @@ spec.loader.exec_module(m)
 class DriverTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="openclaw-mlx-proof-test-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.scratch = self.root / "scratch"
         self.scratch.mkdir()
         self.artifacts = self.root / "proof"
         self.artifacts.mkdir()
         self.proof = m.Proof(self.root, self.scratch, self.artifacts, m.Budget(time.monotonic()))
+        self.proof.controller = self.root
+        self.proof.verify_controller = lambda revision: {"sha": revision}
         self.platform = self.root / "platform-T"
         self.platform.mkdir()
         self.proof.platform_temp = self.platform
@@ -434,7 +436,7 @@ class DriverTests(unittest.TestCase):
     def test_foundation_only_requires_admission_and_returns_before_build_or_models(self):
         with self.assertRaisesRegex(RuntimeError,"requires extended"):
             self.proof.execute(False,True)
-        self.proof.verify_source=lambda *args: {"sha":"a"*40}
+        self.proof.verify_source=lambda *args: {"sha":"a"*40,"capability":"config-preflight"}
         self.proof.foundation_admission=lambda: None
         self.proof.build=lambda *args: self.fail("unexpected helper build")
         self.proof.extended=lambda *args: self.fail("unexpected model proof")
@@ -444,14 +446,14 @@ class DriverTests(unittest.TestCase):
         self.assertTrue(self.proof.result["diagnosticComplete"])
         for field in ["helperBuildRun","modelInferenceRun","offlineHelperCacheComplete","settingsUpgradeComplete","complete"]:
             self.assertFalse(self.proof.result[field])
-        result=m.subprocess.run([sys.executable,"-I","-S",sys.argv[1],"--proof-dir",str(self.artifacts),"--started",str(time.monotonic()),"--foundation-admission-only"],capture_output=True)
+        result=m.subprocess.run([sys.executable,"-I","-S",sys.argv[1],"--candidate-root",str(self.root),"--candidate-sha","a"*40,"--proof-dir",str(self.artifacts),"--started",str(time.monotonic()),"--foundation-admission-only"],capture_output=True)
         self.assertNotEqual(result.returncode,0)
         self.assertIn(b"requires extended",result.stderr)
 
     def test_full_extended_admits_directory_before_online_controls_without_http_warmup(self):
         calls=[]
         self.proof.platform_temp=None
-        self.proof.verify_source=lambda *args: {"sha":"a"*40}
+        self.proof.verify_source=lambda *args: {"sha":"a"*40,"capability":"config-preflight"}
         self.proof.build=lambda *args: calls.append("build") or {"fixture":"fixed"}
         self.proof.quiet_capture=lambda *args,**kwargs: calls.append("compiler") or {"code":0,"failure":None,"child":SimpleNamespace(capture_overflow=False)}
         def admit(binary):
@@ -487,7 +489,7 @@ class DriverTests(unittest.TestCase):
 
     def test_selected_checkout_is_not_the_workflow_or_trigger_commit(self):
         selected, workflow, trigger = "a" * 40, "b" * 40, "c" * 40
-        self.proof.verify_source = lambda source, revision: {"sha": revision} if revision == selected else self.fail("wrong source")
+        self.proof.verify_source = lambda source, revision: {"sha": revision,"capability":"baseline"} if revision == selected else self.fail("wrong source")
         self.proof.build = lambda name, source: None
         with patch.dict(os.environ, {"CHECKOUT_SHA": selected, "GITHUB_WORKFLOW_SHA": workflow, "GITHUB_SHA": trigger, "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "fixture"}):
             self.proof.execute(False)
@@ -540,7 +542,7 @@ class DriverTests(unittest.TestCase):
         fixture = self.root / m.BAD_RESOLUTION
         fixture.parent.mkdir(parents=True)
         fixture.write_bytes((Path(sys.argv[1]).parents[1] / m.BAD_RESOLUTION).read_bytes())
-        self.proof.result["source"] = {"sha": "a" * 40, "blobs": {m.BAD_RESOLUTION: "9923235468d35fe0e7b78382e5f1f1625dabd33a"}}
+        self.proof.result["controller"] = {"sha": "a" * 40, "blobs": {m.BAD_RESOLUTION: "9923235468d35fe0e7b78382e5f1f1625dabd33a"}}
         self.proof.result["variants"]["bad"] = {"sha": m.BAD, "blobs": {"original": "preserve"}}
         for name, value in [
             ("BAD_MANIFEST_SHA256", "72fe0d961c89cdc8cf6a0c8663484fa8d2259521a0ecbdf00ad49be1a3a07b78"),
@@ -573,8 +575,8 @@ class DriverTests(unittest.TestCase):
                 lock.write_bytes(b"changed" if fault == "lock" else b"fixture lock")
                 data = original.replace(b"eventsource", b"eventSource", 1) if fault == "canonical" else original
                 fixture.write_bytes(data)
-                self.proof.result["source"]["blobs"][m.BAD_RESOLUTION] = hashlib.sha1(f"blob {len(data)}\0".encode()+data).hexdigest() if fault == "canonical" else "9923235468d35fe0e7b78382e5f1f1625dabd33a"
-                if fault == "uncommitted": self.proof.result["source"]["blobs"] = {}
+                self.proof.result["controller"]["blobs"][m.BAD_RESOLUTION] = hashlib.sha1(f"blob {len(data)}\0".encode()+data).hexdigest() if fault == "canonical" else "9923235468d35fe0e7b78382e5f1f1625dabd33a"
+                if fault == "uncommitted": self.proof.result["controller"]["blobs"] = {}
                 if fault in ["missing", "symlink"]:
                     fixture.unlink()
                     if fault == "symlink": fixture.symlink_to(package / "Package.swift")
@@ -585,13 +587,13 @@ class DriverTests(unittest.TestCase):
                 if fixture.is_symlink(): fixture.unlink()
                 fixture.write_bytes(original)
 
-    def xctest_output(self):
+    def xctest_output(self, selected_tests=None, root=None):
         lines=["Test Suite 'Selected tests' started at fixture."]
         total=0
-        for name,relative in m.SELECTED_TESTS.items():
-            target=self.root/relative
+        for name,relative in (selected_tests or m.SELECTED_TESTS).items():
+            target=(root or self.root)/relative
             target.parent.mkdir(parents=True,exist_ok=True)
-            target.write_bytes((Path(sys.argv[1]).parents[1]/relative).read_bytes())
+            if not target.exists(): target.write_bytes((Path(sys.argv[1]).parents[1]/relative).read_bytes())
             methods=re.findall(r"^\s+func (test\w+)\(",target.read_text(),re.M)
             total+=len(methods)
             lines.append("Test Suite '"+name+"' started at fixture.")
@@ -602,19 +604,137 @@ class DriverTests(unittest.TestCase):
         lines.extend(["Test Suite 'Selected tests' passed at fixture."," Executed "+str(total)+" tests, with 0 failures (0 unexpected) in 0 seconds","Test run with 0 tests in 0 suites passed"])
         return "\n".join(lines)
 
-    def test_selected_preflight_inputs_do_not_become_historical_snapshot_requirements(self):
-        calls=[]
-        def command(argv,*args):
-            calls.append(argv)
-            if argv[1:]==["rev-parse","HEAD"]:return "a"*40
-            if argv[1]=="hash-object":return "blob:"+argv[-1]
-            if argv[-1].endswith("^{tree}"):return "fixture-tree"
-            return "blob:"+argv[-1].split(":",1)[1]
-        self.proof.command=command
-        result=self.proof.verify_source(self.root,"a"*40)
-        self.assertTrue(set(m.SELECTED_INPUTS)<=set(result["blobs"]))
-        self.assertTrue(set(m.SELECTED_INPUTS).isdisjoint(m.INPUTS))
-        self.assertEqual(len(m.SELECTED_TESTS),2)
+    def candidate(self, current=False):
+        source = self.root / "candidate"
+        source.mkdir()
+        upstream = Path(sys.argv[1]).resolve().parents[1]
+        paths = [*m.INPUTS, m.PROTOCOL_TEST, m.SELECTED_TESTS["MLXTTSHelperServiceTests"]]
+        if current:
+            paths += [m.SELECTED_INPUTS[0], m.SELECTED_TESTS["MLXTTSModelConfigPreflightTests"]]
+        for relative in paths:
+            target = source / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(upstream / relative, target)
+        self.repo_git(source, "init", "-q")
+        self.repo_git(source, "add", ".")
+        self.repo_git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                      "-c", "commit.gpgsign=false", "commit", "-qm", "candidate")
+        return source, self.repo_git(source, "rev-parse", "HEAD").strip()
+
+    def repo_git(self, root, *args):
+        return subprocess.check_output(["git", "-C", str(root), *args], text=True, stderr=subprocess.PIPE)
+
+    def test_real_frozen_source_admission_has_no_candidate_driver_and_six_tests(self):
+        source, revision = self.candidate()
+        self.assertFalse((source / "scripts/test-macos-mlx-native.py").exists())
+        self.proof.checkout = source
+        identity = self.proof.verify_source(source, revision)
+        self.assertEqual(identity["capability"], "baseline")
+        self.assertEqual(identity["blobs"][m.SELECTED_TESTS["MLXTTSHelperServiceTests"]], "2685cabb27c6cfd92584471e1e61c506743bdd71")
+        self.assertIn(m.PROTOCOL + "/Package.swift", identity["blobs"])
+        output = self.xctest_output(self.proof.selected_tests, source)
+        self.assertEqual(m.verify_fixed_xctests(source, output, self.proof.selected_tests)["testCount"], 6)
+        for invalid in [output.replace(" passed.", " skipped.", 1), output.replace(" started.", " omitted.", 1),
+                        "Test run with 0 tests in 0 suites passed"]:
+            with self.assertRaises(RuntimeError): m.verify_fixed_xctests(source, invalid, self.proof.selected_tests)
+        self.proof.verify_controller = lambda revision: {"sha":revision}
+        with patch.dict(os.environ,{"CHECKOUT_SHA":revision,"GITHUB_RUN_ID":"1","GITHUB_RUN_ATTEMPT":"1","GITHUB_JOB":"fixture"}):
+            with self.assertRaisesRegex(RuntimeError,"extended proof requires"):
+                self.proof.execute(True)
+        self.assertFalse(self.proof.result["complete"])
+
+    def test_admission_rejects_wrong_identity_untracked_symlink_and_partial_inputs(self):
+        source, revision = self.candidate()
+        for root, sha in [(source / m.PACKAGE, revision), (source, "0"*40)]:
+            with self.subTest(root=str(root),sha=sha),self.assertRaises(RuntimeError):
+                self.proof.verify_source(root,sha)
+        target = source / (m.PROTOCOL + "/Package.swift")
+        original = target.read_bytes()
+        target.write_bytes(original + b"\n")
+        with self.assertRaisesRegex(RuntimeError,"input differs"):self.proof.verify_source(source,revision)
+        target.write_bytes(original)
+        target.unlink();target.symlink_to(Path(sys.argv[1]).resolve().parents[1] / (m.PROTOCOL + "/Package.swift"))
+        with self.assertRaisesRegex(RuntimeError,"symlinked"):self.proof.verify_source(source,revision)
+        target.unlink();target.write_bytes(original)
+        extra = source / m.PACKAGE / "Sources/OpenClawMLXTTSRuntime/Unexpected.swift"
+        extra.write_text("// unexpected compiler input")
+        with self.assertRaisesRegex(RuntimeError,"untracked"):self.proof.verify_source(source,revision)
+        extra.unlink()
+        optional = source / m.SELECTED_INPUTS[0]
+        shutil.copyfile(Path(sys.argv[1]).resolve().parents[1] / m.SELECTED_INPUTS[0], optional)
+        self.repo_git(source,"add",".")
+        self.repo_git(source,"-c","user.name=Fixture","-c","user.email=fixture@example.test","-c","commit.gpgsign=false","commit","-qm","partial")
+        with self.assertRaisesRegex(RuntimeError,"partial config-preflight"):
+            self.proof.verify_source(source,self.repo_git(source,"rev-parse","HEAD").strip())
+
+    def test_current_source_and_each_native_build_boundary_revalidate_all_inputs(self):
+        source, revision = self.candidate(current=True)
+        self.proof.checkout = source
+        original_command = self.proof.command
+        identity = self.proof.verify_source(source,revision)
+        self.assertEqual(identity["capability"],"config-preflight")
+        self.assertEqual(m.verify_fixed_xctests(source,self.xctest_output(root=source))["testCount"],13)
+        target=source/m.PROTOCOL_TEST; original=target.read_bytes()
+        for boundary in ["resolve","build","test"]:
+            with self.subTest(boundary=boundary):
+                self.proof.result["source"]=identity
+                self.proof.result["controller"]={"sha":"fixture-controller"}
+                self.proof.result["variants"]["fixed"]=dict(identity)
+                def command(argv,seconds,cwd=None,env=None):
+                    args=[str(x) for x in argv]
+                    if args[0]=="git":return original_command(argv,seconds,cwd,env)
+                    if (boundary=="resolve" and args[:2]==["swift","package"]) or (boundary=="build" and args[:2]==["swift","build"] and "--show-bin-path" not in args) or (boundary=="test" and args[:2]==["swift","test"]):
+                        target.write_bytes(original+b"\n// mutation")
+                    if "--show-bin-path" in args:
+                        binary=self.scratch/"fixed-build/bin";library=binary/"mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+                        library.parent.mkdir(parents=True,exist_ok=True);library.write_bytes(b"metal")
+                        (binary/"openclaw-mlx-tts").write_bytes(b"binary");return str(binary)
+                    return self.xctest_output(root=source) if args[:2]==["swift","test"] else ""
+                self.proof.command=command
+                with self.assertRaisesRegex(RuntimeError,"input differs"):self.proof.build("fixed",source)
+                target.write_bytes(original)
+        self.proof.command=original_command
+
+    def test_actual_harness_materialization_keeps_controller_assets_out_of_candidate(self):
+        source, revision = self.candidate()
+        controller=self.root/"controller";controller.mkdir()
+        upstream=Path(sys.argv[1]).resolve().parents[1]
+        assets=[*m.CONTROLLER_INPUTS,".github/actions/setup-node-env/action.yml"]
+        for relative in assets:
+            target=controller/relative;target.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(upstream/relative,target)
+        self.repo_git(controller,"init","-q");self.repo_git(controller,"add",".")
+        self.repo_git(controller,"-c","user.name=Fixture","-c","user.email=fixture@example.test","-c","commit.gpgsign=false","commit","-qm","controller")
+        workflow=self.repo_git(controller,"rev-parse","HEAD").strip()
+        module=ast.parse((upstream/".github/actions/git-owner/owner.py").read_text())
+        function=next(n for n in module.body if isinstance(n,ast.FunctionDef) and n.name=="checkout_harness")
+        def run_git(root,*args,**kwargs):return self.repo_git(root,*args)
+        def fetch(root,ref,**kwargs):return self.repo_git(root,"fetch","--no-tags","--no-write-fetch-head",str(controller),ref)
+        scope={"os":os,"workspace":str(source),"kind":"platform","remote":str(controller),"GitFailure":RuntimeError,
+               "run_git":run_git,"git_output":run_git,"fetch":fetch,"fetch_timeout_seconds":10,"check_cancelled":lambda:None}
+        exec(compile(ast.Module(body=[function],type_ignores=[]),"checkout_harness","exec"),scope)
+        with patch.dict(os.environ,{"WORKFLOW_SHA":workflow}):scope["checkout_harness"](revision)
+        self.assertFalse((source/"scripts/test-macos-mlx-native.py").exists())
+        self.proof.checkout=source;self.proof.controller=source/".ci-harness"
+        result=m.Proof.verify_controller(self.proof,workflow)
+        self.assertEqual(set(result["blobs"]),set(m.CONTROLLER_INPUTS))
+        self.proof.result["source"]=self.proof.verify_source(source,revision)
+        self.assertEqual(self.proof.result["source"]["capability"],"baseline")
+        self.proof.result["controller"]=result
+        self.proof.verify_controller=lambda sha:m.Proof.verify_controller(self.proof,sha)
+        self.proof.revalidate_source()
+        policy=self.proof.controller/"scripts/macos-health-render.sb"
+        original_policy=policy.read_bytes();policy.write_bytes(original_policy+b"\n")
+        with self.assertRaisesRegex(RuntimeError,"input differs"):self.proof.revalidate_source()
+        policy.write_bytes(original_policy)
+        # The exported, same-revision path also materializes these exact assets.
+        scope["workspace"]=str(controller)
+        with patch.dict(os.environ,{"WORKFLOW_SHA":workflow}):scope["checkout_harness"](workflow)
+        self.proof.checkout=controller;self.proof.controller=controller/".ci-harness"
+        self.assertEqual(m.Proof.verify_controller(self.proof,workflow)["blobs"],result["blobs"])
+        asset=self.proof.controller/m.BAD_RESOLUTION
+        asset.write_bytes(b"candidate must not replace trusted reference")
+        with self.assertRaisesRegex(RuntimeError,"asset differs"):m.Proof.verify_controller(self.proof,workflow)
 
     def test_fixed_build_executes_both_source_derived_classes_and_rejects_missing_execution(self):
         calls=self.fake_build()
@@ -744,6 +864,7 @@ class DriverTests(unittest.TestCase):
         self.assertFalse(hub.exists())
 
     def fake_build(self, stale=False, mutate=False, name="fixed"):
+        self.proof.revalidate_source = lambda: None
         package = self.root / m.PACKAGE
         package.mkdir(parents=True)
         (package / "Package.swift").write_text("fixture manifest")

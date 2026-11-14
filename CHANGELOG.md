@@ -1,5 +1,7 @@
 # Changelog
 
+- CI: Run the trusted MLX driver against authenticated frozen candidate sources, retaining baseline helper tests and complete config-preflight coverage without copying controller code into the candidate.
+
 <!-- openclaw:split-changelog -->
 
 Release notes: https://docs.openclaw.ai/releases
