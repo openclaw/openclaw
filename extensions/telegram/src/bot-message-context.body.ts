@@ -416,7 +416,10 @@ export async function resolveTelegramInboundBody(params: {
     historyKey,
     commandAuthorized,
     effectiveWasMentioned,
-    inboundEventKind: privateTopicTitleUpdate ? "room_event" : inboundEventKind,
+    inboundEventKind:
+      privateTopicTitleUpdate && !rawBody && nativeMediaFacts.length === 0
+        ? "room_event"
+        : inboundEventKind,
     groupThread,
     mentionFacts: {
       canDetectMention,

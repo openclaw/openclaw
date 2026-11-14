@@ -37,7 +37,7 @@ vi.mock("./session-transcript-title-reader.js", () => ({
 }));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -70,7 +70,7 @@ function titleParams(entry: SessionEntry | undefined = baseEntry) {
   return { ...titleDefaults, entry };
 }
 
-function mockSessionUpdate(current: SessionEntry): void {
+function mockSessionUpdate(current: InternalSessionEntry): void {
   mocks.patch.mockImplementation(async (_scope, update) => {
     const patch = await update({ ...current });
     const result = patch ? { ...current, ...patch } : current;
@@ -212,12 +212,64 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it("skips a persisted display name even when supplied an older entry", async () => {
-    const params = titleParams({ ...baseEntry, displayName: "My release" });
+  it("keeps a persisted name while initializing its follow-up window", async () => {
+    const current = { ...baseEntry, displayName: "My release" };
+    mockSessionUpdate(current);
+    const params = titleParams(current);
     await expect(maybeGenerateDashboardSessionTitle({ ...params, entry: baseEntry })).resolves.toBe(
       false,
     );
-    expectCalls(0, mocks.generate, mocks.patch);
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(mocks.load()).toMatchObject({
+      displayName: "My release",
+      conversationLabelRefinement: { remainingMessages: 6 },
+    });
+  });
+
+  it("counts distinct messages waiting behind an earlier naming operation", async () => {
+    const entry = {
+      ...baseEntry,
+      displayName: "Email",
+      conversationLabelRefinement: {
+        sessionId: baseEntry.sessionId,
+        remainingMessages: 6,
+        lastMessageId: "opening",
+      },
+    };
+    let current = entry;
+    mocks.load.mockImplementation(() => current);
+    const started = createDeferredCore();
+    const release = createDeferredCore();
+    let writes = 0;
+    mocks.patch.mockImplementation(async (_scope, update) => {
+      if (writes++ === 0) {
+        started.resolve();
+        await release.promise;
+      }
+      const patch = await update({ ...current });
+      if (patch) {
+        current = { ...current, ...patch };
+      }
+      return current;
+    });
+    const first = maybeGenerateDashboardSessionTitle({
+      ...titleDefaults,
+      userMessage: "Check the mailbox",
+      messageId: "one",
+    });
+    await started.promise;
+    const second = maybeGenerateDashboardSessionTitle({
+      ...titleDefaults,
+      userMessage: "Check the mail rules",
+      messageId: "two",
+    });
+    release.resolve();
+    await Promise.all([first, second]);
+    expect(current.conversationLabelRefinement).toMatchObject({
+      remainingMessages: 4,
+      lastMessageId: "two",
+    });
+    expect(mocks.generate).not.toHaveBeenCalled();
   });
 
   it("titles over an Android platform auto-label without treating it as a rename", async () => {
@@ -232,8 +284,74 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ).resolves.toBe(true);
 
     const update = mocks.patch.mock.calls[0]?.[1];
-    expect(await update?.({ ...entry })).toEqual({ displayName: "Release Planning" });
+    expect(await update?.({ ...entry })).toEqual({
+      displayName: "Release Planning",
+      conversationLabelRefinement: {
+        sessionId: "session-1",
+        remainingMessages: 6,
+      },
+    });
   });
+
+  it("waits for the actual first input after a prepared title", async () => {
+    await expect(
+      maybeGenerateSessionTitle({
+        ...titleParams(),
+        allowReassessment: true,
+        awaitingFirstMessage: true,
+      }),
+    ).resolves.toBe(true);
+    expect(mocks.load().conversationLabelRefinement).toEqual({
+      sessionId: "session-1",
+      remainingMessages: 6,
+      awaitingFirstMessage: true,
+    });
+  });
+
+  it.each([
+    {
+      kind: "approved opening",
+      approved: "Help me plan the release",
+      prior: undefined,
+      awaiting: false,
+      retained: true,
+    },
+    {
+      kind: "unapproved creation",
+      approved: undefined,
+      prior: undefined,
+      awaiting: true,
+      retained: false,
+    },
+    {
+      kind: "earlier transcript",
+      approved: "Help me plan the release",
+      prior: "Earlier approved task",
+      awaiting: false,
+      retained: false,
+    },
+  ])(
+    "retains only the matching committed $kind as opening context",
+    async ({ approved, prior, awaiting, retained }) => {
+      mocks.readTranscript.mockReturnValue({ firstUserMessage: prior, lastMessagePreview: null });
+      mockSessionUpdate(baseEntry);
+      await expect(
+        maybeGenerateDashboardSessionTitle({
+          ...titleParams(),
+          currentUserMessage: "Help me plan the release",
+          ...(approved ? { approvedOpeningText: approved } : {}),
+          ...(awaiting ? { awaitingFirstMessage: true } : {}),
+          messageId: "opening",
+        }),
+      ).resolves.toBe(true);
+      const state = mocks.load().conversationLabelRefinement;
+      if (retained) {
+        expect(state.inputMessages).toEqual([approved]);
+      } else {
+        expect(state.inputMessages).toBeUndefined();
+      }
+    },
+  );
 
   it("retries a historical session from the transcript's first user message", async () => {
     const entry = { ...baseEntry, systemSent: true };
@@ -313,6 +431,84 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       expect(mocks.generate).toHaveBeenCalledTimes(2);
     },
   );
+
+  it("keeps a manual title exactly when reassessment returns it", async () => {
+    const currentName =
+      '"My deliberately detailed release name that is longer than sixty characters"';
+    const entry: InternalSessionEntry = {
+      ...baseEntry,
+      label: currentName,
+      conversationLabelRefinement: {
+        sessionId: "before-reset",
+        remainingMessages: 0,
+      },
+    };
+    mockSessionUpdate(entry);
+    mocks.generate.mockImplementation(async ({ normalizeLabel, maxLength }) => {
+      expect(maxLength).toBeGreaterThanOrEqual(currentName.length);
+      return normalizeLabel(currentName);
+    });
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(false);
+    expect(mocks.load()).toMatchObject({
+      label: currentName,
+      conversationLabelRefinement: { sessionId: "session-1", remainingMessages: 6 },
+    });
+  });
+
+  it.each(["rename", "reset", "reset-same-id"])(
+    "discards reassessment after a concurrent %s",
+    async (change) => {
+      let current: InternalSessionEntry = {
+        ...baseEntry,
+        lifecycleRevision: "revision-before",
+        displayName: "Release planning",
+        conversationLabelRefinement: {
+          sessionId: "before-reset",
+          remainingMessages: 0,
+        },
+      };
+      const params = titleParams(current);
+      mocks.load.mockImplementation(() => current);
+      mocks.patch.mockImplementation(async (_scope, update) => {
+        const patch = await update(current);
+        if (patch) {
+          current = { ...current, ...patch };
+        }
+        return current;
+      });
+      const naming = pendingLabel();
+      const pending = maybeGenerateDashboardSessionTitle(params);
+      await naming.started;
+      current =
+        change === "rename"
+          ? { ...current, label: "My chosen name" }
+          : change === "reset-same-id"
+            ? { ...current, lifecycleRevision: "revision-after" }
+            : { ...current, sessionId: "after-another-reset" };
+      naming.resolve("Different subject");
+      await expect(pending).resolves.toBe(false);
+      expect(current.displayName).toBe("Release planning");
+      expect(current.conversationLabelRefinement?.sessionId).toBe("before-reset");
+      if (change === "reset-same-id") {
+        expect(current.sessionId).toBe(baseEntry.sessionId);
+        expect(current.lifecycleRevision).toBe("revision-after");
+      }
+    },
+  );
+
+  it("rejects an admitted legacy generation when reset adds a revision before the background read", async () => {
+    const params = { ...titleParams(), lifecycleRevision: undefined };
+    const afterReset: InternalSessionEntry = {
+      ...baseEntry,
+      lifecycleRevision: "after-reset",
+      displayName: "Email",
+      conversationLabelRefinement: { sessionId: baseEntry.sessionId, remainingMessages: 0 },
+    };
+    mocks.load.mockReturnValue(afterReset);
+    mockSessionUpdate(afterReset);
+    await expect(maybeGenerateDashboardSessionTitle(params)).resolves.toBe(false);
+    expectCalls(0, mocks.generate, mocks.patch);
+  });
 
   it("does not write into a reset session generation", async () => {
     mockSessionUpdate({ ...baseEntry, sessionId: "session-2" });

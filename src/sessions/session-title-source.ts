@@ -12,7 +12,7 @@ export function resolveSessionTitleSource(
   skillCommands: SkillCommandSpec[] = [],
 ): string | null {
   const text = stripInboundMetadata(message).trim();
-  const source = text.startsWith("/")
+  const source = /^\/[\w-]+(?:@[\w]+)?(?:\s|$)/u.test(text)
     ? resolveSkillCommandInvocation({ commandBodyNormalized: text, skillCommands })?.args?.trim()
     : text;
   if (

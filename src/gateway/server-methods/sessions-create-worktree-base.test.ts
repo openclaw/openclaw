@@ -337,7 +337,11 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     await settleWorkspaceRuns(context, storePath, sessionKey);
     const beforeTitle = loadSessionEntry(target)!;
     // Automatic naming is independent of the failed worktree run's settlement.
-    await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
+    await sessionTitleRequests.get({
+      ...target,
+      sessionId: beforeTitle.sessionId,
+      lifecycleRevision: beforeTitle.lifecycleRevision,
+    });
     const failed = loadSessionEntry(target)!;
     expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);

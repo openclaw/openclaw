@@ -1,0 +1,2 @@
+# Cover opening context, per-message batches, legacy serialization and private projections.
+303

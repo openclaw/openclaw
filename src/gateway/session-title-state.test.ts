@@ -19,6 +19,9 @@ it.each(["fulfilled", "rejected"])(
     expect(duplicate).not.toHaveBeenCalled();
     expect(states).toEqual([true]);
     expect(
+      sessionTitleRequests.get({ ...target, lifecycleRevision: "reset-with-same-session-id" }),
+    ).toBeUndefined();
+    expect(
       sessionTitleRequests.get({ ...target, sessionId: "another-generation" }),
     ).toBeUndefined();
     expect(

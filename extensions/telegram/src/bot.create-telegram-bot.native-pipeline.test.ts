@@ -8,6 +8,7 @@ import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-
 import * as replyRuntime from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   getSessionEntry,
+  getSessionEntryAsync,
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -422,7 +423,7 @@ it.each([
   },
 );
 
-it.each(["text", "voice", "photo", "untranscribed voice"] as const)(
+it.each(["text", "text with creation", "voice", "photo", "untranscribed voice"] as const)(
   "labels a first DM topic opened with %s but not an established session",
   async (kind) => {
     const bounded = "a".repeat(499);
@@ -458,18 +459,20 @@ it.each(["text", "voice", "photo", "untranscribed voice"] as const)(
       const firstMessage =
         kind === "text"
           ? message
-          : {
-              ...message,
-              text: undefined,
-              ...(kind === "photo"
-                ? { photo }
-                : { voice: { file_id: "voice", file_unique_id: "voice-unique", duration: 2 } }),
-            };
+          : kind === "text with creation"
+            ? { ...message, forum_topic_created: { name: "New Chat", icon_color: 0 } }
+            : {
+                ...message,
+                text: undefined,
+                ...(kind === "photo"
+                  ? { photo }
+                  : { voice: { file_id: "voice", file_unique_id: "voice-unique", duration: 2 } }),
+              };
       await handleMessage(bot, 2700, firstMessage);
       expect(generated).toHaveBeenCalledTimes(1);
       await renamed.promise;
       expect(generated.mock.calls[0]?.[0].userMessage).toBe(
-        kind === "text"
+        kind === "text" || kind === "text with creation"
           ? bounded
           : kind === "voice"
             ? '[Audio transcript (machine-generated, untrusted)]: "Plan a hiking trip"'
@@ -486,11 +489,18 @@ it.each(["text", "voice", "photo", "untranscribed voice"] as const)(
       ]);
       const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
       assert(sessionKey, "Expected the first topic turn to reach the model");
-      // The controlled model substitutes for the engine that persists first-turn completion.
+      // Wait for the asynchronous title write and keep the existing lifecycle: replacing
+      // the session ID here would simulate a reset, not first-turn completion.
+      const storePath = resolveStorePath(undefined, { agentId: "main" });
+      await vi.waitFor(() => {
+        expect(getSessionEntry({ storePath, sessionKey })?.topicName).toBe("Invoice review");
+      });
+      const entry = getSessionEntry({ storePath, sessionKey });
+      assert(entry, "Expected the topic session to exist");
       await upsertSessionEntry({
-        storePath: resolveStorePath(undefined, { agentId: "main" }),
+        storePath,
         sessionKey,
-        entry: { sessionId: "delivered-dm-topic", updatedAt: Date.now(), systemSent: true },
+        entry: { ...entry, updatedAt: Date.now(), systemSent: true },
       });
       await handleMessage(bot, 2701, topicMessage("Continue the same topic"));
       expect(generated).toHaveBeenCalledTimes(1);
@@ -500,6 +510,66 @@ it.each(["text", "voice", "photo", "untranscribed voice"] as const)(
     }
   },
 );
+
+it("names an implicitly named DM topic from its first text while its reply is held", async () => {
+  const generated = vi
+    .spyOn(replyRuntime, "generateConversationLabel")
+    .mockResolvedValue("Invoice review");
+  const release = createDeferred<void>();
+  harness.replySpy.mockImplementationOnce(async () => {
+    await release.promise;
+    return { text: "Done" };
+  });
+  const bot = await configuredBot({ ...openUnstreamed, autoTopicLabel: true }, {}, true);
+  const title = "Скачай через дан...";
+  await handleMessage(bot, 2800, {
+    message_id: 99,
+    date: messageBase.date,
+    chat,
+    from,
+    message_thread_id: 99,
+    is_topic_message: true,
+    forum_topic_created: { name: title, icon_color: 0, is_name_implicit: true },
+  });
+  const pending = handleMessage(bot, 2801, {
+    ...commandMessage("Review invoice"),
+    entities: [],
+    message_thread_id: 99,
+    is_topic_message: true,
+  });
+  try {
+    await vi.waitFor(() => expect(apiPayloads("editForumTopic")).toHaveLength(1), {
+      timeout: 15_000,
+    });
+    expect(generated).toHaveBeenCalledWith(
+      expect.objectContaining({ userMessage: "Review invoice" }),
+    );
+    expect(apiPayloads("editForumTopic")).toEqual([
+      expect.objectContaining({ chat_id: chat.id, message_thread_id: 99, name: "Invoice review" }),
+    ]);
+    expect(apiPayloads("sendMessage")).toHaveLength(0);
+  } finally {
+    release.resolve();
+    await pending;
+    generated.mockRestore();
+  }
+  const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
+  assert(sessionKey);
+  await handleMessage(bot, 2802, {
+    ...messageBase,
+    message_id: 2802,
+    message_thread_id: 99,
+    is_topic_message: true,
+    forum_topic_edited: { name: "Manual invoice review" },
+  });
+  const entry = await getSessionEntryAsync({
+    storePath: resolveStorePath(undefined, { agentId: "main" }),
+    sessionKey,
+  });
+  expect(entry?.topicName).toBe("Manual invoice review");
+  expect(entry?.label).toBeUndefined();
+  expect(harness.replySpy).toHaveBeenCalledTimes(1);
+});
 
 it("commits a first sticker description before model admission and never describes a supplemental image as that sticker", async () => {
   const describeStarted = createDeferred<void>();

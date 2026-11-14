@@ -7,7 +7,7 @@ import {
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
-import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
@@ -76,6 +76,7 @@ export function createTelegramInboundPipeline({
     resolveTelegramSessionState,
     resolvePromptContextAmbientWatermark,
     recordMessageForReplyChain,
+    processMessageWithReplyChain,
   } = messageRuntime;
   const { authorizeInboundMessage } = authorizationRuntime;
   const { cancelPending, inboundDebouncer, resolveTelegramDebounceLane } =
@@ -470,9 +471,17 @@ export function createTelegramInboundPipeline({
       return { kind: "ignored" };
     }
     const msg = isChannelPost ? normalizeChannelPostMessage(original) : original;
+    const isPrivateTitleEdit =
+      msg.chat.type === "private" && Boolean(msg.forum_topic_edited?.name?.trim());
+    if (isPrivateTitleEdit) {
+      logVerbose("telegram topic title edit: received");
+    }
     const botUserId = resolveBotUserId(ctx);
     const updateId = ctx.update?.update_id;
     if (shouldSkipUpdate(ctx)) {
+      if (isPrivateTitleEdit) {
+        logVerbose("telegram topic title edit: ignored by update filter");
+      }
       return { kind: "recorded" };
     }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -489,6 +498,43 @@ export function createTelegramInboundPipeline({
     });
     if (gate.allowed) {
       await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, botUserId);
+      const threadSpec = gate.context.threadSpec;
+      if (
+        normalizedMsg.chat.type === "private" &&
+        normalizedMsg.message_thread_id != null &&
+        threadSpec.scope === "dm" &&
+        threadSpec.id === normalizedMsg.message_thread_id &&
+        normalizedMsg.forum_topic_edited?.name?.trim()
+      ) {
+        // Reuse the title-only metadata path without replaying the edited message body.
+        // Like ordinary title events, delayed edits can follow an outbound rename.
+        const titleUpdate: Message = {
+          message_id: normalizedMsg.message_id,
+          date: normalizedMsg.date,
+          chat: normalizedMsg.chat,
+          from: normalizedMsg.from,
+          message_thread_id: normalizedMsg.message_thread_id,
+          is_topic_message: true,
+          forum_topic_edited: normalizedMsg.forum_topic_edited,
+        };
+        const result = await processMessageWithReplyChain({
+          ctx: buildSyntheticContext(ctx, titleUpdate),
+          msg: titleUpdate,
+          allMedia: [],
+          storeAllowFrom: gate.context.storeAllowFrom,
+          options: { threadSpec, channelIngressResolvers: [gate.resolveChannelIngress] },
+        });
+        recordTelegramMessageProcessingResult(result);
+        if (result.kind === "completed") {
+          logVerbose(
+            "telegram topic title edit: topic metadata persisted; existing session sync attempted",
+          );
+        } else {
+          logVerbose(`telegram topic title edit: metadata processing ${result.kind}`);
+        }
+      } else if (isPrivateTitleEdit) {
+        logVerbose("telegram topic title edit: ignored without an explicit private thread");
+      }
       if (typeof updateId === "number") {
         emitTelegramLiveLocationMessageHook({
           accountId,
@@ -498,6 +544,8 @@ export function createTelegramInboundPipeline({
           isForum,
         });
       }
+    } else if (isPrivateTitleEdit) {
+      logVerbose("telegram topic title edit: ignored by authorization");
     }
     return { kind: "recorded" };
   };

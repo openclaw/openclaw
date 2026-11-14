@@ -437,6 +437,27 @@ describe("Telegram prompt composition", () => {
     expect(ctx?.ctxPayload.ChannelStructuredContext).toBeUndefined();
   });
 
+  it("does not count a topic creation event as a user message in a mixed batch", async () => {
+    const creation = {
+      ...message(1, ""),
+      text: undefined,
+      message_thread_id: 77,
+      is_topic_message: true,
+      forum_topic_created: { name: "New Chat", icon_color: 0 },
+    };
+    const task = { ...message(2, "Grow tomatoes"), message_thread_id: 77, is_topic_message: true };
+    const context = await buildTelegramMessageContextForTest({
+      cfg: config(),
+      message: { ...creation, text: task.text },
+      options: { bufferedMessages: [creation, task], ingressBuffer: "text-batch" },
+    });
+    expect(context?.ctxPayload).toMatchObject({
+      InboundEventKind: "user_request",
+      RawBody: "Grow tomatoes",
+      MessageSids: ["2"],
+    });
+  });
+
   it("orders mixed forwarded media while redacting denied origins and keeping command text clean", async () => {
     const ordinary = message(1, "ordinary note", { chat: groupChat });
     const context = await buildTelegramMessageContextForTest({
@@ -545,6 +566,8 @@ describe("Telegram prompt composition", () => {
       })),
       options: { bufferedMessages: burst },
     });
+    expect(context?.ctxPayload.MessageSids).toEqual(burst.map((item) => String(item.message_id)));
+    expect(context?.bufferedMessages).toEqual(burst);
     expect(context?.ctxPayload.ReplyChain?.map((entry) => entry.messageId)).toEqual([
       "510",
       "509",

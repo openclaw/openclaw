@@ -64,6 +64,18 @@ How forum topics map to sessions, agents, and ACP bindings.
   </Accordion>
 </AccordionGroup>
 
+## Automatic names for private topics
+
+With `autoTopicLabel` enabled, the first ordinary message gives a private topic its
+initial name. Slash commands do not name it. After six follow-up task messages,
+the utility model checks the current title once and keeps it if it still fits,
+including a title you edited manually.
+
+`/reset` keeps the title while clearing context. The next ordinary message compares
+its task with that title before deciding whether to change it; an intervening
+`/model` command does not consume this comparison. See
+[automatic session names](/concepts/session#automatic-session-names).
+
 ## Bot-created forum topics
 
 Set `requireMentionInBotThreads` on a group or topic to override mention gating only in forum topics created by the receiving bot. `false` allows unmentioned messages to start turns there; `true` requires a mention, including for replies to the bot. Omission preserves existing behavior. A topic setting wins over the selected group setting. The same paths are available under `channels.telegram.accounts.<accountId>.groups`.

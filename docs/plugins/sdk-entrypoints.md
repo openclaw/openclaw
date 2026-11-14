@@ -402,7 +402,7 @@ the bounded description. Oversized detail is rejected by the existing request sc
 `agent-sessions` exposes awaited SessionManager mutations and versioned extension
 actions. `session-store-runtime` provides `prepareSessionEntryPatch` for host
 preparation followed by a conditional worker commit, and `applySessionEntryPatch`
-for already prepared data. `session-transcript-runtime` provides
+for already prepared data. For a unique custom label, `prepareSessionEntryLabelClaim` checks the current owner and commits the guarded patch atomically; it returns `false` if the label is occupied or the patch is stale. It requires a live host authority. `session-transcript-runtime` provides
 `withSessionTranscriptWrite` and duplicate-aware message preparation. Released
 synchronous and opaque transaction callback forms remain deprecated through
 2026-12-31, with removal in the first January 2027 stable release. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)

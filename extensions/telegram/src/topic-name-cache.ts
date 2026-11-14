@@ -3,6 +3,7 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { ConversationLabelRefinementState } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
@@ -15,10 +16,13 @@ const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
 
 type TopicEntry = {
   name: string;
+  isNameImplicit?: boolean;
   creatorUserId?: number;
   iconColor?: number;
   iconCustomEmojiId?: string;
   closed?: boolean;
+  labelState?: ConversationLabelRefinementState;
+  nameRevision?: number;
   updatedAt: number;
 };
 
@@ -155,9 +159,20 @@ export async function updateTopicName(
   const iconCustomEmojiId = patch.iconCustomEmojiId ?? existing?.iconCustomEmojiId;
   const closed = patch.closed ?? existing?.closed;
   const creatorUserId = patch.creatorUserId ?? existing?.creatorUserId;
+  const labelState = patch.labelState ?? existing?.labelState;
+  // A name update supersedes creation provenance, including a human edit.
+  const isNameImplicit =
+    patch.name !== undefined
+      ? patch.isNameImplicit
+      : (patch.isNameImplicit ?? existing?.isNameImplicit);
+  const nameRevision =
+    patch.name !== undefined ? (existing?.nameRevision ?? 0) + 1 : existing?.nameRevision;
   const merged: TopicEntry = {
     name: patch.name ?? existing?.name ?? "",
     updatedAt: nextUpdatedAt(scope),
+    ...(nameRevision !== undefined ? { nameRevision } : {}),
+    ...(labelState !== undefined ? { labelState } : {}),
+    ...(isNameImplicit ? { isNameImplicit } : {}),
     ...(iconColor !== undefined ? { iconColor } : {}),
     ...(iconCustomEmojiId !== undefined ? { iconCustomEmojiId } : {}),
     ...(closed !== undefined ? { closed } : {}),
@@ -172,6 +187,33 @@ export async function updateTopicName(
   if (evictedKey) {
     await state.persistentStore.delete(evictedKey);
   }
+}
+
+/** Returns a snapshot without refreshing access time or mutating persisted metadata. */
+export async function getTopicLabelMetadata(
+  chatId: number | string,
+  threadId: number | string,
+  scope?: string,
+): Promise<
+  | {
+      name: string;
+      nameRevision: number;
+      isNameImplicit?: boolean;
+      labelState?: ConversationLabelRefinementState;
+    }
+  | undefined
+> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  const entry = state.store.get(cacheKey(chatId, threadId));
+  return entry
+    ? {
+        name: entry.name,
+        nameRevision: entry.nameRevision ?? 0,
+        isNameImplicit: entry.isNameImplicit,
+        labelState: entry.labelState,
+      }
+    : undefined;
 }
 
 export async function getTopicName(
@@ -193,7 +235,10 @@ export async function getTopicName(
 export async function recordTopicCreation(
   chatId: number | string,
   threadId: number | string,
-  creation: Pick<TopicEntry, "name" | "creatorUserId" | "iconColor" | "iconCustomEmojiId">,
+  creation: Pick<
+    TopicEntry,
+    "name" | "isNameImplicit" | "creatorUserId" | "iconColor" | "iconCustomEmojiId"
+  >,
   scope?: string,
 ): Promise<void> {
   const state = getTopicStoreState(scope);

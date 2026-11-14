@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import { createMessageInjectionAuthority } from "../auto-reply/reply/message-injection-authority.js";
@@ -32,6 +33,7 @@ export type UserTurnPromptReactionSource = Readonly<{
 }>;
 
 type AdmissionOwner = {
+  onCollectedInputPersisted?: (approved: PersistedUserTurnMessage, unchanged: boolean) => void;
   onOriginalInputCommitted?: (anchor: TranscriptEntryAnchor) => void;
   prepareMentionInvitation?: (
     message: PersistedUserTurnMessage,
@@ -52,6 +54,27 @@ type AdmissionOwner = {
     message: PersistedUserTurnMessage,
   ) => void;
 };
+
+export function notifyCollectedInputPersisted(
+  sources: readonly UserTurnTranscriptRecorder[] | undefined,
+  approved: PersistedUserTurnMessage,
+  original: PersistedUserTurnMessage | undefined,
+  lossless: boolean,
+) {
+  if (
+    !sources ||
+    approved["__openclaw"]?.beforeAgentRunBlocked !== undefined ||
+    approved.display === false ||
+    approved.excludeFromContext === true ||
+    (approved.provenance && approved.provenance.kind !== "external_user")
+  ) {
+    return;
+  }
+  const unchanged = lossless && isDeepStrictEqual(approved.content, original?.content);
+  for (const source of sources) {
+    getUserTurnTranscriptAdmissionOwner(source)?.onCollectedInputPersisted?.(approved, unchanged);
+  }
+}
 
 // Only the recorder factory registers an owner; copied SDK values cannot bind one.
 const admissionOwners = new WeakMap<UserTurnTranscriptRecorder, AdmissionOwner>();

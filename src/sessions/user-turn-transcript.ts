@@ -31,6 +31,10 @@ import {
   projectUserTurnRequesterOrigin,
 } from "./user-turn-transcript-admission.js";
 import { persistUserTurnInput, stageUserTurnPendingInput } from "./user-turn-transcript-media.js";
+import {
+  createCollectedInputNotifier,
+  createUserTurnPersistedNotifier,
+} from "./user-turn-transcript-notify.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
 import {
   capturePersistedModelPromptProjection,
@@ -101,7 +105,6 @@ export function createUserTurnTranscriptRecorder(
   let runtimePersistencePromise: Promise<void> | undefined;
   let selfPersistencePromise: Promise<UserTurnTranscriptPersistResult | undefined> | undefined;
   let resolvedMessagePromise: Promise<PersistedUserTurnMessage | undefined> | undefined;
-  let persistedMessageNotified = false;
   let originalInputCommitted = false;
   let resolvedSourceMessage: PersistedUserTurnMessage | undefined;
   let runtimePersistedMessage: PersistedUserTurnMessage | undefined;
@@ -217,20 +220,13 @@ export function createUserTurnTranscriptRecorder(
     return pendingInput?.message ?? resolved;
   };
 
-  const notifyMessagePersisted = (persistedMessage?: PersistedUserTurnMessage) => {
-    const notificationMessage = persistedMessage ?? persistedResult?.message ?? message;
-    if (!notificationMessage || persistedMessageNotified || !params.onMessagePersisted) {
-      return;
-    }
-    persistedMessageNotified = true;
-    try {
-      void Promise.resolve(params.onMessagePersisted(notificationMessage)).catch(
-        handlePersistenceError,
-      );
-    } catch (error) {
-      handlePersistenceError(error);
-    }
-  };
+  const notifyMessagePersisted = createUserTurnPersistedNotifier({
+    ...params,
+    committed: () => persistedResult?.message,
+    fallback: () => message,
+    original: () => [resolvedSourceMessage ?? pendingInput?.message ?? message, blocked],
+    onError: handlePersistenceError,
+  });
 
   const notifyOriginalInputCommitted = (commit: UserTurnOriginalInputCommit) => {
     const sourceMessage = commit.message;
@@ -700,6 +696,10 @@ export function createUserTurnTranscriptRecorder(
     inputActorBinding = binding;
   });
   const admissionOwner = registerUserTurnTranscriptAdmissionOwner(recorder, {
+    onCollectedInputPersisted: createCollectedInputNotifier(
+      () => [pendingInput?.message ?? resolvedSourceMessage ?? message, blocked],
+      notifyMessagePersisted,
+    ),
     onOriginalInputCommitted: (anchor) => {
       const sourceMessage = pendingInput?.message ?? resolvedSourceMessage ?? message;
       if (sourceMessage) {

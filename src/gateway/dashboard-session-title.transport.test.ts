@@ -11,6 +11,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import * as clientVoice from "../talk/client-voice-session.js";
+import { maybeReassessDashboardSessionTitle } from "./dashboard-session-title-refinement.js";
 import { dashboardTitleRuntimeEntrypoints } from "./dashboard-session-title-runtime.test-support.js";
 import {
   maybeGenerateDashboardSessionTitle,
@@ -78,7 +79,11 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
       await withTitleProvider("Plan the release", async ({ cfg, storePath, requests }) => {
         const scope = { agentId: "main", sessionKey: "agent:main:ios-topic", storePath };
         const sessionId = "voice-topic-session";
-        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+        await replaceSessionEntry(scope, {
+          sessionId,
+          updatedAt: 1,
+          lifecycleRevision: "opening-revision",
+        });
         const voiceSessionId = await createOrResumeClientVoiceSession({ ...scope, origin });
         const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         const titled = createDeferred();
@@ -90,11 +95,17 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
             change.agentId === scope.agentId &&
             change.scope === "runtime"
           ) {
-            void sessionTitleRequests.get({ ...scope, sessionId })?.then((persisted) => {
-              if (persisted) {
-                titled.resolve();
-              }
-            }, titled.reject);
+            void sessionTitleRequests
+              .get({
+                ...scope,
+                sessionId,
+                lifecycleRevision: loadSessionEntry(scope)?.lifecycleRevision,
+              })
+              ?.then((persisted) => {
+                if (persisted) {
+                  titled.resolve();
+                }
+              }, titled.reject);
           }
         });
         try {
@@ -120,6 +131,102 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
         } finally {
           stop();
         }
+      });
+    },
+  );
+
+  it("reassesses Talk speech after a reset with a new lifecycle revision", async ({ signal }) => {
+    await withTitleProvider("New topic", async ({ cfg, storePath, requests }) => {
+      const scope = { agentId: "main", sessionKey: "agent:main:ios-reset", storePath };
+      const sessionId = "voice-reset-session";
+      const lifecycleRevision = "after-reset";
+      await replaceSessionEntry(scope, {
+        sessionId,
+        lifecycleRevision,
+        updatedAt: 1,
+        displayName: "Previous topic",
+        conversationLabelRefinement: {
+          sessionId,
+          lifecycleRevision: "before-reset",
+          remainingMessages: 0,
+        },
+      });
+      const voiceSessionId = await createOrResumeClientVoiceSession({ ...scope, origin: "client" });
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const titled = createDeferred();
+      void titled.promise.catch(() => undefined);
+      const stop = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          void sessionTitleRequests
+            .get({ ...scope, sessionId, lifecycleRevision })
+            ?.then((changed) => {
+              if (changed) {
+                titled.resolve();
+              }
+            }, titled.reject);
+        }
+      });
+      try {
+        await appendTalkClientTranscript(
+          {
+            ...scope,
+            sessionTarget: scope,
+            config: cfg,
+            voiceSessionId,
+            entryId: "reset-first-message",
+            role: "user",
+            text: "Discuss a new topic",
+          },
+          context,
+        );
+        await withinTest(titled.promise, signal);
+        expect(loadSessionEntry(scope)?.displayName).toBe("New topic");
+        expect(requests).toHaveLength(1);
+      } finally {
+        stop();
+      }
+    });
+  });
+
+  it.each([true, false])(
+    "preserves label uniqueness during reassessment (occupied: %s)",
+    async (occupied) => {
+      await withTitleProvider("unused", async ({ storePath }) => {
+        const scope = {
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:label-owner",
+          storePath,
+        };
+        const sessionId = "label-owner";
+        await replaceSessionEntry(scope, {
+          sessionId,
+          updatedAt: 1,
+          label: "Original",
+          displayName: "Original",
+          conversationLabelRefinement: { sessionId: "before-reset", remainingMessages: 0 },
+        });
+        if (occupied) {
+          await replaceSessionEntry(
+            { ...scope, sessionKey: "agent:main:dashboard:other" },
+            { sessionId: "other", updatedAt: 1, label: "Taken" },
+          );
+        }
+        await expect(
+          maybeReassessDashboardSessionTitle({
+            ...scope,
+            sessionId,
+            userMessage: "New subject",
+            skillCommands: [],
+            basePrompt: "Title",
+            assertCurrent: () => {},
+            generate: async () => "Taken",
+          }),
+        ).resolves.toBe(!occupied);
+        expect(loadSessionEntry(scope)).toMatchObject(
+          occupied
+            ? { label: "Original", displayName: "Original" }
+            : { label: "Taken", displayName: "Taken" },
+        );
       });
     },
   );

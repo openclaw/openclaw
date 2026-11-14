@@ -47,12 +47,14 @@ async function createTitleFixture(state: OpenClawTestState, options: TitleOption
     agentId: "main",
     sessionKey: "agent:main:dashboard:title-test",
     sessionId: "title-test",
+    lifecycleRevision: "title-test-generation",
     storePath: options.legacyPath
       ? resolveSessionStorePathCore(undefined, { agentId: "main" })
       : resolveOpenClawAgentSqlitePath({ agentId: "main" }),
   };
   await replaceSessionEntry(scope, {
     sessionId: scope.sessionId,
+    lifecycleRevision: scope.lifecycleRevision,
     updatedAt: 1,
     ...(options.titleSource ? { pendingWorktree: { titleSource: options.titleSource } } : {}),
   });
@@ -84,6 +86,7 @@ async function createTitleFixture(state: OpenClawTestState, options: TitleOption
         {
           ...scope,
           admittedSessionId: scope.sessionId,
+          entry: scope,
           cfg,
           context,
           request: { rawMessage, normalizedAttachments: [] },
@@ -116,6 +119,82 @@ async function withTitle(
     }
   });
 }
+
+it("ignores a blocked input after the recorder settles", async () => {
+  await withTitle({}, async ({ scope, context }) => {
+    const input =
+      createDeferredCore<
+        import("../../sessions/user-turn-transcript.types.js").PersistedUserTurnMessage
+      >();
+    const finished = createDeferredCore();
+    scheduleChatDashboardSessionTitle({
+      ...scope,
+      admittedSessionId: scope.sessionId,
+      entry: scope,
+      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
+      context,
+      request: { rawMessage: "private task", normalizedAttachments: [] },
+      baseInput: {},
+      approvedInput: input.promise,
+      inputFinished: finished.promise,
+    });
+    input.resolve({
+      role: "user",
+      content: "Request blocked",
+      timestamp: 1,
+      __openclaw: { beforeAgentRunBlocked: true },
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(generate).not.toHaveBeenCalled();
+    expect(sessionTitleRequests.get(scope)).toBeUndefined();
+    finished.resolve();
+  });
+});
+
+it("does not read attachment contents from restored media facts", async () => {
+  await withTitle({}, async ({ scope, context, finish }) => {
+    const body = "Secret release plan";
+    scheduleChatDashboardSessionTitle({
+      ...scope,
+      admittedSessionId: scope.sessionId,
+      entry: scope,
+      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
+      context,
+      request: {
+        rawMessage: "Caption",
+        normalizedAttachments: [
+          {
+            type: "file",
+            fileName: "plan.txt",
+            mimeType: "text/plain",
+            content: Buffer.from(body).toString("base64"),
+          },
+        ],
+      },
+      baseInput: {},
+      approvedInput: Promise.resolve({
+        role: "user",
+        content: "Caption",
+        timestamp: 1,
+        __openclaw: { media: [{ url: "media://inbound/test-plan" }] },
+      }),
+      inputFinished: new Promise(() => {}),
+    });
+    await vi.waitFor(
+      () => {
+        expect(context.logGateway.warn).not.toHaveBeenCalled();
+        expect(generate).toHaveBeenCalledOnce();
+      },
+      { timeout: 30_000 },
+    );
+    expect(generate).toHaveBeenCalledWith(expect.objectContaining({ userMessage: "Caption" }));
+    const pending = sessionTitleRequests.get(scope);
+    await finish();
+    await pending;
+  });
+});
 
 it.each(["persisted", "failed"])("publishes pending and %s title settlement", async (outcome) => {
   await withTitle({ legacyPath: true }, async ({ scope, context, start, finish }) => {

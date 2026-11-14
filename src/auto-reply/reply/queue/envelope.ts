@@ -240,6 +240,7 @@ export function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     },
     resolveInput: buildInput,
     pendingInputSources: transcriptSources.flatMap((item) => item.userTurnTranscriptRecorder ?? []),
+    pendingInputSourcesAreLossless: true,
     target: () => resolveFollowupTranscriptTarget(source),
     errorContext: "collected followup user turn transcript",
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,

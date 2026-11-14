@@ -1,5 +1,6 @@
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { ReplyMessageInjectionAttempt } from "../../sessions/session-controller.contracts.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
@@ -33,6 +34,7 @@ export type StartChatDispatchParams = {
     beginCapturedMessageInjection: () => Promise<ReplyMessageInjectionAttempt | undefined>;
     replyContextFieldsPromise: Promise<ChatSendReplyContextFields> | undefined;
   };
+  titleInput: Promise<PersistedUserTurnMessage>;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
   timing: {

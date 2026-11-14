@@ -671,6 +671,8 @@ export type SessionScheduledMemoryParent = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Naming state follows the logical conversation; sessionId detects a cleared context. */
+  conversationLabelRefinement?: import("../../auto-reply/reply/conversation-label-refinement.js").ConversationLabelRefinementState;
   /**
    * Written only by cron run preparation on a child-placement `:run:` row, so a
    * session the run spawns can resolve its memory audience through that parent.

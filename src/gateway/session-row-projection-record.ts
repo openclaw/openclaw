@@ -521,6 +521,7 @@ export function present(
       storePath: record.storeTarget.storePath,
       sessionKey: record.key,
       sessionId: record.entry.sessionId,
+      lifecycleRevision: record.entry.lifecycleRevision,
     }) !== undefined;
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {

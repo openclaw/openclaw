@@ -49,7 +49,7 @@ import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 
 const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
-export async function runTelegramDispatchTurn(turn: Turn) {
+export async function runTelegramDispatchTurn(turn: Turn, afterRecord?: () => void) {
   const { context } = turn;
   const hasRepliedRef = { value: false };
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
@@ -120,6 +120,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           },
           ctxPayload: context.ctxPayload,
           record: context.turn.record,
+          afterRecord,
           botLoopProtection: resolveTelegramBotLoopProtection({
             cfg: turn.cfg,
             accountId: context.route.accountId,

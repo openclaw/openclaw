@@ -224,6 +224,8 @@ test("chat.send deletes a session before its pending dashboard title finishes", 
       storePath,
       sessionKey,
       sessionId: requireNonEmptyString(created.payload?.sessionId, "created session id"),
+      lifecycleRevision: loadSessionEntry({ agentId: "main", sessionKey, storePath })
+        ?.lifecycleRevision,
     });
     expect(titleCompletion).toBeDefined();
     dispatch.finish();

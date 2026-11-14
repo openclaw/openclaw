@@ -77,6 +77,7 @@ export {
 } from "./session-store-runtime-internal.js";
 export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 export { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
+export { prepareSessionEntryLabelClaim } from "./session-store-runtime-label-claim.js";
 
 export {
   deliveryContextFromSession,
@@ -142,8 +143,6 @@ type UpdateSessionStoreEntryParams = {
   takeCacheOwnership?: boolean;
   requireWriteSuccess?: boolean;
 };
-
-type UpsertSessionEntryParams = SessionStoreReadParams & { entry: SessionEntry };
 
 type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
   key: string;
@@ -592,7 +591,9 @@ export async function updateSessionStoreEntry(
 }
 
 /** Replaces or creates one session entry by agent/session identity. */
-export async function upsertSessionEntry(params: UpsertSessionEntryParams): Promise<void> {
+export async function upsertSessionEntry(
+  params: SessionStoreReadParams & { entry: SessionEntry },
+): Promise<void> {
   const publicEntry = projectPluginSessionEntry(params.entry);
   await applySessionEntryOperation(
     toSessionAccessScope(params),

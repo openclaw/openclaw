@@ -45,6 +45,7 @@ import {
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
+import { getTopicName, resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 let cfg: OpenClawConfig;
 let storePath: string;
@@ -386,6 +387,109 @@ describe("Telegram recorded session destinations", () => {
     expect(serviceCalls).not.toContain("sendChatAction");
   });
 
+  it("records an authorized edited topic title without replaying its body", async () => {
+    const bot = await createBot(false, true, cfg, true);
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: privateTopicKey,
+      entry: {
+        sessionId: "private-topic-edited",
+        updatedAt: 1,
+        topicName: "Old topic name",
+        delivery: normalizeSessionDeliveryState({
+          context: { ...deliveryContext("telegram:42001", "77"), accountId: "default" },
+          origin: {
+            provider: "telegram",
+            from: "telegram:direct:42001",
+            to: "telegram:42001",
+            accountId: "default",
+            threadId: "77",
+          },
+        }),
+      },
+    });
+    const edited = serviceMessage({
+      message_thread_id: 77,
+      is_topic_message: true,
+      forum_topic_edited: { name: "Renamed topic" },
+      text: "A prior body that must not run again",
+      edit_date: 1736380710,
+    });
+    await deliverTelegramUpdate(bot, { update_id: ++updateId, edited_message: edited });
+    const scope = resolveTelegramDirectTopicNameCacheScope(storePath, "default");
+    expect(entry(privateTopicKey)?.topicName).toBe("Renamed topic");
+    expect(await getTopicName(chat.id, 77, scope)).toBe("Renamed topic");
+    await receive(
+      bot,
+      serviceMessage({
+        message_thread_id: 77,
+        is_topic_message: true,
+        forum_topic_created: { name: "Old topic name", icon_color: 7322096 },
+      }),
+    );
+    expect(entry(privateTopicKey)?.topicName).toBe("Renamed topic");
+    expect(await getTopicName(chat.id, 77, scope)).toBe("Renamed topic");
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(apiCalls.mock.calls.map(([method]) => method)).not.toContain("sendMessage");
+  });
+
+  it.each([
+    "ordinary text",
+    "edited creation",
+    "missing thread",
+    "different thread",
+    "unauthorized",
+  ] as const)("leaves title metadata unchanged for %s", async (kind) => {
+    cfg.channels!.telegram!.dmPolicy = "allowlist";
+    cfg.channels!.telegram!.allowFrom = [String(from.id)];
+    const bot = await createBot(false, true, cfg, true);
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: privateTopicKey,
+      entry: {
+        sessionId: "private-topic-control",
+        updatedAt: 1,
+        topicName: "Original title",
+        delivery: normalizeSessionDeliveryState({
+          context: { ...deliveryContext("telegram:42001", "77"), accountId: "default" },
+          origin: {
+            provider: "telegram",
+            from: "telegram:direct:42001",
+            to: "telegram:42001",
+            accountId: "default",
+            threadId: "77",
+          },
+        }),
+      },
+    });
+    await receive(
+      bot,
+      serviceMessage({
+        message_thread_id: 77,
+        is_topic_message: true,
+        forum_topic_created: { name: "Original title", icon_color: 7322096 },
+      }),
+    );
+    const edited = serviceMessage({
+      ...(kind === "missing thread"
+        ? {}
+        : { message_thread_id: kind === "different thread" ? 78 : 77, is_topic_message: true }),
+      ...(kind === "unauthorized" ? { from: { ...from, id: 99999 } } : {}),
+      ...(kind === "ordinary text"
+        ? {}
+        : kind === "edited creation"
+          ? { forum_topic_created: { name: "Changed title", icon_color: 7322096 } }
+          : { forum_topic_edited: { name: "Changed title" } }),
+      text: "Existing message body",
+      edit_date: 1736380710,
+    });
+    await deliverTelegramUpdate(bot, { update_id: ++updateId, edited_message: edited });
+    expect(entry(privateTopicKey)?.topicName).toBe("Original title");
+    const scope = resolveTelegramDirectTopicNameCacheScope(storePath, "default");
+    expect(await getTopicName(chat.id, 77, scope)).toBe("Original title");
+    expect(harness.replySpy).not.toHaveBeenCalled();
+  });
+
   it("does not create a private topic session from a title-only service update", async () => {
     const sessionKey = privateTopicKey;
     const bot = await createBot(false, true, cfg, true);
@@ -407,6 +511,28 @@ describe("Telegram recorded session destinations", () => {
     );
     expect(entry(sessionKey)).toBeUndefined();
     expect(harness.replySpy).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a user message carrying a private topic creation event", async () => {
+    const bot = await createBot(false, true, cfg, true);
+    await receive(
+      bot,
+      serviceMessage({
+        message_thread_id: 77,
+        is_topic_message: true,
+        forum_topic_created: { name: "New Chat", icon_color: 7322096 },
+        text: "The actual first task",
+      }),
+    );
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      RawBody: "The actual first task",
+      SessionKey: privateTopicKey,
+      InboundEventKind: "user_request",
+    });
+    expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([
+      ["sendMessage", expect.objectContaining({ text: "Test response", message_thread_id: 77 })],
+    ]);
   });
 
   it("learns reply topic names and restores them after plugin-state reopen", async () => {

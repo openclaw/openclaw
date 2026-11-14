@@ -192,6 +192,8 @@ export const createTelegramMessageProcessor = (
     }
     if (
       isTelegramForumTopicTitleUpdate(context.primaryCtx.message) &&
+      !context.ctxPayload.RawBody?.trim() &&
+      !context.ctxPayload.media?.length &&
       !context.isGroup &&
       context.threadSpec.scope === "dm"
     ) {

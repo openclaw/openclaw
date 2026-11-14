@@ -39,7 +39,7 @@ import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
-import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
+import * as dashboardTitle from "./chat-send-background.js";
 import { readChatSendReplyPayload } from "./chat-send-command-replies.js";
 import { createChatSendDashboardReadAdmission } from "./chat-send-dashboard-authority.js";
 import {
@@ -90,7 +90,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
     activeRunAbort,
-    admittedSessionId,
     chatSendTraceAttributes,
     gatewayWorkAdmission,
     messageInjectionTarget,
@@ -258,9 +257,8 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     assertDashboardReadCurrent,
   });
   const phase = diagnostics.scope("dispatch");
-  // Naming needs only the accepted message, not a ready workspace or reply progress.
-  scheduleChatDashboardSessionTitle(
-    { admittedSessionId, agentId, cfg, context, request, sessionKey, storePath },
+  dashboardTitle.scheduleChatDashboardSessionTitle(
+    dashboardTitle.makeApprovedChatDashboardSessionTitleRequest(params, titleTurn.promise),
     titleTurn.promise,
   );
   const dispatch = replyDispatch
@@ -700,9 +698,8 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     try {
       await dispatch;
     } finally {
-      // A failed overlapping label may retry after any terminal turn outcome.
-      titleTurn.resolve();
-      await dispatchErrorLifecycle.finalize();
+      // Retain the naming fence through error-finalization input persistence.
+      await dispatchErrorLifecycle.finalize().finally(() => titleTurn.resolve());
       // Terminal lifecycle can precede owner release; publish exact liveness after cleanup.
       emitSessionsChanged(
         context,

@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
-import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEventsSync,
+  patchSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   getAgentRunContext,
   registerAgentRunContext,
   clearAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
@@ -312,9 +317,21 @@ describe("registered progress refresh admission", () => {
   it.each([false, true])(
     "starts a hidden status-only turn when idle or steering is unavailable (active=%s)",
     async (active) => {
-      await using f = await createFixture({ active, preserveContent: true });
+      await using f = await createFixture({
+        active,
+        preserveContent: true,
+        sessionKey: "agent:main:dashboard:refresh-title",
+      });
       let releaseRefresh: (() => void) | undefined;
       try {
+        await patchSessionEntryCore(f.scope, () => ({
+          displayName: "Release planning",
+          conversationLabelRefinement: {
+            sessionId: f.scope.sessionId,
+            remainingMessages: 6,
+            inputMessages: ["Plan the release"],
+          },
+        }));
         await putCard(f, "Previous status");
         const respond = await refreshCard(f, "refresh-click");
         expect(respond).toHaveBeenCalledWith(...acceptedResponse());
@@ -351,6 +368,13 @@ describe("registered progress refresh admission", () => {
         releaseRefresh();
         releaseRefresh = undefined;
         await f.finishDispatch();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        expect(
+          (await readSessionEntryReadOnlyInWorker(f.scope))?.conversationLabelRefinement,
+        ).toMatchObject({
+          remainingMessages: 6,
+          inputMessages: ["Plan the release"],
+        });
         expect(() => prepared({ ...f.scope, sessionId: "late-refresh" })).toThrow(
           "no longer owns its admission",
         );

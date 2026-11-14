@@ -15,6 +15,8 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
+import { telegramBufferedUserMessageIds } from "./bot-message-context.message-ids.js";
+import { resolveReplyChainMediaType } from "./bot-message-context.reply-media.js";
 import type { BuildTelegramInboundContextPayloadParams } from "./bot-message-context.session.types.js";
 import type {
   TelegramMediaRef,
@@ -41,7 +43,6 @@ import {
   telegramPromptContextHistory,
 } from "./group-history-window.js";
 import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
-import { isTelegramMediaKind } from "./message-cache-persistence.js";
 import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH } from "./message-cache.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildTelegramConversationId } from "./topic-conversation.js";
@@ -126,16 +127,6 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
     entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
   ].filter(Boolean);
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
-}
-
-function resolveReplyChainMediaType(entry: TelegramReplyChainEntry) {
-  const mediaType = entry.mediaType;
-  const nativeKind = isTelegramMediaKind(mediaType) ? mediaType : undefined;
-  const kind = entry.mediaKind || nativeKind;
-  return {
-    ...(kind ? { kind } : {}),
-    ...(mediaType && !nativeKind ? { contentType: mediaType } : {}),
-  };
 }
 
 export async function buildTelegramInboundContextPayload(
@@ -606,6 +597,9 @@ export async function buildTelegramInboundContextPayload(
     },
     contextVisibility: contextVisibilityMode,
     extra: {
+      MessageSids: hasMultiMessageBatch
+        ? telegramBufferedUserMessageIds(bufferedMessages)
+        : undefined,
       GroupThread: groupThread,
       BotUsername: primaryCtx.me?.username ?? undefined,
       AmbientTranscriptWatermarkKey: ambientTranscriptWatermarkKey,

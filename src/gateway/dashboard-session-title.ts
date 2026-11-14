@@ -30,6 +30,7 @@ import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { ChatAttachment } from "./chat-attachments.js";
+import { maybeReassessDashboardSessionTitle } from "./dashboard-session-title-refinement.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import {
   hasExplicitSessionName,
@@ -86,7 +87,7 @@ export function buildDashboardSessionTitleSource(params: {
   attachments?: readonly ChatAttachment[];
 }): string {
   const visibleMessage = params.message.trim();
-  const slashCommand = visibleMessage.startsWith("/");
+  const slashCommand = visibleMessage.startsWith("/") && !resolveSessionTitleSource(visibleMessage);
   let source = slashCommand ? "" : visibleMessage;
   for (const attachment of params.attachments ?? []) {
     const separatorLength = source ? 1 : 0;
@@ -111,9 +112,14 @@ type SessionTitleParams = {
   agentId: string;
   entry?: SessionEntry;
   sessionId: string;
+  lifecycleRevision?: string;
   sessionKey: string;
   storePath: string;
   currentUserMessage?: string;
+  approvedOpeningText?: string;
+  messageId?: string;
+  allowReassessment?: boolean;
+  awaitingFirstMessage?: boolean;
   userMessage: string;
   commitGuard?: SessionSourceAssertion;
   withSource?: WorktreeSourceStage;
@@ -287,6 +293,8 @@ async function generateDashboardSessionTitle(params: {
   entry?: DashboardSessionTitleModelEntry;
   sourceText: string;
   utilityOnly?: boolean;
+  prompt?: string;
+  currentName?: string;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -323,15 +331,18 @@ async function generateDashboardSessionTitle(params: {
       params.abortSignal?.throwIfAborted();
       return await generateConversationLabelWithFallback({
         userMessage: sourceText,
-        prompt: DASHBOARD_SESSION_TITLE_PROMPT,
+        prompt: params.prompt ?? DASHBOARD_SESSION_TITLE_PROMPT,
         cfg: params.cfg,
         agentId: params.agentId,
         ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
         ...(utilityModelRef ? { utilityModelRef } : {}),
         regularModelRef,
         ...(preferredProfile ? { preferredProfile } : {}),
-        normalizeLabel: normalizeDashboardSessionTitle,
-        maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
+        normalizeLabel: (raw) =>
+          params.currentName && raw.trim() === params.currentName
+            ? params.currentName
+            : normalizeDashboardSessionTitle(raw),
+        maxLength: Math.max(DASHBOARD_SESSION_TITLE_MAX_CHARS, params.currentName?.length ?? 0),
         abortSignal: params.abortSignal,
         assertCurrent: params.assertCurrent,
         operatorAuthority: params.operatorAuthority,
@@ -444,6 +455,7 @@ export async function maybeGenerateDashboardSessionTitle(
   return await maybeGenerateSessionTitle({
     ...params,
     retryFailedJoin: true,
+    allowReassessment: true,
   });
 }
 
@@ -466,8 +478,47 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     memory?.authority.assertCurrent();
   };
   const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
-  if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
+  if (
+    entry?.sessionId !== params.sessionId ||
+    (Object.hasOwn(params, "lifecycleRevision") &&
+      entry.lifecycleRevision !== params.lifecycleRevision)
+  ) {
     return false;
+  }
+  if (hasExplicitSessionName(entry)) {
+    if (!params.allowReassessment) {
+      return false;
+    }
+    return maybeReassessDashboardSessionTitle({
+      ...scope,
+      sessionId: params.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      userMessage: params.currentUserMessage ?? params.userMessage,
+      messageId: params.messageId,
+      skillCommands: await prepareTitleSkillCommands({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        entry,
+        sessionKey,
+        assertCurrent: assertMemoryCurrent,
+      }),
+      basePrompt: DASHBOARD_SESSION_TITLE_PROMPT,
+      assertCurrent: assertMemoryCurrent,
+      commitGuard: params.commitGuard,
+      onTitleStateChanged: params.onTitleStateChanged,
+      generate: (sourceText, prompt, currentName) =>
+        generateDashboardSessionTitle({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          entry,
+          sourceText,
+          prompt,
+          currentName,
+          utilityOnly: true,
+          operatorAuthority: params.operatorAuthority,
+          assertCurrent: assertMemoryCurrent,
+        }),
+    });
   }
   const skillParams = {
     cfg: params.cfg,
@@ -480,18 +531,24 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
   const requestTarget = {
     ...scope,
     sessionId: params.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
   };
   const existing = sessionTitleRequests.get(requestTarget);
   if (existing) {
     const persisted = await (params.retryFailedJoin ? existing.catch(() => false) : existing);
     assertMemoryCurrent();
     // A failed join can retry once with fresh session state and this caller's authority.
-    return !persisted && params.retryFailedJoin
-      ? await maybeGenerateSessionTitle({ ...params, retryFailedJoin: false })
+    return (!persisted && params.retryFailedJoin) ||
+      (persisted && params.allowReassessment && params.messageId)
+      ? await maybeGenerateSessionTitle({
+          ...params,
+          lifecycleRevision: entry.lifecycleRevision,
+          retryFailedJoin: false,
+        })
       : false;
   }
 
-  const finish = async (generation: Promise<string | null>) => {
+  const finish = async (generation: Promise<string | null>, approvedOpeningSource?: string) => {
     const displayName = await generation;
     if (!displayName) {
       return false;
@@ -509,11 +566,31 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       await patchSessionEntryCore(
         scope,
         (current) => {
-          if (current.sessionId !== params.sessionId || hasExplicitSessionName(current)) {
+          if (
+            current.sessionId !== params.sessionId ||
+            current.lifecycleRevision !== entry.lifecycleRevision ||
+            hasExplicitSessionName(current)
+          ) {
             return null;
           }
           persisted = true;
-          return { displayName };
+          return {
+            displayName,
+            ...(params.allowReassessment
+              ? {
+                  conversationLabelRefinement: {
+                    sessionId: params.sessionId,
+                    ...(entry.lifecycleRevision
+                      ? { lifecycleRevision: entry.lifecycleRevision }
+                      : {}),
+                    remainingMessages: 6,
+                    ...(approvedOpeningSource ? { inputMessages: [approvedOpeningSource] } : {}),
+                    ...(params.awaitingFirstMessage ? { awaitingFirstMessage: true } : {}),
+                    ...(params.messageId ? { lastMessageId: params.messageId } : {}),
+                  },
+                }
+              : {}),
+          };
         },
         {
           requireWriteSuccess: true,
@@ -554,6 +631,11 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     if (!sourceText) {
       return false;
     }
+    const approvedOpeningSource = params.awaitingFirstMessage
+      ? undefined
+      : (resolveSessionTitleSource(params.approvedOpeningText ?? "", skillCommands) ?? undefined);
+    const capturedOpening =
+      approvedOpeningSource === sourceText ? approvedOpeningSource : undefined;
 
     const generate = (abortSignal?: AbortSignal) =>
       generateDashboardSessionTitle({
@@ -570,7 +652,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     const withSource = params.withSource;
     if (!withSource) {
       params.commitGuard?.();
-      return await finish(generate());
+      return await finish(generate(), capturedOpening);
     }
     return await runWithAsyncWorkResources(
       async () => {
@@ -585,7 +667,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           void completion.catch(() => undefined);
           return { completion };
         });
-        return await finish(pending.completion);
+        return await finish(pending.completion, capturedOpening);
       },
       { cancelOnError: true },
     );

@@ -134,7 +134,19 @@ background when the Gateway dispatches their message. Naming starts alongside
 worktree and reply preparation; it does not wait for the agent’s first progress
 event and does not block the turn. The name appears when the title model finishes.
 If the title request fails while overlapping a turn, it retries once after that
-turn settles. Explicit names and manual renames are preserved.
+turn settles.
+
+After six follow-up task messages, the utility model compares the current title
+with the conversation once. It keeps the exact title when it still fits, including
+a name you chose manually, and changes it only if the subject has changed.
+Commands do not count toward these six messages.
+
+Reset clears context and keeps the conversation's name. The first ordinary message
+after reset asks the utility model whether that existing name still fits; it does
+not start by inventing a new name. Commands such as `/model` between reset and that
+message do not trigger naming. The same rules apply to Dashboard conversations and
+Telegram DM topics with automatic topic labels enabled. A manual rename or another
+reset while naming is running takes priority over that pending result.
 
 ## DM isolation
 

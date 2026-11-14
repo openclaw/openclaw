@@ -97,6 +97,7 @@ export type TelegramMessageContext = {
   ackReactionPromise: Promise<boolean> | null;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
+  bufferedMessages?: TelegramMessageContextOptions["bufferedMessages"];
   pluginCommandDispatch?: TelegramMessageContextOptions["pluginCommandDispatch"];
 };
 
@@ -572,6 +573,7 @@ export const buildTelegramMessageContext = async ({
     ackReactionPromise,
     statusReactionController,
     accountId: account.accountId,
+    ...(options?.bufferedMessages ? { bufferedMessages: options.bufferedMessages } : {}),
     ...(options?.pluginCommandDispatch
       ? { pluginCommandDispatch: options.pluginCommandDispatch }
       : {}),

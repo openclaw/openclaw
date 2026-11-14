@@ -199,9 +199,13 @@ The sidebar menu’s **Rename…** action still opens its dialog.
 
 ## Automatic session names
 
-New Dashboard conversations receive a title from their opening task. Later messages
-keep that title. Only an explicit rename by you or the agent through `sessions.patch`
-changes it. The open conversation URL updates when its name arrives or changes,
+New Dashboard conversations receive a title from their first task message.
+After six follow-up task messages, the utility model checks once whether the current
+name still fits. It preserves useful names, including manual renames. Reset keeps
+the name; the first ordinary message afterward compares it with the new task before
+changing it. Commands do not trigger or count toward naming. See
+[automatic session names](/concepts/session#automatic-session-names).
+The open conversation URL updates when its name arrives or changes,
 without reloading the page or adding a browser-history entry.
 
 ## Temporary disconnections

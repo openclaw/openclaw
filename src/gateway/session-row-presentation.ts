@@ -457,6 +457,7 @@ export function prepareProjectedSessionPresentation(
           storePath: record.storeTarget.storePath,
           sessionKey: record.key,
           sessionId: record.entry.sessionId,
+          lifecycleRevision: record.entry.lifecycleRevision,
         }) !== undefined;
       facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
       // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.

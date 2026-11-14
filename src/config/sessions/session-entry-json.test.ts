@@ -3,9 +3,14 @@ import {
   admitCanonicalSessionEntry,
   parseCanonicalSqliteSessionEntry,
 } from "./session-entry-json.js";
-import { projectPublicSessionEntry } from "./session-entry-projection.js";
+import {
+  projectExecutionSessionEntry,
+  projectPublicSessionEntry,
+  projectPublicSessionEntryPatch,
+} from "./session-entry-projection.js";
 import { preserveGenerationPrivateFields } from "./session-entry-public-patch.js";
 import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
+import type { InternalSessionEntry } from "./types.js";
 
 describe("canonical session numeric metadata", () => {
   it.each([
@@ -139,6 +144,26 @@ describe("canonical session numeric metadata", () => {
       expect(written.resumeAfterRestart).toEqual(
         next === publicEntry ? resumeAfterRestart : undefined,
       );
+    }
+  });
+
+  it("keeps captured conversation label inputs out of public and execution projections", () => {
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      conversationLabelRefinement: {
+        sessionId: "session",
+        remainingMessages: 1,
+        inputMessages: ["Opening task", "Follow-up"],
+      },
+    } satisfies InternalSessionEntry;
+
+    for (const projected of [
+      projectPublicSessionEntry(entry),
+      projectPublicSessionEntryPatch(entry),
+      projectExecutionSessionEntry(entry),
+    ]) {
+      expect(projected).not.toHaveProperty("conversationLabelRefinement");
     }
   });
 });

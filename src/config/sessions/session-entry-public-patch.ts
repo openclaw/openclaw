@@ -14,6 +14,9 @@ function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.conversationLabelRefinement
+      ? { conversationLabelRefinement: existingEntry.conversationLabelRefinement }
+      : {}),
     ...(existingEntry.localWorkspaceHandoff
       ? { localWorkspaceHandoff: existingEntry.localWorkspaceHandoff }
       : {}),
