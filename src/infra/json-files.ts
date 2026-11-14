@@ -1,4 +1,5 @@
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { writeTextAtomic as writeFsSafeTextAtomic } from "@openclaw/fs-safe/atomic";
 import { tryReadJsonSync } from "@openclaw/fs-safe/json";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
