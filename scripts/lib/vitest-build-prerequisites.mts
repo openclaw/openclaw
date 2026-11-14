@@ -150,9 +150,7 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "src",
   },
-  ...[
-    "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
-  ].map((file) => ({
+  ...["src/agents/tool-surface-plan.provider-catalog.integration.test.ts"].map((file) => ({
     file,
     configs: ["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"],
     mode: "runtime" as const,
