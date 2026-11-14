@@ -13,6 +13,37 @@ const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
 
+export function resolveMatrixCurrentContent(
+  content: RoomMessageEventContent,
+): RoomMessageEventContent {
+  if (!content["m.relates_to"]?.["m.in_reply_to"]?.event_id) {
+    return content;
+  }
+
+  // Rich-reply fallbacks are untrusted copies; quote context is fetched separately.
+  const body = content.body;
+  let bodyStart = 0;
+  if (typeof body === "string" && /^> (?:\* )?<@[^>\n]+>/.test(body)) {
+    while (body.startsWith("> ", bodyStart)) {
+      const end = body.indexOf("\n", bodyStart);
+      bodyStart = end === -1 ? body.length : end + 1;
+    }
+    if (bodyStart > 0 && body[bodyStart] === "\n") {
+      bodyStart += 1;
+    }
+  }
+  const formattedBody = content.formatted_body;
+  const fallback =
+    content.format === "org.matrix.custom.html"
+      ? formattedBody?.match(/^<mx-reply>[\s\S]*?<\/mx-reply>/i)
+      : undefined;
+  return {
+    ...content,
+    ...(typeof body === "string" && bodyStart > 0 ? { body: body.slice(bodyStart) } : {}),
+    ...(fallback ? { formatted_body: formattedBody!.slice(fallback[0].length) } : {}),
+  };
+}
+
 export function resolveMatrixMentionPrecheckText(params: {
   eventType: string;
   content: RoomMessageEventContent;

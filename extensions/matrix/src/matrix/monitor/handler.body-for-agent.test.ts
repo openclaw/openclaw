@@ -1,3 +1,4 @@
+import { matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
@@ -61,10 +62,133 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
 
   beforeEach(() => {
     installMatrixMonitorTestRuntime({
-      matchesMentionPatterns: () => false,
+      matchesMentionPatterns,
       saveMediaBuffer: vi.fn(),
     });
   });
+
+  it.each([
+    { name: "quoted HTML link", body: "Solved.", html: "Solved.", admitted: false },
+    {
+      name: "quoted plain mention",
+      body: "Solved.",
+      html: "Solved.",
+      quote: "Claw help?",
+      plain: true,
+      admitted: false,
+    },
+    {
+      name: "quoted room mention",
+      body: "Solved.",
+      html: "Solved.",
+      quote: "@room help?",
+      plain: true,
+      admitted: false,
+    },
+    {
+      name: "fresh HTML link",
+      body: "Bot, solved.",
+      html: '<a href="https://matrix.to/#/@bot:example.org">Bot</a>, solved.',
+      admitted: true,
+    },
+    {
+      name: "fresh native mention",
+      body: "@bot:example.org solved.",
+      html: "Solved.",
+      mentions: { user_ids: ["@bot:example.org"] },
+      admitted: true,
+    },
+    { name: "fresh plain mention", body: "Claw solved.", html: "Solved.", admitted: true },
+    {
+      name: "fresh room mention",
+      body: "@room solved.",
+      html: "@room solved.",
+      mentions: { room: true },
+      admitted: true,
+    },
+    {
+      name: "authored blockquote after fallback",
+      body: "> Claw solved.\n\nAgreed.",
+      html: "<blockquote>Claw solved.</blockquote>Agreed.",
+      admitted: true,
+    },
+  ])(
+    "uses only current reply content for $name",
+    async ({ body, html, mentions, admitted, quote, plain }) => {
+      const harness = createHarness({
+        isDirectMessage: false,
+        roomsConfig: { "*": { requireMention: true } },
+        mentionRegexes: body.includes("Claw") || quote?.includes("Claw") ? [/\bClaw\b/i] : [],
+        getMemberDisplayName: async (_room, user) => names[user] ?? user,
+        client: {
+          getEvent: async () =>
+            textMessage({
+              eventId: "$alice",
+              sender: "@alice:example.org",
+              body: "Hydrated original",
+            }),
+        },
+        historyLimit: 5,
+      });
+      const event = textMessage({
+        eventId: "$bob",
+        sender: "@bob:example.org",
+        body: `> <@alice:example.org> ${quote ?? "Bot help?"}\n> More old text\n\n${body}`,
+        relatesTo: { "m.in_reply_to": { event_id: "$alice" } },
+        mentions: mentions ?? { user_ids: [] },
+      });
+      if (!plain) {
+        Object.assign(event.content, {
+          format: "org.matrix.custom.html",
+          formatted_body: `<mx-reply><blockquote><a href="https://matrix.to/#/@bot:example.org">Bot</a> help?</blockquote></mx-reply>${html}`,
+        });
+      }
+      const original = structuredClone(event);
+      await harness.handler(roomId, event);
+      expect(harness.runPrepared.mock.calls.map(([turn]) => turn.ctxPayload.RawBody)).toEqual(
+        admitted ? [body] : [],
+      );
+      if (admitted) {
+        expect(harness.runPrepared.mock.calls[0]![0].ctxPayload).toMatchObject({
+          BodyForAgent: body,
+          ReplyToBody: "Hydrated original",
+          ReplyToSender: "Alice",
+        });
+      } else {
+        await harness.handler(
+          roomId,
+          textMessage({ eventId: "$trigger", body: "@room next", mentions: { room: true } }),
+        );
+        expect(harness.runPrepared.mock.calls[0]![0].ctxPayload.InboundHistory).toEqual([
+          expect.objectContaining({ body: "Solved." }),
+        ]);
+      }
+      expect(event).toEqual(original);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps an authored blockquote without fallback (reply=%s)",
+    async (reply) => {
+      const { ctx } = await receive(
+        textMessage({
+          eventId: "$blockquote",
+          body: "> Claw says hello\n\nAgreed.",
+          relatesTo: reply ? { "m.in_reply_to": { event_id: "$alice" } } : undefined,
+        }),
+        {
+          isDirectMessage: false,
+          roomsConfig: { "*": { requireMention: true } },
+          mentionRegexes: [/Claw/i],
+          client: {
+            getEvent: async () =>
+              textMessage({ eventId: "$alice", sender: "@alice:example.org", body: "Original" }),
+          },
+        },
+      );
+      expect(ctx.BodyForAgent).toBe("> Claw says hello\n\nAgreed.");
+    },
+  );
 
   it("keeps inbound content in the agent context, not verbose diagnostics", async () => {
     const diagnostics: string[] = [];
