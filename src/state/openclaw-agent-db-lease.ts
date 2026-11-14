@@ -356,6 +356,9 @@ export function releaseOpenClawAgentDatabaseLease(
           leaseId,
           receipt,
           ...(phases ? { close: phases } : {}),
+          ...(receipt === "checkpoint-incomplete" && timing?.checkpoint
+            ? { checkpoint: timing.checkpoint }
+            : {}),
           blockingLease: blockingLease && {
             leaseId: blockingLease.lease_id,
             ownerPid: blockingLease.owner_pid,
