@@ -3,11 +3,14 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { requestOneShotSettledExitWatchdog } from "./one-shot-exit.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { getProgramContext } from "./program/program-context.js";
 import { hasCliProcessScope } from "./runtime-cleanup-scope.js";
@@ -52,6 +55,50 @@ function requiredUpdateLeafString(opts: Record<string, unknown>, key: string): s
     );
   }
   return value;
+}
+
+async function runBackupCliLeaf<T>(params: {
+  json: boolean;
+  reason: string;
+  failureContext?: () => Record<string, unknown>;
+  allowPublishedOnAbort?: boolean;
+  run: (signal: AbortSignal) => Promise<T>;
+  render: (value: T) => { json: unknown; message: string };
+}): Promise<void> {
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const interrupt = () => controller.abort(new Error("Backup CLI operation interrupted."));
+  process.on("SIGTERM", interrupt);
+  process.on("SIGINT", interrupt);
+  try {
+    // The CLI joins detached Git children before returning on signal or failure.
+    const value = await withCommandProcessScope(async () => params.run(signal), signal);
+    if (!params.allowPublishedOnAbort) {
+      signal.throwIfAborted();
+    }
+    const rendered = params.render(value);
+    if (params.json) {
+      defaultRuntime.writeJson(rendered.json);
+    } else {
+      defaultRuntime.log(rendered.message);
+    }
+  } catch (error) {
+    if (params.json) {
+      defaultRuntime.writeJson({
+        status: "error",
+        reason: hasCommandProcessCleanupError(error)
+          ? "backup-cli-child-cleanup-uncertain"
+          : params.reason,
+        ...params.failureContext?.(),
+      });
+    } else {
+      defaultRuntime.error(formatErrorMessage(error));
+    }
+    exitCliAfterOutput(defaultRuntime, 1);
+  } finally {
+    process.off("SIGTERM", interrupt);
+    process.off("SIGINT", interrupt);
+  }
 }
 
 // Leaves opt into dry-run explicitly; unsupported leaves reject it before owner work.
@@ -231,6 +278,105 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       } catch (err) {
         handleUpdateCommandError(err);
       }
+    });
+
+  const backupCli = update
+    .command("backup-cli", { hidden: true })
+    .description("Prepare and inspect a separate source-built backup CLI without activation");
+  backupCli
+    .command("prepare")
+    .description("Build an exact Git revision as a retained backup CLI candidate")
+    .requiredOption("--sha <commit>", "Exact 40-character source commit")
+    .requiredOption("--operation-id <uuid>", "Controller operation identity")
+    .option("--json", "Output candidate receipt as JSON", false)
+    .action(async (opts: { sha: string; operationId: string; json: boolean }) => {
+      let custody: { candidateRoot: string; stagingRoot: string } | undefined;
+      let publishedReceipt: unknown;
+      await runBackupCliLeaf({
+        json: opts.json,
+        reason: "backup-cli-preparation-failed",
+        allowPublishedOnAbort: true,
+        failureContext: () => ({
+          id: opts.operationId,
+          ...(custody ?? {}),
+          ...(publishedReceipt
+            ? { publicationState: "published-unverified", publishedReceipt }
+            : {}),
+        }),
+        run: async (signal) => {
+          const { prepareBackupCliCandidate } =
+            await import("../infra/update-backup-cli-candidate.js");
+          const { resolveUpdateRoot } = await import("./update-cli/shared.js");
+          return prepareBackupCliCandidate({
+            controlRoot: await resolveUpdateRoot(),
+            sha: opts.sha,
+            operationId: opts.operationId,
+            signal,
+            onCustody: (paths) => {
+              custody = paths;
+            },
+            onPublished: (receipt) => {
+              publishedReceipt = receipt;
+            },
+          });
+        },
+        render: (receipt) => ({
+          json: receipt,
+          message: `Prepared backup CLI ${receipt.id} at ${receipt.sha}.`,
+        }),
+      });
+    });
+  backupCli
+    .command("verify")
+    .description("Verify a prepared backup CLI candidate and return its bound receipt")
+    .requiredOption("--id <uuid>", "Candidate identity")
+    .requiredOption("--operation-id <uuid>", "Controller operation identity")
+    .option("--json", "Output candidate receipt as JSON", false)
+    .action(async (opts: { id: string; operationId: string; json: boolean }) => {
+      await runBackupCliLeaf({
+        json: opts.json,
+        reason: "backup-cli-verification-failed",
+        run: async () => {
+          const { verifyBackupCliCandidate } =
+            await import("../infra/update-backup-cli-candidate.js");
+          const { resolveUpdateRoot } = await import("./update-cli/shared.js");
+          return verifyBackupCliCandidate({
+            controlRoot: await resolveUpdateRoot(),
+            id: opts.id,
+            operationId: opts.operationId,
+          });
+        },
+        render: (receipt) => ({
+          json: receipt,
+          message: `Verified backup CLI ${receipt.id} at ${receipt.sha}.`,
+        }),
+      });
+    });
+  backupCli
+    .command("retire")
+    .description("Retire a settled backup CLI candidate after its controller holder releases")
+    .requiredOption("--id <uuid>", "Candidate identity")
+    .requiredOption("--operation-id <uuid>", "Controller operation identity")
+    .option("--json", "Output retirement result as JSON", false)
+    .action(async (opts: { id: string; operationId: string; json: boolean }) => {
+      await runBackupCliLeaf({
+        json: opts.json,
+        reason: "backup-cli-retirement-failed",
+        run: async () => {
+          const { retireBackupCliCandidate } =
+            await import("../infra/update-backup-cli-candidate.js");
+          const { resolveUpdateRoot } = await import("./update-cli/shared.js");
+          return retireBackupCliCandidate({
+            controlRoot: await resolveUpdateRoot(),
+            id: opts.id,
+            operationId: opts.operationId,
+          });
+        },
+        render: () => ({
+          json: { status: "retired", id: opts.id },
+          message: `Retired backup CLI ${opts.id}.`,
+        }),
+      });
     });
 
   update
