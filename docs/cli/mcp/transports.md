@@ -158,6 +158,22 @@ If `gateway.publicOrigin` is missing, the sign-in result names that setting and 
 
 Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.
 
+In Settings → MCP, operator **Sign in** uses the Gateway address opened by the
+browser and its `/oauth/provider/callback` route. It preserves HTTPS rather than
+replacing the callback with a separate HTTP loopback listener. Some providers
+reject HTTPS loopback callbacks even though they accept the CLI's HTTP loopback
+callback; this is not a missing `application_type=native` field.
+
+If registration rejects that callback, keep Gateway TLS enabled. Use an existing
+provider-compatible HTTPS Gateway address reachable from the browser, or sign in
+from the Gateway's terminal: stop the Gateway through its service owner, run
+`openclaw mcp login <name>`, then start the Gateway again **even if login fails**.
+The CLI path applies only to servers configured in `mcp.servers`; plugin-declared
+connections must use their plugin's sign-in settings. An explicit CLI
+`oauth.redirectUrl` is not silently replaced, so review it if the provider rejects
+it too. A browser on another machine must be able to reach the selected Gateway
+address; a loopback address on that browser points to that machine, not the Gateway.
+
 The shared operator flow uses the following commands:
 
 <Steps>

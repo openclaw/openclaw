@@ -22,6 +22,7 @@ import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-m
 import { resolveOperatorMcpOAuthConnection } from "../../plugins/mcp-auth-status.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { WizardSession } from "../../wizard/session.js";
+import { isLoopbackHost } from "../net.js";
 import {
   createProviderBrowserAuthSession,
   ProviderBrowserSignInError,
@@ -173,6 +174,7 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
               AuthorizationServerMismatchError,
               IssuerMismatchError,
               OAuthError,
+              parseErrorResponse,
               RegistrationRejectedError,
             } = await import("@modelcontextprotocol/client");
             let reason = "unexpected";
@@ -198,8 +200,23 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
                 "The sign-in service rejected this attempt. Existing credentials were not changed. Close this dialog, review the connection settings, and try again.";
             } else if (error instanceof RegistrationRejectedError) {
               reason = "registration-rejected";
-              message =
-                "The sign-in service rejected this connection's settings. Close this dialog and review the connection settings before trying again.";
+              const redirectUrl = error.submittedMetadata.redirect_uris?.[0];
+              const callback = redirectUrl ? URL.parse(redirectUrl) : null;
+              if (
+                callback?.protocol === "https:" &&
+                isLoopbackHost(callback.hostname) &&
+                (await parseErrorResponse(error.body)).code === "invalid_redirect_uri"
+              ) {
+                // Changing callback scheme or host would break its admitted browser delivery path.
+                message =
+                  "The sign-in service rejected this Gateway's HTTPS loopback callback. Keep Gateway TLS enabled. Use an existing provider-compatible HTTPS Gateway address reachable from this browser" +
+                  (terminalLogin
+                    ? `, or sign in from this Gateway's terminal: ${terminalLogin}. Restart the Gateway even if login fails.`
+                    : ". Review the plugin's sign-in settings if no compatible Gateway address is available.");
+              } else {
+                message =
+                  "The sign-in service rejected this connection's settings. Close this dialog and review the connection settings before trying again.";
+              }
             } else if (error instanceof OAuthError) {
               reason = "provider-rejected";
               message =

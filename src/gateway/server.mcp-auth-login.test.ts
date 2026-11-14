@@ -49,6 +49,7 @@ import {
   mcpOAuthMetadata,
   type McpAuthEffectEndpoint,
 } from "./server.mcp-auth-login.forced-effects.test-support.js";
+import { registerMcpAuthRegistrationTests } from "./server.mcp-auth-login.registration.test-support.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -279,8 +280,12 @@ describe("registered mcp.authLogin", () => {
     }
     return resolved;
   }
-  async function connect(scopes: string[], origin = `http://127.0.0.1:${gateway.port}`) {
-    const client = await gateway.openWs({ origin });
+  async function connect(
+    scopes: string[],
+    origin = `http://127.0.0.1:${gateway.port}`,
+    host?: string,
+  ) {
+    const client = await gateway.openWs({ origin, ...(host ? { host } : {}) });
     await connectOk(client, {
       scopes,
       deviceIdentityPath: path.join(
@@ -449,46 +454,27 @@ describe("registered mcp.authLogin", () => {
     },
   );
 
-  it.each(["registration", "network"] as const)(
-    "explains %s failure without exposing provider-controlled details",
-    async (failure) => {
-      await clearMcpOAuthCredentials(identity());
-      effects.endpoint = async (request, response) => {
-        if (new URL(request.url ?? "/", resourceUrl).pathname !== "/register") {
-          return false;
-        }
-        if (failure === "network") {
-          request.socket.destroy();
-        } else {
-          response.writeHead(400).end(
-            JSON.stringify({
-              error: "invalid_client_metadata",
-              error_description: "private-registration-detail https://private.example/?code=secret",
-            }),
-          );
-        }
-        return true;
-      };
+  registerMcpAuthRegistrationTests({
+    identity,
+    transport: resolvedTransport,
+    requests,
+    effects,
+    browserLogin: async (origin) => {
+      let client: WebSocket | undefined;
       try {
-        const sessionId = await startLogin();
-        const result = await terminal(sessionId);
-        expect(result).toMatchObject({
-          status: "error",
-          error: expect.stringContaining(
-            failure === "network"
-              ? "could not reach the sign-in service"
-              : "rejected this connection's settings",
-          ),
-        });
-        expect(JSON.stringify(result)).not.toMatch(
-          /private-registration-detail|private\.example|secret/,
+        // Browser callbacks must win over a CLI-specific explicit callback.
+        await configure(
+          { ...config, oauth: { redirectUrl: "https://explicit.example/cli-callback" } },
+          origin,
         );
-        expect((await store()).tokens).toBeUndefined();
+        client = await connect(["operator.admin"], origin, new URL(origin).host);
+        return await terminal(await startLogin(client), client);
       } finally {
-        effects.endpoint = undefined;
+        client?.close();
+        await configure();
       }
     },
-  );
+  });
 
   it("reports an expired attempt rather than an explicit cancellation", async () => {
     await clearMcpOAuthCredentials(identity());
