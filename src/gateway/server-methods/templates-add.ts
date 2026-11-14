@@ -370,6 +370,8 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       log.error(
         `templates.add.apply failed: ${error instanceof Error ? error.message : String(error)}`,
       );
+      const manifestConflict =
+        error instanceof TemplateAddMutationError && error.code === "workspace_conflict";
       const code =
         error instanceof TemplateGatewayAuthorityError ||
         error instanceof TemplatesLabsDisabledError
@@ -378,18 +380,20 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
               error instanceof TemplateGatewayPlanBlockedError ||
               error instanceof TemplateGatewayConsentError ||
               error instanceof TemplateSkillConsentError ||
+              manifestConflict ||
               (error instanceof ClawHubSourceError &&
                 error.code === "clawhub_risk_acknowledgement_required")
             ? ErrorCodes.INVALID_REQUEST
             : ErrorCodes.UNAVAILABLE;
-      const message =
-        error instanceof TemplateGatewayAuthorityError ||
-        error instanceof TemplatesLabsDisabledError ||
-        error instanceof TemplateGatewayConsentError ||
-        error instanceof TemplateSkillConsentError ||
-        error instanceof TemplateGatewayPlanBlockedError ||
-        error instanceof TemplateGatewayPlanChangedError ||
-        error instanceof ClawHubSourceError
+      const message = manifestConflict
+        ? `${error.message} Nothing was kept. Ask the publisher to move the conflicting workspace file and publish a corrected release before adding it again.`
+        : error instanceof TemplateGatewayAuthorityError ||
+            error instanceof TemplatesLabsDisabledError ||
+            error instanceof TemplateGatewayConsentError ||
+            error instanceof TemplateSkillConsentError ||
+            error instanceof TemplateGatewayPlanBlockedError ||
+            error instanceof TemplateGatewayPlanChangedError ||
+            error instanceof ClawHubSourceError
           ? error.message
           : "Could not add this Template. Review Gateway logs before retrying.";
       respond(

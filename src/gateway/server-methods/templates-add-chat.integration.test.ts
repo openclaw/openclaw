@@ -574,7 +574,9 @@ it.each(["fetch", "workspace", "manifest collision"] as const)(
       expect(error?.message).toBe(
         failure === "fetch"
           ? "ClawHub could not deliver this Template."
-          : "Could not add this Template. Review Gateway logs before retrying.",
+          : failure === "manifest collision"
+            ? "CLAW.md is reserved for the unchanged Template manifest in chat-based Add. Nothing was kept. Ask the publisher to move the conflicting workspace file and publish a corrected release before adding it again."
+            : "Could not add this Template. Review Gateway logs before retrying.",
       );
       // The agent and chat existed: the client was told, then both were removed.
       expect(gateway.events).toEqual([{ stage: "agent-admitted", agentId: "travel-copilot" }]);
@@ -587,6 +589,7 @@ it.each(["fetch", "workspace", "manifest collision"] as const)(
       expect(await exists(workspace)).toBe(false);
       expect(greeting).not.toHaveBeenCalled();
       if (failure === "manifest collision") {
+        expect(error?.code).toBe("INVALID_REQUEST");
         expect(workspaceWrite.attempt.mock.calls.filter(([root]) => root === workspace)).toEqual(
           [],
         );
