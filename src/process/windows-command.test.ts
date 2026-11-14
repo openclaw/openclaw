@@ -91,6 +91,24 @@ windowsIt("uses process cwd for blank cwd and relative PATH", ({ cwd }) => {
   );
 });
 
+windowsIt(
+  "resolves commands under a working directory whose name contains a semicolon",
+  async ({ cwd }) => {
+    const projectDir = path.join(cwd, "project;literal");
+    await mkdir(path.join(projectDir, "bin"), { recursive: true });
+    await writeFile(path.join(projectDir, "bin", "fixture.exe"), "");
+    const env: NodeJS.ProcessEnv = { PATH: "bin", PATHEXT: ".EXE" };
+    // Bare name with a relative PATH directory beneath the semicolon cwd.
+    expect(resolveCommand(["fixture"], env, projectDir).command).toBe(
+      path.join(projectDir, "bin", "fixture.exe"),
+    );
+    // Explicit extensionless relative path beneath the same cwd.
+    expect(resolveCommand(["./bin/fixture"], env, projectDir).command).toBe(
+      path.join(projectDir, "bin", "fixture.exe"),
+    );
+  },
+);
+
 describe.runIf(process.platform === "win32")("Windows batch argv preservation", () => {
   const args = [
     ["", "alpha", "", "two words", "two\twords", "\t", 'say "hello"'],
