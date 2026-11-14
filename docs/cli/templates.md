@@ -234,6 +234,9 @@ A package may declare `agent.heartbeat` in `CLAW.md` or include
 and private job scratch instead of installing heartbeat configuration. Legacy
 `tasks:` entries become separate automations, and the remaining checklist stays
 in the monitor's scratch. An `every: 0m` declaration stays disabled.
+Because it becomes job scratch, `HEARTBEAT.md` must be valid UTF-8 and at most
+256 KiB; `validate`, `inspect`, `build` and Add report a larger or non-UTF-8
+file as a Template diagnostic.
 The Add review shows each converted job with its interval and owner delivery;
 existing cron schedules keep their meaning.
 Gateway review responses represent interval schedules as `{ everyMs }`, where
