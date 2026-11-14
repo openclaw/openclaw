@@ -12,6 +12,8 @@ export type ManagedLlamaModel = {
   projectorPath?: string;
   imageMaxTokens?: number;
   device?: string;
+  // Keep a full-size sliding-window cache so the server can reuse a cached prompt prefix.
+  swaFull?: boolean;
 };
 
 export type ManagedLlamaChatModel =
@@ -211,6 +213,10 @@ export function buildLlamaServerPreset(
     ...(params.chatModel.mode === "configure" ? [params.chatModel] : []),
     ...(params.mediaModels ?? []),
   ];
+  const userDefaults = new Set([
+    ...readSettingKeys(sections.get("*")),
+    ...readServiceSettingKeys(params.serviceSettings),
+  ]);
   for (const model of models) {
     // batch-size/ubatch-size deliberately stay at llama.cpp's defaults. llama.cpp applies a cancel
     // only between logical batches; on a 24-thread CPU run, 1024/512 cut cancel release from ~2.7 s
@@ -230,6 +236,13 @@ export function buildLlamaServerPreset(
               parallel: "1",
               "load-on-startup": "false",
             }
+          : {}),
+        // Sliding-window models (Gemma) otherwise reprocess the whole prompt whenever an earlier
+        // part changes, e.g. dropped reasoning or a new session. Explicit user settings win.
+        ...(model.swaFull &&
+        !userDefaults.has("swa-full") &&
+        !readSettingKeys(sections.get(model.id)).has("swa-full")
+          ? { "swa-full": "true" }
           : {}),
         ...(model.device
           ? {
