@@ -296,6 +296,7 @@ type Run = {
   status: string;
   event: string;
   display_title: string;
+  head_branch?: string;
   html_url: string;
 };
 
@@ -372,12 +373,7 @@ export function observeReleaseGitHubState(input: {
       remediation: `Inspect authenticated release visibility and exact tag ${input.releaseTag}: ${readCommand}`,
     });
   }
-  for (const workflow of [
-    "openclaw-release-publish.yml",
-    "plugin-npm-release.yml",
-    "plugin-clawhub-release.yml",
-    "plugin-clawhub-new.yml",
-  ]) {
+  for (const workflow of ["openclaw-release-publish.yml", "plugin-npm-release.yml"]) {
     const runs = new Map<number, Run>();
     const unresolved: string[] = [];
     const unreadCommands: string[] = [];
@@ -436,6 +432,15 @@ export function observeReleaseGitHubState(input: {
         continue;
       }
       const parent = workflow === "openclaw-release-publish.yml";
+      // Detached ClawHub parents share this workflow, not its core/npm queue.
+      if (
+        parent &&
+        typeof run.head_branch === "string" &&
+        /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(run.head_branch) &&
+        /^ClawHub registry update \[[^\]\r\n]+\]$/u.test(run.display_title)
+      ) {
+        continue;
+      }
       const npm = workflow === "plugin-npm-release.yml";
       const titleSha = npm
         ? /^Plugin NPM (?:Release|Artifact Preflight|Trusted Publisher Preflight) \[(?:default|extended-stable)\] ([a-f0-9]{40})$/u.exec(
@@ -470,16 +475,10 @@ export function observeReleaseGitHubState(input: {
               return values.length && new Set(values).size === 1 ? values[0] : undefined;
             };
             const value = env(parent ? "RELEASE_NPM_DIST_TAG" : "TARGET_REF");
-            const dryRun = env("DRY_RUN");
             if (value !== undefined && value !== (parent ? input.npmDistTag : input.sourceSha)) {
               continue;
             }
-            if (!parent && !npm && dryRun === "true") {
-              continue;
-            }
-            match =
-              value === (parent ? input.npmDistTag : input.sourceSha) &&
-              (parent || npm || dryRun === "false");
+            match = value === (parent ? input.npmDistTag : input.sourceSha);
             evidence = match
               ? `exact job ${job.id} dispatch environment`
               : "dispatch inputs incomplete in available job log";
@@ -514,7 +513,7 @@ export function observeReleaseGitHubState(input: {
         message: `${run.status} run ${run.id}: ${match ? "same concurrency group" : "possible concurrency blocker"} (${evidence}).${orphan} ${run.html_url}`,
         remediation: match
           ? `Inspect and reconcile run ${run.id} before dispatch; do not cancel without checking parent ownership. gh api repos/${input.repository}/actions/runs/${run.id} --method GET`
-          : `Resolve the run's exact ${parent ? "npm_dist_tag" : "ref and dry_run"} inputs before dispatch: gh api 'repos/${input.repository}/actions/runs/${run.id}/jobs?per_page=100' --method GET`,
+          : `Resolve the run's exact ${parent ? "npm_dist_tag" : "ref"} inputs before dispatch: gh api 'repos/${input.repository}/actions/runs/${run.id}/jobs?per_page=100' --method GET`,
       });
     }
     if (

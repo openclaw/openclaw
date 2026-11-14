@@ -7,6 +7,9 @@
  * --scenario all includes Code Mode, aborts, compaction, cron, yield and rejected steering.
  * --scenario restart separately proves managed restart/resume across process boundaries.
  * Use --settle-ms 17000 to outlive the diagnostic event owner before counting classes.
+ * --scenario surge --active 68 --clients 30 --duration-seconds 60 holds real provider
+ * streams concurrently while publishing row changes. --reuse-state-fixture reuses
+ * one owned synthetic fixture serially; never point it at operator state.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -33,7 +36,7 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.ts";
-import { stopChild } from "../lib/gateway-bench-child.ts";
+import { stopChild, stopGatewayGracefully } from "../lib/gateway-bench-child.ts";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
 import {
   buildGatewayBenchChildArgs,
@@ -42,6 +45,7 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
+import { createTeamStressFanoutReceipts } from "./team-shape-stress-receipts.ts";
 
 const { values } = parseArgs({
   options: {
@@ -50,7 +54,15 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "4000" },
     "transcript-mib": { type: "string", default: "64" },
     "baseline-dir": { type: "string" },
+    "baseline-revision": { type: "string" },
     "state-fixture": { type: "string" },
+    "reuse-state-fixture": { type: "boolean", default: false },
+    active: { type: "string", default: "68" },
+    clients: { type: "string", default: "30" },
+    "duration-seconds": { type: "string", default: "60" },
+    "chunk-ms": { type: "string", default: "100" },
+    "publication-ms": { type: "string", default: "1000" },
+    profile: { type: "boolean", default: false },
     "cleanup-fail-every": { type: "string", default: "0" },
     allocations: { type: "boolean", default: false },
     "expect-released": { type: "boolean", default: false },
@@ -67,12 +79,24 @@ const runs = Number(values.runs);
 assert(Number.isSafeInteger(runs) && runs > 0);
 const settleMs = Number(values["settle-ms"]);
 assert(Number.isSafeInteger(settleMs) && settleMs >= 0);
-const port = await getFreePort();
+let port = await getFreePort();
+for (let attempt = 0; port < 40_000 && attempt < 20; attempt++) {
+  port = await getFreePort();
+}
+assert(port >= 40_000, "Could not allocate a port in the synthetic fixture range");
 let mode = "success";
 let toolIssued = false;
 let yieldIssued = false;
 let replyMarker = "";
 const scenario = values.scenario!;
+const activeCount = Number(values.active);
+const clientCount = Number(values.clients);
+const durationMs = Number(values["duration-seconds"]) * 1000;
+const chunkMs = Number(values["chunk-ms"]);
+const publicationMs = Number(values["publication-ms"]);
+for (const value of [activeCount, clientCount, durationMs, chunkMs, publicationMs]) {
+  assert(Number.isSafeInteger(value) && value > 0);
+}
 assert(
   [
     "lifecycle",
@@ -84,6 +108,7 @@ assert(
     "cron",
     "queue",
     "restart",
+    "surge",
   ].includes(scenario),
 );
 function writeTool(response: ServerResponse, name: string, args: unknown) {
@@ -117,6 +142,10 @@ function writeTool(response: ServerResponse, name: string, args: unknown) {
 }
 const providerProgress = { requests: 0 };
 const held = new Set<ServerResponse>();
+const streams = new Map<ServerResponse, { text: string; messageId: string; responseId: string }>();
+let finishStreams = false;
+let providerChunks = 0;
+let peakStreams = 0;
 const providerServer = createServer((request, response) => {
   void (async () => {
     const chunks: Buffer[] = [];
@@ -129,6 +158,72 @@ const providerServer = createServer((request, response) => {
       Array.isArray(requestBody.tools) &&
       requestBody.tools.some((tool: { name?: string }) => tool.name === "exec");
     providerProgress.requests++;
+    if (mode === "surge") {
+      const stream = { text: "", messageId: randomUUID(), responseId: randomUUID() };
+      streams.set(response, stream);
+      peakStreams = Math.max(peakStreams, streams.size);
+      held.add(response);
+      response.once("close", () => {
+        held.delete(response);
+        streams.delete(response);
+      });
+      response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+      const emit = (event: unknown) => response.write(`data: ${JSON.stringify(event)}\n\n`);
+      emit({
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          type: "message",
+          id: stream.messageId,
+          role: "assistant",
+          status: "in_progress",
+          content: [],
+        },
+      });
+      for (;;) {
+        if (finishStreams || response.destroyed) {
+          break;
+        }
+        const delta = `Synthetic stream ${providerChunks++}. `;
+        stream.text += delta;
+        emit({
+          type: "response.output_text.delta",
+          item_id: stream.messageId,
+          output_index: 0,
+          content_index: 0,
+          delta,
+        });
+        await delay(chunkMs);
+      }
+      if (!response.destroyed) {
+        const message = {
+          type: "message",
+          id: stream.messageId,
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: stream.text, annotations: [] }],
+        };
+        emit({
+          type: "response.output_text.done",
+          item_id: stream.messageId,
+          output_index: 0,
+          content_index: 0,
+          text: stream.text,
+        });
+        emit({ type: "response.output_item.done", output_index: 0, item: message });
+        emit({
+          type: "response.completed",
+          response: {
+            id: stream.responseId,
+            status: "completed",
+            output: [message],
+            usage: { input_tokens: 16, output_tokens: 64, total_tokens: 80 },
+          },
+        });
+        response.end("data: [DONE]\n\n");
+      }
+      return;
+    }
     if (mode === "degenerate" && toolCapable && !toolIssued) {
       toolIssued = true;
       const item = {
@@ -207,7 +302,10 @@ const provider = buildMockOpenAiResponsesProvider(
   `http://127.0.0.1:${address.port}/v1`,
   "synthetic-model",
 );
-const stateDir = path.join(output, "state");
+assert(!values["reuse-state-fixture"] || values["state-fixture"], "reuse requires --state-fixture");
+const stateDir = values["reuse-state-fixture"]
+  ? path.resolve(values["state-fixture"]!)
+  : path.join(output, "state");
 const configPath = path.join(stateDir, "openclaw.json");
 const fixture = values["state-fixture"] && path.resolve(values["state-fixture"]);
 if (fixture) {
@@ -218,7 +316,9 @@ if (fixture) {
     isRecord(manifest) && manifest.format === "openclaw-team-shape-v1",
     "Expected an offline synthetic fixture",
   );
-  if (process.platform === "darwin") {
+  if (values["reuse-state-fixture"]) {
+    assert.equal(stateDir, fixture);
+  } else if (process.platform === "darwin") {
     // Node can fall back to a full copy here; native cp preserves APFS clones.
     execFileSync("/bin/cp", ["-cR", fixture, stateDir], { stdio: "pipe" });
   } else {
@@ -281,10 +381,11 @@ config.agents!.defaults = {
   },
   thinkingDefault: "off",
   timeoutSeconds: 30,
+  ...(scenario === "surge" ? { maxConcurrent: activeCount, timeoutSeconds: 600 } : {}),
 };
 config.models = { providers: { [provider.providerId]: provider.config } };
 config.tools = { allow: [], codeMode: { enabled: false }, toolSearch: false };
-if (scenario !== "lifecycle") {
+if (scenario !== "lifecycle" && scenario !== "surge") {
   config.tools = { profile: "coding", codeMode: { enabled: true }, toolSearch: false };
   config.plugins = {
     enabled: true,
@@ -299,6 +400,13 @@ if (scenario !== "lifecycle") {
   };
 }
 config.skills = { load: { watch: false } };
+if (scenario === "surge") {
+  config.diagnostics = { enabled: true };
+  config.session = {
+    ...config.session,
+    maintenance: { ...config.session?.maintenance, maxEntries: 30_000 },
+  };
+}
 config.logging = { ...config.logging, file: path.join(stateDir, "gateway.log") };
 
 if (
@@ -327,12 +435,16 @@ if (
 writeFileSync(configPath, JSON.stringify(config, null, 2));
 function startGateway() {
   const log = openSync(path.join(output, "gateway.log"), "a");
+  const stopPreload = new URL("../lib/gateway-bench-stop-preload.mjs", import.meta.url);
+  stopPreload.searchParams.set("parentPid", String(process.pid));
+  stopPreload.searchParams.set("entry", path.resolve("scripts/perf/transcript-listener-entry.ts"));
   const child = spawn(
     process.execPath,
     buildGatewayBenchChildArgs("scripts/perf/transcript-listener-entry.ts", port, [
       "--expose-gc",
       "--import",
       "./scripts/tsx.mjs",
+      ...(scenario === "surge" ? ["--import", stopPreload.href] : []),
     ]),
     {
       env: {
@@ -340,8 +452,11 @@ function startGateway() {
         OPENCLAW_LISTENER_BASELINE: values["baseline-dir"]
           ? path.resolve(values["baseline-dir"])
           : "",
+        OPENCLAW_LISTENER_BASELINE_REVISION: values["baseline-revision"] ?? "",
         OPENCLAW_LISTENER_FAIL_EVERY: values["cleanup-fail-every"],
         OPENCLAW_LISTENER_ALLOCATIONS: values.allocations ? "1" : "0",
+        OPENCLAW_LISTENER_SURGE: scenario === "surge" ? "1" : "0",
+        OPENCLAW_LISTENER_PROFILE: values.profile ? path.join(output, "surge.cpuprofile") : "",
       },
       detached: process.platform !== "win32",
       stdio: ["ignore", log, log, "ipc"],
@@ -363,6 +478,8 @@ async function until<T>(message: string, check: () => Promise<T | undefined>) {
 }
 let gateway = startGateway();
 let client: ReturnType<typeof createGatewayWsClient> | undefined;
+const surgeClients: ReturnType<typeof createGatewayWsClient>[] = [];
+let surgeResult: unknown;
 const captures: Array<{
   completed: number;
   pid: number | undefined;
@@ -423,6 +540,250 @@ async function capture(completed: number) {
   });
   console.log(JSON.stringify({ completed, pid: gateway.pid, ...captured }));
 }
+async function measureSurge(
+  rpc: (method: string, params: unknown) => Promise<Record<string, unknown>>,
+  terminal: (runId: unknown) => Promise<Record<string, unknown>>,
+) {
+  const sample = (action: "sample" | "start" | "stop") =>
+    new Promise<Record<string, unknown>>((resolve, reject) => {
+      const id = randomUUID();
+      const timeout = setTimeout(() => {
+        gateway.off("message", receive);
+        reject(new Error("Surge IPC timed out"));
+      }, 120_000);
+      function receive(message: unknown) {
+        if (isRecord(message) && message.channel === "listener-surge" && message.id === id) {
+          clearTimeout(timeout);
+          gateway.off("message", receive);
+          if (message.error) {
+            reject(new Error(JSON.stringify(message.error)));
+          } else {
+            resolve(message);
+          }
+        }
+      }
+      gateway.on("message", receive);
+      gateway.send({ channel: "listener-surge", id, action });
+    });
+  let measuring = false;
+  const receipts = createTeamStressFanoutReceipts(clientCount, []);
+  const sequences = new Map<number, number>();
+  let sequenceError: string | undefined;
+  const latency: number[] = [];
+  const listLatencies: Record<"all" | "active", number[]> = { all: [], active: [] };
+  const distribution = (samples: number[]) => {
+    const sorted = samples.toSorted((left, right) => left - right);
+    return {
+      count: sorted.length,
+      p50Ms: sorted[Math.floor(sorted.length * 0.5)],
+      p95Ms: sorted[Math.floor(sorted.length * 0.95)],
+      p99Ms: sorted[Math.floor(sorted.length * 0.99)],
+      maxMs: sorted.at(-1),
+    };
+  };
+  const delivered = Array.from({ length: clientCount }, () => ({
+    changed: 0,
+    message: 0,
+    chat: 0,
+  }));
+  const audiences = [
+    ["operator.admin", "operator.read", "operator.write"],
+    ["operator.read", "operator.write"],
+    ["operator.read"],
+  ];
+  for (let index = 0; index < clientCount; index++) {
+    const scopes = audiences[index % audiences.length]!;
+    const observer = createGatewayWsClient({
+      url: `ws://127.0.0.1:${port}`,
+      onEvent(event) {
+        receipts.observe(index, event.event, isRecord(event.payload) ? event.payload : undefined);
+        if (typeof event.seq === "number") {
+          const previous = sequences.get(index);
+          if (previous !== undefined && event.seq !== previous + 1) {
+            sequenceError ??= `Client ${index} event sequence ${previous} -> ${event.seq}`;
+          }
+          sequences.set(index, event.seq);
+        }
+        if (!measuring) {
+          return;
+        }
+        const count = delivered[index]!;
+        if (event.event === "sessions.changed") {
+          count.changed++;
+        } else if (event.event === "session.message") {
+          count.message++;
+        } else if (event.event === "chat") {
+          count.chat++;
+        } else {
+          return;
+        }
+        if (
+          (event.event === "sessions.changed" || event.event === "session.message") &&
+          isRecord(event.payload) &&
+          typeof event.payload.ts === "number"
+        ) {
+          latency.push(Math.max(0, Date.now() - event.payload.ts));
+        }
+      },
+    });
+    surgeClients.push(observer);
+    await observer.waitOpen();
+    const connected = await observer.request("connect", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "backend",
+      },
+      role: "operator",
+      scopes,
+      caps: ["session-scoped-events", "session-row-deltas", "session-event-field-refs"],
+    });
+    assert(connected.ok, JSON.stringify(connected.error));
+    assert(isRecord(connected.payload) && isRecord(connected.payload.auth));
+    assert.deepEqual(
+      connected.payload.auth.scopes,
+      scopes,
+      "Viewer scopes changed at authentication",
+    );
+    const subscribed = await observer.request(
+      "sessions.subscribe",
+      {
+        limit: 100,
+        rowMode: "sidebar",
+        source: "sidebar",
+        includeMessageBodies: true,
+      },
+      120_000,
+    );
+    assert(subscribed.ok, JSON.stringify(subscribed.error));
+  }
+  const nonce = randomUUID();
+  const beforeCount = (
+    await rpc("sessions.list", { limit: 1, includeGlobal: true, includeUnknown: true })
+  ).totalCount;
+  assert.equal(typeof beforeCount, "number");
+  const keys = Array.from(
+    { length: activeCount },
+    (_, index) => `agent:main:surge-${nonce}-${index}`,
+  );
+  receipts.trackForeground(keys);
+  for (const key of keys) {
+    await rpc("sessions.create", { key, agentId: "main" });
+  }
+  mode = "surge";
+  const issuedRuns = await Promise.all(
+    keys.map(async (sessionKey) =>
+      rpc("chat.send", {
+        sessionKey,
+        message: "Stream the synthetic fixture reply.",
+        deliver: false,
+        idempotencyKey: randomUUID(),
+      }),
+    ),
+  );
+  await until("All surge sessions must reach the streaming provider", async () =>
+    streams.size === activeCount ? true : undefined,
+  );
+  await until("Gateway work metrics must report the streaming sessions as running", async () => {
+    const { work } = await sample("sample");
+    return isRecord(work) && isRecord(work.sessions) && work.sessions.running === activeCount
+      ? true
+      : undefined;
+  });
+  // Retain streams through warmup and every measured row publication.
+  await delay(5000);
+  const beforeChunks = providerChunks;
+  const samples: unknown[] = [];
+  const started = performance.now();
+  await sample("start");
+  measuring = true;
+  let rounds = 0;
+  let minimumStreams = streams.size;
+  while (performance.now() - started < durationMs) {
+    const roundStarted = performance.now();
+    minimumStreams = Math.min(minimumStreams, streams.size);
+    assert.equal(streams.size, activeCount, "A provider stream ended during measurement");
+    // Real metadata commits exercise the session-row publisher at a fixed offered rate.
+    await Promise.all(
+      keys.map((key, index) =>
+        rpc("sessions.patch", { key, label: `Synthetic surge ${index}/${rounds}` }),
+      ),
+    );
+    const activeOnly = rounds % 2 === 0;
+    const listStarted = performance.now();
+    await rpc("sessions.list", { limit: 100, activeOnly });
+    listLatencies[activeOnly ? "active" : "all"].push(performance.now() - listStarted);
+    samples.push(await sample("sample"));
+    rounds++;
+    await delay(Math.max(0, publicationMs - (performance.now() - roundStarted)));
+  }
+  const measured = await sample("stop");
+  measuring = false;
+  assert.equal(typeof measured.elapsedMs, "number");
+  const seconds = Number(measured.elapsedMs) / 1000;
+  const result = {
+    ...measured,
+    activeCount,
+    clientCount,
+    chunkMs,
+    publicationMs,
+    rounds,
+    publications: rounds * keys.length,
+    providerChunks: providerChunks - beforeChunks,
+    mainCpuMsPerSecond: Number(measured.mainCpuMs) / seconds,
+    publicationsPerSecond: (rounds * keys.length) / seconds,
+    providerChunksPerSecond: (providerChunks - beforeChunks) / seconds,
+    listCallsPerSecond: rounds / seconds,
+    peakStreams,
+    minimumStreams,
+    audiences,
+    delivered,
+    workSamples: samples,
+    eventToDelivery: distribution(latency),
+    sessionsList: {
+      all: distribution(listLatencies.all),
+      active: distribution(listLatencies.active),
+    },
+  };
+  surgeResult = result;
+  console.log(JSON.stringify(result));
+  assert.equal(
+    measured.minimumRunning,
+    activeCount,
+    "Gateway running sessions fell during measurement",
+  );
+  assert(
+    latency.length > 0 && delivered.every((count) => count.changed > 0),
+    "No row publications reached clients",
+  );
+  finishStreams = true;
+  for (const run of issuedRuns) {
+    assert.equal((await terminal(run.runId)).status, "ok");
+  }
+  await until("Surge session publications did not drain", async () =>
+    receipts.isDrained() ? true : undefined,
+  );
+  receipts.assertComplete();
+  assert.equal(sequenceError, undefined, "A recipient missed or duplicated an event");
+  Object.assign(result, {
+    fanout: "exact recipient/session/event identities; contiguous client sequences",
+  });
+  for (const key of keys) {
+    assert.equal(
+      (await rpc("sessions.delete", { key, agentId: "main", deleteTranscript: true })).deleted,
+      true,
+    );
+  }
+  const afterCount = (
+    await rpc("sessions.list", { limit: 1, includeGlobal: true, includeUnknown: true })
+  ).totalCount;
+  assert.equal(afterCount, beforeCount, "Owned surge sessions were not completely removed");
+  Object.assign(result, { beforeCount, afterCount });
+  return result;
+}
 try {
   const connect = async () => {
     const ready = await waitForInitialProbe({
@@ -478,8 +839,13 @@ try {
     message.stopReason === "stop" &&
     JSON.stringify(message.content).includes(replyMarker);
   await connect();
-  await capture(-4);
-  for (let index = -4; index < runs; index++) {
+  if (scenario === "surge") {
+    await measureSurge(rpc, terminal);
+  } else {
+    await capture(-4);
+  }
+  const lifecycleRuns = scenario === "surge" ? -4 : runs;
+  for (let index = -4; index < lifecycleRuns; index++) {
     mode =
       scenario === "lifecycle"
         ? ["success", "abort", "failure", "success"][(index + 4) % 4]!
@@ -768,8 +1134,23 @@ try {
   failure = error instanceof Error ? error : new Error("Synthetic soak failed", { cause: error });
 } finally {
   client?.close();
+  for (const observer of surgeClients) {
+    observer.close();
+  }
+  finishStreams = true;
   for (const response of held) {
     response.destroy();
+  }
+  if (scenario === "surge") {
+    try {
+      const shutdown = await stopGatewayGracefully(gateway, 90_000);
+      if (isRecord(surgeResult)) {
+        surgeResult.shutdown = shutdown;
+      }
+    } catch (error) {
+      failure ??=
+        error instanceof Error ? error : new Error("Surge shutdown failed", { cause: error });
+    }
   }
   await stopChild(gateway);
   providerServer.closeAllConnections();
@@ -791,6 +1172,7 @@ try {
         settleMs,
         captures,
         turns,
+        surge: surgeResult,
         failure: failure?.message,
       },
       null,

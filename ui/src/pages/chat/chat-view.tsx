@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { composerInputFocusElement } from "../../lib/composer-input.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -472,10 +473,14 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
       input.props,
       (replacement) => {
         const replacementElement = replacement && replacementComposer.read();
+        const footer = getComposerFooter();
+        const composer = getChatComposerState(input.props.paneId).composerTextarea;
         const target =
-          replacementElement ||
-          getChatComposerState(input.props.paneId).composerTextarea ||
-          getComposerFooter();
+          replacementElement || (composer && composerInputFocusElement(composer)) || footer;
+        // The fallback is a keyboard destination, not a pointer-focusable editor ancestor.
+        if (target === footer) {
+          footer?.setAttribute("tabindex", "-1");
+        }
         target?.focus({ preventScroll: true });
       },
       // This view mounts only while its pane's question source exists.
@@ -502,10 +507,14 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
       input.props.onRefresh();
     }
   };
+  // Keep cancellation outside the transcript's native scrolling path.
+  const forwardWheel = (event: WheelEvent) =>
+    forwardChatWheelToTranscript(event, input.props.transcript.scrollElement);
   const historyFailure = (inline: boolean) => (
     <div
       class={["chat-history-error", { "chat-history-error--inline": inline }]}
       role={inline ? "status" : "alert"}
+      onWheel={inline ? forwardWheel : undefined}
     >
       {inline ? (
         <>
@@ -598,17 +607,12 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                   class="chat-main__conversation-frame"
                   ref={[elementRef(input.props.onConversationFrameRef)]}
                 >
-                  <div
-                    class="chat-main__conversation"
-                    ref={skillFileHovercard}
-                    onWheel={(event) =>
-                      forwardChatWheelToTranscript(event, input.props.transcript.scrollElement)
-                    }
-                  >
+                  <div class="chat-main__conversation" ref={skillFileHovercard}>
                     <Show when={!input.props.suggestionComposer}>
                       <a
                         class="shell-skip-link chat-composer-skip-link"
                         href={`#${composerTargetId}`}
+                        onWheel={forwardWheel}
                         onClick={(event) => {
                           event.preventDefault();
                           frame().threadProps.onFocusComposer?.();
@@ -641,7 +645,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                     </Show>
                     {/* Keep the affordance mounted so showing it never changes transcript layout. */}
                     <Show when={input.props.onScrollToBottom}>
-                      <div class="chat-scroll-to-bottom-wrap">
+                      <div class="chat-scroll-to-bottom-wrap" onWheel={forwardWheel}>
                         <button
                           class="chat-scroll-to-bottom"
                           ref={elementRef(bindScrollToLatestButton)}
@@ -661,7 +665,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                         input.props.detailsEnabled || (input.props.taskSuggestions?.length ?? 0) > 0
                       }
                     >
-                      <div class="chat-gutter-stack">
+                      <div class="chat-gutter-stack" onWheel={forwardWheel}>
                         <div class="chat-gutter-header" hidden={!input.props.detailsEnabled}>
                           <Show when={input.props.detailsEnabled}>
                             <ChatTopbarNotices {...input.props} />
@@ -677,8 +681,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                     <div
                       id={composerTargetId}
                       class="chat-footer"
-                      tabindex={-1}
+                      onBlur={(event) => event.currentTarget.removeAttribute("tabindex")}
                       ref={[bindComposerFooter, elementRef(input.props.onFooterElementRef)]}
+                      onWheel={forwardWheel}
                     >
                       <ChatSurface
                         binding={{

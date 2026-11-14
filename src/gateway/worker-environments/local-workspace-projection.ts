@@ -1,6 +1,12 @@
-import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type {
+  LocalWorkspacePausePhase,
+  LocalWorkspacePauseReason,
+} from "../../agents/sandbox/local-workspace-quiescence.js";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
-import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import {
+  startWorktreePreparationPhase,
+  timeWorktreePreparationPhase,
+} from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRegistryReadGuard,
   prepareWorktreeRegistryGuard,
@@ -143,9 +149,14 @@ export function checkpointLocalWorkspace(
     (beginCapture) =>
       withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
         beginCapture();
+        let snapshotCapture = false;
         if (
           !options.knownMutation &&
-          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"]))
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"], (entries, elapsedMs) => {
+            // A probe stops at its first edit. The accepted inventory also covers
+            // large trees whose changed file happens to sort first.
+            snapshotCapture = entries >= 20_000 || elapsedMs >= 500;
+          }))
         ) {
           await removeLocalWorkspaceCheckpointCapture(store.get()!.projection_path, {
             signal: store.signal,
@@ -164,7 +175,7 @@ export function checkpointLocalWorkspace(
                 quiescence &&
                 (() => timeWorktreePreparationPhase("runtimeResume", quiescence.resume)),
             }),
-          { reason: "checkpoint" },
+          { reason: "checkpoint", snapshotCapture },
         );
       }),
     options,
@@ -377,28 +388,49 @@ export function reuseLocalWorkspaceProjection(
       using phases = observeDiagnosticsTimelinePhases(
         "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
       );
+      let finishPhase = startWorktreePreparationPhase("reuse.operation");
+      const markPhase = (
+        phase:
+          | LocalWorkspacePausePhase
+          | "capturePreparation"
+          | "probeCanonical"
+          | "probeProjection",
+      ) => {
+        finishPhase();
+        finishPhase = startWorktreePreparationPhase(`reuse.${phase}`);
+      };
       try {
         if (store.get()?.baseline_ref) {
           beginCapture?.();
         }
         return (
-          (await probeUnchangedLocalWorkspace(owner, store, ["canonical", "projection"])) ??
+          (await probeUnchangedLocalWorkspace(
+            owner,
+            store,
+            ["canonical", "projection"],
+            undefined,
+            (target) => markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
+          )) ??
           (await runLocalWorkspaceProjection(owner, store, (state) => state.reuse(), {
             reason: "preparation",
+            onPhase: markPhase,
           }))
         );
       } finally {
+        finishPhase();
         phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
       }
     },
   );
 }
 
-/** A live probe can prove there is nothing to publish; changed bytes still require quiescence. */
+/** A live probe can prove there is nothing to publish; changes need a consistent capture. */
 async function probeUnchangedLocalWorkspace(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   targets: readonly ("canonical" | "projection")[],
+  observeProbe?: (entries: number, elapsedMs: number) => void,
+  markProbe?: (target: "canonical" | "projection") => void,
 ) {
   let row = store.get();
   if (
@@ -415,7 +447,9 @@ async function probeUnchangedLocalWorkspace(
   // Bind the row before observation; acceptance retains the same lease and live authority.
   projectionOperations(owner, store, row).current();
   for (const target of targets) {
+    markProbe?.(target);
     const selected = row;
+    const started = performance.now();
     const snapshot = await timeWorktreePreparationPhase(
       target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
       async () => {
@@ -432,6 +466,10 @@ async function probeUnchangedLocalWorkspace(
           return undefined;
         }
       },
+    );
+    observeProbe?.(
+      snapshot?.kind === "rescan" ? (snapshot.entryCount ?? 0) : 0,
+      performance.now() - started,
     );
     store.assertCurrent();
     if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {
@@ -479,7 +517,7 @@ export async function expireLocalWorkspaceProjection(params: {
       if (params.worktree.removedAt === undefined) {
         throw new Error("Cannot expire a live sandbox workspace");
       }
-      const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+      const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", params.worktree);
       const record = await readRegistryWorktree(context, params.worktree.id);
       const assertWorktreeCurrent = accept(record);
       params.assertCurrent();
@@ -588,7 +626,8 @@ export async function resolveLocalWorkspaceOwner(params: {
       release();
       return undefined;
     }
-    const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+    const selection = { id: entry.worktree.id, ownerKind: "session" } as const;
+    const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", selection);
     const worktree = await readRegistryWorktree(context, entry.worktree.id);
     const assertWorktreeCurrent = accept(worktree);
     if (

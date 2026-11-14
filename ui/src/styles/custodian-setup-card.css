@@ -29,18 +29,18 @@ openclaw-custodian-setup-card {
 
 .custodian-setup h2 {
   color: var(--text-strong);
-  font-size: calc(18px * var(--control-ui-text-scale));
+  font-size: 18px;
   line-height: 1.4;
 }
 
 .custodian-setup h3 {
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .custodian-setup p,
 .custodian-setup__attempts {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -93,5 +93,5 @@ openclaw-custodian-setup-card {
 
 .custodian-setup .custodian-setup__safety {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }

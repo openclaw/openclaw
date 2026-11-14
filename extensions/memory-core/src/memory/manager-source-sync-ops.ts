@@ -1,9 +1,10 @@
 // Memory Core plugin module owns memory and session source indexing.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntries,
-  type SessionFileEntry,
   sessionPathForSessionIdentity,
+  streamSessionEntries,
+  streamSessionEntry,
+  type SessionEntrySummary,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
@@ -319,7 +320,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     };
     const resolveSessionIndexEntry = async (
       absPath: string,
-      entry: SessionFileEntry | null,
+      entry: SessionEntrySummary | null,
     ): Promise<MemoryIndexEntry | null> => {
       if (!entry) {
         this.advanceSyncProgress(params.progress);
@@ -379,8 +380,16 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
-      // Keep the prepared entry's non-enumerable reset boundary.
-      return Object.assign(entry, { hash, sessionId: corpusEntryForPath(absPath).sessionId });
+      // Keep the summary's non-enumerable reset boundary. Indexing streams the export again
+      // under this entry's state; a later change differs from this hash and reindexes.
+      const corpusEntry = corpusEntryForPath(absPath);
+      const options = this.buildSessionEntryOptions(corpusEntry);
+      return Object.assign(entry, {
+        hash,
+        sessionId: corpusEntry.sessionId,
+        streamSessionExport: (stream: Parameters<typeof streamSessionEntry>[2]) =>
+          streamSessionEntry(absPath, options, stream),
+      });
     };
     const syncFiles = async (batch: string[]) => {
       const selected = batch.filter((file) => {
@@ -390,7 +399,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return false;
       });
-      const entries = await buildSessionEntries(
+      const entries = await streamSessionEntries(
         selected.map((absPath) => ({
           absPath,
           options: this.buildSessionEntryOptions(corpusEntryForPath(absPath)),
@@ -441,8 +450,8 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         return false;
       };
 
-      // Session entries carry flattened transcript content; flush bounded groups
-      // so source-wide batching cannot retain the whole dirty transcript corpus.
+      // Session entries stream their content while indexing; flush bounded groups so
+      // source-wide batching cannot retain the prepared chunks of the whole dirty corpus.
       const groupSize = this.syncIsBackground ? 8 : SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES;
       for (let start = 0; start < files.length; start += groupSize) {
         if (this.shouldYieldSessionIndexing()) {

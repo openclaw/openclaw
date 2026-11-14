@@ -52,6 +52,7 @@ export function resolveUsableAgentCredentialModes(
           ? Object.freeze({
               source: "native",
               mode: native.mode === "api-key" ? "api_key" : native.mode,
+              ...(native.display ? { display: native.display } : {}),
             })
           : "api_key";
       }

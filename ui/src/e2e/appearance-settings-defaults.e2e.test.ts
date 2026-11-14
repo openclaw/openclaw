@@ -187,11 +187,6 @@ suite.define(() => {
       await expectPressed(themeCard(page, "knot"));
       await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("dark");
       await expect.poll(() => textSizeSection.locator("input:checked").inputValue()).toBe("110");
-      expect(
-        await page
-          .locator(".page-title")
-          .evaluate((node) => Number.parseFloat(getComputedStyle(node).fontSize)),
-      ).toBeCloseTo(28.6);
       await expectAttribute(page.locator("html"), "data-theme-mode", "dark");
 
       const resets = [
@@ -219,9 +214,6 @@ suite.define(() => {
       }
 
       await textSizeSection.getByRole("radio", { name: "100%", exact: true }).click();
-      await expect
-        .poll(() => page.locator(".page-title").evaluate((node) => getComputedStyle(node).fontSize))
-        .toBe("26px");
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expectDefaults(page);
       await page.reload();

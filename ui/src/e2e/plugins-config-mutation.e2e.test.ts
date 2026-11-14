@@ -1,7 +1,11 @@
 // Control UI tests cover plugin mutations serialized behind pending config drafts.
 import { expect, it } from "vitest";
 import type { PluginsInspectResult } from "../lib/plugins/index.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -78,6 +82,12 @@ suite.define(() => {
         mutationAllowed: true,
       });
       const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "models.list",
+        ],
         methodResponses: {
           "agents.list": {
             defaultId: "main",

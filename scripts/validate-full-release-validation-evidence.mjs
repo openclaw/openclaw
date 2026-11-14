@@ -15,10 +15,6 @@ import {
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
 import {
-  RECEIPT_RECOVERY_WORKFLOW,
-  verifyReceiptRecoveryAuthority,
-} from "./full-release-receipt-recovery.mjs";
-import {
   normalizeReleaseCoveragePolicy,
   isSplitChangelogEvidenceDelta,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
@@ -27,6 +23,10 @@ import {
 } from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import {
+  RECEIPT_RECOVERY_WORKFLOW,
+  verifyReceiptRecoveryAuthority,
+} from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 import { qualificationAdmissionContract } from "./release-qualification-coverage.mjs";
@@ -170,6 +170,16 @@ function validatePublicationOperation(source, operation) {
     throw new Error("Publication operation requires an authenticated publish admission.");
   }
   if (publicationSourceJson(original) === publicationSourceJson(operation)) {
+    return;
+  }
+  // Detached plugin publication drops only core npm. The original route,
+  // channel, plugin roster and optional Windows operands remain binding.
+  if (
+    !operation.publishOpenclawNpm &&
+    original.publishOpenclawNpm &&
+    publicationSourceJson({ ...operation, publishOpenclawNpm: true }) ===
+      publicationSourceJson(original)
+  ) {
     return;
   }
   if (
@@ -370,7 +380,9 @@ export function validateFullReleaseValidationEvidence({
   if (manifest.publicationAdmissionContract !== registryContract) {
     throw new Error("Publication evidence differs from its immutable registry-admission contract.");
   }
+  // Recovery authenticates the original admission separately in strict evidence below.
   if (
+    !receiptRecovery &&
     qualificationAdmissionContract(workflowSource) === "1" &&
     sourceAdmission?.validationPurpose === "publish" &&
     !sourceAdmission.qualificationAdmission
@@ -704,10 +716,21 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     evidence,
     publicationAdmission: manifest.publicationAdmission ?? null,
     revalidateAuthority,
+    publicationAuthority: candidateArtifactAuthorityRecord(manifest, evidence),
   };
 }
 
 function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
+  const authority = candidateArtifactAuthorityRecord(manifest, evidence);
+  if (!authority) {
+    return undefined;
+  }
+  const revalidate = () => revalidateCandidateArtifactAuthority(authority, evidenceClient);
+  revalidate();
+  return revalidate;
+}
+
+function candidateArtifactAuthorityRecord(manifest, evidence) {
   const descriptor =
     manifest?.sourceAdmission?.qualificationAdmission ??
     manifest?.receiptRecovery?.qualificationAdmission;
@@ -717,8 +740,8 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
   if (!evidence.qualificationAdmission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
-  // Keep live authority process-local and independent of caller-owned data.
-  const authority = structuredClone({
+  // Retain authenticated identities, not live permission or ref verdicts.
+  return structuredClone({
     descriptor,
     admission: evidence.qualificationAdmission,
     recoveryProducer: manifest.receiptRecovery
@@ -730,14 +753,21 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
         }
       : null,
   });
-  const revalidateAuthority = () => {
+}
+
+// Only an authenticated preview carrier may restore this owner-generated record.
+// It carries the operator identities, never their current permission verdict.
+export function revalidateCandidateArtifactAuthority(authority, evidenceClient) {
+  if (authority) {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
     if (authority.recoveryProducer) {
-      verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      if (evidenceClient.verifyReceiptRecoveryAuthority) {
+        evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);
+      } else {
+        verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      }
     }
-  };
-  revalidateAuthority();
-  return revalidateAuthority;
+  }
 }
 
 function validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha) {
@@ -874,9 +904,7 @@ async function main() {
   const consumer = process.env.PUBLICATION_CONSUMER ?? "";
   const coreProjection = consumer === "core-npm" || consumer === "docker-only";
   const boundedOperation =
-    consumer === "publisher" &&
-    process.env.PLUGIN_PUBLISH_SCOPE === "selected" &&
-    manifest.sourceAdmission?.publicationSelection !== undefined;
+    consumer === "publisher" && manifest.sourceAdmission?.publicationSelection !== undefined;
   if (consumer && !["publisher", "core-npm", "docker-only"].includes(consumer)) {
     throw new Error("Unknown publication evidence consumer.");
   }

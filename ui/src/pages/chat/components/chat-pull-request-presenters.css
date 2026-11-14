@@ -29,8 +29,8 @@
 }
 
 .chat-details .chat-pr.chat-pr--summary .chat-pr__title {
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .chat-details[data-desktop] .chat-pr.chat-pr--summary .chat-pr__identity,
@@ -146,8 +146,8 @@
   width: 248px;
   max-width: calc(100vw - 16px);
   padding: 4px;
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 18px;
 }
 
 /* Keep both axes with their owners: Details supplies the side edges, the menu
@@ -193,8 +193,8 @@
   gap: 10px;
   min-height: 32px;
   padding: 6px 8px;
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .chat-pr-menu .oc-menu-item__icon,
@@ -253,7 +253,7 @@
   display: block;
   padding: 2px 8px 6px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .chat-pr__check-symbol {
@@ -293,7 +293,7 @@
 .chat-pr-menu__error {
   margin: 6px 8px;
   color: var(--danger);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .chat-pr-mobile {
@@ -357,14 +357,14 @@
   min-width: 0;
 }
 .chat-pr-mobile__row-title {
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 500;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 .chat-pr-mobile__row-meta {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 .chat-pr-mobile__row-meta > span {
@@ -380,7 +380,7 @@
   display: grid;
   gap: 14px;
   padding: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 .chat-pr-mobile__identity {
   display: flex;
@@ -390,7 +390,7 @@
 }
 .chat-pr-mobile__identity > :first-child {
   min-width: 0;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 500;
   overflow-wrap: anywhere;
 }
@@ -407,7 +407,7 @@
   padding: 3px 10px;
   border-radius: var(--radius-xl);
   background: var(--bg);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 .chat-pr-mobile__state svg {
   width: 13px;
@@ -440,7 +440,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 .chat-pr-mobile__author {
@@ -475,7 +475,7 @@
 .chat-pr-mobile__checks h3 {
   margin: 4px 12px 8px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
 }
 .chat-pr-mobile__checks .chat-pr__checks-row {
@@ -483,7 +483,7 @@
   align-items: center;
   gap: 10px;
   min-height: 40px;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
 }
 .chat-pr-mobile__actions > a,
 .chat-pr-mobile__actions > button {
@@ -498,7 +498,7 @@
   border-radius: 0;
   background: transparent;
   color: inherit;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   text-align: start;
   text-decoration: none;
   cursor: default;
@@ -534,8 +534,8 @@
 .chat-pr-mobile__recovery-copy {
   flex: 1;
   min-width: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 18px;
 }
 .chat-pr-mobile__recovery strong {
   font-weight: 500;
@@ -548,7 +548,7 @@
 .chat-pr-mobile__retry.btn {
   min-height: 30px;
   padding: 4px 10px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 .chat-pr-mobile__recovery--empty {
   flex-direction: column;
@@ -561,7 +561,7 @@
   min-height: 44px;
   margin-top: 8px;
   padding: 10px 24px;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
 }
 .chat-pr-mobile__illustration {
   width: 44px;
@@ -581,7 +581,7 @@
   gap: 12px;
   min-height: 44px;
   color: var(--text);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   text-decoration: none;
 }
 .chat-pr-mobile__checks-link::before {
@@ -605,8 +605,8 @@
   width: 300px;
   padding: 8px;
   border-radius: var(--radius-xl);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .chat-pr-menu--drill :is(.oc-menu-item, .chat-pr-menu__fact, .chat-pr__checks-row) {
@@ -673,8 +673,8 @@
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: var(--control-ui-text-lg);
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .chat-pr-menu--drill :is(.chat-ci__job-summary, .chat-ci__skipped > summary) {

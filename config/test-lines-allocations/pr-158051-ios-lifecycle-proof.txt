@@ -1,2 +1,0 @@
-# Exercise native Access lifecycle selection and the Simulator restart proof command.
-16

@@ -326,6 +326,16 @@ not override the archive. The recovered config is published after every store
 passes verification, with its matching anchors.
 The original PostgreSQL namespaces remain untouched.
 
+To import into a different server without changing that secret, for example a
+staging database for a restore drill, pass
+`--postgres-connection-env <name>`: every PostgreSQL import, and the cleanup
+after a failed import, uses the DSN in that environment variable instead. The
+variable is read through the archived config's default env secret provider
+(`secrets.defaults.env`, or `default`), including its allowlist. The
+captured family selections still apply, and the restored config keeps the
+archived connection unchanged, so point that connection at the same server
+before activating the restore.
+
 <Warning>
   Restoring an archive is time travel. Messaging-channel credentials with
   ratchet state, especially WhatsApp, may desynchronize after rollback and need
@@ -802,6 +812,25 @@ paths remain included. Config, credentials, workspaces, agent directories, and
 plugin-included resources nested inside a template remain protected. The dry-run
 plan and archive manifest report existing omitted templates as `regenerable`.
 This flag does not delete or modify local templates.
+
+Archives include Doctor's retained pre-migration originals by default, because
+they are the only way to return a database to the generation before its last
+migration or repair. Use `--exclude-migration-backups` to omit them when you
+keep a separate pre-upgrade backup. It matches only the exact names Doctor
+writes beside the shared state database and each agent database:
+
+- `<database>.pre-startup-migration-<id>.bak`: full SQLite original.
+- `<database>.pre-startup-migration-<id>.scoped.bak`: scoped SQLite original.
+- `<database>.pre-startup-migration-<id>.postgres.bak`: PostgreSQL backup
+  directory, omitted as a whole.
+- `<database>.pre-startup-migration-restart-recovery-<id>.bak`: SQLite original
+  saved before a restart-recovery session repair.
+
+Similar files stay included. The dry-run plan, JSON result, and archive
+manifest list each omitted original once as `excluded`. The live databases are
+still captured as usual. A restored archive cannot roll back the last migration
+with those originals. This flag does not delete or modify them; `openclaw
+update cleanup` still owns the retention of the originals it tracks.
 
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.

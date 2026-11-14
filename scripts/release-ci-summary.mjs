@@ -42,6 +42,7 @@ import {
   MAX_RELEASE_ARTIFACT_BYTES,
   normalizeReleaseCoveragePolicy,
   readReleaseJobListing,
+  releaseWatcherJobName,
   releaseCompositeJobsSha256,
   releaseChildSpec,
   releaseChildAdvisories,
@@ -59,9 +60,9 @@ import {
   inspectActionsArtifactZip,
 } from "./lib/actions-artifact-archive.mjs";
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
-import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
 import {
+  accountGithubRequest,
   execGhRead,
   execGhReadAsync,
   plainGhAuthenticatedEnv,
@@ -76,6 +77,7 @@ import {
   resolveTrustedWorkflowIdentity,
   resolveVerifierIdentity,
   validateTrustedProducerIdentity,
+  verifyReceiptRecoveryAuthority,
 } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
@@ -268,6 +270,7 @@ function downloadArtifactZip(
   for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_ATTEMPTS; attempt += 1) {
     const output = openSync(destination, "w");
     try {
+      accountGithubRequest(artifactDownloadArgs(artifactId, repository));
       execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
         env: plainGhAuthenticatedEnv(),
         killSignal: "SIGKILL",
@@ -345,13 +348,19 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
   });
 }
 
-function readRunArtifacts(runId, repository) {
+function readEvidenceJson(route, repository, immutableReads) {
+  const load = () => runReleaseCiGh(githubRestArgs(route, repository));
+  return JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
+}
+
+function readRunArtifacts(runId, repository, immutableReads) {
   const artifacts = [];
   let total;
   for (let page = 1; page <= 10; page += 1) {
-    const response = githubRestJson(
+    const response = readEvidenceJson(
       `actions/runs/${runId}/artifacts?per_page=100&page=${page}`,
       repository,
+      immutableReads,
     );
     if (
       !Number.isSafeInteger(response?.total_count) ||
@@ -379,7 +388,7 @@ function readRunArtifacts(runId, repository) {
 
 function readExecutionPlanEvidence(runId, repository, immutableReads) {
   const name = `full-release-execution-plan-${runId}`;
-  const artifacts = readRunArtifacts(runId, repository);
+  const artifacts = readRunArtifacts(runId, repository, immutableReads);
   const matches = artifacts.filter((artifact) => artifact.name === name);
   if (matches.length !== 1) {
     throw new Error(
@@ -387,7 +396,7 @@ function readExecutionPlanEvidence(runId, repository, immutableReads) {
     );
   }
   const listed = matches[0];
-  const artifact = githubRestJson(`actions/artifacts/${listed.id}`, repository);
+  const artifact = readEvidenceJson(`actions/artifacts/${listed.id}`, repository, immutableReads);
   if (
     String(artifact.id) !== String(listed.id) ||
     artifact.name !== name ||
@@ -2036,8 +2045,11 @@ function downloadParentManifestEvidence(
   const artifacts = [];
   for (let page = 1; page <= 10; page += 1) {
     const pageArtifacts =
-      githubRestJson(`actions/runs/${runId}/artifacts?per_page=100&page=${page}`, targetRepository)
-        .artifacts ?? [];
+      readEvidenceJson(
+        `actions/runs/${runId}/artifacts?per_page=100&page=${page}`,
+        targetRepository,
+        immutableReads,
+      ).artifacts ?? [];
     artifacts.push(...pageArtifacts);
     if (pageArtifacts.length < 100) {
       break;
@@ -2048,7 +2060,7 @@ function downloadParentManifestEvidence(
     return undefined;
   }
   const artifact = validateManifestArtifactIdentity(
-    githubRestJson(`actions/artifacts/${listedArtifact.id}`, targetRepository),
+    readEvidenceJson(`actions/artifacts/${listedArtifact.id}`, targetRepository, immutableReads),
     {
       artifactDigest: listedArtifact.digest,
       artifactId: listedArtifact.id,
@@ -2127,10 +2139,7 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutableReads } = {}) {
   const normalizedRepository = normalizeRepository(repository);
-  const readEvidenceJson = (route) => {
-    const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
-    return JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
-  };
+  const readJson = (route) => readEvidenceJson(route, normalizedRepository, immutableReads);
   const runAdmissionGh = (args) => {
     const route = args[1].replace("repos/" + normalizedRepository + "/", "");
     const load = () => runQualificationAdmissionGh(args);
@@ -2140,7 +2149,11 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
   };
   return {
     validateChildReuse(selection, request, { deadlineMs } = {}) {
-      return validateReusableReleaseChild(selection, request, { immutableReads, deadlineMs });
+      return validateReusableReleaseChild(selection, request, {
+        immutableReads,
+        deadlineMs,
+        getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
+      });
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
@@ -2179,10 +2192,10 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     },
     compareCommitLineage(base, head) {
-      return readEvidenceJson(`compare/${base}...${head}?per_page=1&page=2`);
+      return readJson(`compare/${base}...${head}?per_page=1&page=2`);
     },
     compareCommits(base, head) {
-      return readEvidenceJson(`compare/${base}...${head}`);
+      return readJson(`compare/${base}...${head}`);
     },
     getJobLog(jobId) {
       return parentJobLog(jobId, normalizedRepository, immutableReads);
@@ -2199,12 +2212,12 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       );
     },
     getRunAttempt(runId, runAttempt) {
-      return readEvidenceJson(`actions/runs/${runId}/attempts/${runAttempt}`);
+      return readJson(`actions/runs/${runId}/attempts/${runAttempt}`);
     },
     verifyQualificationAdmission(options) {
       if (immutableReads) {
         const route = "actions/runs/" + options.descriptor.runId;
-        const current = githubRestJson(route, normalizedRepository);
+        const current = readJson(route);
         if (current.run_attempt !== options.descriptor.runAttempt) {
           throw new Error("Qualification admission producer attempt changed");
         }
@@ -2213,6 +2226,19 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       return verifyQualificationAdmission({
         ...options,
         ...(immutableReads ? { runGh: runAdmissionGh, downloadArchive: runAdmissionGh } : {}),
+      });
+    },
+    verifyReceiptRecoveryAuthority(producer) {
+      if (!immutableReads) {
+        return verifyReceiptRecoveryAuthority(normalizedRepository, producer);
+      }
+      return verifyReceiptRecoveryAuthority(normalizedRepository, producer, true, (args) => {
+        const query = args.indexOf("--jq");
+        const request = query < 0 ? args : [...args.slice(0, query), ...args.slice(query + 2)];
+        const route = request[1].replace("repos/" + normalizedRepository + "/", "");
+        // The raw comparison includes patches; use the existing full-response
+        // reader rather than the tooling reader's projected-response buffer.
+        return JSON.stringify(readJson(route));
       });
     },
     revalidateQualificationAdmissionAuthority(options) {
@@ -2228,13 +2254,13 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       return downloadExactActionsArtifactArchive({ ...options, immutableReads });
     },
     getRunArtifacts(runId) {
-      return readRunArtifacts(runId, normalizedRepository);
+      return readRunArtifacts(runId, normalizedRepository, immutableReads);
     },
     getArtifact(artifactId) {
       if (!/^[1-9][0-9]{0,19}$/u.test(String(artifactId))) {
         throw new Error("invalid publication artifact ID");
       }
-      return githubRestJson(`actions/artifacts/${artifactId}`, normalizedRepository);
+      return readJson(`actions/artifacts/${artifactId}`);
     },
     getRef(fullRef) {
       const refPath = String(fullRef)
@@ -2242,24 +2268,26 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         .split("/")
         .map(encodeURIComponent)
         .join("/");
-      return githubRestJson(`git/ref/${refPath}`, normalizedRepository);
+      return readJson(`git/ref/${refPath}`);
     },
     async getRun(runId) {
       const route = "actions/runs/" + runId;
-      const run = await githubRestJsonAsync(route, normalizedRepository);
+      const load = async () =>
+        JSON.stringify(await githubRestJsonAsync(route, normalizedRepository));
+      const run = JSON.parse(await (immutableReads ? immutableReads.text(route, load) : load()));
       immutableReads?.observeRun(route, run);
       return run;
     },
-    getRunView(runId) {
-      return jsonGh([
-        "run",
-        "view",
-        String(runId),
-        "--repo",
-        normalizedRepository,
-        "--json",
-        "status,conclusion,attempt,headBranch,headSha,url",
-      ]);
+    async getRunView(runId) {
+      const run = await githubRestJsonAsync("actions/runs/" + runId, normalizedRepository);
+      return {
+        status: run.status,
+        conclusion: run.conclusion,
+        attempt: run.run_attempt,
+        headBranch: run.head_branch,
+        headSha: run.head_sha,
+        url: run.html_url,
+      };
     },
     loadManifest(runId, runAttempt, manifestPath) {
       return downloadParentManifestEvidence(
@@ -2291,7 +2319,7 @@ async function loadValidatedParentEvidence({
   repository,
   runId,
 }) {
-  const parentView = client.getRunView(runId);
+  const parentView = await client.getRunView(runId);
   const parentRun = preloadedRun ?? (await client.getRun(runId));
   const parentRunAttempt = normalizePositiveInteger(
     parentRun.run_attempt,
@@ -2396,15 +2424,9 @@ async function validateStrictChildRun({
   );
   const parentLog = await client.getJobLog(parentJob.id);
   if (reused) {
-    const selectionSha256 = releaseChildReuseSha256(childReuse);
-    const witnesses = [
-      ...String(parentLog).matchAll(/\bFRV_CHILD_REUSE_SHA256=([a-f0-9]{64})\b/gu),
-    ];
-    if (witnesses.length !== 1 || witnesses[0][1] !== selectionSha256) {
-      throw new Error(`release child reuse adoption witness mismatch: ${child.name}`);
-    }
     validateReleaseChildDispatchBinding({
       child: plannedChild,
+      childReuse,
       coveragePolicy: parentEvidence.manifest.validationInputs?.coveragePolicy,
       log: parentLog,
       plannedRunAttempt: plannedChild.runAttempt,
@@ -3535,8 +3557,8 @@ export function tryReadReleaseDecisionArtifact(
 
 function releaseDecisionBlockedDuringDrain(parent, runId, repository) {
   const jobs = parent.jobs ?? [];
-  const decision = jobs.find((job) => job.name === "Release Decision");
-  const drain = jobs.find((job) => job.name === "Diagnostic Drain");
+  const decision = jobs.find((job) => releaseWatcherJobName(job.name) === "Release Decision");
+  const drain = jobs.find((job) => releaseWatcherJobName(job.name) === "Diagnostic Drain");
   if (
     decision?.status !== "completed" ||
     SUCCESSFUL_PARENT_JOB_CONCLUSIONS.has(String(decision.conclusion ?? "")) ||

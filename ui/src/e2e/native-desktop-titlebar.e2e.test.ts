@@ -146,7 +146,13 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
             return box.y < 52 &&
               (box.right > viewportWidth - 138 ||
                 (box.x < titlebar.right && box.right > titlebar.left))
-              ? [button.getAttribute("aria-label") ?? button.textContent?.trim()]
+              ? [
+                  {
+                    label: button.getAttribute("aria-label") ?? button.textContent?.trim(),
+                    bounds: box.toJSON(),
+                    titlebar: titlebar.toJSON(),
+                  },
+                ]
               : [];
           });
         }, width),
@@ -278,6 +284,7 @@ async function alignsNativeHeaders(
   host: "web" | "macos" | "tauri-linux" | "tauri-macos",
 ) {
   const native = host !== "web";
+  const macNavigation = host === "macos";
   const macos = host === "macos" || host === "tauri-macos";
   if (host === "macos") {
     await installNativeWebChrome(page);
@@ -288,16 +295,13 @@ async function alignsNativeHeaders(
   await installChat(page, "Selectable transcript content.");
   await page.goto(`${suite.server.baseUrl}chat`);
   const row = page.locator(".sidebar-session-toolbar");
-  const collapse = row.getByRole("button", { name: "Collapse sidebar" });
+  const collapse = macNavigation
+    ? page.locator(".macos-titlebar-controls__sidebar")
+    : row.getByRole("button", { name: "Collapse sidebar" });
   await collapse.waitFor();
   expect(await collapse.getAttribute("aria-expanded")).toBe("true");
   expect(await row.locator("a").count()).toBe(0);
   expect(await row.getByRole("button", { name: /New (session|conversation)/ }).count()).toBe(0);
-  await page.mouse.move(600, 600);
-  const restingBackgrounds = await row
-    .locator("button.sidebar-session-toolbar__button")
-    .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).backgroundColor));
-  expect(restingBackgrounds).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
   const geometry = await row.evaluate((element) => {
     const box = (selector: string) =>
       document.querySelector(selector)!.getBoundingClientRect().toJSON();
@@ -308,7 +312,7 @@ async function alignsNativeHeaders(
       panelPadding: getComputedStyle(document.querySelector(".sidebar-shell")!).paddingTop,
     };
   });
-  if (native) {
+  if (native && !macNavigation) {
     expect(geometry).toMatchObject({ row: { y: 0, height: 52 }, panelPadding: "0px" });
     expect(geometry.title.y + geometry.title.height / 2).toBeCloseTo(26, 1);
     expect(geometry.title.x).toBe(macos ? 92 : 68);
@@ -328,7 +332,9 @@ async function alignsNativeHeaders(
   for (const panel of ["pages", "online"] as const) {
     await page.locator(`[data-navigation-view="${panel}"]`).click();
     const header = page.locator(".sidebar-panel-header");
-    const toggle = header.getByRole("button", { name: "Collapse sidebar" });
+    const toggle = macNavigation
+      ? page.locator(".macos-titlebar-controls__sidebar")
+      : header.getByRole("button", { name: "Collapse sidebar" });
     await toggle.waitFor();
     const panelGeometry = await header.evaluate((element) => {
       const title = element.firstElementChild!.getBoundingClientRect();
@@ -348,8 +354,10 @@ async function alignsNativeHeaders(
     });
     expect(panelGeometry).toMatchObject({ y: geometry.row.y, height: geometry.row.height });
     expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
-    expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
-    expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
+    if (!macNavigation) {
+      expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
+      expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
+    }
     // Empty header space must stay non-interactive so it can drag the window.
     const dragGap = await header.evaluate((element) => {
       const bounds = element.getBoundingClientRect();
@@ -372,35 +380,31 @@ async function alignsNativeHeaders(
     });
     expect(dragGap.width).toBeGreaterThanOrEqual(24);
     expect(dragGap.button).toBe(false);
-    if (native) {
+    if (native && !macNavigation) {
       expect(panelGeometry.x).toBe(macos ? 92 : 68);
     }
     await toggle.click();
     await page
-      .locator(native ? ".shell-chrome-controls__nav-toggle" : `[data-navigation-view="${panel}"]`)
+      .locator(
+        macNavigation
+          ? ".macos-titlebar-controls__sidebar"
+          : native
+            ? ".shell-chrome-controls__nav-toggle"
+            : `[data-navigation-view="${panel}"]`,
+      )
       .click();
   }
   await page.locator('[data-navigation-view="sessions"]').click();
   await collapse.click();
   const cluster = page.locator(".shell-chrome-controls");
-  await expect.poll(() => cluster.isVisible()).toBe(native);
+  await expect.poll(() => cluster.isVisible()).toBe(native && !macNavigation);
   expect(await page.locator('[data-navigation-view][aria-pressed="true"]').count()).toBe(0);
   expect(
     await cluster
       .locator("button, a")
       .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
   ).toEqual(native ? ["Expand sidebar"] : []);
-  if (native) {
-    expect(
-      await cluster.locator("button").evaluate((button) => {
-        const style = getComputedStyle(button);
-        return {
-          border: style.borderTopWidth,
-          background: style.backgroundColor,
-          shadow: style.boxShadow,
-        };
-      }),
-    ).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)", shadow: "none" });
+  if (native && !macNavigation) {
     expect((await cluster.boundingBox())!.x).toBe(macos ? 92 : 64);
     await expect
       .poll(async () => {
@@ -419,7 +423,17 @@ async function alignsNativeHeaders(
       })
       .toBe(true);
   }
-  if (native) {
+  if (macNavigation) {
+    const toolbar = page.locator(".macos-titlebar-controls");
+    const [bar, rail, title] = await Promise.all([
+      toolbar.boundingBox(),
+      page.locator(".sidebar-rail").boundingBox(),
+      page.locator(".chat-pane__crumbs").first().boundingBox(),
+    ]);
+    expect(rail).not.toBeNull();
+    expect(title!.x).toBeGreaterThanOrEqual(bar!.x + bar!.width + 8);
+    await collapse.click();
+  } else if (native) {
     await cluster.getByRole("button", { name: "Expand sidebar" }).click();
   } else {
     await page.locator('[data-navigation-view="sessions"]').click();

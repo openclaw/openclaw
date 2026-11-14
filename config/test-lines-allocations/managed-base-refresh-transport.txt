@@ -1,2 +1,0 @@
-# Native managed base-refresh transport regression coverage after removing a duplicate config assertion.
-52

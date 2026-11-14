@@ -15,7 +15,7 @@ export function createWorkerPlacementRedispatch(params: {
   dispatch: WorkerPlacementDispatchContract["dispatch"];
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
 }): WorkerPlacementRedispatch {
-  return async (placement, { assertCurrent, signal }) => {
+  return async (placement, { assertCurrent, signal, readNativeCredential: suppliedCredential }) => {
     signal?.throwIfAborted();
     assertCurrent();
     const projection = await params.placements.readProjection([placement.sessionId], {
@@ -60,11 +60,14 @@ export function createWorkerPlacementRedispatch(params: {
     const machineClass =
       typeof profileSnapshot.machineClass === "string" ? profileSnapshot.machineClass : undefined;
     const os = typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined;
-    const readNativeCredential = repositoryChatDispatchCredentialReader(
-      identity,
-      { profileId, providerId, profileSnapshot, executionMode },
-      assertCurrent,
-    );
+    // Direct publication recovery carries its own live caller, without a chat turn.
+    const readNativeCredential =
+      suppliedCredential ??
+      repositoryChatDispatchCredentialReader(
+        identity,
+        { profileId, providerId, profileSnapshot, executionMode },
+        assertCurrent,
+      );
     const requiredProfile = getRuntimeConfig().cloudWorkers?.requiredProfile;
     return await params.dispatch(
       {

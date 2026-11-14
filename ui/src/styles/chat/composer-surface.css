@@ -164,15 +164,32 @@
   --chat-composer-send-size: 32px;
   --chat-composer-primary-surface-size: 30px;
   --chat-composer-icon-size: 16px;
-  --chat-composer-plus-icon-size: 20px;
-  --chat-composer-context-icon-size: 15px;
+  /* Every glyph box in the row is even, so each one centers on whole pixels of
+     the 32px row instead of straddling them. The plus is two bare strokes: it
+     needs the larger box to carry the same height as the shield and microphone
+     beside it, and at 22px its left stroke lands on the draft's left edge. */
+  --chat-composer-plus-icon-size: 22px;
+  --chat-composer-context-icon-size: 14px;
+  --chat-composer-brand-icon-size: var(--chat-composer-chip-icon);
   --chat-composer-context-stroke: 2.5px;
   --chat-composer-microphone-icon-size: 16px;
   --chat-composer-primary-icon-size: 18px;
   --chat-composer-chevron-size: 12px;
   --chat-composer-icon-stroke: 2;
+  /* Line glyphs resting in the action row share one rendered stroke, 1.5px,
+     which is also the send arrow's. stroke-width is in viewBox units, so each
+     size tier states 1.5 x 24 / its box: 16px, 22px and 12px. */
+  --chat-composer-glyph-stroke: 2.25;
+  --chat-composer-plus-stroke: 1.64;
+  --chat-composer-chevron-stroke: 3;
   --chat-composer-control-gap: 4px;
   --chat-composer-group-gap: 4px;
+  /* Rest-state rhythm. Neighboring controls sit about 22px apart ink to ink:
+     the plus keeps the row's gap from the permission chip, the context ring's
+     narrow box makes up the difference, and the microphone's wide one tucks in. */
+  --chat-composer-lead-gap: var(--chat-composer-control-gap);
+  --chat-composer-context-offset: 4px;
+  --chat-composer-talk-tuck: -1px;
   /* The labelled chips in the action row — model, reasoning, session mode — are
      one control family, so their box, type and rhythm live here instead of each
      chip restating its own. They are peers describing the next turn, and a
@@ -180,11 +197,19 @@
      outside the composer keep the same values as fallbacks; the mobile block
      raises the whole family to touch size by rewriting these four.
      The chip box is the icon buttons' box, so every control in the action row
-     shares one height and one centre line; the trigger rule paints the pill
-     one step inside it, on the primary action's 30px painted tier. */
+     shares one height and one centre line. Two painted tiers sit inside that
+     box: the actions (plus, microphone, send) paint 30px and the chips that
+     describe the turn paint 28px, so the actions stay the taller pair of
+     bookends even while a chip is hovered. */
   --chat-composer-chip-height: var(--chat-composer-send-size);
+  --chat-composer-chip-surface-inset: calc(
+    (var(--chat-composer-chip-height) - var(--chat-composer-control-size)) / 2
+  );
   --chat-composer-chip-gap: 4px;
   --chat-composer-chip-padding-inline: 8px;
+  /* A glyph's box carries slack around its ink that a label's does not, so a
+     glyph at either end of a chip sits 1px closer to the edge. */
+  --chat-composer-chip-glyph-pull: -1px;
   --chat-composer-chip-text: calc(13px * var(--control-ui-text-scale));
   --chat-composer-chip-icon: 16px;
   /* Menu-row family: every option row inside a composer popover (model, effort,
@@ -272,13 +297,12 @@
 /* Focus is a neutral state, not an accent/status signal. Keep it within one
    subtle luminance step of the resting hairline; a second ring or outer spread
    would make the composer look thicker as soon as the operator starts typing. */
-.agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
+.agent-chat__input:has(.agent-chat__composer-combobox:focus-within) {
   border-color: color-mix(in srgb, var(--chat-composer-hairline) 94%, var(--text-strong));
   box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
 }
 
-:root[data-theme-mode="light"]
-  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
+:root[data-theme-mode="light"] .agent-chat__input:has(.agent-chat__composer-combobox:focus-within) {
   border-color: transparent;
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 8%),
@@ -301,10 +325,7 @@
    state; this block stays after the dictation rules so it wins their ties. */
 :root .agent-chat__input[data-incognito="true"],
 :root .agent-chat__input--dictating[data-incognito="true"]:focus-within,
-:root
-  .agent-chat__input[data-incognito="true"]:has(
-    .agent-chat__composer-combobox > :is(textarea, input):focus
-  ) {
+:root .agent-chat__input[data-incognito="true"]:has(.agent-chat__composer-combobox:focus-within) {
   border-style: dashed;
   /* Same edge as the /new Incognito composer, so sending keeps the frame. */
   border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
@@ -359,7 +380,7 @@
 
 @media (forced-colors: active) {
   /* Forced colors drop the box shadows and border shift that mark focus above. */
-  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus-visible) {
+  .agent-chat__input:has(.agent-chat__composer-combobox :focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -384,8 +405,7 @@
 }
 
 .agent-chat__composer-combobox
-  > :where(textarea, input, .agent-chat__composer-placeholder, .agent-chat__composer-prediction),
-.agent-chat__composer-prediction-actions {
+  > :where(textarea, input, .agent-chat__composer-placeholder, .agent-chat__composer-prediction) {
   /* Keep text aligned while the native scrollport reaches the surface edge. */
   padding-inline: calc(
     var(--chat-composer-editor-inset-inline) - var(--chat-composer-editor-scroll-inset)
@@ -411,6 +431,18 @@
   font-size: var(--chat-composer-editor-size);
   line-height: var(--chat-composer-editor-line);
   outline: none;
+}
+
+/* The draft is reading text, not chrome: keep macOS stem darkening so it
+   matches the sent message (`.chat-text`). The app-wide `antialiased`
+   (base.css body) thins light faces; buttons and labels keep it. The hint and
+   prediction overlays sit on the same line, so they match the draft. */
+.agent-chat__composer-combobox > textarea,
+.agent-chat__composer-combobox > input,
+.agent-chat__composer-placeholder,
+.agent-chat__composer-prediction {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 /* Enter before the session is ready keeps the draft, dimmed, until it sends. */
@@ -501,7 +533,9 @@
   pointer-events: none;
 }
 
-.agent-chat__composer-combobox > :placeholder-shown ~ .agent-chat__composer-placeholder {
+.agent-chat__composer-combobox
+  > :placeholder-shown:not([hidden])
+  ~ .agent-chat__composer-placeholder {
   display: block;
 }
 
@@ -535,27 +569,21 @@
   pointer-events: none;
 }
 
-.agent-chat__composer-prediction-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding-block: 4px;
+.agent-chat__composer-combobox[data-prediction] > .agent-chat__composer-prediction {
+  max-height: none;
 }
 
-.agent-chat__composer-prediction-actions button {
-  border: 0;
-  padding: 2px 0;
-  background: transparent;
-  color: var(--muted);
+.agent-chat__composer-prediction-hint {
+  display: inline-block;
+  margin-inline-start: 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
   font-size: var(--control-ui-text-xs);
-}
-
-.agent-chat__composer-prediction-actions button:hover {
-  color: var(--text-strong);
-}
-
-.agent-chat__composer-prediction-actions kbd {
-  margin-inline-end: 4px;
+  line-height: 1.4;
+  vertical-align: baseline;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .agent-chat__composer-input-row {
@@ -586,7 +614,9 @@
   margin-top: auto;
   margin-bottom: 6px;
   padding-block: var(--chat-composer-editor-inset-block) 0;
-  padding-inline: 8px;
+  /* Both bookends paint 8px from the side, the same as from the bottom, so the
+     send disc and the plus sit concentric in their corners. */
+  padding-inline: 6px;
 }
 
 .agent-chat__composer-lead,
@@ -601,7 +631,7 @@
 
 .agent-chat__composer-lead {
   grid-column: 1;
-  gap: 0;
+  gap: var(--chat-composer-lead-gap, 0px);
 }
 
 .agent-chat__composer-footer svg {
@@ -655,6 +685,11 @@
 .agent-chat__composer-footer .chat-talk-input-picker__trigger svg {
   width: var(--chat-composer-chevron-size);
   height: var(--chat-composer-chevron-size);
+  stroke-width: var(--chat-composer-chevron-stroke, var(--chat-composer-icon-stroke));
+}
+
+.agent-chat__composer-footer .chat-controls__permission-trigger svg {
+  stroke-width: var(--chat-composer-glyph-stroke, var(--chat-composer-icon-stroke));
 }
 
 .agent-chat__composer-trail {
@@ -667,6 +702,10 @@
 .agent-chat__composer-context {
   /* These icon groups must not shrink below their controls; model labels can. */
   flex: 0 0 auto;
+}
+
+.agent-chat__composer-context {
+  margin-inline-end: var(--chat-composer-context-offset, 0px);
 }
 
 .agent-chat__composer-context:not(:has(> .context-usage)) {
@@ -757,6 +796,7 @@
 .agent-chat__input .chat-send-btn--voice > svg {
   width: var(--chat-composer-microphone-icon-size);
   height: var(--chat-composer-microphone-icon-size);
+  stroke-width: var(--chat-composer-glyph-stroke, 2);
 }
 
 /* Filled Stop keeps its compact square inside the primary action's hit target. */
@@ -777,22 +817,17 @@
 .agent-chat__attach-menu .agent-chat__input-btn--attach svg {
   width: var(--chat-composer-plus-icon-size);
   height: var(--chat-composer-plus-icon-size);
-  stroke-width: var(--chat-composer-icon-stroke);
+  stroke-width: var(--chat-composer-plus-stroke, var(--chat-composer-icon-stroke));
   transform-origin: center;
   transition: transform 165ms ease;
 }
 
+/* The two unfilled actions, plus and microphone, take the label ink: what you
+   press or read is one step, and the shield, brand mark and chevrons that only
+   decorate a label stay on the quieter glyph step. */
 .agent-chat__input .agent-chat__input-btn--attach {
   position: relative;
-  color: color-mix(in srgb, var(--icon-interactive, var(--chat-composer-secondary)) 90%, white);
-}
-
-:where(:root[data-theme-mode="light"]) .agent-chat__input .agent-chat__input-btn--attach {
-  color: color-mix(
-    in srgb,
-    var(--icon-interactive, var(--chat-composer-secondary)) 90%,
-    var(--text-strong)
-  );
+  color: var(--chat-composer-secondary);
 }
 
 /* Icon-only triggers center the glyph, not the generic flex-growing text label. */
@@ -968,7 +1003,7 @@
 }
 
 .agent-chat__input .chat-send-btn--voice:not(:disabled, [aria-disabled="true"]) {
-  color: color-mix(in srgb, var(--icon-interactive, var(--text)) 85%, var(--text));
+  color: var(--chat-composer-secondary, var(--text));
 }
 
 .agent-chat__input .chat-send-btn--voice:disabled {
@@ -1051,8 +1086,10 @@
   box-shadow: none;
 }
 
-/* Keep the painted primary surface independent of the target, including hover. */
+/* Keep the painted primary surface independent of the target, including hover.
+   The idle microphone joins the tier so its wash matches the disc beside it. */
 .agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach,
+.agent-chat__input :where(.agent-chat__composer-actions > .chat-talk-control) .chat-send-btn--voice,
 .agent-chat__input.agent-chat__input--chat
   :is(.chat-mobile-primary-action, .chat-desktop-primary-action)
   .chat-send-btn,
@@ -1151,6 +1188,18 @@
     --chat-composer-chip-height: 44px;
     --chat-composer-chip-gap: 4px;
     --chat-composer-chip-padding-inline: 4px;
+    /* Touch keeps its own row geometry; the pointer row's optical trims stay off. */
+    --chat-composer-chip-surface-inset: 1px;
+    --chat-composer-chip-glyph-pull: 0px;
+    --chat-composer-lead-gap: 0px;
+    --chat-composer-context-offset: 0px;
+    --chat-composer-talk-tuck: 0px;
+    --chat-composer-plus-icon-size: 20px;
+    --chat-composer-context-icon-size: 15px;
+    --chat-composer-brand-icon-size: calc(var(--chat-composer-chip-icon) - 1px);
+    --chat-composer-glyph-stroke: var(--chat-composer-icon-stroke);
+    --chat-composer-plus-stroke: var(--chat-composer-icon-stroke);
+    --chat-composer-chevron-stroke: var(--chat-composer-icon-stroke);
     /* Narrow viewports spend their width on the draft, so the editor keeps the
        tighter side inset here; the block inset stays, because that is the one
        that keeps text off the frame rather than off the screen edge. */
@@ -1165,7 +1214,9 @@
     align-self: stretch;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input, .agent-chat__composer-placeholder) {
+  /* .cm-editor is the rich mention editor, mounted beside its hidden textarea. */
+  .agent-chat__composer-combobox
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     flex: 1 1 auto;
     padding-top: 10px;
     padding-bottom: 10px;
@@ -1216,7 +1267,7 @@
     background: var(--chat-composer-surface);
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input) {
+  .agent-chat__composer-combobox > :is(textarea, input, .cm-editor) {
     min-height: 48px;
     max-height: 56px;
     overflow-y: auto;
@@ -1355,6 +1406,7 @@
   }
   .agent-chat__input--mobile-toolbar {
     --chat-composer-min-height: 92px;
+    --chat-composer-context-offset: 0px;
     --chat-composer-editor-inset-inline: 14px;
     --chat-composer-icon-size: 18px;
     --chat-composer-context-icon-size: 16px;
@@ -1397,7 +1449,7 @@
 
   .agent-chat__input--mobile-toolbar
     .agent-chat__composer-combobox
-    > :is(textarea, input, .agent-chat__composer-placeholder) {
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     padding-block: var(--chat-composer-editor-inset-block);
   }
 
@@ -1459,7 +1511,9 @@
   }
 
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice {
-    padding: var(--chat-mobile-row-icon-padding);
+    padding: calc(
+      (var(--chat-composer-control-size) - var(--chat-composer-primary-surface-size)) / 2
+    );
   }
 
   .agent-chat__input--mobile-toolbar .chat-send-btn--voice > svg {
@@ -1518,7 +1572,7 @@
 
   .agent-chat__input
     .agent-chat__composer-combobox
-    > :is(textarea, input, .agent-chat__composer-placeholder) {
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     min-height: calc(var(--chat-composer-editor-line) + 4px);
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;

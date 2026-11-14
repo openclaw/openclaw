@@ -131,7 +131,7 @@ const MACOS_NATIVE_RE =
 const GIT_OWNER_SCOPE_RE =
   /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-windows-process-census\.(?:mjs|py)))$)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability|desktop-runtime-prune))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
+  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/lib\/macos-mlx-settings-(?:manifest|producer)\.mts|test\/scripts\/macos-mlx-settings-producer\.test\.ts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability|desktop-runtime-prune))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
@@ -605,6 +605,56 @@ export function resolveAllowedGeneratedMixBranch(
     return branchName;
   }
   return "";
+}
+
+// Retained-settings proof exercises these concrete producer and consumer owners.
+// Keep unrelated app/config changes out of model-download qualification.
+const MLX_SETTINGS_PROOF_INPUTS = new Set([
+  "scripts/lib/macos-mlx-settings-manifest.mts",
+  "scripts/lib/macos-mlx-settings-producer.mts",
+  "test/scripts/macos-mlx-settings-producer.test.ts",
+  "apps/macos/Sources/OpenClaw/AppProfile.swift",
+  "apps/macos/Sources/OpenClaw/OpenClawPaths.swift",
+  "apps/macos/Sources/OpenClaw/OpenClawConfigFile.swift",
+  "apps/macos/Sources/OpenClaw/Constants.swift",
+  "apps/macos/Sources/OpenClaw/ConfigStore.swift",
+  "apps/macos/Sources/OpenClaw/TalkModeGatewayConfig.swift",
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/TalkConfigSnapshot.swift",
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/TalkConfigParsing.swift",
+  "src/config/paths.ts",
+  "src/config/io.ts",
+  "src/config/runtime-config-capture-state.ts",
+  "src/config/runtime-source-projection.ts",
+  "src/config/config.ts",
+  "src/config/talk.ts",
+  "src/gateway/talk/handlers/index.ts",
+  "src/talk/provider-registry.ts",
+  "src/tts/provider-registry.ts",
+  "src/tts/provider-registry-core.ts",
+  "packages/gateway-protocol/src/index.ts",
+  "packages/gateway-protocol/src/schema/channels.ts",
+  "packages/gateway-protocol/src/validators/integrations.ts",
+  "packages/gateway-protocol/src/compiled/protocol.generated/validators-integrations.js",
+]);
+
+/**
+ * Model downloads belong only to explicit qualification of this native owner.
+ * The manifest combines this input fact with the existing release-gate admission.
+ * @param {readonly string[] | null} changedPaths
+ * @returns {boolean}
+ */
+export function hasMlxNativeProofInputs(changedPaths) {
+  return (
+    Array.isArray(changedPaths) &&
+    changedPaths.some(
+      (file) =>
+        MLX_SETTINGS_PROOF_INPUTS.has(file) ||
+        file === "test/fixtures/macos-mlx-native/bad.Package.resolved" ||
+        /^(?:apps\/macos-mlx-tts\/|apps\/shared\/OpenClawMLXTTSProtocol\/|apps\/macos\/Tests\/OpenClawIPCTests\/MLXSettingsUpgradeTests\.swift$|scripts\/(?:test-macos-mlx-native\.py|test-macos-(?:mlx-settings|native)\.mts|lib\/native-ci-budget\.mts|macos-health-render\.sb|ci-(?:changed-scope|build-manifest)\.(?:mjs|d\.mts))$|\.github\/workflows\/ci\.yml$|test\/helpers\/macos-mlx-settings-producer\.ts$|test\/scripts\/(?:macos-mlx-(?:native|settings)|macos-native-test-launch|ci-workflow-complete)\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$)/u.test(
+          file,
+        ),
+    )
+  );
 }
 
 /**

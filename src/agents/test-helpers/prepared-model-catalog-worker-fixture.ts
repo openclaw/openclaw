@@ -469,6 +469,10 @@ export function writeCatalogFailureControl(
             } } : {},
             outcomes: [{ provider: ${JSON.stringify(providerId)}, status: "unavailable" }],
           };
+          if (catalogControl === "auth-rejected") return {
+            providers: {},
+            outcomes: [{ provider: ${JSON.stringify(providerId)}, status: "auth-rejected" }],
+          };
           if (catalogControl === "configured") return undefined;
           if (catalogControl === "empty") return { provider: { baseUrl: "https://worker-catalog.invalid/v1", api: "openai-completions", models: [] } };
           if (catalogControl === "alias") return { providers: { [${JSON.stringify(aliasId)}]: {

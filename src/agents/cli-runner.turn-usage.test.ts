@@ -64,7 +64,15 @@ it("persists the terminal Claude turn usage for a multi-call turn", async () => 
     cacheRead: 54_631,
     cacheWrite: 0,
     totalTokens: 54_714,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    // The whole turn is priced once at the Sonnet API rate ($2/$10/$0.10 per M), via priceAs.
+    cost: {
+      input: 0.000012,
+      output: 0.00077,
+      cacheRead: 0.0054631,
+      cacheWrite: 0,
+      total: expect.closeTo(0.0062451, 12),
+    },
     contextUsage: { state: "available", promptTokens: 27_378, totalTokens: 27_379 },
   });
+  expect(result.meta.agentMeta?.costUsd).toBeCloseTo(0.0062451, 12);
 });

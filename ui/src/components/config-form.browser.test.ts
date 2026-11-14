@@ -770,8 +770,6 @@ describe("config form renderer", () => {
     );
     const button = query(".settings-section__help-button", HTMLButtonElement);
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
-    const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");
-    expect((tooltip as HTMLElement & { content: string }).content).toBe("Help for Gateway");
     const link = query(".settings-section__help-popover a", HTMLAnchorElement);
     expect(link.textContent?.trim()).toBe("Learn more");
     const popover = expectElement(link.closest('[role="dialog"]'), "section help popover");

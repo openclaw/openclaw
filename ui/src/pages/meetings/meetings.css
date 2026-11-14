@@ -323,6 +323,12 @@
   white-space: pre-wrap;
 }
 
+.meetings-notes {
+  /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
 .meetings-notes pre {
   overflow-x: auto;
 }
@@ -527,7 +533,7 @@
   }
 
   .transcripts-reader__header h1 {
-    font-size: calc(22px * var(--control-ui-text-scale));
+    font-size: 22px;
   }
 
   /* One row with or without Clear search; a long query scrolls inside its field. */

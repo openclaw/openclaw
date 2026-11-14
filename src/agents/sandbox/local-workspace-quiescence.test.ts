@@ -130,8 +130,61 @@ it.each(["true", "false"])("recovers only owned pauses (Running=%s)", async (run
   const { resume } = await quiesce({ retained: [{ name: "owned", id }] });
   await resume();
   expect(commands("pause")).toHaveLength(0);
-  expect(mocks.pauseLog).not.toHaveBeenCalled();
+  expect(mocks.pauseLog).toHaveBeenCalledExactlyOnceWith(
+    expect.stringMatching(
+      /^Local workspace unpause: reason=reconcile durationMs=\d+ dominantPhase=\w+ dominantPhaseMs=\d+ phaseDurationsMs=\{.*\} durationScope=observed outcome=resumed$/u,
+    ),
+    { engine: "docker", runtime: "container" },
+  );
   expect(commands("unpause").length).toBeGreaterThan(0);
+});
+
+it("reports cumulative frozen phases including engine resume, before receipt cleanup", async () => {
+  let elapsed = 0;
+  let resuming = false;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  mocks.current.mockImplementation(() => {
+    if (resuming) {
+      elapsed += 1_000;
+    }
+  });
+  mockEngine({ owned: id }, ({ action }) => {
+    if (action === "pause") {
+      elapsed = 29_000;
+    } else if (action === "resume-inspect") {
+      resuming = true;
+      elapsed += 29_900;
+    } else if (action === "unpause") {
+      elapsed += 29_900;
+    }
+  });
+  try {
+    const control = await quiesce();
+    elapsed = 82_600;
+    control.markPhase("scan");
+    elapsed = 92_600;
+    control.markPhase("staging");
+    elapsed = 107_600;
+    control.markPhase("scan");
+    elapsed = 117_600;
+    control.markPhase("staging");
+    elapsed = 132_600;
+    control.markPhase("preflight");
+    elapsed += 999;
+    persist.mockImplementationOnce(() => {
+      elapsed += 60_000;
+      retained = [];
+    });
+    await control.resume();
+    await control.resume();
+    expect(mocks.pauseLog).toHaveBeenLastCalledWith(
+      'Local workspace unpause: reason=reconcile durationMs=194399 dominantPhase=operation dominantPhaseMs=53600 phaseDurationsMs={"pause":29000,"operation":53600,"scan":20000,"staging":30000,"resumeInspect":29900,"resumeAuthority":1000,"unpause":29900} durationScope=owner outcome=resumed',
+      { engine: "docker", runtime: "container" },
+    );
+    expect(mocks.pauseLog).toHaveBeenCalledTimes(2);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 it("persists exact container and browser custody before pausing and resumes only those IDs", async () => {
@@ -141,9 +194,12 @@ it("persists exact container and browser custody before pausing and resumes only
   mocks.browsers.mockResolvedValue({
     entries: [{ ...entry, containerName: "browser-owned" }],
   });
-  mockEngine(ids, ({ action, target }) => {
+  mockEngine(ids, ({ action }) => {
+    if (action === "inspect") {
+      expect(commands("pause")).toEqual([]);
+    }
     if (action === "pause") {
-      expect(persist).toHaveBeenLastCalledWith(target === id ? expected.slice(0, 1) : expected);
+      expect(persist).toHaveBeenLastCalledWith(expected);
     }
   });
   const { resume } = await quiesce({ reason: "checkpoint" });
@@ -214,6 +270,9 @@ it("records each released generation before a later resume failure and re-fences
   });
   const { resume } = await quiesce();
   await expect(resume()).rejects.toThrow("resume failed");
+  expect(
+    mocks.pauseLog.mock.calls.filter(([message]) => message.includes(" unpause:")),
+  ).toHaveLength(1);
   expect(retained).toEqual([{ name: "owned", id }]);
   failFirst = false;
   const { resume: recovered } = await quiesce();

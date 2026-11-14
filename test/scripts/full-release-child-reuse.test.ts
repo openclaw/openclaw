@@ -14,6 +14,7 @@ import {
   validateReusableReleaseChild,
 } from "../../scripts/lib/full-release-child-reuse.mjs";
 import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 // Keep promise-based retry sleeps on the same clock as the deadline assertions.
@@ -31,6 +32,7 @@ const TARGET = "b".repeat(40);
 const PUBLISHER = "Seal full release child evidence / Seal child receipt";
 const NOW = Date.parse("2026-09-23T12:00:00Z");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
@@ -242,6 +244,85 @@ async function fixture(
 }
 
 describe("independent release child reuse", () => {
+  it("recovers an exact policy-waived receipt without treating its failed workload as success", async () => {
+    const data = await fixture();
+    const original = await discoverReusableReleaseChild(data.request, data.deps);
+    if (!original) {
+      throw new Error("expected original reusable receipt");
+    }
+    data.run.conclusion = "failure";
+    data.jobs[0]!.name = "checks-node-agentic-control-plane-runtime-state";
+    data.jobs[1]!.name = "openclaw/ci-gate";
+    for (const job of data.jobs.slice(0, 2)) {
+      job.conclusion = "failure";
+    }
+    data.jobs[1]!.steps = [
+      {
+        name: "Verify selected CI lanes",
+        status: "completed",
+        conclusion: "failure",
+      },
+    ];
+    data.receipt.workloadConclusion = "failure";
+    data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
+      ...job,
+      name: data.jobs[index]!.name,
+      conclusion: "failure",
+    }));
+    data.receipt.compositeJobsSha256 = jsonDigest({
+      effectiveRunAttempt: data.receipt.effectiveRunAttempt,
+      plannedRunAttempt: data.receipt.plannedRunAttempt,
+      jobs: data.receipt.jobs,
+    });
+    await data.seal();
+    const selection = {
+      ...original,
+      receiptSha256: data.receipt.sha256,
+      artifact: {
+        ...original.artifact,
+        digest: data.artifact.digest,
+        sizeInBytes: data.artifact.size_in_bytes,
+      },
+    };
+    const deps = {
+      ...data.deps,
+      getJobLog: async () =>
+        "##[error]checks-node-core-test-nondist-shard finished with failure (selected=true)",
+    };
+    await expect(validateReusableReleaseChild(selection, data.request, deps)).rejects.toThrow(
+      "current successful attempt",
+    );
+    const recovered = await validateReusableReleaseChild(
+      selection,
+      {
+        ...data.request,
+        policyTargetVersion: "2026.11.5-beta.3",
+      },
+      deps,
+    );
+    expect(recovered.run.conclusion).toBe("failure");
+    expect(recovered.receipt.workloadConclusion).toBe("failure");
+    await expect(
+      validateReusableReleaseChild(
+        selection,
+        {
+          ...data.request,
+          policyTargetVersion: "2026.11.5-beta.3",
+        },
+        { ...deps, getJobLog: async () => "##[error]artifact integrity failed" },
+      ),
+    ).rejects.toThrow("unwaived failure");
+    await expect(
+      validateReusableReleaseChild(
+        selection,
+        {
+          ...data.request,
+          policyTargetVersion: "2026.11.5-beta.4",
+        },
+        deps,
+      ),
+    ).rejects.toThrow();
+  });
   it("reads twelve complete inventories four at a time within the shared deadline", async () => {
     const data = await fixture("normalCi", undefined, TOOLING, 261, 12);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
@@ -377,7 +458,7 @@ describe("independent release child reuse", () => {
       const checked = succeeds
         ? expect(verification).resolves.toMatchObject({ receipt: { jobs: data.receipt.jobs } })
         : expect(verification).rejects.toMatchObject({
-            message: `Full release child evidence API GET repos/openclaw/openclaw/actions/runs/101 failed (HTTP ${status})`,
+            message: `Full release child evidence API GET repos/openclaw/openclaw/actions/runs/101 failed (HTTP ${status}); reason=unclassified`,
           });
       await vi.runAllTimersAsync();
       await checked;
@@ -790,16 +871,51 @@ describe("independent release child reuse", () => {
     ).toBeNull();
   });
 
+  it.each([
+    ["API rate limit exceeded for private-account", "primary-rate-limit"],
+    ["You have exceeded a secondary rate limit", "secondary-rate-limit"],
+    ["Resource not accessible by integration", "permission"],
+    ["private unexpected response", "unclassified"],
+  ])("classifies a failed gh read without exposing its response: %s", async (message, reason) => {
+    const data = await fixture();
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    const root = tempDirs.make("frv-child-gh-failure-");
+    // The fixture is a Node CommonJS executable, regardless of the test runner.
+    writeFileSync(join(root, "package.json"), '{"type":"commonjs"}\n');
+    const calls = join(root, "calls.txt");
+    const gh = join(root, "gh");
+    writeFileSync(
+      gh,
+      `#!${testNodeExecPath}
+const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
+process.stdout.write(${JSON.stringify(JSON.stringify({ message, privateData: "secret-response" }))});
+process.stderr.write("gh: Forbidden (HTTP 403)");
+process.exit(1);
+`,
+    );
+    chmodSync(gh, 0o755);
+    vi.stubEnv("PATH", `${root}${delimiter}${process.env.PATH ?? ""}`);
+    const { github: _github, ...transport } = data.deps;
+    await expect(
+      validateReusableReleaseChild(selection, data.request, transport),
+    ).rejects.toMatchObject({
+      message: `Full release child evidence API GET repos/openclaw/openclaw/actions/runs/101 failed (HTTP 403); reason=${reason}`,
+    });
+    expect(readFileSync(calls, "utf8")).toBe("api repos/openclaw/openclaw/actions/runs/101\n");
+  });
+
   it("reads binary archives through configured gh auth and rejects failed transfers", async () => {
     const data = await fixture();
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
     const root = tempDirs.make("frv-child-gh-archive-");
+    writeFileSync(join(root, "package.json"), '{"type":"commonjs"}\n');
     const archivePath = join(root, "receipt.zip");
     writeFileSync(archivePath, (await data.deps.downloadArchive()).archiveBytes);
     const gh = join(root, "gh");
     writeFileSync(
       gh,
-      `#!${process.execPath}
+      `#!${testNodeExecPath}
 const fs = require("node:fs");
 if (process.argv.slice(2).join(" ") !== "api repos/openclaw/openclaw/actions/artifacts/301/zip") process.exit(2);
 process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
@@ -813,7 +929,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
       token: "",
     });
     expect(verified.receipt.sha256).toBe(data.receipt.sha256);
-    writeFileSync(gh, `#!${process.execPath}\nprocess.exit(1);\n`);
+    writeFileSync(gh, `#!${testNodeExecPath}\nprocess.exit(1);\n`);
     await expect(
       validateReusableReleaseChild(selection, data.request, { ...transport, token: "" }),
     ).rejects.toThrow("Command failed");

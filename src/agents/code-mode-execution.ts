@@ -154,7 +154,11 @@ export async function runCodeModeExec(params: {
     onUpdate: params.onUpdate,
   };
   const inlineHost = createInlineHost(context, pending, () => {
-    releaseReservation ??= reserveActiveRunSlot();
+    // Required completion cannot publish a suspended run, so it needs no slot.
+    // This also keeps existing process results collectable at suspension capacity.
+    if (!owner.completionRequired) {
+      releaseReservation ??= reserveActiveRunSlot();
+    }
   });
   try {
     const remainingMs = budget.deadlineMs - performance.now();
@@ -471,7 +475,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
     }
     let releaseReservation: (() => void) | undefined;
     try {
-      if (!params.reservedActiveRunSlot) {
+      if (!params.reservedActiveRunSlot && !params.owner.completionRequired) {
         releaseReservation = reserveActiveRunSlot();
       }
       dispatchCodeModeRequests(params, pending, result.pendingRequests);

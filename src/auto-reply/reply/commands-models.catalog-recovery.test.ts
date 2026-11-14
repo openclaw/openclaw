@@ -18,7 +18,10 @@ import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { buildPreparedModelsProviderData } from "./commands-models-catalog.js";
+import {
+  buildPreparedModelsProviderData,
+  getModelsRuntimeChoices,
+} from "./commands-models-catalog.js";
 import { handleModelsCommand, resolveModelsCommandReply } from "./commands-models.js";
 import { createModelsTestOwner } from "./commands-models.test-support.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
@@ -175,6 +178,36 @@ it("lists bound models as unavailable when the native-auth plugin is disabled de
   expect(reply?.text).toContain("run claude auth login on the Gateway host");
   expect(reply?.text).toContain("- anthropic/claude-haiku-4-5");
   expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
+});
+
+it("rechecks a Claude CLI sign-in made after Gateway start for channel model pickers", async () => {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: createClaudeCliBackends,
+  });
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-sonnet-4-6" },
+        models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } } },
+      },
+    },
+  };
+  const recheckNativeLogin = vi.fn(() => {
+    catalogMocks.authModes = { "claude-cli": { source: "native", mode: "oauth" } };
+  });
+  catalogMocks.owner = { modelCatalog: catalog("claude-sonnet-4-6"), recheckNativeLogin };
+
+  const pickerChoices = async () =>
+    getModelsRuntimeChoices(
+      await buildPreparedModelsProviderData(cfg),
+      "anthropic",
+      "claude-sonnet-4-6",
+    )?.map((choice) => choice.id);
+  // Discord's picker reads the same data; unknown choices disable its Submit button.
+  expect(await pickerChoices()).toBeUndefined();
+  expect(recheckNativeLogin).toHaveBeenCalledOnce();
+  expect((await browse("/models anthropic", cfg))?.text).not.toContain("Sign-in needed");
+  expect(await pickerChoices()).toContain("claude-cli");
 });
 
 it.each([false, true])(

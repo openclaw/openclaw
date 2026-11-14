@@ -4,7 +4,7 @@ import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
 describe("flattenMarkdownToPlainText", () => {
   it.each([
     ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
-    ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0`\x00` ````z````", "_i_ **/* [x](y)\x00\x00 `"],
+    ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0``\0`a`` ````z````", "_i_ **/* [x](y)\0\0`a `"],
     [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
@@ -74,6 +74,32 @@ describe("flattenMarkdownToPlainText", () => {
       "# Heading\n- bullet\n+ plus\n* star\n2) numbered\n> quote\n>quoted\n>> deep\n>>>tight\n> > spaced\n> >>mixed\n>\r\n    > literal\nNext a > b\n\\>escaped\n#Heading\n-bullet",
       "Heading bullet plus star numbered quote quoted deep tight spaced mixed > literal Next a > b \\>escaped #Heading -bullet",
     ],
+    [
+      "table headers, alignment delimiters, and cells",
+      "# Homepage Review\n| Navigation | Feature |\n| :--- | ---: |\n| **Home** | [Search](https://example.com) |\n\nAfter | prose",
+      "Homepage Review Navigation Feature Home Search After | prose",
+    ],
+    [
+      "tables without outer pipes and literal pipes inside cells",
+      "Command | Meaning\n--- | ---\n`a|b` | a\\|b\n\nDone",
+      "Command Meaning a|b a|b Done",
+    ],
+    [
+      "non-table pipes and mismatched delimiters",
+      "Keep a | b\n\nA | B\n--- | --- | ---",
+      "Keep a | b A | B --- | --- | ---",
+    ],
+    [
+      "block boundaries after a table",
+      "| A | B |\n| --- | --- |\n| x | y |\n# Choose a | b\n- Keep c | d\n1. Keep e | f\n> Quote g | h",
+      "A B x y Choose a | b Keep c | d Keep e | f Quote g | h",
+    ],
+    [
+      "block markers do not establish table headers",
+      "# Choose a | b\n--- | ---\n- Keep c | d\n--- | ---",
+      "Choose a | b --- | --- Keep c | d --- | ---",
+    ],
+    ["indented table-shaped code", "    A | B\n    --- | ---\n    a | b", "A | B --- | --- a | b"],
     ["emphasis", "**bold** _italic_ ~~struck~~", "bold italic struck"],
     ["wider opener preference", "__a_ _b__", "a_ _b"],
     ["shorter opener fallback", "__a_", "_a"],

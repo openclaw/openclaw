@@ -215,6 +215,9 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           frame,
           sandboxUrl: preview.url,
           sandboxOrigin: preview.origin,
+          sandboxShellHtml: preview.preparedCsp?.sandboxPath
+            ? undefined
+            : preview.document.sandboxShellHtml,
           documentKey: String(generation),
           allowScripts,
           loadDocument: async (signal) => {
@@ -371,7 +374,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             const url = resolveSandboxHostUrl(
               preparedCsp?.sandboxPath ?? document.sandboxUrl,
               document.sandboxPort,
-              document.sandboxOrigin,
+              preparedCsp?.sandboxPath ? preparedCsp.sandboxOrigin : document.sandboxOrigin,
               context.gateway.connection.gatewayUrl,
               window.location.origin,
               undefined,

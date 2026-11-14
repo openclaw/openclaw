@@ -22,8 +22,14 @@ function node(nodeId: string, overrides: Partial<CanvasNode> = {}): CanvasNode {
 
 function presentation(sessionKey?: string) {
   return {
-    document: { kind: "html" as const, html: "<p>Status</p>", hostedUrl: documentUrlPath },
+    document: {
+      kind: "html" as const,
+      html: "<p>Status</p>",
+      source: "<p>Status</p>",
+      hostedUrl: documentUrlPath,
+    },
     title: "Status",
+    name: "status",
     context: sessionKey ? { sessionKey } : {},
   };
 }

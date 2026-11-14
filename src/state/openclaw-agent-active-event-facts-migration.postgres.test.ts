@@ -22,6 +22,7 @@ describe.skipIf(!connection)("PostgreSQL active event facts migration", () => {
         version: 40,
         postgresMigrations: [],
       };
+      const target = { ...agentEngineSchema, ...migration.schema, version: 41 };
       using fixture = createPostgresEngineTestFixture({
         directory: dirs.make("active-facts-upgrade-"),
         connection: connection!,
@@ -43,7 +44,7 @@ describe.skipIf(!connection)("PostgreSQL active event facts migration", () => {
       });
       const retained = original.prepare("SELECT * FROM transcript_events").all();
       fixture.invalidate();
-      const upgraded = fixture.open(agentEngineSchema);
+      const upgraded = fixture.open(target);
       expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
         schema_version: 41,
       });
@@ -53,7 +54,7 @@ describe.skipIf(!connection)("PostgreSQL active event facts migration", () => {
       );
       fixture.invalidate();
       expect(() => fixture.open(source)).toThrow(/newer|version.*41/iu);
-      const reopened = fixture.open(agentEngineSchema);
+      const reopened = fixture.open(target);
       reopened.exec(
         "INSERT INTO session_transcript_active_event_facts VALUES ('retained',1,46,'{}')",
       );

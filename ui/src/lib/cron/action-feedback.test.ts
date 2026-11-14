@@ -50,7 +50,6 @@ it.each([
 
 const outcomes = [
   ["queued", "Run queued. Run ID: run-due", true, "cronNotice"],
-  ["not-due", "This automation is not due yet.", false, "cronNotice"],
   ["already-running", "This automation is already running.", false, "cronNotice"],
   ["stopped", "The scheduler is stopped.", false, "cronError"],
   [
@@ -74,13 +73,12 @@ it.each(outcomes)("reports %s with history refresh", async (reason, message, ref
         : {};
   });
   const state = createStateWithRequest(request, { cronRunsScope: "job", cronRunsJobId: "job" });
-  const mode = reason === "queued" ? "due" : "force";
-  expect(await cron.runCronJob(state, "job", mode)).toBeUndefined();
+  expect(await cron.runCronJob(state, "job")).toBeUndefined();
   expect(state.cronError).toBe(field === "cronError" ? `job: ${message}` : null);
   if (field === "cronNotice") {
     expect(state.cronNotice).toBe(`job: ${message}`);
   }
-  expect(request).toHaveBeenCalledWith("cron.run", { id: "job", mode });
+  expect(request).toHaveBeenCalledWith("cron.run", { id: "job", mode: "force" });
   if (refresh) {
     expect(request).toHaveBeenCalledWith("cron.runs", expect.objectContaining({ id: "job" }));
   } else {

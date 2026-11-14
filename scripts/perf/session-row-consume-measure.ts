@@ -117,19 +117,25 @@ for (let index = 0; index < sessions; index++) {
     collectorCompletion: { status: "done" },
   });
 }
-const owner = createSessionRowProjectionContext({
-  snapshotIdentity: () => snapshot,
-  prepare: async () => {},
-  runs: (ids) =>
-    ids
-      ? new Map(
-          [...ids].flatMap((id) => {
-            const row = runs.get(id);
-            return row ? [[id, row]] : [];
-          }),
-        )
-      : new Map(runs),
-});
+const owner = createSessionRowProjectionContext(
+  {
+    snapshotIdentity: () => snapshot,
+    prepare: async () => {},
+    runs: (ids) =>
+      ids
+        ? new Map(
+            [...ids].flatMap((id) => {
+              const row = runs.get(id);
+              return row ? [[id, row]] : [];
+            }),
+          )
+        : new Map(runs),
+  },
+  {
+    state: () => ({ cfg, epoch: sequence, disposed: false }),
+    prepareRegistry: () => undefined,
+  },
+);
 const rows = new Map<string, Row>();
 const byKey = new Map<string, Row>();
 const refs = new Map<string, Row>();

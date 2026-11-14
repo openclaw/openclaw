@@ -1,2 +1,0 @@
-# Exact net regression growth: the Gateway sweep reclaims day-old SQLite snapshot copies stranded in sibling cache namespaces or the shared cache parent, while live creators, live readers, recent copies, tokenless directories and unreadable roots are kept.
-105

@@ -258,12 +258,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     routeId: "profile",
     labelKey: "githubConnections.title",
     hash: `#${PROFILE_SETTINGS_TARGET_IDS.githubConnections}`,
-    searchKeys: [
-      "githubConnections.mine",
-      "githubConnections.system",
-      "githubConnections.forMe",
-      "githubConnections.forSystem",
-    ],
+    searchKeys: ["githubConnections.mine", "githubConnections.system"],
     aliases:
       "github oauth account connection publication authentication auth status dashboard actions",
   },
@@ -346,13 +341,7 @@ export const SETTINGS_SEARCH_TARGETS = {
   appearanceTabIcon: {
     ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.tabIcon),
     labelKey: "configView.appearance.tabIcon.title",
-    searchKeys: [
-      "configView.appearance.tabIcon.agent",
-      "configView.appearance.tabIcon.square",
-      "configView.appearance.tabIcon.rounded",
-      "configView.appearance.tabIcon.circle",
-      "configView.appearance.tabIcon.lobsterdex",
-    ],
+    searchKeys: ["configView.appearance.tabIcon.agent", "configView.appearance.tabIcon.lobsterdex"],
     aliases: "favicon browser tab icon agent avatar image",
   },
   appearanceTextSize: {

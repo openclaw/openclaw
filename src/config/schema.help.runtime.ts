@@ -23,7 +23,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
   "browser.profiles.*.engine":
-    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" for semantic DOM browsing. Lightpanda requires an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and does not support visual screenshots or other Chromium-only features.',
+    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" / "kitesurf" for external CDP browsing. External engines require an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and expose only their supported operations. Lightpanda has no screenshots; Kitesurf renders experimental screenshots.',
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
@@ -88,6 +88,14 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Web-tool policy grouping for search/fetch providers, limits, and fallback behavior tuning. Keep enabled settings aligned with API key availability and outbound networking policy.",
   "tools.exec":
     "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
+  "tools.openclaw":
+    "Approval policy for persistent changes delegated to the OpenClaw system agent.",
+  "tools.openclaw.autoApproveChanges":
+    "Standing authorization for permitted delegated administration, including configuration that can execute code on the Gateway host. True authorizes changes without individual approval, even when direct execution tools are denied; false always requires approval. Omitted uses explicit Full Access or independently proven unrestricted Gateway execution. Filesystem, sandbox, operation, and current-run restrictions still apply.",
+  "agents.entries.*.tools.openclaw":
+    "Per-agent approval policy for changes delegated to the OpenClaw system agent.",
+  "agents.entries.*.tools.openclaw.autoApproveChanges":
+    "Overrides tools.openclaw.autoApproveChanges for this agent. True is a standing delegated-administration grant that can enable Gateway-host code execution; false requires individual approval, including in Full Access. Omitted inherits the global setting, then the requesting run's effective authority. Filesystem, sandbox, and operation restrictions still apply.",
   "tools.github":
     "Managed local GitHub CLI profile and optional Git author for agent tools. Omit this object to preserve the Gateway runtime user's native account and author; repository remote credentials are never overridden.",
   "tools.github.profileId":
@@ -251,7 +259,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.allowExternalEmbedUrls":
     "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas documents do not need it.",
   "gateway.controlUi.automaticallyFetchFavicons":
-    "Fetch link favicons and browser-tab social previews through the Gateway (default on). Browser-tab cards load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
+    "Fetch link favicons and external-link page previews through the Gateway (default on). Page previews load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
   "gateway.controlUi.allowedOrigins":
     'Allowed browser origins for Control UI/WebChat connections (full origins only, e.g. https://control.example.com). When omitted, defaults to gateway.publicOrigin if configured. An explicit list, including [], overrides that default; existing local/private-origin rules still apply. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
@@ -460,7 +468,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a follow-up for the originating session.",
   "tools.exec.notifyOnExitEmptySuccess":
-    "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
+    "When true (default), successful backgrounded exec exits with empty output still wake the originating session, so a silent waiter reports back. Set false to keep silent successes quiet; the agent then collects them with process poll.",
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",

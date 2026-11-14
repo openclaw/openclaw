@@ -131,7 +131,11 @@ engine anchor and contains no approval policy. The row keeps the JSON document
 shown below as its authoritative value.
 
 The macOS app reads and edits this policy through bounded operations in the
-local OpenClaw CLI on both engines. The CLI routes to the running shared-state
+local OpenClaw CLI on both engines. Packaged apps use their matching bundled CLI,
+including on remote-only Macs that have never prepared a local Gateway runtime.
+An older CLI on `PATH` does not replace this private approval operation. The
+selected profile, state directory, and explicit config path still select the
+local policy owner. The CLI routes to the running shared-state
 owner, or acquires exclusive offline custody when no owner is running. It never
 falls back to opening the shared database from Swift. Saving a policy requires
 the last observed hash; a stale save fails and must be reloaded. Gateway and
@@ -143,8 +147,9 @@ allowed do not deny it; execution does not require an unchanged policy hash.
 
 An unavailable owner or PostgreSQL database denies native execution with an
 `Exec policy unavailable` diagnostic. Inspect `openclaw gateway status` and the
-selected database, or update the app and CLI if the required operation is
-missing. Stopping the Gateway permits offline policy operations only when the
+selected database, or update the app if its bundled operation is missing.
+Unbundled development builds need a matching local CLI. Stopping the Gateway
+permits offline policy operations only when the
 selected database remains reachable. A policy snapshot shown in the UI is for
 display; it cannot authorize execution.
 

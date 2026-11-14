@@ -105,7 +105,8 @@ const enChatSession = {
       noMatches: "No emoji match your search.",
       you: "You",
       andOthers: "{names} and {count} others",
-      reactedWith: "{names} reacted with {emoji}",
+      andOneOther: "{names} and 1 other",
+      current: "Reactions on this message",
     },
     sessionHeader: {
       people: "People",
@@ -164,6 +165,9 @@ const enChatSession = {
       speechBubbles: "Speech bubbles",
       reasoning: "Reasoning",
       toolCalls: "Tool calls",
+      inlineCommands: "Inline command trail (this browser)",
+      inlineCommandsUnavailable:
+        "Couldn’t load the inline command trail. Grouped commands remain available. In View, turn Inline command trail off and on to retry.",
       commentary: "Keep commentary",
     },
     workspaceConflict: {
@@ -211,8 +215,8 @@ const enChatSession = {
         "These comments are too long for Side chat. Use a shorter selection or comment.",
     },
     thread: {
-      search: "Search messages",
-      searchPlaceholder: "Search messages…",
+      search: "Search loaded messages",
+      searchPlaceholder: "Search loaded messages…",
       closeSearch: "Close search",
       loading: "Loading conversation…",
       showEarlier: "Show earlier",
@@ -220,7 +224,7 @@ const enChatSession = {
       earlierUnavailable: "Couldn’t load earlier messages. Try again.",
       earlierInterrupted: "History refreshed before this page loaded. Try again.",
       earlierHint: "Scroll up for earlier messages",
-      noMatches: "No messages match your search.",
+      noMatches: "No matches in the messages loaded so far.",
       noMessages: "No messages yet",
       positionRail: "Conversation position",
       positionMarker: "{label}, marker {position} of {count}",

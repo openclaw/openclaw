@@ -8,12 +8,12 @@ import {
   readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
+  terminalPolicyPass,
   validateReleaseChildRunProvenance,
 } from "../full-release-validation-policy.mjs";
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
-  readBoundedResponseBody,
 } from "./actions-artifact-archive.mjs";
 import { canonicalizeJsonValue } from "./canonical-json.mjs";
 import {
@@ -22,6 +22,10 @@ import {
 } from "./full-release-evidence.mjs";
 import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
+import {
+  evaluateReleaseChildPolicy,
+  validateReleaseWaiverAggregates,
+} from "./release-validation-waivers.mjs";
 
 const MAX_RUNS = 100;
 const MAX_ARTIFACT_PROBES = 40;
@@ -74,6 +78,24 @@ function requestValue(request) {
   return { ...request, inputs: normalizedInputs(request.inputs), spec };
 }
 
+function githubFailureReason(error) {
+  // Classify the original response without exposing its body, identity, or credentials.
+  // Keep the ordinary gh route: --include selects a different Octopool transport.
+  const output = [error?.message, error?.stderr, error?.stdout].join("\n");
+  for (const [reason, pattern] of [
+    ["secondary-rate-limit", /secondary rate limit|abuse detection mechanism/iu],
+    ["primary-rate-limit", /API rate limit exceeded/iu],
+    ["permission", /Resource not accessible by (?:integration|personal access token)/iu],
+    ["saml-enforcement", /SAML enforcement|SAML SSO/iu],
+    ["bad-credentials", /Bad credentials/iu],
+  ]) {
+    if (pattern.test(output)) {
+      return reason;
+    }
+  }
+  return "unclassified";
+}
+
 function dependencies(repository, deps) {
   const deadlineMs = deps.deadlineMs ?? Date.now() + 120_000;
   const remaining = (stage = "verification") => {
@@ -111,7 +133,7 @@ function dependencies(repository, deps) {
                 `${error?.message ?? ""}\n${error?.stderr ?? ""}`,
               )?.[0] ?? (serverError ? "HTTP 5xx" : undefined);
             throw new Error(
-              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}`,
+              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}; reason=${githubFailureReason(error)}`,
             );
           }
           requireEvidence(delay < remaining(stage), `${stage} exceeded its time budget`);
@@ -128,34 +150,14 @@ function dependencies(repository, deps) {
   return {
     github,
     immutableReads: deps.immutableReads,
+    getJobLog: deps.getJobLog,
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
         if (params.token) {
           return downloadExactActionsArtifactArchive({
             ...params,
-            ...(deps.immutableReads
-              ? {
-                  fetchImpl: async (url, options) => {
-                    const route = String(url).replace(
-                      "https://api.github.com/repos/" + repository + "/",
-                      "",
-                    );
-                    if (!route.endsWith("/zip")) {
-                      return fetch(url, options);
-                    }
-                    const bytes = await deps.immutableReads.bytes(route, async () => {
-                      const response = await fetch(url, options);
-                      return readBoundedResponseBody(response, {
-                        expectedBytes: params.expected.artifactSizeBytes,
-                        maxBytes: MAX_RELEASE_ARTIFACT_BYTES,
-                        label: "Child evidence archive",
-                      });
-                    });
-                    return new Response(bytes);
-                  },
-                }
-              : {}),
+            immutableReads: deps.immutableReads,
           });
         }
         // Local verifiers can use gh's authenticated session without exporting
@@ -230,7 +232,8 @@ function validateRun(run, selection, request) {
     run.run_attempt === selection.runAttempt &&
       run.run_attempt <= MAX_ATTEMPTS &&
       run.status === "completed" &&
-      run.conclusion === "success" &&
+      (run.conclusion === "success" ||
+        (request.policyTargetVersion && run.conclusion === "failure")) &&
       run.head_repository?.full_name === request.repository,
     "child is not the current successful attempt",
   );
@@ -394,7 +397,8 @@ async function validateEvidence(selection, request, deps) {
       receipt.dispatchId === origin(selection, request) &&
       receipt.sourceParentRunId === selection.sourceParentRunId &&
       receipt.sourceParentAttempt === selection.sourceParentAttempt &&
-      receipt.workloadConclusion === "success" &&
+      (receipt.workloadConclusion === "success" ||
+        (request.policyTargetVersion && receipt.workloadConclusion === "failure")) &&
       canonical(normalizedInputs(receipt.inputs)) === canonical(request.inputs),
     "receipt target, origin, or exact dispatch inputs changed",
   );
@@ -424,12 +428,41 @@ async function validateEvidence(selection, request, deps) {
   composite.compositeJobsSha256 = releaseCompositeJobsSha256(composite);
   requireEvidence(
     composite.jobs.length > 0 &&
-      composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion)) &&
+      (request.policyTargetVersion ||
+        composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))) &&
       Object.entries(composite).every(
         ([key, value]) => canonical(receipt[key]) === canonical(value),
       ),
     "receipt does not match the complete live composite workload",
   );
+  // Only authenticated recovery supplies a version. Ordinary reuse/discovery remains green-only.
+  if (request.policyTargetVersion) {
+    const child = {
+      key: request.role,
+      runId: String(run.id),
+      runAttempt: run.run_attempt,
+      status: run.status,
+      conclusion: run.conclusion,
+      jobs: composite.jobs,
+    };
+    requireEvidence(
+      terminalPolicyPass(child, request.policyTargetVersion),
+      "workload does not pass recovery release policy",
+    );
+    const policy = evaluateReleaseChildPolicy({
+      child,
+      targetVersion: request.policyTargetVersion,
+    });
+    await validateReleaseWaiverAggregates({
+      policy,
+      jobs: composite.jobs.map((job) =>
+        attempts
+          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
+          .jobs.find((raw) => raw.name === job.name),
+      ),
+      getJobLog: deps.getJobLog,
+    });
+  }
   // The source parent is the pinned dispatch origin, not a live evidence producer.
   // Its later reruns do not supersede the independently checked child attempt.
   // Read the exact origin below, including when immutable payloads are replayed.

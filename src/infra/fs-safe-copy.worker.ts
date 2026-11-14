@@ -16,8 +16,11 @@ import type {
   FsSafeCopyReply,
   FsSafeCopyWrite,
   FsSafeProvisionCopy,
+  ProvisionCopyDetails,
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
+import type { ScratchTreeRequest } from "./scratch-cleanup-tree.js";
+import { workerMutationAssertion } from "./worker-mutation-authority.js";
 
 function failure(error: unknown): FsSafeCopyReply {
   return {
@@ -54,15 +57,49 @@ if (parentPort) {
   const nativeConfig = getFsSafeNativeConfig();
   const { serveWorkerTasks } = await import("./worker-task-server.js");
   configureFsSafeNative(nativeConfig);
-  serveWorkerTasks<FsSafeCopyReply, FsSafeCopyRead | FsSafeProvisionCopy>(
+  serveWorkerTasks<FsSafeCopyReply, FsSafeCopyRead | FsSafeProvisionCopy | ScratchTreeRequest>(
     async (command, channel, control) => {
+      let copyDetails: ProvisionCopyDetails | undefined;
       try {
         switch (command.type) {
+          case "scratch": {
+            if (!channel) {
+              throw new Error("Scratch cleanup requires its live host channel");
+            }
+            const { walkScratchTree } = await import("./scratch-cleanup-tree.js");
+            let progress: import("./scratch-cleanup-tree.js").ScratchTreeResult;
+            const checkpoint = workerMutationAssertion(
+              command.decision,
+              () => channel.notify(progress),
+              control.throwIfCancelled,
+            );
+            return await control.runNativeSection(() =>
+              walkScratchTree(command, control.throwIfCancelled, async (next) => {
+                progress = next;
+                checkpoint();
+              }),
+            );
+          }
           case "provision": {
+            copyDetails = {
+              copier: "portable",
+              batchCount: 0,
+              sourceBytes: 0,
+              spawnCount: 0,
+              spawnMs: 0,
+              childMs: 0,
+              authorityChecks: 0,
+              authorityMs: 0,
+            };
+            const details = copyDetails;
             if (!channel) {
               throw new Error("Worktree provisioning requires its live host channel");
             }
-            const decision = new Int32Array(command.decision);
+            const assertMutation = workerMutationAssertion(
+              command.decision,
+              () => channel.notify("authority"),
+              control.throwIfCancelled,
+            );
             return await control.runNativeSection<FsSafeCopyReply>(async () => {
               const { copyProvisionedPaths } =
                 await import("../agents/worktrees/provisioned-copy.js");
@@ -73,24 +110,20 @@ if (parentPort) {
                   command.destination,
                   command.paths,
                   {
+                    copyDetails: details,
                     signal: control.signal,
                     assertCurrent: () => {
-                      control.throwIfCancelled();
-                      Atomics.store(decision, 0, 0);
-                      channel.notify("authority");
-                      while (Atomics.load(decision, 0) === 0) {
-                        // Retirement can suppress notifications. Observe its shared
-                        // cancellation fence even while this callback cannot yield.
-                        Atomics.wait(decision, 0, 0, 1_000);
-                        control.throwIfCancelled();
-                      }
-                      control.throwIfCancelled();
-                      if (Atomics.load(decision, 0) !== 1) {
-                        throw new Error("Worktree provisioning mutation authority refused");
+                      const started = performance.now();
+                      details.authorityChecks++;
+                      try {
+                        assertMutation();
+                      } finally {
+                        details.authorityMs += performance.now() - started;
                       }
                     },
                   },
                 ),
+                copyDetails: details,
               };
             });
           }
@@ -108,7 +141,7 @@ if (parentPort) {
             throw new Error("Unknown native worktree read operation");
         }
       } catch (error) {
-        return failure(error);
+        return { ...failure(error), ...(copyDetails ? { copyDetails } : {}) };
       }
     },
   );

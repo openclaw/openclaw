@@ -488,7 +488,7 @@ export class ShellOwner
     if (this.context && this.runtime) {
       const state = readShellView(this);
       this.syncConnectionFeedback(state.gatewayStatus.kind);
-      if (!state.settingsTakeover && !state.nativeEmbed) {
+      if ((!state.settingsTakeover || state.railAvailable) && !state.nativeEmbed) {
         Object.assign(this.navigationSidebar, state.sidebarProperties, {
           gatewayStatus: state.gatewayStatus,
           connectionRecovery: this.connectionRecovery,
