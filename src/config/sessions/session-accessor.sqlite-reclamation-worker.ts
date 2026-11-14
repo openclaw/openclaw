@@ -19,6 +19,8 @@ import type {
 } from "./session-accessor.sqlite-reclamation-worker.types.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
+// Keep alternating stores warm without retaining an isolate for every visited agent.
+const MAX_RETAINED_RECLAMATION_WORKERS = 4;
 type ReclamationWorkerSlot = {
   worker?: SqliteReclamationWorker;
   execution?: CanonicalWorkerPool;
@@ -110,12 +112,23 @@ export function withSqliteReclamationWorker<T>(
       source.assertCurrent();
     }
   };
-  return runExclusiveSqliteTranscriptArchiveWorker(() => {
+  return runExclusiveSqliteTranscriptArchiveWorker(async () => {
     const key = sqliteReaderDatabasePathKey(options.path);
+    if (!retained.has(key)) {
+      while (retained.size >= MAX_RETAINED_RECLAMATION_WORKERS) {
+        const oldest = retained.values().next().value;
+        // The archive FIFO has settled every retained request. Close owns native
+        // cleanup and registry removal; a failed close keeps custody and capacity.
+        await oldest!.close();
+      }
+    }
     return useReclamationWorker(
       {
         worker: retained.get(key),
-        retain: (worker) => retained.set(key, worker),
+        retain: (worker) => {
+          retained.delete(key);
+          retained.set(key, worker);
+        },
         // The cached worker must not capture the requesting plan's closure scope.
         retire: retireRetainedWorker.bind(undefined, key),
         alias: requestedPath,
