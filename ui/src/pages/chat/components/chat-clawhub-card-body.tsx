@@ -191,7 +191,7 @@ export function ChatClawHubCardBody(
                 pluginId: plugin.local.pluginId,
                 official: plugin.catalog.official,
                 installed: plugin.local.installed,
-                canInstall: plugin.catalog.official && plugin.local.action === "install",
+                canInstall: plugin.local.action === "install",
                 needsSignIn: Boolean(
                   inspection?.mcpAuth?.some((server) => server.state !== "authorized"),
                 ),
@@ -378,22 +378,24 @@ export function ChatClawHubCardBody(
                       when={result().installed}
                       fallback={
                         <>
-                          <button
-                            type="button"
-                            class="btn chat-clawhub-card__dismiss"
-                            onClick={() => {
-                              state.dismissed = true;
-                              notify();
-                            }}
-                          >
-                            {t("common.dismiss")}
-                          </button>
+                          <Show when={result().kind === "skill"}>
+                            <button
+                              type="button"
+                              class="btn chat-clawhub-card__dismiss"
+                              onClick={() => {
+                                state.dismissed = true;
+                                notify();
+                              }}
+                            >
+                              {t("common.dismiss")}
+                            </button>
+                          </Show>
                           <button
                             type="button"
                             class="btn primary chat-clawhub-card__install"
                             onClick={() => props.onOpenListing(readyStatus()?.canInstall === true)}
                           >
-                            {result().canInstall
+                            {result().kind === "plugin" || result().canInstall
                               ? t("pluginsPage.install")
                               : t("chat.clawhub.viewDetails")}
                           </button>

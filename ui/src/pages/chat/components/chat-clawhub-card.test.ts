@@ -216,18 +216,20 @@ describe("ClawHub chat recommendations", () => {
     let notifyLocale: Parameters<typeof i18n.subscribe>[0] | undefined;
     let translated = false;
     vi.spyOn(i18n, "t").mockImplementation((key, params) =>
-      translated && key === "common.dismiss" ? "Ausblenden" : translate(key, params),
+      translated && key === "pluginsPage.install" ? "Installieren" : translate(key, params),
     );
     vi.spyOn(i18n, "subscribe").mockImplementation((listener) => {
       notifyLocale = listener;
       return subscribe(listener);
     });
     const { card, request } = mount(async () => detail(false));
-    await waitForSolid(() => expect(part(card, "dismiss")?.textContent?.trim()).toBe("Dismiss"));
+    await waitForSolid(() => expect(part(card, "install")?.textContent?.trim()).toBe("Install"));
     const reads = request.mock.calls.length;
     translated = true;
     notifyLocale!(i18n.getLocale());
-    await waitForSolid(() => expect(part(card, "dismiss")?.textContent?.trim()).toBe("Ausblenden"));
+    await waitForSolid(() =>
+      expect(part(card, "install")?.textContent?.trim()).toBe("Installieren"),
+    );
     expect(request).toHaveBeenCalledTimes(reads);
   });
 
@@ -241,7 +243,7 @@ describe("ClawHub chat recommendations", () => {
     await vi.waitFor(() => expect(part(card, "icon svg")).not.toBeNull());
     expect(card.querySelector("img, .skeleton")).toBeNull();
     expect(iconFetch.plugin).not.toHaveBeenCalled();
-    expect(part(card, "dismiss")?.textContent?.trim()).toBe("Dismiss");
+    expect(part(card, "dismiss")).toBeNull();
     part(card, "listing")!.click();
     expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
       pathname: `/plugins/${recommendation.id}`,
@@ -298,17 +300,23 @@ describe("ClawHub chat recommendations", () => {
     expect(part(card, "sign-in")).toBeNull();
   });
 
-  it("rechecks official status before offering installation from an old card", async () => {
-    const result = detail(false, { official: false });
-    const { card, context } = mount(async () => result);
-    await vi.waitFor(() => expect(part(card, "install")?.textContent?.trim()).toBe("View details"));
-    expect(card.querySelector(".plugin-official-badge")).toBeNull();
-    part(card, "install")!.click();
-    expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
-      pathname: `/plugins/${recommendation.id}`,
-      search: "",
-    });
-  });
+  it.each(["install", "unavailable"])(
+    "offers a community Install link without bypassing Gateway availability (%s)",
+    async (action) => {
+      const result = detail(false, { official: false });
+      result.plugin.local.action = action;
+      const { card, context, request } = mount(async () => result);
+      await vi.waitFor(() => expect(part(card, "install")?.textContent?.trim()).toBe("Install"));
+      expect(card.querySelector(".plugin-official-badge")).toBeNull();
+      expect(part(card, "dismiss")).toBeNull();
+      part(card, "install")!.click();
+      expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
+        pathname: `/plugins/${recommendation.id}`,
+        search: action === "install" ? "?action=install" : "",
+      });
+      expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
+    },
+  );
 
   it.each(["connection", "plugin generation"] as const)(
     "rejects old status responses after the %s changes",
@@ -386,8 +394,7 @@ describe("ClawHub chat recommendations", () => {
     expect(card.querySelector("img")).toBe(image);
     expect(image.hidden).toBe(false);
     expect(iconFetch.catalog).toHaveBeenCalledOnce();
-    part(card, "dismiss")!.click();
-    await vi.waitFor(() => expect(card.querySelector(".chat-clawhub-card")).toBeNull());
+    expect(part(card, "dismiss")).toBeNull();
   });
 
   it.each(["before", "after"] as const)(
@@ -609,6 +616,11 @@ describe("ClawHub chat recommendations", () => {
       expect(context.navigate).toHaveBeenCalledWith("skills", {
         search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
       });
+      if (!installed) {
+        expect(part(card, "dismiss")?.textContent?.trim()).toBe("Dismiss");
+        part(card, "dismiss")!.click();
+        await waitForSolid(() => expect(card.querySelector(".chat-clawhub-card")).toBeNull());
+      }
     },
   );
 });
