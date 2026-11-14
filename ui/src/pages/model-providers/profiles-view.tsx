@@ -7,6 +7,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { isAccessTokenExpiry, isOAuthRefreshPending } from "../../lib/model-auth.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
@@ -15,8 +16,6 @@ import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
 import {
-  isAccessTokenExpiry,
-  isOAuthRefreshPending,
   needsOAuthSignIn,
   profileAuthProblem,
   providerStatusCoversAccount,

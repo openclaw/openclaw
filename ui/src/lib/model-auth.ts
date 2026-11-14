@@ -1,10 +1,40 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveUsageProviderId } from "../../../src/infra/provider-usage.shared.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
+import type {
+  ModelAuthStatusProfile,
+  ModelAuthStatusProvider,
+  ModelAuthStatusResult,
+} from "../api/types.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { authReads, type ModelAuthRequest } from "./model-auth-request-state.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
+
+/** The auth owner supplies a reason for unusable grants, not for routine access expiry. */
+export function isAccessTokenExpiry(profile: ModelAuthStatusProfile): boolean {
+  return (
+    profile.type === "oauth" &&
+    (profile.status === "expiring" || profile.status === "expired") &&
+    profile.reasonCode === undefined
+  );
+}
+
+/** For OAuth, the auth owner reports `expired` only while a refresh claim may still settle. */
+export function isOAuthRefreshPending(profile: ModelAuthStatusProfile): boolean {
+  return profile.type === "oauth" && profile.reasonCode === "expired";
+}
+
+/** A rollup is quiet only when every matching expiry belongs to routine OAuth renewal. */
+export function hasRoutineOAuthExpiry(
+  status: "expired" | "expiring",
+  profiles: readonly ModelAuthStatusProfile[],
+): boolean {
+  const expiring = profiles.filter((profile) => profile.status === status);
+  return (
+    expiring.length > 0 &&
+    expiring.every((profile) => isAccessTokenExpiry(profile) || isOAuthRefreshPending(profile))
+  );
+}
 
 const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
 const authRefreshDeadlines = new WeakMap<ModelAuthStatusResult, number | undefined>();
