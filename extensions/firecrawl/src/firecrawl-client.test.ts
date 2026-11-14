@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runFirecrawlScrape, runFirecrawlSearch } from "./firecrawl-client.js";
 import { mockFirecrawlResponses } from "./firecrawl-payload.test-support.js";
 
@@ -87,5 +87,32 @@ describe("Firecrawl payloads", () => {
 
   it("rejects responses without usable content", async () => {
     await expect(scrape({ data: {} })).rejects.toThrow("Firecrawl scrape returned no content.");
+  });
+});
+
+describe("Firecrawl baseUrl DNS failures", () => {
+  // This file pins every hostname to a public address. Lift that pin so a real
+  // lookup failure reaches the baseUrl classifier.
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports an unresolvable baseUrl instead of a private-endpoint policy error", async () => {
+    await expect(
+      runFirecrawlSearch({
+        cfg: {
+          tools: { web: { search: { cacheTtlMinutes: 0 } } },
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: { webFetch: { baseUrl: "http://unresolvable.invalid:3002" } },
+              },
+            },
+          },
+        },
+        query: "dns classification",
+        access: "keyless",
+      }),
+    ).rejects.toThrow("Unable to resolve Firecrawl baseUrl host: unresolvable.invalid.");
   });
 });
