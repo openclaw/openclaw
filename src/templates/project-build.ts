@@ -4,7 +4,10 @@ import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
+import {
+  snapshotTemplateDependencyDirectory,
+  TEMPLATE_BUNDLED_EXECUTABLE_FILE_MODE,
+} from "./dependency-directory.js";
 import { digestTemplateBytes } from "./digest.js";
 import {
   TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION,
@@ -103,6 +106,7 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
     await mkdir(stagingRoot, { mode: 0o755 });
     const staging = await fsSafeRoot(stagingRoot, { mkdir: false, mode: 0o644, durable: false });
     const files = new Map<string, Buffer | string>();
+    const executableFiles = new Set<string>();
     files.set("package.json", `${JSON.stringify(project.packageJson, null, 2)}\n`);
     const templateMarkdown = await readSelectedProjectFile(project.root, "CLAW.md");
     assertValidatedBytes("CLAW.md", templateMarkdown, project.template.snapshot.manifest);
@@ -139,6 +143,9 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
         const bytes = await readSelectedProjectFile(project.root, path);
         assertValidatedBytes(path, bytes, file);
         files.set(path, bytes);
+        if (file.executable) {
+          executableFiles.add(path);
+        }
       }
     }
 
@@ -147,7 +154,11 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
     );
     for (const fileName of fileNames) {
       await mkdir(join(stagingRoot, dirname(fileName)), { recursive: true, mode: 0o755 });
-      await staging.create(fileName, files.get(fileName) as Buffer | string);
+      await staging.create(
+        fileName,
+        files.get(fileName) as Buffer | string,
+        executableFiles.has(fileName) ? { mode: TEMPLATE_BUNDLED_EXECUTABLE_FILE_MODE } : undefined,
+      );
     }
     const tarInputNames = fileNames.map((fileName) =>
       fileName.startsWith("@") ? `./${fileName}` : fileName,
