@@ -268,6 +268,16 @@ it.each`
 
 const command = "printf %s hello\\ ";
 
+it.each(["--script-timeout-seconds", "--script-tool-budget"])(
+  "rejects %s without a script payload on add",
+  async (flag) => {
+    await reject(
+      [...addArgs, "--every", "1h", "--system-event", "tick", flag, "30"],
+      `${flag} requires --script`,
+    );
+  },
+);
+
 const streamArgs = ["--stream-command", '["node","events.mjs"]', "--message", "run"];
 it.each([
   ["--command-cwd", ["--every", "1m", "--command", "pwd"], "payload", " /repo "],
