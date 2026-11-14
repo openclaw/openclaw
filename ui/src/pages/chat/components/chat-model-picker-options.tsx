@@ -10,8 +10,6 @@ import { formatDurationHuman } from "../../../lib/format-duration.ts";
 import "../../../components/tooltip.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
-import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
 import { ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
@@ -69,21 +67,6 @@ export function ChatModelCooldown(props: { until: number }) {
 }
 
 registerEnglishCatalog(registerModelFavoritesEnglish);
-
-function ModelShortcut(props: { rowKey: string }) {
-  const search = useContext(ChatModelSearchContext);
-  const number = createMemo(() => search?.row(props.rowKey)?.shortcut);
-  return (
-    <kbd
-      class="shortcut-kbd"
-      aria-hidden="true"
-      hidden={number() === undefined || !keyboardHintsVisible()}
-      data-chat-model-shortcut="true"
-      data-shortcut={number()}
-      data-chat-model-shortcut-number={number()}
-    />
-  );
-}
 
 export function ChatModelProviderIcon(props: {
   provider: string;
@@ -228,7 +211,6 @@ function ModelOptionButton(
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
   const highlighted = createMemo(() => search?.isHighlighted(key()));
-  const phone = createMediaQuery("(max-width: 640px)");
   const blocked = () =>
     props.disabled ||
     props.presentation.blocked ||
@@ -255,7 +237,7 @@ function ModelOptionButton(
         disabled={props.favorite?.disabled}
         onKeyDown={(event) => {
           // The star is independent of model selection and picker shortcuts.
-          if (event.key !== "Escape" && event.key !== "Tab") {
+          if (event.key !== "Escape" && event.key !== "Tab" && event.key !== "/") {
             event.stopPropagation();
           }
         }}
@@ -302,6 +284,7 @@ function ModelOptionButton(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
+      aria-keyshortcuts={search?.row(key())?.shortcut?.toString()}
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
@@ -351,9 +334,6 @@ function ModelOptionButton(
               <Icon name="info" />
             </span>
           </Show>
-          <Show when={props.favorite && !phone()}>
-            <FavoriteButton />
-          </Show>
           <Show when={props.presentation.modelMeta || props.presentation.cooldownUntil}>
             <span
               class={[
@@ -371,18 +351,16 @@ function ModelOptionButton(
           </Show>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <Show when={!props.presentation.blocked}>
-          <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
-            <span class="chat-controls__inline-select-check" aria-hidden="true">
-              <Icon name="check" />
-            </span>
-          </Show>
+      <span class="chat-controls__model-favorite-slot">
+        <Show when={!props.presentation.blocked && props.presentation.selected}>
+          <span class="chat-controls__inline-select-check" aria-hidden="true">
+            <Icon name="check" />
+          </span>
+        </Show>
+        <Show when={props.favorite}>
+          <FavoriteButton />
         </Show>
       </span>
-      <Show when={props.favorite && phone()}>
-        <FavoriteButton />
-      </Show>
     </div>
   );
 }
@@ -435,6 +413,7 @@ function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
       data-chat-model-name={props.entry.label.toLocaleLowerCase()}
       data-chat-model-provider-label={props.groupLabel.toLocaleLowerCase()}
       role="option"
+      aria-keyshortcuts={search?.row(key())?.shortcut?.toString()}
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       aria-selected="false"
@@ -452,9 +431,6 @@ function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
         <span class="chat-controls__model-option-title">
           <span class="chat-controls__model-option-name">{props.entry.label}</span>
         </span>
-      </span>
-      <span class="chat-controls__model-option-action">
-        <ModelShortcut rowKey={key()} />
       </span>
     </button>
   );

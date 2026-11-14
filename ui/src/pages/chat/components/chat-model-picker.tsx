@@ -110,7 +110,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     void params.onOpen?.();
     pendingSearchFocus = target.ownerDocument.activeElement;
     requestAnimationFrame(focusSearch);
-  });
+  }, "top");
   const state = createMemo(() => {
     const activeModelOption = params.modelOptions.find((option) =>
       isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),

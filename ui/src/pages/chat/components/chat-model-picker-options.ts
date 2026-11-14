@@ -144,7 +144,10 @@ export function prepareChatModelPickerPanel(
     selectedAgentRuntime?: string;
     targetGroups?: readonly ChatModelPickerTargetGroup[];
   },
-  favorites?: { keys: readonly string[]; selected: string },
+  favorites?: {
+    keys: readonly string[];
+    opening: { keys: readonly string[]; selected: string };
+  },
 ) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
   const activeModelOption = params.modelOptions.find((option) =>
@@ -175,9 +178,12 @@ export function prepareChatModelPickerPanel(
     }
     providerGroups.set(provider, group);
   }
-  // Unranked catalogs can contain hundreds of models; browse the rest through All models.
+  // Small provider lists need no disclosure, whether ranked or not.
   for (const [provider, group] of providerGroups) {
-    if (!recommendingProviders.has(provider)) {
+    if (group.lead.length + group.more.length < 10) {
+      group.lead.push(...group.more);
+      group.more = [];
+    } else if (!recommendingProviders.has(provider)) {
       group.more = group.lead.splice(9);
     }
   }
@@ -186,17 +192,20 @@ export function prepareChatModelPickerPanel(
       .filter((option) => !option.isDefault)
       .map((option) => [option.value, option]),
   );
-  const favoriteOptions = (favorites?.keys ?? []).flatMap((key) => {
-    const option = byModel.get(key);
-    return option ? [option] : [];
-  });
+  const favoriteOptions = (favorites?.keys ?? [])
+    .map((key) => byModel.get(key))
+    .filter((option) => option !== undefined);
+  // Keep provider rows steady under the pointer; the Favorites group stays live.
+  const openingFavorites = (favorites?.opening.keys ?? [])
+    .map((key) => byModel.get(key))
+    .filter((option) => option !== undefined);
   for (const [provider, group] of providerGroups) {
     const first = [...group.lead, ...group.more].filter(
-      (option) => option.isDefault || option.value === favorites?.selected,
+      (option) => option.isDefault || option.value === favorites?.opening.selected,
     );
     const promoted = new Set([
       ...first,
-      ...favoriteOptions.filter((option) => groupProvider(option) === provider),
+      ...openingFavorites.filter((option) => groupProvider(option) === provider),
     ]);
     group.lead = [...promoted, ...group.lead.filter((option) => !promoted.has(option))];
     group.more = group.more.filter((option) => !promoted.has(option));
