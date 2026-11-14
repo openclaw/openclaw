@@ -198,6 +198,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         return { error: sessionMutationTargetChanged(params.method, targetRef.sessionKey).error };
       }
       consuming.sharing = retained.read();
+      return { target: consuming.sharing.target };
     }
     return consuming.sharing
       ? { target: (consuming.sharing.assertCurrent(), consuming.sharing.target) }
@@ -395,9 +396,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       if (!retained) {
         throw targetChanged(targetRef.sessionKey);
       }
-      const read = retained.read();
-      return consumeSharing(read, () =>
-        assertTargetCurrent(
+      return consumeSharing(retained.read, () => {
+        const read = consuming.sharing!;
+        return assertTargetCurrent(
           targetRef,
           expected,
           currentCfg,
@@ -405,8 +406,8 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           { target: read.target, members: read.members.map((member) => member.identityId) },
           currentTalkTarget,
           bindSessionIdentity,
-        ),
-      );
+        );
+      });
     }
     if (!prepared && expected?.absentTarget && !expected.created) {
       const currentRoute = consuming.sharing
@@ -480,7 +481,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     if (!sameResolvedTarget) {
       throw targetChanged(targetRef.sessionKey);
     }
-    // One synchronous target check consumes one policy; the next boundary derives it anew.
+    // Each boundary revalidates authority; unchanged facts retain the prepared policy.
     const policyConfig = params.context.getCommittedRuntimeConfig?.() ?? currentCfg;
     const policy = preparedPolicy(policyConfig, prepared?.members);
     const ownershipError = authorizeOwnSessionMutation({
