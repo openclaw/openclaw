@@ -6,7 +6,10 @@ import * as downloads from "../../lib/download.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import * as toasts from "../../lib/toast.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { createUsageExportRequest } from "./export.ts";
 
 const date = "2026-10-01";
@@ -42,7 +45,16 @@ function createExportScenario(
     usage: null,
     computing: true,
   }));
-  const query = { selectedSessions: [selected.key], query: "" };
+  const query = {
+    startDate: date,
+    endDate: date,
+    scope: "instance" as const,
+    timeZone: "utc" as "utc" | "local",
+    selectedDays: [] as string[],
+    selectedHours: [] as number[],
+    selectedSessions: [selected.key],
+    query: "",
+  };
   const build = (
     rows: SessionUsageEntry[] = [selected, excluded, ...pending],
   ): SessionsUsageResult => ({
@@ -57,7 +69,7 @@ function createExportScenario(
     endDate: date,
     cacheStatus: { ...cacheStatus, status: "partial", pendingFiles: pending.length },
   });
-  const request = vi.fn(async () => build());
+  const request = createGatewayRequestMock(async () => build());
   const { gateway } = createApplicationGateway();
   Object.assign(gateway.snapshot, { client: createTestGatewayClient(request), phase: "connected" });
   const binding = new GatewayPageBinding(() => {}, { getGateway: () => gateway });
@@ -68,7 +80,7 @@ function createExportScenario(
   const exporter = createUsageExportRequest(
     () => {},
     binding,
-    () => ({ startDate: date, endDate: date, scope: "instance", timeZone: "utc", ...query }),
+    () => ({ ...query }),
   );
   return {
     download,
@@ -140,7 +152,15 @@ it.each(["json", "sessions-csv", "daily-csv"] as const)(
     await exporter.run(format);
     expect(download).toHaveBeenCalledTimes(2);
     expect(download.mock.calls[1]?.[1]).toContain("100");
-    expect(download.mock.calls[1]?.[1]).not.toContain("excluded");
+    if (format === "json") {
+      const exported = JSON.parse(download.mock.calls[1]?.[1] ?? "{}");
+      expect(exported.sessions.map((session: SessionUsageEntry) => session.key)).not.toContain(
+        excluded.key,
+      );
+      expect(exported.context.selectedSessions).toContain(excluded.key);
+    } else {
+      expect(download.mock.calls[1]?.[1]).not.toContain("excluded");
+    }
 
     // Missing usage can hide a selected row from a usage-dependent filter.
     query.query = "minTokens:1";
@@ -151,3 +171,80 @@ it.each(["json", "sessions-csv", "daily-csv"] as const)(
     expect(toast).toHaveBeenCalledTimes(6);
   },
 );
+
+it("records the effective request even when the selection changes while exporting", async () => {
+  const { query, request, build, selected, excluded, download, exporter } =
+    createExportScenario("json");
+  const result = build();
+  query.timeZone = "local";
+  query.startDate = "2026-09-28";
+  query.selectedDays.push(date);
+  query.selectedHours.push(8);
+  let resolveRequest!: (value: SessionsUsageResult) => void;
+  request.mockImplementationOnce(
+    () =>
+      new Promise<SessionsUsageResult>((resolve) => {
+        resolveRequest = resolve;
+      }),
+  );
+
+  const running = exporter.run("json");
+  query.selectedSessions.splice(0, 1, excluded.key);
+  query.selectedDays.push("2026-10-02");
+  query.selectedHours.push(9);
+  query.startDate = date;
+  resolveRequest(result);
+  await running;
+
+  const params = request.mock.calls[0]?.[1];
+  const exported = JSON.parse(download.mock.calls[0]?.[1] ?? "{}");
+  expect(params).toMatchObject({
+    startDate: "2026-09-28",
+    endDate: date,
+    groupBy: "instance",
+    selectedDays: [date],
+    selectedHours: [8],
+    selectedSessions: [selected.key],
+    mode: exported.context.timeZone.mode,
+    timeZone: exported.context.timeZone.timeZone,
+    utcOffset: exported.context.timeZone.utcOffset,
+  });
+  expect(exported.sessions.map((session: SessionUsageEntry) => session.key)).toEqual([
+    selected.key,
+  ]);
+  expect(exported.context).toMatchObject({
+    version: 1,
+    startDate: "2026-09-28",
+    endDate: date,
+    timeZone: {
+      selection: "local",
+      mode: "specific",
+    },
+    agentId: null,
+    groupBy: "instance",
+    creatorKey: null,
+    query: null,
+    selectedDays: [date],
+    selectedHours: [8],
+    selectedSessions: [selected.key],
+  });
+  expect(new Date(exported.context.generatedAt).toISOString()).toBe(exported.context.generatedAt);
+});
+
+it("distinguishes ranges with the same totals and records an unfiltered UTC report", async () => {
+  const { query, build, selected, request, download, exporter } = createExportScenario("json");
+  query.selectedSessions.length = 0;
+  const result = build([selected]);
+  result.cacheStatus = { ...cacheStatus, status: "fresh", pendingFiles: 0 };
+  request.mockResolvedValue(result);
+  await exporter.run("json");
+  query.startDate = "2026-09-01";
+  await exporter.run("json");
+  const first = JSON.parse(download.mock.calls[0]?.[1] ?? "{}");
+  const second = JSON.parse(download.mock.calls[1]?.[1] ?? "{}");
+  expect(first.totals).toEqual(second.totals);
+  expect(first.context.startDate).toBe(date);
+  expect(second.context.startDate).toBe("2026-09-01");
+  expect(second.context.timeZone).toEqual({ selection: "utc", mode: "utc" });
+  expect(second.context.selectedSessions).toEqual([]);
+});
