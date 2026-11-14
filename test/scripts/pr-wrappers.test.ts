@@ -2111,6 +2111,54 @@ if (process.env.PR_TEST_INSTALL_GATE) {
     expect(collected.stderr).not.toContain("Warning:");
   }
 
+  itPosix("review-init reuses and settles dependency caches after device renumbering", () => {
+    const fixture = makeFrozenDependencyFixture();
+    fixture.git(fixture.canonical, ["checkout", "main"]);
+    // Replace only the downstream GitHub review work; wrapper admission and
+    // dependency materialization still run through the production entry point.
+    const review = "scripts/pr-lib/review.sh";
+    fixture.write(
+      review,
+      readScript(join(fixture.canonical, review)) +
+        '\nreview_init() { echo "review-init reached"; }\n',
+    );
+    fixture.commit([review], true);
+    fixture.git(fixture.canonical, ["checkout", "parked"]);
+    const { anchor } = materializeAnchor(fixture, {
+      ...fixture.env,
+      OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
+    });
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    const database = join(cache, "lifetime.sqlite");
+    const db = new DatabaseSync(database);
+    try {
+      const oldDevice = String(lstatSync(cache, { bigint: true }).dev + 1n);
+      db.prepare("UPDATE owner SET cache_dev = ?, db_dev = ?").run(oldDevice, oldDevice);
+      db.prepare("UPDATE installations SET dev = ?").run(oldDevice);
+      for (const table of ["holds", "operation_lifetimes"]) {
+        db.prepare("UPDATE " + table + " SET anchor_dev = ?").run(oldDevice);
+      }
+      db.prepare("UPDATE operation_lifetimes SET dev = ?").run(oldDevice);
+    } finally {
+      db.close();
+    }
+    const result = runWrapper(fixture, ["review-init", "123"], "linked", {
+      env: { ...fixture.env, OPENCLAW_PR_TOOLING_ROOT: fixture.tooling },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("review-init reached");
+    expect(existsSync(anchor)).toBe(false);
+    expect(jsonLines(fixture.calls)).toHaveLength(1);
+    collectFinishedDependencies(fixture);
+    const entries = prCacheEntries(cache);
+    expect(entries).toHaveLength(1);
+    expect(readPrCacheState(join(cache, entries[0]!))).toEqual({
+      registered: true,
+      settled: true,
+      anchors: [],
+    });
+  });
+
   itPosix.each(["install", "hold", "settle"])(
     "recovers the next scripts/pr invocation after SIGKILL during %s",
     (phase) => {

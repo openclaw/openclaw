@@ -477,13 +477,22 @@ keeps the status pending until that run completes.
 
 ## Recover dependency-cache device identities
 
-The lifetime ledger binds the cache, database, and installations to their device
-numbers, inodes, owners, and modes. A device-number change can make ordinary
-commands refuse the ledger. Matching inodes or a recent reboot do not prove that
-the same volume remains mounted. Ordinary commands never repair this mismatch.
+Current wrappers tolerate device-number changes across remounts or restarts.
+Persisted cache, database, installation, anchor, and lease identities still require
+matching inodes, owners, modes, and physical paths. Within an operation, captured
+path and descriptor identities also require matching device numbers. Shared
+leases, hold settlement, and collection eligibility are unchanged; no ledger
+rewrite or recovery plan is needed for ordinary reuse.
 
-After independently inspecting the complete cache and accepting its current
-identity, an operator can adopt only its device numbers:
+This accepts a replacement volume at the same paths with identical remaining
+metadata as the same cache. Device numbers were never durable volume identities.
+The cache is disposable; this policy does not apply to user data or grant authority
+to retire a live operation. Ambiguous multiple operation leases for one physical
+anchor are retained rather than treated as legacy scratch.
+
+Older frozen wrappers may still require the recorded device numbers. After
+independently inspecting the complete cache and accepting its current identity,
+an operator can use the existing sealed adoption for those wrappers:
 
 ```bash
 scripts/pr dependency-cache-recover <plan.json> \

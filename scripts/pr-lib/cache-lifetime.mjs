@@ -82,6 +82,11 @@ const identityKeys = ["dev", "ino", "uid", "mode"];
 const identityValues = (stat) => identityKeys.map((key) => String(stat[key]));
 const rowMatches = (row, prefix, stat) =>
   identityKeys.every((key) => row[`${prefix}${key}`] === String(stat[key]));
+// st_dev can change across remounts. Persisted observations keep inode, owner
+// and mode checks; same() and operation-local snapshots still include the device.
+// A different volume reusing every remaining identity is an accepted cache risk.
+const persistedMatches = (row, prefix, stat) =>
+  ["ino", "uid", "mode"].every((key) => row[`${prefix}${key}`] === String(stat[key]));
 
 const ledgerSchema = `
           CREATE TABLE owner (
@@ -160,6 +165,16 @@ function processLifetime(command, payload, mutexFd) {
   return JSON.parse(result.stdout || "null");
 }
 
+function operationLifetime(db, anchor) {
+  const rows = db
+    .prepare("SELECT * FROM operation_lifetimes WHERE anchor_path = ? AND anchor_ino = ?")
+    .all(anchor.path, String(anchor.ino));
+  if (rows.length > 1) {
+    throw new Error("Ambiguous PR operation lifetimes; retain anchor");
+  }
+  return rows[0];
+}
+
 function recordLifetime(context, anchor) {
   const path = process.env.OPENCLAW_PR_LIFETIME_FILE;
   if (!path) {
@@ -172,13 +187,14 @@ function recordLifetime(context, anchor) {
   if (!same(file, fstatSync(7, { bigint: true }))) {
     throw new Error("PR lifetime descriptor changed");
   }
-  const existing = context.db
-    .prepare(
-      "SELECT * FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
-    )
-    .get(anchor.path, String(anchor.dev), String(anchor.ino));
+  const existing = operationLifetime(context.db, anchor);
   if (existing) {
-    if (existing.lease_path !== path || !rowMatches(existing, "", file) || existing.retired) {
+    if (
+      existing.lease_path !== path ||
+      !persistedMatches(existing, "anchor_", anchor) ||
+      !persistedMatches(existing, "", file) ||
+      existing.retired
+    ) {
       throw new Error("PR operation lifetime changed");
     }
     return;
@@ -212,14 +228,12 @@ function registerDependencyLifetime(anchor) {
     const context = ledger(lock);
     transaction(context, () => {
       const pending = context.db
-        .prepare(
-          "SELECT * FROM pending_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
-        )
-        .get(anchor.path, String(anchor.dev), String(anchor.ino));
+        .prepare("SELECT * FROM pending_lifetimes WHERE anchor_path = ? AND anchor_ino = ?")
+        .get(anchor.path, String(anchor.ino));
       if (
         !pending ||
         pending.lease_path !== process.env.OPENCLAW_PR_LIFETIME_FILE ||
-        !rowMatches(pending, "anchor_", anchor)
+        !persistedMatches(pending, "anchor_", anchor)
       ) {
         throw new Error("PR pending lifetime changed");
       }
@@ -327,8 +341,8 @@ function openLedger(cache, cacheIdentity, create, readOnly, recovery = false) {
         true,
       );
     }
-    // Only the explicit sealed recovery path may admit a mismatched owner.
-    // It validates the complete preimage inside its synchronous transaction.
+    // Ordinary opens tolerate device renumbering, not changed inode/owner/mode.
+    // Explicit recovery separately validates its complete sealed preimage.
     if (!recovery) {
       assertLedgerOwner(context);
       if (!readOnly) {
@@ -381,7 +395,7 @@ function ledger(lock) {
 function installation(context, entry) {
   const identity = entryIdentity(context.cache, entry);
   const row = context.db.prepare("SELECT * FROM installations WHERE key = ?").get(basename(entry));
-  if (!row || !rowMatches(row, "", identity)) {
+  if (!row || !persistedMatches(row, "", identity)) {
     throw new Error("PR dependency installation ledger differs; retain installation");
   }
   return { identity, row };
@@ -390,13 +404,13 @@ function installation(context, entry) {
 function anchorRows(db, anchor) {
   return db
     .prepare(
-      "SELECT * FROM holds WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ? ORDER BY entry_key",
+      "SELECT * FROM holds WHERE anchor_path = ? AND anchor_ino = ? ORDER BY entry_key, anchor_dev",
     )
-    .all(anchor.path, String(anchor.dev), String(anchor.ino));
+    .all(anchor.path, String(anchor.ino));
 }
 
 function assertHold(row, anchor) {
-  if (row.anchor_path !== anchor.path || !rowMatches(row, "anchor_", anchor)) {
+  if (row.anchor_path !== anchor.path || !persistedMatches(row, "anchor_", anchor)) {
     throw new Error("PR dependency hold identity changed; retain it");
   }
 }
@@ -417,15 +431,13 @@ function acquire(context, entry, anchor, fresh, stage) {
       const row = context.db
         .prepare("SELECT * FROM installations WHERE key = ?")
         .get(basename(entry));
-      if (!row || !rowMatches(row, "", identity)) {
+      if (!row || !persistedMatches(row, "", identity)) {
         throw new Error("PR dependency installation ledger changed");
       }
     }
     const existing = context.db
-      .prepare(
-        "SELECT * FROM holds WHERE entry_key = ? AND anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
-      )
-      .get(basename(entry), anchor.path, String(anchor.dev), String(anchor.ino));
+      .prepare("SELECT * FROM holds WHERE entry_key = ? AND anchor_path = ? AND anchor_ino = ?")
+      .get(basename(entry), anchor.path, String(anchor.ino));
     if (existing) {
       assertHold(existing, anchor);
     } else {
@@ -465,8 +477,8 @@ function assertLedgerOwner(context) {
   const owner = context.db.prepare("SELECT * FROM owner WHERE id = 1").get();
   if (
     !owner ||
-    !rowMatches(owner, "cache_", context.cacheIdentity) ||
-    !rowMatches(owner, "db_", context.file) ||
+    !persistedMatches(owner, "cache_", context.cacheIdentity) ||
+    !persistedMatches(owner, "db_", context.file) ||
     context.db.prepare("PRAGMA user_version").get().user_version !== 0 ||
     context.db.prepare("PRAGMA foreign_keys").get().foreign_keys !== 1
   ) {
@@ -536,8 +548,8 @@ function assertRecoverySchema(db) {
   }
 }
 
-// Device numbers are not durable volume identities. Only an operator-reviewed
-// exact-state adoption may change them; ordinary opens must still reject drift.
+// Retained frozen wrappers may still require exact device cells. Preserve their
+// explicit sealed adoption path; current ordinary opens need no row rewrite.
 export function recoverDependencyCache(planPath, planSha256) {
   const bytes = readFileSync(planPath);
   if (
@@ -1056,10 +1068,8 @@ function assertDependencyTargets(targets, destination) {
       for (const entry of entries) {
         installation(context, entry);
         const hold = context.db
-          .prepare(
-            "SELECT * FROM holds WHERE entry_key = ? AND anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
-          )
-          .get(basename(entry), anchor.path, String(anchor.dev), String(anchor.ino));
+          .prepare("SELECT * FROM holds WHERE entry_key = ? AND anchor_path = ? AND anchor_ino = ?")
+          .get(basename(entry), anchor.path, String(anchor.ino));
         if (!hold) {
           throw new Error("Private cache donor has no matching anchor lifetime hold");
         }
@@ -1201,7 +1211,9 @@ export function collectUnusedDependencyCaches(lock, current = "") {
   }
   const lifetimes = context.db.prepare("SELECT * FROM operation_lifetimes").all();
   const anchors = new Map();
-  const anchorKey = (row) => JSON.stringify([row.anchor_path, row.anchor_dev, row.anchor_ino]);
+  // Group recorded device variants before selecting the lease: a hold-only row
+  // must never take the legacy route around the physical anchor's shared lock.
+  const anchorKey = (row) => JSON.stringify([row.anchor_path, row.anchor_ino]);
   for (const row of context.db
     .prepare(
       "SELECT DISTINCT anchor_path, anchor_dev, anchor_ino, anchor_uid, anchor_mode FROM holds",
@@ -1215,6 +1227,10 @@ export function collectUnusedDependencyCaches(lock, current = "") {
     }
   }
   const candidates = [...anchors.values()]
+    .filter(
+      (row) =>
+        lifetimes.filter((item) => !item.retired && anchorKey(item) === anchorKey(row)).length <= 1,
+    )
     .map((row) => {
       const identity = Object.fromEntries(identityKeys.map((key) => [key, row[`anchor_${key}`]]));
       const entries = anchorRows(
@@ -1261,7 +1277,7 @@ export function collectUnusedDependencyCaches(lock, current = "") {
   const retired = [];
   for (const row of context.db
     .prepare(
-      "SELECT t.*, l.retired FROM dependency_transitions t LEFT JOIN operation_lifetimes l ON l.anchor_path = t.anchor_path AND l.anchor_dev = t.anchor_dev AND l.anchor_ino = t.anchor_ino ORDER BY t.path",
+      "SELECT t.*, (SELECT MIN(l.retired) FROM operation_lifetimes l WHERE l.anchor_path = t.anchor_path AND l.anchor_ino = t.anchor_ino) AS retired FROM dependency_transitions t ORDER BY t.path",
     )
     .all()) {
     if (budget <= 0) {
@@ -1291,7 +1307,7 @@ export function collectUnusedDependencyCaches(lock, current = "") {
       continue;
     }
     const identity = directory(source);
-    if (row.dev !== null && !rowMatches(row, "", identity)) {
+    if (row.dev !== null && !persistedMatches(row, "", identity)) {
       throw new Error("PR dependency transition identity changed");
     }
     if (row.kind === "install") {
@@ -1336,12 +1352,13 @@ export function collectUnusedDependencyCaches(lock, current = "") {
     if (
       !context.db
         .prepare(
-          "SELECT 1 FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ? AND retired = 1",
+          "SELECT 1 FROM operation_lifetimes l WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ? AND retired = 1 AND NOT EXISTS (SELECT 1 FROM operation_lifetimes active WHERE active.anchor_path = l.anchor_path AND active.anchor_ino = l.anchor_ino AND active.retired = 0)",
         )
         .get(row.anchor_path, row.anchor_dev, row.anchor_ino)
     ) {
       continue;
     }
+    const leaseIdentity = lstatSync(row.lease_path, { bigint: true, throwIfNoEntry: false });
     const checked = processLifetime(
       "retire",
       {
@@ -1361,7 +1378,7 @@ export function collectUnusedDependencyCaches(lock, current = "") {
     if (checked.results[0].state !== "retired") {
       continue;
     }
-    if (!rowMatches(row, "", physicalFile(row.lease_path))) {
+    if (!same(leaseIdentity, physicalFile(row.lease_path))) {
       throw new Error("PR lifetime file changed before retirement");
     }
     context.db
@@ -1405,7 +1422,7 @@ export function collectUnusedDependencyCaches(lock, current = "") {
         .get(row.key);
       if (
         !present ||
-        !rowMatches(present, "", identity) ||
+        !persistedMatches(present, "", identity) ||
         present.settled !== 1 ||
         present.last_used !== row.last_used ||
         held
@@ -1486,10 +1503,13 @@ function retirementSnapshot(context, anchor, reviewed) {
   });
   if (
     reviewed &&
-    !isDeepStrictEqual(
-      owned.map(({ row, identity }) => ({ key: row.entry_key, ...identityRecord(identity) })),
-      reviewed.holds.toSorted((left, right) => left.key.localeCompare(right.key)),
-    )
+    (new Set(owned.map(({ row }) => row.entry_key)).size !== reviewed.holds.length ||
+      owned.some(
+        ({ row, identity }) =>
+          !reviewed.holds.some(
+            (entry) => entry.key === row.entry_key && persistedMatches(entry, "", identity),
+          ),
+      ))
   ) {
     throw new Error("PR dependency reviewed holds differ; retain them");
   }
@@ -1522,7 +1542,7 @@ function settleRetirement(context, anchor, snapshot) {
       const entry = context.db
         .prepare("SELECT * FROM installations WHERE key = ?")
         .get(row.entry_key);
-      if (!entry || !rowMatches(entry, "", identity)) {
+      if (!entry || !persistedMatches(entry, "", identity)) {
         throw new Error("PR dependency installation ledger changed after retirement");
       }
       context.db
@@ -1530,19 +1550,21 @@ function settleRetirement(context, anchor, snapshot) {
           "DELETE FROM holds WHERE entry_key = ? AND anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
         )
         .run(row.entry_key, row.anchor_path, row.anchor_dev, row.anchor_ino);
+    }
+    for (const key of new Set(owned.map(({ row }) => row.entry_key))) {
       const result = context.db
         .prepare(`
         UPDATE installations SET settled = 1 WHERE key = ?
           AND NOT EXISTS (SELECT 1 FROM holds WHERE entry_key = ?)
       `)
-        .run(row.entry_key, row.entry_key);
-      (result.changes ? settled : retained).push(row.entry_key);
+        .run(key, key);
+      (result.changes ? settled : retained).push(key);
     }
     context.db
       .prepare(
-        "UPDATE operation_lifetimes SET retired = 1 WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
+        "UPDATE operation_lifetimes SET retired = 1 WHERE anchor_path = ? AND anchor_ino = ?",
       )
-      .run(anchor.path, String(anchor.dev), String(anchor.ino));
+      .run(anchor.path, String(anchor.ino));
     return { state: "released", settled, retained };
   });
 }
@@ -1564,7 +1586,7 @@ export function readDependencyHolds() {
         .all();
       const anchors = new Map();
       for (const row of rows) {
-        const key = JSON.stringify([row.anchor_path, row.anchor_dev, row.anchor_ino]);
+        const key = JSON.stringify([row.anchor_path, row.anchor_ino]);
         if (!anchors.has(key)) {
           anchors.set(key, {
             path: row.anchor_path,
@@ -1572,7 +1594,10 @@ export function readDependencyHolds() {
             holds: [],
           });
         }
-        anchors.get(key).holds.push({ key: row.entry_key, ...identityRecord(row) });
+        const anchor = anchors.get(key);
+        if (!anchor.holds.some((entry) => entry.key === row.entry_key)) {
+          anchor.holds.push({ key: row.entry_key, ...identityRecord(row) });
+        }
       }
       return [...anchors.values()];
     },
@@ -1586,7 +1611,7 @@ export function dependencyHoldState(hold) {
   const inspect = (read, identity) => {
     try {
       const stat = read();
-      return { state: rowMatches(identity, "", stat) ? "present" : "changed", stat };
+      return { state: persistedMatches(identity, "", stat) ? "present" : "changed", stat };
     } catch (error) {
       if (error.code === "ENOENT" || error.code === "ENOTDIR") {
         return { state: "missing" };
@@ -1628,11 +1653,7 @@ export function releaseFinishedAnchor(reviewed) {
       }
       return {
         ...retirementSnapshot(context, anchor, reviewed),
-        lifetime: context.db
-          .prepare(
-            "SELECT * FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
-          )
-          .get(anchor.path, String(anchor.dev), String(anchor.ino)),
+        lifetime: operationLifetime(context.db, anchor),
       };
     },
     false,
@@ -1659,7 +1680,7 @@ export function releaseFinishedAnchor(reviewed) {
       throw new Error("PR dependency lifetime remains held; retain anchor");
     }
   } else if (lstatSync(anchor.path, { throwIfNoEntry: false })) {
-    if (!same(directory(anchor.path), anchor)) {
+    if (!persistedMatches(identityRecord(anchor), "", directory(anchor.path))) {
       throw new Error("PR anchor identity changed; retain it");
     }
     rmSync(anchor.path, { recursive: true });
@@ -1691,10 +1712,8 @@ export function retireAnchorDependencies(anchor, retire) {
       // so let the next invocation acquire EX after the final descriptor closes.
       if (
         context.db
-          .prepare(
-            "SELECT 1 FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
-          )
-          .get(anchor.path, String(anchor.dev), String(anchor.ino))
+          .prepare("SELECT 1 FROM operation_lifetimes WHERE anchor_path = ? AND anchor_ino = ?")
+          .get(anchor.path, String(anchor.ino))
       ) {
         return undefined;
       }
