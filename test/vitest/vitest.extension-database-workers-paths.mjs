@@ -158,7 +158,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/imessage/src/monitor.reaction-owner.test.ts",
   "extensions/telegram/src/monitor.test.ts",
   "extensions/discord/src/durable-delivery.test.ts",
-  "extensions/discord/src/monitor/monitor.test.ts",
   "extensions/imessage/src/test-plugin.test.ts",
   "extensions/mattermost/src/outbound-delivery.test.ts",
   "extensions/googlechat/src/api.fetchok.transport.test.ts",

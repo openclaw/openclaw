@@ -251,7 +251,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/agents/identity-file.worker.ts"],
   },
   ...[
-    "src/gateway/worker-environments/placement-dispatch-recovery.test.ts",
     "src/gateway/worker-environments/worker-turn-launcher-media.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
@@ -261,7 +260,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   ...[
-    "src/gateway/worker-environments/placement-dispatch-recovery.test.ts",
     "src/gateway/worker-environments/worker-turn-launcher-media.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
