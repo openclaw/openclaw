@@ -323,6 +323,13 @@ type PreparedHarnessContextEnginePrompt = {
   systemPrompt: string;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
+  /**
+   * True when the host byte bound omitted stored history from this turn's
+   * assembled context. A fitting engine assembly leaves it false even when
+   * the stored transcript is oversized, so the omission warning must only
+   * be delivered from this outcome, never from the stored-byte latch alone.
+   */
+  contextBounded: boolean;
 };
 
 export async function prepareHarnessContextEnginePrompt(
@@ -338,6 +345,7 @@ export async function prepareHarnessContextEnginePrompt(
     messages: params.messages,
     systemPrompt: params.promptBudget.systemPrompt,
     contextEnginePromptAuthority: "assembled",
+    contextBounded: false,
   };
   const contextEngine = params.contextEngine;
   if (!contextEngine) {
@@ -395,6 +403,7 @@ export async function prepareHarnessContextEnginePrompt(
           })
         : initial.systemPrompt,
       contextEnginePromptAuthority: authority,
+      contextBounded: (bounded.hostOmittedMessages ?? 0) > 0,
       ...(authority === "preassembly_may_overflow"
         ? { unwindowedContextEngineMessagesForPrecheck: preassemblyMessages }
         : {}),

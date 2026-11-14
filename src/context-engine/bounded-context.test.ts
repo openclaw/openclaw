@@ -80,13 +80,16 @@ describe("bounded context assembly", () => {
     const cap = Buffer.byteLength(JSON.stringify(messages.slice(2))) + 1;
     const bounded = boundContextEngineAssembly(assembled, cap);
     expect(bounded.messages).toEqual(messages.slice(4));
+    expect(bounded.hostOmittedMessages).toBe(messages.length - bounded.messages.length);
     expect(JSON.stringify(messages)).toBe(original);
     expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(cap);
   });
 
   it("omits an oversized latest historical turn instead of overflowing or slicing its bytes", () => {
     const assembled: AssembleResult = { messages: [user("界".repeat(500))], estimatedTokens: 500 };
-    expect(boundContextEngineAssembly(assembled, 1024).messages).toEqual([]);
+    const bounded = boundContextEngineAssembly(assembled, 1024);
+    expect(bounded.messages).toEqual([]);
+    expect(bounded.hostOmittedMessages).toBe(1);
   });
 
   it.each([undefined, 4096])(
@@ -101,7 +104,9 @@ describe("bounded context assembly", () => {
           fingerprint: "engine-fingerprint",
         },
       };
-      expect(boundContextEngineAssembly(assembled, cap, 1)).toBe(assembled);
+      const bounded = boundContextEngineAssembly(assembled, cap, 1);
+      expect(bounded).toBe(assembled);
+      expect(bounded.hostOmittedMessages).toBeUndefined();
     },
   );
 

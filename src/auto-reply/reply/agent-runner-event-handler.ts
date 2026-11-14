@@ -44,6 +44,10 @@ export function createAgentRunEventHandler(params: {
     params.turn.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
 
   let modelWaitActive = false;
+  // A byte-bounded turn retries after a provider error, and each attempt
+  // re-prepares history, so the context_bounded event can arrive once per
+  // attempt. The turn observer gets the warning once per turn.
+  let contextBoundedNoticeDelivered = false;
   const currentMessageId =
     params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid;
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
@@ -271,6 +275,10 @@ export function createAgentRunEventHandler(params: {
       return;
     }
     if (phase === "context_bounded") {
+      if (contextBoundedNoticeDelivered) {
+        return;
+      }
+      contextBoundedNoticeDelivered = true;
       await sendCompactionUserNotices("context_bounded");
       return;
     }

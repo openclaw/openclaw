@@ -23,6 +23,13 @@ export type AssembleResult = {
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
   systemPromptAddition?: string;
   /**
+   * Host-set count of messages the host byte bound omitted from this assembly.
+   * Engines never set it; `boundContextEngineAssembly` records it when the
+   * host byte cap drops history, so callers can tell a fitting assembly
+   * (absent) from one that actually omitted stored history.
+   */
+  hostOmittedMessages?: number;
+  /**
    * Optional projection lifecycle for hosts with persistent backend threads.
    *
    * Context engines that return `thread_bootstrap` ask the host to inject the

@@ -71,6 +71,23 @@ describe("executeAgentTurn: compaction events", () => {
       isCompactionNotice: true,
     });
   });
+  it("delivers the context_bounded warning once per turn across retries", async () => {
+    const onCompactionNoticePayload = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      // A byte-bounded turn that retries after a provider error re-prepares
+      // history per attempt, so the event arrives once per attempt.
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
+    expect(result.kind).toBe("success");
+    expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: expect.stringContaining("Full history remains saved"),
+      isCompactionNotice: true,
+    });
+  });
   it.each([
     { summaryRefused: undefined, text: "/new or a larger model" },
     { summaryRefused: true, text: "Context trimmed because the summarizer refused" },
