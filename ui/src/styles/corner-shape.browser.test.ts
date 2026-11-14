@@ -7,6 +7,13 @@ function corners(circular: string, superelliptical: string, selectors: string) {
   return selectors.split(", ").map((selector) => ({ selector, circular, superelliptical }));
 }
 
+// WebKit draws these circular; every other engine with corner-shape draws the superellipse.
+const COMPOSER_CASES = corners(
+  "20px",
+  "25px",
+  ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status",
+);
+
 const CORNER_CASES = [
   ...corners("3px", "3px", ".field .oc-checkbox"),
   ...corners("10px", "12.5px", ".btn, .nav-item, .agent-scope-control .agent-select__trigger"),
@@ -17,6 +24,7 @@ const CORNER_CASES = [
     ".card, .option-card__choice, .exec-approval-card, .agent-chat__search-bar",
   ),
   ...corners("20px", "25px", ".option-card, .settings-group, .agent-chat__input .slash-menu"),
+  ...COMPOSER_CASES,
   // Menu rows share --menu-item-radius at both scales.
   ...corners("10px", "12.5px", ".slash-menu-item, .chat-reply-context-menu button"),
 ];
@@ -24,11 +32,6 @@ const CORNER_CASES = [
 // Neither siblings nor non-opted descendants may inherit scaled radius tokens.
 const ALL_CASES = [
   ...CORNER_CASES,
-  ...corners(
-    "20px",
-    "25px",
-    ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status",
-  ),
   ...corners("9999px", "9999px", ".chip, .statusDot, .circular-icon"),
   ...corners("10px", "10px", ".run-inspector__panel, .oc-icon-button--28"),
   // Row controls share --field-radius, which scales with the engine like .btn; no superellipse.
@@ -118,17 +121,20 @@ fixture.describe("Control UI corner curvature", () => {
     expect(heights).toEqual(width === 390 ? [38, 38] : [32, 32]);
   });
 
-  it.each([true, false])(
-    "preserves corners and canonical root tokens (supported=%s)",
-    async (supported) => {
+  it.each(["superellipse", "webkit", "unsupported"] as const)(
+    "preserves corners and canonical root tokens (%s)",
+    async (engine) => {
+      const supported = engine !== "unsupported";
+      const engineCss = {
+        superellipse: css,
+        // Chromium stands in for WebKit by satisfying its engine probe.
+        webkit: css.replace("(-webkit-nbsp-mode: space)", "(display: block)"),
+        // Rewrite declarations too: unsupported engines ignore ungated corner-shape.
+        unsupported: css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:"),
+      }[engine];
       const actual = await fixture.withPage(
-        String(supported),
-        styleDocument(
-          // Rewrite declarations too: unsupported engines ignore ungated corner-shape.
-          supported ? css : css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:"),
-          markup,
-          'data-theme-mode="light"',
-        ),
+        engine,
+        styleDocument(engineCss, markup, 'data-theme-mode="light"'),
         (page) =>
           page.evaluate(
             ({ selectors, tokens }) => {
@@ -154,7 +160,11 @@ fixture.describe("Control UI corner curvature", () => {
       expect(actual).toEqual([
         ...ALL_CASES.map((item) => [
           supported ? item.superelliptical : item.circular,
-          supported && CORNER_CASES.includes(item) ? "superellipse(1.5)" : CIRCULAR_SHAPE,
+          supported &&
+          CORNER_CASES.includes(item) &&
+          !(engine === "webkit" && COMPOSER_CASES.includes(item))
+            ? "superellipse(1.5)"
+            : CIRCULAR_SHAPE,
         ]),
         Object.values(ROOT_RADIUS_TOKENS),
       ]);

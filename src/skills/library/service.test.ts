@@ -347,7 +347,7 @@ it.each(["canonical", "merged"] as const)(
     const viewerEntries = (
       await lib.list({
         ...authority,
-        getConfig: () => ({ gateway: { roles: { definitions: { viewer } } } }),
+        getConfig: () => ({ gateway: { roles: { default: "viewer", definitions: { viewer } } } }),
       })
     ).entries;
     expect(viewerEntries.map((entry) => entry.skillId)).toEqual(

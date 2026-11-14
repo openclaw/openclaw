@@ -21,7 +21,7 @@ export type EmbeddedAttemptSessionPreparationInput = {
   withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
 };
 
-export type SessionBoundaryAttempt = Pick<
+type SessionBoundaryAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
   | "inputProvenance"

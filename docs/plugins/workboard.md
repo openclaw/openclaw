@@ -574,12 +574,18 @@ dispatch that needs writes.
 ### Worker selection
 
 Each pass starts **at most 3 workers by default**. Ready cards are ordered by
-priority, then position, then creation time. A pass starts only one card per
-owner/agent and skips owners that already have running or review work on the
-board. Archived cards, cards with an active claim, and cards not in `ready`
-status are never selected for worker starts (they can still be affected by the
-data side of dispatch: stale-claim cleanup, dependency promotion, timeout
-cleanup).
+priority, then position, then creation time. Each owner/agent may hold one
+active card at a time by default: a card counts while it is `running`, its run
+is still marked running, or its claim has not expired, so a card waiting for
+review counts only in those cases. The count covers every board, and the
+board's `maxActivePerOwner` orchestration setting (1 to 20, default 1) raises
+the limit for cards on that board. Unassigned cards all share the
+`workboard-dispatcher` owner, so set it above 1 to run several of them at once.
+A pass tries one card per owner before starting extra cards for the same
+owner, and the per-pass cap still applies. Archived cards, cards with an
+active claim, and cards not in `ready` status are never selected for worker
+starts (they can still be affected by the data side of dispatch: stale-claim
+cleanup, dependency promotion, timeout cleanup).
 
 Session keys are fixed per board/card, so repeated dispatches route
 back to the same worker lane instead of creating unrelated sessions:
@@ -611,9 +617,10 @@ as unavailable. They surface as command errors, and so does any Gateway
 failure when an explicit `--url`/`--token` target was given.
 
 Board metadata can set `autoDecompose`, `autoDecomposePerDispatch`,
-`defaultAssignee`, and `orchestratorProfile`. OpenClaw records this intent and
-exposes it in worker context. Actual specification/decomposition still runs
-through the normal Workboard tools.
+`defaultAssignee`, `orchestratorProfile`, and `maxActivePerOwner` (see
+[Worker selection](#worker-selection)). OpenClaw records the first four as
+intent and exposes them in worker context. Actual specification/decomposition
+still runs through the normal Workboard tools.
 
 ## CLI and slash command
 
@@ -875,9 +882,10 @@ openclaw workboard list --status ready
 
 If the CLI reports data-only dispatch, start or restart the Gateway and
 retry - data-only dispatch updates local board state but cannot start
-subagent worker runs. Cards can also be skipped when another card for the
-same owner or agent is already running or waiting for review. Complete,
-block, or release that active work before dispatching more for the same
+subagent worker runs. Cards can also be skipped when the same owner or agent
+already holds as many active cards as the board's
+`maxActivePerOwner` allows (default 1). Complete, block, or release that
+active work, or raise the board's limit, before dispatching more for the same
 owner.
 
 ## Related

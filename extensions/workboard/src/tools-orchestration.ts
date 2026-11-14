@@ -54,6 +54,9 @@ const toolSchemas = {
         autoDecomposePerDispatch: Type.Optional(
           Type.Number({ description: "Maximum orchestration candidates per dispatch." }),
         ),
+        maxActivePerOwner: Type.Optional(
+          Type.Number({ description: "Cards one owner or agent may run at once. Default 1." }),
+        ),
         defaultAssignee: Type.Optional(Type.String({ description: "Default assignee." })),
         orchestratorProfile: Type.Optional(
           Type.String({ description: "Orchestrator profile id." }),

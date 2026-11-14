@@ -187,6 +187,17 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentStartup && workerPlacementModule
       ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
           placements: workerEnvironmentStartup.placementStore,
+          prepareRepositoryIntegration: async (
+            identity,
+            input,
+          ): ReturnType<
+            import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration
+          > => {
+            if (!workerPlacement) {
+              throw new Error("Repository publication worker is unavailable");
+            }
+            return await workerPlacement.prepareRepositoryPublication(identity, input);
+          },
           ...(workerEnvironmentService ? { environments: workerEnvironmentService } : {}),
           getCommittedRuntimeConfig,
           warn: (message) => log.warn(message),

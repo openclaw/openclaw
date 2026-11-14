@@ -69,6 +69,14 @@ export function createDeliveryCrashReader(
         )
       ).rows;
     },
+    readTranscript: async (sessionId: string) => {
+      return (
+        await client.query<{ event_json: string }>(
+          `SELECT event_json FROM ${agent}.transcript_events WHERE session_id = $1 ORDER BY seq`,
+          [sessionId],
+        )
+      ).rows;
+    },
     readNoticeTranscript: async (sessionId: string, noticeId: string) => {
       return (
         await client.query<{ event_json: string }>(
@@ -80,7 +88,8 @@ export function createDeliveryCrashReader(
   };
 }
 
-export async function recoverNoticeAcknowledgementCrash({
+export async function recoverNoticeCommitCrash({
+  transcriptCommitted,
   reader,
   instance,
   completion,
@@ -92,6 +101,7 @@ export async function recoverNoticeAcknowledgementCrash({
   deliveries,
   target,
 }: {
+  transcriptCommitted: boolean;
   reader: ReturnType<typeof createDeliveryCrashReader>;
   instance: OpenClawTestInstance;
   completion: Extract<DurableDeliveryCompletion, { kind: "pending-final" }>;
@@ -103,7 +113,7 @@ export async function recoverNoticeAcknowledgementCrash({
   deliveries: Array<{ to: string; text: string }>;
   target: string;
 }) {
-  const { readEntry, readQueue, readNoticeTranscript } = reader;
+  const { readEntry, readQueue, readTranscript, readNoticeTranscript } = reader;
   const firstChild = instance.child!;
   const notice = { to: target, text: expect.stringContaining("I couldn’t confirm") };
   expect(deliveries).toEqual([expect.objectContaining(notice)]);
@@ -122,11 +132,14 @@ export async function recoverNoticeAcknowledgementCrash({
   });
   const entry = await readEntry();
   expect(entry.pendingDeliveryNotice).toMatchObject({ state: "owed" });
-  expect(await readNoticeTranscript(entry.sessionId, noticeId)).toEqual([]);
+  const committedTranscript = await readNoticeTranscript(entry.sessionId, noticeId);
+  expect(committedTranscript).toHaveLength(transcriptCommitted ? 1 : 0);
+  const transcriptCheckpoint = await readTranscript(entry.sessionId);
   await instance.crashGateway();
   expect(firstChild.signalCode).toBe("SIGKILL");
   expect(await readQueue()).toEqual(checkpoint);
   expect(await readQueue(noticeId)).toEqual(completedNotice);
+  expect(await readTranscript(entry.sessionId)).toEqual(transcriptCheckpoint);
   gatewayPrefix[2] = createDeliveryCrashPreload({
     window: "notice-ack-reply-lost",
     id: completion.deliveryId,
@@ -142,6 +155,11 @@ export async function recoverNoticeAcknowledgementCrash({
   expect((await readEntry()).pendingDeliveryNotice).toMatchObject({ state: "acknowledged" });
   const transcript = await readNoticeTranscript(entry.sessionId, noticeId);
   expect(transcript).toHaveLength(1);
+  if (transcriptCommitted) {
+    // Compare the whole stream too: a replay must not add an unkeyed duplicate.
+    expect(await readTranscript(entry.sessionId)).toEqual(transcriptCheckpoint);
+    expect(transcript).toEqual(committedTranscript);
+  }
   expect(JSON.parse(transcript[0]!.event_json)).toMatchObject({
     message: { role: "assistant", content: [{ type: "text", text: deliveries[0]!.text }] },
   });
@@ -164,7 +182,8 @@ export function createDeliveryCrashPreload({
     | "receipt-before-ack"
     | "acceptance-before-receipt"
     | "response-lost"
-    | "notice-ack-reply-lost";
+    | "notice-ack-reply-lost"
+    | "notice-transcript-reply-lost";
   id: string;
   noticeId?: string;
   serverUrl: string;
@@ -173,12 +192,18 @@ export function createDeliveryCrashPreload({
 }) {
   const identity = JSON.stringify(id);
   const receiptCommitted = window === "receipt-before-ack";
+  const transcriptCommitted = window === "notice-transcript-reply-lost";
+  const holdReply = !observe && (window === "response-lost" || window.startsWith("notice-"));
   let matches: string;
   if (observe) {
     matches = receiptCommitted
       ? `command?.type === "deliveryQueue.ack" && input?.id === ${identity}`
       : `command?.type === "deliveryQueue.finalizeFailure" &&
          JSON.parse(input.entry.entryJson).id === ${identity}`;
+  } else if (transcriptCommitted) {
+    matches = `command?.type === "session.turn.commit" &&
+      input?.options?.messages?.some((append) =>
+        append.message?.idempotencyKey === ${JSON.stringify(noticeId)})`;
   } else if (window === "notice-ack-reply-lost") {
     matches = `command?.type === "deliveryQueue.ack" && input?.id === ${JSON.stringify(noticeId)}`;
   } else if (window === "acceptance-before-receipt") {
@@ -190,7 +215,8 @@ export function createDeliveryCrashPreload({
   } else {
     matches = `command?.type === "deliveryQueue.ack" && input?.id === ${identity}`;
   }
-  // Hold receipt/ACK requests before execution, or the committed transport-failure reply.
+  // Transcript candidate/admission frames precede COMMIT; hold only its final reply.
+  // Other windows hold receipt/ACK requests or committed transport-failure replies.
   // Restart observes real terminal replies with one clock across Gateway threads.
   return `data:text/javascript,${encodeURIComponent(`
     import threads, { Worker, isMainThread } from "node:worker_threads";
@@ -219,7 +245,7 @@ export function createDeliveryCrashPreload({
           const input = command?.input;
           if (${matches}) {
             ${
-              observe || window === "response-lost" || window === "notice-ack-reply-lost"
+              observe || holdReply
                 ? "target = { worker: this, requestId: request.id };"
                 : "void report(); return;"
             }
@@ -232,9 +258,17 @@ export function createDeliveryCrashPreload({
         if (target?.worker === this && event === "message" &&
             reply?.id === target.requestId && reply.ok === true
             ${observe && !receiptCommitted ? "&& reply.value instanceof Uint8Array && deserialize(reply.value) === true" : ""}) {
+          ${
+            transcriptCommitted && !observe
+              ? `if (!(reply.value instanceof Uint8Array) ||
+            deserialize(reply.value)?.kind !== "session-entry-patch-committed") {
+              return Reflect.apply(emit, this, [event, ...args]);
+            }`
+              : ""
+          }
           target = undefined;
           void report();
-          ${!observe && (window === "response-lost" || window === "notice-ack-reply-lost") ? "return true;" : ""}
+          ${holdReply ? "return true;" : ""}
         }
         return Reflect.apply(emit, this, [event, ...args]);
       };

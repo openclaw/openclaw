@@ -83,7 +83,11 @@ export type InviteRecord = {
   created_by?: OwnerApprover;
 };
 
-/** An admitted node; it has no account, role, owner capabilities or approval descendants. */
+/**
+ * An admitted node; it has no account, role, owner capabilities or approval descendants. It was
+ * approved either from a node invite (`invite_id`) or together with an owner device
+ * (`owner_device`), whose removal removes it and whose certificate bounds its lifetime.
+ */
 export type NodeRecord = {
   description: NodeRedemptionBody["description"];
   label: string;
@@ -91,7 +95,9 @@ export type NodeRecord = {
   added_by: OwnerApprover;
   /** Last authenticated tunnel activity/admission (or initial approval). */
   last_seen: UnixSeconds;
-  invite_id: string;
+  invite_id?: string;
+  /** The owner device this node belongs to, by fingerprint of its D. */
+  owner_device?: KeyFingerprint;
 };
 
 /** Separate invite class; member proofs can never redeem it. */
@@ -254,7 +260,8 @@ export function nextOwnerExpiry(state: AuthorityState, now: UnixSeconds): UnixSe
 
 /**
  * Tunnel admission (the tunnel child asks this for every connection): the peer key
- * belongs to a member or to an owner device active at `now`. Discovery is not consulted,
+ * belongs to a member, an active owner device, or a node whose bound owner is active.
+ * Invite-enrolled nodes have independent lifetimes. Discovery is not consulted,
  * so a withheld or delayed snapshot cannot keep a removed key admitted.
  */
 export function isAdmitted(
@@ -262,8 +269,13 @@ export function isAdmitted(
   peerKey: IrohEndpointKey,
   now: UnixSeconds,
 ): boolean {
-  if (isNode(state, peerKey)) {
-    return true;
+  const node = state.nodes[peerKey];
+  if (node) {
+    if (!node.owner_device) {
+      return true;
+    }
+    const owner = state.owner_devices[node.owner_device];
+    return owner !== undefined && isOwnerDeviceActive(owner, now);
   }
   if (Object.values(state.members).some((member) => member.peer_keys.includes(peerKey))) {
     return true;
@@ -299,7 +311,9 @@ export function snapshotBody(
       ...new Set(active.flatMap((record) => record.cert.body.peer_keys)),
     ].toSorted(),
     // SAFETY: nodes is keyed by IrohEndpointKey; Object.keys widens keys to string.
-    node_peer_keys: Object.keys(state.nodes).toSorted() as IrohEndpointKey[],
+    node_peer_keys: (Object.keys(state.nodes) as IrohEndpointKey[])
+      .filter((key) => isAdmitted(state, key, now))
+      .toSorted(),
     members: Object.entries(state.members)
       .map(([account_id, member]) => ({
         account_id,

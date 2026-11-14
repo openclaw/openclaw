@@ -369,7 +369,26 @@ it("retains source preparation until directory or registry ownership changes", a
       const stat = vi.spyOn(fs, "statSync");
       const readdir = vi.spyOn(fs, "readdirSync");
       syncBuiltinESMExports();
-      const first = await prepareSourcesAsync(params);
+      const prepare = transcriptWorkers.prepareSessionStoreCandidatesInWorker;
+      let notified = false;
+      const validation = vi
+        .spyOn(transcriptWorkers, "prepareSessionStoreCandidatesInWorker")
+        .mockImplementation(async (input) => {
+          const result = await prepare(input);
+          if (
+            "observePaths" in input &&
+            input.observePaths.observations &&
+            !input.observePaths.paths &&
+            !input.observePaths.inventory
+          ) {
+            // An unchanged path notification can arrive after native validation completed.
+            notifyAlias(alias);
+            notified = true;
+          }
+          return result;
+        });
+      const first = await prepareSourcesAsync(params).finally(() => validation.mockRestore());
+      expect(notified).toBe(true);
       expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
       const warm = await prepareSourcesAsync(params);
       expect(warm.request).toEqual(first.request);

@@ -20,7 +20,8 @@ function buildCatalogContext(apiKey: string): ProviderCatalogContext {
     config: {},
     env: {},
     resolveProviderApiKey: () => ({ apiKey }),
-  } as unknown as ProviderCatalogContext;
+    resolveProviderAuth: () => ({ apiKey, mode: "api_key", source: "env" }),
+  };
 }
 
 function discoveryRow(id: string, overrides: Record<string, unknown> = {}) {
@@ -70,15 +71,20 @@ it("does not resolve Anthropic credentials for Claude CLI-only catalog scope", a
   const resolveProviderApiKey = vi.fn(() => {
     throw new Error("unselected Anthropic credential read");
   });
+  const resolveProviderAuth = vi.fn(() => {
+    throw new Error("unselected Anthropic auth read");
+  });
 
   await expect(
     buildAnthropicProvider().catalog?.run?.({
       ...buildCatalogContext("unused"),
       providerIds: ["claude-cli"],
       resolveProviderApiKey,
+      resolveProviderAuth,
     }),
   ).resolves.toBeNull();
   expect(resolveProviderApiKey).not.toHaveBeenCalled();
+  expect(resolveProviderAuth).not.toHaveBeenCalled();
   expect(guardedFetch).not.toHaveBeenCalled();
 });
 
@@ -89,6 +95,7 @@ it("retains shipped models and their compat while projecting discovered capabili
       display_name: "Claude Brand New 9",
       capabilities: capabilities(),
     }),
+    discoveryRow("claude-fable-5-2", { capabilities: capabilities() }),
     discoveryRow("claude-unshaped-9"),
     discoveryRow("claude-audio-only", {
       capabilities: capabilities(),
@@ -110,6 +117,7 @@ it("retains shipped models and their compat while projecting discovered capabili
   expect(models.has("claude-mythos-5")).toBe(true);
   expect(models.get("claude-brand-new-9")).toMatchObject({
     name: "Claude Brand New 9",
+    family: "anthropic",
     input: ["text", "image"],
     thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     params: {
@@ -121,6 +129,7 @@ it("retains shipped models and their compat while projecting discovered capabili
       },
     },
   });
+  expect(models.get("claude-fable-5-2")?.family).toBe("anthropic");
   expect(models.has("claude-unshaped-9")).toBe(false);
   expect(models.get("claude-brand-new-9")?.inference?.chat).not.toBe(false);
   expect(models.get("claude-audio-only")?.inference?.chat).toBe(false);

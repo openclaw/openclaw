@@ -110,6 +110,7 @@ const publicationWriters = new Map<string, readonly string[]>([
     [key(publicationWorker, "personalMutation")],
   ]),
   ...[
+    "reopenRepositoryGitHubPublicationInDatabase",
     "bindRepositoryGitHubPublicationCheckpointInDatabase",
     "failRepositoryGitHubPublicationPreparationInDatabase",
     "writeRepositoryGitHubPublicationInDatabase",

@@ -10,6 +10,8 @@
  * --parents 2800 --rows 14000 adds resident parents and four children per parent.
  * CPU/wall cover snapshot loops only; --allocation samples the whole iteration,
  * including fixture mutation. Run allocation separately from untraced timing.
+ * clockViews counts subagent clock-view construction, including the one page presenter.
+ * Page tails/stalls cover owner snapshots only, not Gateway consume tasks or RPC latency.
  * --cpu-profile <file> captures a separate iteration-window CPU profile.
  * Node 24+; no V8-version-specific allocation counter is required.
  */
@@ -152,6 +154,12 @@ assert.equal(children.size, parentCount);
 const activity = createSessionRowChildActivity(
   (link) => rows.get(link.key)?.materialized.source.childLinks ?? [],
 );
+let clockViews = 0;
+const atTime = metadata.current.subagentRuns.atTime.bind(metadata.current.subagentRuns);
+metadata.current.subagentRuns.atTime = (...args) => {
+  clockViews++;
+  return atTime(...args);
+};
 const visibility = createSessionRowChildVisibility();
 let projections = 0;
 const read: SessionRowReadView = {
@@ -234,6 +242,7 @@ try {
     await inspector.post("Profiler.start");
   }
   const samples: number[] = [];
+  clockViews = 0;
   let cpuUs = 0;
   let wallMs = 0;
   for (let index = 0; index < iterations; index++) {
@@ -268,7 +277,10 @@ try {
       coldWallMs,
       medianPageMs: samples[Math.floor(samples.length / 2)],
       p95PageMs: samples[Math.ceil(samples.length * 0.95) - 1],
+      p99PageMs: samples[Math.ceil(samples.length * 0.99) - 1],
       maxPageMs: samples.at(-1),
+      pagesOver180Ms: samples.filter((ms) => ms > 180).length,
+      clockViews,
       churn,
       iterations,
       warmup,

@@ -32,6 +32,7 @@ export async function importWorkerWorkspaceHistory(params: {
   root: string;
   gitHistory?: WorkerWorkspaceGitHistory;
   gitPackPath?: string;
+  baseEnv?: NodeJS.ProcessEnv;
   assertCurrent?: SessionSourceAssertion;
   workerAuthority?: WorktreeWorkerAuthority;
 }): Promise<void> {
@@ -77,6 +78,7 @@ export async function importWorkerWorkspaceHistory(params: {
       ]).slice(1),
       {
         stdinFileDescriptor: pack.fd,
+        baseEnv: params.baseEnv,
         timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
         maxBuffer: 1024 * 1024,
       },
@@ -85,7 +87,9 @@ export async function importWorkerWorkspaceHistory(params: {
     await pack.close();
   }
   // Verify the received graph, not just the worker's ancestry claim.
-  await git(params.root, ["merge-base", "--is-ancestor", history.baseCommit, history.headCommit]);
+  await git(params.root, ["merge-base", "--is-ancestor", history.baseCommit, history.headCommit], {
+    baseEnv: params.baseEnv,
+  });
   params.assertCurrent?.();
 }
 

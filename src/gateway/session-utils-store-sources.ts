@@ -273,12 +273,9 @@ async function prepareSourceRequest(
     observations = registered.observations;
     registered.candidates.forEach(capture);
   }
-  // Close the observation-installation race before exposing the prepared memo.
+  // Validate physical identities; later notifications only dirty the next read.
   memo.pathsNeedValidation = false;
   await memo.pathsCurrent();
-  if (memo.pathsNeedValidation) {
-    throw storeChanged();
-  }
   registry.assertCurrent();
   memo.registry = readOpenClawAgentDatabaseRegistryToken({ env, path: params.registryPath });
   return registeredDatabases

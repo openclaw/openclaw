@@ -30,7 +30,7 @@ import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
 import { HumanMentionMenuView } from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { SelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.tsx";
 import {
-  PaletteSessionAddMenu,
+  PaletteSessionModel,
   PaletteSessionAttachments,
   PaletteSessionControls,
   PaletteSessionAuxiliary,
@@ -627,11 +627,11 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             <Show when={current().mode === "compose"}>
               <div class="agent-chat__composer-footer">
                 <div class="agent-chat__composer-lead">
-                  <PaletteSessionAddMenu draft={current().draft} revision={current()} />
+                  <PaletteSessionControls draft={current().draft} revision={current()} />
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-controls">
-                    <PaletteSessionControls draft={current().draft} revision={current()} />
+                    <PaletteSessionModel draft={current().draft} revision={current()} />
                   </div>
                   <div class="agent-chat__composer-actions">
                     <openclaw-tooltip prop:content={reason()} placement="bottom-end">

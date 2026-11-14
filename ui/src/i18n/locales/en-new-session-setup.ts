@@ -129,6 +129,7 @@ const enNewSessionSetup = {
     browseAccessDenied: "You don’t have permission to browse this folder. Ask an admin for access.",
     browseRequiresAdmin:
       "You need admin access to browse outside agent workspaces. Ask an admin for access.",
+    browseRequiresAdminTooltip: "Only admins can browse outside agent workspaces.",
     connectMachine: "Connect a device",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
@@ -138,18 +139,17 @@ const enNewSessionSetup = {
     hiddenFolder: "Hidden folder",
     worktreeUnavailable: "The selected folder isn’t a Git checkout",
     worktreeBaseRef: "From",
-    worktreeBranchesLimited: "Suggestions are limited. Enter any branch or commit.",
     worktreeBranchesUnavailable: "Branch suggestions are unavailable. Enter a branch or commit.",
     worktreeName: "Name",
-    worktreeNamePlaceholder: "Named from the session title",
+    worktreeNamePlaceholder: "From session title",
     worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
-    worktreeBranchFromTitleNote: "Creates a branch from the session title in a separate checkout.",
+    worktreeBranchFromTitleNote: "Uses the session title if blank.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     draftUnavailable:
       "Draft creation is disabled. Your message and attachments have been kept. Turn off Draft to create a Shared session, or ask an administrator to enable Draft creation.",
-    messagePlaceholder: "What should this session work on?",
+    messagePlaceholder: "Ask me anything, or hand me something to do",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
@@ -157,6 +157,8 @@ const enNewSessionSetup = {
     startInTerminal: "Start in terminal",
     nativeTerminalHint:
       "Starts the native CLI on the selected device using its own account and configuration. This doesn’t create an OpenClaw session.",
+    nativeTerminalHintTooltip:
+      "Opens the native CLI on the selected device with its own account and settings—not an OpenClaw session.",
     chooseNativeHost: "Choose a device for the native CLI",
     nativeHostsUnavailable:
       "No native CLI is available. Install it on this computer or connect a device with CLI access, then reconnect to the Gateway.",
@@ -179,7 +181,6 @@ const enNewSessionSetup = {
     checkoutCurrent: "Current checkout",
     checkoutWorktree: "New worktree",
     checkoutWorktreeNamed: "Worktree · {name}",
-    checkoutWorktreeSub: "Isolated copy of the repo",
     checkoutWorktreeFrom: "New worktree from {branch}",
     checkoutCloud: "Starting branch",
     checkoutCloudFrom: "From {branch}",

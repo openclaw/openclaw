@@ -387,6 +387,23 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     signers["device-1"],
   );
 
+  // An app approved as an owner device brings its node in the same decision.
+  const cert3 = await signStatement("OwnerDeviceCert", certBody("device-3"), signers["device-1"]);
+  const deviceNodeChange = await signStatement(
+    "MembershipChange",
+    {
+      claw_id: VECTOR_CLAW_ID,
+      seq: 5,
+      target: {
+        op: "add_owner_device",
+        cert: cert3,
+        node: { peer_key: iroh("node"), label: "Mac Studio", description },
+      },
+      issued_at: VECTOR_NOW,
+    },
+    signers["device-1"],
+  );
+
   // Forgeries and invalid statements.
   const malloryBinding = await signStatement(
     "ServerBinding",
@@ -509,6 +526,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       vector("node W signs redemption", "node_redemption", nodeRedemption),
       vector("owner approves node", "owner", nodeChange),
       vector("owner removes node", "owner", nodeRemoval),
+      vector("owner approves a device with its node", "owner", deviceNodeChange),
     ],
     invalid: [
       {

@@ -130,7 +130,16 @@ export type MembershipTarget =
   | { op: "remove"; account_id: string }
   | { op: "set_role"; account_id: string; role: MemberRole }
   | { op: "revoke_device"; peer_key: IrohEndpointKey }
-  | { op: "add_owner_device"; cert: SignedStatement<"OwnerDeviceCert"> }
+  | {
+      op: "add_owner_device";
+      cert: SignedStatement<"OwnerDeviceCert">;
+      /**
+       * The same device's node, approved in this decision and bound to the device: it is listed in
+       * `node_peer_keys`, and removing the device removes it. Absent leaves a listed device's
+       * existing node unchanged.
+       */
+      node?: OwnerDeviceNode;
+    }
   /** Owner declines a pending redemption; the invite is consumed and nothing is admitted. */
   | { op: "deny_invite"; invite_id: string };
 
@@ -252,6 +261,14 @@ export type NodeDescription = {
   platform: string;
   commands: string[];
   caps: string[];
+};
+
+/** A node approved together with an owner device (sign-in-first apps); never human authority. */
+export type OwnerDeviceNode = {
+  peer_key: IrohEndpointKey;
+  label: string;
+  /** The surface the approver reviewed; the node may use no command or cap outside it. */
+  description: NodeDescription;
 };
 
 /** Self-signed by W (the same raw key encoded as ed25519: in the envelope). */
