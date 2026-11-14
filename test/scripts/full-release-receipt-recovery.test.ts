@@ -696,7 +696,11 @@ describe("receipt-backed aggregate recovery", () => {
     };
     await revalidateReceiptRecoveryRuns(recovery, client);
     expect(new Set(calls).size).toBe(8);
-    const waivedRun = recovery.children.normalCi.runId;
+    const normalCi = recovery.children.normalCi;
+    if (!normalCi) {
+      throw new Error("fixture is missing the normal CI child");
+    }
+    const waivedRun = normalCi.runId;
     const failedClient = {
       getRun: async (id: string) => ({
         ...(await client.getRun(id)),
