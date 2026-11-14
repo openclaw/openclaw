@@ -83,7 +83,11 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
         " · " +
         item.timezone +
         " · " +
-        t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")
+        t(
+          item.enabled
+            ? "templatesCatalog.automationEnabled"
+            : "templatesCatalog.automationDisabled",
+        )
       );
     }
     if ("source" in item && item.source === "bundled") {
@@ -236,7 +240,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                                   t(
                                                     item.enabled
                                                       ? "templatesCatalog.automationEnabled"
-                                                      : "templatesCatalog.automationPaused",
+                                                      : "templatesCatalog.automationDisabled",
                                                   )
                                                 : ""}
                                       </small>
