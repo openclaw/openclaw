@@ -1,0 +1,2 @@
+# Slack route-discovery transport-authority handoff: forwards assertDirectAdapterHandoff into the three remote lookups. Net test delta +149.
+149
