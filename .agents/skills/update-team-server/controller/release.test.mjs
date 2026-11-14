@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import test, { describe } from "node:test";
 import { fileURLToPath } from "node:url";
 import { events, makeReleaseFixture, runLibrary, runOwner } from "./worker-config-owner-fixture.mjs";
-import { names, descriptor, call as adoptController, ok as adoptionOK } from "./retained-controller-adoption-test-support.mjs";
+import { names, descriptor, call as adoptController, ok as adoptionOK, fault as adoptionFault, crashed as adoptionCrashed } from "./retained-controller-adoption-test-support.mjs";
 import { nativeFixture } from "./retained-repair-lifecycle-test-support.mjs";
 
 const owner = dirname(fileURLToPath(import.meta.url));
@@ -308,7 +308,7 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = f
   // First complete a same-schema adoption for an earlier incident, as on the host.
   const stage = join(f.root, "approved-controller"); mkdirSync(stage, { mode: 0o755 });
   for (const [index, name] of names.entries()) {
-    copyFileSync(join(owner, name), join(stage, name));
+    copyFileSync(join(process.env.TEAM_CONTROLLER_INCUMBENT ?? owner, name), join(stage, name));
     chmodSync(join(stage, name), index ? 0o644 : 0o755);
   }
   f.runner = join(stage, "release-lib.mjs");
@@ -454,8 +454,121 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = f
   assert.deepEqual(readFileSync(prefix + ".original.json"), readFileSync(f.journal));
   assert.match(readFileSync(prefix + ".backup-0", "utf8"), /later reviewed shell/);
   assert.doesNotMatch(readFileSync(f.nativeCalls, "utf8"), /"(?:start|stop|restart|daemon-reload)"/);
+  f.adoptionEnv = { ...f.env };
   f.env = nativeEnv;
   return retained;
+}
+
+function adoptSteadySuccessor(f, retainedJournal, target) {
+  const runtimeEnv = f.env;
+  f.env = f.adoptionEnv;
+  const gatePath = join(f.serving, "journal", "controller-adoption.json");
+  const gateBytes = readFileSync(gatePath), gate = JSON.parse(gateBytes);
+  const intent = JSON.parse(readFileSync(gate.intent.path));
+  const completePath = gate.intent.path.replace(/\.intent\.json$/, ".complete.json");
+  const oldClosure = names.map(name => descriptor(join(f.root, name)));
+  const stage = join(f.root, "steady-controller-" + randomUUID()); mkdirSync(stage, { mode: 0o755 });
+  for (const [index, name] of names.entries()) {
+    copyFileSync(join(owner, name), join(stage, name)); chmodSync(join(stage, name), index ? 0o644 : 0o755);
+  }
+  f.runner = join(stage, "release-lib.mjs");
+  const pointers = Object.fromEntries(["current", "previous"].map(name => {
+    const path = join(f.serving, name), entry = lstatSync(path);
+    return [name, { path, sha: basename(readlinkSync(path)), device: entry.dev, inode: entry.ino }];
+  }));
+  const request = { version: 1, operation: randomUUID(), source: intent.original, oldClosure,
+    replacement: names.map(name => descriptor(join(stage, name))),
+    historical: { gate: descriptor(gatePath), complete: descriptor(completePath) },
+    steady: { process: { pid: f.pid, generation: f.start, release: f.b, runtime: process.execPath,
+      uid: f.runtimeOwnedState ? f.runtimeUid : process.getuid(), port: 18789 }, pointers } };
+  const protectedBefore = [f.configPath, f.databasePath, f.agentDatabasePath, f.lockFile].map(descriptor);
+  const originalEvents = events(f);
+  const unchanged = () => {
+    assert.deepEqual(names.map(name => descriptor(join(f.root, name))), oldClosure);
+    assert.deepEqual(descriptor(gatePath), request.historical.gate);
+  };
+  if (target) {
+    const legacy = { version: 1, operation: randomUUID(), source: intent.request.source, oldClosure,
+      replacement: names.map(name => descriptor(join(f.root, "approved-controller", name))) };
+    const absentSource = adoptController(f, "prepare", legacy, { runner: join(f.root, "approved-controller", "release-lib.mjs") });
+    assert.notEqual(absentSource.status, 0);
+    assert.match(absentSource.stderr, /ENOENT.*activation\.json/);
+    for (const action of ["prepare", "historical-successor"]) {
+      const wrongSurface = adoptController(f, action, request);
+      assert.notEqual(wrongSurface.status, 0); assert.match(wrongSurface.stderr, /request|fields|keys/); unchanged();
+    }
+  }
+  // Neither the old retained API nor ordinary adoption can replace an active transaction.
+  writeFileSync(f.journal, retainedJournal, { mode: 0o600 });
+  const busy = adoptController(f, "steady-successor", request);
+  assert.notEqual(busy.status, 0); assert.match(busy.stderr, /journal/); unchanged();
+  rmSync(f.journal);
+  for (const [label, mutate, reason] of [
+    ["generation", value => { value.steady.process.generation = "1"; }, /generation|process/],
+    ["pointer", value => { value.steady.pointers.current.inode++; }, /pointer/],
+    ["closure", value => { value.oldClosure[0].sha256 = "0".repeat(64); }, /closure|incumbent|predecessor/],
+  ]) {
+    const changed = structuredClone(request); mutate(changed);
+    const result = adoptController(f, "steady-successor", changed);
+    assert.notEqual(result.status, 0, label); assert.match(result.stderr, reason); unchanged();
+  }
+  renameSync(completePath, completePath + ".saved");
+  const incomplete = adoptController(f, "steady-successor", request);
+  assert.notEqual(incomplete.status, 0); assert.match(incomplete.stderr, /ENOENT|complete/); unchanged();
+  renameSync(completePath + ".saved", completePath);
+  const binding = adoptionOK(adoptController(f, "steady-successor", request));
+  assert.deepEqual(adoptionOK(adoptController(f, "steady-successor", request)), binding);
+  writeFileSync(f.journal, retainedJournal, { mode: 0o600 });
+  const appeared = adoptController(f, "apply", binding);
+  assert.notEqual(appeared.status, 0); assert.match(appeared.stderr, /journal/);
+  rmSync(f.journal);
+  const processStat = join(f.env.OPENCLAW_TEAM_PROC_ROOT, String(f.pid), "stat");
+  const originalStat = readFileSync(processStat);
+  writeProcess(f.root, f.pid, "1");
+  const changedProcess = adoptController(f, "apply", binding);
+  assert.notEqual(changedProcess.status, 0); assert.match(changedProcess.stderr, /generation|process/);
+  writeFileSync(processStat, originalStat);
+  // The fixed gate excludes deploy/readers while a complete-pair publication is unfinished.
+  const blocked = runOwner(f, ["--cleanup"]);
+  assert.notEqual(blocked.status, 0); assert.match(blocked.stderr, /complete|adoption|ENOENT/);
+  adoptionCrashed(adoptController(f, "apply", binding, { preload: adoptionFault(f, { type: "rename", index: 2, when: "after" }) }));
+  const complete = adoptionOK(adoptController(f, "apply", binding));
+  assert.deepEqual(adoptionOK(adoptController(f, "context", binding)), complete);
+  assert.deepEqual(adoptionOK(adoptController(f, "apply", binding)), complete);
+  const prefix = join(f.serving, "journal", "repair-" + request.operation + ".adoption");
+  assert.deepEqual(readFileSync(prefix + ".predecessor-gate.json"), gateBytes);
+  for (const [index, name] of names.entries()) {
+    assert.equal(descriptor(prefix + ".backup-" + index).sha256, oldClosure[index].sha256);
+    assert.deepEqual(readFileSync(join(f.root, name)), readFileSync(join(stage, name)));
+    assert.equal(complete.closure[index].sha256, request.replacement[index].sha256);
+  }
+  for (const kept of protectedBefore) assert.deepEqual(descriptor(kept.path), kept);
+  assert.equal(events(f), originalEvents);
+  assert.equal(existsSync(f.journal), false);
+  assert.doesNotMatch(readFileSync(f.nativeCalls, "utf8"), /"(?:start|stop|restart|daemon-reload)"/);
+  f.env = runtimeEnv;
+  if (!target) return;
+  // A later ordinary deploy must use the adopted installed closure, not a capacity/library shim.
+  executable(join(f.commands, "git"), `
+case "$*" in
+*'remote get-url origin') printf 'https://github.com/openclaw/openclaw.git\\n' ;;
+*'rev-parse refs/remotes/origin/main') printf '${target}\\n' ;;
+*'fetch --prune origin'*) ;;
+*) exit 64 ;;
+esac`);
+  const deployed = runOwner(f);
+  assert.equal(deployed.status, 0, deployed.stderr + events(f));
+  assert.equal(readlinkSync(join(f.serving, "current")), join(f.serving, "releases", target));
+  assert.equal(readFileSync(join(f.serving, "verified", target), "utf8"), target + "\n");
+  assert.equal(existsSync(f.journal), false);
+  assert.match(events(f).slice(originalEvents.length), /service\.system\.stop/);
+  assert.match(events(f).slice(originalEvents.length), /service\.system\.start/);
+  assert.equal(descriptor(completePath).sha256, request.historical.complete.sha256);
+  // Steady adoption remains available after an ordinary deployment changed the live generation.
+  f.pid = Number(readFileSync(join(f.state, "pid"))); f.start = String(f.pid * 10);
+  f.b = join(f.serving, "releases", target);
+  nativeFixture(f); f.adoptionEnv = { ...f.env }; f.env = runtimeEnv;
+  adoptSteadySuccessor(f, retainedJournal);
 }
 
 function assertUnchangedRecovery(f, result, reason) {
@@ -1472,7 +1585,7 @@ exec '${process.execPath}' "$@"`);
   for (const phase of ["D_VERIFYING", "ROLLBACK_FAILED"]) {
     for (const state of ["live", "stopped", "unverifiable"]) {
       for (const held of phase === "ROLLBACK_FAILED" && state === "live"
-        ? ["none", "in-place", "archived", "archive-only", "new-witness", "reconstructed", "replaced-archive", "live-mismatch", "adopt-archived", "adopt-delegated", "adopt-refusals", "adopt-archived-receipt", "adopt-config-only", "adopt-config-drift", "adopt-config-drift-refusals"]
+        ? ["none", "in-place", "archived", "archive-only", "new-witness", "reconstructed", "replaced-archive", "live-mismatch", "adopt-archived", "adopt-delegated", "adopt-refusals", "adopt-archived-receipt", "adopt-config-only", "adopt-config-drift", "adopt-config-drift-refusals", "adopt-steady-successor"]
         : ["none"])
       for (const native of ["in-place", "archived"].includes(held) ? [true, false]
         : [!["replaced-archive", "live-mismatch"].includes(held)])
@@ -1485,6 +1598,7 @@ exec '${process.execPath}' "$@"`);
         const configDrift = held.startsWith("adopt-config-");
         const f = failedReleaseFixture(t, state !== "stopped", state === "unverifiable" ? "marker-wrong-session" : "success",
           adopting ? { state: 39, agent: 41 } : undefined, configDrift);
+        if (held === "adopt-steady-successor") f.addRelease("d".repeat(40), { state: 40, agent: 42 });
         if (process.env.TEAM_OWNER_TEST_SOURCE) {
           f.owner = process.env.TEAM_OWNER_TEST_SOURCE;
         }
@@ -1549,7 +1663,7 @@ exec '${process.execPath}' "$@"`);
             const { dev, ino } = lstatSync(heldPath);
             heldReceiptIdentity = { path: heldPath, dev, ino };
           }
-          if (["archived", "archive-only", "replaced-archive", "adopt-archived", "adopt-delegated", "adopt-refusals", "adopt-archived-receipt"].includes(held) || configDrift) {
+          if (["archived", "archive-only", "replaced-archive", "adopt-archived", "adopt-delegated", "adopt-refusals", "adopt-archived-receipt", "adopt-steady-successor"].includes(held) || configDrift) {
             const archive = join(stateRoot, "held-agent-archive", "retained-held-schema0-fixture");
             mkdirSync(dirname(archive), { recursive: true }); renameSync(heldDir, archive);
             heldPath = join(archive, "agent", "openclaw-agent.sqlite");
@@ -1596,7 +1710,8 @@ exec '${process.execPath}' "$@"`);
         }
         const currentConfig = descriptor(f.configPath);
         writeFileSync(f.journal, JSON.stringify(record), { mode: 0o600 });
-        const adopted = adopting ? adoptNativeRecovery(f, record, backupDirectory, held === "adopt-refusals", held === "adopt-delegated" || configDrift, held === "adopt-config-drift-refusals") : undefined;
+        const adopted = adopting ? adoptNativeRecovery(f, record, backupDirectory, held === "adopt-refusals", held === "adopt-delegated" || held === "adopt-steady-successor" || configDrift, held === "adopt-config-drift-refusals") : undefined;
+        const retainedJournal = readFileSync(f.journal);
         const result = runOwner(f, ["--recover"]);
         assert.ifError(result.error);
         if (configDrift) assert.match(result.stderr, /NATIVE_CONFIG_DRIFT /);
@@ -1624,6 +1739,7 @@ exec '${process.execPath}' "$@"`);
           assert.match(events(f), /gateway gateway call channels.status/);
           assert.match(events(f), /gateway gateway call sessions.list/);
           assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)|gateway\.suspend\.|gateway update (restore|finish)/);
+          if (held === "adopt-steady-successor") adoptSteadySuccessor(f, retainedJournal, "d".repeat(40));
         } else {
           assert.notEqual(result.status, 0);
           assert.match(result.stderr, /native update restoration failed/);
