@@ -435,120 +435,74 @@ it("asks for an id its roster does not use and retries the id the Gateway admitt
   expect(applies()[1]?.[1]).toEqual({ mode: "chat", source, agentId: "harbor-3", resume: true });
 });
 
-it("attaches live chat without releasing buffered input or same-agent Retry", async () => {
-  const { request, context, publishEvent } = await createLoadedPage({ templatesEnabled: true });
-  const original = request.getMockImplementation()!;
-  const first = createDeferredCore<unknown>();
-  const second = createDeferredCore<unknown>();
-  let attempts = 0;
-  request.mockImplementation((method, params, options) => {
-    if (method !== "templates.add.apply") {
-      return original(method, params, options);
-    }
-    attempts += 1;
-    options?.onSent?.("live-" + attempts);
-    return attempts === 1 ? first.promise : second.promise;
-  });
-  const applying = addTemplateAgent(context, template, false);
-  const composer = context.chatSubmissions.readCreate()!.composer!;
-  composer.setMessage("Buffered follow-up");
-  expect(composer.enqueue()).toBe(true);
-  composer.setMessage("Draft while setup runs");
-  const saved = { agentId: "workflow-operator", sessionKey: "agent:workflow-operator:team-room" };
-  for (const stage of ["agent-admitted", "agent-ready"]) {
-    publishEvent({
-      type: "event",
-      event: "templates.add.progress",
-      payload: { ...saved, requestId: "live-1", stage },
+it.each([false, true])(
+  "keeps live setup custody and same-agent Retry (canonical route=%s)",
+  async (canonical) => {
+    const { request, context, publishEvent } = await createLoadedPage({ templatesEnabled: true });
+    const original = request.getMockImplementation()!;
+    const first = createDeferredCore<unknown>();
+    const second = createDeferredCore<unknown>();
+    let attempts = 0;
+    request.mockImplementation((method, params, options) => {
+      if (method !== "templates.add.apply") {
+        return original(method, params, options);
+      }
+      options?.onSent?.("live-" + ++attempts);
+      return attempts === 1 ? first.promise : second.promise;
     });
-  }
-  expect(context.chatSubmissions.creationFor(saved.sessionKey)?.admitted).toBe(true);
-  expect(context.chatSubmissions.readCreateComposer(saved.sessionKey)).toBe(composer);
-  expect(composer.canAdopt()).toBe(false);
-  expect(
-    takeCreatedComposer(context, saved.sessionKey, context.gateway.snapshot.client),
-  ).toBeUndefined();
-  first.resolve({
-    ...saved,
-    status: "partial",
-    agentRetained: true,
-    initializationPending: true,
-    error: { code: "template_opening_failed", message: "Opening failed after attachment" },
-  });
-  await applying;
-  expect(composer.recovery).toBeDefined();
-  expect(composer.message).toBe("Draft while setup runs");
-  expect(composer.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
-  composer.recovery!.retry();
-  expect(attempts).toBe(2);
-  expect(
-    request.mock.calls.filter(([method]) => method === "templates.add.apply")[1]?.[1],
-  ).toMatchObject({ agentId: saved.agentId, resume: true });
-  second.resolve({ ...saved, status: "complete", readiness: { ready: true } });
-  await waitForSolid(() =>
-    expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined(),
-  );
-  const transfer = takeCreatedComposer(context, saved.sessionKey, context.gateway.snapshot.client);
-  expect(transfer?.draft).toBe("Draft while setup runs");
-  expect(transfer?.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
-  transfer?.complete();
-  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
-});
-
-it("keeps setup custody and Retry on the Gateway's canonical live route", async () => {
-  const { request, context, publishEvent } = await createLoadedPage({ templatesEnabled: true });
-  const original = request.getMockImplementation()!;
-  const first = createDeferredCore<unknown>();
-  const second = createDeferredCore<unknown>();
-  let attempts = 0;
-  request.mockImplementation((method, params, options) => {
-    if (method !== "templates.add.apply") {
-      return original(method, params, options);
+    const applying = addTemplateAgent(context, template, false);
+    const composer = context.chatSubmissions.readCreate()!.composer!;
+    composer.setMessage("Buffered follow-up");
+    expect(composer.enqueue()).toBe(true);
+    composer.setMessage("Draft while setup runs");
+    const provisional = context.chatSubmissions.creation!.sessionKey;
+    const agentId = canonical ? "workflow-operator-2" : "workflow-operator";
+    const saved = { agentId, sessionKey: "agent:" + agentId + ":team-room" };
+    for (const stage of ["agent-admitted", "agent-ready"]) {
+      publishEvent({
+        type: "event",
+        event: "templates.add.progress",
+        payload: { ...saved, requestId: "live-1", stage },
+      });
     }
-    options?.onSent?.("canonical-" + ++attempts);
-    return attempts === 1 ? first.promise : second.promise;
-  });
-  const applying = addTemplateAgent(context, template, false);
-  const composer = context.chatSubmissions.readCreate()!.composer!;
-  composer.setMessage("Canonical buffered input");
-  expect(composer.enqueue()).toBe(true);
-  composer.setMessage("Canonical draft");
-  const provisional = context.chatSubmissions.creation!.sessionKey;
-  const saved = {
-    agentId: "workflow-operator-2",
-    sessionKey: "agent:workflow-operator-2:team-room",
-  };
-  for (const stage of ["agent-admitted", "agent-ready"]) {
-    publishEvent({
-      type: "event",
-      event: "templates.add.progress",
-      payload: { ...saved, requestId: "canonical-1", stage },
+    expect(context.router.getState().location.pathname).toBe("/chat/" + agentId);
+    if (canonical) {
+      expect(context.chatSubmissions.creationFor(provisional)).toBeUndefined();
+    }
+    expect(context.chatSubmissions.creationFor(saved.sessionKey)?.admitted).toBe(true);
+    expect(context.chatSubmissions.readCreateComposer(saved.sessionKey)).toBe(composer);
+    expect(composer.canAdopt()).toBe(false);
+    expect(
+      takeCreatedComposer(context, saved.sessionKey, context.gateway.snapshot.client),
+    ).toBeUndefined();
+    first.resolve({
+      ...saved,
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+      error: { code: "template_opening_failed", message: "Opening failed after attachment" },
     });
-  }
-  expect(context.router.getState().location.pathname).toBe("/chat/workflow-operator-2");
-  expect(context.chatSubmissions.creationFor(provisional)).toBeUndefined();
-  expect(context.chatSubmissions.readCreateComposer(saved.sessionKey)).toBe(composer);
-  expect(composer.canAdopt()).toBe(false);
-  first.resolve({
-    ...saved,
-    status: "partial",
-    agentRetained: true,
-    initializationPending: true,
-    error: { code: "template_opening_failed", message: "Canonical opening failed" },
-  });
-  await applying;
-  expect(composer.recovery).toBeDefined();
-  composer.recovery!.retry();
-  expect(attempts).toBe(2);
-  expect(
-    request.mock.calls.filter(([method]) => method === "templates.add.apply")[1]?.[1],
-  ).toMatchObject({ agentId: saved.agentId, resume: true });
-  second.resolve({ ...saved, status: "complete", readiness: { ready: true } });
-  await waitForSolid(() =>
-    expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined(),
-  );
-  const transfer = takeCreatedComposer(context, saved.sessionKey, context.gateway.snapshot.client);
-  expect(transfer?.draft).toBe("Canonical draft");
-  expect(transfer?.inputs.map((input) => input.text)).toEqual(["Canonical buffered input"]);
-  transfer?.complete();
-});
+    await applying;
+    expect(composer.recovery).toBeDefined();
+    expect(composer.message).toBe("Draft while setup runs");
+    expect(composer.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
+    composer.recovery!.retry();
+    expect(attempts).toBe(2);
+    expect(
+      request.mock.calls.filter(([method]) => method === "templates.add.apply")[1]?.[1],
+    ).toMatchObject({ agentId: saved.agentId, resume: true });
+    second.resolve({ ...saved, status: "complete", readiness: { ready: true } });
+    await waitForSolid(() =>
+      expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined(),
+    );
+    const transfer = takeCreatedComposer(
+      context,
+      saved.sessionKey,
+      context.gateway.snapshot.client,
+    );
+    expect(transfer?.draft).toBe("Draft while setup runs");
+    expect(transfer?.inputs.map((input) => input.text)).toEqual(["Buffered follow-up"]);
+    transfer?.complete();
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+  },
+);
