@@ -30,6 +30,7 @@ export function finalizeOpenClawTools(params: {
           params.tools,
           options?.listingClientCaps ?? options?.clientCaps,
           options?.clientCaps,
+          options?.clientCapsWithheldToolNames,
         ),
         config,
       ),

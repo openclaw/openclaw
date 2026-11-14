@@ -380,8 +380,10 @@ export async function resolveGatewayScopedTools(
     agentId: policyAgentId,
     model: { provider: params.modelProvider, id: params.modelId },
   });
+  const clientCapsWithheldToolNames = new Set<string>();
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     ...commonToolOptions(),
+    clientCapsWithheldToolNames,
     computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
     gatewayConfigReadAllowed,
@@ -621,11 +623,14 @@ export async function resolveGatewayScopedTools(
     params.messageProvider,
   );
   let nativeCreatorTools = (params.nativeCronCreatorToolAllowlist ?? []).map((name) => ({ name }));
-  const declaredToolAllowlist = buildDeclaredToolAllowlistContext({
-    config: params.cfg,
-    workspaceDir,
-    toolDenylist: catalogDenylist,
-  });
+  const declaredToolAllowlist = {
+    ...buildDeclaredToolAllowlistContext({
+      config: params.cfg,
+      workspaceDir,
+      toolDenylist: catalogDenylist,
+    }),
+    clientCapsWithheldToolNames,
+  };
   function filterGatewayToolPolicies(
     config: OpenClawConfig,
     onFilter?: Parameters<typeof applyToolPolicyPipeline>[0]["onFilter"],

@@ -44,6 +44,8 @@ export type DeclaredToolAllowlistContext = {
   pluginToolNames?: Iterable<string>;
   pluginIds?: Iterable<string>;
   mcpServerNames?: Iterable<string>;
+  /** Built for this run, then withheld because the listing client lacks their requiredClientCaps. */
+  clientCapsWithheldToolNames?: Iterable<string>;
 };
 
 /** Synthetic allowlist entry that means "use default plugin tools". */
@@ -276,9 +278,22 @@ export function analyzeAllowlistByToolType(
     }
   }
   const mcpToolPrefixes = buildDeclaredMcpToolPrefixes(declaredTools?.mcpServerNames);
+  // A family grant like `canvas` covers its members wherever they exist. Skip only members the
+  // client-caps filter withheld this run; other absences (e.g. host disabled) and entries the
+  // operator wrote still warn.
+  const configuredEntries = new Set(policy.allow.map(normalizeToolPolicyName));
+  const clientCapsWithheld = new Set(declaredTools?.clientCapsWithheldToolNames);
+  const expectedAbsentFamilyTools = new Set(
+    [...configuredEntries].flatMap(
+      (entry) =>
+        SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(entry)?.filter(
+          (tool) => clientCapsWithheld.has(tool) && !configuredEntries.has(tool),
+        ) ?? [],
+    ),
+  );
   const unknownAllowlist: string[] = [];
   for (const entry of normalized) {
-    if (entry === "*") {
+    if (entry === "*" || expectedAbsentFamilyTools.has(entry)) {
       continue;
     }
     const isPluginEntry =
