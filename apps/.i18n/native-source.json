@@ -2027,7 +2027,6 @@
     {"path":"apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.56f8cc96f8356d5d","source":"Talk mode off"},
     {"path":"apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ae23f3662db0d35e","source":"Talk mode paused"},
     {"path":"apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.61c183a43828ff8a","source":"Talk mode ready"},
-    {"path":"apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.7289910f9a2c9417","source":"Talk mode uses the primary Gateway window"},
     {"path":"apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ea5944dac09f07af","source":"Thinking"},
     {"path":"apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.0f20d6eaac7c7a9d","source":"What can you do?"},
     {"path":"apps/macos/Sources/OpenClaw/WebChatSwiftUI.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.3507417063d4905f","source":"What would you like to work on?"},
