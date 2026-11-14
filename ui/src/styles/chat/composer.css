@@ -678,7 +678,6 @@
   font-size: 12px;
 }
 
-.agent-chat__dictation-phase,
 .chat-controls__account-selection {
   min-width: 0;
   overflow: hidden;
@@ -687,10 +686,9 @@
   white-space: nowrap;
 }
 
-/* The startup label can become the microphone permission hint; keep that recovery text whole. */
-.agent-chat__dictation-phase--starting {
-  overflow: visible;
-  white-space: normal;
+/* Phase labels wrap: the startup label can become the microphone permission hint. */
+.agent-chat__dictation-phase {
+  color: var(--muted);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2274,7 +2272,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   --chat-composer-menu-row-gap: 8px;
   --menu-item-radius: 12px;
 
-  width: min(440px, calc(100vw - 24px));
+  width: min(416px, calc(100vw - 24px));
   min-height: 0;
   max-height: inherit;
   padding: 8px;
@@ -2707,6 +2705,34 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   overscroll-behavior: none;
 }
 
+/* Fade clipped content, not the scrollbar or sticky provider heading. */
+.chat-controls__model-options[data-scrollable="true"] {
+  --chat-model-fade-in: black;
+  --chat-model-fade-out: black;
+  mask:
+    linear-gradient(to bottom, var(--chat-model-fade-in), var(--chat-model-fade-out)),
+    linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
+}
+
+.chat-controls__model-options[data-at-end="false"] {
+  --chat-model-fade-out: black calc(100% - 12px), transparent;
+}
+
+.chat-controls__model-menu[data-chat-model-filtering]
+  .chat-controls__model-options[data-at-start="false"] {
+  --chat-model-fade-in: transparent, black 12px;
+}
+
+.chat-controls__model-options[data-at-start="false"]
+  .chat-controls__model-virtual-row[data-chat-model-heading]::after {
+  content: "";
+  position: absolute;
+  inset: 100% 0 auto;
+  height: 12px;
+  background: linear-gradient(var(--card), transparent);
+  pointer-events: none;
+}
+
 /* Group/list hosts keep their accessible structure; one window owns row geometry. */
 .chat-controls__model-options[data-chat-model-window] {
   display: block;
@@ -2727,6 +2753,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   position: absolute;
   inset: 0 0 auto;
   padding-bottom: 0;
+}
+
+.chat-controls__model-virtual-row:has(.chat-controls__model-option) {
+  padding-bottom: 1px;
 }
 
 .chat-controls__model-virtual-row .chat-controls__model-option {
@@ -2786,13 +2816,15 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: var(--menu-hover);
 }
 
-/* Opening the picker highlights its current model, which keeps the plain selected fill. */
+/* Keyboard navigation onto the selected model keeps its selected fill. */
 .chat-controls__inline-select-option--selected[data-chat-model-highlighted] {
   background: var(--chat-composer-menu-selected);
 }
 
 .chat-controls__model-option-provider {
   display: none;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
@@ -2816,23 +2848,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   width: 16px;
   min-width: 16px;
   margin-left: 0;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .chat-controls__model-option-action kbd {
-    transition: opacity var(--duration-fast) var(--ease-out);
-  }
-}
-
-.chat-controls__model-search-wrap:focus-within
-  ~ .chat-controls__model-browser
-  .chat-controls__model-option-action
-  kbd {
-  opacity: 0;
-}
-
-.chat-controls__model-option-action kbd::before {
-  content: attr(data-chat-model-shortcut-number);
 }
 
 .chat-controls__model-search-empty {
@@ -4138,21 +4153,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   margin-bottom: 0;
 }
 
-.chat-controls__model-option-action .shortcut-kbd {
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
-  color: var(--muted);
-  font-family: var(--font-shortcut);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 16px;
-}
-
 .chat-controls__model-menu .chat-controls__provider-settings {
   width: 28px;
   height: 28px;
@@ -4260,10 +4260,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   .chat-controls__model-search-wrap {
     height: 44px;
   }
-
-  .chat-controls__model-option-action kbd {
-    display: none;
-  }
 }
 
 .chat-controls__model-menu .chat-controls__provider-settings svg {
@@ -4293,18 +4289,28 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   grid-template-columns: minmax(0, 1fr);
 }
 
-.chat-controls__provider-rail > openclaw-tooltip {
+.chat-controls__provider-slot {
   flex: 0 0 36px;
 }
 
-.chat-controls__provider-rail[data-dragging] > openclaw-tooltip {
-  /* Override the tooltip's inline display: contents to retain native drop targets. */
-  display: block !important;
+.chat-controls__provider-rail[data-dragging] .chat-controls__provider-tab {
+  /* Moving tabs must not displace their stationary drop targets. */
+  pointer-events: none;
 }
 
-.chat-controls__provider-rail[data-dragging] .chat-controls__provider-tab {
-  /* Moving tabs must not displace the tooltip hosts' stationary drop targets. */
-  pointer-events: none;
+/* Percent heights use the viewport; stretch fits the actual anchor side instead. */
+@position-try --chat-model-fit {
+  position-area: top span-all;
+  justify-self: anchor-center;
+  max-height: stretch;
+  min-height: 200px;
+}
+
+@position-try --chat-model-below {
+  position-area: bottom span-all;
+  justify-self: anchor-center;
+  max-height: stretch;
+  min-height: 200px;
 }
 
 @media not ((max-width: 640px) or ((max-width: 932px) and (max-height: 500px) and (orientation: landscape))) {
@@ -4319,6 +4325,13 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   .chat-controls__model-picker > .chat-picker-overlay {
     --oc-overlay-distance: 8px;
     border-radius: var(--menu-radius);
+    position-try-fallbacks:
+      top span-right,
+      top span-left,
+      --chat-model-fit,
+      --chat-model-below,
+      --oc-overlay-fit,
+      --oc-overlay-fit flip-inline;
   }
 
   .agent-chat__input .chat-controls__model-picker > .chat-picker-overlay {
@@ -4349,18 +4362,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   .chat-controls__model-pane .chat-controls__model-options {
     flex: 1 1 auto;
     max-height: none;
-    scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
-    scrollbar-width: thin;
-  }
-
-  .chat-controls__model-pane .chat-controls__model-options::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  .chat-controls__model-pane .chat-controls__model-options::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    background: color-mix(in srgb, var(--text) 20%, transparent);
-    background-clip: content-box;
   }
 
   .chat-controls__model-pane .chat-controls__provider-heading {
@@ -4386,6 +4387,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   .chat-controls__model-option {
     border: 0;
     gap: 0;
+  }
+
+  .chat-controls__model-option-provider {
+    margin-inline-end: 6px;
   }
 
   .chat-controls__model-option:hover {
@@ -4421,20 +4426,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   .chat-controls__model-option-action {
     order: 3;
     margin-inline-start: 4px;
-  }
-
-  /* Keep keyboard hints while the metadata retains the common right edge. */
-  .chat-controls__model-option-action:has(> .shortcut-kbd:not([hidden])) {
-    order: 1;
-    margin-inline-start: auto;
-  }
-
-  .chat-controls__model-option:has(.shortcut-kbd:not([hidden])) .chat-controls__model-option-meta {
-    margin-inline-start: 0;
-  }
-
-  .chat-controls__model-option-action:has(> .shortcut-kbd[hidden]) {
-    display: none;
   }
 
   .chat-controls__model-option-action .chat-controls__inline-select-check {
@@ -4698,7 +4689,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__context-menu {
   position: absolute;
   top: 4px;
-  right: 36px;
+  /* Leave the shared trailing star/check column and its gap unobstructed. */
+  right: 42px;
 }
 
 .chat-controls__context-trigger,
@@ -4714,7 +4706,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: none;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .chat-controls__model-option-meta.chat-controls__context-placeholder {
@@ -4756,7 +4748,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   padding: 4px 2px 4px 8px;
   border-radius: min(12px, var(--radius-menu-item));
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -5299,15 +5291,57 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   }
 }
 
-/* Favorites share the model row without stealing its selection action. */
+/* One fixed column aligns checks and favorites with the provider settings control. */
+.chat-controls__model-option:has(> .chat-controls__model-favorite-slot) {
+  padding-inline-end: 6px;
+}
+
+.chat-controls__model-favorite-slot {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  order: 3;
+  margin-inline-start: 4px;
+
+  .chat-controls__model-option:not(:has(.chat-controls__model-option-meta)) & {
+    margin-inline-start: auto;
+  }
+
+  > * {
+    grid-area: 1 / 1;
+  }
+
+  .chat-controls__inline-select-check {
+    color: var(--accent);
+    pointer-events: none;
+
+    svg {
+      width: 14px;
+      height: 14px;
+    }
+  }
+
+  &:has(> .chat-controls__model-favorite) .chat-controls__inline-select-check {
+    .chat-controls__model-option:hover & {
+      opacity: 0;
+    }
+
+    @media (max-width: 640px) {
+      opacity: 0;
+    }
+  }
+}
+
+/* Favorites share the selection slot without stealing the row's selection action. */
 .chat-controls__model-favorite {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 22px;
-  width: 22px;
-  height: 22px;
-  margin-left: -2px;
+  width: 28px;
+  height: 28px;
+  margin: 0;
   padding: 0;
   border: 0;
   border-radius: min(7px, var(--radius-menu-item));
@@ -5315,45 +5349,40 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   color: var(--muted);
   opacity: 0;
   cursor: var(--cursor-action);
-}
 
-.chat-controls__model-menu .chat-controls__model-favorite > svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-}
+  .chat-controls__model-menu & > svg {
+    width: 13px;
+    height: 13px;
+    fill: none;
+  }
 
-.chat-controls__model-favorite[aria-pressed="true"],
-.chat-controls__model-option:hover .chat-controls__model-favorite,
-.chat-controls__model-option[data-chat-model-highlighted] .chat-controls__model-favorite,
-.chat-controls__model-favorite:focus-visible {
-  opacity: 1;
-}
+  .chat-controls__model-option:hover & {
+    opacity: 1;
+  }
 
-.chat-controls__model-favorite[aria-pressed="true"] > svg {
-  fill: currentColor;
-}
+  &[aria-pressed="true"] > svg {
+    fill: currentColor;
+  }
 
-.chat-controls__model-favorite:hover {
-  color: var(--text-strong);
-  background: var(--menu-hover);
+  &:hover {
+    color: var(--text-strong);
+    background: var(--menu-hover);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    transition:
+      opacity 140ms,
+      color 140ms;
+
+    &[data-popped] > svg {
+      animation: chat-model-favorite-pop 360ms ease-out;
+    }
+  }
 }
 
 [data-chat-model-provider-group="$favorites"] .chat-controls__model-option-provider {
   display: inline-flex;
   visibility: visible;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .chat-controls__model-favorite {
-    transition:
-      opacity 140ms,
-      color 140ms;
-  }
-
-  .chat-controls__model-favorite[data-popped] > svg {
-    animation: chat-model-favorite-pop 360ms ease-out;
-  }
 }
 
 @keyframes chat-model-favorite-pop {
@@ -5369,18 +5398,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 @media (max-width: 640px) {
-  .chat-controls__model-option-wrap:has(.chat-controls__model-favorite)
-    .chat-controls__context-menu {
-    /* Reserve the trailing star's 28px box and the row's 12px gap. */
-    right: 76px;
-  }
-
   .chat-controls__model-favorite {
-    order: 4;
-    flex-basis: 28px;
-    width: 28px;
-    height: 28px;
-    margin-left: 0;
     border-radius: min(9px, var(--radius-menu-item));
     opacity: 1;
   }

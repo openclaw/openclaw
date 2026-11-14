@@ -127,7 +127,7 @@ describe("tsdown config", () => {
         cacheKeyGenerator = generator;
       },
     });
-    const result = plugin.load.call(
+    const result = plugin.load.handler.call(
       { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
       modulePath,
     );

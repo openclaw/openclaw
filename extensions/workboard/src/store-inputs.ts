@@ -206,6 +206,8 @@ export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions 
 export type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
+  /** Host run id of the calling agent turn; refuses writes from a superseded attempt. */
+  runId?: unknown;
 };
 
 export type WorkboardDiagnosticsResult = {

@@ -215,7 +215,8 @@ async function setup(
   };
   const client = mockClient as unknown as GatewayBrowserClient;
   const kitUsed = vi.fn();
-  owner = createOwnerApproval(client, vi.fn(), kitUsed);
+  const memberDeviceAdded = vi.fn();
+  owner = createOwnerApproval(client, vi.fn(), kitUsed, memberDeviceAdded);
   owner.start();
   if (invalid) {
     await vi.waitFor(() => expect(reads).toBeGreaterThanOrEqual(invalid === "commitment" ? 3 : 2));
@@ -230,11 +231,17 @@ async function setup(
     read: () => ({ submitted, handoff }),
     id: start.request_id,
     kitUsed,
-    notice: (ref: string) => {
+    memberDeviceAdded,
+    notice: (
+      ref: string,
+      event: "kit_used" | "member_device_added" = "kit_used",
+      noticeClawId = clawId,
+    ) => {
       queue.push({
         ...message("start", {}),
+        claw_id: noticeClawId,
         message_id: "78".repeat(16),
-        payload: { kind: "notice", event: "kit_used", ref },
+        payload: { kind: "notice", event, ref },
       });
       wake?.();
     },
@@ -286,6 +293,15 @@ describe("local original-D SAS approval", () => {
     const f = await setup();
     f.notice("fp:local");
     await vi.waitFor(() => expect(f.kitUsed).toHaveBeenCalledWith("local"));
+  });
+  it("surfaces member-device notices only for this claw without treating them as approvals", async () => {
+    const f = await setup();
+    f.notice("fp:other", "member_device_added", "ab".repeat(16));
+    f.notice("fp:member-peer", "member_device_added");
+    await vi.waitFor(() => expect(f.memberDeviceAdded).toHaveBeenCalledTimes(1));
+    expect(f.kitUsed).not.toHaveBeenCalled();
+    expect(f.operations).toEqual(["accept"]);
+    expect(owner.read().requests).toHaveLength(1);
   });
   it("approves a browser without a node", async () => {
     const f = await setup();

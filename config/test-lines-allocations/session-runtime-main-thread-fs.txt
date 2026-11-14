@@ -1,4 +1,4 @@
-# 12,745 net test LF against main 6ff27cb minus the single 400-line PR allowance.
+# 12,746 net test LF against main 6ff27cb minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -11,4 +11,4 @@
 # Real replacement, confinement, settlement, and main-thread sync-FS regressions.
 # Output-cap settlement, revoked-admission no-effect, and fresh-process schema reuse proof.
 # Startup backfill preserves same-file reopen and worker refusal of physical replacement.
-12345
+12346

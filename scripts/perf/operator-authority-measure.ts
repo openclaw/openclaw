@@ -232,7 +232,7 @@ function checkAuth() {
 }
 function checkGrant() {
   counts.resumeOwner++;
-  resumeGatewayOperatorAccessGrant(profile, config, grant, retained);
+  resumeGatewayOperatorAccessGrant(profile, config, grant, { retained });
 }
 function checkSource() {
   checkAuth();

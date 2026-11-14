@@ -257,6 +257,8 @@ it.each`
   ${["edit", "job-1", "--pacing-min", "30m", "--every", ""]}                                                 | ${"Schedule values must not be blank"}                                                                                        | ${{ configRevision: "revision", pacing: { min: "1m", max: "1h" } }}                                         | ${["cron.get"]}
   ${[...addArgs, "--system-event", "test", "--every", "8640000000000001ms"]}                                 | ${"Invalid --every"}                                                                                                          | ${undefined}                                                                                                | ${undefined}
   ${["edit", "job-1", "--cron", "0 * * * *", "--tz", "UTC", "--stagger", "8640000000000001ms"]}              | ${"Invalid --stagger"}                                                                                                        | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--cron", "0 * * * *", "--stagger", " "]}                                              | ${"Invalid --stagger"}                                                                                                        | ${undefined}                                                                                                | ${undefined}
+  ${[...addMessage, "--trigger-script", "   "]}                                                              | ${"--trigger-script must not be blank"}                                                                                       | ${undefined}                                                                                                | ${undefined}
 `("rejects $args", async ({ args, message, job, reads }: RejectCase) => {
   if (job) {
     existing(job);
@@ -405,13 +407,6 @@ describe("cron trigger CLI options", () => {
     expectRequest(
       "cron.add",
       expect.objectContaining({ trigger: { script: "json({ fire: true })", once: true } }),
-    );
-  });
-
-  it("rejects an explicitly blank trigger script before adding a job", async () => {
-    await rejectAdd(
-      { "trigger-script": "   ", "system-event": "changed", session: "main" },
-      "--trigger-script must not be blank",
     );
   });
 

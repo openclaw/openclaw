@@ -146,10 +146,11 @@ it("retains failed probe custody until disposal is explicitly settled", async ()
     ).toBe(false);
   } finally {
     close.mockRestore();
-    if (stagedDir) {
+    const directory = stagedDir;
+    if (directory) {
       const settle = async () => {
-        await dispose(path.join(stagedDir, "openclaw-agent.sqlite"), { env: state.env });
-        await fs.promises.rm(stagedDir, { recursive: true, force: true });
+        await dispose(path.join(directory, "openclaw-agent.sqlite"), { env: state.env });
+        await fs.promises.rm(directory, { recursive: true, force: true });
       };
       // The fixture observes the real retained lease; only settled disposal releases it.
       await (retained ? retained.run(settle) : settle());
