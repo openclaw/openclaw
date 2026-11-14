@@ -12,7 +12,6 @@ Inspect and maintain the `memory-wiki` vault. Provided by the bundled optional `
 
 ```bash
 openclaw plugins enable memory-wiki
-openclaw gateway restart
 ```
 
 Related: [Memory Wiki plugin](/plugins/memory-wiki), [Memory Overview](/concepts/memory), [CLI: memory](/cli/memory)
