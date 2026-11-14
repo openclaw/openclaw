@@ -19,6 +19,7 @@ import {
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
 import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.mjs";
+import { releaseChildReuseSha256 } from "../../scripts/lib/full-release-child-request.mjs";
 import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
 import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
@@ -308,8 +309,11 @@ describe("receipt-backed aggregate recovery", () => {
     );
   });
 
-  it("bounds Docker transfers and reconstructs recovery payloads from live metadata", async () => {
+  it("bounds transfers and verifies adopted child receipts", async () => {
     const { old, recovery } = fixture();
+    const selected = expectDefined(recovery.children.normalCi, "normal CI");
+    selected.sourceParentRunId = "800";
+    selected.workflowRef = "release-ci/earlier-same-candidate";
     vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
     const verifyChild = vi
       .fn<typeof childReuse.validateReusableReleaseChild>()
@@ -371,9 +375,21 @@ describe("receipt-backed aggregate recovery", () => {
           dispatches.find((entry) => entry.id === id),
           "dispatch job",
         );
-        return `TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
+        const witness =
+          child.runId === selected.runId
+            ? `FRV_CHILD_REUSE_SHA256=${releaseChildReuseSha256(selected)}\n`
+            : "";
+        return `${witness}TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
       },
     };
+    const adoptedLog = client.getJobLog;
+    client.getJobLog = async (id) =>
+      (await adoptedLog(id)).replace(/FRV_CHILD_REUSE_SHA256=[a-f0-9]{64}/u, "");
+    await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
+      "reuse adoption witness mismatch",
+    );
+    expect(verifyPayloads).not.toHaveBeenCalled();
+    client.getJobLog = adoptedLog;
     await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
       "publication verification reached",
     );
@@ -545,6 +561,7 @@ describe("receipt-backed aggregate recovery", () => {
       client: inventoryClient,
       authenticatedPayloads: expectedPayloads,
     });
+    expect(result.children[0]?.sourceParentRunId).toBe("800");
     expect(result.publication.payloads).toEqual(expectedPayloads);
     expect(downloads).toEqual(["904"]);
     expect(inventoryClient.getArtifact.mock.calls.map(([id]) => String(id))).toEqual([
