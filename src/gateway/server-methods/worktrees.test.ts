@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { WorktreesGcResultSchema } from "../../../packages/gateway-protocol/src/schema/worktrees.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { WorktreeRecordNotFoundError } from "../../agents/worktrees/errors.js";
 import { WorktreeGcProgress } from "../../agents/worktrees/gc-progress.js";
 import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-support.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
@@ -241,6 +242,21 @@ it("maps snapshot failures onto a structured removed=false result", async () => 
     snapshotError: "nested gitlink",
   });
 });
+
+it.each(["remove", "restore"] as const)(
+  "reports an unknown %s id as a refusal that changed nothing",
+  async (method) => {
+    const message = "unknown active worktree: nope";
+    vi.spyOn(managedWorktrees, method).mockRejectedValue(new WorktreeRecordNotFoundError(message));
+    const response = await requests()(method, { id: "nope" });
+
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]).toMatchObject({
+      message,
+      details: { reason: "WORKTREE_NOT_FOUND", mutationAccepted: false },
+    });
+  },
+);
 
 it.each([
   ["create", { repoRoot: "" }],

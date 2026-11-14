@@ -46,14 +46,23 @@ describe("worktrees.remove/restore padded ids on live registry", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     await fs.stat(created.path);
 
+    // An id that names no record is refused before any change, and the response says so.
+    const refusal = (message: string) => [
+      false,
+      undefined,
+      {
+        code: "UNAVAILABLE",
+        message,
+        retryable: false,
+        details: { reason: "WORKTREE_NOT_FOUND", mutationAccepted: false },
+      },
+    ];
     for (const id of ["   ", "\t\n"]) {
-      expect(await call("worktrees.remove", { id })).toEqual([
-        false,
-        undefined,
-        { code: "UNAVAILABLE", message: `Error: unknown active worktree: ${id}`, retryable: false },
-      ]);
-      await expect(call("worktrees.restore", { id })).rejects.toThrow(
-        `worktree ${id} is not restorable`,
+      expect(await call("worktrees.remove", { id })).toEqual(
+        refusal(`unknown active worktree: ${id}`),
+      );
+      expect(await call("worktrees.restore", { id })).toEqual(
+        refusal(`worktree ${id} is not restorable`),
       );
     }
 
