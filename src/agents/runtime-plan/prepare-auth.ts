@@ -19,6 +19,7 @@ import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/re
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
+  getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
 } from "../auth-profiles/usage-state.js";
@@ -74,6 +75,12 @@ function createAuthProfileCooldownError(
       reason,
       status: resolveFailoverStatus(reason),
       code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+      rateLimitResetAt:
+        reason === "rate_limit" && params.authProfileStore
+          ? (getSoonestCooldownExpiry(params.authProfileStore, [profileId], {
+              forModel: params.modelId,
+            }) ?? undefined)
+          : undefined,
       provider: params.provider,
       model: params.modelId,
       profileId,

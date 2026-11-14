@@ -1108,6 +1108,15 @@ retirement after it records success. A failed update that never reached repair o
 activation attempts the same retirement after its failure is recorded, including
 its own capture.
 
+External supervisors using `update migrate` and `update finish` attempt the same
+cleanup when they finish an accepted update, after retiring their rollback journal.
+The recorded migration start time keeps that update's own migration originals
+protected until a later accepted update supersedes them. This includes verified
+originals produced by standalone Doctor or startup migration. `update finish`
+returns the cleanup summary in `diagnostics` and any cleanup warning without
+changing the accepted update's outcome. Receipts without a migration start time
+cannot establish this ordering and do not trigger automatic cleanup.
+
 Once the update's Gateway health verification is recorded (service running, version
 match, readiness, settled channels, and no plugin errors), that update retires its
 own original-state capture and the Doctor migration originals it produced. Without that

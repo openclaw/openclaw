@@ -261,8 +261,10 @@ describe("task facts", () => {
     const v3 = await assembleVersionedModelCatalogBundle(v1, new WeakMap(), undefined, [], {}, 3);
     const { models } = catalog.parseRemoteModelCatalogBundleV3(v3);
     const hosted = new Set(models.flatMap((m) => (m.inference?.decision ? [m.provider] : [])));
-    // Runtime/refreshable providers (Levanto too, out of scope) list live, never from hosted rows.
-    // ONNX presets are local artifacts, Rerank has no fixed list, SubQ retired its only model.
+    // The Gateway hides hosted rows of runtime/refreshable providers until a live listing
+    // publishes them; only these plugins register one. ONNX presets are local artifacts,
+    // Rerank has no fixed list, SubQ retired its only model.
+    const listed = new Set(["baseten", "clawrouter", "google", "openai", "openrouter"]);
     const exempt = new Set(["onnx", "rerank", "subq"]);
     const unhosted = manifests.flatMap(({ manifestPath }) => {
       const loaded = loadPluginManifest(path.dirname(manifestPath));
@@ -270,8 +272,8 @@ describe("task facts", () => {
         throw new Error(loaded.error);
       }
       const { contracts, modelCatalog } = loaded.manifest;
-      return (contracts?.decisionProviders ?? []).filter(
-        (id) => !modelCatalog?.discovery?.[id] && !exempt.has(id) && !hosted.has(id),
+      return (contracts?.decisionProviders ?? []).filter((id) =>
+        modelCatalog?.discovery?.[id] ? !listed.has(id) : !exempt.has(id) && !hosted.has(id),
       );
     });
     expect(unhosted).toEqual([]);

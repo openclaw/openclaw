@@ -26,11 +26,13 @@ function TitlebarButton(props: {
   disabled?: boolean;
   expanded?: boolean;
   shortcut?: KeyboardShortcutCombo;
+  /** Back and Forward arrows explain themselves; the others teach their shortcut. */
+  tooltip?: boolean;
   onClick?: () => void;
   class: string;
 }) {
   return (
-    <openclaw-tooltip prop:content={props.label}>
+    <openclaw-tooltip prop:content={props.label} prop:disabled={props.tooltip === false}>
       <Show when={props.shortcut}>
         {(combo) => (
           <span slot="content">
@@ -71,6 +73,7 @@ export const MacosTitlebarControls = defineSolidBridge<Props>(
             label={t(props.navigationExpanded ? "nav.collapse" : "nav.expand")}
             icon="sessionPanels"
             expanded={props.navigationExpanded}
+            shortcut={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
             disabled={props.historyOnly}
             onClick={props.onToggleSidebar}
             class="macos-titlebar-controls__sidebar"
@@ -85,6 +88,7 @@ export const MacosTitlebarControls = defineSolidBridge<Props>(
         </Show>
         <TitlebarButton
           label={t("nav.back")}
+          tooltip={false}
           icon="chevronLeft"
           disabled={!props.canGoBack}
           onClick={() => globalThis.history.back()}
@@ -92,6 +96,7 @@ export const MacosTitlebarControls = defineSolidBridge<Props>(
         />
         <TitlebarButton
           label={t("nav.forward")}
+          tooltip={false}
           icon="chevronRight"
           disabled={!props.canGoForward}
           onClick={() => globalThis.history.forward()}

@@ -36,7 +36,10 @@ export type BackupCoreDatabase = Readonly<
   {
     sourcePath: string;
     identity?: BigIntStats;
-  } & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string })
+  } & (
+    | { role: "global" | "quarantine" | "client" | "services" }
+    | { role: "agent"; agentId: string }
+  )
 >;
 
 /** Ephemeral coverage of a captured canonical image; never part of the archive manifest. */

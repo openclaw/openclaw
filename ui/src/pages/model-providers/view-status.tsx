@@ -18,15 +18,26 @@ export function isAccessTokenExpiry(profile: ModelAuthStatusProfile): boolean {
   );
 }
 
+/** For OAuth, the auth owner reports `expired` only while a refresh claim may still settle. */
+export function isOAuthRefreshPending(profile: ModelAuthStatusProfile): boolean {
+  return profile.type === "oauth" && profile.reasonCode === "expired";
+}
+
+/** A failed refresh or a lost grant: only a fresh sign-in recovers the account. */
+export function needsOAuthSignIn(profile: ModelAuthStatusProfile): boolean {
+  return (
+    profile.type === "oauth" &&
+    (profile.reasonCode === "refresh_failed" || profile.reasonCode === "missing_credential")
+  );
+}
+
 export function profileAuthProblem(profile: ModelAuthStatusProfile): string | undefined {
-  if (profile.type !== "oauth") {
+  if (!needsOAuthSignIn(profile)) {
     return undefined;
   }
-  if (profile.reasonCode === "missing_credential") {
-    return "modelProviders.status.signInAgain";
-  }
-  // The existing reason covers both pending and failed refresh markers, not just rejection.
-  return profile.reasonCode === "expired" ? "modelProviders.status.signInUnavailable" : undefined;
+  return profile.reasonCode === "refresh_failed"
+    ? "modelProviders.status.signInExpired"
+    : "modelProviders.status.missing";
 }
 
 const AUTH_STATUS: Record<
@@ -95,8 +106,12 @@ export function needsAuthAttention(card: ModelProviderCard): boolean {
     return false;
   }
   // A rollup has no credential type. Unknown or mixed expiry retains its warning.
+  // A refresh in progress is routine too; it settles without the operator.
   const expiring = card.profiles.filter((profile) => profile.status === card.auth?.kind);
-  return expiring.length === 0 || !expiring.every(isAccessTokenExpiry);
+  return (
+    expiring.length === 0 ||
+    !expiring.every((profile) => isAccessTokenExpiry(profile) || isOAuthRefreshPending(profile))
+  );
 }
 
 /**
@@ -117,20 +132,6 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
 }
 
 export function renderProviderStatus(card: ModelProviderCard) {
-  if (card.checkingModels) {
-    return (
-      <SettingsStatus
-        kind="muted"
-        dot={false}
-        label={
-          <span class="model-providers__checking" role="status">
-            <span class="btn__spinner" aria-hidden="true" />
-            <span>{t("modelProviders.status.checking")}</span>
-          </span>
-        }
-      />
-    );
-  }
   if (card.catalogStatus === "auth-rejected") {
     // The card-wide outcome does not identify which saved credential was rejected.
     return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;

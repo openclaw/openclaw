@@ -125,7 +125,7 @@ export async function scanExecSafeBinTrustedDirHints(
   for (const scope of collectExecSafeBinScopes(cfg)) {
     const trustedDirs = await getTrustedSafeBinDirs({ extraDirs: scope.trustedSafeBinDirs });
     for (const bin of scope.safeBins) {
-      const resolution = resolveCommandResolutionFromArgv([bin]);
+      const resolution = await resolveCommandResolutionFromArgv([bin]);
       if (!resolution?.execution.resolvedPath) {
         continue;
       }

@@ -9,6 +9,13 @@ import {
 const FP = `fp:${"ab".repeat(32)}` as const;
 
 describe("mailbox notices", () => {
+  it("sends member device notices to owners, never to self", () => {
+    expect(isValidNotice("member_device_added", `fp:${"ab".repeat(32)}`)).toBe(true);
+    expect(noticeRecipientAllowed("member_device_added", "owners")).toBe(true);
+    for (const event of MAILBOX_NOTICE_EVENTS) {
+      expect(noticeRecipientAllowed(event, "self")).toBe(false);
+    }
+  });
   it("lists seq_conflict among the notice events", () => {
     expect(MAILBOX_NOTICE_EVENTS).toContain("seq_conflict");
   });

@@ -111,6 +111,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
+    execRealpath: runtimeProcessEntrypoint("infra/exec-realpath.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
     secretFileRead: runtimeProcessEntrypoint("infra/secret-file-read.worker"),
@@ -199,6 +200,9 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     ),
     sessionTranscriptProjectionPublication: runtimeProcessEntrypoint(
       "config/sessions/session-transcript-projection-publication.worker",
+    ),
+    sessionTranscriptActiveFactsBackfill: runtimeProcessEntrypoint(
+      "config/sessions/session-transcript-active-facts-backfill.worker",
     ),
     sessionTranscriptReports: runtimeProcessEntrypoint(
       "config/sessions/session-accessor.sqlite-transcript-reports.worker",

@@ -47,6 +47,7 @@ const repositoryScriptEntries = [
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/perf/decision-tool-catalog-measure.ts!",
   "scripts/perf/exec-safe-bin-io-measure.mjs!",
+  "scripts/perf/usage-cost-source-measure.mjs!",
   "scripts/perf/clickclack-account-snapshot.ts!",
   "scripts/perf/clickclack-credential-read.ts!",
   "scripts/perf/github-managed-profile-read.ts!",
@@ -59,6 +60,7 @@ const repositoryScriptEntries = [
   "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
+  "scripts/bench-ci-planner.mts!",
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
@@ -92,6 +94,8 @@ const repositoryScriptEntries = [
   "scripts/perf/state-private-store-modes-measure.mjs!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
   "scripts/perf/sandbox-projection-fetch-measure.ts!",
+  // ws-compression-measure.ts forks the receiving peers by exact path.
+  "scripts/perf/ws-compression-peers.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
@@ -898,6 +902,9 @@ const rootBundledPluginRuntimeDependencies = [
 // owning workspace, or invoke their package binaries/loaders without a static module import.
 const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
+  // Inline-command benchmarks resolve Codex from each measured checkout's
+  // extensions/codex/package.json, never from the tooling root.
+  "@openai/codex",
   // installed-terminal-dependencies.mjs loads these from the pinned npm CLI's own
   // dependency tree via createRequire(npmCli), never from the root workspace.
   "@npmcli/arborist",
@@ -1342,6 +1349,7 @@ const config = {
           "scripts/control-ui-parity/vitest.config.ts",
           "scripts/control-ui-retention/vitest.config.ts",
           "test/vitest.codex-worker-authority.config.ts",
+          "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
         ],
       },
       project: [
@@ -1609,6 +1617,10 @@ const config = {
       "session-catalog-plugin.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openclaw-id-access`]: bundledPluginWorkspace([
+      // Opt-in member-device visual proof selects this config directly through Vitest.
+      "test/member-devices.vitest.config.ts",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: bundledPluginWorkspace([
       // OAuth, model, and media provider helpers are runtime/plugin surfaces.
       "image-generation-provider.ts!",

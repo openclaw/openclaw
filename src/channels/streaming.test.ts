@@ -535,6 +535,37 @@ it.each([
     "Send to session",
     "Check streaming",
   ],
+  [
+    "sessions_send",
+    {
+      sessionKey: "agent:demo:subagent:00000000-0000-4000-8000-000000002633",
+      label: "Check streaming",
+    },
+    "Send to session",
+    "Check streaming …2633",
+  ],
+  [
+    "sessions_history",
+    { sessionKey: "agent:demo:subagent:00000000-0000-4000-8000-00000000a4f0" },
+    "Read session history",
+    "…a4f0",
+  ],
+  [
+    "subagents",
+    { action: "steer", target: "Review browser" },
+    "Send to subagent",
+    "Review browser",
+  ],
+  [
+    "subagents",
+    {
+      action: "steer",
+      target: "00000000-0000-4000-8000-000000002633",
+      message: "Private instructions",
+    },
+    "Send to subagent",
+    "…2633",
+  ],
   ["nodes", { action: "status" }, "List nodes", undefined],
   ["sessions_send", { sessionKey: "agent:demo:subagent:opaque" }, "Send to session", undefined],
   [

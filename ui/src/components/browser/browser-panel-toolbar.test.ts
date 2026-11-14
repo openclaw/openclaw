@@ -215,6 +215,84 @@ describe("Browser toolbar", () => {
     expect(panel.querySelector(".bp-toolbar-favicon svg")).not.toBeNull();
   });
 
+  it("explains address input it can neither open nor search", async () => {
+    const panel = await mountToolbar();
+    const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    input.focus();
+    input.value = "javascript:alert(1)";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await panel.updateComplete;
+    const hint = panel.querySelector(".bp-toolbar-hint");
+    expect(hint?.textContent).toBe(
+      "Only web addresses (http or https) or search text can be opened here.",
+    );
+    expect(input.getAttribute("aria-describedby")).toBe(hint?.id);
+    expect(document.activeElement).toBe(input);
+
+    input.value = "openclaw docs";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    expect(panel.querySelector(".bp-toolbar-hint")).toBeNull();
+  });
+
+  it("offers the address a bare name used to open while Enter still searches", async () => {
+    stubScreenshotMedia();
+    const page = createBrowserPageClient("asset", "https://assets.test/a.png");
+    const panel = panelFor(page.client);
+    mountSolid(() => panel);
+    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+    const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    input.focus();
+    input.value = "devbox";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    const option = panel.querySelector<HTMLButtonElement>(".bp-toolbar-go")!;
+    expect(option.textContent).toBe("Go to https://devbox/");
+
+    option.click();
+    const navigated = () =>
+      page.request.mock.calls
+        .map(([, params]) => params as { path: string; body?: { url?: string } })
+        .filter((params) => params.path === "/navigate")
+        .map((params) => params.body?.url);
+    await waitForSolid(() => expect(navigated()).toEqual(["https://devbox/"]));
+
+    input.focus();
+    input.value = "devbox";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await waitForSolid(() =>
+      expect(navigated()).toEqual(["https://devbox/", "https://www.google.com/search?q=devbox"]),
+    );
+  });
+
+  it("opens a typed Chrome settings page in a new tab instead of searching", async () => {
+    stubScreenshotMedia();
+    const page = createBrowserPageClient("asset", "https://assets.test/a.png");
+    const panel = panelFor(page.client);
+    mountSolid(() => panel);
+    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+    const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    input.focus();
+    input.value = "chrome://settings/payments";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const requests = () =>
+      page.request.mock.calls
+        .map(([, params]) => params as { path: string; body?: { url?: string } })
+        .filter((params) => params.path === "/tabs/open" || params.path === "/navigate");
+    await waitForSolid(() =>
+      expect(requests()).toEqual([
+        expect.objectContaining({
+          path: "/tabs/open",
+          body: { url: "chrome://settings/payments" },
+        }),
+      ]),
+    );
+    expect(panel.querySelector(".bp-toolbar-hint")).toBeNull();
+  });
+
   it("renders the download's Gateway error and HTTP status", async () => {
     const panel = await mountToolbar();
     const error = { error: { message: "Unauthorized", type: "unauthorized" } };

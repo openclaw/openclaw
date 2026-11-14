@@ -2,17 +2,12 @@ import Foundation
 
 /// Stable failures never include the join secret, signature header or remote response text.
 public enum OpenClawIDNodeEnrollmentError: Error, Sendable, Equatable {
-    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     case malformed, unsupportedVersion, invalidLink, discoveryOriginRequired
-    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     case keychain(Int32), invalidIdentity, badSignature, rootMismatch, wrongClaw, wrongHost
-    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     case rollback, staleSnapshot, notAdmitted, timeout, responseTooLarge, redirect, unavailable
-    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     case discoveryRejected(Int)
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// The actual node command/capability manifest frozen for an enrollment attempt.
 public struct OpenClawIDNodeEnrollmentDescription: Sendable, Equatable {
     public let displayName: String
@@ -54,7 +49,6 @@ public struct OpenClawIDNodeEnrollmentDescription: Sendable, Equatable {
     }
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Fragment-only invite input. This is transient secret material, never Codable or logged.
 public struct OpenClawIDNodeEnrollmentLink: Sendable {
     public let clawID: String

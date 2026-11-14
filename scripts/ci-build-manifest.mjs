@@ -23,15 +23,20 @@ const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
 const ordinaryPullRequest = workflowEventName === "pull_request";
 const ciQualification =
   workflowEventName === "workflow_dispatch" &&
-  process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
   (process.env.OPENCLAW_CI_QUALIFICATION === "true" ||
-    process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson");
+    (process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
+      process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson"));
 const mainQualification = ciQualification && process.env.OPENCLAW_CI_SHAPE === "main";
-const eventName = ciQualification
-  ? mainQualification
-    ? "push"
-    : "pull_request"
-  : workflowEventName;
+const exactMainQualification =
+  mainQualification && process.env.OPENCLAW_CI_RELEASE_GATE === "false";
+// Admission owns identity. Project only coverage; the raw event still owns trust and provenance.
+const eventName = exactMainQualification
+  ? "schedule"
+  : ciQualification
+    ? mainQualification
+      ? "push"
+      : "pull_request"
+    : workflowEventName;
 const eventRef = mainQualification ? "refs/heads/main" : process.env.GITHUB_REF;
 const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
 const workflowRevision = process.env.OPENCLAW_CI_WORKFLOW_REVISION ?? "";
@@ -177,6 +182,9 @@ const packageScripts = packageJson.scripts ?? {};
 const hasPackageScript = (name) => typeof packageScripts[name] === "string";
 const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
 const changedPaths = (() => {
+  if (exactMainQualification) {
+    return null;
+  }
   try {
     const manifestPath = process.env.OPENCLAW_CI_CHANGED_PATHS_FILE;
     // Frozen target producers can predate the complete file transport.
@@ -190,8 +198,9 @@ const changedPaths = (() => {
     return null;
   }
 })();
-const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
-const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const docsOnly = !exactMainQualification && parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
+const docsChanged = exactMainQualification || parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const scopeEnabled = (value) => exactMainQualification || parseCiEnvFlag(value);
 const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
@@ -202,6 +211,9 @@ const runProofTier = eventName !== "pull_request" && !releaseGate;
 const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
 const validationTier = process.env.OPENCLAW_CI_VALIDATION_TIER ?? "full";
 const mainValidation = validationTier === "main";
+if (exactMainQualification && !mainValidation) {
+  throw new Error("Exact main qualification requires validation_tier=main");
+}
 if (validationTier !== "full" && !mainValidation) {
   throw new Error("validation_tier must be full or main");
 }
@@ -211,7 +223,8 @@ if (
     !isCanonicalRepository ||
     frozenTarget ||
     compatibilityTarget ||
-    ciQualification ||
+    (ciQualification && !exactMainQualification) ||
+    (exactMainQualification && checkoutRevision !== workflowRevision) ||
     releaseGate ||
     releaseScope !== "full" ||
     process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER)
@@ -295,11 +308,12 @@ const nativeGeneratedOnly =
 const runNode =
   !nodeDataOnly &&
   !nativeGeneratedOnly &&
-  ((parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
+  ((scopeEnabled(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
 const runNodeFastOnly =
   runNode &&
   !runtimePullRequest &&
   !toolingOwnerChange &&
+  !exactMainQualification &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
 const runNodeFull = runNode && !runNodeFastOnly;
 const runBuiltSourceVerifiers =
@@ -363,9 +377,13 @@ if (
 }
 
 const runNodeFastPluginContracts =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
 const runNodeFastCiRouting =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
 const proposedCheckScope =
   runtimePullRequest &&
   (!frozenTarget || releaseGate) &&
@@ -400,7 +418,7 @@ const runMlxNativeProof =
 const runMacos =
   !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS) &&
   !docsOnly &&
   isCanonicalRepository &&
   !releaseFastLane;
@@ -409,7 +427,7 @@ const runMacosNode =
   runMacos ||
   (!ordinaryPullRequest &&
     !nativeGeneratedOnly &&
-    parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
+    scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
     !docsOnly &&
     isCanonicalRepository &&
     !releaseFastLane);
@@ -425,7 +443,7 @@ const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -434,7 +452,7 @@ const iosBuildScope =
 const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_ANDROID) &&
   !npmQualification &&
   !docsOnly &&
   isCanonicalRepository &&
@@ -450,18 +468,18 @@ const runAndroidAccessNative =
     ));
 let runWindows =
   !ordinaryPullRequest &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
   !releaseFastLane &&
   !docsOnly &&
   !runNodeFastOnly &&
   isCanonicalRepository;
 const runSkillsPython =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
 const runControlUiI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
 let runUiTests =
   fullUiPullRequest ||
-  (parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
+  (scopeEnabled(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
     !docsOnly &&
     !nodeDataOnly &&
     !releaseFastLane);
@@ -520,7 +538,7 @@ const supportsNativeI18n =
   hasPackageScript("android:i18n:check") &&
   hasPackageScript("apple:i18n:check");
 const runNativeI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -659,7 +677,10 @@ if (runtimePullRequest && runNodeFull) {
       !frozenTarget &&
       !compatibilityTarget &&
       nodeSelectionMode === "aggressive",
-    onSelection: (selection) => nodeSelectionReasons.push(selection),
+    onSelection: (selection) => {
+      nodeSelectionReasons.push(selection);
+      console.log(`Node test selection provenance: ${JSON.stringify(selection)}`);
+    },
   });
 }
 const fullIosSimulatorPr = parseCiEnvFlag(process.env.OPENCLAW_CI_IOS_SIMULATOR_FULL);
@@ -1002,7 +1023,7 @@ const fullCoreLintStripes =
   !frozenTarget &&
   ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
     nodeRunnerBackend === "runson" ||
-    ciQualification)
+    (ciQualification && !exactMainQualification))
     ? [1, 2]
     : [1, 2, 3, 4, 5];
 const coreLintRows = fullCoreLintStripes.map((stripe) => ({ stripe }));
@@ -1481,8 +1502,20 @@ const nodeTestShards = targetNodeTestShards
             ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
           ])
         : undefined;
+    const auditCliObservations =
+      eventName === "schedule" &&
+      isCanonicalRepository &&
+      !frozenTarget &&
+      !shard.requiresDist &&
+      groups?.some(
+        (group) =>
+          group.configs?.length === 1 &&
+          group.configs[0] === "test/vitest/vitest.cli-process.config.ts",
+      ) &&
+      !groups.some((group) => group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"));
     const row = {
       check_name: shard.checkName,
+      audit_cli_observations: auditCliObservations || undefined,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       adaptive_observations:
         (shard.groups ?? [shard]).some((group) =>
@@ -1585,6 +1618,15 @@ const nodeTestShards = targetNodeTestShards
     }
     return row;
   });
+// Vary the single audit capture across runs instead of always observing the first row.
+const auditCliRows = nodeTestShards.filter((row) => row.audit_cli_observations);
+if (auditCliRows.length > 0) {
+  const runId = process.env.GITHUB_RUN_ID ?? "";
+  const auditIndex = /^\d+$/u.test(runId) ? Number(BigInt(runId) % BigInt(auditCliRows.length)) : 0;
+  auditCliRows.forEach((row, index) => {
+    row.audit_cli_observations = index === auditIndex || undefined;
+  });
+}
 const nodeTestGroupPools = {};
 if (
   typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&
@@ -1686,7 +1728,7 @@ const additionalChecks = [
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
   // Main-shaped qualifications are still dispatches with an exact comparison range.
-  ...(eventName === "workflow_dispatch" || mainQualification
+  ...(eventName === "workflow_dispatch" || (mainQualification && !exactMainQualification)
     ? [
         // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {

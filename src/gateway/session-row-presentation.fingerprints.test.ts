@@ -51,6 +51,8 @@ it("retains nested publication facts across real transcript writes without hidin
       clients.map((client) => [client, new ConnectionSessionRows()]),
     );
     const cfg = rolePolicyConfig();
+    // Permission fingerprints do not depend on automatic utility-model discovery.
+    cfg.agents = { defaults: { utilityModel: "" } };
     const query = { agentId: "main", key: "agent:main:fingerprint-publication" };
     const target = { agentId: query.agentId, sessionKey: query.key, sessionId: "fingerprints" };
     const toolOverrides = { mcpToolsDeny: { synthetic: ["unchanged-tool".repeat(100)] } };

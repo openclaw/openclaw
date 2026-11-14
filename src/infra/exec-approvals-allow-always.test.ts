@@ -19,7 +19,7 @@ import {
 } from "./exec-approvals.js";
 import { buildCwdBoundHashedArgPattern, matchAllowlist } from "./exec-command-resolution.js";
 
-type Analysis = ReturnType<typeof analyzeArgvCommand>;
+type Analysis = Awaited<ReturnType<typeof analyzeArgvCommand>>;
 type Allowlist = Parameters<typeof evaluateExecAllowlist>[0]["allowlist"];
 
 function expectApprovalRequired(result: { analysisOk: boolean; allowlistSatisfied: boolean }) {
@@ -54,7 +54,7 @@ function fixture(inheritPath = false) {
     expectApprovalRequired(await evaluate(command, allowlist));
   const persist = async (command: string, platform: string = process.platform) => {
     const analysis = await evaluate(command, [], platform);
-    const decision = resolveAllowAlwaysPersistenceDecision({
+    const decision = await resolveAllowAlwaysPersistenceDecision({
       segments: analysis.segments,
       commandText: command,
       ...context(platform),
@@ -79,13 +79,13 @@ function fixture(inheritPath = false) {
       }
       return file;
     },
-    analyze(argv: string[], platform?: string) {
-      const analysis = analyzeArgvCommand({ argv, ...context(platform) });
+    async analyze(argv: string[], platform?: string) {
+      const analysis = await analyzeArgvCommand({ argv, ...context(platform) });
       expect(analysis.ok).toBe(true);
       return analysis;
     },
-    patterns: (analysis: Analysis, platform?: string) =>
-      resolveAllowAlwaysPatternEntries({ segments: analysis.segments, ...context(platform) }),
+    patterns: async (analysis: Analysis, platform?: string) =>
+      await resolveAllowAlwaysPatternEntries({ segments: analysis.segments, ...context(platform) }),
     allowed: async (
       analysis: Analysis,
       allowlist: Allowlist,
@@ -236,7 +236,7 @@ it.each(["", "cmd /c ", "powershell -Command ", "pwsh -c "])(
   },
 );
 
-it("keeps Windows strict inline-eval interpreter approvals argv-bound", () => {
+it("keeps Windows strict inline-eval interpreter approvals argv-bound", async () => {
   const awk = "C:\\temp\\awk.exe";
   const cwd = "C:\\workspace";
   const execution = resolvedExecutable(awk, "awk");
@@ -246,8 +246,11 @@ it("keeps Windows strict inline-eval interpreter approvals argv-bound", () => {
     cwd,
     platform: "win32",
   };
-  expect(resolveAllowAlwaysPersistenceDecision(params).kind).toBe("one-shot");
-  const decision = resolveAllowAlwaysPersistenceDecision({ ...params, strictInlineEval: true });
+  expect((await resolveAllowAlwaysPersistenceDecision(params)).kind).toBe("one-shot");
+  const decision = await resolveAllowAlwaysPersistenceDecision({
+    ...params,
+    strictInlineEval: true,
+  });
   expect(decision.kind).toBe("patterns");
   const entries = decision.kind === "patterns" ? [...decision.patterns] : [];
   expect(entries).toEqual([{ pattern: awk, argPattern: expect.any(String) }]);
@@ -299,8 +302,8 @@ it("persists empty PowerShell file arguments after dispatch unwrap", async () =>
   f.exe("env");
   f.exe("pwsh");
   const script = f.write("script.ps1", "", true);
-  const analysis = f.analyze(["env", "pwsh", "/file", script, ""]);
-  const entries = f.patterns(analysis, "win32");
+  const analysis = await f.analyze(["env", "pwsh", "/file", script, ""]);
+  const entries = await f.patterns(analysis, "win32");
   expect(entries).toEqual([{ pattern: script, argPattern: f.hash([script, ""], "win32") }]);
   expect(await f.allowed(analysis, [...entries], "win32", new Set())).toBe(true);
 });
@@ -321,14 +324,14 @@ it("extracts all inner binaries from reusable shell chains and deduplicates", as
 it.each([
   { executable: "sudo", args: ["/bin/zsh", "-lc", "whoami"] },
   { executable: "busybox", args: ["sed", "-n", "1p"] },
-])("does not persist unsupported $executable dispatch", ({ executable, args }) => {
+])("does not persist unsupported $executable dispatch", async ({ executable, args }) => {
   if (executable === "busybox" && process.platform === "win32") {
     return;
   }
   const f = fixture();
   const tool = f.exe(executable);
   expect(
-    f.patterns(f.analyze([executable === "busybox" ? tool : executable, ...args])),
+    await f.patterns(await f.analyze([executable === "busybox" ? tool : executable, ...args])),
   ).toStrictEqual([]);
 });
 
@@ -350,7 +353,7 @@ it.each([" ", "="])("rejects shell startup options with %j separators", async (s
     const f = scriptFixture();
     f.write("scripts/evilrc", "echo blocked\n");
     const command = "bash " + option + separator + "scripts/evilrc scripts/save_crystal.sh";
-    expect(f.patterns(f.analyze(command.split(" ")))).toStrictEqual([]);
+    expect(await f.patterns(await f.analyze(command.split(" ")))).toStrictEqual([]);
     expect((await f.persist(command)).persisted).toStrictEqual([]);
     await f.expectAllowed(command, [{ pattern: f.script }], false);
   }
@@ -399,17 +402,17 @@ it("keeps generated positional carrier patterns bound to the carried argv", asyn
   const touch = f.exe("touch");
   f.exe("sh");
   const marker = path.join(f.dir, "marker");
-  const analysis = f.analyze(["sh", "-c", '$0 "$@"', "touch", marker], "linux");
-  const entries = f.patterns(analysis, "linux");
+  const analysis = await f.analyze(["sh", "-c", '$0 "$@"', "touch", marker], "linux");
+  const entries = await f.patterns(analysis, "linux");
   expect(entries).toEqual([{ pattern: touch, argPattern: f.hash([touch, marker], "linux") }]);
   expect(await f.allowed(analysis, [...entries], "linux")).toBe(true);
-  const changed = f.analyze(
+  const changed = await f.analyze(
     ["sh", "-c", '$0 "$@"', "touch", path.join(f.dir, "other-marker")],
     "linux",
   );
   expect(await f.allowed(changed, [...entries], "linux")).toBe(false);
-  const partial = f.analyze(["sh", "-c", '$0 "$1"', "touch", marker], "linux");
-  expect(f.patterns(partial, "linux")).toEqual([]);
+  const partial = await f.analyze(["sh", "-c", '$0 "$1"', "touch", marker], "linux");
+  expect(await f.patterns(partial, "linux")).toEqual([]);
 });
 
 it.each(["-c 'scripts/save_crystal.sh'", "-s scripts/save_crystal.sh"])(
@@ -465,8 +468,8 @@ it("prevents Windows fallback from allowlisting opaque shell inline payloads", a
   const f = fixture();
   const shell = f.exe("nu.exe");
   const safeTool = f.exe("safe-tool.exe");
-  const analysis = f.analyze([shell, "--commands", "safe-tool arg"], "win32");
-  expect(f.patterns(analysis, "win32")).toStrictEqual([]);
+  const analysis = await f.analyze([shell, "--commands", "safe-tool arg"], "win32");
+  expect(await f.patterns(analysis, "win32")).toStrictEqual([]);
   const allowlistSatisfied = await f.allowed(
     analysis,
     [{ pattern: safeTool, source: "allow-always" }],
@@ -480,8 +483,8 @@ it("does not bind mksh option values as shell script allowlist targets", async (
   f.exe("mksh");
   const script = f.write("run.sh", "#!/bin/sh\necho ok\n", true);
   const decoy = f.write("errexit", "decoy\n");
-  const analysis = f.analyze(["mksh", "+o", "errexit", "./run.sh"]);
-  const entries = f.patterns(analysis);
+  const analysis = await f.analyze(["mksh", "+o", "errexit", "./run.sh"]);
+  const entries = await f.patterns(analysis);
   expect(entries).toEqual([{ pattern: script, argPattern: f.hash([script]) }]);
   expect(await f.allowed(analysis, [{ pattern: decoy, source: "allow-always" }])).toBe(false);
   expect(
@@ -528,13 +531,13 @@ it("matches package-manager shell-script arg patterns against inner argv", async
   const f = scriptFixture();
   f.exe("pnpm");
   f.exe("bash");
-  const analysis = f.analyze(["pnpm", "exec", "bash", f.script, "allowed"], "win32");
-  const entries = f.patterns(analysis, "win32");
+  const analysis = await f.analyze(["pnpm", "exec", "bash", f.script, "allowed"], "win32");
+  const entries = await f.patterns(analysis, "win32");
   expect(entries).toEqual([
     { pattern: f.script, argPattern: f.hash([f.script, "allowed"], "win32") },
   ]);
   expect(await f.allowed(analysis, [...entries], "win32")).toBe(true);
-  const extra = f.analyze(["pnpm", "exec", "bash", f.script, "allowed", "extra"], "win32");
+  const extra = await f.analyze(["pnpm", "exec", "bash", f.script, "allowed", "extra"], "win32");
   const allowlistSatisfied = await f.allowed(extra, [...entries], "win32");
   expectApprovalRequired({ analysisOk: extra.ok, allowlistSatisfied });
 });
@@ -624,9 +627,9 @@ it.runIf(process.platform !== "win32")(
     const script = path.join(dirWithSpace, "bash");
     fs.writeFileSync(script, "echo ok\n");
     const context = { cwd: dirWithSpace, env: makePathEnv(base), platform: process.platform };
-    const approved = analyzeArgvCommand({ argv: [shell, "./bash", "allowed"], ...context });
+    const approved = await analyzeArgvCommand({ argv: [shell, "./bash", "allowed"], ...context });
     expect(approved.ok).toBe(true);
-    const decision = resolveAllowAlwaysPersistenceDecision({
+    const decision = await resolveAllowAlwaysPersistenceDecision({
       segments: approved.segments,
       ...context,
     });
@@ -645,7 +648,7 @@ it.runIf(process.platform !== "win32")(
       [[shell, script, "allowed"], dirWithSpace, true],
       [[shell, script, "allowed"], dirNoSpace, false],
     ] as const) {
-      const analysis = analyzeArgvCommand({ ...context, argv: [...argv], cwd });
+      const analysis = await analyzeArgvCommand({ ...context, argv: [...argv], cwd });
       expect(analysis.ok).toBe(true);
       const evaluation = await evaluateExecAllowlist({
         ...context,

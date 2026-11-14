@@ -82,7 +82,6 @@ struct VoiceWakeOverlayView: View {
                         .animation(.spring(response: 0.35, dampingFraction: 0.78), value: sent)
                     }
                     .buttonStyle(.plain)
-                    .help("Send message")
                     .accessibilityLabel("Send message")
                     .disabled(
                         !self.controller.model.forwardEnabled || self.controller.model.isSending ||
@@ -166,7 +165,6 @@ struct CloseButtonOverlay: View {
                         .shadow(color: Color.black.opacity(0.2), radius: 2, x: 0, y: 0)
                 }
                 .buttonStyle(.plain)
-                .help("Cancel")
                 .accessibilityLabel("Cancel")
                 .focusable(false)
                 .padding(3)

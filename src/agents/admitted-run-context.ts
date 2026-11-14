@@ -25,6 +25,8 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { scopeOperatorAccessDecisions } from "../infra/operator-access-decision.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -66,19 +68,25 @@ export function createAdmittedRunOperatorAuthority(
   const signal = source.signal;
   let revoked = false;
   let revocationReason: unknown;
-  const assertCurrent = composeSessionSourceAssertion([check], (assertSource) => {
-    if (revoked) {
-      throw revocationReason;
-    }
-    try {
-      signal?.throwIfAborted();
-      assertSource();
-    } catch (error) {
-      revoked = true;
-      revocationReason = error;
-      throw error;
-    }
-  });
+  const assertCurrent = composeSessionSourceAssertion(
+    [check],
+    scopeOperatorAccessDecisions((assertSource: () => void) => {
+      if (revoked) {
+        throw revocationReason;
+      }
+      try {
+        signal?.throwIfAborted();
+        assertSource();
+      } catch (error) {
+        if (!isOperatorAuthorityUnavailable(error)) {
+          revoked = true;
+          revocationReason = error;
+        }
+        throw error;
+      }
+    }),
+    { synchronousCheck: true },
+  );
   const readRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
@@ -201,7 +209,8 @@ export function bindOperatorModelExecution(
   }
   const selected = model ? { ...model } : undefined;
   const assertModelAllowed = createOperatorModelSelectionAssertion(authority, selected);
-  const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
+  const mapError = (error: unknown) =>
+    isOperatorAuthorityUnavailable(error) ? error : (mapAuthorizationError?.(error) ?? error);
   let releaseAuthority: (() => void) | undefined;
   try {
     assertModelAllowed();
@@ -220,7 +229,9 @@ export function bindOperatorModelExecution(
       assertModelAllowed();
     } catch (error) {
       const failure = mapError(error);
-      revoked.abort(failure);
+      if (!isOperatorAuthorityUnavailable(error)) {
+        revoked.abort(failure);
+      }
       throw failure;
     }
   };
@@ -417,9 +428,16 @@ export function captureAdmittedRunActiveAssertion(
     }
     assertSource();
   };
-  return Object.assign(composeSessionSourceAssertion([source.assertCurrent], assertLocalCurrent), {
-    assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
-  });
+  return Object.assign(
+    composeSessionSourceAssertion(
+      [source.assertCurrent],
+      scopeOperatorAccessDecisions(assertLocalCurrent),
+      { synchronousCheck: true },
+    ),
+    {
+      assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
+    },
+  );
 }
 
 /** Idempotently compare-releases the authority captured by this admission. */
@@ -527,19 +545,25 @@ export function prepareAgentRunAdmission(params: {
   let sourceFailure: Error | undefined;
   const assertSourceCurrent =
     (sourceAssertion || assertOperatorCurrent) &&
-    composeSessionSourceAssertion([sourceAssertion, assertOperatorCurrent], (assertSources) => {
-      if (sourceFailure) {
-        throw sourceFailure;
-      }
-      try {
-        assertSources();
-      } catch (error) {
-        sourceFailure = new Error("source execution authority is no longer active", {
-          cause: error,
-        });
-        throw error;
-      }
-    });
+    composeSessionSourceAssertion(
+      [sourceAssertion, assertOperatorCurrent],
+      scopeOperatorAccessDecisions((assertSources: () => void) => {
+        if (sourceFailure) {
+          throw sourceFailure;
+        }
+        try {
+          assertSources();
+        } catch (error) {
+          if (!isOperatorAuthorityUnavailable(error)) {
+            sourceFailure = new Error("source execution authority is no longer active", {
+              cause: error,
+            });
+          }
+          throw error;
+        }
+      }),
+      { synchronousCheck: true },
+    );
   let admittedRuntimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"] | undefined;
   let admittedRuntimeInstanceId: string | undefined;
   let admitted: Promise<AdmittedRunContext> | undefined;
@@ -550,10 +574,14 @@ export function prepareAgentRunAdmission(params: {
       throw new Error("prepared execution context is already closed");
     }
   };
-  const scopedSource = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
-    assertPreparationOpen();
-    assertSource();
-  });
+  const scopedSource = composeSessionSourceAssertion(
+    [assertSourceCurrent],
+    (assertSource) => {
+      assertPreparationOpen();
+      assertSource();
+    },
+    { synchronousCheck: true },
+  );
   const prepared: PreparedAgentRunAdmission = Object.freeze({
     operationalRunInstance,
     assertCurrent: () => {
@@ -569,13 +597,16 @@ export function prepareAgentRunAdmission(params: {
       }
       assertActive.assertScopeCurrent();
     },
-    assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
-      assertScopeCurrent: assertPreparationOpen,
-      prepareSessionSourceScope: () => {
-        assertPreparationOpen();
-        return prepareSessionSourceScope(scopedSource);
+    assertSourceCurrent: Object.assign(
+      composeSessionSourceAssertion([assertSourceCurrent], undefined, { synchronousCheck: true }),
+      {
+        assertScopeCurrent: assertPreparationOpen,
+        prepareSessionSourceScope: () => {
+          assertPreparationOpen();
+          return prepareSessionSourceScope(scopedSource);
+        },
       },
-    }),
+    ),
     readOperatorAuthority: () => {
       if (operatorAuthority) {
         if (closed) {
