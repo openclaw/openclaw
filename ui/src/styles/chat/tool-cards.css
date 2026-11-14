@@ -99,7 +99,8 @@
 }
 
 .chat-tool-msg-summary,
-.chat-activity-group__summary {
+.chat-activity-group__summary,
+.chat-reasoning {
   gap: 4px;
   padding: 0;
   font-family: var(--font-body);

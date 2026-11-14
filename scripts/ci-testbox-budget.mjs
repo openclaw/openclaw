@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const PROFILES = {
@@ -188,8 +188,8 @@ async function main() {
   if (process.argv[2] === "configure") {
     // The workflow checks queue age before checkout; admitted work keeps its lease.
     const path = "/tmp/.testbox/idle_timeout";
-    const idle = boundedTestboxIdleMinutes(readFileSync(path, "utf8"));
-    writeFileSync(path, `${idle}\n`);
+    const idle = boundedTestboxIdleMinutes(fs.readFileSync(path, "utf8"));
+    fs.writeFileSync(path, `${idle}\n`);
     console.log(
       `Testbox idle timeout capped at ${idle} minutes; active SSH work remains protected.`,
     );
@@ -219,7 +219,7 @@ async function main() {
     minutes: process.env.TESTBOX_MINUTES,
     createdAt: run.created_at,
   });
-  appendFileSync(
+  fs.appendFileSync(
     process.env.GITHUB_OUTPUT,
     Object.entries(plan)
       .map(([key, value]) => `${key}=${value}\n`)

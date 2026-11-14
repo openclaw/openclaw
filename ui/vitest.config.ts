@@ -81,6 +81,7 @@ const mockRegistryBrowserTests = [
   "src/lib/toast-host.loading.browser.test.ts",
   "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
   "src/pages/chat/components/chat-tool-cards.browser.test.tsx",
+  "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
 ].map((file) => resolveUiTypeScriptPath(file, here));
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
   const defaultExecutablePath = chromium.executablePath();
@@ -93,6 +94,7 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
+  "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
   "src/pages/apps/apps-page.browser.test.tsx",
   "src/pages/config/view.config-read.browser.test.tsx",
   "src/pages/usage/view-details.browser.test.tsx",
@@ -167,8 +169,12 @@ export function createUiBrowserVitestConfig(
       : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
-  const mockRegistryInclude =
-    browser === "chromium" ? includeUiTests(mockRegistryBrowserTests, env) : [];
+  const mockRegistryInclude = includeUiTests(
+    browser === "chromium"
+      ? mockRegistryBrowserTests
+      : ["src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx"],
+    env,
+  );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
   const excludesBrowserFiles =
     runtimeFiles !== null &&
@@ -275,8 +281,10 @@ export function createUiBrowserVitestConfig(
             ? [
                 {
                   browser,
-                  name: "chromium-mock-registry",
+                  name: `${browser}-mock-registry`,
                   include: mockRegistryInclude,
+                  // This additional WebKit lane proves parked-row box/geometry restoration.
+                  ...(browser === "webkit" ? { testNamePattern: /parks retained rows/ } : {}),
                   isolate: true,
                 },
               ]
