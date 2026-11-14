@@ -463,3 +463,18 @@ describe("buildStatusMessage context window", () => {
     expect(text).not.toContain("pinned session");
   });
 });
+
+it.each([undefined, "standard", "daybreak_blue", "daybreak_red"] as const)(
+  "shows saved Access %s in text and structured status",
+  (cyberAccessProgram) => {
+    const args = { ...haiku, sessionEntry: session(0, { cyberAccessProgram }) };
+    const parts = buildStatusMessageParts(args);
+    expect(statusRows(parts).get("🔐 Access")).toBe(cyberAccessProgram);
+    const text = buildStatusMessage(args);
+    if (cyberAccessProgram) {
+      expect(text).toContain(`Access: ${cyberAccessProgram}`);
+    } else {
+      expect(text).not.toContain("Access:");
+    }
+  },
+);

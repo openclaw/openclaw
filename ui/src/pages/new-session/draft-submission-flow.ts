@@ -267,14 +267,13 @@ export class DraftSubmissionFlow {
   }
 
   /** Audience retirement needs an explicit choice; other gates follow a submit attempt. */
-  blockedSubmitNotice(): string | undefined {
+  blockedSubmitNotice(options: { includePageRendered?: boolean } = {}): string | undefined {
     const block = this.submitBlock();
     if (block?.gate === "draft-unavailable") {
       return block.reason;
     }
-    return this.blockedSubmitAttempt && block && !PAGE_RENDERED_GATES.has(block.gate)
-      ? block.reason
-      : undefined;
+    const showNotice = options.includePageRendered || !PAGE_RENDERED_GATES.has(block?.gate ?? "");
+    return this.blockedSubmitAttempt && showNotice ? block?.reason : undefined;
   }
 
   private buildDraftSessionCreateParams = (options: DraftSessionCreateOverrides = {}) =>

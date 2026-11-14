@@ -61,6 +61,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
+import { doctorMigrationBackupPath } from "../../doctor-migration-backup-names.js";
 import {
   inspectLegacyRestartTombstone,
   migrateLegacySessionEntryState,
@@ -254,7 +255,7 @@ export async function repairLegacySessionRunOutcomes(
     const { createVerifiedSqliteSnapshot } = await import("../../../infra/sqlite-snapshot.js");
     await createVerifiedSqliteSnapshot({
       sourcePath: scope.storePath,
-      targetPath: `${scope.storePath}.pre-startup-migration-restart-recovery-${randomUUID()}.bak`,
+      targetPath: doctorMigrationBackupPath(scope.storePath, randomUUID(), "restart-recovery"),
       preserveRowIds: true,
       beforePublish: assertRepairCurrent,
     });
