@@ -24,11 +24,8 @@ import {
   reconcileChatInputCustody,
 } from "./history-merge.ts";
 
-export { createPendingSteerLookup, type PendingSteer } from "./chat-pending-input-display.ts";
-export {
-  buildPendingInputItems,
-  buildPendingInputQueueItems,
-} from "./chat-pending-input-presentation.ts";
+export type { PendingSteer } from "./chat-pending-input-display.ts";
+export { buildPendingInputQueueItems } from "./chat-pending-input-presentation.ts";
 
 export function isPendingInputDismissHidden(view: ChatPendingInputView, id: string): boolean {
   return Boolean(view.dismissing?.has(id) || view.dismissed?.has(id));
