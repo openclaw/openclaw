@@ -46,7 +46,7 @@ type PublicationDelivery = {
   variants: Array<SessionEventProjection | undefined>;
   envelope: PublicationEnvelope;
   plan: ReturnType<ConnectionSessionRows["prepareDelivery"]>;
-  serializeSession: () => string;
+  serializeSession: () => Buffer;
   delivered: (client: GatewayClient) => void;
 };
 
@@ -82,7 +82,7 @@ function prepareEnvelopeSerialization(
   const suffix = prefix + flush();
   return (
     recipient: Record<string, unknown>,
-    serializeSession: () => string,
+    serializeSession: () => Buffer,
     serializeMessage?: () => Buffer,
   ): ReturnType<NonNullable<SessionEventProjection["serializePayload"]>> => {
     let encoded = "";
@@ -91,10 +91,9 @@ function prepareEnvelopeSerialization(
       encoded += segment.prefix + (field ? `${field},` : "");
     }
     encoded += suffix;
-    const session = `"session":${serializeSession()}}`;
     return serializeMessage
-      ? [Buffer.from(encoded), serializeMessage(), Buffer.from(session)]
-      : [Buffer.from(encoded + session)];
+      ? [Buffer.from(encoded), serializeMessage(), serializeSession()]
+      : [Buffer.from(encoded), serializeSession()];
   };
 }
 
@@ -324,21 +323,25 @@ export function prepareSessionEventProjection(
         if (prepared?.reuseEnvelope) {
           audience.envelope = envelope;
         }
-        let sessionJSON = plan.rows?.encoded[0];
+        let sessionBytes: Buffer | undefined;
         delivery = {
           variants: [],
           envelope,
           plan,
           serializeSession: () => {
-            if (sessionJSON === undefined) {
-              const encoded = serializeSessionRow(row);
-              const wire = plan.rows?.wire[0];
-              // Patches already carry their encoding; full wrappers vary only by history.
-              sessionJSON = wire
-                ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
-                : encoded;
+            if (!sessionBytes) {
+              let sessionJSON = plan.rows?.encoded[0];
+              if (sessionJSON === undefined) {
+                const encoded = serializeSessionRow(row);
+                const wire = plan.rows?.wire[0];
+                // Patches already carry their encoding; full wrappers vary only by history.
+                sessionJSON = wire
+                  ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
+                  : encoded;
+              }
+              sessionBytes = Buffer.from(`"session":${sessionJSON}}`);
             }
-            return sessionJSON;
+            return sessionBytes;
           },
           delivered: (viewer) => connection.references(viewer).deliver(plan),
         };
