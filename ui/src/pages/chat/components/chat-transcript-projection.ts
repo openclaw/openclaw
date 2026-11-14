@@ -8,7 +8,7 @@ import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
-import { createPendingSteerLookup } from "../chat-pending-inputs.ts";
+import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
 import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
