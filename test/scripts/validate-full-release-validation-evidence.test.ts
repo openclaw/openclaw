@@ -209,6 +209,10 @@ describe("full release validation evidence", () => {
     "new-publish-without-admission",
     "receipt-recovery",
     "receipt-recovery-without-proof",
+    "plugins-only",
+    "plugins-only-route",
+    "plugins-only-channel",
+    "plugins-only-roster",
     "subset",
     "subset-outside-roster",
     "subset-duplicate",
@@ -321,44 +325,56 @@ describe("full release validation evidence", () => {
                 : manifest,
           },
         }),
-        expectedPublicationOperation: scenario.startsWith("subset")
-          ? {
-              ...selection,
-              publishOpenclawNpm: scenario === "subset-core",
-              pluginPublishScope: "selected",
-              plugins:
-                scenario === "subset-empty"
-                  ? []
-                  : scenario === "subset-outside-roster"
+        expectedPublicationOperation:
+          scenario.startsWith("subset") || scenario.startsWith("plugins-only")
+            ? {
+                ...selection,
+                publishOpenclawNpm: scenario === "subset-core",
+                pluginPublishScope: scenario.startsWith("plugins-only")
+                  ? "all-publishable"
+                  : "selected",
+                plugins: scenario.startsWith("plugins-only")
+                  ? scenario === "plugins-only-roster"
                     ? ["@openclaw/unknown"]
-                    : scenario === "subset-duplicate"
-                      ? ["@openclaw/test", "@openclaw/test"]
-                      : ["@openclaw/test"],
-              route: scenario === "subset-route" ? "prepared" : "normal",
-              npmDistTag: scenario === "subset-channel" ? "beta" : "latest",
-              ...(scenario === "subset-windows" ? { windowsNodeTag: "v0.6.3" } : {}),
-            }
-          : undefined,
-        expectedPublicationSelection: scenario.startsWith("subset")
-          ? undefined
-          : (): PublicationSelection => ({
-              ...selection,
-              route: scenario === "selection" ? "prepared" : "normal",
-              ...(scenario === "windows-after-admission"
-                ? {
-                    windowsNodeTag: "v0.6.3",
-                    windowsNodeInstallerDigests: {
-                      "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
-                    },
-                  }
-                : {}),
-            }),
+                    : []
+                  : scenario === "subset-empty"
+                    ? []
+                    : scenario === "subset-outside-roster"
+                      ? ["@openclaw/unknown"]
+                      : scenario === "subset-duplicate"
+                        ? ["@openclaw/test", "@openclaw/test"]
+                        : ["@openclaw/test"],
+                route: scenario.endsWith("-route") ? "prepared" : "normal",
+                npmDistTag: scenario.endsWith("-channel") ? "beta" : "latest",
+                ...(scenario === "subset-windows" ? { windowsNodeTag: "v0.6.3" } : {}),
+              }
+            : undefined,
+        expectedPublicationSelection:
+          scenario.startsWith("subset") || scenario.startsWith("plugins-only")
+            ? undefined
+            : (): PublicationSelection => ({
+                ...selection,
+                route: scenario === "selection" ? "prepared" : "normal",
+                ...(scenario === "windows-after-admission"
+                  ? {
+                      windowsNodeTag: "v0.6.3",
+                      windowsNodeInstallerDigests: {
+                        "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
+                      },
+                    }
+                  : {}),
+              }),
       });
     if (scenario === "windows-after-admission") {
       expect(run).toThrow("windows-node-release.yml");
     } else if (scenario === "receipt-recovery-without-proof") {
       expect(run).toThrow("Receipt recovery requires authenticated original qualification");
-    } else if (scenario === "publish" || scenario === "subset" || scenario === "receipt-recovery") {
+    } else if (
+      scenario === "publish" ||
+      scenario === "subset" ||
+      scenario === "receipt-recovery" ||
+      scenario === "plugins-only"
+    ) {
       expect(run).not.toThrow();
     } else {
       expect(run).toThrow(

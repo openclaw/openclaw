@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
-import { htmlFragment, withControlUiBasePath } from "./markdown.test-support.ts";
+import {
+  htmlFragment,
+  toStreamingMarkdownParts,
+  withControlUiBasePath,
+} from "./markdown.test-support.ts";
 import {
   prewarmSanitizedMarkdown,
   toSanitizedMarkdownContent,
@@ -33,6 +37,25 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(typeof prepared).toBe("object");
     expect(toSanitizedMarkdownContent(source)).toBe(toSanitizedMarkdownHtml(source));
   });
+
+  it.each([5, 6])(
+    "keeps a level-%s heading as its own block in settled and streamed replies",
+    (level) => {
+      const source = `Before.\n\n${"#".repeat(level)} Follow-ups`;
+      for (const html of [
+        toSanitizedMarkdownHtml(source),
+        toStreamingMarkdownParts(source).join(""),
+        toStreamingMarkdownParts(`${source}<br>`).join(""),
+      ]) {
+        expect(
+          [...htmlFragment(html).children].map((node) => [node.tagName, node.textContent]),
+        ).toEqual([
+          ["P", "Before."],
+          [`H${level}`, "Follow-ups"],
+        ]);
+      }
+    },
+  );
 
   it("normalizes Unicode and CR line breaks before rendering", () => {
     const fragment = render("## Unicode\u2028\u2028- alpha\u2029- beta\r- gamma\r\n- delta");

@@ -194,7 +194,8 @@ async function persistRunningSessions(
   }
   for (const process of listRunningSessions()) {
     const sessionKey = process.sessionKey ?? process.scopeKey;
-    if (sessionKey) {
+    // Durable processes survive restart; the registry adopts them and wakes on exit.
+    if (sessionKey && !process.durable) {
       add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
     }
   }

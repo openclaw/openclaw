@@ -57,6 +57,8 @@ const TRUNCATED_SUPPORT_FIELD = "<truncated>";
 export type SupportRedactionContext = {
   env: NodeJS.ProcessEnv;
   stateDir: string;
+  /** Compact diagnostics can require relative paths to stay private too. */
+  redactRelativePaths?: boolean;
   /** Shared only within one export; raw identifiers and their mapping never leave memory. */
   identifierKeys?: Map<string, string>;
   /** Exporters supply schema classification without adding it to shared logging's closure. */
@@ -302,9 +304,6 @@ const WINDOWS_NAMESPACE_MARKER_LENGTH = 4;
 
 function namespaceMarkerLengthBefore(value: string, endIndex: number): number {
   const start = endIndex - WINDOWS_NAMESPACE_MARKER_LENGTH;
-  if (start < 0) {
-    return 0;
-  }
   return WINDOWS_NAMESPACE_MARKER_RE.test(value.slice(start, endIndex))
     ? WINDOWS_NAMESPACE_MARKER_LENGTH
     : 0;
@@ -403,9 +402,11 @@ export function redactSupportDiagnosticLine(
   );
   const redacted = redactSupportString(first, context, { maxLength: Number.MAX_SAFE_INTEGER });
   // Paths may contain spaces and quotes; neither can safely mark the end of private text.
-  // Retain the diagnostic prefix and redact the rest rather than guess.
+  // Relative paths require dropping the prefix too; closed causes survive below.
   const paths = redacted.replace(
-    /["'`]?(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:["'`]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
+    context.redactRelativePaths
+      ? /^.*[\\/].*/u
+      : /["'`]?(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:["'`]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
     "[redacted-path]",
   );
   const commandRedacted = paths.replace(
