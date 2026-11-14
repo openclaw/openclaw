@@ -578,10 +578,7 @@ export async function listProjectedSessions(params: {
               retained,
             }),
           );
-        const selection =
-          params.acceptsSerializedJson && exactKey === undefined
-            ? presentation.select(opts, select)
-            : select();
+        const selection = exactKey === undefined ? presentation.select(opts, select) : select();
         return {
           now,
           presentation,
