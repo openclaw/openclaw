@@ -121,6 +121,7 @@ export async function runCliFallbackCandidate(
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
+    onTerminalEvent: turn.followupRun.run.internalEventExecution?.onTerminalEvent,
     startedAt: cliLifecycleStartedAt,
     getLifecycleGeneration: () => params.lifecycleGeneration,
     resolveTerminationFields: (error) =>

@@ -113,6 +113,7 @@ export async function runEmbeddedFallbackCandidate(
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
+    onTerminalEvent: turn.followupRun.run.internalEventExecution?.onTerminalEvent,
     getLifecycleGeneration: params.getLifecycleGeneration,
     resolveTerminationFields: (error) =>
       resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),

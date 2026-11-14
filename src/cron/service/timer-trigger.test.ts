@@ -85,6 +85,23 @@ describe("resolveTransientCronRetryDecision", () => {
     },
   );
 
+  it.each([
+    { reason: "auth_permanent", consecutiveErrors: 1, expected: "permanent error" },
+    { reason: "server_error", consecutiveErrors: 4, expected: "max retries exhausted" },
+  ] as const)(
+    "does not retry $reason after $consecutiveErrors errors",
+    ({ reason, consecutiveErrors, expected }) => {
+      expect(
+        resolveTransientCronRetryDecision({
+          error: "The AI service is having trouble.",
+          errorClassification: { kind: "reason", reason },
+          executionStarted: true,
+          consecutiveErrors,
+        }),
+      ).toMatchObject({ retryable: false, reason: expected });
+    },
+  );
+
   it("keeps permanent-looking and transient provider classifications distinct", () => {
     const error = "HTTP 429: all available credits have been exhausted";
 

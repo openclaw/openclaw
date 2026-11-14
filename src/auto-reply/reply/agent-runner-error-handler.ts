@@ -77,6 +77,7 @@ export async function handleAgentExecutionError(params: {
       createAgentLifecycleTerminalBackstop({
         runId: params.runId,
         sessionKey: turn.sessionKey,
+        onTerminalEvent: turn.followupRun.run.internalEventExecution?.onTerminalEvent,
         startedAt: params.state.turnStartedAtMs,
         getLifecycleGeneration: () => params.state.lifecycleGeneration,
         resolveTerminationFields: (error) =>
