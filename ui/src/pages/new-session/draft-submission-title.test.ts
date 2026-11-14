@@ -81,12 +81,16 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
   Object.assign(context.gateway.snapshot, { selfUser: { id: "person-a", name: "Person A" } });
   place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
   const { draw, find } = controlQueries(place.modelControl, context, "main", place.selectedAgent());
+  const accountToggle = () =>
+    draw().querySelector<HTMLButtonElement>(".chat-controls__account-trigger");
   const select = async (value: string, label?: string) => {
     await waitForModelControl(place.modelControl, context, "main", place.selectedAgent());
-    if (!find("account-option", value)) {
-      find("account-group-toggle")!.click();
+    await vi.waitFor(() => expect(accountToggle()).not.toBeNull());
+    if (accountToggle()!.getAttribute("aria-expanded") !== "true") {
+      accountToggle()!.click();
       await vi.advanceTimersByTimeAsync(0);
     }
+    await vi.waitFor(() => expect(find("account-option", value)).not.toBeNull());
     if (label) {
       expect(draw().textContent).toContain(label);
     }
