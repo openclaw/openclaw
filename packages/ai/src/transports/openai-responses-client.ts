@@ -72,12 +72,11 @@ import {
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import { RESPONSES_BOOKKEEPING_TIMEOUT_MS } from "./openai-responses-stream-slots-internal.js";
-import { createRecoverableResponsesWebSocketStream } from "./openai-responses-websocket-recovery.js";
 import {
   combineWebSocketTimeoutSignal,
-  createOpenAIResponsesWebSocketStream,
   resolveNativeOpenAIResponsesWebSocketMode,
-} from "./openai-responses-websocket.js";
+} from "./openai-responses-websocket-options.js";
+import { createRecoverableResponsesWebSocketStream } from "./openai-responses-websocket-recovery.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -432,6 +431,11 @@ function createResponsesTransportExecutor(config: {
         if (websocketMode) {
           requestSignal = websocketSignal;
           try {
+            const { createOpenAIResponsesWebSocketStream } =
+              await import("./openai-responses-websocket.js");
+            if (websocketSignal.aborted) {
+              throw transportAbortError(websocketSignal);
+            }
             const websocket = createOpenAIResponsesWebSocketStream({
               client,
               request: params,

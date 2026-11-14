@@ -13,10 +13,7 @@ import {
 } from "../../src/config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../../src/config/sessions/session-accessor.sqlite-participants.native.js";
 import { SessionEntryChangedDuringReadError } from "../../src/config/sessions/session-entry-read-errors.js";
-import {
-  projectionLane,
-  targetDiscoveryLane,
-} from "../../src/config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../src/config/sessions/session-transcript-worker-resources.js";
 import type { InternalSessionEntry as SessionEntry } from "../../src/config/sessions/types.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
@@ -166,16 +163,15 @@ describe("session-share source publication filters", () => {
         );
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const held = [projectionLane, targetDiscoveryLane].map(({ pool }) => {
-          const run = pool.run.bind(pool);
-          return vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
-            const request = typeof input === "function" ? await input() : input;
-            if (request.kind === "session-exact-entries" && request.database.agentId === "other") {
-              entered.resolve();
-              await release.promise;
-            }
-            return run(request, controls);
-          });
+        const { pool } = sessionStoreLane;
+        const run = pool.run.bind(pool);
+        const held = vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+          const request = typeof input === "function" ? await input() : input;
+          if (request.kind === "session-exact-entries" && request.database.agentId === "other") {
+            entered.resolve();
+            await release.promise;
+          }
+          return run(request, controls);
         });
         const pending = fixture.list().then(
           (page) => ({ page }),
@@ -233,9 +229,7 @@ describe("session-share source publication filters", () => {
         } finally {
           release.resolve();
           await pending;
-          for (const spy of held) {
-            spy.mockRestore();
-          }
+          held.mockRestore();
         }
       });
     },
@@ -397,16 +391,15 @@ describe("session-share source publication filters", () => {
       };
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const held = [projectionLane, targetDiscoveryLane].map(({ pool }) => {
-        const run = pool.run.bind(pool);
-        return vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
-          const request = typeof input === "function" ? await input() : input;
-          if (request.kind === "session-exact-entries") {
-            entered.resolve();
-            await release.promise;
-          }
-          return run(request, controls);
-        });
+      const { pool } = sessionStoreLane;
+      const run = pool.run.bind(pool);
+      const held = vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+        const request = typeof input === "function" ? await input() : input;
+        if (request.kind === "session-exact-entries") {
+          entered.resolve();
+          await release.promise;
+        }
+        return run(request, controls);
       });
       const pending = runtime.agent.session.withSessionEntriesAsync(params, (entries) =>
         entries.map((entry) => entry.sessionKey),
@@ -428,9 +421,7 @@ describe("session-share source publication filters", () => {
       } finally {
         release.resolve();
         await pending.catch(() => {});
-        for (const spy of held) {
-          spy.mockRestore();
-        }
+        held.mockRestore();
       }
     });
   });
@@ -499,16 +490,15 @@ describe("session-share source publication filters", () => {
       });
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const held = [projectionLane, targetDiscoveryLane].map(({ pool }) => {
-        const run = pool.run.bind(pool);
-        return vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
-          const request = typeof input === "function" ? await input() : input;
-          if (request.kind === "session-exact-entries") {
-            entered.resolve();
-            await release.promise;
-          }
-          return run(request, controls);
-        });
+      const { pool } = sessionStoreLane;
+      const run = pool.run.bind(pool);
+      const held = vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+        const request = typeof input === "function" ? await input() : input;
+        if (request.kind === "session-exact-entries") {
+          entered.resolve();
+          await release.promise;
+        }
+        return run(request, controls);
       });
       const pending = fixture.runtime.agent.session.withSessionEntriesAsync(
         {
@@ -568,9 +558,7 @@ describe("session-share source publication filters", () => {
       } finally {
         release.resolve();
         await pending.catch(() => {});
-        for (const spy of held) {
-          spy.mockRestore();
-        }
+        held.mockRestore();
       }
     });
   });

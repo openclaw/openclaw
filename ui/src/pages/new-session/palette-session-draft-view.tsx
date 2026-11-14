@@ -1,4 +1,5 @@
 import { createMemo, Show } from "solid-js";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
 import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
@@ -40,7 +41,9 @@ export function PaletteSessionModel(props: DraftProps) {
   );
 }
 
-export function PaletteSessionAttachments(props: DraftProps) {
+export function PaletteSessionAttachments(
+  props: DraftProps & { onOpenImage: (item: ImageLightboxItem) => void },
+) {
   const preview = createMemo(() => {
     void props.revision;
     const attachments = props.draft.attachmentProps();
@@ -60,7 +63,11 @@ export function PaletteSessionAttachments(props: DraftProps) {
           props.draft.removeComment(event.detail)
         }
       >
-        <AttachmentPreview {...preview()!} readRevision={props.revision} />
+        <AttachmentPreview
+          {...preview()!}
+          readRevision={props.revision}
+          onOpenImage={props.onOpenImage}
+        />
       </div>
     </Show>
   );

@@ -12,7 +12,7 @@ import { loadSessionEntryReadOnly } from "./session-accessor.sqlite-entry.js";
 import { sessionTests } from "./session-entry-fixture.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionEntry } from "./types.js";
 
@@ -72,7 +72,7 @@ test("preserves archive cursor ties, page limits, and protected rows across work
         cursor: { archivedAt: 10, sessionKey: "agent:main:recent" },
       });
     },
-    maintenanceLane,
+    sessionStoreLane,
   );
 });
 

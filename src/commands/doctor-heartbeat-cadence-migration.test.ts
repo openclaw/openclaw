@@ -22,10 +22,8 @@ import {
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../cron/store/run-history.kernel.js";
-import {
-  loadCronRuntimeAuthorities,
-  replaceCronRuntimeAuthorityRows,
-} from "../cron/store/runtime-authority-store.js";
+import { loadCronRuntimeAuthorities } from "../cron/store/runtime-authority-store.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import type { CronStoredJob } from "../cron/types.js";
 import {

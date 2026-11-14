@@ -60,8 +60,10 @@ const controlUiPerformanceBudgets = {
   newBootCssRequests: 3,
   // Coordinator-accepted shipped feature cost after paydown #199196.
   // Measured on main 5328b275: exact route totals, with no added headroom.
-  chatBootJsGzipBytes: 1_310_659,
-  newBootJsGzipBytes: 814_328,
+  // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
+  chatBootJsGzipBytes: 1_310_894,
+  // The same shared lazy signer adds the coordinator-accepted +235 B here.
+  newBootJsGzipBytes: 814_563,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).

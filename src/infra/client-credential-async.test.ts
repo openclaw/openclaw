@@ -330,6 +330,7 @@ it("retires the idle credential worker under pressure and preserves identity aft
 }) => {
   await drainGlobalSingletonLifecycleState();
   const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const entry = String(resolveRuntimeProcessEntrypointUrl("clientCredentials"));
   const observedWorkers = () =>
     created.mock.calls.flatMap(([url], index) => {
@@ -352,6 +353,7 @@ it("retires the idle credential worker under pressure and preserves identity aft
       throw new Error("Expected the real credential worker");
     }
     const exited = once(worker, "exit");
+    clock.mockReturnValue(1_000);
     channel("openclaw.memory.critical").publish(undefined);
     await withinTest(exited, signal);
     expect(worker.threadId).toBe(-1);
@@ -363,6 +365,7 @@ it("retires the idle credential worker under pressure and preserves identity aft
     expect(observedWorkers()[1]).not.toBe(worker);
   } finally {
     await drainGlobalSingletonLifecycleState();
+    clock.mockRestore();
     created.mockRestore();
   }
 });

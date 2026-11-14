@@ -1328,7 +1328,6 @@
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../provider-stream.js","76a2d4bdca673b2c5637e7eac2972103485d49882da662625675e75fc5b21c17",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../runtime-plan/build.js","e3839074811afc13b116d3944ed1fb2c286cd879fd7858f0f335a1eec59a5b14",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../session-tool-result-guard-wrapper.js","63e777bf095237246676b5ba7117af8535304b4adef4e1b6be3871faf8aec3e8",1]
-["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../sessions/index.js","67f939860911ddcb36d0497e6635c223fc3a85a342a9634489e825ee2bf1495c",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../sessions/model-registry-runtime.js","b810a7248cf5b01c184f8c309faa99397ed0a030e23b3a32158950121a4a47de",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../sessions/resource-loader.js","e68d7a70e50f9b35d4088df4bde251260040002e55a07e9035ae3e66b9148b18",1]
 ["src/agents/embedded-agent-runner/compact.hooks.harness.ts","../transcript-policy.js","4a81085e9f062fa04e20403ccccccfc45c84e4281f892e1b6f90963314dc534d",1]

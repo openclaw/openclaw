@@ -283,8 +283,8 @@ export async function createUpdateDatabaseBackupInProcess(
       return {};
     }
   };
-  const { readBackupEngine, readBackupEngineImage } =
-    await import("./database-engine/physical-store.js");
+  const { readBackupEngine } = await import("./database-engine/physical-store.js");
+  const { readBackupEngineImage } = await import("./database-engine/physical-store-inspection.js");
   const requestedOriginalSources = new Set(input.originalCaptureSourcePaths);
   const preserveSourceArtifacts = input.stopped || input.preserveSourceArtifacts;
   const stoppedSources = new Set(
