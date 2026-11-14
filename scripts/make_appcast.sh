@@ -2,8 +2,36 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-ZIP=${1:?"Usage: $0 OpenClaw-<ver>.zip"}
-FEED_URL=${2:-"https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"}
+ZIP=${1:?"Usage: $0 OpenClaw-<ver>.zip [feed-url] [--delta-from previous.zip --output-dir new-directory]"}
+shift
+FEED_URL="https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"
+if [[ $# -gt 0 && "$1" != --* ]]; then
+  FEED_URL=${1:-$FEED_URL}
+  shift
+fi
+DELTA_FROM=""
+OUTPUT_DIR=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --delta-from|--output-dir)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "Missing value for $1" >&2
+        exit 1
+      fi
+      if [[ "$1" == --delta-from ]]; then DELTA_FROM=$2; else OUTPUT_DIR=$2; fi
+      shift 2
+      ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+if [[ -n "$DELTA_FROM" && -z "$OUTPUT_DIR" ]]; then
+  echo "--delta-from requires --output-dir; experimental feeds must not replace appcast.xml." >&2
+  exit 1
+fi
+if [[ -n "$OUTPUT_DIR" && -e "$OUTPUT_DIR" ]]; then
+  echo "Output directory already exists: $OUTPUT_DIR" >&2
+  exit 1
+fi
 PRIVATE_KEY_FILE=${SPARKLE_PRIVATE_KEY_FILE:-}
 
 find_generate_appcast() {
@@ -83,7 +111,16 @@ cleanup() {
 }
 trap cleanup EXIT
 cp -f "$ZIP" "$TMP_DIR/$ZIP_NAME"
-if [[ -f "$ROOT/appcast.xml" ]]; then
+if [[ -n "$DELTA_FROM" ]]; then
+  if [[ ! -f "$DELTA_FROM" || "$(basename "$DELTA_FROM")" == "$ZIP_NAME" ]]; then
+    echo "--delta-from must name an existing previous archive with a different filename." >&2
+    exit 1
+  fi
+  cp -f "$DELTA_FROM" "$TMP_DIR/$(basename "$DELTA_FROM")"
+  APPCAST_ARGS+=(--maximum-deltas 1 --maximum-versions 1)
+fi
+# Experimental output starts a separate feed; production history remains untouched.
+if [[ -z "$OUTPUT_DIR" && -f "$ROOT/appcast.xml" ]]; then
   cp -f "$ROOT/appcast.xml" "$TMP_DIR/appcast.xml"
 fi
 
@@ -113,23 +150,69 @@ fi
   "${APPCAST_ARGS[@]}" \
   "$TMP_DIR"
 
-APPCAST_PATH="$TMP_DIR/appcast.xml" APPCAST_VERSION="$VERSION" node <<'NODE'
-const { readFileSync } = require("node:fs");
+APPCAST_PATH="$TMP_DIR/appcast.xml" APPCAST_VERSION="$VERSION" \
+APPCAST_OUTPUT_DIR="$OUTPUT_DIR" APPCAST_ZIP="$ZIP" APPCAST_NOTES="$NOTES_HTML" \
+APPCAST_DOWNLOAD_PREFIX="$DOWNLOAD_URL_PREFIX" node <<'NODE'
+const { copyFileSync, mkdirSync, readFileSync, statSync } = require("node:fs");
+const path = require("node:path");
 
 const appcastPath = process.env.APPCAST_PATH;
 const version = process.env.APPCAST_VERSION;
 const appcast = readFileSync(appcastPath, "utf8");
-const item = [...appcast.matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gu)].find((match) =>
-  match[1]?.includes(`<sparkle:shortVersionString>${version}</sparkle:shortVersionString>`),
+const items = [...appcast.matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gu)];
+const item = items.find((match) =>
+  match[1]?.includes("<sparkle:shortVersionString>" + version + "</sparkle:shortVersionString>"),
 );
 if (!item) {
-  throw new Error(`Generated appcast is missing release ${version}.`);
+  throw new Error("Generated appcast is missing release " + version);
 }
-if (!/sparkle:edSignature="[^"]+"/u.test(item[1] ?? "")) {
-  throw new Error(`Generated appcast release ${version} is missing sparkle:edSignature.`);
+const deltaBlock = item[1].match(/<sparkle:deltas(?:\s[^>]*)?>([\s\S]*?)<\/sparkle:deltas>/u);
+const fullBody = item[1].replace(deltaBlock?.[0] ?? "", "");
+const full = fullBody.match(/<enclosure\b[^>]*>/u)?.[0];
+const attribute = (tag, name) => tag?.match(new RegExp(name + '="([^"]*)"', "u"))?.[1];
+if (!attribute(full, "sparkle:edSignature")) {
+  throw new Error("Generated appcast release " + version + " is missing sparkle:edSignature on its full download.");
+}
+
+const output = process.env.APPCAST_OUTPUT_DIR;
+if (output) {
+  // Only the selected release's assets are exported. A mixed-branch input needs separate feeds.
+  if (items.length !== 1) {
+    throw new Error("Experimental output requires one release; use matching architecture/channel/OS baselines.");
+  }
+  const prefix = process.env.APPCAST_DOWNLOAD_PREFIX;
+  const validate = (tag, file) => {
+    if (!attribute(tag, "sparkle:edSignature") ||
+        attribute(tag, "url") !== prefix + path.basename(file) ||
+        Number(attribute(tag, "length")) !== statSync(file).size) {
+      throw new Error("Generated enclosure does not match signed artifact " + path.basename(file));
+    }
+    return file;
+  };
+  const files = [validate(full, process.env.APPCAST_ZIP)];
+  const deltas = [...(deltaBlock?.[1] ?? "").matchAll(/<enclosure\b[^>]*>/gu)];
+  if (deltas.length > 1) throw new Error("Experimental output supports one baseline delta");
+  for (const [tag] of deltas) {
+    const url = attribute(tag, "url");
+    const name = url?.slice(prefix.length);
+    if (!url?.startsWith(prefix) || !name || path.basename(name) !== name || !name.endsWith(".delta") ||
+        !attribute(tag, "sparkle:deltaFrom")) {
+      throw new Error("Invalid generated delta enclosure");
+    }
+    files.push(validate(tag, path.join(path.dirname(appcastPath), name)));
+  }
+  mkdirSync(output);
+  for (const file of files) copyFileSync(file, path.join(output, path.basename(file)));
+  copyFileSync(process.env.APPCAST_NOTES, path.join(output, path.basename(process.env.APPCAST_NOTES)));
+  // Copy the feed last: an incomplete export must not advertise unavailable artifacts.
+  copyFileSync(appcastPath, path.join(output, "appcast.xml"));
+  console.log("Isolated appcast exported: " + deltas.length + " delta(s), full download retained.");
 }
 NODE
 
-cp -f "$TMP_DIR/appcast.xml" "$ROOT/appcast.xml"
-
-echo "Appcast generated (appcast.xml). Upload alongside $ZIP at $FEED_URL"
+if [[ -z "$OUTPUT_DIR" ]]; then
+  cp -f "$TMP_DIR/appcast.xml" "$ROOT/appcast.xml"
+  echo "Appcast generated (appcast.xml). Upload alongside $ZIP at $FEED_URL"
+else
+  echo "Experimental artifacts exported to $OUTPUT_DIR; nothing uploaded or changed in the production feed."
+fi
