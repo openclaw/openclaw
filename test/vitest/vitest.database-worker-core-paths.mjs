@@ -561,6 +561,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/flows/doctor-gateway-token-repair.test.ts",
   "src/plugins/provider-auth-persistence.test.ts",
   "src/system-agent/config-write-validation.test.ts",
+  "src/system-agent/config-application-reloader.test.ts",
+  "src/system-agent/operations.config-application.integration.test.ts",
   "src/system-agent/inference-route-runtime.test.ts",
   "src/wizard/setup.gateway-config.test.ts",
   "src/state/openclaw-state-lease-async.test.ts",

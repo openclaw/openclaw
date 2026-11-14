@@ -1,5 +1,6 @@
 import { listAgentRoles } from "../agents/agent-roles.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
+import type { RuntimeConfigWriteApplicationStatus } from "../config/runtime-write-application.js";
 import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
@@ -18,7 +19,9 @@ import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 export type { SystemAgentOperation };
 
 export type SystemAgentOperationResult = {
+  /** The persistent operation committed; runtime activation is reported separately. */
   applied: boolean;
+  runtimeApplication?: RuntimeConfigWriteApplicationStatus;
   /** Creation created or preserved BOOTSTRAP.md for the agent's first turn. */
   bootstrapPending?: boolean;
   /** Agent created by this operation, when applicable. */

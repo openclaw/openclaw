@@ -154,6 +154,7 @@ export async function runConfigSet(opts: {
   /** Embedded recovery needs the writer's typed postcommit/rollback outcome. */
   throwOnError?: boolean;
   localStateOwner?: ConfigMutationOwner;
+  onRuntimeApplication?: ConfigOperationParams["onRuntimeApplication"];
 }) {
   return runConfigMutation(
     opts,
@@ -169,6 +170,7 @@ export async function runConfigSet(opts: {
       return {
         operations,
         successMode: "set",
+        ...(opts.onRuntimeApplication ? { onRuntimeApplication: opts.onRuntimeApplication } : {}),
         ...(currentExpectation ? { currentExpectation } : {}),
         ...(opts.beforePersistentApply
           ? { beforePersistentApply: opts.beforePersistentApply }
