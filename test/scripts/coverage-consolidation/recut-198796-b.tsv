@@ -19,6 +19,6 @@ rank	removed_lines	file	keeper_files	reason
 822	924	src/gateway/server-methods/projects.test.ts	src/projects/project-registry.test.ts;src/gateway/server-methods/projects-recents.test.ts;ui/src/e2e/new-session-page.github-projects.e2e.test.ts	Approved file-level area consolidation; retained keepers exist on frozen main and final approved tip.
 824	924	test/plugins/deep-research-routing.gateway.test.ts	ui/src/e2e/deep-research-plugin.e2e.test.ts	Approved file-level area consolidation; retained keepers exist on frozen main and final approved tip.
 825	924	ui/src/pages/chat/components/widget-card.test.tsx	ui/src/e2e/chat-widget-sandbox.e2e.test.ts;ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts	Approved file-level area consolidation; retained keepers exist on frozen main and final approved tip.
-# original_accounting	A43+B17 cuts; four explicit retains736,747,778,815 recorded in partA. All64 original cuts accounted.
+# current_accounting	64 candidates: partA40removed/7retained; partB15removed/2retained; total55removed/9retained. Original allocation: partA43plannedcuts+4explicitretains; partB17plannedcuts.
 # fixture_closure	Database include uses plugin-state-store.runtime; three-config selection uses unit-src audit-config. Existing assertions unchanged.
 # negative_reference	ci-changed-node-test-plan.integration.test.ts intentionally asserts execution-decision-facts is not selected; no file required.
