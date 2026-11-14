@@ -147,6 +147,8 @@ it.each<[string, Plan, RouteOptions, object]>([
       reason: "configured-auth",
       source: { profileId: "openai:wrong-route" },
       route: { authRequirement: "api-key" },
+      message:
+        "Configured openai authentication has no compatible credential source for the selected model route. Selected model route requires api-key authentication (openai-responses); configured profiles support subscription authentication. Select a model route compatible with the configured account, or select a compatible account.",
     },
   ],
 ])("%s", (_name, plan, options, expected) => {
@@ -201,6 +203,25 @@ it.each([
     reason: "explicit-order",
   });
 });
+
+it.each([
+  ["token-sharing on a subscription route", shared, 1, true],
+  ["unavailable token-sharing on its API route", { ...shared, readiness: "unavailable" }, 0, false],
+  ["identity-only OAuth on Platform", { ...subscription, authRequirement: null }, 0, true],
+  ["identity-only OAuth on subscription", { ...subscription, authRequirement: null }, 1, true],
+] as const)(
+  "classifies auth compatibility from the profile contract: %s",
+  (_name, source, route, incompatible) => {
+    const decision = selectRoute({ profiles: [source] }, { resolution: singleRoute(route) });
+    expect(decision.kind).toBe("rejected");
+    expect(decision.kind === "rejected" && decision.authModeIncompatible === true).toBe(
+      incompatible,
+    );
+    if (source.authRequirement === null && decision.kind === "rejected") {
+      expect(decision.message).not.toContain("profiles support subscription");
+    }
+  },
+);
 
 it.each<[string, RouteOptions, object]>([
   [
