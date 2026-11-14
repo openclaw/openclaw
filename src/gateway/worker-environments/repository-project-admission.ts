@@ -13,6 +13,10 @@ import {
   prepareGitHubReadIdentity,
 } from "../../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { retryAsync } from "../../infra/retry.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
@@ -30,6 +34,8 @@ const GitObject = /^[a-f0-9]{40}$/u;
 // Commit lookup requests one changed file; trees are nonrecursive and inspect
 // only the root and recipe directories. Oversized/truncated metadata is not absence.
 const METADATA_MAX_BYTES = 1024 * 1024;
+const METADATA_READ_RETRY = { attempts: 3, minDelayMs: 500, maxDelayMs: 2_000, jitter: 0.2 };
+const log = createSubsystemLogger("worker-environments");
 // Bind object resolution to the immutable repository, never its reusable name.
 const PINNED_REPOSITORY_QUERY = `query PinnedRepository($repositoryId: ID!, $commit: GitObjectID!) {
   node(id: $repositoryId) {
@@ -68,6 +74,15 @@ function objectSha(value: unknown): string {
     throw new Error("GitHub returned invalid repository object metadata; retry preparation.");
   }
   return value.sha;
+}
+
+// Quota errors keep their own cooldown; a retry there would only replay the cached failure.
+function isTransientGitHubReadError(error: unknown): boolean {
+  return (
+    error instanceof gitHubPublicApi.ControlUiGitHubError &&
+    error.retryable &&
+    error.statusCode !== 429
+  );
 }
 
 function sourceChanged(): never {
@@ -165,43 +180,58 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     identity.assertSelected();
   };
   const endpoint = `${gitHubPublicApi.GITHUB_API_BASE_URL}/repos${repositoryPath}`;
-  const read = async (
+  // A GitHub blip must not discard a provisioned machine, but these reads prove current
+  // access: each attempt rechecks its owner, and exhausted attempts still fail closed.
+  const read = (
     suffix: string,
     readIdentity: typeof identity,
     assertOwner: () => void,
     signal?: AbortSignal,
     graphql?: { query: string; variables: Record<string, string> },
-  ): Promise<unknown> => {
-    assertOwner();
-    const response = await gitHubPublicApi.fetchGitHubApi(
-      graphql ? gitHubPublicApi.GITHUB_GRAPHQL_URL : endpoint + suffix,
-      fetch,
-      readIdentity.token,
-      async () => sourceChanged(),
-      readIdentity,
-      undefined,
-      signal,
-      graphql,
+  ): Promise<unknown> =>
+    retryAsync(
+      async () => {
+        assertOwner();
+        const response = await gitHubPublicApi.fetchGitHubApi(
+          graphql ? gitHubPublicApi.GITHUB_GRAPHQL_URL : endpoint + suffix,
+          fetch,
+          readIdentity.token,
+          async () => sourceChanged(),
+          readIdentity,
+          undefined,
+          signal,
+          graphql,
+        );
+        let value: unknown;
+        try {
+          assertOwner();
+          value =
+            graphql && readIdentity.token
+              ? await gitHubPublicApi.readGitHubGraphQLResponse(
+                  response,
+                  fetch,
+                  readIdentity.token,
+                  METADATA_MAX_BYTES,
+                )
+              : await gitHubPublicApi.readGitHubJsonResponse(response, METADATA_MAX_BYTES);
+        } finally {
+          await gitHubPublicApi.discardResponse(response);
+        }
+        await readIdentity.revalidate();
+        assertOwner();
+        return value;
+      },
+      {
+        ...METADATA_READ_RETRY,
+        shouldRetry: (error) => !signal?.aborted && isTransientGitHubReadError(error),
+        onRetry: ({ attempt, maxAttempts, delayMs, err }) => {
+          log.warn(
+            `GitHub repository read failed (${formatErrorMessage(err)}); retry ${attempt}/${maxAttempts - 1} in ${delayMs}ms`,
+          );
+        },
+        sleep: (delayMs) => sleepWithAbort(delayMs, signal),
+      },
     );
-    let value: unknown;
-    try {
-      assertOwner();
-      value =
-        graphql && readIdentity.token
-          ? await gitHubPublicApi.readGitHubGraphQLResponse(
-              response,
-              fetch,
-              readIdentity.token,
-              METADATA_MAX_BYTES,
-            )
-          : await gitHubPublicApi.readGitHubJsonResponse(response, METADATA_MAX_BYTES);
-    } finally {
-      await gitHubPublicApi.discardResponse(response);
-    }
-    await readIdentity.revalidate();
-    assertOwner();
-    return value;
-  };
   const repositoryMetadata = (value: unknown, readIdentity: typeof identity) => {
     if (
       !isRecord(value) ||
