@@ -538,19 +538,29 @@ it("observes future deadlines without SQL wakes and retries an unacknowledged du
   expect(jobIds(scheduler.tick(deadline + minute, 11 * minute).accepted)).toEqual(["future"]);
 });
 
-it("looks again within a minute while a run waits for a run slot", async () => {
+it.each([
+  ["looks again within a minute", true, 1],
+  ["does not look again before the next due job without dynamic concurrency", false, 0],
+])("%s while a run waits for a run slot", async (_name, dynamicConcurrency, lookups) => {
   const hour = 60 * minute;
   const busy = ids("busy", DEFAULT_CRON_MAX_CONCURRENT_RUNS + 1).map((id) =>
     job(id, now - minute, { schedule: { kind: "every", everyMs: hour, anchorMs: now - minute } }),
   );
-  const scheduler = storedScheduler("queued-run-wake", [...busy, job("idle", now + 10 * hour)]);
+  const scheduler = storedScheduler(`queued-run-wake-${dynamicConcurrency}`, [
+    ...busy,
+    job("idle", now + 10 * hour),
+  ]);
   using wakes = observeWakes(scheduler.channelName);
-  const started = scheduler.start(now, immediate(busy.length));
+  const { snapshot: base } = immediate(busy.length);
+  const started = scheduler.start(now, {
+    snapshot: { ...base, config: { ...base.config, cronConfig: { dynamicConcurrency } } },
+  });
   expect(started.launches).toHaveLength(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
-  // The next due job is ten hours away; the queued run is looked at again after a minute.
+  // The next due job is ten hours away; with dynamic concurrency the queued run is looked at
+  // again after a minute, since a conversation turn ending can free a slot.
   expect(started.nextWakeAtMs).toBe(now + 10 * hour);
   await vi.advanceTimersByTimeAsync(minute);
-  expect(wakes.posted).toHaveBeenCalledTimes(1);
+  expect(wakes.posted).toHaveBeenCalledTimes(lookups);
 });
 
 it.each([
