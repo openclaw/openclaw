@@ -129,9 +129,19 @@ export function registerSettledFinalizationTests(_fixtures: SettledFinalizationF
         "unexpected status 502 Bad Gateway: Codex parent-local inference transport failed; retry on a fresh connection., url: http://127.0.0.1:12345/synthetic-route/responses",
       freshConnection: true,
     },
+    {
+      message:
+        "unexpected status 502 Bad Gateway: Codex parent-local inference transport failed; retry on a fresh connection., url: ws://127.0.0.1:12345/synthetic-route/responses",
+      freshConnection: true,
+    },
+    {
+      message:
+        "unexpected status 502 Bad Gateway: Codex parent-local inference transport failed; retry on a fresh connection., url: ws://example.test:12345/synthetic-route/responses",
+      freshConnection: false,
+    },
     { message: "unexpected status 502 Bad Gateway: Unknown error", freshConnection: false },
   ])(
-    "preserves completed work after transport failure (fresh connection: $freshConnection)",
+    "preserves completed work after transport failure ($message)",
     async ({ message, freshConnection }) => {
       const { params, sessionFile, workspaceDir } = await settledParams(
         "transport-recovery",
@@ -209,6 +219,25 @@ export function registerSettledFinalizationTests(_fixtures: SettledFinalizationF
       }
     },
   );
+  it("keeps a successful WebSocket fallback warning visible without retiring its connection", async () => {
+    const { params } = await settledParams("successful-fallback", "Finish after fallback.");
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
+    const harness = createStartedThreadHarness(undefined, { persistedThreads: ["thread-1"] });
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    const message =
+      "Falling back from WebSockets to HTTPS transport. unexpected status 502 Bad Gateway: Codex parent-local inference transport failed; retry on a fresh connection., url: ws://127.0.0.1:12345/synthetic-route/responses";
+    await harness.notify({ method: "warning", params: { threadId: "thread-1", message } });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    expect((await run).terminal).toEqual({ kind: "ok" });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "notice",
+      data: { phase: "warning", message },
+    });
+    expect(getCurrentSharedClientEntry(harness.client)).toBeDefined();
+    expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+  });
   it("preserves settled finalization eligibility after provider overload", async () => {
     const failure = {
       message: "Selected model is at capacity. Please try a different model.",
