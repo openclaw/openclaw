@@ -8,6 +8,7 @@ import {
 } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
+  isCommunityClawHubInstallRecord,
   isThirdPartyNpmInstallRecord,
   isTrustedOfficialPluginInstallRecord,
 } from "./official-external-install-records.js";
@@ -119,6 +120,8 @@ export function resolvePluginTrust(params: {
     reason = "provenance-missing";
   } else if (isThirdPartyNpmInstallRecord(installOwner, params.candidate.packageName, record)) {
     reason = "third-party-npm";
+  } else if (isCommunityClawHubInstallRecord(installOwner, params.candidate.packageName, record)) {
+    reason = "community-clawhub";
   } else {
     reason = "provenance-invalid";
   }
