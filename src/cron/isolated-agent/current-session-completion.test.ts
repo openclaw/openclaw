@@ -58,6 +58,30 @@ it.each(["literal-text", "prepared-media"] as const)(
     }),
 );
 
+it.each(["current", "isolated"] as const)(
+  "does not report a native-only %s result delivered to WebChat without a conversation entry",
+  (sessionTarget) =>
+    withCompletionFixture(async (fixture) => {
+      fixture.params.deliveryPayloads = [
+        { channelData: { discord: { embeds: [{ title: "Report" }] } } },
+      ];
+      const result = await dispatchCronDelivery(fixture.params);
+      expect(result).toMatchObject({
+        delivered: false,
+        deliveryState: { status: "not-delivered" },
+        deliveryError: "cron delivery payload has no visible conversation content",
+        disposition: { kind: "error", errorKind: "delivery-target" },
+        diagnostics: {
+          entries: expect.arrayContaining([
+            expect.objectContaining({ message: "native-only payload not added to conversation" }),
+          ]),
+        },
+      });
+      expect(await fixture.messages()).toEqual([]);
+      expect(fixture.updates()).toBe(0);
+    }, sessionTarget),
+);
+
 it("does not write a report into the creator when explicit account intent is unresolved", () =>
   withCompletionFixture(async (fixture) => {
     const { params } = fixture;

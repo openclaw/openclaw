@@ -478,6 +478,10 @@ export async function dispatchCronDelivery(
         conversationError = committed.reason;
       } else {
         diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
+        if (committed.skipped) {
+          // With no external route, only a visible conversation commit proves delivery.
+          conversationError = "cron delivery payload has no visible conversation content";
+        }
       }
     } catch (error) {
       conversationError = formatErrorMessage(error);
