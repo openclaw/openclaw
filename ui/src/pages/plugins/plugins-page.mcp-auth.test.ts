@@ -98,7 +98,7 @@ it("starts the server's existing OAuth flow and waits for authoritative status a
       return { done: true, status: "done" };
     },
   });
-  // Until the account is connected, sign-in takes the hero's primary action slot.
+  // Until a saved sign-in is reported, sign-in takes the hero's primary action slot.
   expect(heroSignIn(page)?.textContent?.trim()).toBe("Sign in");
   expect(heroSignIn(page)?.getAttribute("aria-label")).toBe("Sign in to workboard-mcp");
   expect(accountButton(page)?.textContent?.trim()).toBe("Sign in");
@@ -113,7 +113,7 @@ it("starts the server's existing OAuth flow and waits for authoritative status a
   refreshed.resolve(inspectionWithAuth("authorized"));
   await waitForSolid(() => expect(accountButton(page)).toBeNull());
   expect(heroSignIn(page)).toBeNull();
-  expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Connected");
+  expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Sign-in saved");
   expect(signOutButton(page)?.textContent?.trim()).toBe("Sign out");
 });
 
@@ -134,7 +134,7 @@ it("signs out after confirmation and shows the account as signed out again", asy
     title: "Sign out of Workboard?",
     danger: true,
   });
-  // The account stays connected until the operator confirms.
+  // The saved sign-in stays available until the operator confirms.
   expect(calls("mcp.authLogout")).toHaveLength(0);
   confirmation.resolve(true);
   await waitForCall("mcp.authLogout");

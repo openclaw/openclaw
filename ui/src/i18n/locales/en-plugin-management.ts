@@ -364,7 +364,7 @@ const enPluginManagement = {
       accounts: "Accounts",
       credentials: "Credentials",
       edit: "Edit",
-      connected: "Connected",
+      connected: "Sign-in saved",
       configured: "Configured",
       editCredential: "Edit {name}",
       connectAccount: "Sign in to {name}",
