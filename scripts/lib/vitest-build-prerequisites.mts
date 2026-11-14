@@ -245,7 +245,6 @@ const runtimeConsumers = [
   // Native Codex transcript evidence runs in the packaged history Worker.
   ...[
     "extensions/codex/src/app-server/event-projector.verbose-hooks.test.ts",
-    "extensions/codex/src/app-server/session-history.test.ts",
     "extensions/codex/src/app-server/settled-turn-finalizer.native.test.ts",
     "extensions/codex/src/app-server/transcript-mirror.admission.test.ts",
     "extensions/codex/src/app-server/transcript-mirror.test.ts",

@@ -636,7 +636,6 @@ describe("CI changed Node test plan", () => {
         "test/scripts/pr-merge-prior-ci.test.ts",
         "test/scripts/pr-merge-receipt.test.ts",
         "test/scripts/pr-merge-recovery.test.ts",
-        "test/scripts/pr-merge-rest.test.ts",
         "test/scripts/pr-worktree-interruption.test.ts",
         "test/scripts/pr-worktree-provision.test.ts",
       ];
