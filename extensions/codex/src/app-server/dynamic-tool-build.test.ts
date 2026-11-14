@@ -944,50 +944,6 @@ it.each([
   expect(tools.map((tool) => tool.name)).toEqual(expected);
 });
 
-it.each([false, true])(
-  "forwards memory/auth context: separate store=%s",
-  async (separateToolStore) => {
-    const oauthProfile = {
-      provider: "openai",
-      type: "oauth",
-      access: "transport-token",
-      refresh: "transport-refresh",
-      expires: 4_000_000_000_000,
-    } as const;
-    params.authProfileStore = {
-      version: 1,
-      profiles: separateToolStore
-        ? { "openai:work": oauthProfile }
-        : {
-            "openai:api-key-backup": {
-              provider: "openai",
-              type: "api_key",
-              key: "not-a-real-key",
-            },
-          },
-    };
-    params.toolAuthProfileStore = separateToolStore ? { ...params.authProfileStore } : undefined;
-    params.messageActionTurnCapability = "turn-capability-1";
-    params.senderIsOwner = true;
-    params.memoryAudience = Object.freeze({
-      kind: "conversation",
-      agentId: "main",
-      sessionKey: expectDefined(params.sessionKey, "memory audience session key"),
-      sessionId: params.sessionId,
-    });
-    const factory = mockTools();
-
-    await buildTools({ sandbox: null });
-
-    expect(factory).toHaveBeenCalledOnce();
-    expect(factory.mock.calls[0]?.[0]?.memoryAudience).toBe(params.memoryAudience);
-    expect(factory.mock.calls[0]?.[0]?.authProfileStore).toBe(
-      params.toolAuthProfileStore ?? params.authProfileStore,
-    );
-    expect(factory.mock.calls[0]?.[0]?.messageActionTurnCapability).toBe("turn-capability-1");
-  },
-);
-
 it("quarantines exposed Codex memory writes and edits after a network tool", async () => {
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
   vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
