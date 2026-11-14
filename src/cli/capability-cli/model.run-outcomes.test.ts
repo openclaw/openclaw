@@ -4,7 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
+import { makeZeroUsageSnapshot, type NormalizedUsage, type UsageLike } from "../../agents/usage.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerCapabilityCli } from "../capability-cli.js";
 import { registerModelCapabilityCommands } from "./model.js";
@@ -252,7 +252,12 @@ it.each<[string, string, string, string | undefined, string | undefined]>([
 for (const transport of ["local", "gateway"] as const) {
   it.each<[string, UsageLike | undefined, NormalizedUsage | undefined]>([
     ["absent", undefined, undefined],
-    ["adapter-default zeros", { input: 0, output: 0, total: 0, cost: { total: 0 } }, undefined],
+    ["adapter-default zeros", makeZeroUsageSnapshot(), undefined],
+    [
+      "recorded cost zero",
+      { input: 0, output: 0, total: 0, cost: { total: 0 } },
+      { input: 0, output: 0, total: 0, cost: { total: 0 } },
+    ],
     [
       "reported",
       {

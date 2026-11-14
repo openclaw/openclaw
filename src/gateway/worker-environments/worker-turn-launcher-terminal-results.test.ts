@@ -738,7 +738,14 @@ describe("worker turn launcher terminal results", () => {
     expect(worker.destroy).not.toHaveBeenCalled();
   });
 
-  it.each(fx.workerTurnTerminalReplyCases)(
+  it.each(
+    fx.workerTurnTerminalReplyCases.flatMap((testCase) => [
+      { ...testCase, unpricedLastCall: false },
+      ...(testCase.costs
+        ? [{ ...testCase, name: "unpriced final call after a priced call", unpricedLastCall: true }]
+        : []),
+    ]),
+  )(
     "reports canonical usage, prompt tools, and $name",
     async ({
       content,
@@ -746,6 +753,7 @@ describe("worker turn launcher terminal results", () => {
       rawText,
       terminalReply = { disposition: "empty" },
       costs = { first: 0, last: 0, total: 0 },
+      unpricedLastCall,
     }) => {
       await fx.seedActivePlacement();
       const environments = environmentForTunnel({
@@ -790,7 +798,9 @@ describe("worker turn launcher terminal results", () => {
                       totalTokens: 270,
                     },
                     totalTokens: 270,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.last },
+                    cost: unpricedLastCall
+                      ? {}
+                      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.last },
                   },
                 }),
               );
@@ -831,14 +841,17 @@ describe("worker turn launcher terminal results", () => {
         sessionFile: fx.sessionFile,
         provider: "anthropic",
         model: "claude-reported",
-        costUsd: costs.total,
+        ...(unpricedLastCall ? {} : { costUsd: costs.total }),
         usage: {
           input: 300,
           output: 40,
           cacheRead: 60,
           cacheWrite: 5,
           total: 405,
-          cost: { total: costs.total },
+          ...(unpricedLastCall
+            ? {}
+            : { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.total } }),
+          costStatus: unpricedLastCall ? "unavailable" : "complete",
         },
         lastCallUsage: {
           input: 200,
@@ -851,10 +864,15 @@ describe("worker turn launcher terminal results", () => {
             totalTokens: 270,
           },
           total: 270,
-          cost: { total: costs.last },
+          ...(unpricedLastCall
+            ? {}
+            : { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.last } }),
         },
         promptTokens: 240,
       });
+      if (unpricedLastCall) {
+        expect(result.meta.agentMeta).not.toHaveProperty("costUsd");
+      }
     },
   );
 });

@@ -605,7 +605,7 @@ describe("followup context-pressure accounting", () => {
         model: diagnostic.model,
         agentHarnessId: "codex",
         ...(runtimeOwned ? { runtimeModelSelection: selection } : {}),
-        usage: turnUsage,
+        usage: { ...turnUsage, cacheRead: 0, cacheWrite: 0 },
       });
 
       const persisted = fixture.read();
@@ -647,7 +647,7 @@ describe("followup context-pressure accounting", () => {
 
   it("persists new diagnostic with usage without changing token/cost accounting", async () => {
     const fixture = await createFixture();
-    const usage = { ...turnUsage, cacheRead: 20 };
+    const usage = { ...turnUsage, cacheRead: 20, cacheWrite: 0 };
     await fixture.account(lane, { usage, lastCallUsage: usage, contextBudgetStatus: diagnostic });
     expect(fixture.read()?.contextBudgetStatus).toEqual(diagnostic);
     expect(fixture.read()).toMatchObject({
@@ -667,6 +667,16 @@ describe("followup context-pressure accounting", () => {
     expect(fixture.read()?.contextBudgetStatus).toEqual(before);
   });
 
+  it.each([turnUsage, { ...turnUsage, cacheRead: 20 }, { input: 120 }])(
+    "does not persist a complete estimate for partial usage: %j",
+    async (usage) => {
+      const fixture = await createFixture();
+      await fixture.account(lane, { usage, lastCallUsage: usage });
+      expect(fixture.read()?.inputTokens).toBe(120);
+      expect(fixture.read()?.estimatedCostUsd).toBeUndefined();
+    },
+  );
+
   it.each(["session", "context-pressure-successor"])(
     "accounts current-generation compaction into accepted %s",
     async (target) => {
@@ -681,11 +691,12 @@ describe("followup context-pressure accounting", () => {
       fixture.context.activeSessionEntry = successor;
       fixture.turn.session.publish(successor);
       fixture.context.replyOperation.updateSessionId(sessionId);
+      const usage = { input: 120, output: 0, cacheRead: 0, cacheWrite: 0 };
       await fixture.account(lane, {
         sessionId,
         compactionCount: 1,
-        usage: { input: 120 },
-        lastCallUsage: { input: 120 },
+        usage,
+        lastCallUsage: usage,
       });
       expect(fixture.read()?.contextBudgetStatus).toBeUndefined();
       expect(fixture.read()).toMatchObject({

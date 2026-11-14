@@ -462,45 +462,50 @@ test("sessions.list yields for bulk metadata and later serves previews without r
   }
 });
 
-test("sessions.changed includes live usage metadata without inventing an unpriced cost", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await seedCompletedSessionTranscript({
-    storePath,
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    entries: {
-      main: sessionStoreEntry("sess-main", {
-        providerOverride: "openai",
-        modelOverride: "test-unpriced-model",
-        modelProvider: "openai",
-        model: "test-unpriced-model",
-        agentHarnessId: "openclaw",
-        contextTokens: 123_456,
-        contextTokensSource: "runtime",
-        totalTokens: 0,
-        totalTokensFresh: false,
-      }),
-    },
-    message: {
-      ...reply("openai", "test-unpriced-model", [5_107, 1_827, 1_536, 0], 0),
-      timestamp: Date.now(),
-    },
-  });
-  const result = await invokeSessionMutation({ key: "main", label: "Renamed" });
-  expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
-  expectChangedBroadcast(result.broadcastToConnIds, {
-    sessionKey: "agent:main:main",
-    reason: "patch",
-    effectiveResponseUsage: "off",
-    totalTokens: 8_470,
-    totalTokensFresh: true,
-    contextTokens: 123_456,
-    estimatedCostUsd: undefined,
-    modelProvider: "openai",
-    model: "test-unpriced-model",
-    responseUsage: undefined,
-  });
-});
+test.each([false, true])(
+  "sessions.changed preserves live usage with recorded zero cost: %s",
+  async (recordedZero) => {
+    const { storePath } = await createSessionStoreDir();
+    await seedCompletedSessionTranscript({
+      storePath,
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      entries: {
+        main: sessionStoreEntry("sess-main", {
+          providerOverride: "openai",
+          modelOverride: "test-unpriced-model",
+          modelProvider: "openai",
+          model: "test-unpriced-model",
+          agentHarnessId: "openclaw",
+          contextTokens: 123_456,
+          contextTokensSource: "runtime",
+          totalTokens: 0,
+          totalTokensFresh: false,
+        }),
+      },
+      message: {
+        ...(recordedZero
+          ? reply("openai", "test-unpriced-model", [5_107, 1_827, 1_536, 0], 0)
+          : reply("openai", "test-unpriced-model", [5_107, 1_827, 1_536, 0])),
+        timestamp: Date.now(),
+      },
+    });
+    const result = await invokeSessionMutation({ key: "main", label: "Renamed" });
+    expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
+    expectChangedBroadcast(result.broadcastToConnIds, {
+      sessionKey: "agent:main:main",
+      reason: "patch",
+      effectiveResponseUsage: "off",
+      totalTokens: 8_470,
+      totalTokensFresh: true,
+      contextTokens: 123_456,
+      estimatedCostUsd: recordedZero ? 0 : undefined,
+      modelProvider: "openai",
+      model: "test-unpriced-model",
+      responseUsage: undefined,
+    });
+  },
+);
 
 test("sessions.changed mutation events include session management metadata", async () => {
   await createSessionStoreDir();
