@@ -303,9 +303,9 @@ public enum OpenClawChatGatewayPayloadCodec {
         let agentId: String?
     }
 
-    // One name registry drives both admission and the exhaustive decoder below.
-    // session.narration is intentionally absent: foreground chat uses full streams,
-    // and bounded narration tails cannot replace transcript messages.
+    /// One name registry drives both admission and the exhaustive decoder below.
+    /// session.narration is intentionally absent: foreground chat uses full streams,
+    /// and bounded narration tails cannot replace transcript messages.
     private enum EventKind: String {
         case tick
         case chatMetadataChanged = "chat.metadata.changed"
