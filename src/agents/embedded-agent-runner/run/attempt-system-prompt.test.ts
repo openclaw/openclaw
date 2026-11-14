@@ -106,11 +106,9 @@ async function preparePermissionPrompt({
   suppliedTools,
   additionalToolNames = [],
   contextFiles = [],
-  retainsPersonalUser = contextFiles.some((file) => file.personalUser === true),
 }: {
   additionalToolNames?: string[];
   contextFiles?: ReturnType<typeof createEmptyPromptBootstrap>["contextFiles"];
-  retainsPersonalUser?: boolean;
   codeModeActive?: boolean;
   isRawModelRun?: boolean;
   requireExplicitMessageTarget?: boolean;
@@ -188,7 +186,7 @@ async function preparePermissionPrompt({
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     activeContextEngine: undefined,
-    bootstrap: { ...createEmptyPromptBootstrap(), contextFiles, retainsPersonalUser },
+    bootstrap: { ...createEmptyPromptBootstrap(), contextFiles },
     capabilityToolNames,
     effectiveTools,
     setup: createAttemptSetupFixture({
@@ -627,12 +625,14 @@ describe("buildAttemptSystemPrompt", () => {
     expect(unverified.prepared.systemPromptText).toBe(verified.prepared.systemPromptText);
     expect(gate(verified.prepared)).toEqual([]);
     expect(gate(unverified.prepared)).toHaveLength(1);
-    // A continuation turn injects no files, yet the pinned prompt still carries the personal file.
-    const continuation = await preparePermissionPrompt({
-      retainsPersonalUser: true,
+    // A continuation turn, or a turn after the file was removed, loads no personal file while the
+    // pinned prefix may still carry it: the gate follows the session's selected person.
+    const retained = await preparePermissionPrompt({
       attemptOverrides: { sessionUserProfileId: "alice" },
     });
-    expect(gate(continuation.prepared)).toHaveLength(1);
+    expect(gate(retained.prepared)).toHaveLength(1);
+    const shared = await preparePermissionPrompt({ contextFiles: [] });
+    expect(gate(shared.prepared)).toEqual([]);
   });
 
   it("keeps the system prompt identical when execution-owned processes change", async () => {
