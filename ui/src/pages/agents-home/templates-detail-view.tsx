@@ -4,19 +4,14 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
-import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
-import type { TemplateAddReviewPlan } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
-
-registerEnglishCatalog(registerPluginConsentEnglish);
 
 type ClawHubAudit = {
   release: string;
@@ -85,55 +80,6 @@ function renderTemplateTrustWarning(warning: string) {
       )}
     </InlineAlert>
   );
-}
-
-type TemplatePluginGrants = TemplateAddReviewPlan["pluginReviews"][number]["capabilityGrants"];
-
-function grantSummary(grants: TemplatePluginGrants): string[] {
-  const status = (enabled: boolean) =>
-    t(enabled ? "pluginConsent.allowed" : "pluginConsent.blocked");
-  const summary = [
-    `${t("pluginConsent.promptInjection")}: ${status(grants.hooks.allowPromptInjection.effective)}`,
-    `${t("pluginConsent.conversationAccess")}: ${status(grants.hooks.allowConversationAccess.effective)}`,
-  ];
-  if (grants.llm?.allowModelOverride !== undefined) {
-    summary.push(
-      `${t("pluginConsent.modelOverrides")}: ${t("pluginConsent.modelOverride", { value: status(grants.llm.allowModelOverride) })}`,
-    );
-  }
-  if (grants.llm?.allowedModels?.length) {
-    summary.push(t("pluginConsent.allowedModels", { models: grants.llm.allowedModels.join(", ") }));
-  }
-  if (grants.llm?.allowedCompletionModels?.length) {
-    summary.push(
-      t("pluginConsent.allowedCompletionModels", {
-        models: grants.llm.allowedCompletionModels.join(", "),
-      }),
-    );
-  }
-  if (grants.llm?.allowAuthProfileOverride !== undefined) {
-    summary.push(
-      t("pluginConsent.authProfileOverride", {
-        value: status(grants.llm.allowAuthProfileOverride),
-      }),
-    );
-  }
-  if (grants.llm?.allowAgentIdOverride !== undefined) {
-    summary.push(
-      t("pluginConsent.agentIdOverride", { value: status(grants.llm.allowAgentIdOverride) }),
-    );
-  }
-  if (grants.subagent?.allowModelOverride !== undefined) {
-    summary.push(
-      `${t("pluginConsent.subagentModelOverrides")}: ${t("pluginConsent.modelOverride", { value: status(grants.subagent.allowModelOverride) })}`,
-    );
-  }
-  if (grants.subagent?.allowedModels?.length) {
-    summary.push(
-      `${t("pluginConsent.subagentModelOverrides")}: ${t("pluginConsent.allowedModels", { models: grants.subagent.allowedModels.join(", ") })}`,
-    );
-  }
-  return summary;
 }
 
 function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
@@ -218,78 +164,6 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   );
 }
 
-function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
-  return (
-    <Show when={props.view.reviewPlan}>
-      <section class="templates-add-consent" aria-label={t("templatesCatalog.reviewTitle")}>
-        <h3>{t("templatesCatalog.reviewTitle")}</h3>
-        <p>{t("templatesCatalog.reviewDescription")}</p>
-        <For
-          each={props.view.reviewPlan?.pluginReviews.filter(
-            (item) => item.ownerAction === "install",
-          )}
-        >
-          {(item) => (
-            <div class="templates-add-consent__item">
-              <strong>{item.source === "bundled" ? item.pluginId : item.ref}</strong>
-              <span>
-                {item.source === "bundled"
-                  ? `${t("templatesCatalog.dependencyBundled")} · ${item.path}`
-                  : t("templatesCatalog.version", { version: item.version })}
-              </span>
-              <strong>{t("pluginConsent.grantsTitle")}</strong>
-              <ul>
-                <For each={grantSummary(item.capabilityGrants)}>{(grant) => <li>{grant}</li>}</For>
-              </ul>
-              <For
-                each={Object.entries(item.capabilityGrantsByPluginId).filter(
-                  ([id]) => id !== item.pluginId,
-                )}
-              >
-                {([id, grants]) => (
-                  <>
-                    <strong>{id}</strong>
-                    <ul>
-                      <For each={grantSummary(grants)}>{(grant) => <li>{grant}</li>}</For>
-                    </ul>
-                  </>
-                )}
-              </For>
-              <Show when={item.riskWarning}>{renderTemplateTrustWarning(item.riskWarning!)}</Show>
-            </div>
-          )}
-        </For>
-        <For each={props.view.reviewPlan?.skillReviews}>
-          {(item) => (
-            <div class="templates-add-consent__item">
-              <strong>{"path" in item ? item.name : item.ref}</strong>
-              <span>
-                {"path" in item
-                  ? `${t("templatesCatalog.dependencyBundled")} · ${item.path}`
-                  : t("templatesCatalog.version", { version: item.version })}
-              </span>
-              {renderTemplateTrustWarning(item.riskWarning)}
-            </div>
-          )}
-        </For>
-        <div class="templates-add-consent__actions">
-          <button type="button" class="btn" onClick={() => props.view.onCancelReview()}>
-            {t("common.cancel")}
-          </button>
-          <button
-            type="button"
-            class="btn primary"
-            disabled={props.view.applying}
-            onClick={() => void props.view.onConfirmReview()}
-          >
-            {t("templatesCatalog.addAnyway")}
-          </button>
-        </div>
-      </section>
-    </Show>
-  );
-}
-
 export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) {
   return (
     <openclaw-templates-detail-view>
@@ -299,11 +173,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
           const detail = () => view().detail;
           const publisher = () => detail() ?? selected();
           const canAdd = () =>
-            view().canAdd &&
-            Boolean(detail()) &&
-            !view().applying &&
-            !view().consentWarning &&
-            !view().reviewPlan;
+            view().canAdd && Boolean(detail()) && !view().applying && !view().consentWarning;
           return (
             <SettingsPage wide carapace>
               <PluginDetailShell
@@ -393,18 +263,16 @@ declare module "@solidjs/web" {
 }
 
 export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) {
+  const failure = () =>
+    props.view.addFailure?.entry.packageName === props.view.selected?.packageName
+      ? props.view.addFailure?.message
+      : undefined;
   return (
     <>
-      <Show when={props.view.addError}>
+      <Show when={failure()}>
         <InlineAlert tone="danger" role="alert">
-          <span>{props.view.addError}</span>{" "}
-          <button type="button" class="btn btn--sm" onClick={() => props.view.onRetryDetail()}>
-            {t("common.retry")}
-          </button>
+          {failure()}
         </InlineAlert>
-      </Show>
-      <Show when={!props.view.consentWarning}>
-        <ReviewWarning view={props.view} />
       </Show>
       <Show when={props.view.consentWarning}>
         <section class="templates-add-consent" aria-label={t("templatesCatalog.trustReview")}>

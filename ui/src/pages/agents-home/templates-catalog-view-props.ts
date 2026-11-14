@@ -1,8 +1,5 @@
-import type {
-  TemplateAddReviewPlan,
-  TemplateCatalogDetail,
-  TemplateCatalogEntry,
-} from "./templates-catalog-client.ts";
+import type { TemplateAddFailure } from "./templates-add-agent.ts";
+import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 
 export type TemplatesCatalogViewProps = {
   basePath: string;
@@ -13,12 +10,9 @@ export type TemplatesCatalogViewProps = {
   readDetail: () => TemplateCatalogDetail | null;
   detailRequest: Promise<TemplateCatalogDetail | null> | undefined;
   installedPluginPackages: ReadonlySet<string>;
-  addError: string | null;
+  addFailure: Pick<TemplateAddFailure, "entry" | "message"> | null;
   applying: boolean;
-  reviewing: boolean;
-  canStartAdd: boolean;
   consentWarning: string | null;
-  reviewPlan: TemplateAddReviewPlan | null;
   canAdd: boolean;
   preview?: {
     kind: "instruction" | "skill";
@@ -34,6 +28,4 @@ export type TemplatesCatalogViewProps = {
   onConfirm: () => void | Promise<void>;
   onConfirmConsent: () => void | Promise<void>;
   onCancelConsent: () => void;
-  onConfirmReview: () => void | Promise<void>;
-  onCancelReview: () => void;
 };

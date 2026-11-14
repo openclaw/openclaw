@@ -344,16 +344,15 @@ describe("Templates discovery", () => {
         packageName: workflowOperator.packageName,
         version: workflowOperator.latestVersion,
       };
-      expect(request).toHaveBeenCalledWith("templates.add.plan", { source });
-
       expect(request.mock.calls.some(([method]) => method === "templates.add.apply")).toBe(false);
       detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
       await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
       expect(request).toHaveBeenCalledWith(
         "templates.add.apply",
-        expect.objectContaining({ source }),
+        { mode: "chat", source, agentId: "workflow-operator" },
         expect.objectContaining({ onSent: expect.any(Function) }),
       );
+      expect(request.mock.calls.some(([method]) => method === "templates.add.plan")).toBe(false);
     },
   );
 

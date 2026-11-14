@@ -1,5 +1,8 @@
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { isProtocolRecord } from "./protocol-value-normalization.js";
+import { ErrorCodes } from "./gateway-error-codes.js";
+import { asProtocolRecord, isProtocolRecord } from "./protocol-value-normalization.js";
+
+export const CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED = "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED";
 
 /** Structured ClawHub trust details carried in gateway error payloads. */
 export const ClawHubTrustErrorCodes = {
@@ -48,4 +51,22 @@ export function readClawHubTrustErrorDetails(
     version: readNonBlankString(details.version),
     warning: readNonBlankString(details.warning),
   });
+}
+
+export type ClawHubRiskAcknowledgementRequiredErrorDetails = {
+  code: typeof CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED;
+  warning: string;
+};
+
+export function readClawHubRiskAcknowledgementRequiredError(
+  error: unknown,
+): ClawHubRiskAcknowledgementRequiredErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  const warning = typeof details?.warning === "string" ? details.warning.trim() : "";
+  return record?.code === ErrorCodes.INVALID_REQUEST &&
+    details?.code === CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED &&
+    warning
+    ? { code: CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED, warning }
+    : null;
 }

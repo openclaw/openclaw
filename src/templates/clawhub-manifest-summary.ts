@@ -2,6 +2,7 @@ import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-co
 import { ClawHubSourceError } from "./clawhub-source-artifact.js";
 
 export function parseTemplateManifestSummary(value: unknown): {
+  id: string;
   name?: string;
   description?: string;
 } {
@@ -36,6 +37,7 @@ export function parseTemplateManifestSummary(value: unknown): {
     );
   }
   return {
+    id: agent.id,
     ...(agent.name !== undefined ? { name: agent.name } : {}),
     ...(agent.description !== undefined ? { description: agent.description } : {}),
   };

@@ -1,0 +1,9 @@
+# Chat-based Template Add: the Gateway request-seam suite drives real admission,
+# workspace, skill, bundled-plugin, MCP and rollback owners against a Template
+# fixture, and the Control UI suite covers the plan-free Add and its rollback.
+# Follow-up policy cases resolve effective grants across profile/allow/deny layers;
+# deferred-detail cases protect immediate chat and stale-connection non-mutation.
+# The reserved CLAW.md rollback/retry case reuses the failure table and records no writes (+11 net).
+# The current reviewed request-seam and policy regressions total 738 net lines;
+# retain all assertions and allocate exactly the 338 lines above the global 400.
+338
