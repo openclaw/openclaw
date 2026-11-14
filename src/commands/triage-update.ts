@@ -331,7 +331,7 @@ export function sanitizeTriageUpdateFailure(
     ),
   );
   omittedDetails += failedSteps.filter((step) => !retained.has(step)).length;
-  const triggerIndex = trigger ? Array.from(retained).indexOf(trigger) : -1;
+  const retainedSteps = Array.from(retained);
   const sanitized = {
     ...(error ? { error } : {}),
     result: {
@@ -396,11 +396,15 @@ export function sanitizeTriageUpdateFailure(
   }
   const maxBytes =
     format === "artifact" ? UPDATE_FAILURE_MAX_BYTES - 1 : UPDATE_FAILURE_PROMPT_MAX_BYTES;
-  const triggerRecord = sanitized.result.steps[triggerIndex];
+  const recordOf = (step: (typeof result.steps)[number] | undefined) =>
+    step ? sanitized.result.steps[retainedSteps.indexOf(step)] : undefined;
+  const latestRecord = recordOf(failedSteps.at(-1));
+  const protectedRecords = new Set([recordOf(trigger), latestRecord]);
   while (Buffer.byteLength(JSON.stringify(sanitized)) > maxBytes) {
     const steps = sanitized.result.steps;
     if (steps.length > 1) {
-      steps.splice(steps[0] === triggerRecord && steps.length > 2 ? 1 : 0, 1);
+      const older = steps.findIndex((step) => !protectedRecords.has(step));
+      steps.splice(older === -1 ? steps.findIndex((step) => step !== latestRecord) : older, 1);
     } else if (removePluginDetails.length > 1) {
       removePluginDetails.pop()?.();
     } else if ((sanitized.result.steps[0]?.failureFacts?.length ?? 0) > 1) {

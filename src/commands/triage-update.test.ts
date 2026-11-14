@@ -227,6 +227,48 @@ describe("update failure triage diagnostics", () => {
     ]);
   });
 
+  it("keeps the latest failure when a lint inventory record follows it under the artifact budget", () => {
+    const noisy = (label: string) => `${label} ${'\\"'.repeat(1_000)}`;
+    const failing = (name: string) =>
+      failedStep(name, {
+        stderrTail: noisy(`${name} stderr`),
+        stdoutTail: noisy(`${name} stdout`),
+        failureFacts: Array.from({ length: 5 }, (_, index) => ({
+          check: `${name}/check-${index}`.padEnd(120, "-"),
+          code: "doctor-failed",
+          message: `${name} fact ${index}`.padEnd(190, "."),
+          affectedKey: `${name}.key.${index}`.padEnd(120, "k"),
+          location: `${name}/location/${index}`.padEnd(150, "l"),
+          // Sized so the artifact budget forces exactly one record out.
+          packageSpec: `${name}-package@${index}`.padEnd(128, "p"),
+        })),
+      });
+    const recorded = sanitizeTriageUpdateFailure(
+      {
+        error: "Update failed",
+        result: {
+          status: "error",
+          mode: "npm",
+          steps: [
+            failing("trigger"),
+            failing("latest"),
+            failedStep("candidate-doctor-lint", {
+              exitCode: 0,
+              doctorLintFindings: [{ checkId: "core/config", message: "Config warning" }],
+            }),
+          ],
+        },
+      },
+      { env, stateDir },
+      "artifact",
+    );
+
+    expect(recorded).toMatchObject({
+      omittedDetails: 1,
+      result: { steps: [{ name: "trigger" }, { name: "latest" }] },
+    });
+  });
+
   it("preserves a post-install activation error even when the core update succeeded", async () => {
     const result: Result = {
       status: "ok",
