@@ -825,7 +825,9 @@ if (args[0] === 'startup-profile') {
   } else throw Error('unsupported synthetic profile command: ' + command);
 } else {
   if (args[0] === 'unlink-exact' && args[1] === journal && failure === 'journal-retirement') refuse('journal-retirement');
-  const result = spawnSync(process.execPath, [${JSON.stringify(delegate)}, ...args], { stdio: 'inherit' });
+  const result = spawnSync(process.execPath, [${JSON.stringify(delegate)}, ...args], {
+    stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 9],
+  });
   process.exit(result.status ?? 1);
 }
 `);
@@ -1177,6 +1179,25 @@ describe("Team verified release retention and recovery refusal", () => {
 
   test("successful deployment records a private verified marker after full acceptance", (t) => {
     const f = deploymentFixture(t);
+    const obsolete = f.addRelease("e".repeat(40));
+    const library = f.env.OPENCLAW_TEAM_RELEASE_LIB;
+    const pruning = join(f.root, "prune-order.mjs");
+    const pruningTrace = join(f.root, "prune-order");
+    writeFileSync(pruning, `
+import { appendFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+if (['quarantine', 'prune-quarantine'].includes(process.argv[2])) {
+  appendFileSync(${JSON.stringify(pruningTrace)}, JSON.stringify({
+    accepted: existsSync(${JSON.stringify(join(f.serving, "verified", after))}),
+    journal: existsSync(${JSON.stringify(f.journal)}),
+  }) + '\\n');
+}
+const result = spawnSync(process.execPath, [${JSON.stringify(library)}, ...process.argv.slice(2)], {
+  stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 9],
+});
+process.exit(result.status ?? 1);
+`);
+    f.env.OPENCLAW_TEAM_RELEASE_LIB = pruning;
     const failed = join(f.serving, "failed", after);
     writeFileSync(failed, after + "\n", { mode: 0o600 });
     const result = runOwner(f);
@@ -1194,6 +1215,9 @@ describe("Team verified release retention and recovery refusal", () => {
     assert.equal(events(f).split("service.system.start\n").length - 1, 1);
     assert.equal(existsSync(join(f.serving, "verified", before)), false);
     assert.equal(readFileSync(failed, "utf8"), after + "\n");
+    assert.equal(existsSync(obsolete), process.platform === "linux" && process.getuid() !== 0);
+    for (const line of readFileSync(pruningTrace, "utf8").trim().split("\n"))
+      assert.deepEqual(JSON.parse(line), { accepted: true, journal: false }, "pruning must follow full acceptance and journal retirement");
   });
 
   test("failed marker publication retains the journal and recovery completes the marker before retirement", (t) => {
@@ -1339,7 +1363,9 @@ if (args[0] === 'stat-identity' && args[1] === release) {
 } else {
   if (args[1] === release && ['validate-release', 'quarantine'].includes(args[0]))
     appendFileSync(${JSON.stringify(trace)}, args[0] + '\\n');
-  const result = spawnSync(process.execPath, [${JSON.stringify(f.library)}, ...args], { stdio: 'inherit' });
+  const result = spawnSync(process.execPath, [${JSON.stringify(f.library)}, ...args], {
+    stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 9],
+  });
   process.exit(result.status ?? 1);
 }
 `);

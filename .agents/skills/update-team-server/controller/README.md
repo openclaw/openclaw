@@ -85,7 +85,7 @@ historical failed-attempt records, even after a later verified success.
 
 Native transaction roots under `<runtime-home>/.openclaw-update/` stay on disk
 until the controller next prunes releases with no activation journal present:
-before a deployment, after an accepted one, and in `--cleanup`. Without a
+after an accepted deployment and in `--cleanup`. Without a
 journal, an earlier transaction's pre-migration snapshot can only undo state
 that was since accepted. Roots whose receipt is absent (Doctor never ran),
 `migrated`, `restored`, or `finished` are then retired: the runtime account
@@ -454,7 +454,13 @@ candidate files independent of writable store inodes. pnpm owns store format,
 invalidation, and pruning. Operators can reclaim unused packages with
 `pnpm store prune --store-dir <build-home>/cache/store` as the build account when
 the deployment owner is idle. Candidate cleanup removes only the work and
-staging trees. Staging uses reflinks where supported and ordinary copies
+staging trees. Release pruning runs only after full acceptance or through explicit
+`--cleanup`, never to reclaim headroom before a build. Insufficient capacity
+refuses preparation so the operator can schedule cleanup separately. Retention
+still protects current, previous, the three most recently verified releases,
+pins, and journal references. Post-acceptance pruning can still cause a host-wide
+filesystem commit stall and delay other I/O; it no longer overlaps deployment
+drain or verification. Staging uses reflinks where supported and ordinary copies
 otherwise; sealing, filesystem ownership, manifest validation, and directory
 publication remain unchanged. The build account also retains the build owner's
 artifact cache at `cache/build-artifacts`. Input content hashes select reusable

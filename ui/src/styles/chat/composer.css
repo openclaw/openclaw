@@ -672,6 +672,7 @@
 .agent-chat__dictation-status {
   display: flex;
   align-items: center;
+  gap: 8px;
   width: 100%;
   color: var(--accent);
   font-size: 12px;
@@ -684,6 +685,12 @@
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The startup label can become the microphone permission hint; keep that recovery text whole. */
+.agent-chat__dictation-phase--starting {
+  overflow: visible;
+  white-space: normal;
 }
 
 @media (prefers-reduced-motion: reduce) {

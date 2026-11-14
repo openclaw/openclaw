@@ -17,7 +17,7 @@ const MAX_PASS_BYTES = 2 * 1024 * 1024 * 1024;
 
 /** Each pass owns one cancellable reader; no page map or SQLite snapshot survives it. */
 export async function warmGatewayDatabasePageCache(params: {
-  databases: readonly PreparedStartupSessionDatabase[];
+  databases: readonly Pick<PreparedStartupSessionDatabase, "database" | "assertCurrent">[];
   signal: AbortSignal;
   startupTrace?: GatewayStartupTrace;
   log: { info: (message: string) => void; warn: (message: string) => void };
