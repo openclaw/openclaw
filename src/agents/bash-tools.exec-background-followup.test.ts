@@ -416,54 +416,61 @@ test.for([
   },
 );
 
-test("completions pending behind a completion turn share the next turn", async ({ signal }) => {
-  const sessionKey = "agent:main:dashboard:batched-completions";
+test.for([
+  { label: "share the next turn", runIds: ["run-0", "run-0", "run-0"], turns: [[1], [2, 3]] },
+  {
+    label: "keep separate launch runs apart",
+    runIds: ["run-0", "run-0", "run-1"],
+    turns: [[1], [2], [3]],
+  },
+])("completions pending behind a completion turn $label", async ({ runIds, turns }, { signal }) => {
+  const sessionKey = `agent:main:dashboard:batched-${runIds.join("-")}`;
   await seedOrigin(sessionKey);
   const gate = createDeferredCore();
   const firstTurn = createDeferredCore();
-  const prompts: string[] = [];
+  const calls: RunEmbeddedAgentParams[] = [];
   model.mockImplementation(async (params: RunEmbeddedAgentParams) => {
     await admitModelTurn(params);
-    prompts.push(params.prompt);
-    if (prompts.length === 1) {
+    calls.push(params);
+    if (calls.length === 1) {
       firstTurn.resolve();
       await gate.promise;
     }
     return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
   });
-  const exec = backgroundExec(sessionKey, { agentId: "main" });
-  const release = path.join(
-    await fs.realpath(await fs.mkdtemp(path.join(state.workspaceDir, "batch-"))),
-    "release",
-  );
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(state.workspaceDir, "batch-")));
+  const release = (job: number) => path.join(directory, job === 1 ? "first" : "later");
   // Every command captures its destination before any exit changes the session.
-  for (const job of [1, 2, 3]) {
-    const script = `const t = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(release)})) { clearInterval(t); process.stdout.write("BATCH_${job}"); } }, 20);`;
-    runningSession((await exec(`batch-${job}`, script)).details);
+  for (const [index, runId] of runIds.entries()) {
+    const job = index + 1;
+    const script = `const t = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(release(job))})) { clearInterval(t); process.stdout.write("BATCH_${job}"); } }, 20);`;
+    runningSession(
+      (await backgroundExec(sessionKey, { agentId: "main", runId })(`batch-${job}`, script))
+        .details,
+    );
   }
-  await fs.writeFile(release, "");
-  await withinTest(waitForExecScope(sessionKey), signal);
+  await fs.writeFile(release(1), "");
   await withinTest(firstTurn.promise, signal);
-  const jobs = (prompt: string) => prompt.match(/BATCH_\d/g) ?? [];
-  const [firstJob] = jobs(prompts[0] ?? "");
+  await fs.writeFile(release(2), "");
+  await withinTest(waitForExecScope(sessionKey), signal);
   // Exit notification follows process settlement; wait until both later exits are queued.
-  await vi.waitFor(
-    () =>
-      expect(
-        peekSystemEventEntries(sessionKey).filter((event) => !event.text.includes(firstJob ?? "")),
-      ).toHaveLength(2),
-    { timeout: 30_000 },
-  );
+  await vi.waitFor(() => expect(peekSystemEventEntries(sessionKey)).toHaveLength(2), {
+    timeout: 30_000,
+  });
   // The later exits wait for the running completion turn instead of queueing their own.
   expect(receipts).toHaveLength(1);
   gate.resolve();
-  await vi.waitFor(() => expect(receipts).toHaveLength(2), { timeout: 30_000 });
+  await vi.waitFor(() => expect(receipts).toHaveLength(turns.length), { timeout: 30_000 });
   await completion(signal);
-  // One turn for the first exit; the two exits that arrived during it share the next.
-  expect(model).toHaveBeenCalledTimes(2);
-  expect(jobs(prompts[0] ?? "")).toHaveLength(1);
-  expect(jobs(prompts[1] ?? "")).toHaveLength(2);
-  expect(prompts.flatMap(jobs).toSorted()).toEqual(["BATCH_1", "BATCH_2", "BATCH_3"]);
+  // Each turn names the run that launched its commands; later exits may finish in any order.
+  const observed = calls.map((params) => ({
+    jobs: (params.prompt.match(/BATCH_\d/g) ?? []).map((job) => Number(job.slice(6))).toSorted(),
+    runId: params.inputProvenance?.runId,
+  }));
+  expect(observed[0]?.jobs).toEqual([1]);
+  expect(observed.toSorted((a, b) => (a.jobs[0] ?? 0) - (b.jobs[0] ?? 0))).toEqual(
+    turns.map((jobs) => ({ jobs, runId: runIds[(jobs[0] ?? 1) - 1] })),
+  );
 });
 
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({

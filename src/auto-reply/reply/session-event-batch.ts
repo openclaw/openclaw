@@ -129,7 +129,9 @@ function sameBatch(first: HeldOccurrence, member: HeldOccurrence): boolean {
   const owners = new Set(readExecRequestOwners(first.options));
   const memberOwners = readExecRequestOwners(member.options) ?? [];
   // Stop retires every owner's shared turn, so only one request's occurrences share it.
+  // The shared turn names one launch run, so it carries only that run's commands.
   return (
+    first.options.sourceRunId === member.options.sourceRunId &&
     owners.size === new Set(memberOwners).size &&
     memberOwners.every((owner) => owners.has(owner)) &&
     channelRouteDedupeKey(first.options.deliveryContext) ===
