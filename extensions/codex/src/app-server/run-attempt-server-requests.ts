@@ -54,6 +54,7 @@ export function createCodexAttemptServerRequestController(
   const {
     compactionPlanState,
     toolBridge,
+    reserveClientToolCall,
     toolOutcomeOrdinals,
     suppressedDynamicToolOutcomeOrdinals,
     allocateCodexToolOutcomeOrdinal,
@@ -192,6 +193,8 @@ export function createCodexAttemptServerRequestController(
         return toCodexDynamicToolProtocolResponse(response) as JsonValue;
       }
       const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
+      // Parallel client calls keep the model's order even when their hooks finish out of order.
+      reserveClientToolCall(call.callId, call.tool);
       markCurrentTurnRequestProgress();
       pendingOpenClawDynamicToolCompletionIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
