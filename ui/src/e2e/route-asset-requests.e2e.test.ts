@@ -2,6 +2,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, inject, it } from "vitest";
 import { startControlUiBenchGatewayServer } from "../../../scripts/lib/control-ui-bench-gateway-server.ts";
+// Prepare the file worker during collection, outside the suite setup deadline.
+import "../../../src/test-utils/prepare-compiled-subprocesses.ts";
 // Scenario probes use the action-timing owner's optional Window hook.
 import "../../../scripts/lib/control-ui-engine-action-timing.ts";
 import { createEnginePageScenarios } from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
