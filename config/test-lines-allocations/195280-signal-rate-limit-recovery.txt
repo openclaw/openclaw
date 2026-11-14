@@ -1,0 +1,4 @@
+# Rate-limit/captcha recovery-fact regressions on both Signal transports (HTTP + UNIX socket).
+# Plus shipped-entry-point (sendMessageSignal) regression for the native send path.
+# Exact net growth for PR for issue #195280.
+179
