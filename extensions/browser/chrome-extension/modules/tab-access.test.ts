@@ -275,3 +275,27 @@ describe("tab access policy", () => {
     await expect(h.policy.requireTab(2)).rejects.toThrow("paused for OpenClaw");
   });
 });
+
+describe.each(["all", "selected"] as const)("input receipt authority (%s)", (mode) => {
+  it("keeps the admitted epoch immutable and document-bound", async () => {
+    const tab = { id: 1, url: "https://example.com/", groupId: 7 };
+    const { policy } = createHarness({ tabs: [tab] });
+    await policy.initialize(mode, true);
+    const epoch = Object.freeze(policy.capture(1, "Input.dispatchMouseEvent"));
+    await policy.requireTab(1, epoch);
+    policy.renewTabAccess(1, epoch, tab, { url: tab.url });
+    await expect(policy.requireInputReceipt(1, epoch)).resolves.toMatchObject({ id: 1 });
+    await expect(policy.requireTab(1, epoch)).rejects.toThrow("access was revoked");
+  });
+
+  it("requires admission for the exact original tab", async () => {
+    const { policy } = createHarness({
+      tabs: [1, 2].map((id) => ({ id, url: "https://example.com/", groupId: 7 })),
+    });
+    await policy.initialize(mode, true);
+    const epoch = policy.capture(1, "Input.dispatchMouseEvent");
+    await expect(policy.requireInputReceipt(1, epoch)).rejects.toThrow("no admitted access");
+    await policy.requireTab(1, epoch);
+    await expect(policy.requireInputReceipt(2, epoch)).rejects.toThrow("no admitted access");
+  });
+});

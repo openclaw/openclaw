@@ -99,6 +99,7 @@ it.each(["owned", "borrowed"] as const)(
         return epoch;
       },
       requireAccessibleTab: requireTab,
+      requireInputReceipt: requireTab,
       requireNavigatedTab: requireTab,
       navigateTab: async () => {},
     });
