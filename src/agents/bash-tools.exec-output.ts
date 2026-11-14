@@ -2,7 +2,6 @@
  * Keeps no-output placeholders and warning placement consistent across exec
  * progress, polling, and completion surfaces.
  */
-import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 
 export type ExecProcessFailureKind =
@@ -51,7 +50,10 @@ export const EXEC_MANUAL_COLLECTION_FOLLOW_UP =
   "Automatic completion wake is unavailable after ending this turn. If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.";
 export const MAX_EXEC_YIELD_MS = 120_000;
 const BACKGROUND_EXEC_FOLLOW_UP =
-  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. New output while this command is running does not start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.";
+  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) to control it. New output while it runs does not start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. This is not a saved, restartable automation.";
+/** One waiting recipe for every surface that tells the agent how to wait. */
+export const EXEC_WAIT_RECIPE =
+  "To wait for a condition or a time, run one command that loops until it holds, exits non-zero on failure states and prints the result.";
 
 type ExitWakeFacts = {
   notifyOnExit?: boolean;
@@ -60,27 +62,23 @@ type ExitWakeFacts = {
   assertExitNotificationAcceptanceCurrent?: () => void;
 };
 
-/** Whether completion can wake the conversation after the originating turn ends. */
+/** Whether every exit, silent success included, wakes the conversation after the originating turn ends. */
 export function hasExitWake(session: ExitWakeFacts): boolean {
   return (
     session.notifyOnExit === true &&
+    // An explicit tools.exec.notifyOnExitEmptySuccess=false opt-out leaves silent success unannounced.
+    session.notifyOnExitEmptySuccess === true &&
     session.notifySessionTarget !== undefined &&
     // Cron completion admission still requires its originating run.
     session.assertExitNotificationAcceptanceCurrent === undefined
   );
 }
 
-/**
- * Exit-wake fact plus the condition for ending the turn, or undefined when the exit starts no turn.
- * A silent success wakes nobody unless notifyOnExitEmptySuccess is set.
- */
+/** Exit-wake fact plus the condition for ending the turn, or undefined when the exit starts no turn. */
 export function describeExitWake(session: ExitWakeFacts): string | undefined {
-  if (!hasExitWake(session)) {
-    return undefined;
-  }
-  return session.notifyOnExitEmptySuccess
-    ? "Its exit wakes this conversation. If only waiting remains, end this turn"
-    : "Its exit wakes this conversation if it prints output or fails, not after a silent success. If only waiting remains and it prints its result, end this turn";
+  return hasExitWake(session)
+    ? "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn"
+    : undefined;
 }
 
 /** Guidance for a running background handle, read when the handle is returned. */
@@ -93,10 +91,7 @@ export function buildBackgroundExecFollowUp(
   return [
     (requestedYieldMs ?? 0) > MAX_EXEC_YIELD_MS && `yieldMs is capped at ${MAX_EXEC_YIELD_MS}.`,
     exitWake &&
-      `${exitWake} now; do not poll it or start another command that waits for the same result. To wait for a condition, loop inside one command until it holds and prints the result.`,
-    exitWake &&
-      !session.notifyOnExitEmptySuccess &&
-      "If it may succeed silently, collect it with poll before ending the turn.",
+      `${exitWake} now; do not poll it or start another command for the same result. ${EXEC_WAIT_RECIPE}`,
     otherRunning.length > 0 &&
       `Also running in this conversation: ${otherRunning.join("; ")}. Keep one command per awaited result.`,
     BACKGROUND_EXEC_FOLLOW_UP,
@@ -145,18 +140,8 @@ export function appendExecTimeoutRetryGuidance(
   return `${text}\n\n${EXEC_TIMEOUT_RETRY_GUIDANCE}`;
 }
 
-const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
-
 export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
-}
-
-export function compactNotifyOutput(value: string) {
-  return truncateWithMarker(normalizeNotifyOutput(value), DEFAULT_NOTIFY_SNIPPET_CHARS, {
-    marker: "…",
-    reserve: 1,
-    trimEnd: false,
-  });
 }
 
 export function joinExecFailureOutput(aggregated: string, reason: string) {
