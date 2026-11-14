@@ -1746,7 +1746,13 @@ describe("plugin batch build admission", () => {
     [{ ids: ["qa-channel"], args: [lifecycle], include: [lifecycle] }, true, combined],
     [{ args: [ordinaryQa], include: [lifecycle] }, true, combined],
     [
-      { args: [ordinaryQa, "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"] },
+      {
+        args: [
+          ordinaryQa,
+          "--exclude",
+          "extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts",
+        ],
+      },
       true,
       combined,
     ],

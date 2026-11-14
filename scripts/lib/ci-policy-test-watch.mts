@@ -373,7 +373,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["extensions/logbook/src/store.worker.ts"],
   },
   ...[
-    "extensions/memory-core/src/cli.test.ts",
+    "extensions/memory-core/src/cli.memory-slot.test.ts",
     "extensions/memory-core/src/memory/manager-captured-session-preparation.test.ts",
     "extensions/memory-core/src/memory/manager-memory-source-race.test.ts",
     "extensions/memory-core/src/memory/manager-provider-lifecycle-fallback.test.ts",
@@ -1589,7 +1589,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "extensions/memory-core/src/memory/index.test.ts",
+    "extensions/memory-core/src/memory/index-identity.test.ts",
     "extensions/memory-core/src/memory/manager-search-provenance.test.ts",
     "extensions/memory-core/src/memory/manager-temporal-ranking.test.ts",
     "extensions/memory-core/src/memory/manager.watcher-filesystem.test.ts",

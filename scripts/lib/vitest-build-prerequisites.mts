@@ -248,7 +248,6 @@ const runtimeConsumers = [
     "extensions/codex/src/app-server/session-history.test.ts",
     "extensions/codex/src/app-server/settled-turn-finalizer.native.test.ts",
     "extensions/codex/src/app-server/transcript-mirror.admission.test.ts",
-    "extensions/codex/src/app-server/transcript-mirror.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.extension-codex-app-server-support.config.ts"],

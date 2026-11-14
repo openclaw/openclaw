@@ -364,7 +364,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}",
     );
     expect(extensionStep.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
-    expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
+    expect(extensionStep.run).not.toContain(
+      "extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts",
+    );
   });
 
   it("gates plugin Docker fanout on full release validation", () => {

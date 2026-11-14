@@ -544,14 +544,14 @@ it("relativizes absolute exclude paths from extension cwd", () => {
     relativizeExtensionVitestArgs(
       [
         flag,
-        path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
+        path.join(extensionCwd, "src", "app-server", "run-attempt-one-shot-cleanup.test.ts"),
         path.join(extensionCwd, "src", "app-server", "client.test.ts"),
       ],
       extensionCwd,
     ),
   ).toEqual([
     flag,
-    "codex/src/app-server/run-attempt.test.ts",
+    "codex/src/app-server/run-attempt-one-shot-cleanup.test.ts",
     "codex/src/app-server/client.test.ts",
   ]);
 });
@@ -730,7 +730,7 @@ it.each([
 });
 
 it("preserves Codex process bounds with release options", async () => {
-  const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";
+  const excluded = "extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts";
   const expectedFiles = [
     ...(await listVitestConfigTestFiles(extensionConfig("codex"))),
     ...(await listVitestConfigTestFiles(extensionConfig("database-workers"))).filter((file) =>
@@ -764,7 +764,7 @@ it("preserves Codex process bounds with release options", async () => {
   for (const call of calls) {
     expect(parseVitest(call.args).options).toMatchObject({
       retry: 1,
-      exclude: ["codex/src/app-server/run-attempt.test.ts"],
+      exclude: ["codex/src/app-server/run-attempt-one-shot-cleanup.test.ts"],
     });
   }
 });
@@ -849,9 +849,9 @@ it("detects exact Vitest excludes in extension batch args", () => {
   expect([
     ...parseExactVitestExcludePaths([
       "--exclude",
-      "extensions/codex/src/app-server/run-attempt.test.ts",
+      "extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts",
     ]),
-  ]).toEqual(["extensions/codex/src/app-server/run-attempt.test.ts"]);
+  ]).toEqual(["extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts"]);
   expect([...parseExactVitestExcludePaths(["--exclude=extensions/**/*.test.ts"])]).toEqual([]);
 });
 

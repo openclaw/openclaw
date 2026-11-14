@@ -2533,7 +2533,7 @@ describe("publication source intent and durable binding", () => {
             ...publicationIntentInputs(historical),
             targetContextRef: "main",
             extensionTestExcludePatternsJson:
-              '["extensions/codex/src/app-server/run-attempt.test.ts"]',
+              '["extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts"]',
           },
         }),
       ).toThrow("coverage extensionTestExcludePatternsJson differs");

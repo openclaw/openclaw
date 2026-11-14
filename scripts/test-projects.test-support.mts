@@ -767,7 +767,7 @@ const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-sna
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
 const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
   "extensions/codex/src/manifest.test.ts",
-  "extensions/openai/openai-provider.test.ts",
+  "extensions/openai/openai-codex-discovery.test.ts",
   "test/scripts/codex-client-version-contract.test.ts",
 ];
 // The iframe script and native document load as assets outside the import graph.
@@ -3466,7 +3466,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       dockerBuild,
       dockerE2e,
       "openai-image-auth-docker-client",
-      "extensions/openai/image-generation-provider.test.ts",
+      "extensions/openai/image-generation-provider.auth.test.ts",
     ],
   ],
   ["scripts/e2e/lib/openai-chat-tools/client.mjs", [openaiChatToolsE2e]],
@@ -4183,7 +4183,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^test\/e2e\/qa-lab\/runtime\/openai-image-auth-docker-client\.ts$/u,
     [
       "openai-image-auth-docker-client",
-      "extensions/openai/image-generation-provider.test.ts",
+      "extensions/openai/image-generation-provider.auth.test.ts",
       "src/image-generation/openai-compatible-image-provider.test.ts",
     ],
   ],
