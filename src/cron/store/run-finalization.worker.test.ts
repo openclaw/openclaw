@@ -25,6 +25,7 @@ import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
 
 type Outcome =
   CronRuntimeWorkerOperations["cron.finalizeRuns"]["input"]["snapshot"]["outcomes"][number];
+const notRequested = { status: "not-requested" } as const;
 const finalize = (
   database: ReturnType<typeof openOpenClawStateDatabase>,
   storeKey: string,
@@ -155,7 +156,7 @@ it.each([undefined, "timeout"] as const)(
   },
 );
 
-it.each(["cancel", "disable"] as const)(
+it.each(["cancel", "disable", "quiet check"] as const)(
   "coalesces deferred receipts without replay after %s",
   async (terminalAction) => {
     await withOpenClawTestState({ label: "cron-deferred-receipts" }, async (fixture) => {
@@ -218,6 +219,26 @@ it.each(["cancel", "disable"] as const)(
         });
         const retried = claim().accepted[0]!;
         expect(retried.runReceipt.receiptId).not.toBe(request.receiptId);
+        if (terminalAction === "quiet check") {
+          // A check that runs and finds nothing ends the waiting episode it recovered from.
+          const [run] = drainCronQueueInWorker(database, {
+            storeKey,
+            nowMs: attemptAt,
+            requests: [],
+            maxConcurrentRuns: 1,
+          }).launches;
+          finalize(database, storeKey, attemptAt, {
+            ...run!,
+            status: "ok",
+            errorReason: undefined,
+            completionStatus: "succeeded",
+            deliveryState: { status: "not-requested", failureNotification: notRequested },
+            triggerEval: { fired: false, stateChanged: false },
+          });
+          expect(current().state.lastTriggerEvalAtMs).toBe(attemptAt);
+          expect(current().state.admissionDeferred).toBeUndefined();
+          return;
+        }
         // The final decision is authoritative even after a backward clock adjustment.
         if (terminalAction === "cancel") {
           cancelCronRequestsInWorker(database, {
@@ -447,5 +468,88 @@ it("preserves capacity and cancellation contexts when draining receipts", async 
         withContexts.skipped.map(({ runReceipt, error }) => [runReceipt.receiptId, error]),
       ).toEqual([[cancelled!.receiptId, ""]]);
     });
+  });
+});
+
+const quiet = { script: "return { fire: false }" };
+
+it("keeps checks beyond three queued in due order, off the run slots", async () => {
+  await withOpenClawTestState({ label: "cron-condition-checks" }, async (fixture) => {
+    const storeKey = fixture.statePath("cron", "jobs.json");
+    const watch = (id: string, dueAtMs: number) =>
+      queueJob(id, now, { trigger: quiet, state: { nextRunAtMs: dueAtMs } });
+    const jobs = [
+      ...["long-a", "long-b", "long-c"].map((id) => queueJob(id, now)),
+      watch("late", now),
+      ...["w1", "w2", "w3"].map((id) => watch(id, now - 1_000)),
+      watch("early", now - 500),
+    ];
+    const queue = await queueStore(storeKey, jobs, now);
+    await queue.request(jobs.map((job) => scheduled(storeKey, job, job.state.nextRunAtMs!)));
+    const launch = async () => (await queue.drain([], 3)).launches.map(({ job }) => job.id);
+    const first = await queue.drain([], 3);
+    // The long runs take every run slot; three checks start anyway, and early and late wait.
+    expect(first.launches.map(({ job }) => job.id)).toEqual([
+      "w1",
+      "w2",
+      "w3",
+      "long-a",
+      "long-b",
+      "long-c",
+    ]);
+    expect(await launch()).toEqual([]);
+    const fired = first.launches[1]!.runReceipt;
+    const fire = () =>
+      executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+        type: "cron.settleConditionCheck",
+        input: { storeKey, jobId: fired.jobId, receiptId: fired.receiptId },
+      });
+    // A fired condition waits for a run slot, and frees its check for the earliest waiter; it
+    // takes the next slot that opens.
+    expect(await fire()).toMatchObject({
+      runSlot: false,
+      job: { state: { runSlotWaitReceiptId: fired.receiptId } },
+    });
+    expect(await launch()).toEqual(["early"]);
+    await queue.drain([], 4);
+    expect(await fire()).toMatchObject({ runSlot: true });
+    // The check still waiting was never started, so a restart keeps its occurrence.
+    await queue.recover();
+    const late = (await queue.read()).jobs.find((job) => job.id === "late")!;
+    expect(late.state).toMatchObject({ nextRunAtMs: now, queuedAtMs: now });
+    expect(late.state.lastError).toBeUndefined();
+  });
+});
+
+it("gives freed run slots to fired conditions and queued runs in due order", async () => {
+  await withOpenClawTestState({ label: "cron-run-slot-order" }, async (fixture) => {
+    const storeKey = fixture.statePath("cron", "jobs.json");
+    const jobs = [
+      ...["long-a", "long-b"].map((id) =>
+        queueJob(id, now, { state: { nextRunAtMs: now - 2_000 } }),
+      ),
+      queueJob("older", now, { state: { nextRunAtMs: now - 1_000 } }),
+      queueJob("watch", now, { trigger: quiet, state: { nextRunAtMs: now - 500 } }),
+      queueJob("newer", now, { state: { nextRunAtMs: now } }),
+    ];
+    const queue = await queueStore(storeKey, jobs, now);
+    await queue.request(jobs.map((job) => scheduled(storeKey, job, job.state.nextRunAtMs!)));
+    const launch = async (runSlots: number) =>
+      (await queue.drain([], runSlots)).launches.map(({ job }) => job.id);
+    expect(await launch(2)).toEqual(["long-a", "long-b", "watch"]);
+    const watch = (await queue.read()).jobs.find((job) => job.id === "watch")!;
+    const fire = () =>
+      executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+        type: "cron.settleConditionCheck",
+        input: { storeKey, jobId: watch.id, receiptId: watch.state.runningReceiptId! },
+      });
+    expect(await fire()).toMatchObject({ runSlot: false });
+    // The first free slot goes to the run due before the condition fired, not to the condition.
+    expect(await launch(3)).toEqual(["older"]);
+    expect(await fire()).toMatchObject({ runSlot: false });
+    // The next goes to the fired condition, ahead of the run due after it.
+    expect(await launch(4)).toEqual([]);
+    expect(await fire()).toMatchObject({ runSlot: true });
+    expect(await launch(5)).toEqual(["newer"]);
   });
 });

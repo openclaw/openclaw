@@ -18,7 +18,6 @@ export type SubagentActivityProps = {
   rows: readonly ChatSubagentActivity[];
   /** A bounded display receipt, never a hydrated child roster. */
   presentation?: readonly DetailsSubagent[];
-  onPresentation?: (rows: readonly ChatSubagentActivity[]) => void;
   onOpenSubagent?: (key: string) => void;
   onOpenSession?: (key: string) => void;
   /** Limits rendering to the displayed rows. */

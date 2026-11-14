@@ -845,9 +845,9 @@ describe("google-interactions provider", () => {
       expected: { thinking_summaries: "auto" },
     },
   ])(
-    "maps $modelId reasoning=$reasoning and nucleus sampling into the request",
+    "maps $modelId reasoning=$reasoning and sampling controls into the request",
     async ({ modelId, reasoning, expected }) => {
-      const options = { apiKey: "test-api-key", reasoning, topP: 0.4 };
+      const options = { apiKey: "test-api-key", reasoning, topP: 0.4, seed: 7 };
       const fetchMock = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(sseResponse(completedSse() + "data: [DONE]\n\n"));
@@ -864,7 +864,7 @@ describe("google-interactions provider", () => {
       ).result();
 
       const request = requestJson(fetchMock.mock.calls[0]?.[1]?.body);
-      expect(request).toHaveProperty("generation_config", { ...expected, top_p: 0.4 });
+      expect(request).toHaveProperty("generation_config", { ...expected, top_p: 0.4, seed: 7 });
     },
   );
 });

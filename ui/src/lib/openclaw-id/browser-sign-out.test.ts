@@ -40,6 +40,11 @@ async function browser(initial = true) {
   Object.assign(documentWindow, {
     location: { origin: "http://localhost:18790", href: "http://localhost:18790/", assign },
     history: { replaceState: vi.fn() },
+    screen: { availWidth: 1920, availHeight: 1080 },
+    screenX: 100,
+    screenY: 40,
+    outerWidth: 1280,
+    outerHeight: 900,
     open: () => popup,
     setTimeout,
     clearTimeout,
@@ -49,6 +54,55 @@ async function browser(initial = true) {
   const account = await import("./account.ts");
   return { account, storage, documentWindow, assign, popup };
 }
+
+it.each([
+  {
+    screenX: 100,
+    screenY: 40,
+    availWidth: 1920,
+    availHeight: 1080,
+    expected: "popup,width=520,height=720,left=480,top=130",
+  },
+  {
+    screenX: -1500,
+    screenY: -1000,
+    availWidth: 1920,
+    availHeight: 1080,
+    expected: "popup,width=520,height=720,left=-1120,top=-910",
+  },
+  {
+    screenX: 0,
+    screenY: 0,
+    availWidth: 400,
+    availHeight: 600,
+    expected: "popup,width=400,height=600,left=0,top=0",
+  },
+])(
+  "reserves a centered sign-in popup before the Gateway read ($screenX, $screenY)",
+  async (geometry) => {
+    const { account, documentWindow, popup } = await browser(false);
+    Object.assign(documentWindow, {
+      screenX: geometry.screenX,
+      screenY: geometry.screenY,
+      outerWidth: Math.min(1280, geometry.availWidth),
+      outerHeight: Math.min(900, geometry.availHeight),
+      screen: { availWidth: geometry.availWidth, availHeight: geometry.availHeight },
+    });
+    const open = vi.spyOn(window, "open");
+    const request = vi.fn().mockImplementation(() => {
+      expect(open).toHaveBeenCalledWith("about:blank", "_blank", geometry.expected);
+      expect(popup).toHaveProperty("opener", null);
+      return Promise.reject(new Error("synthetic authority failure"));
+    });
+    // SAFETY: the sign-in failure only exercises the Gateway request method.
+    const client = { request } as unknown as GatewayBrowserClient;
+    await expect(account.signInWithOpenClawId({ client, basePath: "" })).rejects.toThrow(
+      "synthetic authority failure",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(popup.close).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("local sign-out immediately clears the account and navigates to safe issuer confirmation", async () => {
   const { account, storage, assign } = await browser();

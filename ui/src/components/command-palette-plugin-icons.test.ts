@@ -6,6 +6,7 @@ import {
   findPaletteOption,
   mountSearch,
   paletteInput,
+  pressKey,
   registerCommandPaletteTestHooks,
   searchPalette,
   setInputValue,
@@ -60,12 +61,14 @@ it("loads eligible visible icons and reloads retained rows without retrying fail
   );
   const initialRow = workboard();
   const input = paletteInput(palette);
+  pressKey(input, "Tab", { cancelable: true });
   setInputValue(input, "Draft a plan for the next release including all testing steps.");
   await palette.updateComplete;
   expect(workboard()).toBe(initialRow);
   expect(initialRow?.closest("[inert]")).not.toBeNull();
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:workboard-1");
   setInputValue(input, "workboard");
+  pressKey(input, "Tab", { cancelable: true });
   await vi.advanceTimersByTimeAsync(200);
   await waitForIcon(2);
 

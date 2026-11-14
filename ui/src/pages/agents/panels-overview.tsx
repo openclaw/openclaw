@@ -37,10 +37,16 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
+import {
+  modelSettingFallbacks,
+  modelSettingPrimary,
+  readModelSetting,
+} from "../../lib/model-setting.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -51,6 +57,8 @@ import type { AgentIdentityOutcome } from "./identity-actions.ts";
 import { renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
+
+const INHERIT_UTILITY = "__openclaw_inherit_utility__";
 
 export function AgentOverview(
   params: AgentConfigState &
@@ -63,6 +71,7 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
+      panelAccess: AgentSettingsAccess["panels"];
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -142,6 +151,32 @@ export function AgentOverview(
   const inheritedDecisionModel = createMemo(() => {
     const value = config().defaults?.decisionModel;
     return typeof value === "string" ? value : undefined;
+  });
+  // Own utility model: an omitted primary inherits agents.defaults.utilityModel; "" disables it.
+  const ownUtilitySetting = createMemo(() => readModelSetting(config().entry?.utilityModel));
+  const utilityModel = createMemo(() => modelSettingPrimary(ownUtilitySetting()));
+  const ownUtilityFallbacks = createMemo(() => modelSettingFallbacks(ownUtilitySetting()));
+  const utilityModelOptions = createMemo(() => {
+    const inherited = modelSettingPrimary(readModelSetting(config().defaults?.utilityModel));
+    return [
+      {
+        value: INHERIT_UTILITY,
+        label: t("agents.overview.inheritDefaultModel", {
+          model:
+            inherited === undefined
+              ? t("agents.overview.utilityModelInheritAutomatic")
+              : inherited || t("modelProviders.defaults.disabled"),
+        }),
+      },
+      { value: "", label: t("agents.overview.utilityModelDisabled") },
+      // Passing the own model keeps an unavailable override visible and selected.
+      ...buildModelOptions(
+        configForm(),
+        utilityModel() || undefined,
+        params.modelCatalog,
+        params.agent.id,
+      ),
+    ];
   });
   const modelFallbacks = createMemo(
     () =>
@@ -439,6 +474,37 @@ export function AgentOverview(
           }
         />
         <SettingsRow
+          title={t("agents.overview.utilityModel")}
+          description={
+            <>
+              {t("agents.overview.utilityModelHelp")}
+              <Show when={ownUtilityFallbacks().length > 0}>
+                <br />
+                {t("agents.overview.utilityModelFallbacks", {
+                  models: ownUtilityFallbacks().join(", "),
+                })}
+              </Show>
+            </>
+          }
+          control={
+            <ModelPicker
+              id="agent-utility-model"
+              label={t("agents.overview.utilityModel")}
+              title={utilityModel() || undefined}
+              value={utilityModel() ?? INHERIT_UTILITY}
+              options={utilityModelOptions()}
+              disabled={disabled()}
+              onChange={(value) =>
+                params.onUtilityModelChange(
+                  params.agent.id,
+                  value === INHERIT_UTILITY ? null : value,
+                )
+              }
+              onOpen={params.onModelCatalogOpen}
+            />
+          }
+        />
+        <SettingsRow
           title={t("chat.modelControls.decisionLabel")}
           description={t("chat.modelControls.decisionAgentHelp")}
           control={
@@ -455,16 +521,36 @@ export function AgentOverview(
         />
       </SettingsSection>
       <SettingsSection title={t("agents.context.title")}>
-        <SettingsNavRow
-          title={t("agents.context.workspace")}
-          description={<span class="agent-overview__workspace">{context().workspace}</span>}
-          onClick={() => params.onSelectPanel("files")}
-        />
-        <SettingsNavRow
-          title={t("agents.context.skillsFilter")}
-          control={<SettingsValue value={context().skillsLabel} />}
-          onClick={() => params.onSelectPanel("skills")}
-        />
+        <Show
+          when={params.panelAccess.files === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.workspace")}
+              control={<SettingsValue mono value={context().workspace} />}
+            />
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.workspace")}
+            description={<span class="agent-overview__workspace">{context().workspace}</span>}
+            onClick={() => params.onSelectPanel("files")}
+          />
+        </Show>
+        <Show
+          when={params.panelAccess.skills === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.skillsFilter")}
+              control={<SettingsValue value={context().skillsLabel} />}
+            />
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.skillsFilter")}
+            control={<SettingsValue value={context().skillsLabel} />}
+            onClick={() => params.onSelectPanel("skills")}
+          />
+        </Show>
         <Show when={params.agent.thinkingDefault}>
           {(level) => (
             <SettingsRow

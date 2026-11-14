@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { describe, expect, it } from "vitest";
+import { extractWikiLinks } from "./markdown-links.js";
 import {
   extractHumanNotesBlock,
+  formatWikiLink,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
   renderWikiMarkdown,
@@ -129,6 +132,18 @@ it.each([
 ])("ignores fenced links and title comments (%s, #97945)", (_name, markdown, expected) => {
   expect(scanWikiSummary(markdown)).toMatchObject(expected);
 });
+
+it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`", "*raw* _text_ &amp; <tag>"])(
+  "renders native link titles literally: %s",
+  (title) => {
+    const relativePath = "sources/meeting notes.md";
+    for (const sourceRelativeTo of ["index.md", "entities/plan.md"]) {
+      const link = formatWikiLink({ renderMode: "native", relativePath, sourceRelativeTo, title });
+      expect(extractWikiLinks(link, sourceRelativeTo)).toEqual([relativePath]);
+      expect(JSON.stringify(fromMarkdown(link))).toContain(`"value":${JSON.stringify(title)}`);
+    }
+  },
+);
 
 it("filters literal links while parsing CommonMark destinations", () => {
   const markdown = [

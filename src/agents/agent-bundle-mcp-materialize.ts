@@ -75,7 +75,7 @@ function toJsonAgentToolResult(params: {
     content: [
       {
         type: "text",
-        text: JSON.stringify(publicValue, null, 2),
+        text: JSON.stringify(publicValue),
       },
     ],
     details: {

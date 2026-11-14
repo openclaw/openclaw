@@ -59,7 +59,7 @@ import {
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
-  resolveRequestedSessionProjectRoot,
+  resolveRequestedSessionProject,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
   validateSessionWorktreeSelection,
@@ -357,14 +357,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, reuseError);
       return;
     }
-    const deferWorktree =
-      p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
-    const requestedProject = await resolveRequestedSessionProjectRoot(cfg, p, client);
+    const requestedProject = await resolveRequestedSessionProject(cfg, p, client);
     if (!requestedProject.ok) {
       respond(false, undefined, requestedProject.error);
       return;
     }
-    const projectRoot = requestedProject.value;
+    const projectRoot = requestedProject.value.root;
+    if (requestedProject.value.worktree || requestedProjectGitUrl) {
+      p.worktree = true;
+    }
+    const deferWorktree =
+      p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
       // Mention validation and later creation must use the same real child target.
@@ -534,6 +537,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       clearExecBinding: !requestedExecNode,
       // A plain New Chat with no cwd must not inherit the prior session cwd.
       clearSpawnedCwd: p.worktree !== true && !sessionCwd,
+      worktree: p.worktree,
       fork: p.fork,
       forkFrom: p.forkFrom,
       ...resolveSessionCreateSpawnContext({
@@ -672,8 +676,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const responseEntry = sessionEntryForkedFromParent(created.entry)
       ? { ...created.entry, forkedFromParent: true as const }
       : created.entry;
+    const freshSession = !created.resetExisting;
     const runStarted =
-      !created.resetExisting &&
+      freshSession &&
       isFreshChatSendStarted({
         payload: runPayload,
         cached: runMeta?.cached === true,
@@ -687,16 +692,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       entry: responseEntry,
       runStarted,
       publicRead,
-      ...(!created.resetExisting && runPayload ? runPayload : {}),
-      ...(!created.resetExisting && runError ? { runError } : {}),
+      ...(freshSession && runPayload ? runPayload : {}),
+      ...(freshSession && runError ? { runError } : {}),
       resolved: created.resolved,
       ...(createdWorktree ? { worktree: createdWorktree } : {}),
     });
     diagnostics?.mark("handlerExit");
-    for (const reason of [
-      created.resetExisting ? "new" : "create",
-      ...(runStarted ? ["send"] : []),
-    ]) {
+    for (const reason of [freshSession ? "create" : "new", ...(runStarted ? ["send"] : [])]) {
       emitSessionsChanged(context, {
         sessionKey: created.key,
         agentId: created.agentId,

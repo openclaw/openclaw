@@ -34,7 +34,7 @@ function anchors(palette: Locator) {
       ".cmd-palette",
       ".cmd-palette__input",
       ".cmd-palette__create",
-      'button[aria-label="New session settings"]',
+      ".palette-session-settings__trigger",
     ].map((selector) => {
       const node = element.querySelector(selector);
       if (!node) {
@@ -48,7 +48,7 @@ function anchors(palette: Locator) {
 
 suite.define(() => {
   it.each([1280, 390])(
-    "keeps the input and actions anchored through paste and removal at %s px",
+    "keeps the card anchored through paste and restores it after removal at %s px",
     async (width) => {
       await suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
@@ -66,7 +66,16 @@ suite.define(() => {
             page,
             suite.server.baseUrl,
           );
+          await input.press("Tab");
           await page.evaluate(() => document.fonts.ready);
+          // Anchors are measured after the card settles from its mode glide.
+          await page.evaluate(() =>
+            Promise.allSettled(
+              (document.querySelector(".cmd-palette-stack")?.getAnimations() ?? []).map(
+                (animation) => animation.finished,
+              ),
+            ),
+          );
           const images = palette.locator(".chat-attachment-thumb img");
           const start = palette.getByRole("button", {
             name: "Start new session in background",
@@ -83,10 +92,11 @@ suite.define(() => {
             const initial = await anchors(palette);
             await pasteImages(input, 2);
             await expect.poll(() => images.count()).toBe(2);
-            expect(await anchors(palette)).toEqual(initial);
+            // The strip docks above the text, as in the composer; only the card's top is fixed.
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             await pasteImages(input, 10);
             await expect.poll(() => images.count()).toBe(12);
-            expect(await anchors(palette)).toEqual(initial);
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             expect(
               await palette
                 .locator(".chat-attachments-preview")
@@ -94,7 +104,7 @@ suite.define(() => {
             ).toBe(true);
             await remove.first().click();
             await expect.poll(() => images.count()).toBe(11);
-            expect(await anchors(palette)).toEqual(initial);
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             // The first pointer removal covers interaction; clear the unchecked tail together.
             await remove.evaluateAll((buttons) => {
               for (const button of buttons) {

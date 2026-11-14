@@ -1,2 +1,0 @@
-# Catalan browser detection, document locale switching, and the existing picker E2E regression.
-9

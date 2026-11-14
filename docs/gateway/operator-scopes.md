@@ -195,6 +195,12 @@ Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
 agent access, and runtime and sandbox requirements still apply.
+Before anyone has used an agent's main conversation, a session writer allowed
+to start sessions for that agent can open it, subscribe to it, and send its
+first turn, which makes them its creator. A subscription from a session-only
+reader or a writer whose role excludes that agent, or to another conversation
+that does not exist yet, still gets the same not-found answer as a hidden
+conversation.
 
 Session readers can read visible dashboards and receive their updates and focus
 commands. Session writers can arrange tabs and put widgets on their own
@@ -250,7 +256,8 @@ secret prompts, and other privileged question workflows retain their existing
 
 ## Named operator roles
 
-Team Gateways can bind authenticated durable profiles to named operator roles.
+Team Gateways enable named-role enforcement by setting `gateway.roles.default`.
+This binds authenticated durable profiles to named operator roles.
 Each role controls access to other people's sessions,
 agents available for session creation and agent runs, a maximum set of operator
 scopes, and whether newly created sessions require sandboxing. It can also require
@@ -283,8 +290,8 @@ an access policy supplied by a plugin.
 ```
 
 Use the administrator-scoped `users.setRole` Gateway method with
-`{ profileId, role }` to assign a configured role. Set `role: null` to clear an
-assignment. Assignment changes immediately invalidate and close that profile's
+`{ profileId, role }` to assign a configured role while named-role enforcement is
+enabled. Set `role: null` to clear an assignment, even when enforcement is disabled. Assignment changes immediately invalidate and close that profile's
 active Gateway connections. Reconnecting applies the current role and scope
 ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
@@ -306,6 +313,7 @@ Use `gateway.roles.assignments.byGithubLogin` to declare assignments before a
 person's first login or share the same mapping across Gateways. Keys are GitHub
 logins, matched case-insensitively after trimming; malformed logins and duplicate
 normalized logins are rejected. Every mapped role must exist in `definitions`.
+The mapping requires `gateway.roles.default`, even when the mapping is empty.
 A valid explicit `users.setRole` assignment wins, followed by the mapping for the
 profile's cached verified primary GitHub identity, then `gateway.roles.default`. Profiles without
 a cached GitHub identity never match this mapping. Clearing an explicit assignment
@@ -313,9 +321,17 @@ with `role: null` exposes the configured mapping or default again.
 
 `users.list` keeps `role` as the explicit assignment and reports `effectiveRole`
 with `roleSource` (`"assigned"`, `"githubLogin"`, or `"default"`).
-`gateway.roles.default` is required whenever roles are configured and must name
-an existing definition. Omitting `gateway.roles` entirely leaves solo and
-shared-secret deployments unchanged.
+`gateway.roles.default` is optional and must name an existing definition when set.
+Without a default, `definitions` is a role catalog only: sign-in, authorization,
+profile requirements, and session access behave as if `gateway.roles` were absent.
+Stored explicit assignments do not apply, and `users.list` reports no effective
+role. Assigning a named role requires a default; clearing an assignment remains
+available. Existing configurations with a default keep their behavior unchanged.
+
+Definitions alone do not disable device-token or setup-code sign-in, browser-code
+pairing, or owner ingress. They do not cap trusted-proxy or Tailscale users; existing
+identity scopes and pairing grants still apply. OpenClaw ID tunnel members retain
+their membership policy regardless of whether named-role enforcement is enabled.
 
 Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
 must confirm the person's current access. For example, the Visitor Access plugin
@@ -346,13 +362,13 @@ mutations recheck the policy before acquiring authority;
 already-admitted runs retain their normal completion and cancellation lifecycle,
 including cancellation when their original access-policy grant expires or is revoked.
 
-When roles are configured, identity-authenticated operator connections do not
+When `gateway.roles.default` is set, identity-authenticated operator connections do not
 receive reusable device or bootstrap tokens: those tokens are not bound to a
 person and could bypass the role ceiling. Device-token or bootstrap-token
 authentication without a verified user identity is rejected for operator
 Gateway connections and HTTP requests. Reconnect through the trusted proxy or
 another supported verified identity, such as Tailscale. Node connections,
-shared-secret/password access, and Gateways without role configuration retain
+shared-secret/password access, and Gateways without named-role enforcement retain
 their existing behavior.
 
 For sessions created by other people, `sessions.others` supports these values:
@@ -419,7 +435,7 @@ grant, and restoring it does not revive revoked authority. New admission is
 required. An unset-selection cyber fallback can retry with Blue only when both
 the role and provider permit Blue; an explicit Standard selection never escalates.
 
-System/shared-secret use and deployments without `gateway.roles` keep their existing non-RBAC
+System/shared-secret use and deployments without `gateway.roles.default` keep their existing non-RBAC
 behavior and provider capability checks. This is not a bypass available to a
 role-governed person.
 
@@ -752,6 +768,11 @@ dispatch so authorization failures have one standard structured response:
 - `sessions.delete` requires `operator.write` for an archived-only request
   with the supported fields, and `operator.admin` otherwise. Neither session
   scope authorizes deletion.
+- `session.typing` accepts `operator.sessions.write` for draft previews in the
+  authenticated creator’s own session, or broader `operator.write` access under
+  the existing participation policy. Read-only access cannot publish typing;
+  session visibility and current authority are checked again before a delayed
+  preview is delivered.
 - `session.reactions.list` accepts `operator.sessions.read` or broader read
   access and requires current session visibility. `session.reactions.set` requires `operator.write`, an identified
   author, and permission to send to or suggest in the session. A view-only
@@ -894,6 +915,15 @@ shared-secret bearer auth, even if a caller sends narrower declared scopes.
 Identity-bearing modes, such as trusted proxy auth or private-ingress `none`,
 can still honor explicit declared scopes. Use separate Gateways for real trust
 boundary separation.
+
+## Recovering from inactive authority
+
+If a turn reports that operator source or execution authority is no longer active,
+reconnect to the Gateway, then send the message again. If reconnecting denies
+access, ask an administrator to restore your access. Starting a new conversation
+does not restore a revoked connection grant. Accepted work retains its original
+authority: reconnecting admits fresh requests but never reactivates old tools or
+callbacks.
 
 ## Related
 

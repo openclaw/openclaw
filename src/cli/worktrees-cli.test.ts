@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WorktreeRecordNotFoundError } from "../agents/worktrees/errors.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -77,19 +78,15 @@ describe("worktrees cli", () => {
     ["remove", "--if-lossless", "--force"],
     ["remove", "--exact-state", "."],
     ["restore", "--recover-exact-state", "."],
+    ["create", "--source-profile"],
   ])("rejects invalid %s requests before mutation", async (command, ...flags) => {
     const remove = vi.spyOn(owner, "remove");
     const lossless = vi.spyOn(owner, "removeIfLossless");
     const restore = vi.spyOn(owner, "restore");
-    const error = flags.includes(".") ? /regular.*file/ : "cannot be used with option";
-    await expect(run([command, "worktree-id", ...flags])).rejects.toThrow(error);
-    expect([remove, lossless, restore].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
-  });
-
-  it("leaves missing source profile values to Commander and performs no creation", async () => {
     const create = vi.spyOn(owner, "create");
-    await expect(run(["create", "/repo", "--source-profile"])).rejects.toThrow(/argument missing/);
-    expect(create).not.toHaveBeenCalled();
+    const error = flags.includes(".") ? /regular.*file/ : /with option|argument missing/;
+    await expect(run([command, "worktree-id", ...flags])).rejects.toThrow(error);
+    expect([remove, lossless, restore, create].some((spy) => spy.mock.calls.length)).toBe(false);
   });
 
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
@@ -146,13 +143,16 @@ describe("worktrees cli", () => {
     },
   );
 
-  it("rejects an empty cleanup job selector before cleanup", async () => {
+  it.each([
+    [["gc", "--job", "", "--json"], "--job must not be empty."],
+    [["remove", "nope"], "unknown active worktree: nope"],
+    [["restore", "nope"], "worktree nope is not restorable"],
+  ])("reports %j as %j", async (args, message) => {
     setRuntimeConfigSnapshot({}, {});
     const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
-    await expect(run(["gc", "--job", "", "--json"])).rejects.toHaveProperty(
-      "humanOutput",
-      "--job must not be empty.",
-    );
+    vi.spyOn(owner, "remove").mockRejectedValue(new WorktreeRecordNotFoundError(message));
+    vi.spyOn(owner, "restore").mockRejectedValue(new WorktreeRecordNotFoundError(message));
+    await expect(run(args)).rejects.toMatchObject({ humanOutput: message, machineOutput: message });
     expect(gc).not.toHaveBeenCalled();
   });
 

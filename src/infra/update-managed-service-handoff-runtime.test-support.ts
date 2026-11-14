@@ -42,7 +42,9 @@ export async function prepareManagedServiceRuntimeFixture({
     | "cancelAtActivation"
     | "interruptedUpdate"
     | "updaterStopped"
+    | "operatorRestart"
     | "pluginCohort"
+    | "finalizeFailure"
   >;
 }) {
   const appendRuntime = (source: string) => fs.appendFile(recoveryModulePath, source);
@@ -71,7 +73,9 @@ export async function prepareManagedServiceRuntimeFixture({
           runId,
           cut: options.interruptedUpdate,
           updaterStopped: options.updaterStopped,
+          operatorRestart: options.operatorRestart,
           pluginCohort: options.pluginCohort,
+          finalizeFailure: options.finalizeFailure,
         })
       : undefined;
   if (options?.requester) {

@@ -25,16 +25,18 @@ import {
   type Ed25519PublicKey,
   type InactivityWindows,
   type IrohEndpointKey,
-  type KeyFingerprint,
   parseStatement,
   registerInvite,
   ROOT_EPOCH,
-  type OwnerCapability,
-  type SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { verifyBinding } from "./binding-check.js";
-import { needsAllowlistUpgrade, upgradeToAllowlist } from "./claw-migration.js";
+import {
+  needsAllowlistUpgrade,
+  upgradeNodeCollections,
+  upgradeToAllowlist,
+} from "./claw-migration.js";
 import {
   assertSameClawIdentity,
   assertStoredClawText,
@@ -54,6 +56,9 @@ import {
   retainMemberProfiles,
   type OpenClawIdMemberProfiles,
 } from "./member-profiles.js";
+import { createNodeInviteOperations, listNodeInviteViews } from "./node-invites.js";
+import type { OwnerDeviceView } from "./owner-devices-view.js";
+import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
@@ -73,20 +78,6 @@ export type LinkCommit = {
   owner_device: unknown;
   /** ServerBinding(seq 1), signed by R. */
   binding: unknown;
-};
-
-/** A refused write: a stable code the UI matches, and detail for logs. */
-export type AuthorityRefusal = {
-  ok: false;
-  code: string;
-  detail: string;
-};
-
-/** Accepted write and the effects to perform. */
-export type AuthorityAccepted = {
-  ok: true;
-  status: "applied" | "pending";
-  events: AuthorityEvent[];
 };
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
@@ -115,13 +106,6 @@ function emptyRecord(clawId: string): StoredClaw {
   };
 }
 
-/** An owner device as the owner's own devices see it: certificate, granted caps and approver. */
-export type OwnerDeviceView = {
-  cert: SignedStatement<"OwnerDeviceCert">;
-  caps: OwnerCapability[];
-  approved_by: "root" | KeyFingerprint;
-};
-
 /** A tunnel-issued device token and the device key it is bound to. */
 export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string };
 
@@ -129,7 +113,7 @@ export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string }
 export function createOpenClawIdAuthority(
   store: {
     read: () => Promise<StoredClaw | undefined>;
-    write: (record: StoredClaw) => Promise<void>;
+    write: (record: StoredClaw, assertCurrent?: () => void) => Promise<void>;
     profiles?: OpenClawIdMemberProfiles;
   } = {
     read: readStoredClaw,
@@ -153,6 +137,7 @@ export function createOpenClawIdAuthority(
     let current = needsAllowlistUpgrade(stored)
       ? await upgradeToAllowlist(stored, nowSeconds())
       : stored;
+    current = upgradeNodeCollections(current);
     if (
       Object.keys(current.authority?.members ?? {}).some(
         (id) => !Object.hasOwn(current.member_approved_at ?? {}, id),
@@ -196,11 +181,12 @@ export function createOpenClawIdAuthority(
     return next;
   };
 
-  const commit = async (candidate: StoredClaw) => {
+  const commit = async (candidate: StoredClaw, assertCurrent?: () => void) => {
     const next = await retainMemberProfiles(record, candidate, profiles);
     const previous = record;
+    assertCurrent?.();
     try {
-      await store.write(next);
+      await store.write(next, assertCurrent);
     } catch (error) {
       // A rejected acknowledgement can follow a durable commit. Withdraw cached authority
       // before reconciliation; no synchronous admission or later write may use a stale row.
@@ -255,6 +241,14 @@ export function createOpenClawIdAuthority(
         isOwnerDeviceActive(device, now) && device.cert.body.peer_keys.includes(peerKey),
     );
     const source = { clawId: state.claw_id, rootPub: state.anchor.root_pub };
+    const node = state.nodes[peerKey];
+    if (node) {
+      return {
+        kind: "node",
+        peerKey,
+        authority: { ...source, listedSeq: node.listed_seq },
+      };
+    }
     if (owner) {
       return {
         kind: "owner",
@@ -336,6 +330,8 @@ export function createOpenClawIdAuthority(
       kSrv: IrohEndpointKey;
       kGw: Ed25519PublicKey;
       hostname: string;
+      /** Throws once the caller's ceremony authority is gone; checked at the write. */
+      guard?: () => void;
     }): Promise<LinkPreparation | AuthorityRefusal> {
       return serialize(async () => {
         const current = await load();
@@ -345,7 +341,7 @@ export function createOpenClawIdAuthority(
         const next = current ?? emptyRecord(bytesToHex(randomBytes(16)));
         const hostname = params.hostname;
         if (next !== current || next.hostname !== hostname) {
-          await commit({ ...next, hostname });
+          await commit({ ...next, hostname }, params.guard);
         }
         return {
           claw_id: next.claw_id,
@@ -360,12 +356,14 @@ export function createOpenClawIdAuthority(
 
     /**
      * Pins R for good, admits owner device D1 and stores the ServerBinding.
-     * Only over direct loopback: relayed traffic never runs a root ceremony.
+     * Only on the `local_operator` ceremony channel: relayed traffic never runs a root
+     * ceremony. `expected.guard` throws once the caller's live ceremony authority is gone;
+     * it is checked at the write, which then rejects.
      */
     commitLink(
       input: LinkCommit,
       channel: Channel | undefined,
-      expected: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey },
+      expected: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey; guard?: () => void },
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
       return serialize(async () => {
         if (channel !== "local_operator") {
@@ -397,7 +395,11 @@ export function createOpenClawIdAuthority(
         if (!binding.ok) {
           return binding;
         }
-        await commit({ ...current, authority: added.state, binding: binding.statement });
+        // The caller's live ceremony authority is checked at the durable write itself.
+        await commit(
+          { ...current, authority: added.state, binding: binding.statement },
+          expected.guard,
+        );
         return {
           ok: true,
           status: "applied",
@@ -482,6 +484,10 @@ export function createOpenClawIdAuthority(
         return { ok: true, status: result.status, events: [...events, ...result.events] };
       });
     },
+
+    ...createNodeInviteOperations({ serialize, load, commit }),
+
+    ...createRebindOperations({ serialize, load, commit }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(
@@ -633,6 +639,11 @@ export function createOpenClawIdAuthority(
       if (!state) {
         return undefined;
       }
+      const nodeInvites = await listNodeInviteViews(current, nowSeconds());
+      // Hashing comparison codes may yield; disclose only the same committed owner view.
+      if (record !== current) {
+        return undefined;
+      }
       const now = nowSeconds();
       const owners = activeOwnerDevices(state, now);
       if (
@@ -657,12 +668,16 @@ export function createOpenClawIdAuthority(
           peer_keys: member.peer_keys,
         })),
         invites: listInviteViews(current, now),
+        nodes: Object.entries(state.nodes).map(([peer_key, node]) =>
+          Object.assign({ peer_key }, node),
+        ),
+        node_invites: nodeInvites,
       };
     },
 
     /**
      * Who the tunnel device `peerKey` is right now: an active owner device, a
-     * member with their role, or undefined when the protocol would not admit it.
+     * member with their role, a node-only key, or undefined when not admitted.
      * An owner device that is also listed as a member is the owner.
      */
     async resolvePeer(peerKey: string): Promise<OpenClawIdTunnelPrincipal | undefined> {
@@ -709,7 +724,21 @@ export function createOpenClawIdAuthority(
       });
     },
 
-    /** Peer keys the tunnel child may admit right now (members and active owner devices). */
+    /** Durable pairing provenance compares the original listing, independently of Labs. */
+    isCurrentNodeListing(source: {
+      peerKey: string;
+      authority: NonNullable<OpenClawIdTunnelPrincipal["authority"]>;
+    }): boolean {
+      const current = currentPeer(source.peerKey);
+      return (
+        current?.kind === "node" &&
+        current.authority?.clawId === source.authority.clawId &&
+        current.authority.rootPub === source.authority.rootPub &&
+        current.authority.listedSeq === source.authority.listedSeq
+      );
+    },
+
+    /** Peer keys the tunnel child may admit now (nodes, members and active owner devices). */
     async admittedPeerKeys(): Promise<{ seq: number; admitted: IrohEndpointKey[] }> {
       const state = (await load())?.authority;
       if (!state) {
@@ -799,11 +828,12 @@ function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): A
   return peerKeys.length > 0 ? [{ type: "disconnect", peer_keys: peerKeys }] : [];
 }
 
-// Every device key of a member or owner device, admitted now or not.
+// Every listed node, member or owner device key, admitted now or not.
 function memberKeys(state: AuthorityState): Set<IrohEndpointKey> {
   return new Set<IrohEndpointKey>([
     ...Object.values(state.members).flatMap((member) => member.peer_keys),
     ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
+    ...Object.keys(state.nodes).filter(isIrohEndpointKey),
   ]);
 }
 

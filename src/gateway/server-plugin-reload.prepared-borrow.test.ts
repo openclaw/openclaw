@@ -376,13 +376,14 @@ it.each(["plugins.reload", "auth refresh", "tool handoff"] as const)(
         assert(record);
         return record;
       };
-      const expectProbe = async (lease: PreparedModelRuntimeLease, generation = 1) => {
-        const tool = fixture.tools(toolName, lease).find(({ name }) => name === toolName);
-        assert(tool, "the Gateway plugin tool must resolve for the prepared turn");
-        await expect(tool.execute("borrow-probe", {})).resolves.toMatchObject({
-          content: [{ type: "text", text: `generation ${generation}` }],
+      const expectProbe = (lease: PreparedModelRuntimeLease, generation = 1) =>
+        lease.run(async () => {
+          const tool = fixture.tools(toolName, lease).find(({ name }) => name === toolName);
+          assert(tool, "the Gateway plugin tool must resolve for the prepared turn");
+          await expect(tool.execute("borrow-probe", {})).resolves.toMatchObject({
+            content: [{ type: "text", text: `generation ${generation}` }],
+          });
         });
-      };
       let lease: PreparedModelRuntimeLease | undefined;
       await fixture.publish();
       lease = await fixture.acquireTurn();

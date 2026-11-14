@@ -59,6 +59,7 @@ import {
 } from "../vitest/vitest.agents-paths.mjs";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createAutoReplyReplyVitestConfig } from "../vitest/vitest.auto-reply-reply.config.ts";
+import { createBoundaryVitestConfig } from "../vitest/vitest.boundary.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
@@ -1469,7 +1470,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(predicted(measured)).toBe(
         runnerBackend === "blacksmith" ? 240 : runnerBackend === "hybrid" ? 435 : 440,
       );
-      expectPlanFiles(measured, files);
+      expectPlanFiles(
+        measured,
+        files.filter((file) => file !== e2eModel && file !== fastModel),
+      );
       expectEvery(
         measured.flatMap(jobGroups).filter((group) => group.shard_name.startsWith(models)),
         (group) => group.timing_key?.startsWith(`${models}-parallel`),
@@ -1479,13 +1483,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .flatMap(jobGroups)
           .filter((group) => group.shard_name.startsWith(models));
         expect(modelGroups).toHaveLength(2);
-        expect(
-          modelGroups.map(
-            (group) =>
-              group.includePatterns?.filter((file) => file !== e2eModel && file !== fastModel)
-                .length,
-          ),
-        ).toEqual([1, 1]);
+        expect(modelGroups.map((group) => group.includePatterns?.length)).toEqual([1, 1]);
         modelGroups.forEach((group, index) => {
           seconds[group.timing_key!] = index === 0 ? 180 : 190;
         });
@@ -2711,7 +2709,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const configs = new Set([configPath("cli"), configPath("cli-process")]);
     const restore = selectFixtureProjects((config) => configs.has(config));
     const timings = spyTimings().mockReturnValue({
-      "agentic-cli": 136,
+      "agentic-cli": 130,
     });
     const options = compactOptions("hybrid", "pull-request");
     try {
@@ -2824,8 +2822,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(planFiles(selected)).toEqual([fast]);
   });
 
-  it("retains recovery contracts in their main, PR, and manual Node tiers", () => {
-    const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
+  it("retains recovery and feature transport contracts in their main, PR, and manual Node tiers", () => {
+    const proofFiles = [
+      "src/gateway/server.codex-failure-recovery.test.ts",
+      "src/gateway/server.feature-session-actions.test.ts",
+    ];
     const files = (mode: "push" | "pull-request") => planFiles(committedPlan(mode));
     const mainFiles = files("push");
     const prFiles = files("pull-request");
@@ -2835,6 +2836,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(prFiles.filter((target) => target === file)).toHaveLength(1);
       const rawConfig = required(buildVitestRunPlans([file])[0]?.config);
       const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+      expect(config).toBe(configPath("gateway-server-isolated"));
       expect(
         manual.filter(
           (shard) =>
@@ -3278,6 +3280,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         isDatabaseWorkerCoreTestFile: () => false,
       });
       mockTrackedFiles((root: string) => (root === "src/infra" ? files : []));
+      await mockFastPaths();
       mockPlanTimings(() =>
         Object.fromEntries(entries.map(([, owner, seconds]) => [owner, seconds])),
       );
@@ -3807,7 +3810,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(hasTooling(automatic)).toBe(false);
     const files = automatic.flatMap(optionalPatterns);
     expectNone(files, (file) => file.startsWith("test/scripts/"));
-    expect(files).toContain("src/infra/home-dir.test.ts");
+    expect(automatic.flatMap((shard) => shard.configs)).toContain(configPath("boundary"));
+    expect(listMatchedTestFiles(createBoundaryVitestConfig({}, []))).toContain(
+      "src/infra/home-dir.test.ts",
+    );
   });
 
   it.each([
@@ -3980,9 +3986,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       owner: "infra",
       prefix: "core-runtime-infra-",
       config: configPath("infra"),
-      expectedFiles: () => [
-        ...new Set([...listTestFiles("src/infra"), ...databaseWorkerCoreTestFiles]),
-      ],
+      expectedFiles: () => listMatchedTestFiles(createInfraVitestConfig({})),
     },
     {
       owner: "cron",
@@ -4027,6 +4031,7 @@ function expectImpacts(
 describe("CI changed Node test plan", () => {
   it.each([
     ["ui/src/main.ts", true],
+    ["src/gateway/control-ui-route-preloads.ts", true],
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     // Erased TSX header imports do not bring Gateway server code into the UI runtime.
     ["packages/gateway-client/src/index.ts", false],

@@ -226,6 +226,7 @@ test("sessions.reset preempts the controller run and clears queues", async () =>
     boardFace: "dashboard",
     boardPresentation: "expanded",
     visibility: "draft",
+    topicName: "Invoices",
   } satisfies Partial<InternalSessionEntry>;
   await upsertSessionEntryCore(
     { storePath, sessionKey: "agent:main:main" },

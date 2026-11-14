@@ -30,6 +30,7 @@ type Step = {
   "working-directory"?: string;
 };
 type Job = {
+  outputs?: Record<string, string>;
   env?: Record<string, string>;
   name?: string;
   environment?: string;
@@ -56,6 +57,42 @@ type Workflow = {
   };
   jobs?: Record<string, Job>;
 };
+
+it("uses live evidence when a failed-job rerun retains an earlier preview", () => {
+  const jobs = workflow().jobs!;
+  expect(jobs.preview_plugins_npm?.outputs?.evidence_attempt).toBe(
+    "${{ steps.prepared_plan.outputs.evidence_attempt }}",
+  );
+  expect(step(jobs.preview_plugins_npm, "Read qualified npm preparation").run).toContain(
+    'echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"',
+  );
+  for (const [previewAttempt, currentAttempt, expectedId] of [
+    ["1", "1", "900"],
+    ["1", "2", ""],
+    ["2", "2", "900"],
+  ]) {
+    for (const [key, value] of Object.entries({
+      PREPARED_NPM_EVIDENCE_ID: "900",
+      PREPARED_NPM_EVIDENCE_DIGEST: "digest",
+    })) {
+      const expression = jobs.publish_plugins_npm!.env![key]!;
+      expect(
+        runInNewContext(expression.slice(3, -2), {
+          github: { run_attempt: currentAttempt },
+          needs: {
+            preview_plugins_npm: {
+              outputs: {
+                evidence_attempt: previewAttempt,
+                evidence_id: "900",
+                evidence_digest: "digest",
+              },
+            },
+          },
+        }),
+      ).toBe(expectedId ? value : "");
+    }
+  }
+});
 
 function workflow(): Workflow {
   return parse(readFileSync(workflowPath, "utf8")) as Workflow;
@@ -269,6 +306,7 @@ it("records the resolved candidate and already-published dispositions without pr
         all.map((entry) => ({ ...entry, localPath: "/producer/private" })),
       ),
       CANDIDATES: JSON.stringify([all[0]]),
+      CORE_DEFERRALS: "[]",
     },
   });
   expect(result.status, result.stderr).toBe(0);
@@ -276,6 +314,7 @@ it("records the resolved candidate and already-published dispositions without pr
     sourceSha: "a".repeat(40),
     all,
     candidates: [all[0]],
+    coreDeferrals: [],
     skippedPublished: [all[1]],
   });
 });
@@ -285,17 +324,9 @@ it.each([
   ["qualified full publication", "full", "latest", "full-release-validation", true],
   ["beta publication", "beta", "beta", "full-release-validation", false],
   ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
-  [
-    "retired waiver cannot qualify stable publication",
-    "beta",
-    "latest",
-    "full-release-validation",
-    false,
-    "Operator approved soak waiver",
-  ],
 ])(
   "creates bootstrap approval only with qualified evidence: %s",
-  (_name, profile, distTag, evidenceMode, expected, waiver = "") => {
+  (_name, profile, distTag, evidenceMode, expected) => {
     const parent = parse(
       readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
     ) as Workflow;
@@ -318,7 +349,7 @@ it.each([
           },
           needs: {
             resolve_release_target: {
-              outputs: { release_profile: profile, stable_soak_waiver: JSON.stringify(waiver) },
+              outputs: { release_profile: profile },
             },
           },
         }),
@@ -353,16 +384,6 @@ it.skipIf(process.platform === "win32").each([
     { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
   ],
   ["profile", { approval: { releaseProfile: "beta" } }],
-  [
-    "retired waiver",
-    {
-      approval: {
-        releaseProfile: "beta",
-        stableSoakWaiver: "2026.9.3 approved",
-        stableSoakWaiverSource: "explicit",
-      },
-    },
-  ],
   ["attestation", { attestationExit: 1 }],
   ["tag moved", { tagSha: "c".repeat(40) }],
   ["target", { approval: { targetSha: "c".repeat(40) } }],
@@ -460,6 +481,7 @@ it.each([
     for (const script of [
       "release-tooling-identity.mjs",
       "lib/record-shared.mjs",
+      "lib/plain-gh.mjs",
       "openclaw-npm-extended-stable-release.mjs",
       "plugin-sdk-api-release-evidence.mjs",
       "lib/release-version.mjs",

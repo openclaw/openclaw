@@ -391,7 +391,7 @@ describe("trajectory runtime", () => {
 
   it("bounds oversized prompts before compact preservation", async () => {
     const parsed = await captureEvent("context.compiled", {
-      prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
+      prompt: "x".repeat(65_537),
     });
     expectBoundedCapture();
     expect(parsed.data.truncated).toBeUndefined();
@@ -403,7 +403,7 @@ describe("trajectory runtime", () => {
     const data = {
       finalPromptText: "inspect",
       prompt: "inspect",
-      systemPrompt: "system prompt",
+      systemPrompt: "x".repeat(65_536),
       messages: [{ role: "user", content: "inspect" }],
       messagesSnapshot: [{ role: "assistant", content: "done" }],
       imagesCount: 0,

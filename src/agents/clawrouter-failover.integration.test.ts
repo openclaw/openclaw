@@ -34,12 +34,21 @@ it.each([
     "invalid_request_error",
     "Your credit balance is too low to access the Anthropic API.",
     false,
+    "route_unavailable",
   ],
-  ["router budget", 402, "budget_exhausted", "proxy key budget is exhausted", true],
-  ["router authentication", 401, "invalid_api_key", "Invalid API key", true],
+  [
+    "request schema",
+    400,
+    "invalid_request_error",
+    "Unsupported parameter temperature",
+    false,
+    "format",
+  ],
+  ["router budget", 402, "budget_exhausted", "proxy key budget is exhausted", true, "billing"],
+  ["router authentication", 401, "invalid_api_key", "Invalid API key", true, "auth"],
 ] as const)(
   "scopes %s failures to their owner across sessions",
-  async (_label, status, code, message, disabled) => {
+  async (_label, status, code, message, disabled, reason) => {
     await withOpenClawTestState(
       {
         label: "clawrouter-failover",
@@ -173,6 +182,10 @@ it.each([
           if (disabled) {
             expect(first).toBeInstanceOf(Error);
             expect(firstRequestCount).toBe(1);
+          } else if (reason === "format") {
+            expect(first).toMatchObject({ reason: "format", status: 400 });
+            expect(String(first)).toContain("Unsupported parameter temperature");
+            expect(firstRequestCount).toBe(1);
           } else {
             expect(first).toMatchObject({ payloads: [{ text: "Peer answered" }] });
             expect(firstRequestCount).toBe(2);
@@ -180,12 +193,14 @@ it.each([
             expect(requests[1]).toMatch(/\/chat\/completions$/);
             const pinned = await run("pinned", true).catch((error: unknown) => error);
             expect(String(pinned)).toMatch(/cannot serve this model.*Choose another model/);
-            expect(pinned).toMatchObject({ reason: "route_unavailable" });
+            expect(pinned).toMatchObject({ reason });
             expect(requests.length).toBe(3);
           }
           reject = false;
           const peer = await run("peer").catch((error: unknown) => error);
-          expect(requests.length).toBe(firstRequestCount + (disabled ? 0 : 2));
+          expect(requests.length).toBe(
+            firstRequestCount + (disabled ? 0 : reason === "format" ? 1 : 2),
+          );
           if (disabled) {
             expect(String(peer)).toMatch(/Retry after|temporarily disabled/);
           } else {

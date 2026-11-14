@@ -70,6 +70,7 @@ import {
   buildPublicModelProjection,
   projectModelServiceTiers,
   projectProviderCatalogOutcomes,
+  retainModelChoiceAccountPin,
 } from "./models-list-public-projection.js";
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
 import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
@@ -279,10 +280,9 @@ export async function prepareModelsListResult({
       );
     }
     await withCurrentReadAuthority(authority, () => {});
-    const catalog = dedupeModelCatalogEntries([
-      ...preparedCatalog.catalog,
-      ...projector.snapshot.entries,
-    ]).filter((entry) => entry.inference?.chat !== false);
+    const { routeVariants, providerOutcomes, entries: snapshotEntries } = projector.snapshot;
+    const allRows = dedupeModelCatalogEntries([...preparedCatalog.catalog, ...snapshotEntries]);
+    const catalog = allRows.filter((entry) => entry.inference?.chat !== false);
     const { evaluateNative } = projector;
     const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
       config: cfg,
@@ -291,11 +291,11 @@ export async function prepareModelsListResult({
       provider: params.params.provider,
     });
     const decisionModels = availableDecisionModels.filter(matchesProvider);
-    const { routeVariants, providerOutcomes } = projector.snapshot;
     const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
     const visibilityPolicy = createModelVisibilityPolicy({
       cfg,
-      catalog,
+      // The policy needs typed-only rows to tell them from refs no catalog knows.
+      catalog: allRows,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel,
       agentId,
@@ -515,7 +515,7 @@ export async function prepareModelsListResult({
                 baseUrl: route.baseUrl,
               })
             : undefined;
-        return {
+        const choice: ModelChoice = {
           ...preparedEntry,
           ...(supportsFastMode === undefined ? {} : { supportsFastMode }),
           ...(speedPolicy.supportsServiceTierRecovery === true
@@ -551,6 +551,7 @@ export async function prepareModelsListResult({
               }
             : {}),
         };
+        return retainModelChoiceAccountPin(choice, decisions.hasPinnedAccount(entry));
       };
     };
 
@@ -586,7 +587,6 @@ export async function prepareModelsListResult({
         }),
       };
     }
-    const { evaluateEntry } = projector;
     const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
     const runtimeChoiceReaders = new Map<string, () => ModelRuntimeChoice[]>();
     const twinRoutes = new Map<string, CliRuntimeTwinRoute>();
@@ -647,7 +647,7 @@ export async function prepareModelsListResult({
                 modelBaseUrl: entry.baseUrl,
               }).runtime
             : undefined;
-          const preparedHost = evaluateEntry(entry, variants, baseRuntime);
+          const preparedHost = projector.evaluateEntry(entry, variants, baseRuntime);
           // Picker alternatives never change the configured row when a session selects a sibling.
           const host = baseRuntime
             ? { ...preparedHost, requestedRuntimeId: undefined }

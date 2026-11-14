@@ -36,11 +36,11 @@ import {
   hashOpenPublishedFile,
   hashPublishedFile,
   hashPublishedFileSync,
-  removePublicationStagingDirectory,
   removePublishedTargetIfOwned,
   sameFileStatFingerprint,
   type SqliteFileContent,
 } from "./sqlite-snapshot-file.js";
+import { removePublicationStagingDirectory } from "./sqlite-snapshot-publication-cleanup.js";
 import {
   prepareSqliteReadOnlyLocation,
   withSqliteSnapshotSource,
@@ -153,6 +153,7 @@ export async function createStoppedSqliteSnapshot(options: {
   sourcePath: string;
   targetPath: string;
   sourceIdentity: BigIntStats;
+  integrity?: CreateVerifiedSqliteSnapshotOptions["integrity"];
 }): Promise<VerifiedSqliteSnapshot> {
   if (options.sourceIdentity.size === 0n) {
     throw new Error(`SQLite snapshot source must not be empty: ${options.sourcePath}`);
@@ -166,6 +167,9 @@ export async function createStoppedSqliteSnapshot(options: {
   let userVersion: number;
   try {
     configureSqliteSnapshotPragmas(snapshot);
+    if (options.integrity) {
+      assertSqliteIntegrity(snapshot, options.targetPath, options.integrity);
+    }
     userVersion = readSqliteUserVersion(snapshot);
   } finally {
     snapshot.close();
@@ -459,13 +463,14 @@ async function publishSqliteFile(
       expectedIdentity,
     );
     assertExpectedContent(publishedContent, expectedContent, options.targetPath);
-    await fs.rmdir(stagingDir);
+    // Retiring an open hard-link alias can leave an NFS .nfs file in staging.
+    await target.close();
+    target = undefined;
+    await removePublicationStagingDirectory(stagingDir, stagingIdentity);
     requireDirectorySync(
       await syncDirectory(targetDirectoryReceipt),
       "SQLite publication directory",
     );
-    await target.close();
-    target = undefined;
     targetPinFileDescriptor = fsSync.openSync(options.targetPath, "r");
     assertOpenFileIdentitySync(targetPinFileDescriptor, options.targetPath, expectedIdentity);
 
@@ -557,6 +562,7 @@ export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
   const retained = options.sourceAcquisition?.preparedSource;
+  const cleanupOptions = { cleanupFailure: options.sourceAcquisition?.cleanupFailure };
   // Take cleanup custody before any asynchronous admission; a rejected transfer
   // must retire this image rather than reacquire a different source generation.
   const create = async () => {
@@ -610,15 +616,13 @@ export async function createVerifiedSqliteSnapshot(
       return withPreparedSqliteSnapshot(
         prepared,
         (privateSourcePath) => verifyAndPublishSqliteSnapshot(options, privateSourcePath),
-        { bestEffortCleanup: options.sourceAcquisition.bestEffortCleanup },
+        cleanupOptions,
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
   return retained
-    ? withPreparedSqliteSnapshot(retained.prepared, create, {
-        bestEffortCleanup: options.sourceAcquisition?.bestEffortCleanup,
-      })
+    ? withPreparedSqliteSnapshot(retained.prepared, create, cleanupOptions)
     : create();
 }
 

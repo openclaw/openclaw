@@ -38,6 +38,10 @@ export default { test: {
   maxWorkers: 2, sequence: { sequencer: UiE2eSequencer },
 } };\n`,
   );
+  symlinkSync(
+    path.resolve("test/vitest/vitest.pattern-file.ts"),
+    local("test/vitest/vitest.pattern-file.ts"),
+  );
   for (const [command, body] of [
     ["pnpm", 'printf "%s\\n" "$*" >> "$UI_BROWSER_INSTALLS"'],
     ["node", 'printf "%s\\n" "$@" > "$UI_BROWSER_ARGS"'],

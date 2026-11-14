@@ -25,6 +25,23 @@ function mountSubagents(initial: readonly Row[], mobile = false) {
   return { view, setRows, setCollapsed, openChild, openCollection };
 }
 
+it.each([false, true])("shimmers only working names as status changes (mobile=%s)", (mobile) => {
+  const { view, setRows } = mountSubagents(
+    [{ key: "child", label: "Review", status: "running" }],
+    mobile,
+  );
+  const name = () => view.container.querySelector(".chat-details-subagents__name")!;
+  expect(name().classList.contains("text-shimmer")).toBe(true);
+  for (const status of ["waiting", "queued", "done", "failed", "stopped", "running"] as const) {
+    setRows([{ key: "child", label: "Review", status }]);
+    flush();
+    expect(name().textContent).toBe("Review");
+    expect(name().classList.contains("text-shimmer")).toBe(
+      status === "running" || status === "waiting",
+    );
+  }
+});
+
 it.each([
   { mobile: false, limit: 5 },
   { mobile: true, limit: 3 },

@@ -400,6 +400,7 @@ run_update() {
       "scripts/prepublish-plugin-registry-artifact.mjs",
       "scripts/e2e/lib/plugins/npm-registry-server.mjs",
       "scripts/lib/bounded-response.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/docker/install-sh-common/version-parse.sh",
     ]) {
       mkdirSync(dirname(join(root, file)), { recursive: true });

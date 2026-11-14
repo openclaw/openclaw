@@ -383,7 +383,12 @@ export function resolveAttachmentSource(
   if (!src) {
     return { status: "checking" as const, reason: undefined, onRetry: undefined };
   }
-  const playback = assistantAvailability.playback ?? attachment.playback ?? "native";
+  // A busy Gateway inspector publishes managed media without playback metadata; the playback
+  // route inspects on demand and serves the original bytes when no rendition is needed.
+  const playback =
+    assistantAvailability.playback ??
+    attachment.playback ??
+    (isManagedOutgoingMediaSource(attachment.url) ? "transcode" : "native");
   return {
     status: "available" as const,
     source: {

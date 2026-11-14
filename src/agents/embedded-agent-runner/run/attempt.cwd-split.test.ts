@@ -140,9 +140,13 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       workspaceAccess: "ro",
       workspaceDir: "/tmp/openclaw-sandbox-copy",
     });
-    await expect(run({ cwd: "/tmp/task-repo", disableTools: true })).rejects.toThrow(
-      "cwd override is not supported",
-    );
+    await expect(
+      run({
+        cwd: "/tmp/task-repo",
+        disableTools: true,
+        config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
+      }),
+    ).rejects.toThrow("cwd override is not supported");
     expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
@@ -153,7 +157,11 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       workspaceAccess: "rw",
       workspaceDir: worktree,
     });
-    await run({ workspaceDir: worktree, cwd: worktree });
+    await run({
+      workspaceDir: worktree,
+      cwd: worktree,
+      config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } } },
+    });
     const call = hoisted.createOpenClawCodingToolsMock.mock.calls[0];
     expect(call?.[0]).toMatchObject({ cwd: worktree, workspaceDir: worktree });
     expect(call?.[4]).toHaveProperty("assertCurrent", expect.any(Function));
