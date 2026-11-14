@@ -9,7 +9,12 @@ import {
   probeTreeClone,
   readCloneFileMetadata,
 } from "@openclaw/fs-safe/copy";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
+import type {
+  WorkspaceFilesystemReadCommand,
+  WorkspaceFilesystemReadReply,
+} from "../agents/workspace-filesystem.types.js";
 import { hasErrnoCode } from "./errno.js";
 import type {
   FsSafeCopyRead,
@@ -20,7 +25,9 @@ import type {
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 import type { ScratchTreeRequest } from "./scratch-cleanup-tree.js";
+import { withWorkerFsSafeNativeMode } from "./worker-fs-safe.js";
 import { workerMutationAssertion } from "./worker-mutation-authority.js";
+import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 
 function failure(error: unknown): FsSafeCopyReply {
   return {
@@ -57,94 +64,119 @@ if (parentPort) {
   const nativeConfig = getFsSafeNativeConfig();
   const { serveWorkerTasks } = await import("./worker-task-server.js");
   configureFsSafeNative(nativeConfig);
-  serveWorkerTasks<FsSafeCopyReply, FsSafeCopyRead | FsSafeProvisionCopy | ScratchTreeRequest>(
-    async (command, channel, control) => {
-      let copyDetails: ProvisionCopyDetails | undefined;
-      try {
-        switch (command.type) {
-          case "scratch": {
-            if (!channel) {
-              throw new Error("Scratch cleanup requires its live host channel");
-            }
-            const { walkScratchTree } = await import("./scratch-cleanup-tree.js");
-            let progress: import("./scratch-cleanup-tree.js").ScratchTreeResult;
-            const checkpoint = workerMutationAssertion(
-              command.decision,
-              () => channel.notify(progress),
-              control.throwIfCancelled,
-            );
-            return await control.runNativeSection(() =>
-              walkScratchTree(command, control.throwIfCancelled, async (next) => {
-                progress = next;
-                checkpoint();
-              }),
-            );
-          }
-          case "provision": {
-            copyDetails = {
-              copier: "portable",
-              batchCount: 0,
-              sourceBytes: 0,
-              spawnCount: 0,
-              spawnMs: 0,
-              childMs: 0,
-              authorityChecks: 0,
-              authorityMs: 0,
-            };
-            const details = copyDetails;
-            if (!channel) {
-              throw new Error("Worktree provisioning requires its live host channel");
-            }
-            const assertMutation = workerMutationAssertion(
-              command.decision,
-              () => channel.notify("authority"),
-              control.throwIfCancelled,
-            );
-            return await control.runNativeSection<FsSafeCopyReply>(async () => {
-              const { copyProvisionedPaths } =
-                await import("../agents/worktrees/provisioned-copy.js");
-              return {
-                type: "provisioned",
-                paths: await copyProvisionedPaths(
-                  command.source,
-                  command.destination,
-                  command.paths,
-                  {
-                    copyDetails: details,
-                    signal: control.signal,
-                    assertCurrent: () => {
-                      const started = performance.now();
-                      details.authorityChecks++;
-                      try {
-                        assertMutation();
-                      } finally {
-                        details.authorityMs += performance.now() - started;
-                      }
-                    },
-                  },
-                ),
-                copyDetails: details,
-              };
-            });
-          }
-          case "probe":
-            return {
-              type: "probe",
-              backend: probeTreeClone(command.parent),
-              nativeMode: getFsSafeNativeConfig().mode,
-            };
-          case "acl":
-            return { type: "acl", acl: inspectDarwinAcl(command.path) };
-          case "metadata":
-            return { type: "metadata", entries: await readCloneFileMetadata(command.paths) };
-          default:
-            throw new Error("Unknown native worktree read operation");
+  serveWorkerTasks<
+    FsSafeCopyReply | WorkspaceFilesystemReadReply,
+    FsSafeCopyRead | FsSafeProvisionCopy | ScratchTreeRequest | WorkspaceFilesystemReadCommand
+  >(async (command, channel, control) => {
+    let copyDetails: ProvisionCopyDetails | undefined;
+    try {
+      switch (command.type) {
+        case "workspace-read": {
+          const { readLocalWorkspaceFileWithGuards } =
+            await import("../agents/workspace-file-read-local.js");
+          const result = await control.runNativeSection(() =>
+            withWorkerFsSafeNativeMode(command.nativeMode, () =>
+              readLocalWorkspaceFileWithGuards(command.input),
+            ),
+          );
+          return {
+            type: "workspace-read",
+            result: result.ok
+              ? result
+              : {
+                  ok: false,
+                  reason: result.reason,
+                  ...(result.error === undefined
+                    ? {}
+                    : { error: encodeNativeWorkerFailure(result.error) }),
+                  ...(result.error instanceof FsSafeError
+                    ? { fsCode: result.error.code, details: result.error.details }
+                    : {}),
+                },
+          };
         }
-      } catch (error) {
-        return { ...failure(error), ...(copyDetails ? { copyDetails } : {}) };
+        case "scratch": {
+          if (!channel) {
+            throw new Error("Scratch cleanup requires its live host channel");
+          }
+          const { walkScratchTree } = await import("./scratch-cleanup-tree.js");
+          let progress: import("./scratch-cleanup-tree.js").ScratchTreeResult;
+          const checkpoint = workerMutationAssertion(
+            command.decision,
+            () => channel.notify(progress),
+            control.throwIfCancelled,
+          );
+          return await control.runNativeSection(() =>
+            walkScratchTree(command, control.throwIfCancelled, async (next) => {
+              progress = next;
+              checkpoint();
+            }),
+          );
+        }
+        case "provision": {
+          copyDetails = {
+            copier: "portable",
+            batchCount: 0,
+            sourceBytes: 0,
+            spawnCount: 0,
+            spawnMs: 0,
+            childMs: 0,
+            authorityChecks: 0,
+            authorityMs: 0,
+          };
+          const details = copyDetails;
+          if (!channel) {
+            throw new Error("Worktree provisioning requires its live host channel");
+          }
+          const assertMutation = workerMutationAssertion(
+            command.decision,
+            () => channel.notify("authority"),
+            control.throwIfCancelled,
+          );
+          return await control.runNativeSection<FsSafeCopyReply>(async () => {
+            const { copyProvisionedPaths } =
+              await import("../agents/worktrees/provisioned-copy.js");
+            return {
+              type: "provisioned",
+              paths: await copyProvisionedPaths(
+                command.source,
+                command.destination,
+                command.paths,
+                {
+                  copyDetails: details,
+                  signal: control.signal,
+                  assertCurrent: () => {
+                    const started = performance.now();
+                    details.authorityChecks++;
+                    try {
+                      assertMutation();
+                    } finally {
+                      details.authorityMs += performance.now() - started;
+                    }
+                  },
+                },
+              ),
+              copyDetails: details,
+            };
+          });
+        }
+        case "probe":
+          return {
+            type: "probe",
+            backend: probeTreeClone(command.parent),
+            nativeMode: getFsSafeNativeConfig().mode,
+          };
+        case "acl":
+          return { type: "acl", acl: inspectDarwinAcl(command.path) };
+        case "metadata":
+          return { type: "metadata", entries: await readCloneFileMetadata(command.paths) };
+        default:
+          throw new Error("Unknown native worktree read operation");
       }
-    },
-  );
+    } catch (error) {
+      return { ...failure(error), ...(copyDetails ? { copyDetails } : {}) };
+    }
+  });
 } else {
   const controller = new AbortController();
   const abort = () => controller.abort();

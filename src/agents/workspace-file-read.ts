@@ -1,12 +1,13 @@
-import syncFs from "node:fs";
 import path from "node:path";
-import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isRootFileMissingFailure, openRootFile } from "../infra/boundary-file-read.js";
+import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { runFsSafeFilesystemTask } from "../infra/fs-safe-filesystem-worker.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../infra/home-dir.js";
-import { retryAsync } from "../infra/retry.js";
+import { decodeNativeWorkerFailure } from "../infra/worker-native-error.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
@@ -18,48 +19,18 @@ import {
   type WorkspaceBootstrapFile,
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
-import {
-  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-  readWorkspaceBootstrapFile,
-} from "./workspace-bootstrap-read.js";
-import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
+import { readLocalWorkspaceFileWithGuards } from "./workspace-file-read-local.js";
+import type {
+  WorkspaceFileSourceIdentity,
+  WorkspaceGuardedReadResult,
+} from "./workspace-filesystem.types.js";
+export { retryWorkspaceRead } from "./workspace-file-read-local.js";
 
 const workspaceLogger = createSubsystemLogger("workspace");
 
-const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"]);
-const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
-const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
-
-export function retryWorkspaceRead<T>(operation: () => Promise<T>): Promise<T> {
-  return retryAsync(operation, {
-    attempts: 3,
-    minDelayMs: 50,
-    maxDelayMs: 50,
-    shouldRetry: (error) => isTransientWorkspaceReadError(error),
-  });
-}
-
-type WorkspaceFileSourceIdentity = readonly [
-  canonicalPath: string,
-  stat: FileIdentityStat | undefined,
-  workspaceRelativePath?: string,
-];
 // Loader-owned records retain the pinned-open identity through final session filtering.
 const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
-
-type WorkspaceGuardedReadResult =
-  | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
-  | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
-
-function workspaceFileIdentity(
-  stat: syncFs.Stats,
-  identity: FileIdentityStat,
-  canonicalPath: string,
-): string {
-  // ctimeMs catches in-place edits that restore mtime (sync/restore/editor tooling);
-  // matches the freshness pattern in assistant-avatar-cache.ts and plugin-registry-snapshot.ts.
-  return `${canonicalPath}|${identity.dev}:${identity.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-}
 
 export function createLoadedWorkspaceBootstrapFile(
   name: WorkspaceBootstrapFile["name"],
@@ -142,68 +113,37 @@ export async function readWorkspaceFileWithGuards(params: {
       return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
     }
   }
-  try {
-    // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
-    // read must not drop the agent's bootstrap file for the turn — this reader
-    // runs every turn for AGENTS/SOUL/TOOLS/etc. Retry the whole open+read so
-    // each attempt uses a fresh fd (retrying readFileSync on the same fd could
-    // return truncated content after a partial read); the inode-identity guard
-    // in openRootFile still protects against a swapped file between attempts.
-    return await retryWorkspaceRead(async () => {
-      const opened = await openRootFile({
-        absolutePath: params.filePath,
-        rootPath: params.workspaceDir,
-        boundaryLabel: "workspace root",
-        symlinks: params.rejectAliases ? "reject" : "follow-parents-within-root",
+  // Seed/publication comparisons already opt out of caching. Move their pinned
+  // filesystem work off-thread without changing the warm bootstrap cache contract.
+  if (params.useCache === false) {
+    try {
+      const { result } = await runFsSafeFilesystemTask({
+        type: "workspace-read",
+        nativeMode: getFsSafeNativeConfig().mode,
+        input: { ...params, useCache: false },
       });
-      if (!opened.ok) {
-        // Boundary resolution can report transient IO as "validation", while
-        // pinned open failures use "io". Classify the underlying error so
-        // deterministic path and validation failures still return unchanged.
-        if (isTransientWorkspaceReadError(opened.error)) {
-          throw opened.error;
-        }
-        return opened;
+      if (result.ok) {
+        return result;
       }
-
-      const identity = workspaceFileIdentity(opened.stat, opened.exactIdentity, opened.path);
-      const sourceIdentity = [opened.path, opened.exactIdentity] as const;
-      const cached =
-        params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
-      try {
-        const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
-        if (cached === undefined && params.useCache !== false) {
-          writeWorkspaceFileCache({ filePath: opened.path, content, identity });
-        }
-        return { ok: true, content, sourceIdentity };
-      } finally {
-        syncFs.closeSync(opened.fd);
-      }
-    });
-  } catch (error) {
-    // Non-transient read failure, or transient retries exhausted.
-    return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
-  }
-}
-
-function isTransientWorkspaceReadError(error: unknown): boolean {
-  if (error && typeof error === "object") {
-    if (
-      "code" in error &&
-      typeof error.code === "string" &&
-      TRANSIENT_WORKSPACE_READ_CODES.has(error.code)
-    ) {
-      return true;
-    }
-    if (
-      "errno" in error &&
-      typeof error.errno === "number" &&
-      TRANSIENT_WORKSPACE_READ_ERRNOS.has(error.errno)
-    ) {
-      return true;
+      const error =
+        result.error === undefined ? undefined : decodeNativeWorkerFailure(result.error);
+      return {
+        ok: false,
+        reason: result.reason,
+        error:
+          result.fsCode && error instanceof Error
+            ? new FsSafeError(result.fsCode, error.message, {
+                cause: error.cause,
+                details: result.details,
+              })
+            : error,
+      };
+    } catch (error) {
+      return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
     }
   }
-  return error instanceof Error && TRANSIENT_WORKSPACE_READ_MESSAGE.test(error.message);
+
+  return readLocalWorkspaceFileWithGuards(params);
 }
 
 export async function loadWorkspaceBootstrapFiles(
