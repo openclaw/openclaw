@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isTranscriptArtifactProvider } from "../../../../packages/agent-core/src/harness/session/transcript-model.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
@@ -109,6 +110,8 @@ export type WorkGroupRenderItem = {
   replyRunId?: string;
   /** No visible reply owns this rollup; nested execution identities must not frame it. */
   ownerless?: true;
+  /** Folded group -> preceding visible output, for chronological expanded rows. */
+  workAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -129,7 +132,30 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
   );
 }
 
+// Assistant text stays out of completed work unless its provider labels all of it
+// commentary. An absent phase is unknown, and a toolUse stop is not narration.
+// Host-authored transcript artifacts retain their existing work classification.
+function isUnlabeledAssistantText(item: TurnRenderItem): item is MessageGroup {
+  return (
+    item.kind === "group" &&
+    item.role.toLowerCase() === "assistant" &&
+    item.visibleContent === "text" &&
+    !item.messages.some(({ message }) => asRecord(message)?.stopReason === "error") &&
+    item.messages.some(
+      ({ message }) =>
+        !isTranscriptArtifactProvider(asRecord(message)?.provider) &&
+        resolveAssistantReplyPhase(message) !== "commentary",
+    )
+  );
+}
+
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
+  return isLegacyWorkGroup(item) && !isUnlabeledAssistantText(item);
+}
+
+// The pre-existing work classification. Placement and run ownership still follow it,
+// so text that now stays visible keeps the position and timing it had as work.
+function isLegacyWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (
     item.kind !== "group" ||
     item.isStreaming ||
@@ -354,7 +380,7 @@ export function collapseCompletedTurnWork(
         trailing.length > 0 &&
         trailing.every(
           (item) =>
-            isCollapsibleWorkGroup(item) &&
+            isLegacyWorkGroup(item) &&
             item.runId === terminalReply.runId &&
             !groupHasFailedResult(item) &&
             !groupEndsRunInFailure(item),
@@ -415,6 +441,8 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
+    const workAfterGroup = new Map<string, string>();
+    let precedingAnswerKey: string | undefined;
     // CLI runtimes import tool rows and interim text without a run id; only the
     // persisted reply that follows them carries it. Such rows belong to that run.
     const workRunIds = new Set<string | undefined>();
@@ -429,6 +457,9 @@ export function collapseCompletedTurnWork(
         (index < finalReplyIndex || (!groupHasFailedResult(item) && !groupEndsRunInFailure(item)))
       ) {
         groups.push(item);
+        if (precedingAnswerKey) {
+          workAfterGroup.set(item.key, precedingAnswerKey);
+        }
         if (earlierRunReplies.size > 0) {
           let runId = item.runId;
           for (let next = index + 1; runId === undefined && next <= segmentEnd; next += 1) {
@@ -439,6 +470,7 @@ export function collapseCompletedTurnWork(
         }
       } else {
         answers.push(item);
+        precedingAnswerKey = item.key;
       }
     }
     if (groups.length === 0) {
@@ -450,7 +482,17 @@ export function collapseCompletedTurnWork(
     // runs keep their replies, the rollup sits above the first of them; that
     // reply owns it only when all of the work belongs to its run. Work across
     // several runs stays outside any run frame.
-    const firstAnswer = answers.find((answer): answer is MessageGroup => answer.kind === "group");
+    // Text that is visible only because it lacks a commentary label never owns the
+    // rollup: ownership and elapsed time stay with the replies that owned them before.
+    const ownerCandidates = answers.filter(
+      (answer) =>
+        answer === terminalReply ||
+        earlierRunReplies.has(answer as MessageGroup) ||
+        !(isLegacyWorkGroup(answer) && isUnlabeledAssistantText(answer)),
+    );
+    const firstAnswer = ownerCandidates.find(
+      (answer): answer is MessageGroup => answer.kind === "group",
+    );
     const ownerReply =
       earlierRunReplies.size === 0
         ? terminalReply
@@ -461,8 +503,8 @@ export function collapseCompletedTurnWork(
       ownerReply &&
       !hasForwardedSource(ownerReply) &&
       !groups.some(hasForwardedSource) &&
-      answers
-        .slice(0, answers.indexOf(ownerReply))
+      ownerCandidates
+        .slice(0, ownerCandidates.indexOf(ownerReply))
         .every(
           (answer) =>
             answer.kind === "group" &&
@@ -483,6 +525,7 @@ export function collapseCompletedTurnWork(
       // Above several runs' replies, work owned by none of them stays unframed
       // even when its rows share one run.
       ...(earlierRunReplies.size > 0 && !replyRunId ? { ownerless: true as const } : {}),
+      ...(workAfterGroup.size > 0 ? { workAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));

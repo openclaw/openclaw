@@ -298,7 +298,13 @@ const run = (runId: string) => ({ __openclaw: { runId } });
 it("shows every run's reply below completed work when completions arrive without user input", async () => {
   const container = await renderTallTranscript("work-runs", [
     { role: "user", content: "Start two subagents", timestamp: 1_000 },
-    { role: "assistant", content: "Spawning both.", timestamp: 1_500, ...run("run-user") },
+    {
+      role: "assistant",
+      content: "Spawning both.",
+      phase: "commentary",
+      timestamp: 1_500,
+      ...run("run-user"),
+    },
     {
       role: "toolResult",
       toolCallId: "work-runs-spawn",
@@ -356,3 +362,74 @@ it("keeps a later run's source cards when an earlier run's reply stays visible",
   // The search result sits in the rollup above both replies; the citing reply keeps its card.
   await waitForSolid(() => expect(container.querySelector(".chat-source-card")).not.toBeNull());
 });
+
+it.each(["same run", "steered", "mixed runs"])(
+  "restores chronological work between replies (%s)",
+  async (variant) => {
+    const entry = (id: string, seq: number, message: Record<string, unknown>) => ({
+      timestamp: seq * 1000,
+      ...message,
+      __openclaw: {
+        id,
+        seq,
+        runId: variant === "mixed runs" && seq <= 2 ? "earlier" : "chrono",
+        ...(message["__openclaw"] as Record<string, unknown>),
+      },
+    });
+    const container = await renderTallTranscript("chrono", [
+      entry("q", 1, { role: "user", content: "Check audio" }),
+      entry("before", 1.5, {
+        role: "assistant",
+        phase: "commentary",
+        content: "Before the answer",
+      }),
+      entry("answer", 2, {
+        role: "assistant",
+        content: "Audio answer first",
+        phase: "final_answer",
+      }),
+      entry("call", 3, {
+        role: "assistant",
+        phase: "commentary",
+        content: [
+          { type: "text", text: "Checking audio now" },
+          { type: "toolCall", id: "audio", name: "read", arguments: { path: "audio.txt" } },
+        ],
+      }),
+      entry("result", 4, {
+        role: "toolResult",
+        toolCallId: "audio",
+        toolName: "read",
+        content: "checked",
+      }),
+      entry("closing", 5, { role: "assistant", content: "Audio closing last", stopReason: "stop" }),
+      ...(variant === "steered"
+        ? [
+            entry("steer", 6, {
+              role: "user",
+              content: "Continue checking",
+              __openclaw: { id: "steer", seq: 6, steerTargetRunId: "chrono" },
+            }),
+          ]
+        : []),
+    ]);
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-work-group button")!;
+    expect(toggle).not.toBeNull();
+    expect(container.textContent).not.toContain("Checking audio now");
+    toggle.click();
+    await waitForSolid(() => expect(container.textContent).toContain("Checking audio now"));
+    const text = container.textContent!;
+    for (const label of [
+      "Before the answer",
+      "Audio answer first",
+      "Checking audio now",
+      "Audio closing last",
+    ]) {
+      expect(text.split(label)).toHaveLength(2);
+    }
+    expect(container.querySelectorAll(".chat-work-group")).toHaveLength(1);
+    expect(text.indexOf("Before the answer")).toBeLessThan(text.indexOf("Audio answer first"));
+    expect(text.indexOf("Audio answer first")).toBeLessThan(text.indexOf("Checking audio now"));
+    expect(text.indexOf("Checking audio now")).toBeLessThan(text.indexOf("Audio closing last"));
+  },
+);
