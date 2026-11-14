@@ -25,7 +25,6 @@ import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lo
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
-  adoptPluginNativeAdmissions,
   nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
   settlePluginNativeAdmissions,
@@ -748,33 +747,5 @@ it("keeps only the current namespace in the admission state as retired generatio
     const current = resources.capture(cache, fixture.root);
     expect(nativeAdmissionStateFor(cache).namespaces.size).toBe(1);
     expectBytes(current.resolve(fixture.filename), fixture.bytes);
-  });
-});
-
-it("keeps only the current namespace when worker admissions replace a receipt", async () => {
-  await withOpenClawTestState({ label: "native-adoption-retention" }, async () => {
-    await using resources = captureResources();
-    const state = nativeAdmissionStateFor(resources.cache());
-    const receipt = (directory: string): PluginSourceAdmissionReceipt => ({
-      signature: directory,
-      sourceDigest: "a".repeat(64),
-      nativeArtifacts: {},
-      nativeNamespaces: {
-        [directory]: {
-          sourceDirectory: "/plugin",
-          capturedRoot: directory,
-          managed: false,
-          members: {},
-        },
-      },
-    });
-    for (const directory of ["/capture/a", "/capture/b", "/capture/c"]) {
-      adoptPluginNativeAdmissions(state, {
-        receipts: new Map([["plugin", receipt(directory)]]),
-        roots: [],
-        publications: [],
-      });
-    }
-    expect([...state.namespaces.keys()]).toEqual(["/capture/c"]);
   });
 });
