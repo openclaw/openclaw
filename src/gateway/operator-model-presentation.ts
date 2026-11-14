@@ -532,6 +532,8 @@ export function prepareOperatorModelPolicyPresentation(params: {
             thinkingLevels: _levels,
             thinkingOptions: _options,
             thinkingDefault: _thinking,
+            // Resolved from the hidden model's params; the policy model has its own default.
+            thinkingInheritedDefault: _inheritedThinking,
             ...identity
           } = row;
           const defaults = projectDefaults({

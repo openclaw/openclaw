@@ -55,7 +55,13 @@ type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny"> & {
 
 type AgentConfigEntry = Pick<
   AgentConfig,
-  "name" | "workspace" | "agentDir" | "decisionModel" | "utilityModel" | "skills"
+  | "name"
+  | "workspace"
+  | "agentDir"
+  | "decisionModel"
+  | "utilityModel"
+  | "skills"
+  | "thinkingDefault"
 > & {
   model?: unknown;
   models?: Record<string, { alias?: unknown }>;

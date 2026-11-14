@@ -70,6 +70,10 @@ export function createAgentConfigActions(params: {
               : (modelId ?? undefined),
           );
         }),
+      onThinkingDefaultChange: (agentId: string, level: string | null) =>
+        edit(agentId, level !== null, (config, target) =>
+          stage(config, [...target.path, "thinkingDefault"], level ?? undefined),
+        ),
       onModelFallbacksChange: (agentId: string, fallbacks: string[]) =>
         edit(agentId, true, (config, target) => {
           stage(

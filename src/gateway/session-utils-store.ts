@@ -566,7 +566,7 @@ export async function listAgentsForGateway(
     const preparedCatalog = options?.modelCatalogByAgentId?.get(
       hasAgentCatalog ? id : basic.defaultId,
     );
-    const thinkingProfile = resolveGatewayModelThinkingProfile({
+    const thinkingParams = {
       cfg,
       agentId: id,
       provider: resolvedModel.provider,
@@ -574,7 +574,14 @@ export async function listAgentsForGateway(
       modelCatalog: preparedCatalog?.entries,
       sessionKey,
       providerPolicySource: preparedCatalog?.pluginRegistry,
-    });
+    };
+    const thinkingProfile = resolveGatewayModelThinkingProfile(thinkingParams);
+    // With its own override, thinkingDefault is that override; editors also need the level
+    // clearing it would fall back to (per-model params, global default, model default).
+    const thinkingInheritedDefault = agentConfig?.thinkingDefault
+      ? resolveGatewayModelThinkingProfile({ ...thinkingParams, withoutAgentThinkingDefault: true })
+          .thinkingDefault
+      : undefined;
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
@@ -595,6 +602,7 @@ export async function listAgentsForGateway(
         thinkingLevels: thinkingProfile.thinkingLevels,
         thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
         thinkingDefault: thinkingProfile.thinkingDefault,
+        ...(thinkingInheritedDefault ? { thinkingInheritedDefault } : {}),
       },
       { model },
       utility ? { utilityModel: `${utility.provider}/${utility.model}` } : {},

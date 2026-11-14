@@ -820,6 +820,7 @@ const startupEnglish = {
       notSet: {},
       inheritDefault: {},
       inheritDefaultModel: {},
+      inheritDefaultThinking: {},
       fallbacks: {},
       addFallback: {},
     },
