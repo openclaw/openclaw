@@ -18,6 +18,7 @@ openclaw-chat-question-panel {
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: var(--chat-composer-surface, var(--popover));
+  backdrop-filter: blur(18px) saturate(1.35);
   box-shadow: none;
   color: var(--text);
   outline: none;
@@ -40,12 +41,6 @@ openclaw-chat-question-panel {
   border-color: var(--chat-composer-hairline, var(--border));
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-}
-
-@supports (backdrop-filter: blur(1px)) {
-  .chat-question-panel {
-    backdrop-filter: blur(18px) saturate(1.35);
-  }
 }
 
 .chat-question-panel--collapsed {

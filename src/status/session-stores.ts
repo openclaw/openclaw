@@ -59,6 +59,20 @@ function compareSessionRows(
   );
 }
 
+function locateSessionRow(rows: SummaryRow[], candidate: SummaryRow) {
+  let lo = 0;
+  let hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (compareSessionRows(rows[mid]!, candidate) < 0) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
 function updateProjectionSummary(store: ProjectionStoreSummary, row: SelectionRow, seed = false) {
   let agent = store.agents.get(row.agentId);
   if (!agent) {
@@ -75,23 +89,10 @@ function updateProjectionSummary(store: ProjectionStoreSummary, row: SelectionRo
     agent.ordered.push(next);
     return;
   }
-  const locate = (candidate: SummaryRow) => {
-    let lo = 0;
-    let hi = agent.ordered.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (compareSessionRows(agent.ordered[mid]!, candidate) < 0) {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    return lo;
-  };
   if (previous) {
-    agent.ordered.splice(locate(previous), 1);
+    agent.ordered.splice(locateSessionRow(agent.ordered, previous), 1);
   }
-  agent.ordered.splice(locate(next), 0, next);
+  agent.ordered.splice(locateSessionRow(agent.ordered, next), 0, next);
   store.windows.clear();
 }
 
@@ -107,12 +108,27 @@ function summarizeProjectionRows(
     projectionSummaries.set(projection, stores);
     const retained = stores;
     projection.onSelectionChange((change) => {
-      if (change.kind === "reset" || !change.row) {
+      if (change.kind === "reset") {
         retained.clear();
+        return;
+      }
+      const store = retained.get(change.storePath);
+      if (!store) {
+        return;
+      }
+      if (change.row) {
+        updateProjectionSummary(store, change.row);
       } else {
-        const store = retained.get(change.row.storeTarget.storePath);
-        if (store) {
-          updateProjectionSummary(store, change.row);
+        const agent = store.agents.get(change.agentId);
+        const previous = agent?.rows.get(change.key);
+        if (agent && previous) {
+          agent.rows.delete(change.key);
+          agent.ordered.splice(locateSessionRow(agent.ordered, previous), 1);
+          store.count--;
+          store.windows.clear();
+          if (!agent.rows.size) {
+            store.agents.delete(change.agentId);
+          }
         }
       }
     });

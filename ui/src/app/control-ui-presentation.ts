@@ -117,7 +117,7 @@ export function syncControlUiSystemChrome(
   const root = document.documentElement;
   committedShell = shell ?? committedShell;
   const { contentCanvas, navScrim } = committedShell;
-  const narrow = globalThis.matchMedia?.(
+  const narrow = globalThis.matchMedia(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   ).matches;
   const narrowCanvas = narrow && contentCanvas;
@@ -316,7 +316,8 @@ export function applyControlUiAccent(userAccent?: string): void {
 
 export function applyControlUiOperatorSeamColor(seamColor?: string): void {
   const root = document.documentElement;
-  if (operatorSeamRoot === root && operatorSeamColor === seamColor) {
+  // An absent initial seam has nothing to project; the theme owner applies its own accent.
+  if (operatorSeamColor === seamColor && (seamColor === undefined || operatorSeamRoot === root)) {
     return;
   }
   operatorSeamRoot = root;

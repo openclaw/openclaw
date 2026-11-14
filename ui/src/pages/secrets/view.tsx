@@ -1,10 +1,12 @@
 import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { Radio } from "../../components/solid/radio.tsx";
 import "../../components/modal-dialog.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -17,8 +19,8 @@ import {
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SecretsStoreState } from "../../lib/secrets-store/index.ts";
-import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
+import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import type { SecretsPageState } from "./state.ts";
 
 type SecretsStoreViewProps = {
@@ -270,9 +272,9 @@ function SecretDialog(props: {
         <div class="oc-dialog__body">
           {props.children}
           <Show when={props.view.state.formError}>
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {props.view.state.formError}
-            </div>
+            </InlineAlert>
           </Show>
         </div>
         <openclaw-modal-actions class="oc-dialog__footer">
@@ -391,8 +393,7 @@ function BulkDialog(props: SecretsStoreViewProps) {
           })}
         </div>
         <label class="secrets-store-checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.state.bulkAutoDetect}
             disabled={props.busy}
             onChange={(event) =>
@@ -407,9 +408,9 @@ function BulkDialog(props: SecretsStoreViewProps) {
           </span>
         </label>
         <Show when={props.bulkInvalidNames.length > 0}>
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {t("secretsStore.badName")} {props.bulkInvalidNames.join(", ")}
-          </div>
+          </InlineAlert>
         </Show>
       </SecretDialog>
     </Show>
@@ -421,7 +422,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
     <>
       <SettingsPage wide>
         <Show when={props.state.store.error}>
-          <div class="callout danger secrets-store__message" role="alert">
+          <InlineAlert tone="danger" class="secrets-store__message" role="alert">
             <span>{props.state.store.error}</span>
             <Show when={props.state.canCall("secrets.store.list")}>
               <button
@@ -436,12 +437,17 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                 {t("common.retry")}
               </button>
             </Show>
-          </div>
+          </InlineAlert>
         </Show>
         <Show when={props.state.notice}>
-          <div class="callout success secrets-store__message" role="status" aria-live="polite">
+          <InlineAlert
+            tone="success"
+            class="secrets-store__message"
+            role="status"
+            aria-live="polite"
+          >
             {props.state.notice}
-          </div>
+          </InlineAlert>
         </Show>
         <SettingsSection
           actions={

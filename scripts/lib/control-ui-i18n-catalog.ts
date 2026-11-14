@@ -28,12 +28,14 @@ import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en
 import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-outputs.ts";
 import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-chat-permissions.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
+import { registerChatPublicQrEnglish } from "../../ui/src/i18n/locales/en-chat-public-qr.ts";
 import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-questions.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
+import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerConnectionRecoveryEnglish } from "../../ui/src/i18n/locales/en-connection-recovery.ts";
@@ -59,9 +61,12 @@ import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.t
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
 import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model-controls.ts";
+import { registerModelFavoritesEnglish } from "../../ui/src/i18n/locales/en-model-favorites.ts";
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNativeLinkMenuEnglish } from "../../ui/src/i18n/locales/en-native-link-menu.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../ui/src/i18n/locales/en-openclaw-id-dialogs.ts";
+import { registerOpenClawIdEnglish } from "../../ui/src/i18n/locales/en-openclaw-id.ts";
 import { registerPermissionErrorsEnglish } from "../../ui/src/i18n/locales/en-permission-errors.ts";
 import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
@@ -150,10 +155,12 @@ const sourceFiles = [
   "en-chat-failed-message-edit.ts",
   "en-chat-media.ts",
   "en-chat-provider-review.ts",
+  "en-chat-public-qr.ts",
   "en-chat-questions.ts",
   "en-chat-session.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
+  "en-chat-tool-widgets.ts",
   "en-chat-welcome.ts",
   "en-templates.ts",
   "en-code-blocks.ts",
@@ -179,6 +186,8 @@ const sourceFiles = [
   "en-model-account-list.ts",
   "en-model-accounts.ts",
   "en-model-controls.ts",
+  "en-model-favorites.ts",
+  "en-model-provider-auth.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
   "en-provider-usage.ts",
@@ -191,6 +200,8 @@ const sourceFiles = [
   "en-session-placement.ts",
   "en-new-session-runtime.ts",
   "en-new-session-setup.ts",
+  "en-openclaw-id.ts",
+  "en-openclaw-id-dialogs.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
   "en-portals.ts",
@@ -425,8 +436,17 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   }
   const toolCards: TranslationMap = {};
   const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
+  // Deferred widget leaves retain their original translation-memory positions.
+  const { canvas, showRawDetails, hideRawDetails, widgetActions, ...widgetExports } =
+    registerChatToolWidgetsEnglish.catalog.chat.toolCards;
   for (const [key, value] of Object.entries(registerChatToolLabelsEnglish.catalog.chat.toolCards)) {
     toolCards[key] = value;
+    if (key === "patch") {
+      Object.assign(toolCards, { tool: en.chat.toolCards.tool, canvas });
+    }
+    if (key === "activity") {
+      Object.assign(toolCards, { showRawDetails, hideRawDetails });
+    }
     const contentKeys: Array<keyof typeof toolContent> =
       key === "toolOutput"
         ? [
@@ -439,16 +459,25 @@ export function loadControlUiSourceCatalog(): TranslationMap {
             "outputLoadFailed",
             "outputDownloadFailed",
             "toolError",
+            "previewMore",
+            "previewCaptured",
+            "previewTruncated",
           ]
-        : key === "hideRawDetails"
+        : key === "activity"
           ? ["viewMode", "diff", "raw"]
           : key === "openFile"
-            ? ["openDetails"]
+            ? ["openDetails", "openDetailsTooltip"]
             : key === "exitCode"
               ? ["noOutputFailed"]
               : [];
     for (const contentKey of contentKeys) {
       toolCards[contentKey] = toolContent[contentKey];
+    }
+    if (key === "openFile") {
+      toolCards.widgetActions = widgetActions;
+    }
+    if (key === "downloadFile") {
+      Object.assign(toolCards, widgetExports);
     }
   }
   const boardWidget: TranslationMap = {};
@@ -627,6 +656,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     },
     registerChatGoalsEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
+    registerChatPublicQrEnglish.catalog,
     registerCodeBlocksEnglish.catalog,
     registerConnectionRecoveryEnglish.catalog,
     registerCronEnglish.catalog,
@@ -645,11 +675,14 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerModelAccountsEnglish.catalog,
     registerCronScheduleEnglish.catalog,
     registerModelControlsEnglish.catalog,
+    registerModelFavoritesEnglish.catalog,
     registerModelSetupEnglish.catalog,
     registerPersonalInstructionsEnglish.catalog,
     registerSessionMachineEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
+    registerOpenClawIdEnglish.catalog,
+    registerOpenClawIdDialogsEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,

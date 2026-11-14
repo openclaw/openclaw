@@ -59,7 +59,7 @@ suite.define(() =>
       const row = (label: string) =>
         page
           .locator(".session-data-row")
-          .filter({ has: page.locator(`.session-label-chip[title="${label}"]`) });
+          .filter({ has: page.getByRole("link", { name: label, exact: true }) });
       const mainRow = row(main.label);
       const researchRow = row(research.label);
       await mainRow.waitFor({ state: "visible", timeout: 10_000 });
@@ -67,7 +67,6 @@ suite.define(() =>
 
       await ui.button(page, "Filters").click();
       const filters = page.locator(".sessions-filter-popover:popover-open");
-      await filters.locator(".header-search__toggle").click();
       const rosterFilter = filters.getByRole("searchbox");
       await rosterFilter.fill("Research");
       await gateway.waitForRequest("sessions.list", { match: { search: "Research" } });
@@ -75,7 +74,7 @@ suite.define(() =>
         .poll(() =>
           page.locator(".session-data-row").evaluateAll((rows) =>
             rows.map((element) => ({
-              label: element.querySelector(".session-label-chip")?.getAttribute("title"),
+              label: element.querySelector(".session-key-cell__primary .session-link")?.textContent,
               visible: element.checkVisibility({ visibilityProperty: true }),
             })),
           ),
@@ -84,7 +83,6 @@ suite.define(() =>
       await captureUiProof(page, "01-session-filter.png");
       await rosterFilter.fill("");
       await mainRow.waitFor({ state: "visible" });
-      await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
       const transcriptSearch = page.getByRole("search", { name: "Search transcripts" });
@@ -121,13 +119,15 @@ suite.define(() =>
       await support.activateSelfRemovingControl(
         ui.menuItem(page.locator("openclaw-session-menu"), "Archive session", false),
       );
-      await ui.sessionPatch(gateway, research.key, { archived: true });
       const toast = page
         .locator("openclaw-toast-host .app-toast")
         .filter({ hasText: "Session archived" });
       await toast.waitFor({ state: "visible", timeout: 10_000 });
       await ui.visible(ui.button(toast, "Undo", false));
       await captureUiProof(page, "03-session-archive-feedback.png");
+      expect(await ui.requestCount(gateway, "sessions.patch")).toBe(0);
+      await ui.closeArchiveUndoToast(page);
+      await ui.sessionPatch(gateway, research.key, { archived: true });
     });
   }),
 );

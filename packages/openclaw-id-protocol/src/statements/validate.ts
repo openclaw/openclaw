@@ -10,12 +10,17 @@ import {
 } from "../keys.js";
 import { checkVersion, SUPPORTED_STATEMENT_VERSIONS, type StatementVersion } from "../version.js";
 import {
-  MEMBER_ROLES,
+  MAX_NODE_DISPLAY_NAME,
+  MAX_NODE_PLATFORM,
+  MAX_NODE_SURFACE_ITEMS,
+  MAX_NODE_SURFACE_NAME,
   MEMBERSHIP_OPS,
   OWNER_CAPABILITIES,
   REVOCATION_KINDS,
   ROOT_EPOCH,
   STATEMENT_TYPES,
+  type MemberRole,
+  type NodeDescription,
   type SignedStatement,
   type StatementType,
 } from "./types.js";
@@ -112,9 +117,9 @@ function nullable(check: Check): Check {
 }
 
 // A list of unique items, each passing `check`.
-function list(check: Check, minLength = 0): Check {
+function list(check: Check, minLength = 0, maxLength = MAX_LIST): Check {
   return (value, path) => {
-    if (!Array.isArray(value) || value.length < minLength || value.length > MAX_LIST) {
+    if (!Array.isArray(value) || value.length < minLength || value.length > maxLength) {
       fail(path, "expected list");
     }
     value.forEach((item, index) => check(item, `${path}[${index}]`));
@@ -124,8 +129,18 @@ function list(check: Check, minLength = 0): Check {
   };
 }
 
+const OPTIONAL = new WeakSet<Check>();
+
+// A member that may be absent; when present it must pass `check`.
+function optional(check: Check): Check {
+  const wrapped: Check = (value, path) => check(value, path);
+  OPTIONAL.add(wrapped);
+  return wrapped;
+}
+
 // An object with exactly these members. Unknown members are rejected: a new signed field
-// needs a new envelope version (docs/versioning.md, "Unknown fields").
+// needs a new envelope version (docs/versioning.md, "Unknown fields"). Pre-release v1-draft
+// additions use `optional` instead (statements.md, "Node-only statements and membership").
 function object(shape: Record<string, Check>): Check {
   return (value, path) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -140,6 +155,9 @@ function object(shape: Record<string, Check>): Check {
     }
     for (const [key, check] of Object.entries(shape)) {
       if (!Object.hasOwn(record, key)) {
+        if (OPTIONAL.has(check)) {
+          continue;
+        }
         fail(`${path}.${key}`, "missing field");
       }
       check(record[key], `${path}.${key}`);
@@ -162,7 +180,42 @@ function tagged(field: string, variants: Record<string, Check>): Check {
   };
 }
 
-const role = oneOf(MEMBER_ROLES);
+// These fields are shown in a terminal; reject embedded terminal controls at the signed boundary.
+// oxlint-disable-next-line no-control-regex
+const NODE_CONTROL_RE = /[\u0000-\u001f\u007f]/;
+const nodeText = (max: number): Check =>
+  predicate(
+    (v) => isText(v) && v.length > 0 && v.length <= max && !NODE_CONTROL_RE.test(v),
+    `expected non-empty text of at most ${max} UTF-16 code units without control characters`,
+  );
+const nodeDescription = object({
+  display_name: nodeText(MAX_NODE_DISPLAY_NAME),
+  platform: nodeText(MAX_NODE_PLATFORM),
+  commands: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
+  caps: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
+});
+/** Validates an opaque, signed member role name without assigning it authority or rank. */
+export function isMemberRole(value: unknown): value is MemberRole {
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value);
+}
+
+const role = predicate(
+  isMemberRole,
+  "expected role name: 1-64 lowercase ASCII letters, digits, - or _, starting with a letter",
+);
+
+/** Whether an untrusted value is a bounded node description (as signed in NodeRedemption). */
+export function isNodeDescription(value: unknown): value is NodeDescription {
+  try {
+    nodeDescription(value, "$");
+    return true;
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      return false;
+    }
+    throw error;
+  }
+}
 const ownerDeviceCertBody = object({
   device_pub: ed25519Key,
   peer_keys: list(irohKey),
@@ -215,6 +268,22 @@ const V1_BODIES: Record<StatementType, Check> = {
     single_use: bool,
     secret_hash: sha256Hex,
   }),
+  NodeInviteCap: object({
+    claw_id: clawId,
+    invite_id: randomId,
+    label: text,
+    created_at: seconds,
+    expires_at: seconds,
+    secret_hash: sha256Hex,
+  }),
+  NodeRedemption: object({
+    description: nodeDescription,
+    claw_id: clawId,
+    invite_id: randomId,
+    peer_key: irohKey,
+    proof: sha256Hex,
+    requested_at: seconds,
+  }),
   MembershipChange: object({
     claw_id: clawId,
     seq: positive,
@@ -226,6 +295,20 @@ const V1_BODIES: Record<StatementType, Check> = {
         peer_keys: list(irohKey, 1),
         invite_id: nullable(randomId),
       }),
+      add_member_device: object({
+        op: oneOf(["add_member_device"]),
+        account_id: nonEmptyText,
+        peer_key: irohKey,
+        device_pub: ed25519Key,
+        label: text,
+      }),
+      add_node: object({
+        op: oneOf(["add_node"]),
+        peer_key: irohKey,
+        label: text,
+        invite_id: randomId,
+      }),
+      remove_node: object({ op: oneOf(["remove_node"]), peer_key: irohKey }),
       remove: object({ op: oneOf(["remove"]), account_id: nonEmptyText }),
       set_role: object({ op: oneOf(["set_role"]), account_id: nonEmptyText, role }),
       revoke_device: object({ op: oneOf(["revoke_device"]), peer_key: irohKey }),
@@ -233,6 +316,7 @@ const V1_BODIES: Record<StatementType, Check> = {
         op: oneOf(["add_owner_device"]),
         // A v1 MembershipChange carries a v1 certificate.
         cert: (value, path) => envelope("OwnerDeviceCert", 1, ownerDeviceCertBody)(value, path),
+        node: optional(object({ peer_key: irohKey, label: text, description: nodeDescription })),
       }),
       deny_invite: object({ op: oneOf(["deny_invite"]), invite_id: randomId }),
     } satisfies Record<(typeof MEMBERSHIP_OPS)[number], Check>),
@@ -253,11 +337,13 @@ const V1_BODIES: Record<StatementType, Check> = {
     binding_seq: positive,
     owner_devices: list(object({ device_pub: ed25519Key, caps: list(oneOf(OWNER_CAPABILITIES)) })),
     owner_peer_keys: list(irohKey),
+    node_peer_keys: list(irohKey),
     members: list(object({ account_id: nonEmptyText, role, peer_keys: list(irohKey) })),
     protocols: object({ statement: versionList, descriptor: versionList }),
     issued_at: seconds,
   }),
   InviteRedemption: object({
+    label: text,
     claw_id: clawId,
     invite_id: randomId,
     account_id: nonEmptyText,

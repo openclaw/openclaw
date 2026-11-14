@@ -156,12 +156,12 @@ describe("cron view list pane", () => {
         );
       }
       if (props.error) {
-        expect(text(container, '.cron-error-banner[role="alert"]')).toContain(props.error);
+        expect(text(container, ".callout.danger[role=alert]")).toContain(props.error);
       }
     }
     const failed = await renderView({ hasLoaded: false, listError: "Unable to load automations." });
     expectAbsent(failed, ".cron-empty-state", testId("cron-jobs-loading"));
-    const failedAlert = getElement(failed, ".cron-error-banner", HTMLDivElement);
+    const failedAlert = getElement(failed, ".callout.danger[role=alert]", HTMLDivElement);
     expect(failedAlert.getAttribute("role")).toBe("alert");
     expect(failedAlert.textContent).toContain("Unable to load automations.");
   });

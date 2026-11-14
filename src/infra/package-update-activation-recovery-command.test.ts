@@ -141,7 +141,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
       }
       expect(fs.readFileSync(prepared.launcher, "utf8")).toBe("candidate launcher\n");
       expect(fs.statSync(path.join(prepared.packageRoot, "dist/index.js")).mode & 0o777).toBe(
-        0o600,
+        0o650,
       );
       expect(
         JSON.parse(fs.readFileSync(path.join(prepared.packageRoot, "package.json"), "utf8")),

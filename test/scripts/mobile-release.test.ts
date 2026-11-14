@@ -64,6 +64,7 @@ function fixture(
   const uploadAudit = path.join(directory, "upload.json");
   const firebaseAudit = path.join(directory, "firebase.jsonl");
   const firebasePreload = path.join(directory, "firebase-fixture.mjs");
+  const rendezvous = path.join(directory, "rendezvous");
   let firebaseKey = "";
   git(directory, "init", "--bare", "--initial-branch=main", remote);
   git(directory, "clone", remote, root);
@@ -135,6 +136,60 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
 `,
   });
   if (platform === "android") {
+    fs.mkdirSync(rendezvous);
+    fs.renameSync(
+      path.join(root, "scripts/mobile-release-notes.ts"),
+      path.join(root, "scripts/fixture-notes.ts"),
+    );
+    write(
+      root,
+      "scripts/mobile-release-notes.ts",
+      String.raw`
+import fs from "node:fs";
+import path from "node:path";
+import { waitFor } from "./fixture-rendezvous.mjs";
+if (process.argv.includes("generate")) {
+  const directory = process.env.FIXTURE_RELEASE_RENDEZVOUS;
+  fs.writeFileSync(path.join(directory, "notes-pid"), String(process.pid));
+  process.once("exit", () => {
+    if (process.env.FIXTURE_RELEASE_FAILURE) {
+      fs.mkdirSync("apps/android/build/release-artifacts", { recursive: true });
+      fs.writeFileSync("apps/android/build/release-artifacts/notes-joined.apk", "Generator finished before artifact collection.");
+    }
+    fs.writeFileSync(path.join(directory, "notes-exited"), "finished");
+  });
+  await waitFor("build-ready", "Build did not start while notes were pending.");
+  if (process.env.FIXTURE_RELEASE_FAILURE === "notes") {
+    throw new Error("Synthetic notes generation refused.");
+  }
+}
+await import("./fixture-notes.ts");
+`,
+    );
+    write(
+      root,
+      "scripts/fixture-rendezvous.mjs",
+      String.raw`
+import fs from "node:fs";
+import path from "node:path";
+export const waitFor = (file, failure) => new Promise((resolve, reject) => {
+  const directory = process.env.FIXTURE_RELEASE_RENDEZVOUS;
+  const deadline = AbortSignal.timeout(3000);
+  const watcher = fs.watch(directory, (_, changed) => { if (changed === file) finish(); });
+  const aborted = () => finish(new Error(failure));
+  function finish(error) {
+    watcher.close();
+    deadline.removeEventListener("abort", aborted);
+    error ? reject(error) : resolve();
+  }
+  deadline.addEventListener("abort", aborted, { once: true });
+  if (fs.existsSync(path.join(directory, file))) finish();
+});
+if (process.argv[2] === "build") {
+  await waitFor("notes-pid", "Notes did not start while the build was pending.");
+}
+`,
+    );
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     firebaseKey = JSON.stringify({
       type: "service_account",
@@ -229,7 +284,10 @@ def validate_android_release_preflight!(metadata); end
 def capture_android_screenshots!; end
 def screenshots; $lanes.fetch(:screenshots).call; end
 def build_release_artifacts!(artifact: "all")
+  raise "Overlap failed" unless system("node", "scripts/fixture-rendezvous.mjs", "build")
   raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--artifact", artifact, "--dry-run")
+  File.write(File.join(ENV.fetch("FIXTURE_RELEASE_RENDEZVOUS"), "build-ready"), "ready")
+  raise "Synthetic archive failure" if ENV["FIXTURE_RELEASE_FAILURE"] == "build"
   FileUtils.mkdir_p("apps/android/build/release-artifacts")
   %w(play wear).each do |audience|
     file = "apps/android/build/release-artifacts/openclaw-2026.9.20-#{audience}-release.aab"
@@ -261,6 +319,7 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
     ...process.env,
     FIXTURE_UPLOAD_AUDIT: uploadAudit,
     FIXTURE_FIREBASE_AUDIT: firebaseAudit,
+    FIXTURE_RELEASE_RENDEZVOUS: rendezvous,
     FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA: firebaseKey,
     FIREBASE_APP_ID: "1:123:android:abc123",
     FIREBASE_TESTER_GROUPS: "android-daily",
@@ -301,6 +360,7 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
     invoke,
     uploadAudit,
     firebaseAudit,
+    rendezvous,
     audit: () => readLines(uploadAudit),
     ref: (name: string) => git(remote, "rev-parse", name),
   };
@@ -396,6 +456,7 @@ describe("mobile release CLI", () => {
         "Release artifact: wear aab",
         "Release artifact: play aab",
       ]);
+      expect(read(f.rendezvous, "notes-exited")).toBe("finished");
       expect(f.audit()[0]).toMatchObject({
         version: "2026.9.20",
         versionCode: 2026090250,
@@ -427,6 +488,34 @@ describe("mobile release CLI", () => {
       expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
       expect(rebuilt.stdout).toContain("Release artifact: third-party apk");
       expect(git(f.root, "status", "--porcelain")).toBe("");
+    },
+  );
+
+  it.each(["notes", "build"])(
+    "joins Android notes and retains the failed attempt without uploading after a %s failure",
+    (failure) => {
+      const f = fixture("android");
+      const result = f.invoke("run", ["--destination", "internal"], {
+        ...workflowEnv(f.base),
+        FIXTURE_RELEASE_FAILURE: failure,
+      });
+      expectResult(
+        result,
+        1,
+        failure === "notes" ? "release-note generation failed" : "Synthetic archive failure",
+      );
+      expect([f.uploadAudit, f.firebaseAudit].map((file) => fs.existsSync(file))).toEqual([
+        false,
+        false,
+      ]);
+      expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/openclaw")).toBe("");
+      expect(exists(f.recovery, "source")).toBe(true);
+      expect(read(f.recovery, "artifacts/notes-joined.apk")).toBe(
+        "Generator finished before artifact collection.",
+      );
+      expect(read(f.rendezvous, "notes-exited")).toBe("finished");
+      expect(() => process.kill(Number(read(f.rendezvous, "notes-pid")), 0)).toThrow(/ESRCH/);
+      expect(f.ref("main")).toBe(f.base);
     },
   );
 

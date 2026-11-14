@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -158,8 +158,33 @@ export function DeviceDisclosure(props: {
   status?: JSX.Element;
   children: JSX.Element;
 }) {
+  // Keep drafts and nested disclosures alive after first open. Unopened bodies
+  // intentionally do not participate in browser find-in-page.
+  const [hasOpened, setHasOpened] = createSignal(false);
+  let details: HTMLDetailsElement;
+  onSettled(() => {
+    // Native toggle can arrive after the first expanded paint. Attribute
+    // delivery also covers programmatic opening, before the next frame.
+    const observer = new MutationObserver(() => {
+      if (details.open) {
+        setHasOpened(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(details, { attributes: true, attributeFilter: ["open"] });
+    return () => observer.disconnect();
+  });
   return (
-    <details class="device-entry" data-device-id={props.deviceId}>
+    <details
+      ref={(element) => (details = element)}
+      class="device-entry"
+      data-device-id={props.deviceId}
+      onToggle={(event) => {
+        if (event.currentTarget.open) {
+          setHasOpened(true);
+        }
+      }}
+    >
       <summary class="settings-row settings-row--nav device-entry__summary">
         <span class="settings-row__text">
           <span class="settings-row__title">{props.name}</span>
@@ -177,7 +202,9 @@ export function DeviceDisclosure(props: {
           </span>
         </span>
       </summary>
-      <div class="device-entry__body">{props.children}</div>
+      <Show when={hasOpened()}>
+        <div class="device-entry__body">{props.children}</div>
+      </Show>
     </details>
   );
 }

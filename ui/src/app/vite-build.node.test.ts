@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { JSDOM } from "jsdom";
 import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
@@ -139,6 +140,35 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+it("keeps inline recovery executable and its DOM intact after document compaction", async () => {
+  const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
+    <h1>Still loading</h1><button>Retry</button>
+    <p><span>Keep</span>
+      <span>spacing</span></p><pre>  code\n  next</pre><textarea>  draft\n  next</textarea>
+    <script data-cfasync="false">/* recovery */
+      document.querySelector("button").addEventListener("click", function () {
+        document.querySelector("h1").textContent = "Retrying";
+      });
+    </script>
+    <script nomodule>window.unsupported = function () { return "Update your browser"; };</script>`;
+  await writeRoot("index.html", source + '<script type="module" src="./main.js"></script>');
+  const { html: compact } = await buildOutput(createConfig());
+  const dom = new JSDOM(compact, { runScripts: "dangerously" });
+  const { document } = dom.window;
+  expect(document.querySelector("h1")?.outerHTML).toBe("<h1>Still loading</h1>");
+  expect(dom.window.getComputedStyle(document.querySelector("h1")!).color).toBe("rgb(255, 0, 0)");
+  document.querySelector("button")!.click();
+  expect(document.querySelector("h1")?.textContent).toBe("Retrying");
+  expect(document.querySelector("script[nomodule]")?.textContent).not.toMatch(
+    /[=]>|\b(?:let|const)\b/u,
+  );
+  expect(compact).not.toContain("/* recovery */");
+  expect(document.querySelector("p")?.textContent).toBe("Keep spacing");
+  expect(document.querySelector("pre")?.textContent).toBe("  code\n  next");
+  expect(document.querySelector("textarea")?.value).toBe("  draft\n  next");
+  dom.window.close();
+});
+
 it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
   const config = createConfig();
   await writeFiles({
@@ -224,6 +254,99 @@ it("fetches deep composer code with the root import without evaluating or route-
   expect(html).not.toContain(frameChunk.fileName);
 });
 
+it("fetches a locale's co-registered error catalogs in one lazy request", async () => {
+  const config = createConfig();
+  const prefix = "\0virtual:openclaw-control-ui-locale-namespace/";
+  const errors = ["runtimeErrors", "notificationErrors", "nativeDeviceEditError"];
+  const ids = errors.map((namespace) => `${prefix}de/${namespace}`);
+  const otherLocale = `${prefix}ar/runtimeErrors`;
+  const otherNamespace = `${prefix}de/profilePage`;
+  const modules = new Map(
+    [...ids, otherLocale, otherNamespace].map((id) => [
+      id,
+      `export default ${JSON.stringify({ [id.split("/").at(-1)!]: id })};`,
+    ]),
+  );
+  addModules(
+    config,
+    modules,
+    Object.fromEntries([...modules.keys()].map((id) => [id.slice(1), id])),
+  );
+  await writeRoot(
+    "main.js",
+    [...modules.keys()]
+      .map((id, index) => `globalThis.load${index} = () => import(${JSON.stringify(id.slice(1))});`)
+      .join("\n"),
+  );
+  setOutput(config, { codeSplitting: controlUiCodeSplitting });
+  const { output, html } = await buildOutput(config);
+  const chunks = output.filter((chunk) => chunk.type === "chunk");
+  const errorsChunk = chunks.find((chunk) => Object.hasOwn(chunk.modules, ids[0]!))!;
+  expect(ids.every((id) => id in errorsChunk.modules)).toBe(true);
+  expect(otherLocale in errorsChunk.modules).toBe(false);
+  expect(otherNamespace in errorsChunk.modules).toBe(false);
+  const entry = chunks.find((chunk) => chunk.isEntry)!;
+  expect(entry.dynamicImports.filter((file) => file === errorsChunk.fileName)).toHaveLength(1);
+  expect(entry.imports).not.toContain(errorsChunk.fileName);
+  expect(html).not.toContain(errorsChunk.fileName);
+});
+
+it("preloads only the selected locale's Chat catalogs before body parsing", async () => {
+  const config = createConfig();
+  await writeRoot(
+    "main.js",
+    `globalThis.locales = [${["de", "ar"].map((locale) => `() => import(${JSON.stringify(fileURLToPath(new URL(`../i18n/locales/${locale}.ts`, import.meta.url)))})`).join(",")}];`,
+  );
+  await writeRoot(
+    "index.html",
+    `<html><head><script>globalThis.beforeBody = { body: document.body, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };</script></head><body><script type="module" src="./main.js"></script></body></html>`,
+  );
+  const { html, output } = await buildOutput(config);
+  const emitted = new Set(output.map((asset) => asset.fileName));
+  for (const [base, route, saved, language, expected] of [
+    ["", "/chat/main/session", "de", "en-US", "de"],
+    ["/control", "/chat/main/session", "ar", "en-US", "ar"],
+    ["/control", "/chat", null, "de-DE", "de"],
+    ["", "/chat", "en", "de-DE", null],
+    ["", "/new", "de", "de-DE", null],
+    ["", "/settings/appearance", "de", "de-DE", null],
+    ["", "/chatty", "de", "de-DE", null],
+  ] as const) {
+    const page = new JSDOM(
+      html.replace("<html>", `<html data-openclaw-control-ui-base-path="${base}">`),
+      {
+        url: `https://gateway.example${base}${route}`,
+        runScripts: "dangerously",
+        beforeParse(window) {
+          Object.defineProperty(window.navigator, "language", { value: language });
+          if (saved) {
+            window.localStorage.setItem("openclaw.i18n.locale", saved);
+          }
+        },
+      },
+    );
+    try {
+      const beforeBody = Reflect.get(page.window, "beforeBody");
+      expect(beforeBody.body).toBeNull();
+      const hints = beforeBody.hints.filter((href: string) => !href.includes("/index-"));
+      expect(hints).toHaveLength(expected ? 14 : 0);
+      for (const href of hints) {
+        expect(href.startsWith(`${base}/assets/`)).toBe(true);
+        const file = href.slice(base.length + 1);
+        expect(emitted.has(file)).toBe(true);
+        expect(
+          file.startsWith(`assets/${expected}-`) ||
+            file.startsWith(`assets/locale-namespace-${expected}-`) ||
+            file.startsWith(`assets/locale-errors-${expected}-`) ||
+            file.startsWith("assets/lazy-catalog-"),
+        ).toBe(true);
+      }
+    } finally {
+      page.window.close();
+    }
+  }
+});
+
 it("keeps page styles separate from measured JavaScript boot groups", async () => {
   const config = createConfig();
   const pages = fileURLToPath(new URL("../pages/", import.meta.url));
@@ -246,6 +369,7 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
     "main.js",
     'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second"); globalThis.loadLazy = () => import("fixture:lazy");',
   );
+  await writeRoot("index.html", '<head></head><script type="module" src="./main.js"></script>');
   addModules(config, modules, {
     "fixture:first": first,
     "fixture:second": second,
@@ -277,11 +401,21 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   expect(html).toContain(initial.name);
   expect(html).toMatch(/<link[^>]*rel="preload"[^>]*as="style"[^>]*>/u);
   expect(html).toMatch(/<link[^>]*id="openclaw-boot-styles"[^>]*media="print"[^>]*>/u);
-  expect(html).not.toContain(firstStyle.name);
-  expect(html).not.toContain(secondStyle.name);
+  const page = new JSDOM(html);
+  for (const style of [firstStyle, secondStyle]) {
+    expect(page.window.document.querySelector(`link[href$="${style.name}"]`)).toBeNull();
+  }
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
-  expect(scripts).toContain(firstStyle.name);
-  expect(scripts).toContain(secondStyle.name);
+  const importMap: { imports: Record<string, string> } = JSON.parse(
+    page.window.document.querySelector('script[type="importmap"]')!.textContent!,
+  );
+  page.window.close();
+  for (const style of [firstStyle, secondStyle]) {
+    const reference = Object.entries(importMap.imports).find(
+      ([, target]) => target === `./assets/${style.name}`,
+    )?.[0];
+    expect(scripts).toContain(reference ? path.posix.basename(reference) : style.name);
+  }
 });
 
 it("compresses small route boot modules while leaving deferred modules lazy", async () => {
@@ -560,7 +694,8 @@ it.each([
   }
   const cacheId = /data-openclaw-control-ui-build-id="([^"]+)"/u.exec(html)?.[1];
   expect(cacheId?.startsWith(`${buildInfo.buildId}-`)).toBe(true);
-  expect(cacheId?.slice(buildInfo.buildId.length + 1)).toMatch(/^[a-f0-9]{64}$/u);
+  const publicAssetVersion = cacheId?.slice(buildInfo.buildId.length + 1);
+  expect(publicAssetVersion).toMatch(/^[a-f0-9]{64}$/u);
   const fonts = await fs.readdir(path.join(outDir, "fonts"));
   for (const fontCss of fonts.filter((name) => name.endsWith(".css"))) {
     const source = await fs.readFile(path.join(outDir, "fonts", fontCss), "utf8");
@@ -569,9 +704,9 @@ it.each([
     for (const [, reference] of references) {
       const fontUrl = new URL(
         reference!,
-        `https://control.example/ui/fonts/${fontCss}?v=${cacheId}`,
+        `https://control.example/ui/fonts/${fontCss}?v=${publicAssetVersion}`,
       );
-      expect(fontUrl.searchParams.get("v")).toBe(cacheId);
+      expect(fontUrl.searchParams.get("v")).toBe(publicAssetVersion);
       expect(fontUrl.pathname).toMatch(/^\/ui\/fonts\/[^/]+\.woff2$/u);
       await expect(
         fs.stat(path.join(outDir, fontUrl.pathname.slice("/ui/".length))),
@@ -584,7 +719,7 @@ it.each([
   expect(webManifest.start_url).toBe("./");
   for (const icon of webManifest.icons) {
     const iconUrl = new URL(icon.src, "https://control.example/ui/manifest.webmanifest");
-    expect(iconUrl.searchParams.get("v")).toBe(cacheId);
+    expect(iconUrl.searchParams.get("v")).toBe(publicAssetVersion);
     await expect(
       fs.stat(path.join(outDir, iconUrl.pathname.slice("/ui/".length))),
     ).resolves.toBeDefined();

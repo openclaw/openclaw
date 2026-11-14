@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
@@ -9,14 +9,17 @@ import {
 } from "../../media/staged-inputs.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { withWorkspaceHashContext } from "./workspace-hash-memo.js";
-import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
-import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
-  MAX_RECONCILIATION_ENTRIES,
-  type WorkerWorkspaceManifest,
-  type WorkerWorkspaceManifestEntry,
-  type WorkerWorkspaceReconciliationJournal,
-  type WorkerWorkspaceReconciliationJournalAdapter,
+  MAX_WORKSPACE_RESULT_CHANGED_PATHS,
+  WorkspaceResultLimitError,
+} from "./workspace-inventory-limits.js";
+import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
+import { captureWorkspaceManifest, prepareWorkspacePatch } from "./workspace-manifest-worker.js";
+import type {
+  WorkerWorkspaceManifest,
+  WorkerWorkspaceManifestEntry,
+  WorkerWorkspaceReconciliationJournal,
+  WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import {
   applyWorkspaceDirectoryChanges,
@@ -32,7 +35,6 @@ import {
 } from "./workspace-reconcile-derived-paths.js";
 import {
   applyWorkspacePatch,
-  createWorkspacePatch,
   recoverWorkerWorkspaceReconciliation,
 } from "./workspace-reconcile-recovery.js";
 
@@ -46,6 +48,9 @@ export async function applyStagedWorkerWorkspace(params: {
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
+  /** Holds every target writer through acceptance or rollback. */
+  freezeTarget?: () => Promise<void>;
+  onPhase?: (phase: "preflight" | "patch" | "capture" | "verification" | "apply") => void;
   acceptance:
     | {
         kind: "reconcile";
@@ -60,6 +65,11 @@ export async function applyStagedWorkerWorkspace(params: {
   return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
     const root = await fs.realpath(params.root);
     const { preflight: preflightInput, includePaths: preparedPaths } = params.reconciliation;
+    if (preflightInput.changedPaths.length > MAX_WORKSPACE_RESULT_CHANGED_PATHS) {
+      throw new WorkspaceResultLimitError(
+        `Workspace result changes ${preflightInput.changedPaths.length} files/directories (limit ${MAX_WORKSPACE_RESULT_CHANGED_PATHS}).`,
+      );
+    }
     const baseNodes = new Map(preflightInput.baseNodes);
     const currentNodes = new Map(preflightInput.currentNodes);
     const changed = new Set(preflightInput.changedPaths);
@@ -126,12 +136,16 @@ export async function applyStagedWorkerWorkspace(params: {
       preparedPaths && params.additionalPaths?.size
         ? new Set([...preparedPaths, ...params.additionalPaths])
         : preparedPaths;
-    const inspectPaths = () => preflightWorkspaceApply({ root, ...preflightInput });
+    const inspectPaths = () => {
+      params.onPhase?.("preflight");
+      return preflightWorkspaceApply({ root, ...preflightInput });
+    };
     const preflight = await inspectPaths();
     const acceptReconciled = async (
       reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
       preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
     ) => {
+      params.onPhase?.("capture");
       const actual = await captureWorkspaceManifest({
         root,
         baseCommit: params.current.baseCommit,
@@ -148,7 +162,12 @@ export async function applyStagedWorkerWorkspace(params: {
         includePaths,
         buildCacheInputs,
       });
-      await verifyLocalStable();
+      // A frozen target cannot change between capture and acceptance. Unfenced
+      // host callers still verify, and the returned verifier protects later use.
+      if (!params.freezeTarget) {
+        params.onPhase?.("verification");
+        await verifyLocalStable();
+      }
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
       params.assertCurrent?.();
       await reconcile.publish?.({ ...actual, conflictPaths });
@@ -161,6 +180,7 @@ export async function applyStagedWorkerWorkspace(params: {
       };
     };
     if (changed.size === 0) {
+      await params.freezeTarget?.();
       return acceptance.kind === "exact-target"
         ? await acceptExactTarget(acceptance.verify)
         : await acceptReconciled(acceptance, preflight);
@@ -185,23 +205,15 @@ export async function applyStagedWorkerWorkspace(params: {
     const appliedDirectories = [...preflight.applyPaths]
       .filter((entryPath) => currentNodes.get(entryPath)?.type === "directory")
       .toSorted();
-    if (
-      baseEntries.length +
-        appliedEntries.length +
-        baseDirectories.length +
-        appliedDirectories.length >
-      MAX_RECONCILIATION_ENTRIES
-    ) {
-      throw new Error(
-        `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-      );
-    }
-    const snapshot = await createWorkspacePatch({
+    params.onPhase?.("patch");
+    const snapshot = await prepareWorkspacePatch({
       root,
       stagingRoot: params.stagingRoot,
       baseEntries,
       appliedEntries,
     });
+    // Preparation may run beside guest writes; fence them before confirming the plan.
+    await params.freezeTarget?.();
     const confirmedPreflight = await inspectPaths();
     if (!isDeepStrictEqual(confirmedPreflight, preflight)) {
       throw new ConcurrentWorkspacePathError(
@@ -220,12 +232,13 @@ export async function applyStagedWorkerWorkspace(params: {
       baseDirectories,
       appliedDirectories,
       baseTree: snapshot.baseTree,
-      basePackSha256: createHash("sha256").update(snapshot.basePack).digest("hex"),
+      basePackSha256: snapshot.basePackSha256,
       basePack: snapshot.basePack,
     };
     params.assertCurrent?.();
     await params.journal.begin(journal);
     try {
+      params.onPhase?.("apply");
       const staged = createStagedInputPathMatcher(await openFsSafeRoot(root));
       await prepareNonDirectoryTargets(
         root,

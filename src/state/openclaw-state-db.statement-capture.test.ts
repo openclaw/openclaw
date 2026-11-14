@@ -34,15 +34,14 @@ it.skipIf(!output)(
     const sqlByStatement = new WeakMap<StatementSync, string>();
     const diagnostics: { source: string; phase: string; engine: unknown; threadId: unknown }[] = [];
     const observations = channel("openclaw.database.statement");
-    const nativeObservations = channel("sqlite.db.query");
     const observe = (message: unknown) => {
       if (message && typeof message === "object" && "engine" in message && "threadId" in message) {
         const { engine, threadId: observedThread } = message;
         diagnostics.push({ source: "engine", phase, engine, threadId: observedThread });
       }
     };
-    const observeNative = () =>
-      diagnostics.push({ source: "native", phase, engine: "sqlite", threadId });
+    const observeStatement = () =>
+      diagnostics.push({ source: "capture", phase, engine: "sqlite", threadId });
     const root = path.join(path.dirname(output), "sqlite-statement-fixture");
     fs.mkdirSync(path.dirname(output), { recursive: true });
     // The path is task-owned and reused so interpolated SQL paths cannot differ between runs.
@@ -63,6 +62,7 @@ it.skipIf(!output)(
     });
     vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
       phases[phase].push({ method: "exec", sql });
+      observeStatement();
       return nativeExec.call(this, sql);
     });
     for (const method of ["run", "get", "all", "iterate"] as const) {
@@ -76,13 +76,13 @@ it.skipIf(!output)(
           throw new Error("Native execution escaped SQL capture");
         }
         phases[phase].push({ method, sql });
+        observeStatement();
         return Reflect.apply(native, this, bindings);
       });
     }
     vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     vi.spyOn(performance, "now").mockReturnValue(1_000);
     observations.subscribe(observe);
-    nativeObservations.subscribe(observeNative);
     try {
       const first = openOpenClawStateDatabase(options);
       expect(first.db.prepare("PRAGMA user_version").get()).toEqual({
@@ -93,7 +93,7 @@ it.skipIf(!output)(
       await closeOpenClawStateDatabaseAsync();
       revokeSqliteDatabaseAdmissionsForPath(first.path);
       const reopened = openOpenClawStateDatabase(options);
-      expect(reopened.db).not.toBe(first.db);
+      expect(reopened.db === first.db).toBe(false);
       phase = "write";
       runOpenClawStateWriteTransaction(({ db }) => {
         db.prepare(
@@ -126,7 +126,6 @@ it.skipIf(!output)(
     } finally {
       await closeOpenClawStateDatabaseAsync();
       observations.unsubscribe(observe);
-      nativeObservations.unsubscribe(observeNative);
       vi.restoreAllMocks();
       fs.rmSync(root, { recursive: true, force: true });
     }

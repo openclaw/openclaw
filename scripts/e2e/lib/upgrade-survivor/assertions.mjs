@@ -1541,7 +1541,6 @@ function assertNpmPluginInstall([
   const records = readInstalledPluginIndex().installRecords ?? {};
   const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
   const record = records[pluginId];
-  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
   assertPluginArtifactConsent(
     record,
     pluginId,
@@ -1568,8 +1567,25 @@ function assertNpmPluginInstall([
     expectedTarball = publishedCompanionTarball;
   }
   const archive = fs.readFileSync(expectedTarball);
-  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
-  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
+  const npmIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  // ClawHub records the archive's SHA-256 separately from npm's SHA-512.
+  // Check every recorded digest so a matching field cannot hide stale provenance.
+  const expectedDigests =
+    record.source === "clawhub"
+      ? {
+          integrity: `sha256-${createHash("sha256").update(archive).digest("base64")}`,
+          npmIntegrity,
+          clawpackSha256: createHash("sha256").update(archive).digest("hex"),
+        }
+      : { integrity: npmIntegrity };
+  const recordedDigests = Object.keys(expectedDigests).filter(
+    (field) => record[field] !== undefined,
+  );
+  assert(
+    recordedDigests.length > 0 &&
+      recordedDigests.every((field) => record[field] === expectedDigests[field]),
+    `${pluginId} plugin registry artifact integrity changed`,
+  );
 }
 
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {

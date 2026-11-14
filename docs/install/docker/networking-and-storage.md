@@ -18,7 +18,7 @@ Bind modes, host-provider URLs, the Claude CLI backend, Bonjour/mDNS, and mounte
 - `loopback`: only processes inside the container network namespace can reach the gateway directly.
 
 <Note>
-Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` / `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`.
+Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` / `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`. Also note `loopback` and `tailnet` are host-centric: inside a container network namespace there is no Tailscale interface, and both modes leave published ports unable to reach the gateway (`tailnet` falls back to loopback-only). Containerized gateways should keep `lan` (the setup default) or use `custom` with `customBindHost: "0.0.0.0"`.
 </Note>
 
 ## Host local providers
@@ -142,4 +142,4 @@ Installed downloadable plugins store package state under the mounted OpenClaw ho
 
 For full VM persistence details, see [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** `media/`, per-agent SQLite databases, legacy session JSONL transcripts, the shared SQLite state database, installed plugin package roots, and rolling file logs under `/tmp/openclaw/`.
+**Disk growth hotspots:** `media/`, per-agent SQLite databases, legacy session JSONL transcripts, the shared SQLite state database, installed plugin package roots, and rolling file logs under the selected state directory's `logs/` directory.

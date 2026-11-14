@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -25,6 +24,7 @@ import {
 } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { canonicalizeContainmentRoot } from "../infra/path-containment.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
@@ -524,25 +524,8 @@ function resolveManagedSkillSymlinkTargetCandidates(params: {
 }
 
 /** Resolve symlinks in the existing prefix while retaining a not-yet-created suffix. */
-export async function canonicalizePathForContainment(targetPath: string): Promise<string> {
-  const resolved = path.resolve(targetPath);
-  const suffix: string[] = [];
-  let probe = resolved;
-
-  while (true) {
-    try {
-      const realProbe = await fs.realpath(probe);
-      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
-    } catch {
-      const parent = path.dirname(probe);
-      if (parent === probe) {
-        return resolved;
-      }
-      suffix.push(path.basename(probe));
-      probe = parent;
-    }
-  }
-}
+/** Backup roots and sources compare in the shared containment owner's spelling. */
+export const canonicalizePathForContainment = canonicalizeContainmentRoot;
 
 export async function resolveBackupAgentRoot(
   config: OpenClawConfig,

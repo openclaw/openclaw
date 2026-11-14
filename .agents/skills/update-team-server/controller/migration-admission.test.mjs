@@ -9,7 +9,8 @@ import test from "node:test";
 import { makeReleaseFixture } from "./worker-config-owner-fixture.mjs";
 
 function invoke(f, args, input, timeout = 10_000) {
-  return spawnSync(process.execPath, ["--no-warnings", f.library, ...args.map(String)],
+  return spawnSync("bash", ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"',
+    "migration-proof", process.execPath, "--no-warnings", f.library, ...args.map(String)],
     { env: f.env, input, encoding: "utf8", timeout });
 }
 const ok = result => { assert.ifError(result.error); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };

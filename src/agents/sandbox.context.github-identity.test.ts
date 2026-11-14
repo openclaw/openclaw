@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as cliShim from "../infra/openclaw-cli-shim.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
@@ -159,6 +160,33 @@ it("keeps identity absent without allowInSandbox opt-in", async () => {
   expect(sandbox?.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
   expect(sandbox?.readOnlyResourceMounts).toBeUndefined();
 });
+
+it.skipIf(process.platform === "win32")(
+  "mounts the Git probe shim read-only without exposing a GitHub identity",
+  async () => {
+    const { config } = await fixture({ allowInSandbox: undefined });
+    onTestFinished(cliShim.clearGatewayAgentCliShim);
+    await cliShim.prepareGatewayAgentCliShim();
+    const gitBinDir = expectDefined(cliShim.getGatewayAgentGitBinDir(), "Git shim directory");
+    const sandbox = expectDefined(await resolve(config), "sandbox");
+    expect(sandbox.docker.env).not.toHaveProperty("GH_CONFIG_DIR");
+    expect(sandbox.readOnlyResourceMounts).toEqual([
+      { hostPath: gitBinDir, containerPath: "/openclaw/git-tools" },
+    ]);
+    const mounts = resolveSandboxMountSelection({
+      workspaceDir: sandbox.workspaceDir,
+      agentWorkspaceDir: sandbox.agentWorkspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: sandbox.workspaceAccess,
+      readOnlyResourceMounts: sandbox.readOnlyResourceMounts,
+      binds: ["/unrelated:/openclaw/git-tools:rw"],
+    });
+    expect(mounts.mounts).toContainEqual(
+      expect.objectContaining({ containerPath: "/openclaw/git-tools", readOnly: true }),
+    );
+    expect(mounts.custom).toEqual([]);
+  },
+);
 
 it("rejects an unsupported backend before handing it identity", async () => {
   const factory = vi.fn();

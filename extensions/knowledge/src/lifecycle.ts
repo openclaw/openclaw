@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
 import { parseDocument } from "yaml";
+import { hashMatches } from "./hash-fence.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
 import { mergeRedirects, referenceIds } from "./merge.js";
 import { Envelope, type LoadedRecord } from "./model.js";
@@ -17,7 +18,7 @@ export function assertLifecycleTarget(
   if (
     !r ||
     (correcting && !r.valid) ||
-    r.hash !== input.expectedHash ||
+    !hashMatches(r.hash, input.expectedHash) ||
     r.revision !== input.expectedRevision ||
     r.lifecycle === "withdrawn" ||
     (correcting && (r.lifecycle !== "active" || r.kind === "page"))

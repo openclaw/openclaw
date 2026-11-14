@@ -34,9 +34,11 @@ function isPendingNodeCompletion({ req, client, context }: RequestEntryOptions):
 /** One Gateway's preparation leases; handler execution belongs to its existing runtime owner. */
 export class GatewayRequestEntryLifetime {
   private readonly stopping = new AbortController();
+  private readonly retained = new AbortController();
   private readonly active = new Set<Promise<void>>();
   private sealed = false;
   readonly signal = this.stopping.signal;
+  readonly retainedSignal = this.retained.signal;
 
   enter(options: RequestEntryOptions): GatewayRequestEntry {
     let released = false;
@@ -75,12 +77,18 @@ export class GatewayRequestEntryLifetime {
     this.stopping.abort();
   }
 
+  /** Accepted ingress authority outlives admission until restart custody is recorded. */
+  retire(reason?: Error): void {
+    this.retained.abort(reason);
+  }
+
   async waitForPendingEntries(): Promise<void> {
     await Promise.all(this.active);
   }
 
   async sealAndJoin(): Promise<void> {
     this.sealed = true;
+    this.retire();
     await this.waitForPendingEntries();
   }
 }

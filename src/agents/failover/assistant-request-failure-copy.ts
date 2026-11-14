@@ -12,6 +12,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { escapeMarkdownText } from "../../shared/text/escape-markdown.js";
+import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
@@ -45,6 +46,8 @@ export const ERROR_DETAILS_HINT =
   "For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
+  "storage-worker-memory":
+    "OpenClaw's storage worker ran out of memory. Ask the Gateway operator to check the logs and address memory or resource pressure before trying again. Restarting this session alone will not fix the underlying problem.",
   unavailable:
     "The database connection was lost. This operation was rolled back; nothing from it was saved. Please retry.",
   SQLITE_BUSY:
@@ -66,12 +69,20 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
 };
 
 const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
+  child_completion_delivery_failed:
+    "The child result couldn't be delivered to this conversation. Your conversation is preserved. Check the child sessions for saved work, then retry or resend your request.",
   codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
   node_runner_update_required:
     "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",
   "runner-offline":
     "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
 };
+
+export const API_KEY_EXPIRED_ERROR_CODE = "api_key_expired";
+const API_KEY_EXPIRED_USER_TEXT =
+  "This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
+const ITEM_CONFLICT_USER_TEXT =
+  "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
 
 const ASSISTANT_REQUEST_FAILURE_COPY = {
   auth: "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
@@ -111,6 +122,12 @@ export function renderAssistantRequestFailureCopy(
 ): string | undefined {
   if (facts.storageFailure) {
     return `⚠️ ${STORAGE_FAILURE_COPY[facts.storageFailure]} ${ERROR_DETAILS_HINT}`;
+  }
+  if (facts.code === API_KEY_EXPIRED_ERROR_CODE) {
+    return `⚠️ ${API_KEY_EXPIRED_USER_TEXT}`;
+  }
+  if (facts.code === "item_conflict") {
+    return ITEM_CONFLICT_USER_TEXT;
   }
   if (facts.code === "incomplete_tool_call") {
     return "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.";
@@ -211,10 +228,18 @@ export function renderFormatErrorCopy(raw: string, options?: FailureCopyOptions)
 
 /** Share bounded request-limit facts between live failures and persisted chat history. */
 export function renderAssistantFormatFailureCopy(
-  message: { errorMessage?: unknown; errorBody?: unknown; errorType?: unknown },
+  message: {
+    errorMessage?: unknown;
+    errorBody?: unknown;
+    errorType?: unknown;
+    errorCode?: unknown;
+  },
   reason?: FailoverReason | null,
   options?: FailureCopyOptions,
 ): string | undefined {
+  if (message.errorCode === "item_conflict" || message.errorMessage === ITEM_CONFLICT_USER_TEXT) {
+    return ITEM_CONFLICT_USER_TEXT;
+  }
   for (const [isBody, raw] of [
     [true, message.errorBody],
     [false, message.errorMessage],
@@ -223,6 +248,14 @@ export function renderAssistantFormatFailureCopy(
       continue;
     }
     const info = parseApiErrorInfo(raw);
+    if (
+      info?.code === "item_conflict" ||
+      /^(?:LLM request rejected: )?An input item conflicts with an existing record\.$/u.test(
+        info?.message ?? raw.trim(),
+      )
+    ) {
+      return ITEM_CONFLICT_USER_TEXT;
+    }
     if (isBody && !info?.message) {
       continue;
     }
@@ -296,7 +329,11 @@ export function renderRecordedAssistantFailureCopy(
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
   // Terminal lifecycle errors can already contain our safe copy without the original failure facts.
-  for (const copy of Object.values(ASSISTANT_REQUEST_FAILURE_COPY)) {
+  for (const copy of [
+    MODEL_REQUEST_POLICY_DENIED_TEXT,
+    API_KEY_EXPIRED_USER_TEXT,
+    ...Object.values(ASSISTANT_REQUEST_FAILURE_COPY),
+  ]) {
     if (copy && (raw === copy || raw === `⚠️ ${copy}`)) {
       return `⚠️ ${copy}`;
     }

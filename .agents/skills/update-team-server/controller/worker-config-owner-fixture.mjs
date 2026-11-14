@@ -77,6 +77,7 @@ function sourceHeader(fixture) {
     'const fs=require("node:fs"),path=require("node:path"),{DatabaseSync}=require("node:sqlite");\n' +
     `const fixture=${JSON.stringify({
       root: fixture.root,
+      stateDir: fixture.stateDir,
       state: fixture.state,
       serving: fixture.serving,
       runtime: fixture.runtime,
@@ -123,7 +124,7 @@ const activeLease=()=>{
   }
   return lease;
 };
-if(process.env.OPENCLAW_CONFIG_PATH!==fixture.config||process.env.OPENCLAW_STATE_DIR!==fixture.root)
+if(process.env.OPENCLAW_CONFIG_PATH!==fixture.config||process.env.OPENCLAW_STATE_DIR!==fixture.stateDir)
   reject("synthetic native CLI did not receive its admitted config and state paths");
 const accounts=()=>{
   const account=(accountId)=>({accountId,configured:true,enabled:true,running:true,
@@ -269,7 +270,7 @@ if(args[0]==="update") {
   emit(accounts());
 } else if(args[0]==="gateway"&&args[1]==="call") {
   const method=args[2];
-  const methods=new Set(["system.info","channels.status","update.status","terminal.list","sessions.list","agent","agent.wait",
+  const methods=new Set(["system.info","config.get","channels.status","update.status","terminal.list","sessions.list","agent","agent.wait",
     "gateway.suspend.prepare","gateway.suspend.status","gateway.suspend.resume","gateway.suspend.handoff"]);
   if(!methods.has(method)) reject("unsupported synthetic Gateway RPC");
   event("gateway gateway call "+method);
@@ -336,6 +337,9 @@ if(args[0]==="update") {
       }
       emit(result);
     }
+  } else if(method==="config.get") {
+    if(Object.keys(params).length) reject("config.get params changed");
+    emit(parseJson(read("config-runtime-snapshot")));
   } else if(method==="system.info") {
     const pid=Number(read("pid"));emit({pid,processInstanceId:"fixture-instance-"+pid});
   } else if(method==="channels.status") {
@@ -646,7 +650,7 @@ if(command==="busctl") {
   );
 }
 
-function writeRelease(fixture, releaseSha = sha) {
+function writeRelease(fixture, releaseSha = sha, schemaVersions = fixture.schemaVersions) {
   const sha = releaseSha;
   const release = join(fixture.serving, "releases", sha);
   for (const name of [".git/objects/info", "dist/control-ui/assets", "node_modules"])
@@ -656,7 +660,7 @@ function writeRelease(fixture, releaseSha = sha) {
   writeFileSync(join(release, "pnpm-workspace.yaml"), "packages: []\n");
   writeFileSync(
     join(release, "package.json"),
-    JSON.stringify({ version: "2026.9.3", openclaw: { schemaVersions: { state: 1, agent: 1 } } }),
+    JSON.stringify({ version: "2026.9.3", openclaw: { schemaVersions } }),
   );
   for (const stamp of [".buildstamp", ".runtime-postbuildstamp"])
     writeFileSync(join(release, "dist", stamp), JSON.stringify({ head: sha }));
@@ -684,7 +688,7 @@ export function isGatewayTransportError(error) {
     ['timeout','closed'].includes(error.kind)&&typeof error.connectionDetails==='object'&&error.connectionDetails!==null;
 }
 export async function callGatewayFromCli(method,opts,params,extra) {
-  if(extra.clientName!=='cli'||extra.mode!=='cli'||JSON.stringify(extra.scopes)!=='["operator.admin"]'||extra.expectFinal!==false||extra.sharedStateMode!=='read-only'||opts.json!==true) throw Error('native CLI identity changed');
+  if((method!=='config.get'&&(extra.clientName!=='cli'||extra.mode!=='cli'||extra.expectFinal!==false))||JSON.stringify(extra.scopes)!=='["operator.admin"]'||extra.sharedStateMode!=='read-only'||opts.json!==true) throw Error('native CLI identity changed');
   const r=spawnSync(process.execPath,[new URL('../index.js',import.meta.url).pathname,'gateway','call',method,'--params',JSON.stringify(params),'--json','--timeout',opts.timeout],{encoding:'utf8',env:process.env});
   if(r.status!==0) {
     if(r.stdout) throw Object.assign(Error('synthetic private transport detail'),JSON.parse(r.stdout).fixtureError);
@@ -713,11 +717,11 @@ export function makeWorkerConfigFixture(t, scenario = "success") {
   return makeOwnerFixture(t, scenario, true);
 }
 
-export function makeReleaseFixture(t, scenario = "success") {
-  return makeOwnerFixture(t, scenario, false);
+export function makeReleaseFixture(t, scenario = "success", schemaVersions, runtimeOwnedState = false) {
+  return makeOwnerFixture(t, scenario, false, schemaVersions, runtimeOwnedState);
 }
 
-function makeOwnerFixture(t, scenario, workerConfig) {
+function makeOwnerFixture(t, scenario, workerConfig, schemaVersions = { state: 1, agent: 1 }, runtimeOwnedState = false) {
   if (workerConfig && (process.platform !== "linux" || process.getuid() !== 0 || process.getgid() !== 0))
     throw new Error(
       "full owner fixture requires disposable Linux root (UID/GID 0) for real config ownership",
@@ -821,8 +825,10 @@ function makeOwnerFixture(t, scenario, workerConfig) {
     running: sha,
   }))
     writeFileSync(join(state, name), value);
-  const config = join(state, "openclaw.json"),
-    databasePath = join(state, "openclaw.sqlite");
+  const stateDir = runtimeOwnedState ? join(runtime, ".openclaw") : root;
+  const config = join(runtimeOwnedState ? stateDir : state, "openclaw.json"),
+    databasePath = join(stateDir, "state", "openclaw.sqlite");
+  mkdirSync(dirname(databasePath), { recursive: true });
   const original = {
     meta: { lastTouchedVersion: "2026.9.3", migrations: { modelPolicyAllowlist: true } },
     update: { auto: { enabled: false } },
@@ -861,17 +867,17 @@ function makeOwnerFixture(t, scenario, workerConfig) {
   writeFileSync(config, JSON.stringify(original) + "\n", { mode: 0o600 });
   if (workerConfig) chownSync(config, runtimeUid, runtimeGid);
   const database = new DatabaseSync(databasePath);
-  database.exec("PRAGMA user_version=1; CREATE TABLE operator_approvals (source_session_id TEXT)");
+  database.exec(`PRAGMA user_version=${schemaVersions.state}; CREATE TABLE operator_approvals (source_session_id TEXT)`);
   database.close();
   chmodSync(databasePath, 0o600);
   // Canonical discovery scans root/agents; no shared registry entry is needed for this store.
-  const agentDatabasePath = join(root, "agents", "controller-test-agent", "agent", "openclaw-agent.sqlite");
+  const agentDatabasePath = join(stateDir, "agents", "controller-test-agent", "agent", "openclaw-agent.sqlite");
   mkdirSync(dirname(agentDatabasePath), { recursive: true });
   const agentDatabase = new DatabaseSync(agentDatabasePath);
   try {
-    agentDatabase.exec(`PRAGMA user_version=1;
+    agentDatabase.exec(`PRAGMA user_version=${schemaVersions.agent};
       CREATE TABLE schema_meta (meta_key TEXT, role TEXT, schema_version INTEGER, agent_id TEXT);
-      INSERT INTO schema_meta VALUES ('primary', 'agent', 1, 'controller-test-agent');
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${schemaVersions.agent}, 'controller-test-agent');
       CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY, current_session_id TEXT NOT NULL, entry_json TEXT NOT NULL, updated_at INTEGER NOT NULL, archived_at INTEGER);
       CREATE TABLE session_windows (session_id TEXT PRIMARY KEY, session_key TEXT NOT NULL);
       CREATE TABLE transcript_rewrite_watermarks (session_id TEXT PRIMARY KEY, generation TEXT NOT NULL);
@@ -905,6 +911,9 @@ function makeOwnerFixture(t, scenario, workerConfig) {
   const originalConfigBytes = readFileSync(config);
   const fixture = {
     root,
+    stateDir,
+    runtimeOwnedState,
+    schemaVersions,
     state,
     commands,
     serving,
@@ -1030,13 +1039,21 @@ function makeOwnerFixture(t, scenario, workerConfig) {
   };
   writeFileSync(fixture.lockFile, "", { mode: 0o600 });
   writeRelease(fixture);
-  fixture.addRelease = (releaseSha) => {
-    writeRelease(fixture, releaseSha);
+  fixture.addRelease = (releaseSha, versions) => {
+    writeRelease(fixture, releaseSha, versions);
     return join(serving, "releases", releaseSha);
   };
   symlinkSync(fixture.initial, join(serving, "current"));
   processEntry(root, fixture.pid, fixture.start, fixture.initial);
   return fixture;
+}
+
+export function runLibrary(fixture, args, { input, imports = [] } = {}) {
+  assert.ok(fixture.realCommands.flock, "library fixture requires real flock");
+  return spawnSync(fixture.realCommands.bash,
+    ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"', "fixture-library",
+      process.execPath, "--no-warnings", ...imports.flatMap(path => ["--import", path]), fixture.library, ...args.map(String)],
+    { cwd: fixture.root, env: fixture.env, input, encoding: "utf8", timeout: 30000 });
 }
 
 export function runOwner(fixture, args = [], input) {

@@ -45,6 +45,7 @@ export type SessionLifecyclePatchEffects = {
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
     notice?: string;
+    desktopNotice?: string;
     /** The run's provider error observation; the failure recorder bounds what it keeps. */
     errorObservation?: unknown;
   };
@@ -69,6 +70,8 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     suppressErrorNotice?: unknown;
     /** Host-authored failure copy the requester already saw; recorded verbatim. */
     errorNotice?: unknown;
+    /** Desktop-only presentation; shared transcript copy stays unchanged. */
+    desktopErrorNotice?: unknown;
     errorObservation?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
@@ -108,7 +111,7 @@ export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry
   if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
     return "external-owner";
   }
-  if (isSubagentSessionKey(sessionKey)) {
+  if (isSubagentSessionKey(sessionKey) || entry?.createdVia === "spawn") {
     return "subagent";
   }
   if (entry?.archivedAt !== undefined) {
@@ -452,7 +455,7 @@ export function projectSessionLifecyclePatch(
     entry.goal?.status === "active" &&
     entry.goal.updatedAt <= endedAt
   ) {
-    // Commit a definitive failure or Stop with its goal pause and frozen timer.
+    // Commit a definitive failure or interruption with its goal pause and frozen timer.
     // Restart, supersession, and yielded work retain their continuation custody.
     // A delayed terminal must not undo a newer resume or replacement goal.
     patch.goal = buildUpdatedSessionGoalStatus(
@@ -460,7 +463,7 @@ export function projectSessionLifecyclePatch(
       {
         status: "paused",
         note: stopped
-          ? "Paused after Stop. Resume to continue."
+          ? "Paused after an interruption. Resume to continue."
           : `Paused after an error. Resume to continue. ${patch.lastRunError ?? (patch.status === "timeout" ? "Run timed out." : "Run failed.")}`,
       },
       endedAt,
@@ -482,6 +485,9 @@ export function projectSessionLifecyclePatch(
         (patch.status === "timeout" ? "Run timed out" : undefined),
       ...(typeof params.event.data?.errorNotice === "string"
         ? { notice: params.event.data.errorNotice }
+        : {}),
+      ...(typeof params.event.data?.desktopErrorNotice === "string"
+        ? { desktopNotice: params.event.data.desktopErrorNotice }
         : {}),
     };
   }

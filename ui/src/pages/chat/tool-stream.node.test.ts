@@ -3,9 +3,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
+import { inlineActivityDisclosureCalls } from "./chat-activity-segments.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
@@ -74,6 +76,57 @@ afterAll(() => {
 afterEach(() => vi.useRealTimers());
 
 it.each(["live", "history"] as const)(
+  "declines marked stdout before sequence admission without changing legacy updates (%s)",
+  (source) => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1", settings: { chatInlineCommands: false } });
+    emitEvent(host, "run-1", 1, "tool", { toolCallId: "call", name: "exec", phase: "start" });
+    const progress = agentEvent("run-1", 3, "tool", {
+      toolCallId: "call",
+      name: "exec",
+      phase: "update",
+      outputOnly: true,
+      partialResult: "Optional stdout",
+    });
+    expect(handleAgentEvent(host, progress, source)).toBe(false);
+    emitEvent(host, "run-1", 2, "tool", {
+      toolCallId: "call",
+      name: "exec",
+      phase: "update",
+      partialResult: "Legacy progress",
+    });
+    const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", "call"));
+    expect(entry?.output).toBe("Legacy progress");
+    host.settings = { chatInlineCommands: true };
+    expect(handleAgentEvent(host, progress, "history")).toBe(false);
+    host.inlineCommandPresentation = { inlineActivityDisclosureCalls };
+    expect(handleAgentEvent(host, progress, "history")).toBe(true);
+    expect(entry?.output).toBe("Optional stdout");
+    vi.advanceTimersByTime(80);
+    const message = entry?.message;
+    const publication = vi.fn();
+    const stop = chatRunPresentation(host).subscribe(publication);
+    // Identical text alone would hide duplicate admission and redundant publication.
+    expect(handleAgentEvent(host, progress, source)).toBe(false);
+    expect(host.toolStreamSyncTimer).toBeNull();
+    vi.advanceTimersByTime(80);
+    expect(entry?.message).toBe(message);
+    expect(publication).not.toHaveBeenCalled();
+    stop();
+    host.settings = { chatInlineCommands: false };
+    emitEvent(host, "run-1", 4, "tool", {
+      toolCallId: "call",
+      name: "exec",
+      phase: "result",
+      outputOnly: true,
+      result: "Final receipt",
+    });
+    expect(entry?.output).toBe("Final receipt");
+    resetToolStream(host);
+  },
+);
+
+it.each(["live", "history"] as const)(
   "anchors only first-observed live tools and commentary (%s)",
   (source) => {
     useToolStreamFakeTimers();
@@ -108,6 +161,77 @@ it.each(["live", "history"] as const)(
       data: { ...tool.data, phase: "result", result: "Done" },
     });
     expect(host.chatToolMessages[0]?.openclawToolStreamAfterSendId).toBe(expected);
+    resetToolStream(host);
+  },
+);
+
+it("clears partial stdout when a structured command receipt has empty text", () => {
+  const host = createHost({ chatRunId: "run-1" });
+  const emit = toolEvents(host, "run-1", { toolCallId: "empty-command", name: "exec" });
+  emit(1, { phase: "start", args: { command: "check" } });
+  emit(2, { phase: "update", partialResult: { text: "provisional" } });
+  emit(3, { phase: "result", result: { text: "", exitCode: 0 }, isError: false });
+  const [card] = extractToolCardsCached(host.chatToolMessages[0]);
+  expect(card?.outputText ?? "").toBe("");
+  expect(resolveToolCardOutcome(card!, false)).toBe("succeeded");
+  resetToolStream(host);
+});
+
+it.each(["result", "item-end", "canvas"] as const)(
+  "keeps %s output on the conversation publication path",
+  (boundary) => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+    const emit = toolEvents(host, "run-1", { toolCallId: "call", name: "exec" });
+    emit(1, { phase: "start", args: { command: "check" } });
+    if (boundary === "result") {
+      emit(2, { phase: "result", result: "Completed" });
+    } else if (boundary === "item-end") {
+      emitEvent(host, "run-1", 2, "item", {
+        itemId: "call",
+        toolCallId: "call",
+        name: "exec",
+        kind: "tool",
+        phase: "end",
+        status: "completed",
+        title: "Check",
+      });
+    } else {
+      emit(2, { phase: "update", partialResult: "Before Canvas" });
+    }
+    vi.advanceTimersByTime(80);
+    const activity = vi.fn();
+    const stop = chatRunPresentation(host).subscribeNonText(activity);
+    const text =
+      boundary === "canvas"
+        ? JSON.stringify({
+            kind: "canvas",
+            view: {
+              backend: "canvas",
+              id: "cv_publication",
+              url: "/__openclaw__/canvas/documents/cv_publication/index.html",
+            },
+            presentation: { target: "assistant_message" },
+          })
+        : "Later accepted output";
+    emit(3, { phase: "update", partialResult: text });
+    vi.advanceTimersByTime(80);
+    expect(extractToolCardsCached(host.chatToolMessages[0])[0]?.outputText).toBe(text);
+    expect(activity).toHaveBeenCalledOnce();
+    if (boundary === "canvas") {
+      for (const [index, output] of ["After Canvas", text, ""].entries()) {
+        emit(index + 4, { phase: "update", partialResult: output });
+        vi.advanceTimersByTime(80);
+        const [card] = extractToolCardsCached(host.chatToolMessages[0]);
+        expect(card?.outputText ?? "").toBe(output);
+        expect(card?.preview?.kind).toBe(index === 1 ? "canvas" : undefined);
+        expect(activity).toHaveBeenCalledTimes(index + 2);
+      }
+      emit(7, { phase: "update", partialResult: "Ordinary output" });
+      vi.advanceTimersByTime(80);
+      expect(activity).toHaveBeenCalledTimes(4);
+    }
+    stop();
     resetToolStream(host);
   },
 );
@@ -347,13 +471,8 @@ describe("app-tool-stream approval lifecycle", () => {
     expect(card).toMatchObject({
       completed: true,
       live: true,
-      preview: {
-        kind: "browser-tab",
-        profile: "managed",
-        target: "host",
-        targetId: "tab-1",
-        title: "Example",
-      },
+      browserTab: { profile: "managed", target: "host", targetId: "tab-1" },
+      preview: undefined,
     });
     resetToolStream(host);
   });
@@ -390,7 +509,7 @@ describe("app-tool-stream approval lifecycle", () => {
       completed: true,
       outputText: "CLI result",
       browserTab: { profile: "shared", target: "node", node: "node-1", targetId: "tab-shared" },
-      preview: { kind: "browser-tab", profile: "shared", target: "node", targetId: "tab-shared" },
+      preview: undefined,
     });
     resetToolStream(host);
   });
@@ -461,7 +580,7 @@ describe("app-tool-stream approval lifecycle", () => {
 
 describe("app-tool-stream throttled projections", () => {
   it("renders a deferred tool update when its projection flushes", () => {
-    useToolStreamFakeTimers();
+    vi.useFakeTimers();
     const publication = vi.fn();
     const host = createHost();
     chatRunPresentation(host).subscribe(publication);
@@ -645,6 +764,31 @@ describe("app-tool-stream result blocks", () => {
         approvalReviewOutcome: "denied",
       });
     }
+  });
+
+  it("does not revive a live output tail from late progress after a run terminates", () => {
+    useToolStreamFakeTimers();
+    const host = { ...createHost({ chatRunId: "run-1" }), settings: {}, chatMessages: [] };
+    const emit = toolEvents(host, "run-1", { name: "exec", toolCallId: "command" });
+    emit(1, { phase: "start", args: { command: "noisy-command" } });
+    const partialResult = {
+      text: "captured beginning",
+      liveOutput: { text: "latest stdout", omittedChars: 12_000 },
+    };
+    emit(2, { phase: "update", partialResult });
+    const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", "command"));
+    expect(entry?.liveOutput?.text).toBe("latest stdout");
+    reduceChatSessionProjection(host, {
+      type: "runTerminal",
+      runId: "run-1",
+      status: "aborted",
+      seq: 3,
+    });
+    emit(4, { phase: "update", partialResult });
+    vi.advanceTimersByTime(80);
+    expect(host.chatToolMessages[0]).not.toHaveProperty("__openclawToolStreamLiveOutput");
+    expect(entry?.liveOutput).toBeUndefined();
+    expect(entry?.output).toBe("captured beginning");
   });
 
   it("projects live edit counts and lets the resolved result replace them without flicker", () => {

@@ -15,10 +15,12 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveProjectDirectory, withProjectCheckoutLifecycle } from "./project-checkout.js";
+import { warnIfProjectCloneShallow } from "./project-clone-preparation.runtime.js";
 import {
   cloneProjectCheckout,
   configureProjectCheckoutMaintenance,
   ensureProjectCheckoutCommit,
+  prepareProjectCheckoutDefaultBase,
   ProjectCloneError,
   refreshProjectCheckout,
 } from "./project-clone-runtime.js";
@@ -32,6 +34,14 @@ import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-r
 
 const PROJECT_CLONE_LEASE_MS = 30_000;
 const PROJECT_CLONE_WAIT_MS = 30_000;
+
+type ProjectCloneOperationOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  token?: string;
+  assertCurrent?: () => void;
+  startRun?: GitOperationStarter;
+};
 
 async function existingCanonicalProject(
   cfg: OpenClawConfig,
@@ -105,6 +115,7 @@ export async function materializeProjectClone(
               return undefined;
             }
             if (current.source === "cloned") {
+              await warnIfProjectCloneShallow(current.repoRoot, { source: current.source, env });
               await configureProjectCheckoutMaintenance(current.repoRoot, {
                 env,
                 signal: checkoutLease.signal,
@@ -204,17 +215,30 @@ export async function materializeProjectClone(
 /** Refreshes an existing project clone while holding its checkout lifecycle lease. */
 export async function refreshProjectClone(
   project: ProjectRegistryRecord,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
-    signal?: AbortSignal;
-    timeoutMs?: number;
-    token?: string;
-    assertCurrent?: () => void;
-    startRun?: GitOperationStarter;
-  } = {},
+  options: ProjectCloneOperationOptions = {},
 ): Promise<void> {
   if (project.source !== "cloned") {
     return;
   }
+  await withCurrentProjectClone(project, options, refreshProjectCheckout);
+}
+
+/** Pin the current remote default through the same authenticated checkout owner as refresh. */
+export async function prepareProjectCloneDefaultBase(
+  project: ProjectRegistryRecord,
+  options: ProjectCloneOperationOptions,
+): Promise<{ baseRef: string; baseCommit: string }> {
+  return await withCurrentProjectClone(project, options, prepareProjectCheckoutDefaultBase);
+}
+
+async function withCurrentProjectClone<T>(
+  project: ProjectRegistryRecord,
+  options: ProjectCloneOperationOptions,
+  run: (
+    source: { target: string; url: string },
+    options: ProjectCloneOperationOptions,
+  ) => Promise<T>,
+): Promise<T> {
   const selectedProject: ProjectRegistryIdentity = {
     id: project.id,
     repoRoot: project.repoRoot,
@@ -224,11 +248,11 @@ export async function refreshProjectClone(
   const { signal, timeoutMs, token, assertCurrent, startRun } = options;
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const context = captureOpenClawStateWorkerContext({ path: options.path, env });
-  await withProjectCheckoutLifecycle(
+  return await withProjectCheckoutLifecycle(
     selectedProject.repoRoot,
     { path: context.admission.databasePath, env, signal },
     async (lease) => {
-      const assertRefreshCurrent = () => {
+      const assertCheckoutCurrent = () => {
         lease.assertOwned();
         assertCurrent?.();
       };
@@ -242,7 +266,7 @@ export async function refreshProjectClone(
           input: { project: selectedProject, lease: identity },
         }),
       );
-      assertRefreshCurrent();
+      assertCheckoutCurrent();
       if (!current) {
         throw new ProjectCloneError(
           "clone_failed",
@@ -257,24 +281,26 @@ export async function refreshProjectClone(
           "Saved project repository is invalid; select the repository and retry.",
         );
       }
+      await warnIfProjectCloneShallow(current.repoRoot, { source: current.source, env });
       await configureProjectCheckoutMaintenance(current.repoRoot, {
         env,
         signal: lease.signal,
-        assertCurrent: assertRefreshCurrent,
+        assertCurrent: assertCheckoutCurrent,
       });
       // The registry owns source identity; origin can be changed inside the shared checkout.
-      await refreshProjectCheckout(
+      const result = await run(
         { target: current.repoRoot, url: originUrl },
         {
           env,
           signal: lease.signal,
           timeoutMs,
           token,
-          assertCurrent: assertRefreshCurrent,
+          assertCurrent: assertCheckoutCurrent,
           startRun,
         },
       );
-      assertRefreshCurrent();
+      assertCheckoutCurrent();
+      return result;
     },
   );
 }

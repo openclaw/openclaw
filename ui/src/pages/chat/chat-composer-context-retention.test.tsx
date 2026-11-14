@@ -123,7 +123,7 @@ it("keeps the context counter exempt and usage-link focus during refreshes", asy
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
   expect(query<HTMLElement>(".context-usage__context-value")!.translate).toBe(false);
-  expect(query<HTMLElement>(".context-usage__title")!.translate).toBe(true);
+  expect(query<HTMLElement>(".oc-menu-heading__label")!.translate).toBe(true);
 
   const current = usageProps(true);
   renderComposerInto(container, {

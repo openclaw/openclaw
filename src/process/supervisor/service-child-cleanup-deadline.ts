@@ -14,15 +14,21 @@ export function createServiceChildCleanupDeadline(params: {
   let expiryTimer: NodeJS.Timeout | undefined;
   let expiryPoll: NodeJS.Immediate | undefined;
   let escalationTimer: NodeJS.Timeout | undefined;
+  const clear = () => {
+    clearTimeout(expiryTimer);
+    expiryTimer = undefined;
+    clearImmediate(expiryPoll);
+    expiryPoll = undefined;
+    clearTimeout(escalationTimer);
+    escalationTimer = undefined;
+  };
   const begin = (shutdownBudget?: ProcessCleanupBudget) => {
     // Shutdown may adopt cleanup already started by a receipt. Accept that
     // owner once; repeated cancellation and EOF cannot renew either budget.
     if (!params.enabled() || (deadline !== undefined && (!shutdownBudget || budget))) {
       return;
     }
-    clearTimeout(expiryTimer);
-    clearImmediate(expiryPoll);
-    clearTimeout(escalationTimer);
+    clear();
     const now = performance.now();
     startedAt ??= now;
     budget = shutdownBudget;
@@ -58,10 +64,6 @@ export function createServiceChildCleanupDeadline(params: {
         begin(shutdownBudget);
       }
     },
-    clear() {
-      clearTimeout(expiryTimer);
-      clearImmediate(expiryPoll);
-      clearTimeout(escalationTimer);
-    },
+    clear,
   };
 }

@@ -18,7 +18,7 @@ type Calculation = {
 
 const text = (maxLength: number) => Type.String({ minLength: 1, maxLength });
 const limit = (maximum: number) => Type.Optional(Type.Integer({ minimum: 1, maximum }));
-const researchRequestSchema = Type.Object(
+export const researchRequestSchema = Type.Object(
   {
     question: text(8_000),
     engine: Type.Optional(Type.Union([Type.Literal("portable"), Type.Literal("google")])),
@@ -97,6 +97,8 @@ export type ResearchResult = {
     reportedTokens: number;
     tokensComplete: boolean;
   };
+  /** Half-open UTF-8 byte ranges emitted with the portable report. */
+  reportCitations?: Array<{ sourceId: string; startByte: number; endByte: number }>;
   providerCitations?: Array<{ url: string; title?: string; startByte?: number; endByte?: number }>;
   route: {
     model: string;

@@ -40,6 +40,9 @@ export function createProcessSessionFixture(params: {
     truncated: false,
     backgrounded: params.backgrounded ?? false,
     cursorKeyMode: params.cursorKeyMode ?? "normal",
+    // An ordinary origin conversation: the exit wakes a turn unless a test opts out.
+    notifyOnExit: true,
+    notifySessionTarget: { sessionId: "origin", generation: "origin" },
   });
   if (params.pid !== undefined) {
     session.pid = params.pid;

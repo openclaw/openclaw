@@ -1,6 +1,5 @@
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -19,6 +18,7 @@ import {
   authProfileCredentialPublication,
   captureAuthProfileCredentialAuthority,
 } from "../state/user-model-account-authority.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json-write.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
@@ -245,7 +245,7 @@ it("releases a failed catalog's retired owner while its shared worker stays warm
   transport.run.mockReset();
   const control = new WeakRef({});
   await nextTurn();
-  queryObjects(WeakRef);
+  forceFullGc();
   expect(control.deref()).toBeUndefined();
   expect(reference.deref()).toBeUndefined();
   expect(transport.close).not.toHaveBeenCalled();

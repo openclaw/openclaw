@@ -48,12 +48,14 @@ it("keeps a page's render failure in the outlet without its exception text, then
   const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
   const context = { label: "page" };
   const { router, state } = throwingRouter();
+  document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
   const outlet = mountRouterOutlet({ router, retryContext: context });
   try {
     await router.navigate("page", context);
     await settleRouterOutlet(outlet);
 
     const alert = outlet.querySelector('[role="alert"]');
+    expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
     expect(alert?.textContent).toContain("Couldn’t load this panel.");
     expect(outlet.textContent).not.toContain(exception);
     expect(outlet.querySelector("details")).toBeNull();
@@ -68,6 +70,7 @@ it("keeps a page's render failure in the outlet without its exception text, then
     await expect.poll(() => outlet.textContent).toContain("Page content");
     expect(outlet.querySelector('[role="alert"]')).toBeNull();
   } finally {
+    document.documentElement.removeAttribute("data-openclaw-warm-frame");
     outlet.dispose();
     router.stop();
   }

@@ -773,9 +773,11 @@ Docs-only runs and unparseable logs do not fill that quota. Failed workflows
 supply positive timing samples only: their missing jobs never count as evidence
 for pruning absent keys. Successful workflow cohorts retain their existing
 pruning policy, including when mixed with failed-workflow samples.
-It also seeks the newest five successful `ci.yml` `pull_request` runs with
-contributing compact or numbered tooling measurements, skipping docs-only and
-unparseable cohorts. The collector recognizes ordinary, `changed-compact`, and
+It also seeks the newest five completed `ci.yml` `pull_request` runs with a
+success or failure conclusion and contributing compact or numbered tooling
+measurements from successful jobs, skipping docs-only and unparseable cohorts.
+Cancelled runs do not supply samples or fill the quota.
+The collector recognizes ordinary, `changed-compact`, and
 `changed-config-compact` jobs and reads each log once for both timing families.
 These tests execute the PR merge-ref; `source` records that provenance separately
 from upstream main and release runs. PR plans may select a subset, so their
@@ -807,7 +809,10 @@ use measured Blacksmith files with the existing hosted factor. Unmeasured files 
 the remaining cold hints or the positive two-second default.
 
 Only successful complete tooling invocations contribute. Native file summaries
-include suite hooks; older verbose-only logs supply summed case durations.
+include suite hooks. Without native file time, a single-file group recording
+exactly one successful tooling process uses its complete begin-to-end span,
+even if reporters duplicate their summaries. Multiple processes and older
+verbose-only logs retain the existing summary or summed-case fallback.
 Those case costs exclude import/setup and can exceed wall time for concurrent
 cases, so they are packing weights rather than claims of per-file wall time.
 Retries contribute one median per file, profile and run. Ordinary refits require

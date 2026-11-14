@@ -68,7 +68,6 @@ const enPluginManagement = {
     thinking: "OpenClaw is thinking",
     earlier: "Earlier",
     requestFailed: "Couldn’t get a reply. Try again.",
-    connectionChanged: "The connection changed. Try again to continue setup.",
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
     unsupportedGateway: "This Gateway doesn’t support setup. Update it and reconnect to continue.",
@@ -86,7 +85,6 @@ const enPluginManagement = {
       thisGateway: "this Gateway",
       alternatives: "Or use another AI",
       signInTitle: "Connect ChatGPT to get started",
-      signInBody: "OpenClaw is ready to connect your ChatGPT account.",
       signIn: "Sign in with ChatGPT",
       startingSignIn: "Opening ChatGPT sign-in…",
       unavailableTitle: "Couldn’t connect your AI",

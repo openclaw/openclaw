@@ -127,3 +127,41 @@ it("turns a burst of catalog publications into one reload", async () => {
     vi.useRealTimers();
   }
 });
+
+it("publishes current auth while keeping refresh pending through catalog completion", async () => {
+  const catalog = createDeferred<ModelCatalogResult>();
+  const request = createGatewayRequestMock(async (method) => {
+    if (method === "models.authStatus") {
+      return { ts: 1, providers: [] };
+    }
+    if (method === "models.list") {
+      return catalog.promise;
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const onComplete = vi.fn();
+  const loader = new ModelProviderCoreLoader(() => {}, {
+    onStart: () => {},
+    onComplete,
+    onCatalogComplete: () => {},
+  });
+  let settled = false;
+  const refresh = loader.refresh(createTestGatewayClient(request), "main", "forced").then(() => {
+    settled = true;
+  });
+  try {
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(loader.catalogLoading).toBe(true);
+    expect(loader.loading).toBe(true);
+    expect(settled).toBe(false);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "models.authStatus",
+      "models.list",
+    ]);
+  } finally {
+    catalog.resolve({ models: [] });
+    await refresh;
+  }
+  expect(loader.catalogLoading).toBe(false);
+  expect(settled).toBe(true);
+});

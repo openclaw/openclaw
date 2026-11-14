@@ -183,6 +183,8 @@ describe("structured Goal admission", () => {
     async (objective) => {
       const host = makeChatHost({
         chatMessage: objective,
+        chatGoalDraftMode:
+          objective === "/stop" ? { action: "start" } : { action: "start", fromCommand: true },
         chatAttachments: [createStagedAttachment("goal-document")],
         chatReplyTarget: {
           messageId: "message-a",

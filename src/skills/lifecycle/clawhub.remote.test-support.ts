@@ -164,14 +164,7 @@ export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
             scenario === "edited" ? 0 : 1,
           );
         } else {
-          expect(results).toEqual([
-            expect.objectContaining({
-              ok: true,
-              slug: "weather",
-              previousVersion: "0.9.0",
-              version: "1.0.0",
-            }),
-          ]);
+          expect(results).toMatchObject([{ ok: true, previousVersion: "0.9.0", version: "1.0.0" }]);
           expect(installPackageDirMock).toHaveBeenCalledWith(
             expect.objectContaining({ targetDir: skillDir }),
           );
@@ -226,5 +219,12 @@ export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
         error: expect.stringContaining("Malformed workspace ClawHub lockfile"),
       });
     });
+  });
+
+  it("starts no skill update once interrupted", async () => {
+    await writeTrackedSkill(getWorkspaceDir(), "weather", { installedVersion: "0.9.0" });
+    const signal = AbortSignal.abort();
+    expect(await updateTestSkill(getWorkspaceDir(), undefined, { signal })).toEqual([]);
+    expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
   });
 }

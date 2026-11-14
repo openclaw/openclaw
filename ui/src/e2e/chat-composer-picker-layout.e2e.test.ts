@@ -75,7 +75,6 @@ suite.define(() => {
         const trigger = page.locator("[data-chat-model-select]");
         await trigger.click();
         const panel = page.locator(".chat-picker-overlay:popover-open");
-        await page.locator("[data-chat-model-provider-toggle]").first().click();
         await page.locator("[data-chat-model-more-toggle]").click();
         const options = panel.locator(".chat-controls__model-options");
         await options.evaluate((node) => node.scrollTo(0, node.scrollHeight));
@@ -220,11 +219,11 @@ suite.define(() => {
           expect(layout.gap).toBeGreaterThanOrEqual(0);
           expect(layout.gap).toBeLessThanOrEqual(8);
           expect(layout.centerOffset).toBeLessThanOrEqual(1);
-          // Reuse the document through 50 Escape and 50 pointer closes at the
-          // mobile breakpoint. Reloading between presses hid WebKit close hangs.
+          // The third close reproduced the WebKit hang. Exercise every delay with
+          // both dismissal paths without reloading the document between presses.
           const delays =
             width === 560
-              ? Array.from({ length: 50 }, (_, i) => [100, 0, 16, 32, 64][i % 5]!)
+              ? Array.from({ length: 10 }, (_, i) => [100, 0, 16, 32, 64][i % 5]!)
               : [0];
           for (const [cycle, delay] of delays.entries()) {
             for (const [triggerSelector, menuSelector, otherMenuSelector] of [
@@ -240,12 +239,20 @@ suite.define(() => {
                   }),
                 )
                 .toBe(true);
+              const overlay = composer.locator(menuSelector).locator("..");
               await layoutBox(trigger);
               await trigger.click({ delay });
               await expect.poll(() => composer.locator(menuSelector).isVisible()).toBe(true);
+              await expect.poll(() => overlay.getAttribute("data-phase")).toBe("open");
               expect(await composer.locator(otherMenuSelector).isVisible()).toBe(false);
               if (cycle % 2 === 0) {
                 await page.keyboard.press("Escape");
+              } else if (triggerSelector === "model" && width <= 640) {
+                // The phone sheet covers its trigger; tap its exposed backdrop instead.
+                await page.mouse.click(width / 2, 0);
+                await expect.poll(() => overlay.getAttribute("data-phase")).toBe("hidden");
+                // An outside tap also collapses the phone composer; resume editing.
+                await composer.locator("textarea").click();
               } else {
                 await trigger.click();
               }

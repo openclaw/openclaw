@@ -17,6 +17,7 @@ import type {
 import { runSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
 import {
   captureReusableSqliteSource,
+  isSqliteSnapshotReuseActive,
   leaseReusableSqliteSnapshot,
   publishReusableSqliteSnapshot,
 } from "../infra/sqlite-snapshot-reuse.js";
@@ -387,12 +388,13 @@ export function startOpenClawStateReadOperation(
       );
     } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
       const sourceIdentity = { key: context.admission.identity.key };
-      if (selection.snapshotPreparation === "awaited") {
+      if (selection.snapshotPreparation === "awaited" || isSqliteSnapshotReuseActive()) {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
           signal,
           expectedSourceIdentity: sourceIdentity,
           reuse: true,
           allowLiveOwner:
+            selection.snapshotPreparation === "awaited" &&
             command.type === "plugins.metadata.read" &&
             context.maintenanceScope?.ownsSchemaMaintenance !== true &&
             !getStateDatabaseSchemaLease(pathname),

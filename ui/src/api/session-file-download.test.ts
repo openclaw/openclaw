@@ -13,14 +13,14 @@ afterEach(() => {
 });
 
 it.each([
-  { remote: false, proxy: false, sessionChanged: false },
-  { remote: true, proxy: false, sessionChanged: false },
-  { remote: false, proxy: true, sessionChanged: false },
-  { remote: true, proxy: true, sessionChanged: false },
-  { remote: false, proxy: true, sessionChanged: true },
+  { remote: false, proxy: false, change: "none" },
+  { remote: true, proxy: false, change: "none" },
+  { remote: false, proxy: true, change: "none" },
+  { remote: true, proxy: true, change: "none" },
+  ...["session", "client", "connection"].map((change) => ({ remote: false, proxy: true, change })),
 ])(
-  "binds native downloads to the serving Gateway and session (remote: $remote, proxy: $proxy, sessionChanged: $sessionChanged)",
-  async ({ remote, proxy, sessionChanged }) => {
+  "binds native downloads to the serving Gateway and session (remote: $remote, proxy: $proxy, change: $change)",
+  async ({ remote, proxy, change }) => {
     const gatewayUrl = "ws://127.0.0.1:18789/control";
     const resourceBasePath = proxy ? "/dev-proxy/control" : "/control";
     vi.stubGlobal(
@@ -50,16 +50,23 @@ it.each([
       sessionKey: params.sessionKey,
       resourceBasePath,
     };
-    const result = downloadSessionFile(state, params, new AbortController().signal);
-    if (sessionChanged) {
+    const controller = new AbortController();
+    const result = downloadSessionFile(state, params, controller.signal);
+    if (change === "session") {
       state.sessionKey = "agent:main:other";
+    } else if (change === "client") {
+      state.client = new GatewayBrowserClient({ url: gatewayUrl });
+    } else if (change === "connection") {
+      state.connectionEpoch += 1;
     }
     response.resolve(payload);
     if (remote) {
       await expect(result).rejects.toThrow("same-origin Gateway connection");
       expect(request).not.toHaveBeenCalled();
-    } else if (sessionChanged) {
+    } else if (change !== "none") {
       await expect(result).resolves.toBeNull();
+      // Scope replacement suppresses the stale grant; only its UI owner aborts transport.
+      expect(controller.signal.aborted).toBe(false);
     } else {
       await expect(result).resolves.toEqual({
         filename: "report.md",

@@ -33,7 +33,7 @@ export function isEngineIdleControl(scenario: EngineScenario): scenario is Engin
 }
 
 /** Same native visibility and CPU window as app idle, without an app or Gateway. */
-export function createEngineIdleControls(): readonly EngineIdleControl[] {
+export function createEngineIdleControls(durationMs = 30_000): readonly EngineIdleControl[] {
   return ["blank", "static"].map((kind): EngineIdleControl => ({
     id: `idle-control-${kind}-hidden`,
     idle: true,
@@ -43,7 +43,7 @@ export function createEngineIdleControls(): readonly EngineIdleControl[] {
     viewports: ["desktop"],
     visibility: "hidden",
     route: kind === "blank" ? "about:blank" : "/__idle-static-control",
-    expected: "A natively hidden control document remains idle for 30 seconds without input.",
+    expected: `A natively hidden control document remains idle for ${durationMs} ms without input.`,
     setup: async (page) => {
       if (kind === "static") {
         await page.route("**/__idle-static-control", (route) =>
@@ -57,7 +57,7 @@ export function createEngineIdleControls(): readonly EngineIdleControl[] {
     prepare: async () => {},
     run: () =>
       new Promise<void>((resolve) => {
-        setTimeout(resolve, 30_000);
+        setTimeout(resolve, durationMs);
       }),
   }));
 }
@@ -181,7 +181,7 @@ export async function verifyEngineIdleClocks(page: Page, gateway: MockGatewayCon
   return checked;
 }
 
-export function createEngineIdleScenarios(): readonly EngineScenario[] {
+export function createEngineIdleScenarios(durationMs = 30_000): readonly EngineScenario[] {
   const pages = createEnginePageScenarios();
   const pageSource = (id: string) => {
     const source = pages.find((scenario) => scenario.id === `page-${id}-leave`);
@@ -242,12 +242,11 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
     viewports: ["desktop"],
     settings: { ...source.settings, locale: "en" },
     visibility: hidden ? "hidden" : undefined,
-    expected:
-      "A connected production page retains its route and native visibility for 30 seconds without input.",
+    expected: `A connected production page retains its route and native visibility for ${durationMs} ms without input.`,
     // The wait belongs to Node; a browser timeout would create measured page work.
     run: async () => {
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30_000);
+        setTimeout(resolve, durationMs);
       });
     },
   });
@@ -322,8 +321,8 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
     ...[false, true].map((hidden) =>
       idle(clocks, `idle-sidebar-clock-${hidden ? "hidden" : "visible"}`, hidden),
     ),
-    ...[0, 1, 5, 20].map((count) =>
-      idle(
+    ...[0, 1, 5, 20].flatMap((count) => {
+      const desktop = idle(
         {
           ...clocks,
           fixtureOverrides: (_sandbox, base) => ({
@@ -357,7 +356,73 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
         },
         `idle-sidebar-running-${count}`,
         false,
-      ),
-    ),
+      );
+      if (count !== 1) {
+        return [desktop];
+      }
+      return [
+        desktop,
+        {
+          ...desktop,
+          id: "idle-sidebar-clock-mobile-open-1",
+          viewports: ["mobile"],
+          expected:
+            "A touch-capable mobile page retains one visible running-session clock in its open navigation drawer without input.",
+          prepare: async (page, gateway) => {
+            await desktop.prepare(page, gateway);
+            const viewport = page.viewportSize()!;
+            const ready = await page.evaluate(({ width, height }) => {
+              const drawer = document.querySelector<HTMLElement>(
+                ".shell--mobile-nav.shell--nav-drawer-open > .shell-nav",
+              );
+              const runningClocks = drawer?.querySelectorAll<HTMLElement>(
+                ".sidebar-recent-session openclaw-elapsed-time",
+              );
+              const clock = runningClocks?.[0];
+              const row = clock?.closest(".sidebar-recent-session");
+              const clockStyle = clock ? getComputedStyle(clock) : undefined;
+              // ElapsedTime uses display: contents; measure its rendered text.
+              const range = document.createRange();
+              if (clock) {
+                range.selectNodeContents(clock);
+              }
+              const bounds = range.getBoundingClientRect();
+              const port = clock?.closest(".sidebar-shell__body")?.getBoundingClientRect();
+              return {
+                viewport: innerWidth === width && innerHeight === height,
+                // WebKit/Firefox can emulate touch while reporting zero maxTouchPoints.
+                coarsePointer: matchMedia("(pointer: coarse)").matches,
+                visibleDocument: document.visibilityState === "visible",
+                modalDrawer:
+                  drawer?.getAttribute("aria-modal") === "true" &&
+                  drawer.getAttribute("aria-hidden") !== "true" &&
+                  !drawer.inert,
+                oneClock: runningClocks?.length === 1,
+                visibleRow:
+                  row?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) === true,
+                labeledClock: Boolean(clock?.textContent?.trim()),
+                running: Boolean(
+                  row?.querySelector(".session-glyph__ring, .session-glyph__trace-run"),
+                ),
+                visibleText:
+                  clockStyle?.visibility === "visible" &&
+                  clockStyle.opacity !== "0" &&
+                  bounds.width > 0 &&
+                  bounds.height > 0 &&
+                  bounds.right > 0 &&
+                  bounds.left < innerWidth &&
+                  bounds.bottom > (port?.top ?? 0) &&
+                  bounds.top < (port?.bottom ?? innerHeight),
+              };
+            }, viewport);
+            if (Object.values(ready).some((condition) => !condition)) {
+              throw new Error(
+                `Mobile idle requires the selected touch viewport, an open modal drawer, and one visible running-session clock: ${JSON.stringify(ready)}`,
+              );
+            }
+          },
+        } satisfies EngineIdleScenario,
+      ];
+    }),
   ];
 }

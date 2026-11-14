@@ -1,6 +1,8 @@
 import type { DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
+import type { AdmissionDiagnostics } from "../infra/diagnostics-timeline.js";
 
 export type DiagnosticSessionActivitySnapshot = {
+  admission?: AdmissionDiagnostics;
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
   hasActiveEmbeddedRun?: boolean;
   activeToolName?: string;

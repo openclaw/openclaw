@@ -128,6 +128,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let helloMethods: [String]
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
+    private let helloControlUiBasePath: String?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
@@ -153,6 +154,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         helloMethods: [String] = [],
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
+        helloControlUiBasePath: String? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
@@ -163,6 +165,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         self.helloMethods = helloMethods
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
+        self.helloControlUiBasePath = helloControlUiBasePath
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
@@ -343,7 +346,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
                     auth: self.helloAuth,
                     methods: self.helloMethods,
                     capabilities: self.helloCapabilities,
-                    sessionDefaults: self.helloSessionDefaults))
+                    sessionDefaults: self.helloSessionDefaults,
+                    controlUiBasePath: self.helloControlUiBasePath))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
@@ -355,7 +359,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
             auth: self.helloAuth,
             methods: self.helloMethods,
             capabilities: self.helloCapabilities,
-            sessionDefaults: self.helloSessionDefaults))
+            sessionDefaults: self.helloSessionDefaults,
+            controlUiBasePath: self.helloControlUiBasePath))
     }
 
     func receive(
@@ -461,7 +466,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         auth: [String: Any]? = nil,
         methods: [String] = [],
         capabilities: [String] = [],
-        sessionDefaults: [String: Any]? = nil) -> Data
+        sessionDefaults: [String: Any]? = nil,
+        controlUiBasePath: String? = nil) -> Data
     {
         var payload: [String: Any] = [
             "type": "hello-ok",
@@ -493,6 +499,9 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         ]
         if let auth {
             payload["auth"] = auth
+        }
+        if let controlUiBasePath {
+            payload["controlUiBasePath"] = controlUiBasePath
         }
         if let sessionDefaults {
             payload["snapshot"] = [
@@ -557,6 +566,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
     private let helloMethods: [String]
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
+    private let helloControlUiBasePath: String?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
@@ -573,6 +583,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         helloMethods: [String] = [],
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
+        helloControlUiBasePath: String? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
@@ -584,6 +595,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         self.helloMethods = helloMethods
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
+        self.helloControlUiBasePath = helloControlUiBasePath
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
@@ -630,6 +642,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
                 helloMethods: self.helloMethods,
                 helloCapabilities: self.helloCapabilities,
                 helloSessionDefaults: self.helloSessionDefaults,
+                helloControlUiBasePath: self.helloControlUiBasePath,
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
                 challengeCapabilities: self.challengeCapabilities,
@@ -880,6 +893,7 @@ extension GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials = .init(),
         options: GatewayConnectOptions,
         session: FakeGatewayWebSocketSession,
+        workerTransportURL: String? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void = {},
         onDisconnected: @escaping @Sendable (String) async -> Void = { _ in },
@@ -895,6 +909,7 @@ extension GatewayNodeSession {
             credentials: credentials,
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
+            workerTransportURL: workerTransportURL,
             extraHeadersProvider: extraHeadersProvider,
             onConnected: onConnected,
             onDisconnected: onDisconnected,
@@ -1162,6 +1177,44 @@ struct GatewayNodeSessionTests {
         #expect(connection["Authorization"] == nil)
         await gateway.disconnect()
         #expect(await gateway.workerConnectionData(ifCurrentRoute: route) == nil)
+    }
+
+    @Test func `private worker bridge belongs to its admitted route and expires on replacement`() async throws {
+        let gateway = GatewayNodeSession()
+        let session = FakeGatewayWebSocketSession(helloCapabilities: [
+            "node-worker-portal-stream-v1", "node-worker-bundle-status-v1",
+        ])
+        let url = try testURL("wss://claw.example.invalid/")
+        let options = nodeConnectOptions(allowStoredDeviceAuth: false)
+        var previousRoute: GatewayNodeSessionRoute?
+        for bridge in ["ws+unix:/tmp/test-node-a/gateway.sock:/", "ws+unix:/tmp/test-node-b/gateway.sock:/"] {
+            try await gateway.connectForTest(
+                url, options: options, session: session, workerTransportURL: bridge)
+            let route = try #require(await gateway.currentRoute())
+            if let previousRoute {
+                #expect(route != previousRoute)
+                #expect(await gateway.workerConnectionData(ifCurrentRoute: previousRoute) == nil)
+            }
+            let data = try #require(await gateway.workerConnectionData(ifCurrentRoute: route))
+            let connection = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(connection["url"] as? String == bridge)
+            #expect(connection["capabilities"] as? [String] == ["node-worker-bundle-status-v1"])
+            #expect(Set(connection.keys) == ["url", "protocol", "capabilities"])
+            previousRoute = route
+        }
+        #expect(session.snapshotMakeCount() == 2)
+        let retiredRoute = try #require(previousRoute)
+        await gateway.disconnect()
+        #expect(await gateway.workerConnectionData(ifCurrentRoute: retiredRoute) == nil)
+        try await gateway.connectForTest(url, options: options, session: session)
+        let directRoute = try #require(await gateway.currentRoute())
+        let directData = try #require(await gateway.workerConnectionData(ifCurrentRoute: directRoute))
+        let directConnection = try #require(JSONSerialization.jsonObject(with: directData) as? [String: Any])
+        #expect(directConnection["url"] as? String == url.absoluteString)
+        #expect(directConnection["capabilities"] as? [String] == [
+            "node-worker-bundle-status-v1", "node-worker-portal-stream-v1",
+        ])
+        await gateway.disconnect()
     }
 
     @Test func `changed connection options renegotiate the advertised handshake`() async throws {
@@ -4443,21 +4496,44 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `server event subscription filters before buffering`() async {
+    func `server event overflow counts only admitted drops until cancellation`() async {
         let gateway = GatewayNodeSession()
         let subscription = await gateway.makeServerEventSubscription(
             bufferingNewest: 1,
             matching: { $0.event == "target" })
-        defer { subscription.cancel() }
-        let stream = subscription.events
+        let fast = await gateway.makeServerEventSubscription(bufferingNewest: 1)
+        defer {
+            subscription.cancel()
+            fast.cancel()
+        }
+        var fastIterator = fast.events.makeAsyncIterator()
+        for sequence in 1...8 {
+            let counts = await gateway._test_broadcastServerEvent(
+                EventFrame(type: "event", event: "target", seq: sequence))
+            #expect(counts == [0, sequence - 1])
+            #expect(await fastIterator.next()?.seq == sequence)
+            let afterNoise = await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+            #expect(afterNoise == counts)
+            #expect(await fastIterator.next()?.event == "noise")
+        }
 
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "target"))
-        await gateway._test_broadcastServerEvent(EventFrame(type: "event", event: "noise"))
+        subscription.cancel()
+        // Exercise .terminated as well as the scheduled onTermination cleanup.
+        // Either path must discard the old counter without recording another drop.
+        let afterCancel = await gateway._test_broadcastServerEvent(
+            EventFrame(type: "event", event: "target", seq: 9))
+        #expect(afterCancel == [0])
+        #expect(await fastIterator.next()?.seq == 9)
+        var iterator = subscription.events.makeAsyncIterator()
+        #expect(await iterator.next()?.seq == 8)
+        #expect(await iterator.next() == nil)
 
-        var iterator = stream.makeAsyncIterator()
-        let event = await iterator.next()
-        #expect(event?.event == "target")
+        let replacement = await gateway.makeServerEventSubscription(bufferingNewest: 1)
+        defer { replacement.cancel() }
+        let afterReplacement = await gateway._test_broadcastServerEvent(
+            EventFrame(type: "event", event: "target", seq: 10))
+        #expect(afterReplacement == [0, 0])
+        #expect(await fastIterator.next()?.seq == 10)
     }
 
     @Test
@@ -4489,6 +4565,23 @@ struct GatewayNodeSessionTests {
 
         await gateway.disconnect()
         #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == nil)
+    }
+
+    @Test
+    func `control UI base path follows the current hello route`() async throws {
+        let session = FakeGatewayWebSocketSession(helloControlUiBasePath: " /gateway ")
+        let gateway = GatewayNodeSession()
+
+        try await gateway.connectForTest(
+            testURL("ws://example.invalid"),
+            options: operatorConnectOptions(),
+            session: session)
+
+        let route = try #require(await gateway.currentRoute())
+        #expect(await gateway.currentControlUiBasePath(ifCurrentRoute: route) == "/gateway")
+
+        await gateway.disconnect()
+        #expect(await gateway.currentControlUiBasePath(ifCurrentRoute: route) == nil)
     }
 
     @Test

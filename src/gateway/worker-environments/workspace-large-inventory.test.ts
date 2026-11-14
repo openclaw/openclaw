@@ -243,10 +243,10 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
   await expect(fixture.read("keep.txt")).resolves.toBe("local edit\n");
 });
 
-it("recovers a converged shipped v1 deletion above the new changed-path limit", async () => {
+it("rejects an unapplied 65k-path historical result but can settle its accepted receipt", async () => {
   const fixture = await workspaceFixture(
     fileManifest(
-      numberedPaths("deleted", 50_001).map((name) => `${name}.txt`),
+      numberedPaths("deleted", 65_000).map((name) => `${name}.txt`),
       "a",
     ),
     makeManifest({}),
@@ -254,16 +254,20 @@ it("recovers a converged shipped v1 deletion above the new changed-path limit", 
   await fixture.stage(true);
   const begin = vi.fn(async () => {});
 
-  const result = await fixture.apply(emptyJournal({ begin }));
+  await expect(fixture.apply(emptyJournal({ begin }))).rejects.toMatchObject({
+    code: "WORKSPACE_RESULT_LIMIT",
+    message: expect.stringMatching(/65000.*50000.*\.gitignore/s),
+  });
+  expect(begin).not.toHaveBeenCalled();
+  const result = await applyStagedWorkerWorkspaceResult({
+    root: fixture.root,
+    stagedResultRef: fixture.ref,
+    expectedBaseManifestRef: fixture.base.ref,
+    journal: emptyJournal({ begin }),
+    alreadyAccepted: true,
+  });
   expect(result).toMatchObject({ changed: true, manifest: { entries: [] } });
-  expect(begin).toHaveBeenCalledWith(
-    expect.objectContaining({
-      baseEntries: [],
-      appliedEntries: [],
-      baseDirectories: [],
-      appliedDirectories: [],
-    }),
-  );
+  expect(begin).not.toHaveBeenCalled();
 }, 30_000);
 
 it("stages a directory-only v2 result above 25,000 reconciliation records", async () => {

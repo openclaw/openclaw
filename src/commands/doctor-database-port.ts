@@ -6,6 +6,7 @@ import { z } from "zod";
 import { setConfigValueAtPath, unsetConfigValueAtPath } from "../config/config-paths.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { writeConfigFile } from "../config/io.js";
+import { normalizeLegacyWorkboardDatabaseConfig } from "../config/legacy-workboard-database.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
@@ -98,8 +99,24 @@ export type DatabasePortOptions = {
 
 async function preflight(ctx: Context, options: DatabasePortOptions) {
   ctx.phase = "preflight";
-  const captured = await configInputs(ctx),
+  let current = await readDatabasePortConfigSnapshot(ctx);
+  const authored = current.snapshot.authoredConfig ?? current.snapshot.sourceConfig;
+  const canonical = normalizeLegacyWorkboardDatabaseConfig(authored, ctx.env);
+  if (!options.dryRun && canonical !== authored) {
+    // Capture/recovery must start with explicit intent: publication removes the
+    // legacy anchor, including when the port is interrupted before config commit.
+    await writeConfigFile(canonical, {
+      ...current.writeOptions,
+      baseSnapshot: current.snapshot,
+      inputBase: "source",
+      assertCurrent: ctx.assertCurrent,
+      observe: false,
+      skipOutputLogs: true,
+      skipRuntimeSnapshotRefresh: true,
+    });
     current = await readDatabasePortConfigSnapshot(ctx);
+  }
+  const captured = await configInputs(ctx);
   for (const input of captured) {
     await assertDatabaseArtifact(input);
   }

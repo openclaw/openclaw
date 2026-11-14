@@ -12,12 +12,18 @@
  * Acceptance: identical result digests and lower CPU/allocation without an adverse
  * metadata-update result. Allocation includes collected objects in a separate pass;
  * GC/timing decisions use only the untraced timing pass.
+ * --sidebar-counts --listeners 1 --sessions 15000 measures the real sidebar count
+ * filter with updates across 15 live rows. --filter-source <saved-session-list-filters.ts>
+ * pins that owner from any path. Compare work counts, selection digest, CPU and allocation
+ * in separate timing/allocation passes; static exclusions must skip disclosure reads
+ * without changing totals, facets or membership of the returned page.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import {
@@ -32,6 +38,7 @@ import { parseArgs } from "node:util";
 import { buildSubagentSessionListReadIndex } from "../../src/agents/subagents/registry/subagent-registry-read.js";
 import { readSessionListSelectionFacts } from "../../src/gateway/session-list-target.js";
 import type { Row, SelectionChange } from "../../src/gateway/session-row-projection-record.js";
+import { createProfileSessionEntryFilter } from "../../src/gateway/session-sharing-read.js";
 import { buildSessionListRowMetadataContext } from "../../src/gateway/session-utils-projection.js";
 import { notifyListeners } from "../../src/shared/listeners.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -44,6 +51,8 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "10800" },
     listeners: { type: "string", default: "20" },
     mode: { type: "string", default: "timing" },
+    "sidebar-counts": { type: "boolean", default: false },
+    "filter-source": { type: "string", default: "src/gateway/session-list-filters.ts" },
   },
 });
 assert(global.gc, "run with --expose-gc");
@@ -59,6 +68,26 @@ const { createSessionRowSelection }: typeof import("../../src/gateway/session-ro
   await import(pathToFileURL(source).href);
 const records: typeof import("../../src/gateway/session-row-projection-record.js") = await import(
   pathToFileURL(recordSource).href
+);
+const filterSource = path.resolve(values["filter-source"]);
+const filterUrl = `${new URL("../../src/gateway/session-list-filters.ts", import.meta.url).href}?measured-filter`;
+const filterHook = registerHooks({
+  load(url, context, nextLoad) {
+    return url === filterUrl
+      ? {
+          format: "module-typescript",
+          source: readFileSync(filterSource, "utf8"),
+          shortCircuit: true,
+        }
+      : nextLoad(url, context);
+  },
+});
+const { filterSessionEntries }: typeof import("../../src/gateway/session-list-filters.js") =
+  await import(filterUrl);
+filterHook.deregister();
+const sharing = createProfileSessionEntryFilter(
+  { profileId: "synthetic", sessionCap: "view" },
+  (actor) => actor?.id === "synthetic",
 );
 const now = Date.UTC(2026, 9, 27);
 const cfg = { agents: { entries: { main: {}, ops: {} } } };
@@ -79,7 +108,10 @@ const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
   node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 const results = [];
-for (const name of ["unchanged", "presentation", "metadata"] as const) {
+const workloads = values["sidebar-counts"]
+  ? (["sidebar"] as const)
+  : (["unchanged", "presentation", "metadata"] as const);
+for (const name of workloads) {
   const owners = Array.from({ length: listenerCount }, () =>
     createSessionRowSelection(cfg, scope, false, () => context),
   );
@@ -122,15 +154,19 @@ for (const name of ["unchanged", "presentation", "metadata"] as const) {
     owner.read();
   }
   let revision = 0;
+  let filterCalls = 0;
+  let filtered: ReturnType<typeof filterSessionEntries> | undefined;
   const run = () => {
-    const index = revision++ % sessions;
+    const index = revision++ % (name === "sidebar" ? Math.min(15, sessions) : sessions);
     let row = rows[index]!;
     if (name !== "unchanged") {
       const entry = {
         ...row.entry!,
-        ...(name === "presentation"
-          ? { outputTokens: revision }
-          : { label: `Changed ${revision}` }),
+        ...(name === "sidebar"
+          ? { updatedAt: now + revision }
+          : name === "presentation"
+            ? { outputTokens: revision }
+            : { label: `Changed ${revision}` }),
       };
       row = {
         ...row,
@@ -144,15 +180,45 @@ for (const name of ["unchanged", "presentation", "metadata"] as const) {
       id: records.identity(row),
       key: row.key,
       agentId: row.agentId,
+      storePath: row.storeTarget.storePath,
       row: records.selectionRow(row),
     };
     notifyListeners(listeners, change, (error) => {
       throw error;
     });
+    if (name === "sidebar") {
+      const selected = owners[0]!.read("updatedAt");
+      filtered = filterSessionEntries(
+        {
+          cfg,
+          now,
+          opts: {
+            limit: 1,
+            includeOwnerSessionCounts: true,
+            excludeSubagents: true,
+            excludeCron: true,
+            excludeSystem: true,
+            excludeDock: true,
+          },
+          entries: selected.entries,
+          entriesSorted: true,
+          getTarget: selected.get,
+          configuredAgentIds: agents,
+          getRowContext: () => context,
+          involvementKeys: selected.involvementKeys,
+          entryFilter: (key, entry) => {
+            filterCalls++;
+            return sharing(key, entry);
+          },
+        },
+        { offset: 0, limit: 1, ownerLimit: 0 },
+      );
+    }
   };
   for (let index = 0; index < 500; index++) {
     run();
   }
+  filterCalls = 0;
   global.gc();
   await nextTurn();
   const inspector = new Session();
@@ -209,6 +275,8 @@ for (const name of ["unchanged", "presentation", "metadata"] as const) {
   results.push({
     name,
     iterations,
+    filterCallsPerUpdate: filterCalls / iterations,
+    selectionDigest: filtered && digest(filtered),
     hostLoadBefore,
     hostLoadAfter,
     elapsedMs,
@@ -232,6 +300,7 @@ console.log(
   JSON.stringify({
     node: process.version,
     source,
+    filterSourceSha256: createHash("sha256").update(readFileSync(filterSource)).digest("hex"),
     sourceSha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
     recordSource,
     recordSourceSha256: createHash("sha256").update(readFileSync(recordSource)).digest("hex"),

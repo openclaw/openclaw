@@ -30,6 +30,29 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: [input],
   })),
+  {
+    // Scenario coverage and taxonomy are filesystem inventories, not imports.
+    testFile: "extensions/qa-lab/src/coverage-report.test.ts",
+    watchGlobs: ["qa/scenarios/**", "taxonomy.yaml"],
+  },
+  {
+    // Copilot consumes this shared replay contract through the SDK facade (three hops).
+    testFile: "extensions/github-copilot/replay-policy.test.ts",
+    watchGlobs: ["src/plugins/provider-replay-helpers.ts"],
+  },
+  {
+    // Match the native scanner's source roots, not all Apple/Android build inputs.
+    testFile: "test/scripts/native-app-i18n.test.ts",
+    watchGlobs: [
+      "apps/ios/**/*.{swift,plist}",
+      "apps/macos/Sources/**/*.{swift,plist}",
+      "apps/shared/OpenClawKit/Sources/**/*.{swift,plist}",
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+      "apps/android/app/src/{main,play,thirdParty}/**/*.{kt,kts}",
+      "apps/android/app/src/{main,play,thirdParty}/**/res/values/*.xml",
+      "apps/android/wear/src/main/res/values/*.xml",
+    ],
+  },
   // Copied release fixtures need the complete helper closure beyond the hub cutoff.
   ...[
     "test/scripts/ocm-npm-workspace-deps.test.ts",
@@ -46,6 +69,18 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     // The node-host integration proves the official-plugin version floor through a facade.
     testFile: "src/node-host/codex-node-plugin.integration.test.ts",
     watchGlobs: ["src/plugins/official-runtime-plugins.ts"],
+  },
+  {
+    // Catalog artwork is read from every bundled manifest's package directory.
+    testFile: "src/plugins/bundled-plugin-icons.test.ts",
+    watchGlobs: [
+      "extensions/*/openclaw.plugin.json",
+      "extensions/*/assets/{icon.png,activity.svg}",
+    ],
+  },
+  {
+    testFile: "src/plugins/bundled-plugin-categories.test.ts",
+    watchGlobs: ["extensions/*/openclaw.plugin.json"],
   },
   {
     // YAML code/docs references are not import edges. A removed path can be
@@ -94,11 +129,10 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   // New or removed modules and new import edges can escape a static inventory.
   // Watch source edits conservatively: the absent inventory entry cannot own its guard.
+  // Provisioning uses the explicit copied-input watch below; these guards detect new edges.
   ...[
     "test/scripts/pr-wrapper-source-closure.test.ts",
-    "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/eager-import-closure.test.ts",
-    "test/scripts/update-restart-module-outcome.test.ts",
     "test/scripts/type-suppression-inventory.test.ts",
     "test/scripts/plugin-sdk-surface-report.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -106,6 +140,22 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     sourceOnly: true,
     watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
   })),
+  {
+    // This fixture evaluates named update modules, not arbitrary repository sources.
+    // Include the native integrity worker and its runtime/bootstrap dependencies.
+    testFile: "test/scripts/update-restart-module-outcome.test.ts",
+    sourceOnly: true,
+    watchGlobs: [
+      "{scripts,packages}/**",
+      "src/{cli,daemon,infra,logging,plugins,process,security,shared,state,utils}/**",
+      "src/test-utils/node-process.ts",
+      "test/scripts/ci-workflow.test-support.ts",
+      "test/vitest/**",
+      "test/{setup*,non-isolated-runner}.ts",
+      "*.{mjs,json}",
+      "pnpm-*.yaml",
+    ],
+  },
   {
     includeDotPaths: true,
     testFile: "test/scripts/lint-suppressions.test.ts",
@@ -1298,6 +1348,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/sessions/session-upstream-monitor.test.ts",
     watchGlobs: [
+      "src/sessions/session-state-events-record.worker.ts",
       "src/sessions/session-state-events.worker.ts",
       "src/sessions/session-upstream-links.worker.ts",
       "src/state/openclaw-state-read-handlers.ts",
