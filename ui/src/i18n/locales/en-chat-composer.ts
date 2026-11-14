@@ -213,7 +213,7 @@ const catalog = {
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
         pausedByStop: "Queue paused",
-        pausedByStopReason: "You stopped the run",
+        pausedByStopReason: "You requested a stop",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         needsReview: "Needs review",

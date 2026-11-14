@@ -250,7 +250,8 @@ struct ChatRunStartupTransportTests {
             thinkingLevel: nil,
             inFlightRun: .init(runId: "r", text: text, events: events))
         #expect(model.applyHistoryPayload(
-            payload, for: model.beginHistoryRequest(), preservingOptimisticLocalMessages: true))
+            payload, for: model.beginHistoryRequest(), preservingOptimisticLocalMessages: true,
+            decodedMessages: []))
     }
 
     @Test func `history restores startup and orders replayed output before retry`() throws {

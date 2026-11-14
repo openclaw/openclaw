@@ -6,6 +6,11 @@
  * measures untraced CPU/transaction holds; counts instruments native iterator rows.
  * Defaults: 10,000 sessions, 30 events per cold session, a full 10 MiB hot window.
  * --hot-sessions 21 interleaves full windows through the physical owner facts cache.
+ * --cold discards window facts before every append; --lifecycle-churn publishes
+ * an unrelated session removal. --cold-pages releases SQLite's page cache before
+ * each append (the OS cache remains warm). Use two hot sessions for competing windows.
+ * Acceptance: fewer payload-row visits and lower cold CPU/allocation and writer
+ * holds, identical retained sequence ranges, no material warm regression.
  * Use --iterations 2000 for longer passes. Alternate base/candidate launch order.
  * For a sparse baseline overlay, preserve changed modules at repository-relative
  * paths, set OPENCLAW_BENCH_BASELINE_DIR, and add
@@ -35,6 +40,9 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "10000" },
     "hot-sessions": { type: "string", default: "1" },
     variant: { type: "string", default: "candidate" },
+    cold: { type: "boolean", default: false },
+    "cold-pages": { type: "boolean", default: false },
+    "lifecycle-churn": { type: "boolean", default: false },
   },
 });
 assert(global.gc, "Use --expose-gc");
@@ -70,9 +78,9 @@ Object.assign(process.env, {
   OPENCLAW_STATE_DIR: root,
   OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  TMPDIR: path.join(root, "tmp"),
 });
 const { replaceSessionEntry } = await import("../../src/config/sessions/session-accessor.js");
+const { sessionChanges } = await import("../../src/sessions/session-row-changes.js");
 const {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -136,6 +144,9 @@ const holds: number[] = [];
 const sqlTimes: number[] = [];
 let iteratorRows = 0;
 let iteratorStatements = 0;
+let coldWindows = 0;
+let statements = 0;
+const nativePrepare = native.prepare.bind(native);
 // oxlint-disable-next-line typescript/unbound-method -- The probe forwards the native receiver and restores this method.
 const nativeExec = DatabaseSync.prototype.exec;
 // oxlint-disable-next-line typescript/unbound-method -- The probe forwards the native receiver and restores this method.
@@ -191,13 +202,40 @@ try {
     { operationLabel: "trajectory.benchmark.seed" },
   );
 
+  if (values.mode === "counts") {
+    native.prepare = (sql) => {
+      const statement = nativePrepare(sql);
+      const get = statement.get.bind(statement);
+      const run = statement.run.bind(statement);
+      statement.get = (...bindings) => {
+        statements += Number(measured && sql.includes("trajectory_runtime_events"));
+        return Reflect.apply(get, statement, bindings);
+      };
+      statement.run = (...bindings) => {
+        statements += Number(measured && sql.includes("trajectory_runtime_events"));
+        return Reflect.apply(run, statement, bindings);
+      };
+      return statement;
+    };
+  }
   const run = () => {
     const selectedId = hotIds[appended++ % hotSessions]!;
+    if (values["lifecycle-churn"]) {
+      sessionChanges.emit({ sessionKey: "agent:main:unrelated", facts: { kind: "removed" } });
+    }
+    const retained = takeWindow(identity, selectedId);
+    const known = values.cold ? undefined : retained;
+    if (measured && !known) {
+      coldWindows++;
+    }
+    if (values["cold-pages"]) {
+      native.exec("PRAGMA shrink_memory");
+    }
     const windowFacts = append(
       {
         sessionId: selectedId,
         maxRuntimeBytes,
-        windowFacts: takeWindow(identity, selectedId),
+        windowFacts: known,
         events: [{ line, ts: event.ts, runId: event.runId }],
       },
       database,
@@ -313,12 +351,44 @@ try {
         `SELECT seq, coalesce(event_utf8_bytes,octet_length(event_json)) AS event_bytes, NULL AS event_json FROM trajectory_runtime_events WHERE session_id=? ORDER BY seq ${direction}`,
     ),
     "DELETE FROM trajectory_runtime_events WHERE session_id=? AND seq<=0",
+    "SELECT MAX(seq) FROM trajectory_runtime_events WHERE session_id=?",
+    "SELECT SUM(coalesce(event_utf8_bytes,octet_length(event_json))+1) FROM trajectory_runtime_events WHERE session_id=?",
   ].map((sql) => ({ sql, plan: native.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(sessionId) }));
-  const ownerRelative = "src/trajectory/runtime-window-facts.ts";
+  const ownerRelative = "src/trajectory/runtime-store.sqlite.ts";
   const owner = path.join(
     process.env.OPENCLAW_BENCH_BASELINE_DIR ?? fileURLToPath(new URL("../../", import.meta.url)),
     ownerRelative,
   );
+  const cacheBehavior =
+    values.mode === "counts"
+      ? [
+          { sessions: 64, churn: false },
+          { sessions: 65, churn: false },
+          { sessions: 2, churn: true },
+        ].map(({ sessions: activeSessions, churn }) => {
+          const cacheOwner = { ...identity };
+          let misses = 0;
+          for (let round = 0; round < 11; round++) {
+            for (let index = 0; index < activeSessions; index++) {
+              if (churn) {
+                sessionChanges.emit({
+                  sessionKey: "agent:main:unrelated",
+                  facts: { kind: "removed" },
+                });
+              }
+              const facts = takeWindow(cacheOwner, String(index));
+              misses += Number(round > 0 && !facts);
+              publishWindow(cacheOwner, String(index), { nextSeq: 1, retainedBytes: bytes + 1 });
+            }
+          }
+          return {
+            sessions: activeSessions,
+            churn,
+            appends: activeSessions * 10,
+            coldWindows: misses,
+          };
+        })
+      : undefined;
   const result = {
     variant: values.variant,
     mode: values.mode,
@@ -327,6 +397,11 @@ try {
     iterations,
     sessions,
     hotSessions,
+    cold: values.cold,
+    coldPages: values["cold-pages"],
+    lifecycleChurn: values["lifecycle-churn"],
+    coldWindows,
+    cacheBehavior,
     seededRows: (sessions - hotSessions) * coldRowsPerSession + hotRows * hotSessions,
     hotRows,
     maxRuntimeBytes,
@@ -338,6 +413,7 @@ try {
     allocation,
     iteratorRows: values.mode === "counts" ? iteratorRows : undefined,
     iteratorStatements: values.mode === "counts" ? iteratorStatements : undefined,
+    statements: values.mode === "counts" ? statements + iteratorStatements : undefined,
     hostLoadBefore,
     hostLoadAfter: loadavg(),
     memoryBefore,
@@ -351,6 +427,7 @@ try {
   measured = false;
   DatabaseSync.prototype.exec = nativeExec;
   StatementSync.prototype.iterate = nativeIterate;
+  native.prepare = nativePrepare;
   if (sampling) {
     await inspector.post("HeapProfiler.stopSampling");
   }

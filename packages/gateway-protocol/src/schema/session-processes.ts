@@ -20,6 +20,8 @@ export const SessionProcessSummarySchema = closedObject({
   tail: Type.String({ maxLength: SESSION_PROCESS_TAIL_MAX_CHARS }),
   truncated: Type.Boolean(),
   canStop: Type.Boolean(),
+  /** Running, and its exit will continue this chat. Empty successful output can still finish silently. */
+  wakesSession: Type.Optional(Type.Literal(true)),
   exitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
   exitSignal: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
   exitReason: Type.Optional(Type.String()),

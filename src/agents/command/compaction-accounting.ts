@@ -4,7 +4,7 @@ import { incrementCompactionCount } from "../../auto-reply/reply/session-updates
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
-import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.types.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
