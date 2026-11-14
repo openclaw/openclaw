@@ -12315,6 +12315,34 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.thinkingLevel } == "medium")
     }
 
+    @Test func `reasoning opt-out does not force off when the gateway offers no off level`() async throws {
+        let history = historyPayload(sessionId: "sess-main")
+        let levels = ["low", "medium", "high", "xhigh", "max", "ultra"].map { thinkingOption($0) }
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "claude-opus-5-5",
+                modelProvider: "anthropic",
+                thinkingLevels: levels,
+                thinkingDefault: "medium"))
+        let models = [
+            modelChoice(id: "claude-opus-5-5", name: "Claude Opus 5.5", reasoning: false, thinkingLevels: levels),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            initialThinkingLevel: "medium")
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        #expect(await MainActor.run { vm.showsThinkingPicker })
+
+        let send = await sendUserMessage(vm, text: "hello")
+        await send?.value
+        #expect(await transport.sentThinkingLevels() == ["medium"])
+    }
+
     @Test func `ungated thinking picker sends stored level`() async throws {
         let history = historyPayload(sessionId: "sess-main")
         let sessions = sessionsResponse(
