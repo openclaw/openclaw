@@ -110,6 +110,11 @@ export function renderWideAreaGatewayZoneText(
   const hostLabel = dnsLabel(hostname, "openclaw");
   const instanceLabel = dnsLabel(`${hostname}-gateway`, "openclaw-gw");
   const domain = normalizeWideAreaDomain(opts.domain) ?? "local.";
+  const serviceLabel = `${instanceLabel}._openclaw-gw._tcp`;
+  // The service instance is the longest generated name; domain includes the root dot.
+  if (`${serviceLabel}.${domain}`.length > MAX_DNS_NAME_LENGTH + 1) {
+    throw new Error("wide-area discovery domain is too long for the generated service name");
+  }
 
   const txt = [
     `displayName=${opts.displayName.trim() || hostname}`,
@@ -149,9 +154,9 @@ export function renderWideAreaGatewayZoneText(
     records.push(`${hostLabel} IN AAAA ${opts.tailnetIPv6}`);
   }
 
-  records.push(`_openclaw-gw._tcp IN PTR ${instanceLabel}._openclaw-gw._tcp`);
-  records.push(`${instanceLabel}._openclaw-gw._tcp IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`);
-  records.push(`${instanceLabel}._openclaw-gw._tcp IN TXT ${txt.map(txtQuote).join(" ")}`);
+  records.push(`_openclaw-gw._tcp IN PTR ${serviceLabel}`);
+  records.push(`${serviceLabel} IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`);
+  records.push(`${serviceLabel} IN TXT ${txt.map(txtQuote).join(" ")}`);
 
   const contentBody = `${records.join("\n")}\n`;
   const hashBody = `${records

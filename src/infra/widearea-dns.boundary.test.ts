@@ -40,6 +40,34 @@ describe("wide-area DNS zone writer — unmocked production boundary", () => {
   });
 
   it.each([
+    { hostname: "gateway", instance: "gateway-gateway" },
+    { hostname: "x".repeat(63), instance: "x".repeat(63) },
+  ])("bounds the expanded service name for $hostname", async ({ hostname, instance }) => {
+    using _ = vi.spyOn(os, "hostname").mockReturnValue(hostname);
+    const prefix = `${instance}._openclaw-gw._tcp.`;
+    let remaining = 253 - prefix.length;
+    const labels: string[] = [];
+    while (remaining > 63) {
+      labels.push("a".repeat(63));
+      remaining -= 64;
+    }
+    labels.push("a".repeat(remaining));
+    const domain = labels.join(".");
+    expect(`${prefix}${domain}.`).toHaveLength(254);
+    const accepted = await writeWideAreaGatewayZone({ ...zoneOpts, domain });
+    expect(fs.readFileSync(accepted.zonePath, "utf8")).toContain(`$ORIGIN ${domain}.`);
+
+    const oversizedDomain = `${domain}a`;
+    const target = getWideAreaZonePath(oversizedDomain);
+    const previous = "; previously served zone\n";
+    fs.writeFileSync(target, previous);
+    await expect(
+      writeWideAreaGatewayZone({ ...zoneOpts, domain: oversizedDomain }),
+    ).rejects.toThrow("wide-area discovery domain is too long for the generated service name");
+    expect(fs.readFileSync(target, "utf8")).toBe(previous);
+  });
+
+  it.each([
     { name: "advances future-dated serials", previous: 2027010101, expected: 2027010102 },
     { name: "advances counters past 99", previous: 2026031400, expected: 2026031401 },
     { name: "wraps maximum 32-bit serials", previous: 0xffffffff, expected: 2026031301 },
