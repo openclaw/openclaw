@@ -126,7 +126,16 @@ export async function loadChatHistory(
     if (opts.supersedeInFlight !== true && inFlight.key === requestKey) {
       return inFlight.promise;
     }
-    const version = ++requests.historyVersion;
+    const accepted = requests.acceptedHistory;
+    // Before the first read publishes there is no transcript to overwrite.
+    // Retiring it anyway lets a busy run's messages keep the chat loading forever.
+    const showsAcceptedHistory =
+      accepted?.sessionKey === sessionKey &&
+      accepted.requestAgentId === requestAgentId &&
+      accepted.client === client &&
+      accepted.sessions === sessions &&
+      accepted.connectionEpoch === connectionEpoch;
+    const version = showsAcceptedHistory ? ++requests.historyVersion : requests.historyVersion;
     const refresh = {
       startup: startup || inFlight.startup,
       deferBranches: opts.deferBranches === true,
