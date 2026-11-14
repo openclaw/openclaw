@@ -6181,10 +6181,11 @@ class ChatComposerLayoutTest {
       assertTrue("Transcript fixture must fit inline image admission", imageBase64.length <= CHAT_IMAGE_MAX_BASE64_CHARS)
       val image = ChatMessageContent(type = "image", mimeType = "image/jpeg", base64 = imageBase64)
       composeRule.runOnIdle {
-        controllerFlow<List<ChatMessage>>("_messages").value = listOf(
-          ChatMessage("garden-question", "user", listOf(ChatMessageContent(text = "Which garden layout works best?"), image, image), null),
-          ChatMessage("garden-answer", "assistant", listOf(ChatMessageContent(text = "The sunny bed has room for herbs. Keep a clear path between the planters.")), null),
-        )
+        controllerFlow<List<ChatMessage>>("_messages").value =
+          listOf(
+            ChatMessage("garden-question", "user", listOf(ChatMessageContent(text = "Which garden layout works best?"), image, image), null),
+            ChatMessage("garden-answer", "assistant", listOf(ChatMessageContent(text = "The sunny bed has room for herbs. Keep a clear path between the planters.")), null),
+          )
       }
       composeRule.waitForIdle()
       composeRule.onAllNodesWithContentDescription("image/jpeg", useUnmergedTree = true).assertCountEquals(0)

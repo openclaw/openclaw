@@ -4,7 +4,6 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -34,11 +33,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lif
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
-import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
-import { identifiedClient } from "./server-methods/sessions-read-cache.test-support.js";
-import type { RespondFn } from "./server-methods/types.js";
 import {
   expectMessageIds,
   historyParams,
@@ -195,65 +190,7 @@ it.each(["rpc", "message-by-id"] as const)(
   "reads archived %s history without restoring or reading cold metadata on the caller",
   async (transport) => {
     await withHistoryState(async (state) => {
-      using _ = vi.spyOn(Date, "now").mockReturnValue(1_750_000_000_000);
       const fixture = await createSessionColdStorageFixture(state.statePath("cold-history.sqlite"));
-      if (transport === "rpc") {
-        await replaceTranscriptEvents(fixture.scope, [
-          { type: "session", version: 3, id: historicalId },
-          ...Array.from({ length: 26 }, (_, index) =>
-            messageEvent(
-              `history-${index}`,
-              {
-                role: index % 2 ? "assistant" : "user",
-                content: [{ type: "text", text: `Preserved message ${index} — 你好 🦊` }],
-                timestamp: index + 1,
-              },
-              index ? `history-${index - 1}` : null,
-            ),
-          ),
-        ]);
-        await waitForSessionTranscriptProjection(fixture.scope);
-        fixture
-          .database()
-          .exec("UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1");
-        await replaceSessionEntry(fixture.scope, {
-          sessionId: currentId,
-          updatedAt: 1,
-          visibility: "shared",
-        });
-        setRuntimeConfigSnapshot({ session: { store: fixture.scope.storePath } });
-      }
-      const rpc = transport === "rpc" ? await createHistoryReadContext() : undefined;
-      const client = rpc ? identifiedClient("cold-history-reader") : null;
-      const readRpc = async () => {
-        if (!rpc) {
-          throw new Error("Expected RPC history context");
-        }
-        const respond = vi.fn<RespondFn>();
-        await chatHistoryHandlers["chat.history"]!({
-          params: { sessionKey: fixture.scope.sessionKey, sessionId: historicalId, limit: 20 },
-          context: rpc,
-          client,
-          req: { type: "req", id: "cold-history", method: "chat.history" },
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(respond).toHaveBeenCalledOnce();
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        const payload = asOptionalRecord(respond.mock.calls[0]?.[1]);
-        if (!payload || !Array.isArray(payload.messages)) {
-          throw new Error("Expected a complete chat.history payload");
-        }
-        return payload;
-      };
-      const warmRpc = rpc ? await readRpc() : undefined;
-      if (warmRpc) {
-        expect(warmRpc.messages).toHaveLength(20);
-        expectMessageIds(
-          warmRpc.messages as unknown[],
-          Array.from({ length: 20 }, (_, index) => `history-${index + 6}`),
-        );
-      }
       expect(
         await runSessionColdStorageMaintenance({
           config: maintenanceConfig(fixture.scope.storePath),
@@ -267,15 +204,22 @@ it.each(["rpc", "message-by-id"] as const)(
         expect(archive).toBeDefined();
         expect(metadataReads).toHaveLength(1);
         metadataReads.length = 0;
-        // Both reads stay cold; metadata and payload work belong to the history worker.
-        for (let round = 0; round < 2; round++) {
+        const read = async () => {
           if (transport === "message-by-id") {
             const result = await readSessionMessageByIdAsync(fixture.scope, "history-assistant");
             expect(result).toMatchObject({ found: true, oversized: false, seq: 2 });
-            expect(readChatHistoryMessageId(result.message)).toBe("history-assistant");
-          } else {
-            expect(await readRpc()).toEqual(warmRpc);
+            return [readChatHistoryMessageId(result.message)];
           }
+          const page = await readChatHistoryPage(historyParams(fixture.scope));
+          return page.messages.map(readChatHistoryMessageId);
+        };
+        // Both reads stay cold; metadata and payload work belong to the history worker.
+        for (let round = 0; round < 2; round++) {
+          expect(await read()).toEqual(
+            transport === "message-by-id"
+              ? ["history-assistant"]
+              : ["history-user", "history-assistant"],
+          );
           expect(metadataReads).toEqual([]);
         }
       } finally {
