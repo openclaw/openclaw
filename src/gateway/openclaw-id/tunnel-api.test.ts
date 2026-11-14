@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   bytesToBase64url,
   formatEd25519PublicKey,
+  fingerprint,
   formatIrohEndpointKey,
   generateEd25519Signer,
   OWNER_CAPABILITIES,
@@ -16,6 +17,7 @@ import {
   linkedClaw,
   nowSeconds,
   ownerInvite,
+  redemptionMail,
   serviceFor,
   type LinkedClaw,
 } from "./openclaw-id.test-support.js";
@@ -85,7 +87,7 @@ describe("OpenClaw ID tunnel API", () => {
     ]);
   });
 
-  it("does not show membership to a device that is not an owner device", async () => {
+  it("shows only the caller account to an admitted member without signing metadata", async () => {
     const claw = await linkedClaw();
     const { call } = await tunnelApi(claw);
     const member = formatIrohEndpointKey(randomBytes(32));
@@ -102,9 +104,154 @@ describe("OpenClaw ID tunnel API", () => {
       ),
     ).toMatchObject({ ok: true });
     expect(await call(member, "GET", "membership")).toMatchObject({
-      status: 403,
-      body: { error: { code: "not_owner_device" } },
+      status: 200,
+      body: {
+        account_id: "acct-viewer",
+        role: "viewer",
+        devices: [
+          { peer_key: member, device_fp: null, label: "", approved_by: null, this_device: true },
+        ],
+      },
     });
+  });
+
+  it("admits member-signed devices, returns scoped views, and removes their approval cascade", async () => {
+    const claw = await linkedClaw();
+    const { call, effects, log, service } = await tunnelApi(claw);
+    const invite = await ownerInvite(claw, { email: "bob@example.com" });
+    const inviteBody = { cap: invite.cap, proof_key: bytesToBase64url(invite.proofKey) };
+    expect((await call(claw.w1, "POST", "invites", inviteBody)).status).toBe(200);
+    const mail = await redemptionMail({
+      clawId: claw.clawId,
+      inviteId: invite.inviteId,
+      proofKey: invite.proofKey,
+      accountId: "bob",
+      email: "bob@example.com",
+    });
+    expect(
+      await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
+    ).toMatchObject({ ok: true });
+    expect(
+      (
+        await call(claw.w1, "POST", "statements", {
+          statement: await claw.sign({
+            op: "add",
+            account_id: "bob",
+            role: "operator",
+            peer_keys: [mail.peerKey],
+            invite_id: invite.inviteId,
+          }),
+        })
+      ).status,
+    ).toBe(200);
+    const phone = await generateEd25519Signer();
+    const peer = formatIrohEndpointKey(randomBytes(32));
+    const target = {
+      op: "add_member_device" as const,
+      account_id: "bob",
+      peer_key: peer,
+      device_pub: formatEd25519PublicKey(phone.publicKey),
+      label: "Bob phone",
+    };
+    expect(
+      (
+        await call(mail.peerKey, "POST", "statements", {
+          statement: await claw.sign(target, mail.signer),
+        })
+      ).status,
+    ).toBe(200);
+    const child = formatIrohEndpointKey(randomBytes(32));
+    const childSigner = await generateEd25519Signer();
+    expect(
+      (
+        await call(peer, "POST", "statements", {
+          statement: await claw.sign(
+            {
+              ...target,
+              peer_key: child,
+              device_pub: formatEd25519PublicKey(childSigner.publicKey),
+              label: "Bob tablet",
+            },
+            phone,
+          ),
+        })
+      ).status,
+    ).toBe(200);
+    const view = (await call(peer, "GET", "membership")).body;
+    expect(Object.keys(view).toSorted()).toEqual([
+      "account_id",
+      "binding_seq",
+      "claw_id",
+      "devices",
+      "role",
+      "seq",
+    ]);
+    expect(view).toMatchObject({
+      account_id: "bob",
+      binding_seq: 1,
+      role: "operator",
+      devices: [
+        {
+          peer_key: mail.peerKey,
+          label: "Bob browser",
+          this_device: false,
+          approved_by: { kind: "invite", invite_id: invite.inviteId },
+        },
+        {
+          peer_key: peer,
+          label: "Bob phone",
+          device_fp: await fingerprint(target.device_pub),
+          this_device: true,
+          approved_by: {
+            kind: "member_device",
+            device_fp: await fingerprint(formatEd25519PublicKey(mail.signer.publicKey)),
+          },
+        },
+        { peer_key: child, label: "Bob tablet", this_device: false },
+      ],
+    });
+    const ownerView = (await call(claw.w1, "GET", "membership")).body;
+    expect(ownerView.members[0].devices).toHaveLength(3);
+    const people = await service.linkStatus();
+    expect(people.members?.[0]?.devices[1]).toMatchObject({
+      peerKey: peer,
+      label: "Bob phone",
+      deviceFp: await fingerprint(target.device_pub),
+      lastSeen: expect.any(Number),
+      approvedBy: { kind: "member_device" },
+    });
+    for (const route of ["invites", "node-invites"]) {
+      expect(await call(peer, "POST", route, inviteBody)).toMatchObject({
+        status: 403,
+        body: { error: { code: "not_owner_device" } },
+      });
+    }
+    expect(
+      await call(peer, "POST", "statements", {
+        statement: await claw.sign({ op: "set_role", account_id: "bob", role: "viewer" }, phone),
+      }),
+    ).toMatchObject({ status: 403, body: { error: { code: "not_an_owner" } } });
+    await claw.authority.bindToken("phone-token", "operator", peer);
+    await claw.authority.bindToken("tablet-token", "operator", child);
+    expect(
+      (
+        await call(mail.peerKey, "POST", "statements", {
+          statement: await claw.sign({ op: "revoke_device", peer_key: peer }, mail.signer),
+        })
+      ).status,
+    ).toBe(200);
+    expect(effects.revokeDeviceTokens).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        { deviceId: "phone-token", role: "operator", peerKey: peer },
+        { deviceId: "tablet-token", role: "operator", peerKey: child },
+      ]),
+    );
+    expect(effects.captureConnections).toHaveBeenCalledWith([peer, child]);
+    expect((await call(peer, "GET", "membership")).status).toBe(403);
+    expect((await call(child, "GET", "membership")).status).toBe(403);
+    expect((await call(mail.peerKey, "GET", "membership")).body.devices).toHaveLength(1);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("member_device_added"));
+    await service.stop();
   });
 
   it("refuses unknown-role and unlisted peers on every route before disclosing or mutating", async () => {

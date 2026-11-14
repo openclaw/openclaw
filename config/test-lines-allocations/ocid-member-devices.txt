@@ -1,0 +1,3 @@
+# Member-device authority, account-scoped HTTP views, persistence capacity,
+# and owner confirmation/notice boundaries require separate integration proofs.
+525
