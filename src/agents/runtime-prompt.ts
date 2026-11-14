@@ -83,7 +83,6 @@ export async function resolveAgentRuntimePrompt(params: {
         : { preparedRepoRoot: await resolveSystemPromptRepoRoot(params) }),
     preparedGitCoauthorPrompt,
     preparedSessionEntry: params.preparedSessionEntry,
-    requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
