@@ -22,6 +22,7 @@ import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { gatewayAction } from "./gateway-action.js";
+import { renderLanesSummary } from "./lanes-cli.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayLockRecoveryCommand } from "./register-recover-lock.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
@@ -228,6 +229,7 @@ export function registerGatewayCli(program: Command) {
             ["openclaw gateway auth-token --show", "Reveal the shared token interactively."],
             ["openclaw gateway discover", "Find local and wide-area gateway beacons."],
             ["openclaw gateway stability", "Show recent stability diagnostics."],
+            ["openclaw gateway lanes", "Show command-lane busyness diagnostics."],
             ["openclaw gateway call health", "Call a gateway RPC method directly."],
           ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
       ),
@@ -582,6 +584,21 @@ export function registerGatewayCli(program: Command) {
             renderStabilitySummary(reply.result as DiagnosticStabilitySnapshot, rich),
           );
         }, "Gateway stability failed"),
+      ),
+  );
+
+  gatewayCallOpts(
+    gateway
+      .command("lanes")
+      .description("Fetch Gateway command-lane busyness diagnostics")
+      .action(
+        gatewayAction(async (opts, command) => {
+          const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
+          const result = await callGatewayReadOnlyCli("diagnostics.lanes", rpcOpts, {});
+          await printGatewayResult(rpcOpts.json, result, (rich) =>
+            renderLanesSummary(result, rich),
+          );
+        }, "Gateway lanes failed"),
       ),
   );
 
