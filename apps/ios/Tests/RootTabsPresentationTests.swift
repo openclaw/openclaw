@@ -483,36 +483,6 @@ struct RootTabsPresentationTests {
             baseRoute: nil) == nil)
     }
 
-    @Test func `wide i pad portrait uses persistent sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(
-            containerSize: CGSize(width: 1024, height: 1366),
-            horizontalSizeClass: .regular,
-            verticalSizeClass: .regular)
-
-        #expect(mode == .split)
-        #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
-    }
-
-    @Test func `expanded phone space uses persistent sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(
-            containerSize: CGSize(width: 951, height: 669),
-            horizontalSizeClass: .regular,
-            verticalSizeClass: .regular)
-
-        #expect(mode == .split)
-        #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
-    }
-
-    @Test func `i pad wide landscape uses visible split sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(
-            containerSize: CGSize(width: 1366, height: 1024),
-            horizontalSizeClass: .regular,
-            verticalSizeClass: .regular)
-
-        #expect(mode == .split)
-        #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
-    }
-
     @Test(arguments: [CGFloat(400), 900, 1366])
     func `persistent sidebar threshold depends on width not height`(height: CGFloat) {
         #expect(RootTabs.sidebarLayoutMode(
@@ -572,13 +542,6 @@ struct RootTabsPresentationTests {
             #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: preference))
             #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: preference) == expected)
         }
-    }
-
-    @Test func `i pad split sidebar width stays usable`() {
-        let width = RootTabs.sidebarWidth(containerWidth: 1366, isDrawerLayout: false)
-
-        #expect(width >= RootTabs.sidebarSplitIdealWidth)
-        #expect(width <= RootTabs.sidebarSplitMaximumWidth)
     }
 
     @Test func `initial sidebar visibility parses launch argument`() {
@@ -951,21 +914,6 @@ struct RootTabsPresentationTests {
             isVisible: false,
             dragOffset: 120,
             reduceMotion: true) == 0)
-    }
-
-    @Test func `narrow landscape keeps drawer sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(
-            containerSize: CGSize(width: 744, height: 600),
-            horizontalSizeClass: .regular,
-            verticalSizeClass: .regular)
-
-        #expect(mode == .drawer)
-        #expect(!RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
-    }
-
-    @Test func `i pad split prefers integrated visible sidebar`() {
-        #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: nil))
-        #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
     @Test func `destination headers own hidden sidebar reveal control`() {

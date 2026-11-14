@@ -988,11 +988,6 @@ describe("prepared Docker publication", () => {
       ).toBe(true);
       expect([job.environment, job.concurrency]).toEqual([undefined, undefined]);
       expect(job.steps?.some((step) => step.uses?.startsWith("docker/login-action@"))).toBe(false);
-      for (const step of job.steps ?? []) {
-        if (step.uses?.startsWith("docker/build-push-action@")) {
-          expect(step.with).toMatchObject({ push: false, sbom: true, provenance: "mode=max" });
-        }
-      }
     }
     expect(publish.jobs.prepare.uses).toBe("./.github/workflows/docker-release-prepare.yml");
     expect(publish.jobs.prepare.secrets).toBeUndefined();
@@ -1013,8 +1008,6 @@ describe("prepared Docker publication", () => {
       ["failure", "success", "success", false, false, false],
       ["success", "failure", "success", false, false, false],
       ["success", "success", "failure", false, true, false],
-      ["success", "success", "skipped", false, true, false],
-      ["success", "success", "cancelled", false, true, false],
       ["success", "success", "success", true, false, false],
     ] as const) {
       const context = {

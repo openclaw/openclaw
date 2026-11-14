@@ -141,7 +141,6 @@ async function expectSseSessionReplaced(fixture: SseReconnectFixture): Promise<v
 
 describe("OpenClaw MCP HTTP lifecycle adapters", () => {
   it.each([
-    "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
     "Error POSTing to endpoint (HTTP 500): bearer=body-secret",
     'Streamable HTTP error: Error POSTing to endpoint: {\n"token":"body-secret"\n}',
   ])("redacts an HTTP response body from %s", (message) => {

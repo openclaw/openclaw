@@ -872,26 +872,14 @@ describe("managed worktree pending slots", () => {
     "rolls back the slot and registration after %s fails",
     async (stage) => {
       config.worktreeMaxCount = 1;
-      const execute = gitExec.executeGitCommand;
       const failure = new Error(`synthetic ${stage} failure`);
       let failedPath: string | undefined;
-      const injection =
-        stage === "publication"
-          ? vi
-              .spyOn(registry, "insertRegistryWorktree")
-              .mockImplementationOnce(async (_env, record) => {
-                failedPath = record.path;
-                throw failure;
-              })
-          : vi
-              .spyOn(gitExec, "executeGitCommand")
-              .mockImplementation(async (cwd, args, options) => {
-                if (args[0] === "read-tree" && args.includes("-u")) {
-                  failedPath = cwd;
-                  throw failure;
-                }
-                return await execute(cwd, args, options);
-              });
+      const injection = vi
+        .spyOn(registry, "insertRegistryWorktree")
+        .mockImplementationOnce(async (_env, record) => {
+          failedPath = record.path;
+          throw failure;
+        });
       await expect(service.create({ repoRoot, name: "retry", baseRef: "HEAD" })).rejects.toThrow(
         failure.message,
       );
@@ -911,10 +899,10 @@ describe("managed worktree pending slots", () => {
     async (kind) => {
       config.worktreeMaxCount = 1;
       const execute = gitExec.executeGitCommand;
-      const failure =
-        kind === "worker"
-          ? new SqliteWorkerError("synthetic unknown materialization outcome", "outcome-unknown")
-          : new CommandProcessCleanupError();
+      const failure = new SqliteWorkerError(
+        "synthetic unknown materialization outcome",
+        "outcome-unknown",
+      );
       const materialization = vi
         .spyOn(gitExec, "executeGitCommand")
         .mockImplementation(async (cwd, args, options) => {

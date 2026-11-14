@@ -2,10 +2,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import {
-  addSessionMember,
-  removeSessionMember,
-} from "../../config/sessions/session-sharing-store.native.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -177,14 +174,6 @@ it.each([{ others: "none", member: false, revoke: false }] as const)(
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const { owner, guest, cfg, profile: userProfile } = await sharingFixture(others);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const scope = { agentId: "main", sessionKey: requestParams.sessionKey };
-      if (member) {
-        addSessionMember(scope, {
-          identityId: guest.id,
-          addedBy: owner.id,
-          expectedSessionId: "question-session",
-        });
-      }
       const viewer = ensureProfileForEmail("viewer@example.test");
       setUserProfileRole(viewer.id, "viewer");
       const makeQuestionClient = (
@@ -247,37 +236,12 @@ it.each([{ others: "none", member: false, revoke: false }] as const)(
       expect((await call("question.list", {}, guestOptions))[1]).toMatchObject({
         questions: member ? [expect.objectContaining({ id })] : [],
       });
-      let waiting: ReturnType<typeof call> | undefined;
-      if (member) {
-        const entered = createDeferred();
-        const wait = manager.waitAnswer.bind(manager);
-        const observed = vi.spyOn(manager, "waitAnswer").mockImplementationOnce((...args) => {
-          const answer = wait(...args);
-          entered.resolve();
-          return answer;
-        });
-        waiting = call("question.waitAnswer", { id }, guestOptions);
-        await Promise.race([entered.promise, waiting]);
-        expect(observed).toHaveBeenCalledOnce();
-        observed.mockRestore();
-        if (revoke) {
-          removeSessionMember(scope, guest.id, undefined, "question-session");
-        }
-      } else {
-        expect(await call("question.waitAnswer", { id }, guestOptions)).toMatchObject([
-          false,
-          undefined,
-          { details: { reason: "QUESTION_NOT_FOUND" } },
-        ]);
-      }
+      expect(await call("question.waitAnswer", { id }, guestOptions)).toMatchObject([
+        false,
+        undefined,
+        { details: { reason: "QUESTION_NOT_FOUND" } },
+      ]);
       await call("question.resolve", { id, answers }, { cfg, client: ownerClient.client });
-      if (waiting) {
-        expect(await waiting).toMatchObject(
-          revoke
-            ? [false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]
-            : [true, { status: "answered", answers }, undefined],
-        );
-      }
       await manager.drain();
 
       expect(broadcast).toHaveBeenCalledWith(

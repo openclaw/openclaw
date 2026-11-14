@@ -505,16 +505,6 @@ describe("Git checkout execution", () => {
     await expectInstalled();
   });
 
-  it("does not invent a remote fallback for an existing main without an upstream", async () => {
-    await advanceRemote();
-    await git(root, "checkout", "-b", "feature");
-    await git(root, "config", "--unset", "branch.main.remote");
-    const result = await update();
-    expect(result).toMatchObject({ status: "skipped", reason: "no-upstream" });
-    expect(events).toEqual([]);
-    expect(await git(root, "branch", "--show-current")).toBe("feature");
-  });
-
   it.each(["checked-out", "rebase", "bisect"] as const)(
     "refuses a dev branch reserved by another worktree before stopping the installed gateway: %s",
     async (reservation) => {

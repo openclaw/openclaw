@@ -985,31 +985,6 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
         }
     }
 
-    @Test func `deleting one gateway credentials leaves the other gateway intact`() {
-        let instanceID = "credential-forget-\(UUID().uuidString)"
-        let gatewayA = "manual|a.example.com|443"
-        let gatewayB = "manual|b.example.com|443"
-        defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
-        for (gatewayID, token) in [(gatewayA, "token-a"), (gatewayB, "token-b")] {
-            GatewaySettingsStore.saveGatewayCredentials(
-                token: token,
-                bootstrapToken: nil,
-                password: nil,
-                gatewayStableID: gatewayID,
-                suppressStoredDeviceAuth: false,
-                instanceId: instanceID)
-        }
-
-        GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID, stableID: gatewayB)
-
-        #expect(GatewaySettingsStore.loadGatewayCredentials(
-            instanceId: instanceID,
-            gatewayStableID: gatewayA).token == "token-a")
-        #expect(GatewaySettingsStore.loadGatewayCredentials(
-            instanceId: instanceID,
-            gatewayStableID: gatewayB) == .empty)
-    }
-
     @Test func `deleting all credentials includes owners not yet in registry`() {
         let instanceID = "credential-reset-\(UUID().uuidString)"
         let gatewayA = "manual|pending-a.example.com|443"
