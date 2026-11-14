@@ -342,7 +342,7 @@ retain	test/scripts/dist-artifact-ownership.test.ts	test/scripts/dist-artifact-o
 retain	test/scripts/personal-credential-writer-guard.test.ts	test/scripts/personal-credential-writer-guard.test.ts	Live fixture targets retained; no new fixture repair.
 retain-main-assertions	src/gateway/talk/handlers/index.test.ts	src/gateway/talk/handlers/index.test.ts	Role-required authenticated Talk creation case and its prepareUserProfileCatalog, ensureProfileForEmail, withOpenClawTestState imports retained.
 retain-main-assertions	test/scripts/ci-workflow-planning.test.ts	test/scripts/ci-workflow-planning.test.ts	One-build-instant Android command assertions retained.
-retain-main-assertions	test/scripts/clawhub-postpublish.test.ts	test/scripts/clawhub-postpublish.test.ts	Published-package verifier import retained alongside zip helper.
+retain-main-assertions	test/scripts/clawhub-postpublish.test.ts	test/scripts/clawhub-postpublish.test.ts	Remaining ClawHub publication assertions preserved; imports without retained callers removed.
 retain-main-assertions	test/scripts/install-sh.test.ts	test/scripts/install-sh.test.ts	Homebrew installation-failure assertions retained; original stale-node and missing-runtime cases kept separately.
 retain-main-assertions	test/scripts/mac-elevation-host.test.ts	test/scripts/mac-elevation-host.test.ts	CUA-bearing elevation artifact rejection case and its exact file/symlink fixture producer retained beside native table wrapper.
 retain-main-assertions	test/scripts/package-acceptance-workflow.test.ts	test/scripts/package-acceptance-workflow.test.ts	ClawHub bootstrap approval permissions and identity assertions retained.

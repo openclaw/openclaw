@@ -1880,7 +1880,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  nativeIt.concurrent.for(["missing", "relative"] as const)(
+  it.skipIf(process.platform !== "darwin").concurrent.for(["missing", "relative"] as const)(
     "requires a reusable absolute CLI for canonical node conversion: %s",
     async (kind, { mac }) =>
       mac.lifetime.run(async () => {

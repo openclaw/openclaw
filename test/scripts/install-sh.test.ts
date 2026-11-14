@@ -3348,8 +3348,6 @@ EOF
 });
 
 describe("install.sh macOS Homebrew Node behavior", () => {
-  const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
-
   it("aborts before brew link when Homebrew node installation fails at runtime", () => {
     const result = runInstallShell(`
       set -euo pipefail
