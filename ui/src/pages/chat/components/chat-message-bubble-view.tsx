@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
+  createSignal,
   lazy,
   For,
   Match,
@@ -15,6 +16,7 @@ import {
 } from "solid-js";
 import { readMessageWorkContext } from "../../../../../src/chat/work-context.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -326,19 +328,35 @@ function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | un
   );
 }
 
+/** A quiet one-line step that opens into the full thought, like a tool row. */
 function MessageReasoning(props: Pick<ContentProps, "state" | "options">) {
-  const content = (
-    <MarkdownText
-      class="chat-thinking"
-      content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown ?? "", {
-        codeBlockInteraction: "interactive",
-      })}
-    />
-  );
+  const [open, setOpen] = createSignal(false);
+  // Shimmer only while the thought itself is the live part of the reply.
+  const thinking = () => Boolean(props.options.isStreaming && !props.state().bodyMarkdown);
   return (
-    <Show when={props.options.bubbleMode} fallback={content}>
-      <ChatBubbleActivity label={t("chat.view.reasoning")}>{content}</ChatBubbleActivity>
-    </Show>
+    <div class={["chat-reasoning", { "chat-reasoning--open": open() }]}>
+      <button
+        class="chat-reasoning__toggle"
+        type="button"
+        aria-expanded={open() ? "true" : "false"}
+        aria-label={t("chat.view.reasoning")}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span class="chat-reasoning__icon" aria-hidden="true">
+          <Icon name="brain" />
+        </span>
+        <span class="chat-reasoning__label">{t("chat.view.reasoning")}</span>
+        <span class="chat-reasoning__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      </button>
+      <MarkdownText
+        class={thinking() && !open() ? "chat-thinking text-shimmer" : "chat-thinking"}
+        content={toSanitizedMarkdownHtml(props.state().reasoningMarkdown ?? "", {
+          codeBlockInteraction: "interactive",
+        })}
+      />
+    </div>
   );
 }
 

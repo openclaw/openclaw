@@ -68,13 +68,20 @@ suite.define(() => {
           expect(await reasoningItems.count()).toBe(2);
           expect(await reasoningItems.locator("pre code").allTextContents()).toEqual([code, code]);
           expect(await reasoningItems.locator("p").allTextContents()).toEqual([
-            "Reasoning:",
             reasoningText,
             conclusion,
-            "Reasoning:",
             reasoningText,
             conclusion,
           ]);
+          // Each thought is a one-line step until its reader opens it.
+          const toggle = pane.getByRole("button", { name: "Reasoning", exact: true }).first();
+          const collapsed = await reasoning.boundingBox();
+          expect(collapsed?.height).toBeLessThan(24);
+          await toggle.click();
+          await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+          await expect
+            .poll(async () => (await reasoning.boundingBox())?.height ?? 0)
+            .toBeGreaterThan(collapsed!.height * 3);
         }
         expect(await answer.isVisible()).toBe(true);
       }
