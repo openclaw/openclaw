@@ -187,7 +187,7 @@ export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
   return (
-    <Show when={props.readDictation()?.active}>
+    <Show when={props.readDictation()?.active || props.readDictation()?.hasRecovery}>
       <ChatLazyBoundary>
         <ActiveDictationStatus readDictation={props.readDictation} />
       </ChatLazyBoundary>

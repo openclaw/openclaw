@@ -140,6 +140,10 @@ const catalog = {
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
       dictationFinalizing: "Finishing dictation…",
+      dictationRetryRecording: "Retry recording",
+      dictationDiscardRecording: "Discard recording",
+      dictationRecordingKept:
+        "No transcript received. This recording is kept in this tab for retry.",
       dictationListening: "Listening…",
       dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",

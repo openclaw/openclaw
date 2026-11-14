@@ -650,6 +650,97 @@ describe("ComposerDictationOwner", () => {
     unsubscribe();
   });
 
+  it.each(["error", "empty", "disconnect", "slow replay"])(
+    "retries an empty recording after %s without reopening the microphone",
+    async (outcome) => {
+      const { controller, options, onCommit } = createHarness({
+        sessionKey: "agent:main:recording",
+      });
+      await startDirect(controller);
+      captureAudio();
+      captureAudio();
+      const finished = controller.finishActive();
+      await vi.advanceTimersByTimeAsync(0);
+      if (outcome === "disconnect") {
+        controller.update({ ...options, connected: false });
+      } else {
+        emit(
+          outcome === "error"
+            ? { type: "error", message: "Transcription unavailable" }
+            : { type: "close", reason: "completed" },
+        );
+      }
+      await expect(finished).resolves.toBe(false);
+      expect(controller.hasRecovery).toBe(true);
+      if (outcome === "disconnect") {
+        await expect(controller.retry()).resolves.toBe(false);
+        controller.update(options);
+      }
+      const upload = createDeferred();
+      request.mockImplementation(async (method) => {
+        if (method === "talk.session.create") {
+          return sessionResult("retry-1");
+        }
+        if (method === "talk.session.appendAudio" && outcome === "slow replay") {
+          await upload.promise;
+        }
+        return { ok: true };
+      });
+      const retried = controller.retry();
+      expect(controller.retrying).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      if (outcome === "slow replay") {
+        await vi.advanceTimersByTimeAsync(10_001);
+        expect(controller.retrying).toBe(true);
+        upload.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(getUserMedia).toHaveBeenCalledOnce();
+      expect(
+        request.mock.calls.filter(([method]) => method === "talk.session.appendAudio"),
+      ).toEqual([
+        ["talk.session.appendAudio", { sessionId: "dictation-1", audioBase64: "/4AA" }],
+        ["talk.session.appendAudio", { sessionId: "dictation-1", audioBase64: "/4AA" }],
+        ["talk.session.appendAudio", { sessionId: "retry-1", audioBase64: "/4AA" }],
+        ["talk.session.appendAudio", { sessionId: "retry-1", audioBase64: "/4AA" }],
+      ]);
+      transcript("Recovered recording", "retry-1");
+      emit({ transcriptionSessionId: "retry-1", type: "close", reason: "completed" });
+      await expect(retried).resolves.toBe(true);
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith("Recovered recording", true);
+      expect(controller.hasRecovery).toBe(false);
+    },
+  );
+
+  it("discards retained audio when the draft changes during retry admission", async () => {
+    const { controller, options, onCommit } = createHarness({ draftKey: "original" });
+    await startDirect(controller);
+    captureAudio();
+    const finished = controller.finishActive();
+    await vi.advanceTimersByTimeAsync(0);
+    emit({ type: "error", message: "Transcription unavailable" });
+    await finished;
+    expect(controller.hasRecovery).toBe(true);
+    const admission = createDeferred<ReturnType<typeof sessionResult>>();
+    request.mockImplementation(async (method) =>
+      method === "talk.session.create" ? admission.promise : { ok: true },
+    );
+    const retried = controller.retry();
+    await vi.advanceTimersByTimeAsync(0);
+    controller.update({ ...options, draftKey: "replacement" });
+    admission.resolve(sessionResult("discarded-retry"));
+    await vi.advanceTimersByTimeAsync(0);
+    transcript("Must not land", "discarded-retry");
+    await expect(retried).resolves.toBe(false);
+    expect(controller.hasRecovery).toBe(false);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalledWith("talk.session.appendAudio", {
+      sessionId: "discarded-retry",
+      audioBase64: "/4AA",
+    });
+    expectClosed("discarded-retry", true);
+  });
+
   it("buffers microphone audio while the transcription session is being created", async () => {
     const { promise: createResult, resolve: resolveCreate } =
       createDeferred<ReturnType<typeof sessionResult>>();

@@ -71,6 +71,7 @@ export class ComposerDictationOwner extends EventTarget {
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private pendingCommitSession: ComposerDictationSession | null = null;
+  private recoverySession: ComposerDictationSession | null = null;
   private disposed = false;
 
   constructor(private options: ComposerDictationOwnerOptions) {
@@ -115,6 +116,28 @@ export class ComposerDictationOwner extends EventTarget {
     return this.stop({ commit: true });
   }
 
+  get hasRecovery(): boolean {
+    return this.recoverySession !== null;
+  }
+
+  get retrying(): boolean {
+    return this.hasRecovery && this.pendingCommitSession === this.recoverySession;
+  }
+
+  get canRetry(): boolean {
+    return this.hasRecovery && !this.retrying && !this.disposed && this.canHold();
+  }
+
+  retry(): Promise<boolean> {
+    const session = this.recoverySession;
+    if (!session || !this.canRetry) {
+      return Promise.resolve(false);
+    }
+    this.pendingCommitSession = session;
+    this.dispatchEvent(new Event("change"));
+    return this.complete(session, session.retry());
+  }
+
   startDirect(): boolean {
     if (this.phase !== "idle" || !this.canHold()) {
       return false;
@@ -127,6 +150,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   update(options: ComposerDictationOwnerOptions): void {
+    const couldRetry = this.canRetry;
     if (
       this.options.client !== options.client ||
       this.options.sessionKey !== options.sessionKey ||
@@ -135,6 +159,12 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancel();
     }
     this.options = options;
+    if (couldRetry !== this.canRetry) {
+      this.dispatchEvent(new Event("change"));
+    }
+    if (!options.enabled || options.realtimeTalkActive) {
+      this.retirePendingCommit();
+    }
     if (!options.connected) {
       this.pendingCommitSession?.markGatewayDisconnected();
     }
@@ -268,7 +298,10 @@ export class ComposerDictationOwner extends EventTarget {
   };
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || (this.phase === "idle" && !this.pendingCommitSession)) {
+    if (
+      event.key !== "Escape" ||
+      (this.phase === "idle" && !this.pendingCommitSession && !this.recoverySession)
+    ) {
       return;
     }
     event.preventDefault();
@@ -371,8 +404,12 @@ export class ComposerDictationOwner extends EventTarget {
       if (this.captureStart !== captureStart || this.disposed || this.finalizing) {
         return;
       }
-      this.options.onError(formatStartError(error), { kind: "start", preservesText: false });
-      await this.stop({ commit: false });
+      if (this.session?.hasRecording) {
+        await this.stop({ commit: true });
+      } else {
+        this.options.onError(formatStartError(error), { kind: "start", preservesText: false });
+        await this.stop({ commit: false });
+      }
     }
   }
 
@@ -384,7 +421,6 @@ export class ComposerDictationOwner extends EventTarget {
     if (this.phase === "idle" || this.phase === "stopping") {
       return Promise.resolve(false);
     }
-    const wasActive = this.active;
     this.clearPointerGesture();
     const session = this.session;
     if (!session) {
@@ -403,20 +439,29 @@ export class ComposerDictationOwner extends EventTarget {
     // its final accumulator and voice claim until another voice action supersedes it.
     this.pendingCommitSession = session;
     this.syncCancellationListeners();
-    return session
-      .finish()
+    return this.complete(session, session.finish());
+  }
+
+  private complete(session: ComposerDictationSession, result: Promise<string>): Promise<boolean> {
+    return result
       .catch(() => "")
       .then((lateTranscript) => {
         const ownsPendingCommit = this.pendingCommitSession === session;
         if (ownsPendingCommit) {
           this.pendingCommitSession = null;
+          // A usable preview keeps its existing text-recovery contract. Empty results
+          // keep the exact recording instead of silently dropping the last copy.
+          this.recoverySession = !lateTranscript && session.hasRecording ? session : null;
+          if (!this.recoverySession) {
+            session.releaseRecording();
+          }
           this.playback.stop();
           this.syncCancellationListeners();
+          this.dispatchEvent(new Event("change"));
         }
         if (
           !ownsPendingCommit ||
           !lateTranscript ||
-          !wasActive ||
           this.disposed ||
           !this.options.enabled ||
           this.options.realtimeTalkActive
@@ -431,11 +476,15 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private retirePendingCommit(): void {
-    const session = this.pendingCommitSession;
+    const session = this.pendingCommitSession ?? this.recoverySession;
     this.pendingCommitSession = null;
+    this.recoverySession = null;
     this.playback.stop();
     this.syncCancellationListeners();
     void session?.cancel().catch(() => undefined);
+    if (session) {
+      this.dispatchEvent(new Event("change"));
+    }
   }
 
   private clearPointerGesture(): void {
@@ -480,7 +529,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private syncCancellationListeners(): void {
-    if (this.phase !== "idle" || this.pendingCommitSession) {
+    if (this.phase !== "idle" || this.pendingCommitSession || this.recoverySession) {
       if (this.cancellationListeners) {
         return;
       }

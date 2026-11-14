@@ -68,7 +68,9 @@ export class ComposerDictationSession {
   private readonly finalTranscripts: string[] = [];
   private currentPartial = "";
   private startPromise: Promise<void> | null = null;
-  private readonly pendingAudio: Float32Array[] = [];
+  private readonly pendingAudio: string[] = [];
+  // One tab-local recording; released on successful text, cancellation, or replacement.
+  private readonly recording: string[] = [];
   private pendingAudioSamples = 0;
   private appendChain: Promise<void> = Promise.resolve();
   private closeRequest: { discard: boolean; promise: Promise<void> } | null = null;
@@ -162,22 +164,32 @@ export class ComposerDictationSession {
       if (this.stopped) {
         return;
       }
+      const audio = bytesToBase64(floatToG711Ulaw(samples));
+      this.recording.push(audio);
       if (!this.sessionId) {
         const remaining = MAX_PENDING_AUDIO_SAMPLES - this.pendingAudioSamples;
         if (remaining <= 0) {
           return;
         }
-        const buffered = samples.slice(0, remaining);
-        this.pendingAudio.push(buffered);
-        this.pendingAudioSamples += buffered.length;
+        const count = Math.min(samples.length, remaining);
+        this.pendingAudio.push(
+          count === samples.length
+            ? audio
+            : bytesToBase64(floatToG711Ulaw(samples.subarray(0, count))),
+        );
+        this.pendingAudioSamples += count;
         this.detectSilence(samples);
         return;
       }
-      this.queueAudio(samples);
+      this.queueAudio(audio);
       this.detectSilence(samples);
     });
     this.callbacks.onReady();
 
+    await this.createRemote();
+  }
+
+  private async createRemote(): Promise<void> {
     const result = await this.client.request<DictationSessionResult>("talk.session.create", {
       mode: "transcription",
       transport: "gateway-relay",
@@ -205,6 +217,9 @@ export class ComposerDictationSession {
     }
     if (this.stopped) {
       if (!this.discarded) {
+        // Admission is bounded separately. Replay may upload more than ten seconds
+        // of queued audio; final-event grace starts after upload and provider close.
+        this.pauseFinalDrain?.();
         await this.appendChain;
       }
       await this.closeRemote();
@@ -223,8 +238,39 @@ export class ComposerDictationSession {
     return transcript;
   }
 
+  get hasRecording(): boolean {
+    return this.recording.length > 0 && !this.discarded;
+  }
+
+  releaseRecording(): void {
+    this.recording.length = 0;
+  }
+
+  async retry(): Promise<string> {
+    // Finish the prior transport before reusing this recording's session owner.
+    // No capture is restarted and every explicit attempt creates a freshly authorized relay.
+    this.gatewayDisconnected = false;
+    await this.stopAndClose(false);
+    if (this.discarded || this.gatewayDisconnected) {
+      return "";
+    }
+    this.failed = false;
+    this.sessionId = null;
+    this.transcriptionSessionId = null;
+    this.closeRequest = null;
+    this.finalTranscripts.length = 0;
+    this.currentPartial = "";
+    this.pendingAudio.length = 0;
+    for (const audio of this.recording) {
+      this.pendingAudio.push(audio);
+    }
+    this.startPromise = this.createRemote();
+    return this.finish();
+  }
+
   async cancel(): Promise<void> {
     this.discarded = true;
+    this.releaseRecording();
     this.pendingAudio.length = 0;
     this.pendingAudioSamples = 0;
     this.settleLateFinalDrain?.(true);
@@ -269,12 +315,11 @@ export class ComposerDictationSession {
     }
   }
 
-  private queueAudio(samples: Float32Array): void {
+  private queueAudio(audioBase64: string): void {
     if (!this.sessionId) {
       return;
     }
     const sessionId = this.sessionId;
-    const audioBase64 = bytesToBase64(floatToG711Ulaw(samples));
     this.appendChain = this.appendChain
       .then(async () => {
         if (this.discarded) {

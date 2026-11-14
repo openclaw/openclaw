@@ -1,4 +1,5 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
@@ -33,38 +34,76 @@ export function ActiveDictationStatus(props: {
     return dictation.connecting ? "connecting" : dictation.finalizing ? "thinking" : "listening";
   });
   return (
-    <Show when={phase()} keyed>
-      {(current) => (
-        <div class="agent-chat__composer-status-stack">
-          <div
-            class={[
-              "agent-chat__dictation-status",
-              { "agent-chat__dictation-status--finalizing": current === "thinking" },
-            ]}
-            role={current === "connecting" ? "status" : undefined}
-            aria-live={current === "connecting" ? "polite" : undefined}
-          >
-            <MicrophoneActivity
-              status={current}
-              inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
-            />
-            <span
-              class={[
-                "agent-chat__dictation-phase",
-                { "agent-chat__dictation-phase--listening text-shimmer": current === "listening" },
-              ]}
+    <Show
+      when={props.readDictation()?.hasRecovery}
+      fallback={
+        <Show when={phase()} keyed>
+          {(current) => (
+            <div class="agent-chat__composer-status-stack">
+              <div
+                class={[
+                  "agent-chat__dictation-status",
+                  { "agent-chat__dictation-status--finalizing": current === "thinking" },
+                ]}
+                role={current === "connecting" ? "status" : undefined}
+                aria-live={current === "connecting" ? "polite" : undefined}
+              >
+                <MicrophoneActivity
+                  status={current}
+                  inputLevel={
+                    current === "listening" ? props.readDictation()?.inputLevel : undefined
+                  }
+                />
+                <span
+                  class={[
+                    "agent-chat__dictation-phase",
+                    {
+                      "agent-chat__dictation-phase--listening text-shimmer":
+                        current === "listening",
+                    },
+                  ]}
+                >
+                  {current === "connecting" ? (
+                    <DictationStartingLabel />
+                  ) : current === "thinking" ? (
+                    t("chat.composer.dictationFinalizing")
+                  ) : (
+                    t("chat.composer.dictationListening")
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+        </Show>
+      }
+    >
+      <InlineAlert
+        tone="warning"
+        class="agent-chat__composer-alert"
+        action={
+          <>
+            <button
+              class="btn btn--sm"
+              type="button"
+              onClick={() => props.readDictation()?.cancel()}
             >
-              {current === "connecting" ? (
-                <DictationStartingLabel />
-              ) : current === "thinking" ? (
-                t("chat.composer.dictationFinalizing")
-              ) : (
-                t("chat.composer.dictationListening")
-              )}
-            </span>
-          </div>
-        </div>
-      )}
+              {t("chat.composer.dictationDiscardRecording")}
+            </button>
+            <button
+              class="btn btn--sm"
+              type="button"
+              disabled={!props.readDictation()?.canRetry}
+              onClick={() => void props.readDictation()?.retry()}
+            >
+              {t("chat.composer.dictationRetryRecording")}
+            </button>
+          </>
+        }
+      >
+        {props.readDictation()?.retrying
+          ? t("chat.composer.dictationFinalizing")
+          : t("chat.composer.dictationRecordingKept")}
+      </InlineAlert>
     </Show>
   );
 }
