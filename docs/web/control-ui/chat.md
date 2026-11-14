@@ -12,7 +12,7 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: session controls, the composer, and how the transcript renders.
 
-Session sharing distinguishes owners, members, and viewers. A read-only session does not grant permission to send messages. Starting suggested tasks requires admin access; reconnect first if the Gateway is disconnected. Public sharing asks **Make this session public?** before publishing. Review the conversation and images for private information: disabling public access cannot recall downloaded copies.
+Session sharing distinguishes owners, members, and viewers. A read-only session does not grant permission to send messages. Public sharing asks **Make this session public?** before publishing. Review the conversation and images for private information: disabling public access cannot recall downloaded copies.
 
 ## Goals, questions, and recovery
 
@@ -549,17 +549,9 @@ When authentication status is available, each provider heading in the chat model
 
 ## Suggested tasks
 
-Suggested task cards offer **Start in a new session** and **Start in a new
-worktree**. Both start the task in the background and keep your current
-conversation and draft open. The card disappears after the task starts; select
-the new session in the sidebar when you want to follow its progress.
-**Start in this session** runs the task in the current conversation.
-
-Before starting a worktree, OpenClaw checks that the suggested folder is a Git
-repository with a commit. If it is not, the card keeps the prompt and lets you
-select a registered project or enter the correct repository path. Select
-**Start in a new worktree** again to continue; no child session is started for
-an invalid source folder.
+Discuss follow-up work in Chat, then use **New session** when you want to start a
+separate conversation. The Control UI does not display agent-generated task cards.
+The TUI supports task suggestions separately.
 
 ## Mobile composer
 

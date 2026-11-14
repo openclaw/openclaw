@@ -134,7 +134,6 @@ suite.define(() => {
             "sessions.files.list",
             "session.suggestions.list",
             "session.suggestions.add",
-            "taskSuggestions.list",
           ],
           methodResponses: {
             "sessions.files.list": {
@@ -171,7 +170,6 @@ suite.define(() => {
               allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
             },
             "session.suggestions.list": { suggestions: [], role: "owner" },
-            "taskSuggestions.list": { suggestions: [] },
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

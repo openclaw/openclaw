@@ -37,7 +37,7 @@ import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
-import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
+import { ChatPaneSharing } from "./chat-pane-sharing.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
@@ -54,7 +54,7 @@ registerChatSessionEnglish();
 
 const NO_PULL_REQUESTS: ControlUiSessionPullRequest[] = [];
 
-export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
+export abstract class ChatPaneSession extends ChatPaneSharing {
   readonly repository: {
     target: { store: ReturnType<typeof sessionPullRequestsForGateway>; key: string } | null;
     dismissedIds: ReadonlySet<string>;
@@ -345,7 +345,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         if (isCurrent() && this.presented && document.visibilityState !== "hidden") {
           this.deferredSessionHydration = null;
           this.syncSessionReactions();
-          void this.refreshTaskSuggestions({ automatic: true });
           if (historyCommitted) {
             this.markSessionRead(selectedChatSessionRow(state));
           }

@@ -56,7 +56,6 @@ type EnglishCatalog = TranslationMap & {
       | "reactions"
       | "sessionHeader"
       | "board"
-      | "taskSuggestions"
       | "view"
       | "workspaceConflict"
       | "skillLearned"
@@ -1661,7 +1660,7 @@ const startupEnglish = {
       "Codex supervision is off. Enable it in plugin settings to continue this session.",
     openCodexSettings: "Open settings",
     catalog: {},
-    taskSuggestions: {},
+
     pullRequests: {
       open: "Open",
       draft: "Draft",

@@ -86,7 +86,6 @@ it("keeps the initial transcript and buffered streaming final exactly once in th
     "models.authStatus": { ts: 1, providers: [] },
     "sessions.branches.list": { branches: [] },
     "question.list": { questions: [] },
-    "taskSuggestions.list": { suggestions: [] },
     "session.suggestions.list": { suggestions: [] },
     "sessions.companion.state": { exchanges: [] },
   });

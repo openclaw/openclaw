@@ -384,7 +384,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.retireHeaderSessionMutations();
       invalidateChatAvatarCache(state);
       state.assistantIdentityRequestVersion += 1;
-      this.taskSuggestionsRequestVersion += 1;
       this.resetSessionSuggestions();
       if (reactionOwnerChanged) {
         this.resetSessionReactions();
@@ -452,7 +451,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         beforeHello: !state.connected,
       });
     }
-    this.reconcileTaskSuggestionConnection(sourceChanged);
     this.synchronizeSessionObservation();
     if (readsResumed && !sourceChanged && this.presented) {
       this.markSessionRead(selectedChatSessionRow(state));

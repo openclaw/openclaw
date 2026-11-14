@@ -167,11 +167,7 @@ export function createSessionContext(
     createApplicationGatewaySnapshot({
       client,
       phase: "connected",
-      hello: gatewayHelloForMethods([
-        ...SESSION_MUTATION_TEST_METHODS,
-        "taskSuggestions.list",
-        "session.suggestions.list",
-      ]),
+      hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "session.suggestions.list"]),
     }),
   );
   const context = withLiveCapabilities({

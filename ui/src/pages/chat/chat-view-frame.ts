@@ -42,7 +42,6 @@ import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.tsx";
 import type { SidebarContent, SidebarOpenResult } from "./components/chat-sidebar-content-types.ts";
-import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
@@ -84,7 +83,6 @@ export type ChatProps = Omit<
     | "onOpenSidebar"
   > &
   ChatDetailsProps &
-  ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     onOpenSidebar?: (content: SidebarContent) => SidebarOpenResult;
     onConversationFrameRef?: (element: HTMLElement) => void | (() => void);

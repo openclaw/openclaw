@@ -153,13 +153,7 @@ const enChatSession = {
       resetTitle: "Reset conversation?",
       resetDescription: "The conversation context resets. Your dashboard stays.",
     },
-    taskSuggestions: {
-      adminRequired: "You need admin access to start suggested tasks.",
-      reconnectRequired: "Reconnect to start suggested tasks.",
-      unavailable: "Starting suggested tasks isn’t available here.",
-      copyPromptFailed: "Couldn’t copy the prompt. Try again.",
-      startUnconfirmed: "Couldn't confirm the task started. Retry checks the same task.",
-    },
+
     view: {
       menu: "View",
       speechBubbles: "Speech bubbles",
