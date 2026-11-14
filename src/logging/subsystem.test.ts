@@ -110,6 +110,18 @@ it("does not inspect or serialize disabled runtime output as sink levels change"
   }
 });
 
+it("keeps Template Add timings out of info logs while retaining debug diagnostics", async () => {
+  const { withTemplateAddTimings } = await import("../templates/timings.js");
+  for (const level of ["info", "trace"] as const) {
+    const file = fileLogging(level);
+    await withTemplateAddTimings("synthetic-add", async () => undefined);
+    await testApi.flushFileLogQueueForTests();
+    const records = fs.existsSync(file) ? await readRecords(file) : [];
+    expect(records).toHaveLength(level === "info" ? 0 : 2);
+    expect(records.every((record) => record._meta.logLevelName === "DEBUG")).toBe(true);
+  }
+});
+
 it.each(["pretty", "compact", "json"] as const)(
   "keeps explicitly file-only diagnostics out of the %s console",
   async (consoleStyle) => {

@@ -30,5 +30,11 @@ export type ChatTemplateAddInput = ClawHubFetchOptions & {
   onAgentCreated?: (
     agent: { agentId: string; sessionKey: string },
     report: TemplateSetupReport,
+    dependenciesPending?: true,
+  ) => Promise<void>;
+  /** A separate hidden turn reports results after the opening, never concurrently with it. */
+  onDependenciesSettled?: (
+    agent: { agentId: string; sessionKey: string },
+    report: TemplateSetupReport,
   ) => Promise<void>;
 };
