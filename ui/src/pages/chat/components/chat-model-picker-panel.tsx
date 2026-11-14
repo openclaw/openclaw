@@ -151,7 +151,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       sessionModelPinned: sessionModelPinned(),
     };
     return {
-      activeProvider: current.activeProvider,
+      activeProvider: current.openingProvider,
       providers: [
         ...providerGroups.map(([provider]) => provider),
         ...targetGroups.map((group) => `target:${group.id}`),

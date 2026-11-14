@@ -166,7 +166,10 @@ export function resetModelSearch(details: HTMLDetailsElement): void {
   }
   // Clear explicit navigation even when the query is already empty.
   state?.view?.highlight(undefined);
-  state?.view?.resetProvider();
+  // Escape also clears search while open; only dismissal resets the tab.
+  if (!details.open) {
+    state?.view?.resetProvider();
+  }
   state?.setQuery("");
 }
 

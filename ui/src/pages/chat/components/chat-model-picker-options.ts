@@ -209,7 +209,8 @@ export function prepareChatModelPickerPanel(
   }
   const orderedProviderGroups = [...providerGroups];
   const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
-  let activeProvider = activeModelOption && groupProvider(activeModelOption);
+  const activeProvider = activeModelOption && groupProvider(activeModelOption);
+  let openingProvider = activeProvider;
 
   if (favoriteOptions.length && orderedProviderGroups.length > 1) {
     orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
@@ -219,7 +220,7 @@ export function prepareChatModelPickerPanel(
       activeModelOption &&
       openingFavorites.includes(activeModelOption)
     ) {
-      activeProvider = FAVORITES_GROUP;
+      openingProvider = FAVORITES_GROUP;
     }
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
@@ -237,6 +238,7 @@ export function prepareChatModelPickerPanel(
   return {
     orderedProviderGroups,
     activeProvider: activeProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
+    openingProvider: openingProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
     orderedOptions,
     optionIndex,
     targetGroups,
