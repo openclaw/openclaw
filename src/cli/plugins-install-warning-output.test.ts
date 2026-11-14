@@ -9,6 +9,7 @@ import {
   resolvePluginLifecycleGatewayMock,
   resetPluginsCliTestState,
   runPluginsCommand,
+  runtimeErrors,
 } from "./plugins-cli-test-helpers.js";
 
 describe("plugin install warning output", () => {
@@ -75,5 +76,39 @@ describe("plugin install warning output", () => {
     expect(pluginsCliRuntimeLogs.filter((line) => line.includes(warning))).toHaveLength(1);
     expect(pluginsCliRuntimeLogs).toContain("Applied in Gateway generation 7.");
     expect(installPluginFromPathMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("plugin install failure output", () => {
+  beforeEach(resetPluginsCliTestState);
+
+  it("renders multi-line npm failures as indented sanitized lines", async () => {
+    await withTempDir("openclaw-failure-output-", async (rootDir) => {
+      createColdPluginFixture({ rootDir, pluginId: "demo" });
+      installPluginFromPathMock.mockResolvedValue({
+        ok: false,
+        error:
+          "npm view failed: npm error code ECONNREFUSED\nnpm error syscall connect\nproxy \u001b[2Kcleared",
+      });
+
+      await expect(
+        runPluginsCommand([
+          "plugins",
+          "install",
+          rootDir,
+          "--link",
+          "--force",
+          "--accept-capabilities",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      // npm remedy lines stay on their own indented lines instead of one literal "\n" run.
+      expect(runtimeErrors[0]).toContain(
+        "npm view failed: npm error code ECONNREFUSED\n  npm error syscall connect",
+      );
+      expect(runtimeErrors[0]).not.toContain("\\n");
+      // Terminal controls are still neutralized inside a line.
+      expect(runtimeErrors[0]).toContain("proxy cleared");
+    });
   });
 });
