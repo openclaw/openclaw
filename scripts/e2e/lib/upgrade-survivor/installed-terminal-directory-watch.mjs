@@ -12,58 +12,122 @@ import { readInstalledTerminalDependencyTree } from "./installed-terminal-contra
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const host = "dist/infra/directory-watch-host.worker.js";
 const parent = "dist/infra/directory-watch-parent.worker.js";
-// Complete emitted closure reviewed at 35e6cd30, including the manifest-resolved
-// parent thread. New emitted bytes need a new review, not a matching basename.
-const files = [
-  [
-    "dist/cli-invocation-BV0wa-I-.mjs",
-    9550,
-    "931da804d9c218318afde4c79850cbfbaf346156fe2e93d4e456b6af3e51ad4e",
-  ],
-  [
-    "dist/gateway-shutdown-budget-De4qQu26.mjs",
-    2022,
-    "bb26e24af6bcd068764a68bee69ba74e9cc43479d3e5a3263b523b3abfce2278",
-  ],
-  [host, 1569, "0f1ec5f29af894608f42e62cd835c98dab5f7545d1001dffe7a1f41d0bbd8916"],
-  [parent, 346, "e5bd1b731870764d8b086b2bad5a44c1e5357d22b0f0e425d8b70dedcd2a2b22"],
-  [
-    "dist/runtime-binary-0X1YU7zH.mjs",
-    3722,
-    "b385d6e258451a39ac0e64dfc4ec2de2662898447957af740a83feb49bf99559",
-  ],
-  [
-    "dist/runtime-process-bootstrap.generated-CPUPb_cD.mjs",
-    904,
-    "47e22e5f6379f7801e86df731f2d1a3d04db53465f650ba45adefd743e310d6e",
-  ],
-  [
-    "dist/runtime-process-entrypoints-CBkgt-O1.mjs",
-    369,
-    "36b8a2e306c336f526477e51e6045c763b5aeefc7619aff34ad77c86a8cfae84",
-  ],
-  [
-    "dist/runtime-process-manifest-BDtYX9i8.mjs",
-    24252,
-    "52b0b93e55e49aabf1682c6477e99885f9315bf9a31f2e3297c7b5cfc31566ee",
-  ],
-  [
-    "dist/runtime-process-scripts.generated-DZVe0fhG.mjs",
-    30946,
-    "682c784a302af677b456e3459427f1cb6eb32939fe201b0966a894aa90923e8b",
-  ],
-  [
-    "dist/runtime-process-url-CudnJwfS.mjs",
-    3014,
-    "f72eec33dc6a2d97ba5dba4fb026bbd820923b5df3c9cf0398be7fde9061d91d",
-  ],
-  [
-    "dist/runtime-worker-url-Cwt-1GdQ.mjs",
-    2922,
-    "257258cc7d9ffb80724292c9b92c2e7512977d30c073eaf48bf872907e60cc1a",
-  ],
+// Both reviewed closures include the manifest-resolved parent thread. The older
+// closure still has an unfinished installed-proof consumer; filenames alone never qualify.
+const closures = [
+  {
+    sha256: "2b9bd475ccf1542ce947df99bd9235baa066a23d01b6b7ec3ac9676c3c377941",
+    files: [
+      [
+        "dist/cli-invocation-BV0wa-I-.mjs",
+        9550,
+        "931da804d9c218318afde4c79850cbfbaf346156fe2e93d4e456b6af3e51ad4e",
+      ],
+      [
+        "dist/gateway-shutdown-budget-De4qQu26.mjs",
+        2022,
+        "bb26e24af6bcd068764a68bee69ba74e9cc43479d3e5a3263b523b3abfce2278",
+      ],
+      [host, 1569, "0f1ec5f29af894608f42e62cd835c98dab5f7545d1001dffe7a1f41d0bbd8916"],
+      [parent, 346, "e5bd1b731870764d8b086b2bad5a44c1e5357d22b0f0e425d8b70dedcd2a2b22"],
+      [
+        "dist/runtime-binary-0X1YU7zH.mjs",
+        3722,
+        "b385d6e258451a39ac0e64dfc4ec2de2662898447957af740a83feb49bf99559",
+      ],
+      [
+        "dist/runtime-process-bootstrap.generated-CPUPb_cD.mjs",
+        904,
+        "47e22e5f6379f7801e86df731f2d1a3d04db53465f650ba45adefd743e310d6e",
+      ],
+      [
+        "dist/runtime-process-entrypoints-CBkgt-O1.mjs",
+        369,
+        "36b8a2e306c336f526477e51e6045c763b5aeefc7619aff34ad77c86a8cfae84",
+      ],
+      [
+        "dist/runtime-process-manifest-BDtYX9i8.mjs",
+        24252,
+        "52b0b93e55e49aabf1682c6477e99885f9315bf9a31f2e3297c7b5cfc31566ee",
+      ],
+      [
+        "dist/runtime-process-scripts.generated-DZVe0fhG.mjs",
+        30946,
+        "682c784a302af677b456e3459427f1cb6eb32939fe201b0966a894aa90923e8b",
+      ],
+      [
+        "dist/runtime-process-url-CudnJwfS.mjs",
+        3014,
+        "f72eec33dc6a2d97ba5dba4fb026bbd820923b5df3c9cf0398be7fde9061d91d",
+      ],
+      [
+        "dist/runtime-worker-url-Cwt-1GdQ.mjs",
+        2922,
+        "257258cc7d9ffb80724292c9b92c2e7512977d30c073eaf48bf872907e60cc1a",
+      ],
+    ],
+  },
+  {
+    sha256: "63d4d5e471699b2f1bd940e1b3e05d63b4a192861172449e309bb3b24885ae2e",
+    files: [
+      [
+        "dist/cli-invocation-D91ZOETd.mjs",
+        7488,
+        "e0c53a7dde5a846cdfbe31990143ce9366f401ba667f92ff291049f1e060afbc",
+      ],
+      [
+        "dist/gateway-shutdown-budget-Utx5eFL-.mjs",
+        1632,
+        "97b148cc056f0d1d79315134644bcc109fabf18d28e949c606f680cc42a9ed0d",
+      ],
+      [
+        "dist/infra/directory-watch-host.worker.js",
+        1304,
+        "834defe1e73a1d9e34e2df15db5a608a8864e5c3879bcaecd49c98e35fedcad8",
+      ],
+      [
+        "dist/infra/directory-watch-parent.worker.js",
+        318,
+        "ab57f5068356374a2c10b88e83654cc00e61f49d4233165ef8c098dc9234b026",
+      ],
+      [
+        "dist/runtime-binary-DNstBs1K.mjs",
+        2965,
+        "825f5d58e6cbc49de6b91d8249564e42c845251fe83970942495a7c32b8ae56d",
+      ],
+      [
+        "dist/runtime-process-bootstrap.generated-oBqwef45.mjs",
+        594,
+        "5a8b2b323eacaabb42cba0c7c910292a5b89c977f2f785089e8fb049c2c7c123",
+      ],
+      [
+        "dist/runtime-process-entrypoints-BVKb5-M_.mjs",
+        353,
+        "480494f43911307d668c6fec4499eed7499ad49fc2ff54befb18691e4e5307b5",
+      ],
+      [
+        "dist/runtime-process-manifest-CYlSRkG1.mjs",
+        22512,
+        "f43f09fcbc3c0e7114e07bec061f9369a14d78b4a210ad63a2fc4bfd2d5dedeb",
+      ],
+      [
+        "dist/runtime-process-scripts.generated-DVFEOcm2.mjs",
+        32741,
+        "2144d3e2943dc5cbe712965ee66ddac56a0370c3e566475af1622bed9af9351a",
+      ],
+      [
+        "dist/runtime-process-url-CL3_jEBq.mjs",
+        2657,
+        "0185cb70a91ff09090209b73121e1a0bfafdffcb7b443cdf82fa3a560b3051c2",
+      ],
+      [
+        "dist/runtime-worker-url-CYdCRlrG.mjs",
+        2198,
+        "07fff1d985704c65b2748034879d7b9196918890221dbc171cf42556946d2be3",
+      ],
+    ],
+  },
 ];
-const closureSha256 = "2b9bd475ccf1542ce947df99bd9235baa066a23d01b6b7ec3ac9676c3c377941";
 // fs-safe/json is eagerly imported by runtime-worker-url, even though this
 // .js worker never calls its JSON reader. Bind content, not a version label.
 const dependencySha256 = "4b955b777dce5967e0564965b8d673cf96f640aace7dc2ca99f14b00c156feb0";
@@ -127,8 +191,15 @@ function runtime(root) {
   const qualificationStartedAt = String(process.hrtime.bigint());
   physical(root, true);
   const rootIdentity = fileIdentity(root);
+  const hostBytes = read(path.join(root, host), 64 * 1024);
+  const hostSha256 = digest(hostBytes);
+  const closure = closures.find(({ files }) =>
+    files.some(([relative, , sha256]) => relative === host && sha256 === hostSha256),
+  );
+  assert(closure, "Directory watch module changed");
+  const { files, sha256: closureSha256 } = closure;
   const actual = files.map(([relative, size, sha256]) => {
-    const bytes = read(path.join(root, relative), 64 * 1024);
+    const bytes = relative === host ? hostBytes : read(path.join(root, relative), 64 * 1024);
     assert.equal(bytes.length, size, "Directory watch module size changed");
     assert.equal(digest(bytes), sha256, "Directory watch module changed");
     return [relative, size, sha256];
@@ -304,7 +375,7 @@ export function directoryWatchCoverage(created, rows, spec, isPackageRoot) {
   assert(
     identityPattern.test(facts.rootIdentity) && identityPattern.test(facts.dependencyIdentity),
   );
-  assert.equal(facts.closureSha256, closureSha256);
+  assert(closures.some(({ sha256 }) => sha256 === facts.closureSha256));
   assert.equal(facts.dependencySha256, dependencySha256);
   assert(
     BigInt(facts.qualificationStartedAt) <= BigInt(facts.qualifiedAt) &&
@@ -393,5 +464,5 @@ export function directoryWatchCoverage(created, rows, spec, isPackageRoot) {
     !rows.some((row) => row.event === "startup" && row.pid === created.child),
     "Sanitized directory watch unexpectedly inherited a preload",
   );
-  return { role: "directory-watch", reason: "closed-helper-lifetime", sha256: closureSha256 };
+  return { role: "directory-watch", reason: "closed-helper-lifetime", sha256: facts.closureSha256 };
 }

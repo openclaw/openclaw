@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import { readInstalledTerminalDependencyTree } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-contracts.mjs";
 import {
   type InstalledTerminalProcessAbsence,
@@ -15,6 +15,8 @@ import { execNodeEvalSync, resolveTestNodeExecPath } from "../../src/test-utils/
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readJsonLines, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
+// The captured Linux package, SIGKILL lifecycle, and physical modes are platform-specific.
+const it = test.skipIf(process.platform !== "linux");
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const node = resolveTestNodeExecPath();
 const observer = path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs");
@@ -285,49 +287,46 @@ it("admits the real sanitized helper only as a closed native lifetime", () => {
   rewrite(filename, original);
 });
 
-it.skipIf(process.platform !== "linux")(
-  "admits post-reap absence of the real watch after its creator exits without close",
-  async () => {
-    const f = fixture();
-    const result = run(f, "creator-exit");
-    expect(result.status, result.stderr).toBe(0);
-    const { pid } = JSON.parse(fs.readFileSync(f.resultPath, "utf8"));
-    let absent = false;
-    const deadline = Date.now() + 1000;
-    while (!absent && Date.now() < deadline) {
-      try {
-        process.kill(pid, 0);
-      } catch (error) {
-        assert(error instanceof Error && "code" in error && error.code === "ESRCH");
-        absent = true;
-      }
-      if (!absent) await new Promise((resolve) => setTimeout(resolve, 10));
+it("admits post-reap absence of the real watch after its creator exits without close", async () => {
+  const f = fixture();
+  const result = run(f, "creator-exit");
+  expect(result.status, result.stderr).toBe(0);
+  const { pid } = JSON.parse(fs.readFileSync(f.resultPath, "utf8"));
+  let absent = false;
+  const deadline = Date.now() + 1000;
+  while (!absent && Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      assert(error instanceof Error && "code" in error && error.code === "ESRCH");
+      absent = true;
     }
-    expect(absent).toBe(true);
-    expect(records(f).filter((row) => row.event === "startup" && row.pid === pid)).toEqual([]);
-    expect(records(f).filter((row) => row.event === "spawn-exit" && row.child === pid)).toEqual([]);
-    expect(() => readInstalledTerminalEvents(f.directory, f.spec)).toThrow("no unique native exit");
-    const processAbsence = absence(f.directory);
-    expect(processAbsence).toHaveLength(1);
-    expect(processAbsence[0]).toMatchObject({ child: pid, errorCode: "ESRCH", ownExitCode: null });
-    expect(
-      readInstalledTerminalEvents(f.directory, { ...f.spec, processAbsence }).find(
-        (row) => row.event === "spawn" && row.child === pid,
-      ),
-    ).toMatchObject({
-      coverage: { reason: "closed-helper-lifetime" },
-      lifetimeBound: processAbsence[0],
-    });
-    for (const errorCode of [null, "EPERM"]) {
-      expect(() =>
-        readInstalledTerminalEvents(f.directory, {
-          ...f.spec,
-          processAbsence: processAbsence.map((receipt) => ({ ...receipt, errorCode })),
-        }),
-      ).toThrow("strict kernel absence");
-    }
-  },
-);
+    if (!absent) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(absent).toBe(true);
+  expect(records(f).filter((row) => row.event === "startup" && row.pid === pid)).toEqual([]);
+  expect(records(f).filter((row) => row.event === "spawn-exit" && row.child === pid)).toEqual([]);
+  expect(() => readInstalledTerminalEvents(f.directory, f.spec)).toThrow("no unique native exit");
+  const processAbsence = absence(f.directory);
+  expect(processAbsence).toHaveLength(1);
+  expect(processAbsence[0]).toMatchObject({ child: pid, errorCode: "ESRCH", ownExitCode: null });
+  expect(
+    readInstalledTerminalEvents(f.directory, { ...f.spec, processAbsence }).find(
+      (row) => row.event === "spawn" && row.child === pid,
+    ),
+  ).toMatchObject({
+    coverage: { reason: "closed-helper-lifetime" },
+    lifetimeBound: processAbsence[0],
+  });
+  for (const errorCode of [null, "EPERM"]) {
+    expect(() =>
+      readInstalledTerminalEvents(f.directory, {
+        ...f.spec,
+        processAbsence: processAbsence.map((receipt) => ({ ...receipt, errorCode })),
+      }),
+    ).toThrow("strict kernel absence");
+  }
+});
 
 it.each([
   "inherited-env",
@@ -365,7 +364,7 @@ it.each(["host", "parent", "resolver", "dependency", "scope", "symlink"])(
         : mode === "parent"
           ? "dist/infra/directory-watch-parent.worker.js"
           : mode === "resolver"
-            ? "dist/runtime-process-url-CudnJwfS.mjs"
+            ? "dist/runtime-process-url-CL3_jEBq.mjs"
             : "node_modules/@openclaw/fs-safe/dist/json.js",
     );
     if (mode === "scope")
@@ -388,29 +387,26 @@ it.each(["host", "parent", "resolver", "dependency", "scope", "symlink"])(
   },
 );
 
-it.skipIf(process.platform !== "linux")(
-  "does not turn a real live helper observation into an absence proof",
-  () => {
-    const f = fixture();
-    const result = run(f, "live-absence");
-    expect(result.status, result.stderr).toBe(0);
-    const { pid, receipts } = JSON.parse(fs.readFileSync(f.resultPath, "utf8"));
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0]).toMatchObject({ child: pid, errorCode: null });
-    const created = records(f).find((row) => row.event === "spawn" && row.child === pid);
-    assert(created);
-    const filename = path.join(f.directory, `${created.pid}-${created.thread}.jsonl`);
-    rewrite(
-      filename,
-      readJsonLines<Row>(filename).filter(
-        (row) => !["spawn-exit", "spawn-close"].includes(String(row.event)) || row.child !== pid,
-      ),
-    );
-    expect(() =>
-      readInstalledTerminalEvents(f.directory, { ...f.spec, processAbsence: receipts }),
-    ).toThrow("strict kernel absence");
-  },
-);
+it("does not turn a real live helper observation into an absence proof", () => {
+  const f = fixture();
+  const result = run(f, "live-absence");
+  expect(result.status, result.stderr).toBe(0);
+  const { pid, receipts } = JSON.parse(fs.readFileSync(f.resultPath, "utf8"));
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]).toMatchObject({ child: pid, errorCode: null });
+  const created = records(f).find((row) => row.event === "spawn" && row.child === pid);
+  assert(created);
+  const filename = path.join(f.directory, `${created.pid}-${created.thread}.jsonl`);
+  rewrite(
+    filename,
+    readJsonLines<Row>(filename).filter(
+      (row) => !["spawn-exit", "spawn-close"].includes(String(row.event)) || row.child !== pid,
+    ),
+  );
+  expect(() =>
+    readInstalledTerminalEvents(f.directory, { ...f.spec, processAbsence: receipts }),
+  ).toThrow("strict kernel absence");
+});
 
 it("joins a real retained-runtime producer before admitting its copied helper", () => {
   const f = fixture();
