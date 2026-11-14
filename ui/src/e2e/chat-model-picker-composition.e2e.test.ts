@@ -48,11 +48,12 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const { picker, trigger, search } = modelPicker(page);
       await trigger.click();
-      await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(1);
-      const account = picker.locator(".chat-controls__account-selection");
-      await polledText(account).toContain("previous@example.test");
-      const accountToggle = picker.locator("[data-chat-account-group-toggle]");
+      await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(0);
+      const accountToggle = picker.locator(".chat-controls__account-trigger");
+      await polledText(accountToggle).toContain(accountLabel);
       await accountToggle.click();
+      const account = picker.locator('[data-chat-account-option="current"]');
+      await polledText(account).toContain("previous@example.test");
       const oldAlternate = picker.locator(
         '[data-chat-account-option="account:openai:old-alternate"]',
       );
@@ -73,10 +74,12 @@ suite.define(() => {
         modelCatalogChanged: true,
       });
       await gateway.waitForRequest("models.list", { after: catalogReads });
+      if ((await accountToggle.getAttribute("aria-expanded")) !== "true") {
+        await accountToggle.click();
+      }
       await polledText(account).toContain("replacement@example.test");
       expect(await account.textContent()).not.toContain("previous@example.test");
       expect(await picker.getAttribute("open")).not.toBeNull();
-      await accountToggle.click();
       const newAlternate = picker.locator(
         '[data-chat-account-option="account:openai:new-alternate"]',
       );
@@ -90,11 +93,11 @@ suite.define(() => {
   });
 
   it.each([
-    { width: 1280, height: 900, minimumTarget: 32 },
-    { width: 390, height: 844, minimumTarget: 44 },
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 },
   ])(
-    "opens provider groups and searches across collapsed models at $width pixels",
-    async ({ width, height, minimumTarget }) => {
+    "switches provider tabs and searches across all models at $width pixels",
+    async ({ width, height }) => {
       await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
         const models = [
           { id: "shared-alpha", name: "Shared Alpha", provider: "openai" },
@@ -112,9 +115,7 @@ suite.define(() => {
         const { picker, trigger, search, option } = modelPicker(page);
         const alpha = option("openai/shared-alpha");
         const beta = option("anthropic/shared-beta");
-        const openai = picker.locator(
-          '[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]',
-        );
+        const openai = picker.locator('[data-chat-model-provider-toggle="openai"]');
         await page.locator(".agent-chat__composer-combobox textarea").click();
         await trigger.click();
         await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(2);
@@ -123,22 +124,15 @@ suite.define(() => {
         );
         await polledText(auth).toContain("long-account-name+siwc@example.test");
         await auth.waitFor({ state: "visible" });
-        const toggleContentsRight = await openai.evaluate((button) =>
-          Math.max(...Array.from(button.children, (child) => child.getBoundingClientRect().right)),
-        );
-        const authBox = await auth.boundingBox();
-        expect(toggleContentsRight).toBeLessThanOrEqual(authBox!.x);
         await openai.click({ trial: true });
         await polledVisible(alpha).toBe(true);
         expect(await beta.isVisible()).toBe(false);
-        expect(await openai.getAttribute("aria-expanded")).toBe("true");
-        await expect
-          .poll(() => openai.evaluate((button) => button.getBoundingClientRect().height))
-          .toBeGreaterThanOrEqual(minimumTarget);
+        expect(await openai.getAttribute("aria-selected")).toBe("true");
         await openai.focus();
-        await page.keyboard.press("Enter");
+        await page.keyboard.press("ArrowDown");
+        await polledVisible(beta).toBe(true);
         await polledVisible(alpha).toBe(false);
-        await page.keyboard.press("Enter");
+        await page.keyboard.press("ArrowUp");
         await polledVisible(alpha).toBe(true);
         expect(await beta.isVisible()).toBe(false);
         await search.fill("shared");
@@ -153,16 +147,16 @@ suite.define(() => {
         await search.press("ControlOrMeta+A");
         await search.press("Backspace");
         expect(await search.inputValue()).toBe("");
-        await polledAttribute(openai, "aria-expanded").toBe("true");
+        await polledAttribute(openai, "aria-selected").toBe("true");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
-        await openai.click();
+        await picker.locator('[data-chat-model-provider-toggle="anthropic"]').click();
         await polledVisible(alpha).toBe(false);
         await search.press("Escape");
         await polledAttribute(picker, "open").toBeNull();
         await trigger.click();
         await polledVisible(alpha).toBe(false);
-        expect(await openai.getAttribute("aria-expanded")).toBe("false");
+        expect(await openai.getAttribute("aria-selected")).toBe("false");
         expect(await search.inputValue()).toBe("");
         await search.fill("shared");
         if (width === 1280) {

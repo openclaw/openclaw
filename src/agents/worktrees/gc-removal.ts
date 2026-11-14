@@ -35,11 +35,13 @@ import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import type {
   CreateManagedWorktreeParams,
+  ManagedWorktreeGcResult,
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
   ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
+  WorktreeMutationGuard,
   WorktreeWorkerAuthority,
 } from "./types.js";
 
@@ -66,6 +68,12 @@ export type WorktreeCleanupOwnerPolicy = {
     signal?: AbortSignal,
   ) => Promise<T>;
 };
+
+export type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
+  WorktreeMutationGuard & {
+    beforeTemplateRemoval?: () => Promise<void>;
+    checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
+  };
 
 export async function removeWorktreeIfLossless(
   params: Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {

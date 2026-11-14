@@ -25,21 +25,26 @@ function row(id: string, extra: Record<string, unknown> = {}) {
 }
 
 describe(CHECK_ID, () => {
-  it.each([4096, 8192])("reports a row pinned to the former default %i", async (saved) => {
-    const findings = await detect({
-      custom: { baseUrl: "http://llm.example/v1", models: [row("big", { maxTokens: saved })] },
-    });
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: CHECK_ID,
-        severity: "info",
-        target: "custom",
-        path: "models.providers.custom.models",
-      }),
-    ]);
-    expect(findings[0]?.message).toContain(`big (${saved})`);
-    expect(findings[0]?.message).toContain("up to 32768 tokens");
-  });
+  it.each([4096, 8192])(
+    "reports matching saved caps without promising an increase (%i)",
+    async (saved) => {
+      const findings = await detect({
+        custom: { baseUrl: "http://llm.example/v1", models: [row("big", { maxTokens: saved })] },
+      });
+      expect(findings).toEqual([
+        expect.objectContaining({
+          checkId: CHECK_ID,
+          severity: "info",
+          target: "custom",
+          path: "models.providers.custom.models",
+        }),
+      ]);
+      expect(findings[0]?.message).toContain(`big (${saved})`);
+      expect(findings[0]?.message).toContain("up to 32768 tokens");
+      expect(findings[0]?.message).toContain("may leave the output cap unchanged or lower it");
+      expect(findings[0]?.message).not.toContain("capped lower than new setups");
+    },
+  );
 
   it("uses the context-sized default when the row has a small window", async () => {
     const findings = await detect({

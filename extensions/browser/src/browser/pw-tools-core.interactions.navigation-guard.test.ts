@@ -407,7 +407,10 @@ describe("resident interaction authority", () => {
           await effect();
           return { dispose: async () => {} };
         },
-        waitForFunction: effect,
+        waitForFunction: async () => {
+          await effect();
+          return { dispose: async () => {} };
+        },
       });
       const opts = {
         ...target,

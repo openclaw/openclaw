@@ -1,2 +1,0 @@
-10
-# Reuse the repository transfer fixture to reject late edits before checkpoint acceptance.

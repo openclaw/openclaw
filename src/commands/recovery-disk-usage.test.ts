@@ -43,7 +43,7 @@ it("reports logical bytes and distinct eligibility counts by kind through status
           {
             serviceRunning: true,
             versionMatch: true,
-            settled: true,
+            settled: now === 1_000, // Unverified latest success keeps its recovery copy.
             coreReady: true,
             pluginErrors: [],
           },

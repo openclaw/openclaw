@@ -8,6 +8,7 @@ import {
   getOwner,
   lazy,
   Match,
+  merge,
   onSettled,
   runWithOwner,
   Show,
@@ -23,9 +24,7 @@ import {
   chatItemGroups,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
-import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
@@ -40,7 +39,7 @@ import {
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
 
@@ -52,11 +51,10 @@ type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
   streamOptions: StreamGroupOptions;
-  workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
+  partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
   onToggleWork: (key: string, expanded: boolean) => void;
-  turnRecap?: TurnRecap;
 };
 type FrameProps = { frame: AgentRunFrameRenderItem; options: AgentRunFrameOptions };
 type BodyPart =
@@ -64,6 +62,7 @@ type BodyPart =
   | StreamGroupPart;
 type PartInput = { part: BodyPart; options: AgentRunFrameOptions };
 type PartRange = {
+  dependencies: readonly unknown[];
   start: Comment;
   end: Comment;
   write: (input: PartInput) => void;
@@ -134,9 +133,13 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
     }
     const ordered = parts.map((value) => {
       const key = `${value.kind}:${value.key}`;
+      const dependencies = options.partDependencies(value);
       const existing = ranges.get(key);
       if (existing) {
-        existing.write({ part: value, options });
+        if (!transcriptArraysEqual(existing.dependencies, dependencies)) {
+          existing.dependencies = dependencies;
+          existing.write({ part: value, options });
+        }
         return existing;
       }
       const start = document.createComment("frame-part");
@@ -155,7 +158,7 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
             },
           );
           insert(parent, render(readInput), end);
-          return { start, end, write, dispose };
+          return { dependencies, start, end, write, dispose };
         }),
       );
       ranges.set(key, range);
@@ -271,7 +274,6 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     frameReplyLine,
     bodyParts,
     firstBubbleKey,
-    workPreviews: opts.workPreviews,
     sourcePreviews,
   };
 }
@@ -287,24 +289,11 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
-  const timedWork = createMemo(() => {
-    const recap = props.options.turnRecap;
-    if (!recap) {
-      return undefined;
-    }
-    const work = props.frame.fragment
-      ? props.frame.fragment.work
-      : props.frame.parts.find(
-          (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
-        );
-    // The recap retains this run's terminal timing after the session moves on.
-    // Run duration appears only on the Worked summary; turns without one show no timing.
-    if (work?.kind !== "work-group") {
-      return undefined;
-    }
-    const durationMs = work.durationMs ?? recap.runtimeMs;
-    return durationMs > 0 ? { ...work, durationMs } : undefined;
-  });
+  const shellOptions = createMemo(() => props.options.renderGroupOptions(state().shell));
+  // Only the completed frame's action owner moves its summary into the outer footer.
+  const footerReactionMessageKey = () =>
+    shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
+  const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const frameContent = [
     <FrameBody
       parts={state().bodyParts}
@@ -316,9 +305,14 @@ function RunFrame(props: FrameProps) {
       {(input) => {
         const part = () => input().part;
         const options = () => input().options;
+        const streamOptions = merge(() => options().streamOptions, {
+          get firstBubbleKey() {
+            return firstBubbleKey();
+          },
+        });
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
-          firstBubbleKey: state().firstBubbleKey,
+          firstBubbleKey: firstBubbleKey(),
         });
         const streamPart = () => {
           const value = part();
@@ -344,35 +338,30 @@ function RunFrame(props: FrameProps) {
           <Switch>
             <Match when={streamPart()}>
               {(stream) => (
-                <StreamPartView
-                  part={stream()}
-                  options={{
-                    ...options().streamOptions,
-                    firstBubbleKey: state().firstBubbleKey,
-                  }}
-                  presentation="standalone"
-                />
+                <StreamPartView part={stream()} options={streamOptions} presentation="standalone" />
               )}
             </Match>
             <Match when={workPart()}>
               {(work) => (
                 <>
                   <WorkGroupSummary
-                    item={timedWork()?.key === work().key ? timedWork()! : work()}
+                    item={work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
-                      mediaReadAllowed: options().streamOptions.mediaReadAllowed,
                       bubbleMode: options().streamOptions.bubbleMode,
                       onToggle: () =>
                         options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
                       presentation: "continuation",
-                      browserTabPreviews: state().workPreviews.get(work().key),
                     }}
                   />
                   <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
                     <For each={work().groups} keyed={(group) => group.key}>
                       {(group) => (
-                        <MessageGroupContent group={group()} options={groupOptions(group())} />
+                        <MessageGroupContent
+                          group={group()}
+                          options={groupOptions(group())}
+                          footerReactionMessageKey={footerReactionMessageKey()}
+                        />
                       )}
                     </For>
                   </Show>
@@ -397,13 +386,11 @@ function RunFrame(props: FrameProps) {
             </Match>
             <Match when={messageGroup()}>
               {(group) => (
-                <>
-                  <MessageGroupContent group={group()} options={groupOptions(group())} />
-                  <BrowserTabPreviews
-                    previews={state().workPreviews.get(group().key)}
-                    mediaReadAllowed={options().streamOptions.mediaReadAllowed}
-                  />
-                </>
+                <MessageGroupContent
+                  group={group()}
+                  options={groupOptions(group())}
+                  footerReactionMessageKey={footerReactionMessageKey()}
+                />
               )}
             </Match>
           </Switch>
@@ -428,14 +415,12 @@ function RunFrame(props: FrameProps) {
     <MessageGroup
       group={state().shell}
       options={{
-        ...props.options.renderGroupOptions(state().shell),
+        ...shellOptions(),
         frameContent,
         frameReplyLine: state().frameReplyLine,
         frameActionOwner: state().actionOwner,
         frameHeader: props.frame.fragment?.first,
         frameFooter: props.frame.fragment?.last,
-        turnRecap:
-          !props.frame.fragment || props.frame.fragment.last ? props.options.turnRecap : undefined,
       }}
     />
   );

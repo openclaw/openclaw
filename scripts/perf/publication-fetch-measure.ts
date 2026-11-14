@@ -2,12 +2,15 @@
 // --extra-refs 13505 --extra-packs 1326 --linked-worktrees 2437.
 // Run serially: node --import ./scripts/tsx.mjs scripts/perf/publication-fetch-measure.ts
 // --fixture <task-owned fixture> --output <new directory> [--base-file <saved transport.ts>]
-// [--contents | --present | --base-refresh] [--allocation]
+// [--contents | --present | --base-refresh | --sequential-fork] [--allocation]
+// --sequential-fork uses empty-source-fork-fixture.py and measures the second
+// missing commit after an untimed first acquisition. It never reads a session DB.
 // Each run restores only this disposable fixture's acquired packs and tracking ref.
 // Compare five counterbalanced A/B and A/A pairs. Accept lower owner wall/CPU with
 // identical received objects and usable ancestry/content; report residual native scans.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { registerHooks } from "node:module";
@@ -24,6 +27,7 @@ const { values } = parseArgs({
     contents: { type: "boolean" },
     present: { type: "boolean" },
     "base-refresh": { type: "boolean" },
+    "sequential-fork": { type: "boolean" },
     allocation: { type: "boolean" },
   },
 });
@@ -46,9 +50,23 @@ const env = {
 const git = (root: string, args: string[]) =>
   execFileSync(actualGit, ["-C", root, ...args], { env, encoding: "utf8" }).trim();
 const base = git(cwd, ["rev-parse", "HEAD"]);
-const target = git(remote, ["rev-parse", "HEAD"]);
+const sequential = values["sequential-fork"]
+  ? (JSON.parse(await fs.readFile(path.join(fixture, "shape.json"), "utf8")) as {
+      first: string;
+      second: string;
+    })
+  : undefined;
+const target = sequential?.second ?? git(remote, ["rev-parse", "HEAD"]);
 const config = await fs.readFile(configPath);
 const initialPacks = new Set(await fs.readdir(packs));
+const readRefs = () =>
+  new Map(
+    git(cwd, ["for-each-ref", "--format=%(refname) %(objectname)"])
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split(" ") as [string, string]),
+  );
+const initialRefs = readRefs();
 const shallow = await fs.readFile(path.join(cwd, ".git/shallow"), "utf8").catch(() => "");
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 await fs.mkdir(output);
@@ -68,6 +86,9 @@ Object.assign(process.env, env, {
 });
 const ownerUrl = new URL("../../src/gateway/github-publication-git-transport.ts", import.meta.url)
   .href;
+const ownerSourceSha256 = createHash("sha256")
+  .update(await fs.readFile(values["base-file"] ?? new URL(ownerUrl)))
+  .digest("hex");
 const hooks = registerHooks({
   load(url, context, nextLoad) {
     return nextLoad(
@@ -95,7 +116,7 @@ try {
     }
     return owner.runPublicationCommand(
       argv.map((arg) =>
-        arg === "https://github.com/synthetic/fixture.git" ? pathToFileURL(remote).href : arg,
+        arg.replace("https://github.com/synthetic/fixture.git", pathToFileURL(remote).href),
       ),
       options,
     );
@@ -105,6 +126,21 @@ try {
     cwd,
     env: { GIT_TRACE2_PERF: undefined, GIT_TRACE_PACKET: undefined },
   });
+  if (sequential) {
+    await owner.requireGitHubPublicationCommit(
+      run,
+      "synthetic/fixture",
+      sequential.first,
+      "github.com",
+      cwd,
+      process.env,
+      "Synthetic first fork acquisition failed",
+    );
+    await fs.rename(path.join(output, "git.perf"), path.join(output, "first.git.perf"));
+    await fs.rename(path.join(output, "git.packet"), path.join(output, "first.git.packet"));
+    fetches = 0;
+  }
+  const measurementPacks = new Set(await fs.readdir(packs));
   for (const name of await fs.readdir(output)) {
     if (name.endsWith(".time") || name.endsWith(".argv")) {
       await fs.unlink(path.join(output, name));
@@ -169,7 +205,7 @@ try {
     );
   }
   const acquired = (await fs.readdir(packs)).filter(
-    (name) => name.endsWith(".pack") && !initialPacks.has(name),
+    (name) => name.endsWith(".pack") && !measurementPacks.has(name),
   );
   let packBytes = 0;
   for (const name of acquired) {
@@ -177,19 +213,46 @@ try {
   }
   assert.equal(git(cwd, ["rev-parse", "HEAD"]), base);
   assert.equal(await fs.readFile(path.join(cwd, ".git/shallow"), "utf8").catch(() => ""), shallow);
-  git(cwd, ["merge-base", "--is-ancestor", base, values.present ? base : target]);
+  git(cwd, [
+    "merge-base",
+    "--is-ancestor",
+    sequential?.first ?? base,
+    values.present ? base : target,
+  ]);
+  const retainedFetchedRefs = [...readRefs().keys()].filter((ref) =>
+    ref.startsWith("refs/openclaw/fetched/"),
+  );
+  if (sequential && !values["base-file"]) {
+    assert.equal(readRefs().get(`refs/openclaw/fetched/${target}`), target);
+    assert(packet.includes(`fetch> have ${sequential.first}`));
+  }
   if (values.contents) {
-    assert.equal(git(cwd, ["show", `${target}:target/missing.txt`]).length, 18432);
+    assert(
+      !git(cwd, [
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "--no-object-names",
+        "--max-count=1",
+        values.present ? base : target,
+      ])
+        .split("\n")
+        .some((line) => line.startsWith("?")),
+    );
   }
   const result = {
     variant: values["base-file"] ? "base" : "candidate",
-    mode: values["base-refresh"]
-      ? "base-refresh"
-      : values.contents
-        ? "contents"
-        : values.present
-          ? "present"
-          : "commit",
+    ownerSourceSha256,
+    gitVersion: git(cwd, ["--version"]),
+    mode: sequential
+      ? "sequential-fork"
+      : values["base-refresh"]
+        ? "base-refresh"
+        : values.contents
+          ? "contents"
+          : values.present
+            ? "present"
+            : "commit",
     wallMs,
     jsCpuMs: (cpu.user + cpu.system) / 1000,
     sampledAllocationBytes,
@@ -197,11 +260,21 @@ try {
     peakRssBytes,
     fetches,
     packBytes,
+    retainedFetchedRefs,
+    previousCommitOffered: sequential
+      ? packet.includes(`fetch> have ${sequential.first}`)
+      : undefined,
     offeredHaves: (packet.match(/fetch> have /gu) ?? []).length,
     receivedObjects: perf
       .split("\n")
       .filter((line) => line.includes("child_start"))
       .reduce((sum, line) => sum + Number(line.match(/--pack_header=\d+,(\d+)/u)?.[1] ?? 0), 0),
+    firstReceivedObjects: sequential
+      ? (await fs.readFile(path.join(output, "first.git.perf"), "utf8"))
+          .split("\n")
+          .filter((line) => line.includes("child_start"))
+          .reduce((sum, line) => sum + Number(line.match(/--pack_header=\d+,(\d+)/u)?.[1] ?? 0), 0)
+      : undefined,
     phases,
     loadBefore,
     loadAfter: os.loadavg(),
@@ -211,7 +284,14 @@ try {
 } finally {
   hooks.deregister();
   inspector.disconnect();
-  git(cwd, ["update-ref", "refs/remotes/origin/main", base]);
+  for (const ref of readRefs().keys()) {
+    if (!initialRefs.has(ref)) {
+      git(cwd, ["update-ref", "-d", ref]);
+    }
+  }
+  for (const [ref, oid] of initialRefs) {
+    git(cwd, ["update-ref", ref, oid]);
+  }
   for (const name of await fs.readdir(packs)) {
     if (!initialPacks.has(name)) {
       await fs.unlink(path.join(packs, name));

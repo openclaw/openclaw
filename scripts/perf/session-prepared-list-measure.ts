@@ -11,6 +11,10 @@
 // third of rows persisted ACP ownership. --source-ref pins runtime owners to a Git revision.
 // --archived-sessions fixes the archive population; --row-updates-per-list publishes metadata
 // writes per logical second, with --row-update-population and --row-update-field selecting them.
+// --search-discovery measures the real sessions_search inventory sweep, excluding transcript FTS.
+// Use --list-shape all --sessions 3500 --archived-sessions 3000 --updates-per-list 0.
+// --list-shape people --row-updates-per-list 1 --row-update-field inputTokens measures
+// selection invalidation under display-only churn. --count-visits also counts owner projections.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -66,6 +70,7 @@ const { values } = parseArgs({
     "source-ref": { type: "string" },
     "identified-viewer": { type: "boolean", default: false },
     "plain-result": { type: "boolean", default: false },
+    "search-discovery": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -92,6 +97,11 @@ if (values["source-ref"]) {
       "src/gateway/session-list-view-cache.ts",
       "src/gateway/session-sharing-read.ts",
       "src/gateway/session-row-presentation.ts",
+      "src/gateway/session-row-projection-revisions.ts",
+      "src/gateway/session-row-projection.ts",
+      "src/gateway/session-row-projection-publication.ts",
+      "src/gateway/session-row-publication.ts",
+      "src/agents/tools/sessions-search-tool.ts",
     ].map((file) => [
       new URL(`../../${file}`, import.meta.url).href,
       execFileSync("git", ["show", `${values["source-ref"]}:${file}`], { encoding: "utf8" }),
@@ -142,6 +152,20 @@ const presentationSourceHash = createHash("sha256")
 const filterSourceHash = createHash("sha256")
   .update(readFileSync(new URL("../../src/gateway/session-list-filters.ts", import.meta.url)))
   .digest("hex");
+const discoverySourceHash = values["search-discovery"]
+  ? createHash("sha256")
+      .update(
+        values["source-ref"]
+          ? execFileSync("git", [
+              "show",
+              `${values["source-ref"]}:src/agents/tools/sessions-search-tool.ts`,
+            ])
+          : readFileSync(
+              new URL("../../src/agents/tools/sessions-search-tool.ts", import.meta.url),
+            ),
+      )
+      .digest("hex")
+  : undefined;
 const anchor = Date.UTC(2026, 9, 25);
 const siblingSessions = values["list-shape"] ? Math.floor(sessions / (agents * 2)) : 0;
 if (values["reuse-fixture"]) {
@@ -285,6 +309,9 @@ const releaseForeground = foreground.retainSessionListForegroundWork();
 const inspector = new Session();
 let connected = false;
 let projection: Awaited<ReturnType<typeof projections.createSessionRowProjection>> | undefined;
+let stateOwner:
+  | ReturnType<typeof import("../../src/infra/gateway-state-owner.js").acquireGatewayStateOwner>
+  | undefined;
 const claims = new Map<string, string>();
 const active: SubagentRunRecord[] = [];
 const realNow = Date.now;
@@ -428,6 +455,7 @@ if (values["list-shape"] && values["list-shape"] !== "mixed") {
     all: { archived: "all" },
     sidebar: { source: "sidebar", rowMode: "sidebar", limit: 100, archived: false },
     full: { source: "sessions-page", limit: 100, archived: "all" },
+    people: { source: "sessions-page", includePeople: true, limit: 100, archived: "all" },
     search: { source: "sessions-page", search: "dashboard", limit: 100, archived: "all" },
     "runtime-search": { source: "sessions-page", search: "openclaw", limit: 100, archived: "all" },
     agent: { source: "sessions-page", agentId: "reviewer", limit: 100, archived: false },
@@ -535,6 +563,18 @@ function sampledCpu(profile: Profiler.Profile) {
 }
 
 try {
+  if (values["search-discovery"]) {
+    const { acquireGatewayStateOwner } = await import("../../src/infra/gateway-state-owner.js");
+    const { defaultPayload } = await import("../../src/infra/gateway-state-owner-record.js");
+    const { resolveOpenClawStateSqlitePath } =
+      await import("../../src/state/openclaw-state-db.paths.js");
+    const databasePath = resolveOpenClawStateSqlitePath();
+    // A serving Gateway holds custody; a standalone maintenance read takes a different path.
+    stateOwner = acquireGatewayStateOwner({
+      databasePath,
+      payload: { ...defaultPayload(databasePath), role: "gateway" },
+    });
+  }
   projection = await projections.createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.ensureMaterialized();
   if (values["acp-rows"]) {
@@ -692,13 +732,67 @@ try {
     publications.publishSubagentRunChanges([next.childSessionKey], [next.runId]);
     updates++;
   };
-  const read = (index: number) =>
+  let discovery: { pages: number; rows: number; keys: number; digest: string } | undefined;
+  const readList = (opts: SessionsListParams) =>
     lists.listProjectedSessions({
       projection: projection!,
-      opts: cases[index % cases.length]!,
+      opts,
       client: viewer,
       acceptsSerializedJson: !values["plain-result"],
     });
+  const { createSessionsSearchTool } = values["search-discovery"]
+    ? await import("../../src/agents/tools/sessions-search-tool.js")
+    : { createSessionsSearchTool: undefined };
+  const embedded = values["search-discovery"]
+    ? await import("../../src/agents/tools/embedded-gateway-stub.js")
+    : undefined;
+  const read = async (index: number) => {
+    if (!createSessionsSearchTool || !embedded) {
+      return readList(cases[index % cases.length]!);
+    }
+    const release = embedded.bindEmbeddedSessionRowProjection(Promise.resolve(projection!));
+    const gateway = embedded.createEmbeddedCallGateway();
+    let last: SessionsListResult | undefined;
+    let pages = 0;
+    let returned = 0;
+    const keys: string[] = [];
+    const tool = createSessionsSearchTool({
+      config: {
+        ...cfg,
+        tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+      },
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+      callGateway: async <T>(request: { method: string; params?: unknown }): Promise<T> => {
+        if (request.method === "sessions.list") {
+          last = await gateway<SessionsListResult>(request);
+          pages++;
+          returned += last.sessions.length;
+          return last as T;
+        }
+        if (request.method === "sessions.describe") {
+          return gateway<T>(request);
+        }
+        assert.equal(request.method, "sessions.search");
+        const params = request.params as { sessionKeys: string[] };
+        keys.push(...params.sessionKeys);
+        return { results: [] } as T;
+      },
+    });
+    try {
+      await tool.execute("synthetic-discovery", { query: "synthetic" });
+    } finally {
+      release();
+    }
+    assert(last);
+    discovery = {
+      pages,
+      rows: returned,
+      keys: keys.length,
+      digest: createHash("sha256").update(JSON.stringify(keys.toSorted())).digest("hex"),
+    };
+    return last;
+  };
   const capture = async () => {
     const digest = createHash("sha256");
     for (let index = 0; index < cases.length; index++) {
@@ -882,7 +976,16 @@ try {
   };
   await run(warmup, false);
   let partitionEntriesVisited = 0;
+  let ownerProjections = 0;
   if (values["count-visits"]) {
+    const identities = projection.state.rowContext.identityProjection;
+    if (identities) {
+      const owner = identities.owner.bind(identities);
+      identities.owner = (...args) => {
+        ownerProjections++;
+        return owner(...args);
+      };
+    }
     const prepared = lists.prepareSessionRowSelection(
       projection,
       { archived: "all" },
@@ -927,6 +1030,7 @@ try {
   const beforeSelections = workMetrics.getSessionRowSelectionMetrics();
   const before = process.threadCpuUsage();
   await run(iterations, true);
+  const measuredOwnerProjections = ownerProjections;
   const used = process.threadCpuUsage(before);
   const elapsedMs = performance.now() - started;
   await nextTurn();
@@ -1009,6 +1113,7 @@ try {
     mode: values.mode,
     presentationSourceHash,
     filterSourceHash,
+    discoverySourceHash,
     listShape: values["list-shape"],
     identifiedViewer: values["identified-viewer"],
     plainResult: values["plain-result"],
@@ -1036,6 +1141,7 @@ try {
       }),
     ),
     partitionEntriesVisited: values["count-visits"] ? partitionEntriesVisited : undefined,
+    ownerProjections: values["count-visits"] ? measuredOwnerProjections : undefined,
     partitions: {
       hits: lastPartitions.hits - firstPartitions.hits,
       misses: lastPartitions.misses - firstPartitions.misses,
@@ -1062,6 +1168,7 @@ try {
     runningCandidateSelections,
     runningCandidateSelectionsPerList: runningCandidateSelections / iterations,
     returnedRows,
+    discovery,
     elapsedMs,
     threadCpuMs: (used.user + used.system) / 1000,
     listCpuMsPerCall: listCpuMicros / 1000 / iterations,
@@ -1076,8 +1183,9 @@ try {
     golden,
     cases,
     host: { node: process.version, load: loadavg() },
-    scope:
-      "Owner-level lists with registry churn; sort-workload uses an identified synthetic operator, limit 200, owner-first, involvement, and recency queries. No transport/model claim. Reconciliation is an explicit incomplete-postimage scenario. Heap family samples overlap and exclude native backing stores.",
+    scope: values["search-discovery"]
+      ? "sessions_search discovery through the embedded Gateway projection owner; transcript FTS excluded. Main-thread CPU and sampled JS allocation per sweep; no transport/model claim."
+      : "Owner-level lists with registry churn; sort-workload uses an identified synthetic operator, limit 200, owner-first, involvement, and recency queries. No transport/model claim. Reconciliation is an explicit incomplete-postimage scenario. Heap family samples overlap and exclude native backing stores.",
   };
   writeFileSync(path.join(root, "result.json"), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
@@ -1095,6 +1203,10 @@ try {
     memory.subagentRuns.delete(entry.runId);
   }
   config.clearRuntimeConfigSnapshot();
-  await agentDb.closeOpenClawAgentDatabasesAsync();
-  await stateDb.closeOpenClawStateDatabaseAsync();
+  try {
+    await agentDb.closeOpenClawAgentDatabasesAsync();
+    await stateDb.closeOpenClawStateDatabaseAsync();
+  } finally {
+    stateOwner?.release();
+  }
 }

@@ -8,7 +8,6 @@ import {
 } from "../infra/clawhub-packages.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   compareOpenClawReleaseVersions,
@@ -16,6 +15,7 @@ import {
   isPrereleaseSemverVersion,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
+  type NpmSpecResolution,
 } from "../infra/npm-registry-spec.js";
 import {
   comparePackageUpdateVersions,
@@ -176,6 +176,8 @@ export type UpdateInstalledPluginsParams = {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
+  /** Once aborted, no further plugin update starts; this loop does not stop one in progress. */
+  signal?: AbortSignal;
 };
 
 export type UpdatablePluginInstallRecord = PluginInstallRecord & {

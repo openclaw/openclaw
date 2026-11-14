@@ -220,6 +220,8 @@ failed and ask you to restart the Gateway. The diagnosis is logged once and
 further worker launches fail immediately; ordinary worker crashes do not mark
 the runtime unavailable. A health or readiness check that finds the executable
 missing publishes the same diagnosis, even when resident workers still serve reads.
+Clients without `operator.admin` see `[redacted]` in `childRuntime.execPath` while
+the availability flag remains visible.
 
 For a service-managed Gateway, the lifecycle owner checks the effective service
 command's Node with a bounded `--version` probe. On macOS, the loaded launchd
@@ -396,9 +398,20 @@ appears as `[async task:...]`, distinct from a sampled call frame. Unnamed work
 remains unattributed. Lower-ranked entries are dropped first to keep each report within 2 KiB;
 `reportTruncated=true` identifies this log-size trimming.
 
-The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),
-and processes already started with conflicting profiling, tracing, or debugger
-options. Callback labels still work on those runtimes. Native blocking work can
+On Node 24, the observer instead captures up to three interrupted JavaScript
+stacks, 250 ms apart, after 500 ms without a heartbeat. It opens no debugger
+listener and starts no CPU profiler. Each stack contains at most 16 frames,
+with bounded symbol/location lengths; at most three stack payloads can wait
+for the main thread. Reports use `sampleMode=interrupt`, `truncated=true`, and
+`null` self times: these are point observations, not sampled CPU durations.
+Source maps and user-defined stack formatting hooks are not invoked. Native
+calls may defer inspector interrupts until unrelated JavaScript resumes;
+captures dispatched more than 100 ms late are discarded. Such calls can still
+produce kernel-only evidence.
+
+The recorder skips Bun and processes already started with conflicting
+profiling, tracing, or debugger options. Callback labels still work on those
+runtimes. Native blocking work can
 remain unsymbolized, and an unusually long stall can exhaust the sample cap;
 `truncated=true` identifies incomplete evidence. Recorder failures are logged
 once and disable recording for that monitor's lifetime.

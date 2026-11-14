@@ -1313,6 +1313,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/sessions/session-upstream-monitor.test.ts",
     watchGlobs: [
+      "src/sessions/session-state-events-record.worker.ts",
       "src/sessions/session-state-events.worker.ts",
       "src/sessions/session-upstream-links.worker.ts",
       "src/state/openclaw-state-read-handlers.ts",

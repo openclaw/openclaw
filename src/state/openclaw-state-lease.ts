@@ -119,7 +119,7 @@ async function runStateLeaseOwnerInScope<T>(
   const identity: LeaseIdentity = {
     scope: validated.scope,
     key: validated.key,
-    owner: randomUUID(),
+    owner: `${validated.operationLabel}:${randomUUID()}`,
     renewalTimer,
     leaseLabel: validated.leaseLabel,
   };
