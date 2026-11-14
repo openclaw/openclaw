@@ -301,7 +301,11 @@ describe("OnboardingMemoryImport", () => {
       .spyOn(globalThis.crypto, "randomUUID")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000002");
-    await startImport(request);
+    const element = await mount(createContext(request));
+    const importButton = await waitForAction(element);
+    expect(element.textContent).not.toContain("Already imported");
+    expect(element.textContent).toContain("Conflicts: 1");
+    importButton.click();
 
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     const applyCalls = request.mock.calls.filter(
