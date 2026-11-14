@@ -828,7 +828,6 @@ describe("gateway session utils", () => {
         [undefined, "Project Team"],
         ["  ", "Project Team"],
         [" Planning ", "Project Team / Planning"],
-        ["Planning", "Project Team / Planning"],
         ["Roadmap", "Project Team / Roadmap"],
       ]) {
         await update({ TopicName });

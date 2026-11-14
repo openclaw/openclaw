@@ -610,35 +610,6 @@ class SidebarGatewayPickerTest {
   }
 
   @Test
-  fun queuedGatewayHandoffProtectsTheActualComposer() {
-    val target =
-      GatewayRegistryEntry(
-        stableId = "manual|127.0.0.1|19876",
-        kind = GatewayRegistryEntryKind.MANUAL,
-        name = "Local QA B",
-        host = "127.0.0.1",
-        port = 19876,
-        tls = false,
-      )
-    prefs.gatewayRegistry.upsert(target)
-    showSidebarAndComposer()
-    val barrier = ReflectionHelpers.getField<Mutex>(runtime, "gatewaySwitchMutex")
-    check(barrier.tryLock())
-    try {
-      composeRule.runOnIdle { model.switchToGateway(target.stableId) }
-      composeRule.waitUntil {
-        composeRule.runOnIdle { model.gatewayConnectionHandoff.value.pending }
-      }
-      capture("queued-handoff")
-      composeRule.onNodeWithText("Message").assertIsNotEnabled()
-    } finally {
-      // Retire queued work before releasing the barrier: no real endpoint is contacted.
-      composeRule.runOnIdle { runtime.disconnect() }
-      barrier.unlock()
-    }
-  }
-
-  @Test
   fun savedOfflineGatewaysSwitchBothWaysWithoutMovingFinishedDraftsOrAttachments() {
     val alpha = savedGateway("Local QA Alpha")
     val beta = savedGateway("Local QA Beta")

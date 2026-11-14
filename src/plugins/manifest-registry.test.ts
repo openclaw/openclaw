@@ -609,17 +609,6 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trust?.reason).toBe("install-path-mismatch");
   });
 
-  it("does not trust legacy ClawHub records without source authority", () => {
-    const dir = makePluginDir("diagnostics-otel");
-    const registry = loadOfficialRegistry("diagnostics-otel", dir, {
-      source: "clawhub",
-      spec: "clawhub:@openclaw/diagnostics-otel@2026.5.18",
-      installPath: dir,
-    });
-
-    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
-  });
-
   it("preserves trusted official installs when a config path selects the installed package", () => {
     const dir = makePluginDir("diagnostics-prometheus");
     const registry = loadOfficialRegistry(

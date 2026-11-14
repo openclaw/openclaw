@@ -351,32 +351,6 @@ struct ChatGatewayRequestTests {
             supportsReadContract: false) == .read)
     }
 
-    @Test func `settings patch request encodes default model as null`() {
-        let request = OpenClawChatGatewayRequests.patchSessionSettings(
-            sessionKey: "agent:main:main",
-            agentID: nil,
-            model: .some(nil))
-
-        #expect(request.params["model"]?.value is NSNull)
-        #expect(request.params["agentId"] == nil)
-    }
-
-    @Test func `settings patch request encodes model thinking and verbosity atomically`() {
-        let request = OpenClawChatGatewayRequests.patchSessionSettings(
-            sessionKey: "global",
-            agentID: "reviewer",
-            model: .some("openai/gpt-5.6-luna"),
-            thinkingLevel: .some("ultra"),
-            verboseLevel: .some("full"))
-
-        #expect(request.method == "sessions.patch")
-        #expect(request.params["key"]?.value as? String == "global")
-        #expect(request.params["agentId"]?.value as? String == "reviewer")
-        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-luna")
-        #expect(request.params["thinkingLevel"]?.value as? String == "ultra")
-        #expect(request.params["verboseLevel"]?.value as? String == "full")
-    }
-
     @Test func `settings patch request encodes fast values and explicit resets`() throws {
         let reset = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: "main",

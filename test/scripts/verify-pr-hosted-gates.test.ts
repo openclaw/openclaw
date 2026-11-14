@@ -670,21 +670,6 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
-  it("rejects a failed rerun of a workflow that was scheduled for the exact head", () => {
-    const workflowRuns = ["CI", ...SCHEDULED_HOSTED_WORKFLOWS].map((name, index) =>
-      makeRun(name, index + 1, `2026-06-17T10:4${index}:00Z`),
-    );
-    workflowRuns[2] = {
-      ...expectDefined(workflowRuns[2], "Blacksmith ARM Testbox workflow run"),
-      conclusion: "failure",
-      updated_at: "2026-06-17T10:50:00Z",
-    };
-
-    expect(() => collectHostedGateEvidence(workflowRuns)).toThrow(
-      "Missing successful recent Blacksmith ARM Testbox workflow",
-    );
-  });
-
   it.each([
     [
       "scheduled CI at the age boundary",

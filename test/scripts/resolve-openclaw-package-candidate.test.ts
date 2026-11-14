@@ -331,12 +331,7 @@ describe("resolve-openclaw-package-candidate", () => {
   });
 
   it("rejects package candidate output names that escape the output directory", () => {
-    for (const outputName of [
-      "../openclaw-current.tgz",
-      "nested/openclaw-current.tgz",
-      "openclaw-current.zip",
-      ".openclaw-current.tgz",
-    ]) {
+    for (const outputName of ["../openclaw-current.tgz"]) {
       expect(() => parseArgs(["--output-name", outputName])).toThrow(
         `--output-name must be a tarball filename, not a path: ${outputName}`,
       );

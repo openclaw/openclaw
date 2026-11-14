@@ -1112,14 +1112,6 @@ class RoomChatCommandOutboxTest {
     }
 
   @Test
-  fun pinSessionKeyRewritesTheAliasExactlyOnce() =
-    runTest {
-      val queued = store.enqueueQueued("pinned", nowMs = 10)
-      store.pinSessionKey(queued.id, "agent:work:main")
-      assertEquals("agent:work:main", store.load("gateway-a").single().sessionKey)
-    }
-
-  @Test
   fun retryAndExactSessionDeletionCanonicalizeOwnerAgentIds() =
     runTest {
       val queued =

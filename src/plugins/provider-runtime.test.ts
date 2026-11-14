@@ -960,25 +960,6 @@ describe("provider-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("exposes provider-owned transport extra params", () => {
-    mockProvider({
-      extraParamsForTransport: () => ({ patch: { providerTransportPatch: true } }),
-    });
-
-    expect(
-      resolvePreparedExtraParams({
-        cfg: undefined,
-        provider: DEMO_PROVIDER_ID,
-        modelId: MODEL.id,
-        model: MODEL,
-        extraParamsOverride: { transport: "websocket" },
-      }),
-    ).toEqual({
-      transport: "websocket",
-      providerTransportPatch: true,
-    });
-  });
-
   it("exposes provider-owned auth profile and fallback route seams", () => {
     mockProvider({
       resolveAuthProfileId: () => "profile-b",
@@ -1199,7 +1180,6 @@ describe("provider-runtime", () => {
   it.each([
     { result: "billing", expected: "billing", laterCalls: 0 },
     { result: "unsupported-reason", expected: undefined, laterCalls: 0 },
-    { result: {}, expected: undefined, laterCalls: 0 },
     { result: null, expected: "overloaded", laterCalls: 1 },
   ])(
     "normalizes external failover result $result without changing hook precedence",

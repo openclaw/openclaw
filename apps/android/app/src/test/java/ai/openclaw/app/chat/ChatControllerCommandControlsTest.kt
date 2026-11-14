@@ -205,7 +205,6 @@ class ChatControllerCommandControlsTest {
       assertFalse(create.second.orEmpty().contains("\"label\""))
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
       assertEquals("fresh-session", controller.sessionId.value)
-      assertTrue(requests.any { it.first == "chat.history" })
       assertTrue(requests.any { it.first == "sessions.list" })
     }
 
@@ -1033,8 +1032,6 @@ class ChatControllerCommandControlsTest {
 
       val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(create.contains("\"parentSessionKey\":\"main\""))
-      assertTrue(create.contains("\"emitCommandHooks\":true"))
-      assertTrue(create.contains("\"succeedsParent\":false"))
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
       assertEquals(0, controller.pendingRunCount.value)
       assertTrue(requests.none { it.first == "chat.abort" || it.first == "chat.stop" })

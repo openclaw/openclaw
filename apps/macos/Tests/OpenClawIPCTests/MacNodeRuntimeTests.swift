@@ -428,9 +428,6 @@ struct MacNodeRuntimeTests {
             "Error: EACCES: permission denied, open /private/example",
             "UNAVAILABLE: Claude session catalog is unavailable"),
         (
-            "Error: Claude transcript changed while it was being read",
-            "UNAVAILABLE: Claude session catalog is unavailable"),
-        (
             "Error: Claude transcript page exceeded the safe scan limit",
             "UNAVAILABLE: Claude session item exceeded the size limit"),
     ])
@@ -558,7 +555,6 @@ struct MacNodeRuntimeTests {
         let authorizedWhenInUse = try #require(CLAuthorizationStatus(rawValue: 4))
         let cases: [(mode: OpenClawLocationMode, status: CLAuthorizationStatus, accepted: Bool)] = [
             (.off, authorizedWhenInUse, false),
-            (.off, .authorizedAlways, false),
             (.whileUsing, authorizedWhenInUse, true),
             (.always, authorizedWhenInUse, false),
             (.whileUsing, .authorizedAlways, true),

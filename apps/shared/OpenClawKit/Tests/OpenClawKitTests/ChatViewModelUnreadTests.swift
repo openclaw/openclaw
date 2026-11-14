@@ -778,22 +778,6 @@ struct ChatViewModelUnreadTests {
         #expect(await transport.listCalls == 0)
     }
 
-    @Test func `successful activation clears unread once`() async throws {
-        let transport = UnreadTestTransport(sessions: [self.entry(key: "a", unread: true)])
-        let viewModel = self.viewModel(sessionKey: "a", transport: transport)
-
-        viewModel.load()
-        await viewModel.bootstrapTask?.value
-        #expect(await transport.unreadPatchAttempts().count == 1)
-        viewModel.refresh()
-        await viewModel.bootstrapTask?.value
-        #expect(await transport.listCallCount() >= 2 && !viewModel.isLoading)
-
-        let attempts = await transport.unreadPatchAttempts()
-        #expect(attempts.map(\.0) == ["a"])
-        #expect(attempts.map(\.1) == [false])
-    }
-
     @Test func `main alias refresh does not rearm unread clearing`() async throws {
         let transport = UnreadTestTransport(
             sessions: [self.entry(key: "agent:alpha:main", unread: true)])

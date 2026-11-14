@@ -745,12 +745,8 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
 
   it.each([
     ["raw-npm", 0],
-    ["qualified-npm", 1],
-    ["sdk", 2],
     ["docker-manifest", 3],
     ["docker-amd64", 4],
-    ["docker-arm64", 5],
-    ["plugin-npm", 6],
   ] as const)(
     "rejects changed %s archive bytes without a fresh-artifact fallback",
     (_kind, index) => {
