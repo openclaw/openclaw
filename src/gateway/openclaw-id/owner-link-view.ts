@@ -1,7 +1,8 @@
 // Owner-only People projection; no proof keys or service lifecycle state is owned here.
-import type {
-  IrohEndpointKey,
-  MemberRole,
+import {
+  isAdmitted,
+  type IrohEndpointKey,
+  type MemberRole,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
@@ -75,16 +76,22 @@ export async function readOwnerLinkStatus(params: {
     ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
     members: state ? await describeMembers(state.members, record?.member_approved_at) : [],
     invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
-    nodes: Object.entries(state?.nodes ?? {}).map(([peerKey, node]) => ({
-      peerKey,
-      label: node.label,
-      description: node.description,
-      listedSeq: node.listed_seq,
-      addedBy: node.added_by,
-      lastSeen: node.last_seen,
-      inviteId: node.invite_id,
-      ownerDevice: node.owner_device,
-    })),
+    nodes: Object.entries(state?.nodes ?? {})
+      .filter(
+        ([key]) =>
+          // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
+          state && isAdmitted(state, key as IrohEndpointKey, Math.floor(Date.now() / 1000)),
+      )
+      .map(([peerKey, node]) => ({
+        peerKey,
+        label: node.label,
+        description: node.description,
+        listedSeq: node.listed_seq,
+        addedBy: node.added_by,
+        lastSeen: node.last_seen,
+        inviteId: node.invite_id,
+        ownerDevice: node.owner_device,
+      })),
     nodeInvites: await listNodeInviteViews(record, Math.floor(Date.now() / 1000)),
     // After a restart, the last publication recorded with the claw stands in.
     publication:

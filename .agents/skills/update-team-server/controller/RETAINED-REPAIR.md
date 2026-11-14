@@ -325,7 +325,9 @@ Ordinary same-schema adoption keeps its existing request and checks.
 `<nativeUpdate.backupRoot>.receipt.json`. `nativeRecovery.backup` is the
 `{path,device,inode}` identity of the receipt's existing
 `<nativeUpdate.backupRoot>.databases` directory. The receipt must still say
-`migrated` and bind the current protected files. `nativeRecovery.process` is
+`migrated`. Live databases retain its exact device/inode identities; held stores
+may retain those same identities in their owner-safe archive even when the
+receipt lists their original live paths. `nativeRecovery.process` is
 `{pid,generation,release,runtime,uid,port}`: the current system Gateway's PID,
 `/proc` start ticks, canonical candidate release directory, runtime executable,
 runtime UID and listener port. The existing native live-custody owner verifies
@@ -334,6 +336,20 @@ existing `source` descriptor binds every byte of the original journal, including
 its candidate, predecessor/candidate schema
 pair, creation time, and transaction UUID in `nativeUpdate.backupRoot`; V1
 activation journals have no separate `id` field.
+
+For this retained failed migration, a later atomic config replacement is accepted
+only when the selected serving candidate has loaded the current config. The
+controller checks its canonical path, runtime ownership and private mode, then
+binds the current bytes to the Gateway's `config.get` revision and requires that
+revision to be applied. A stale watcher snapshot, invalid or unapplied config,
+or included-file revision cannot authorize this single-file reconciliation.
+The existing installation revision key is read without creating or changing it;
+key material and config contents are never recorded. Adoption records the old
+and current config identities and applied revision in its immutable intent.
+Recovery uses the same proof for its local protected-path snapshot and rechecks
+it after full acceptance. The original journal, witness and native receipt stay
+unchanged; stopped migration/restore and same-schema reconciliation keep their
+existing contracts.
 
 Serving-process binding accepts exactly the system unit's cgroup or its
 `/gateway` leaf, matching `DelegateSubgroup=gateway`. Other leaves, nested

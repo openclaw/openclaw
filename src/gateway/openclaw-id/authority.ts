@@ -668,9 +668,10 @@ export function createOpenClawIdAuthority(
           peer_keys: member.peer_keys,
         })),
         invites: listInviteViews(current, now),
-        nodes: Object.entries(state.nodes).map(([peer_key, node]) =>
-          Object.assign({ peer_key }, node),
-        ),
+        nodes: Object.entries(state.nodes)
+          // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
+          .filter(([key]) => isAdmitted(state, key as IrohEndpointKey, now))
+          .map(([peer_key, node]) => Object.assign({ peer_key }, node)),
         node_invites: nodeInvites,
       };
     },
@@ -768,14 +769,15 @@ export function createOpenClawIdAuthority(
       return due.length > 0 ? Math.min(...due) : undefined;
     },
 
-    /** Peer keys of listed owner devices no longer admitted because their certificate expired. */
+    /** Peer keys of inactive owner devices and their bound nodes, for expiry teardown. */
     async expiredOwnerPeers(): Promise<IrohEndpointKey[]> {
       const state = (await load())?.authority;
       if (!state) {
         return [];
       }
       const now = nowSeconds();
-      const expired = new Set<IrohEndpointKey>();
+      // SAFETY: nodes is keyed by IrohEndpointKey; the admission filter below removes active nodes.
+      const expired = new Set(Object.keys(state.nodes) as IrohEndpointKey[]);
       for (const device of Object.values(state.owner_devices)) {
         if (!isOwnerDeviceActive(device, now)) {
           device.cert.body.peer_keys.forEach((key) => expired.add(key));

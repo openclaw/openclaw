@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, chownSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -268,8 +268,8 @@ function nativeUpdateRoot(f, status) {
   return root;
 }
 
-function failedReleaseFixture(t, live = false, scenario = "success", schemaVersions) {
-  const f = makeReleaseFixture(t, scenario, schemaVersions);
+function failedReleaseFixture(t, live = false, scenario = "success", schemaVersions, runtimeOwnedState = false) {
+  const f = makeReleaseFixture(t, scenario, schemaVersions, runtimeOwnedState);
   if (process.env.TEAM_OWNER_TEST_LIBRARY) {
     f.library = process.env.TEAM_OWNER_TEST_LIBRARY;
     f.env.OPENCLAW_TEAM_RELEASE_LIB = f.library;
@@ -299,7 +299,12 @@ function failedReleaseFixture(t, live = false, scenario = "success", schemaVersi
   return f;
 }
 
-function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = false) {
+function ownRuntimeTree(f, path) {
+  chownSync(path, f.runtimeUid, f.runtimeGid);
+  if (lstatSync(path).isDirectory()) for (const name of readdirSync(path)) ownRuntimeTree(f, join(path, name));
+}
+
+function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = false, configDrift = false) {
   // First complete a same-schema adoption for an earlier incident, as on the host.
   const stage = join(f.root, "approved-controller"); mkdirSync(stage, { mode: 0o755 });
   for (const [index, name] of names.entries()) {
@@ -318,7 +323,7 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = f
   const firstComplete = adoptionOK(adoptController(f, "apply", firstBinding));
   const historical = { gate: descriptor(join(f.serving, "journal", "controller-adoption.json")),
     complete: firstComplete.adoption.complete };
-  record.createdAt = "2026-11-13T05:46:16.000Z";
+  record.createdAt = "2026-11-13T05:46:16.364Z";
   writeFileSync(f.journal + ".next", JSON.stringify(record), { mode: 0o600 });
   renameSync(f.journal + ".next", f.journal);
   for (const [path, version] of [[f.databasePath, 40], [f.agentDatabasePath, 42]]) {
@@ -332,6 +337,12 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = f
   const nativeEnv = { ...f.env };
   f.request = { operation: randomUUID() }; f.b = join(f.serving, "releases", after);
   nativeFixture(f);
+  const servingUid = f.runtimeOwnedState ? f.runtimeUid : process.getuid();
+  if (f.runtimeOwnedState) {
+    chownSync(join(f.env.OPENCLAW_TEAM_PROC_ROOT, String(f.pid)), servingUid, f.runtimeGid);
+    f.native.manager.Id = `user@${servingUid}.service`;
+    f.saveNative();
+  }
   const cgroupPath = join(f.env.OPENCLAW_TEAM_PROC_ROOT, String(f.pid), "cgroup");
   const cgroup = "/system.slice/openclaw-gateway.service" + (delegated ? "/gateway" : "");
   writeFileSync(cgroupPath, `0::${cgroup}\n`);
@@ -340,7 +351,7 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = f
   writeFileSync(join(boot, "boot_id"), "11111111-1111-4111-8111-111111111111\n");
   const info = lstatSync(backupDirectory);
   const next = { ...request(), historical, nativeRecovery: {
-    process: { pid: f.pid, generation: f.start, release: f.b, runtime: process.execPath, uid: process.getuid(), port: 18789 },
+    process: { pid: f.pid, generation: f.start, release: f.b, runtime: process.execPath, uid: servingUid, port: 18789 },
     receipt: descriptor(`${record.nativeUpdate.backupRoot}.receipt.json`),
     backup: { path: backupDirectory, device: info.dev, inode: info.ino },
   } };
@@ -378,7 +389,47 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = f
     for (const kept of unchanged) assert.deepEqual(descriptor(kept.path), kept, rejected);
   }
   writeFileSync(cgroupPath, `0::${cgroup}\n`);
+  if (configDrift) {
+    const runtimePath = join(f.state, "config-runtime-snapshot"), runtimeBytes = readFileSync(runtimePath);
+    for (const [name, mutate] of [
+      ["stale config snapshot", value => { value.hash = "hmac-sha256:v1:" + "0".repeat(43); }],
+      ["unapplied config revision", value => { value.appliedConfigHash = "hmac-sha256:v1:" + "0".repeat(43); }],
+      ["invalid current config", value => { value.valid = false; }],
+    ]) {
+      const value = JSON.parse(runtimeBytes); mutate(value);
+      writeFileSync(runtimePath, JSON.stringify(value));
+      const refused = adoptController(f, "historical-successor", next);
+      assert.notEqual(refused.status, 0, name); assert.match(refused.stderr, /config/, name);
+      for (const kept of unchanged) assert.deepEqual(descriptor(kept.path), kept, name);
+    }
+    writeFileSync(runtimePath, runtimeBytes);
+    chmodSync(f.configPath, 0o666);
+    const unsafe = adoptController(f, "historical-successor", next);
+    assert.notEqual(unsafe.status, 0); assert.match(unsafe.stderr, /config|mode|permissions|owner-safe/);
+    chmodSync(f.configPath, 0o600);
+    chownSync(f.configPath, process.getuid() + 1, process.getgid());
+    const foreign = adoptController(f, "historical-successor", next);
+    assert.notEqual(foreign.status, 0); assert.match(foreign.stderr, /config|owner/);
+    chownSync(f.configPath, servingUid, f.runtimeOwnedState ? f.runtimeGid : process.getgid());
+    const archive = join(dirname(dirname(f.databasePath)), "held-agent-archive", "retained-held-schema0-fixture", "agent", "openclaw-agent.sqlite");
+    for (const path of [f.databasePath, f.agentDatabasePath, archive]) {
+      renameSync(path, path + ".saved"); copyFileSync(path + ".saved", path);
+      chownSync(path, servingUid, f.runtimeGid);
+      const replaced = adoptController(f, "historical-successor", next);
+      assert.notEqual(replaced.status, 0); assert.match(replaced.stderr, /database identity/);
+      rmSync(path); renameSync(path + ".saved", path);
+    }
+  }
   const binding = adoptionOK(adoptController(f, "historical-successor", next));
+  if (configDrift) {
+    const bound = unchanged.map(kept => descriptor(kept.path));
+    renameSync(f.configPath, f.configPath + ".saved"); copyFileSync(f.configPath + ".saved", f.configPath);
+    chownSync(f.configPath, servingUid, f.runtimeGid);
+    const changed = adoptController(f, "apply", binding);
+    assert.notEqual(changed.status, 0); assert.match(changed.stderr, /config.*changed/);
+    for (const kept of bound) assert.deepEqual(descriptor(kept.path), kept);
+    rmSync(f.configPath); renameSync(f.configPath + ".saved", f.configPath);
+  }
   // Binding survives the prepare/apply gap only while the exact backup remains.
   if (refusals) {
     renameSync(backupDirectory, backupDirectory + ".saved"); mkdirSync(backupDirectory, { mode: 0o700 });
@@ -389,6 +440,13 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = f
   adoptionOK(adoptController(f, "apply", binding));
   adoptionOK(adoptController(f, "context", binding));
   const prefix = join(f.serving, "journal", "repair-" + next.operation + ".adoption");
+  if (existsSync(join(f.state, "config-runtime-snapshot"))) {
+    const drift = JSON.parse(readFileSync(prefix + ".intent.json")).nativeConfig;
+    const previous = JSON.parse(readFileSync(next.nativeRecovery.receipt.path)).configIdentity;
+    assert.deepEqual(drift.previous, { path: previous.path, device: previous.dev, inode: previous.ino });
+    assert.deepEqual(drift.current, descriptor(f.configPath));
+    assert.equal(drift.appliedRevision, JSON.parse(readFileSync(join(f.state, "config-runtime-snapshot"))).appliedConfigHash);
+  }
   const retained = [descriptor(join(f.serving, "journal", record.originalWitness.name)),
     next.nativeRecovery.receipt, descriptor(join(backupDirectory, "retained-backup")), descriptor(prefix + ".original.json"),
     ...names.map((_, index) => descriptor(prefix + ".backup-" + index)),
@@ -454,11 +512,11 @@ function preparedActivationFixture(t, phase, position = "selected", retainPrevio
   const predecessorInfo = releaseProof(f, "validate-release", f.initial, before, String(process.getuid()), "sealed");
   const candidateInfo = releaseProof(f, "validate-release", candidate, after, String(process.getuid()), "sealed");
   const witness = releaseProof(f, "session-preservation-witness", f.initial, candidate, f.databasePath);
-  const creation = spawnSync(process.execPath, ["--no-warnings", f.library, "journal-create", f.journal,
+  const creation = runLibrary(f, ["journal-create", f.journal,
     predecessorInfo, candidateInfo, "system", String(f.pid), f.start, "fixture-instance-111",
     releaseProof(f, "fingerprint", f.configPath, f.databasePath), before, previousSha,
     "enabled", "active", "disabled", "inactive", handoffId, String(Date.now() + 60000), "READY", "@stdin"],
-    { env: f.env, encoding: "utf8", input: witness, timeout: 30000 });
+    { input: witness });
   assert.equal(creation.status, 0, creation.stderr);
   const original = releaseProof(f, "journal-read", f.journal);
   if (phase !== "A_PREPARED") {
@@ -1388,7 +1446,7 @@ exec '${process.execPath}' "$@"`);
   for (const phase of ["D_VERIFYING", "ROLLBACK_FAILED"]) {
     for (const state of ["live", "stopped", "unverifiable"]) {
       for (const held of phase === "ROLLBACK_FAILED" && state === "live"
-        ? ["none", "in-place", "archived", "archive-only", "new-witness", "reconstructed", "replaced-archive", "live-mismatch", "adopt-archived", "adopt-delegated", "adopt-refusals"]
+        ? ["none", "in-place", "archived", "archive-only", "new-witness", "reconstructed", "replaced-archive", "live-mismatch", "adopt-archived", "adopt-delegated", "adopt-refusals", "adopt-archived-receipt", "adopt-config-only", "adopt-config-drift", "adopt-config-drift-refusals"]
         : ["none"])
       for (const native of ["in-place", "archived"].includes(held) ? [true, false]
         : [!["replaced-archive", "live-mismatch"].includes(held)])
@@ -1398,8 +1456,9 @@ exec '${process.execPath}' "$@"`);
           return;
         }
         const adopting = held.startsWith("adopt-");
+        const configDrift = held.startsWith("adopt-config-");
         const f = failedReleaseFixture(t, state !== "stopped", state === "unverifiable" ? "marker-wrong-session" : "success",
-          adopting ? { state: 39, agent: 41 } : undefined);
+          adopting ? { state: 39, agent: 41 } : undefined, configDrift);
         if (process.env.TEAM_OWNER_TEST_SOURCE) {
           f.owner = process.env.TEAM_OWNER_TEST_SOURCE;
         }
@@ -1418,7 +1477,7 @@ exec '${process.execPath}' "$@"`);
         record.phase = phase;
         if (native) record.nativeUpdate = { backupRoot };
         const stateRoot = dirname(dirname(f.databasePath)), heldDir = join(stateRoot, "agents", "retained");
-        let heldPath = join(heldDir, "agent", "openclaw-agent.sqlite");
+        let heldPath = join(heldDir, "agent", "openclaw-agent.sqlite"), heldReceiptIdentity;
         const hold = () => {
           const db = new DatabaseSync(f.databasePath);
           db.exec(`CREATE TABLE agent_deletion_journal (agent_id TEXT PRIMARY KEY, agent_dir TEXT,
@@ -1460,7 +1519,11 @@ exec '${process.execPath}' "$@"`);
           if (!["new-witness", "reconstructed", "archive-only", "live-mismatch"].includes(held)) hold();
           const db = new DatabaseSync(heldPath);
           db.exec(`PRAGMA user_version=${adopting ? 41 : 0}; UPDATE schema_meta SET schema_version=${adopting ? 41 : 0}`); db.close();
-          if (["archived", "archive-only", "replaced-archive", "adopt-archived", "adopt-delegated", "adopt-refusals"].includes(held)) {
+          if (held === "adopt-archived-receipt" || (configDrift && held !== "adopt-config-only")) {
+            const { dev, ino } = lstatSync(heldPath);
+            heldReceiptIdentity = { path: heldPath, dev, ino };
+          }
+          if (["archived", "archive-only", "replaced-archive", "adopt-archived", "adopt-delegated", "adopt-refusals", "adopt-archived-receipt"].includes(held) || configDrift) {
             const archive = join(stateRoot, "held-agent-archive", "retained-held-schema0-fixture");
             mkdirSync(dirname(archive), { recursive: true }); renameSync(heldDir, archive);
             heldPath = join(archive, "agent", "openclaw-agent.sqlite");
@@ -1480,18 +1543,41 @@ exec '${process.execPath}' "$@"`);
           return { path, dev, ino };
         };
         // The native owner supplied these identities after migration; its restore command is external I/O.
-        const databases = [f.databasePath, f.agentDatabasePath];
+        const databases = [f.databasePath, f.agentDatabasePath, ...(heldReceiptIdentity ? [heldReceiptIdentity.path] : [])];
         const receipt = JSON.stringify({ schemaVersion: 1, status: "migrated", backup: { directory: backupDirectory }, configPath: f.configPath,
           stateDir: dirname(dirname(f.databasePath)), databases, configIdentity: fileIdentity(f.configPath),
-          databaseIdentities: Object.fromEntries(databases.map(path => [path, fileIdentity(path)])) });
+          databaseIdentities: Object.fromEntries(databases.map(path => [path, path === heldReceiptIdentity?.path ? heldReceiptIdentity : fileIdentity(path)])) });
         writeFileSync(`${backupRoot}.receipt.json`, receipt, { mode: 0o600 });
+        if (configDrift) {
+          const config = JSON.parse(readFileSync(f.configPath));
+          config.meta.lastTouchedAt = "2026-11-13T16:37:43Z";
+          writeFileSync(f.configPath + ".next", JSON.stringify(config) + "\n", { mode: 0o600 });
+          renameSync(f.configPath + ".next", f.configPath);
+          assert.notDeepEqual(fileIdentity(f.configPath), JSON.parse(receipt).configIdentity);
+          const key = Buffer.alloc(32, 0x5a), db = new DatabaseSync(f.databasePath);
+          db.exec("CREATE TABLE config_revision_keys (id INTEGER PRIMARY KEY, hmac_key BLOB NOT NULL)");
+          db.prepare("INSERT INTO config_revision_keys VALUES (1, ?)").run(key); db.close();
+          const project = (domain, hash) => "hmac-sha256:v1:" + createHmac("sha256", key)
+            .update(JSON.stringify(["openclaw.gateway.config-revision." + domain + ".v1", hash])).digest("base64url");
+          const loaded = project("resolved", "synthetic-loaded-runtime-config");
+          writeFileSync(join(f.state, "config-runtime-snapshot"), JSON.stringify({ path: f.configPath, exists: true, valid: true, includedPaths: [],
+            hash: project("raw", createHash("sha256").update(readFileSync(f.configPath)).digest("hex")),
+            configRevisionHash: loaded, appliedConfigHash: loaded }));
+        }
+        if (configDrift) {
+          ownRuntimeTree(f, f.stateDir);
+          ownRuntimeTree(f, join(f.runtime, ".openclaw-update"));
+        }
+        const currentConfig = descriptor(f.configPath);
         writeFileSync(f.journal, JSON.stringify(record), { mode: 0o600 });
-        const adopted = adopting ? adoptNativeRecovery(f, record, backupDirectory, held === "adopt-refusals", held === "adopt-delegated") : undefined;
+        const adopted = adopting ? adoptNativeRecovery(f, record, backupDirectory, held === "adopt-refusals", held === "adopt-delegated" || configDrift, held === "adopt-config-drift-refusals") : undefined;
         const result = runOwner(f, ["--recover"]);
         assert.ifError(result.error);
+        if (configDrift) assert.match(result.stderr, /NATIVE_CONFIG_DRIFT /);
         assert.equal(readFileSync(backup, "utf8"), "original pre-migration state");
         assert.equal(readFileSync(`${backupRoot}.receipt.json`, "utf8"), receipt);
         assert.equal(readFileSync(witnessPath, "utf8"), witness);
+        assert.deepEqual(descriptor(f.configPath), currentConfig);
         if (adopted) for (const retained of adopted) assert.deepEqual(descriptor(retained.path), retained);
         if (heldBefore) {
           assert.deepEqual(readFileSync(heldPath), heldBefore.bytes);
@@ -1667,7 +1753,8 @@ describe("Team explicit restored-config reconciliation", () => {
     assert.equal(existsSync(join(f.serving, "previous")), false);
   });
   for (const fault of ["shared-newer", "agent-newer", "shared-metadata", "agent-metadata-missing", "registry-newer", "registry-owner-conflict", "system-job", "user-control", "missing-permit", "writable-fd", "writable-map"]) {
-    test(`cold recovery refuses ${fault} before any start`, t => {
+    test(fault === "registry-newer" ? "cold recovery trusts actual database schema over a stale registry projection"
+      : `cold recovery refuses ${fault} before any start`, t => {
       const f = coldFixture(t);
       if (fault.endsWith("newer") || fault === "shared-metadata") {
         const db = new DatabaseSync(fault === "agent-newer" ? f.agentDatabasePath : f.databasePath);
@@ -1699,6 +1786,13 @@ describe("Team explicit restored-config reconciliation", () => {
         }
       }
       const result = runOwner(f, f.stoppedArgs);
+      if (fault === "registry-newer") {
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stdout, /action=started-restored-predecessor/);
+        assert.equal(existsSync(f.journal), false);
+        assert.deepEqual(readFileSync(f.configPath), f.configBytes);
+        return;
+      }
       assert.notEqual(result.status, 0, result.stdout);
       assert.deepEqual(readFileSync(f.journal), f.journalBytes);
       assert.deepEqual(readFileSync(f.configPath), f.configBytes);
