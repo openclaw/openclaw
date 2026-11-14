@@ -45,6 +45,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -256,11 +257,13 @@ private fun CronEditorPanel(
       enabled = enabled,
       minLines = 2,
     )
-    CronScheduleEditor(
-      schedule = edit.schedule,
-      enabled = enabled,
-      onChange = { onDraftChange(draft.withEdit(edit.withSchedule(it))) },
-    )
+    key(job.id) {
+      CronScheduleEditor(
+        schedule = edit.schedule,
+        enabled = enabled,
+        onChange = { onDraftChange(draft.withEdit(edit.withSchedule(it))) },
+      )
+    }
     ClawTextField(
       value = edit.sessionTarget,
       onValueChange = { onDraftChange(draft.withEdit(edit.copy(sessionTarget = it))) },
@@ -391,24 +394,18 @@ private fun CronScheduleEditor(
         label = nativeString("Expression"),
         enabled = enabled,
       )
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ClawTextField(
-          value = schedule.timezone,
-          onValueChange = { onChange(schedule.copy(timezone = it)) },
-          placeholder = nativeString("e.g. America/New_York"),
-          label = nativeString("Timezone"),
-          enabled = enabled,
-          modifier = Modifier.weight(1f),
-        )
-        ClawTextField(
-          value = schedule.staggerMs,
-          onValueChange = { onChange(schedule.copy(staggerMs = it.filter(Char::isDigit))) },
-          placeholder = nativeString("0 = exact"),
-          label = nativeString("Stagger ms"),
-          enabled = enabled,
-          modifier = Modifier.weight(1f),
-        )
-      }
+      CronTimezoneEditor(
+        value = schedule.timezone,
+        enabled = enabled,
+        onChange = { onChange(schedule.copy(timezone = it)) },
+      )
+      ClawTextField(
+        value = schedule.staggerMs,
+        onValueChange = { onChange(schedule.copy(staggerMs = it.filter(Char::isDigit))) },
+        placeholder = nativeString("0 = exact"),
+        label = nativeString("Stagger ms"),
+        enabled = enabled,
+      )
     }
 
     is GatewayCronScheduleEdit.OnExit -> {
