@@ -105,10 +105,12 @@ export function isRealConversationMessage(
 
 /** Content-independent facts let compaction reuse classification after releasing a payload. */
 export function prepareRealConversationFacts(message: AgentMessage) {
+  const meaningful = message.role !== "toolResult" && isRealConversationMessage(message, [], 0);
   return {
     toolResult: message.role === "toolResult",
-    meaningful: message.role !== "toolResult" && isRealConversationMessage(message, [], 0),
-    anchor: isToolResultConversationAnchor(message),
+    meaningful,
+    // Anchor roles share the same content predicate; do not scan their payload twice.
+    anchor: CONVERSATION_ANCHOR_ROLES.has(message.role) && meaningful,
   };
 }
 
