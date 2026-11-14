@@ -1,10 +1,13 @@
 import { Session } from "node:inspector/promises";
-import { isMainThread } from "node:worker_threads";
+import { isMainThread, threadId } from "node:worker_threads";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 
 declare const Bun: { gc(full: boolean): number };
 
 const IDLE_GC_DELAY_MS = 1_000;
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
+const SLOW_IDLE_GC_MS = 1_000;
+const log = createSubsystemLogger("worker/idle-gc");
 const bun = typeof Bun === "object" ? Bun : undefined;
 let collectedMemory = { heapUsed: 0, external: 0 };
 let session: Session | undefined;
@@ -26,6 +29,8 @@ async function collectWorkerIdleGarbage(): Promise<void> {
     return;
   }
   collecting = true;
+  const before = process.memoryUsage();
+  const startedAt = Date.now();
   try {
     if (bun) {
       bun.gc(true);
@@ -41,6 +46,19 @@ async function collectWorkerIdleGarbage(): Promise<void> {
     }
     // A task overlapping collection can leave garbage until the next idle growth sample.
     collectedMemory = process.memoryUsage();
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= SLOW_IDLE_GC_MS) {
+      // The forced collection blocks this thread, so requests posted meanwhile show
+      // only as slow broker delivery; name the pause instead.
+      log.warn("slow idle worker garbage collection", {
+        elapsedMs,
+        threadId,
+        heapUsedBeforeBytes: before.heapUsed,
+        heapUsedAfterBytes: collectedMemory.heapUsed,
+        externalBeforeBytes: before.external,
+        externalAfterBytes: collectedMemory.external,
+      });
+    }
   } catch (error) {
     process.emitWarning(error instanceof Error ? error : String(error));
   } finally {
