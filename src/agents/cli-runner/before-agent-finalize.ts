@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentFinalizeEvent } from "../../plugins/hook-types.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../harness/lifecycle-hook-helpers.js";
@@ -21,7 +22,8 @@ export function buildCliBeforeAgentFinalizeRelay(
   }
   const run = context.params;
   return {
-    runBeforeAgentFinalize: (stop: NativeStop) => {
+    // Warm transports retain their first turn's async context, so bind to this turn's plugin scope.
+    runBeforeAgentFinalize: AsyncLocalStorage.bind((stop: NativeStop) => {
       assertCurrent();
       return runAgentHarnessBeforeAgentFinalizeHook({
         event: {
@@ -42,6 +44,6 @@ export function buildCliBeforeAgentFinalizeRelay(
           modelId: context.modelId,
         },
       });
-    },
+    }),
   };
 }

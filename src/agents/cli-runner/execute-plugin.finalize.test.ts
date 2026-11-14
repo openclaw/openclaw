@@ -1,9 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../plugins/runtime/generation-state.js";
 import {
   closePluginTestAdmissions,
   createExecution,
@@ -52,5 +54,35 @@ describe("plugin-owned CLI before_agent_finalize relay", () => {
       yield SUCCESS_RESULT;
     });
     expect(relay).toBeUndefined();
+  });
+
+  it("runs the admitted turn's handler when a warm transport retains an earlier scope", async () => {
+    const oldHook = vi.fn(() => ({ action: "continue" as const }));
+    const previous = createMockPluginRegistry([
+      { hookName: "before_agent_finalize", handler: oldHook },
+    ]);
+    const transportScope = withPluginRuntimeGenerationRegistryScope(previous, () =>
+      AsyncLocalStorage.snapshot(),
+    );
+    const current = createMockPluginRegistry([
+      {
+        hookName: "before_agent_finalize",
+        handler: () => ({ action: "revise" as const, reason: "current check" }),
+      },
+    ]);
+    initializeGlobalHookRunner(current);
+    const { context } = await createExecution();
+    let decision: unknown;
+    await withPluginRuntimeGenerationRegistryScope(current, () =>
+      runPlugin(context, async function* (execution) {
+        const relay = (execution as { runBeforeAgentFinalize?: FinalizeRelay })
+          .runBeforeAgentFinalize;
+        decision = await transportScope(() => relay?.({ stopHookActive: false }));
+        yield SUCCESS_RESULT;
+      }),
+    );
+
+    expect(decision).toMatchObject({ action: "revise", reason: "current check" });
+    expect(oldHook).not.toHaveBeenCalled();
   });
 });
