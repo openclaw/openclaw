@@ -446,7 +446,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
@@ -764,7 +763,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/config/sessions/session-accessor.sqlite-byte-size.test.ts",
     "src/config/sessions/session-accessor.sqlite-handle-lifecycle.test.ts",
     "src/config/sessions/session-accessor.sqlite-replacement-projection.test.ts",
-    "src/config/sessions/transcript.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
@@ -1589,7 +1587,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "extensions/memory-core/src/memory/index.test.ts",
     "extensions/memory-core/src/memory/manager-search-provenance.test.ts",
     "extensions/memory-core/src/memory/manager-temporal-ranking.test.ts",
     "extensions/memory-core/src/memory/manager.watcher-filesystem.test.ts",
@@ -1607,13 +1604,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "extensions/memory-core/src/memory/manager-publication.worker.ts",
     ],
   })),
-  {
-    testFile: "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
-    watchGlobs: [
-      "extensions/memory-core/src/memory/manager-index.worker.ts",
-      "extensions/memory-core/src/memory/manager-publication.worker.ts",
-    ],
-  },
   {
     testFile: "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
     watchGlobs: ["src/index.ts"],
@@ -1633,10 +1623,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
   },
   ...[
-    "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
     "src/config/sessions/session-accessor.sqlite-branches.test.ts",
-    "src/gateway/session-message-events.test.ts",
     "src/gateway/worker-environments/worker-turn-execution.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,

@@ -720,10 +720,7 @@ const GROUP_VISIBLE_REPLY_TEST_TARGETS = [
   "extensions/discord/src/monitor/message-handler.process.test.ts",
   "extensions/slack/src/monitor.tool-result.test.ts",
 ];
-const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [
-  "src/agents/system-prompt.test.ts",
-  ...GROUP_VISIBLE_REPLY_TEST_TARGETS,
-];
+const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [...GROUP_VISIBLE_REPLY_TEST_TARGETS];
 const CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS = [
   "directory",
   "plugin",
