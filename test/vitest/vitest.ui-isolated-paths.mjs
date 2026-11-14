@@ -18,8 +18,6 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/app-sidebar.catalog.test.ts",
   // The held MCP renderer import must not be preloaded by another suite.
   "ui/src/components/board/board-widget-cell-mcp-app.test.tsx",
-  // Holds the report chunk before first import to prove the cold widget boundary.
-  "ui/src/components/board/board-widget-cell-plugin.test.ts",
   "ui/src/components/board/core-board-widget.test.tsx",
   "ui/src/components/gateway-url-confirmation.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
@@ -49,17 +47,12 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-page-attachment-handoff.test.ts",
   "ui/src/pages/chat/chat-page-draft-commit.test.ts",
   "ui/src/pages/chat/chat-page-session-refresh.test.ts",
-  "ui/src/pages/chat/chat-page.test.ts",
   "ui/src/pages/chat/chat-pane-attachment-handoff.test.ts",
-  "ui/src/pages/chat/chat-pane-board.test.ts",
   "ui/src/pages/chat/chat-pane-catalog.test.ts",
-  "ui/src/pages/chat/chat-pane-history.test.ts",
   "ui/src/pages/chat/chat-pane-identity.test.ts",
   "ui/src/pages/chat/chat-pane-keyboard-focus.test.ts",
-  "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
   // Holds mobile chrome before first paint to verify its reserved layout slots.
   "ui/src/pages/chat/chat-pane-mobile-chrome-loading.test.tsx",
-  "ui/src/pages/chat/chat-pane-pull-requests.test.ts",
   "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-pane-swarm-startup.test.ts",

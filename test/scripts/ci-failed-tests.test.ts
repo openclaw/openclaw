@@ -305,7 +305,8 @@ it("paginates UI annotations and selects the test entry point when the error poi
   const annotation = {
     annotation_level: "failure",
     path: "ui/src/components/board/board-view.test-support.ts",
-    title: "[unit] src/components/board/board-view.test.ts > board > reports a failed rejection",
+    title:
+      "[unit] src/components/board/board-view-retention.test.ts > board > reports a failed rejection",
   };
   const transport = failureApi({ 100: [selected] });
   const api = vi.fn(async (route: string) => {
@@ -321,7 +322,7 @@ it("paginates UI annotations and selects the test entry point when the error poi
         {
           ...annotation,
           title:
-            "[unit] src/components/board/board-view.test.ts > board > reports a failed approval",
+            "[unit] src/components/board/board-view-retention.test.ts > board > reports a failed approval",
         },
       ];
     }
@@ -330,13 +331,13 @@ it("paginates UI annotations and selects the test entry point when the error poi
   const failures = await collectFailures(run, repo, api);
   expect(failures[0]?.files).toEqual([
     {
-      file: "ui/src/components/board/board-view.test.ts",
+      file: "ui/src/components/board/board-view-retention.test.ts",
       tests: ["board > reports a failed approval", "board > reports a failed rejection"],
     },
   ]);
   expect(rerunArgs(failures)).toEqual([
     "test",
-    "ui/src/components/board/board-view.test.ts",
+    "ui/src/components/board/board-view-retention.test.ts",
     "--",
     "-t",
     "board > reports a failed approval|board > reports a failed rejection",
@@ -374,7 +375,7 @@ it.each([false, true])(
   "keeps full-log UI failures and recovers annotated cases when logs are unavailable: %s",
   async (unavailable) => {
     const selectedFile = "ui/src/components/board/board-settings.test.ts";
-    const other = "ui/src/components/board/board-view.test.ts";
+    const other = "ui/src/components/board/board-view-retention.test.ts";
     const transport = failureApi(
       {
         100: [job(1, "checks-ui (3/3)", "failure", 501)],

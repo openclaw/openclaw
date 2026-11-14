@@ -2394,7 +2394,7 @@ describe("ci workflow guards", () => {
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
       eventName: "pull_request",
-      changedPaths: ["ui/src/pages/activity/activity-page.test.ts"],
+      changedPaths: ["ui/src/pages/activity/activity-page.presence.test.ts"],
       scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
       changedPlannerSource: `
         export const hasUiE2eAffectingChange = () => false;
@@ -2616,7 +2616,7 @@ describe("ci workflow guards", () => {
         ...CI_MANIFEST_FIXTURE_TARGETS.ui,
         ...CI_MANIFEST_FIXTURE_TARGETS.mocked,
       ],
-      changedPaths: ["ui/src/pages/activity/activity-page.test.ts"],
+      changedPaths: ["ui/src/pages/activity/activity-page.presence.test.ts"],
       scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
       ...options,
       changedPlannerSource: `
@@ -11331,7 +11331,7 @@ describe("ci workflow guards", () => {
       shard_name: "test/vitest/vitest.ui-e2e.config.ts",
     };
     const includePatterns = [
-      "ui/src/e2e/chat-flow.navigation-presentation.e2e.test.ts",
+      "ui/src/e2e/chat-flow.sidebar-presentation.e2e.test.ts",
       "ui/src/e2e/chat-session-entry.e2e.test.ts",
     ];
     expect(
