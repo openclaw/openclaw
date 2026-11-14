@@ -12,6 +12,7 @@ import {
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSessionWorkStartError } from "../config/sessions/session-work-start.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { deleteAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
 import { completeAgentOnboarding } from "../gateway/server-methods/agents-onboarding.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
@@ -19,7 +20,10 @@ import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js"
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { withResolvedClawHubSource } from "./clawhub-source.js";
-import { applyTemplateAddForGateway } from "./gateway-add-apply.js";
+import {
+  applyTemplateAddForGateway,
+  TemplateGatewayPlanBlockedError,
+} from "./gateway-add-apply.js";
 import { buildGatewayTemplateAddPlan, projectGatewayTemplateAddPlan } from "./gateway-add-plan.js";
 import { readTemplateManifestFile } from "./reader.js";
 
@@ -497,5 +501,129 @@ it("publishes the ordinary durable agent and empty canonical chat before resolvi
     });
     expect((await readConfigFileSnapshot()).config.agents?.entries).toHaveProperty("fixture-first");
     expect(prepareAgentChat).toHaveBeenCalledOnce();
+  });
+});
+
+it.each([false, true])("drops a blocked review's agent (chat cleanup fails: %s)", async (fails) => {
+  await withOpenClawTestState({ label: "template-blocked-review" }, async (state) => {
+    const root = state.path("template-source");
+    await fs.mkdir(root);
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "@fixture/template-blocked",
+        version: "1.0.0",
+        openclaw: { template: "CLAW.md" },
+      }),
+    );
+    await fs.writeFile(
+      path.join(root, "CLAW.md"),
+      "---\n" +
+        JSON.stringify({
+          schemaVersion: 1,
+          agent: { id: "fixture-blocked", name: "Blocked Fixture" },
+          mcpServers: { docs: { command: "template-docs" } },
+        }) +
+        "\n---\nA calm fixture personality.\n",
+    );
+    const source = await readTemplateManifestFile(root);
+    if (!source.ok) {
+      throw new Error("Invalid fixture manifest");
+    }
+    source.source = {
+      ...source.source,
+      kind: "package",
+      name: "@fixture/template-blocked",
+      version: "1.0.0",
+      integrityKind: "artifact",
+    };
+    const trust = {
+      riskAcknowledgementRequired: false,
+      trustRecord: {
+        clawhubTrustDisposition: "clean" as const,
+        clawhubTrustCheckedAt: "2026-11-04T00:00:00.000Z",
+      },
+    };
+    resolveSource.mockImplementation(
+      async (input: Parameters<typeof withResolvedClawHubSource>[0]) => ({
+        value: await input.run(source, trust, async () => source),
+      }),
+    );
+    const config: OpenClawConfig = {
+      gateway: { controlUi: { experimental: { templates: true } } },
+      agents: {
+        entries: { main: { workspace: state.path("existing-workspace") } },
+        defaults: { model: "ollama/test-model" },
+      },
+    };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
+    const sourceMcpServers = { docs: { command: "operator-docs" } };
+    const review = projectGatewayTemplateAddPlan(
+      await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers }),
+      source,
+      trust,
+      config,
+    );
+    expect(review.blockers).not.toEqual([]);
+    const sessionKey = "agent:fixture-blocked:main";
+    let admittedWorkspace: string | undefined;
+
+    await expect(
+      applyTemplateAddForGateway({
+        source: { packageName: "@fixture/template-blocked", version: "1.0.0" },
+        agentId: review.target.agentId,
+        planIntegrity: review.planIntegrity,
+        getPlanningContext: async () => ({
+          config: (await readConfigFileSnapshot()).config,
+          sourceMcpServers,
+        }),
+        policyConfig: { configPath: state.configPath, env: state.env },
+        assertCurrent: () => {},
+        prepareAgentChat: async (agentId, prospectiveConfig, pending) => {
+          const prepared = await completeAgentOnboarding(
+            {
+              req: { type: "req", id: "template-blocked", method: "templates.add.apply" },
+              context: { getRuntimeConfig: () => config },
+              client: { connect: { client: { mode: "ui" }, scopes: ["operator.admin"] } },
+              respond: vi.fn(),
+            } as unknown as GatewayRequestHandlerOptions,
+            agentId,
+            { config: prospectiveConfig, ...pending },
+          );
+          if (prepared.status !== "completed" || !prepared.rollback) {
+            throw new Error("Session preparation failed");
+          }
+          return fails
+            ? Object.assign(async () => {
+                throw new Error("Session store unavailable");
+              }, prepared.rollback)
+            : prepared.rollback;
+        },
+        waitForAgentRuntime: async () => {
+          const admitted = (await readConfigFileSnapshot()).config.agents?.entries?.[
+            "fixture-blocked"
+          ];
+          admittedWorkspace = admitted?.workspace;
+          expect(loadSessionEntryReadOnly({ agentId: "fixture-blocked", sessionKey })).toBeTruthy();
+          return "applied";
+        },
+        rollbackNewAgent: async (agentId, expectedAgentConfig) => {
+          await deleteAgentConfigEntry({
+            agentId,
+            validate: (agent) => expect(agent).toEqual(expectedAgentConfig),
+          });
+        },
+      }),
+    ).rejects.toBeInstanceOf(TemplateGatewayPlanBlockedError);
+
+    expect(admittedWorkspace).toBeTruthy();
+    expect((await readConfigFileSnapshot()).config.agents?.entries).not.toHaveProperty(
+      "fixture-blocked",
+    );
+    if (!fails) {
+      expect(loadSessionEntryReadOnly({ agentId: "fixture-blocked", sessionKey })).toBeUndefined();
+      await expect(fs.stat(admittedWorkspace!)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 });

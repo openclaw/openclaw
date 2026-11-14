@@ -328,7 +328,9 @@ chat immediately. Sending becomes available when its instruction files, canonica
 conversation, and active runtime are ready, while remaining setup continues. The
 first assistant response is a normal personality/SOUL greeting, not a saved canned
 greeting or a message sent on your behalf. Later setup failure retains the exposed
-agent and conversation; completion does not replace an existing draft.
+agent and conversation; completion does not replace an existing draft. When a
+review has blockers, the Control UI shows the blocker instead of adding, and the
+Gateway refuses that review and removes any agent and conversation opened for it.
 
 The installer shows a card for each newly installed plugin and an automation-created
 notice as each routine is added. Paused routines stay paused until their setup

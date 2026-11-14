@@ -25,6 +25,7 @@ import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-sou
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
 import {
+  discardAdmittedTemplateAgent,
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
   type PreparedAgentChat,
@@ -111,6 +112,7 @@ export async function applyTemplateAddForGateway(
   let settledResult: GatewayTemplateAddApplyResult | undefined;
   let readySessionKey: string | undefined;
   let admitted: AdmittedTemplateAgent | undefined;
+  let createdByRequest = false;
   let initialized = false;
   const withoutAdmission = (config: OpenClawConfig): OpenClawConfig => {
     if (!admitted) {
@@ -235,6 +237,7 @@ export async function applyTemplateAddForGateway(
                       workspaceIdentity: identity,
                       config: structuredClone(result.config.agents!.entries![agentId]!),
                     };
+                    createdByRequest = true;
                     readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
                   },
                 },
@@ -663,6 +666,20 @@ export async function applyTemplateAddForGateway(
     if (settledResult) {
       defaultRuntime.log("Template source cleanup failed after Add; cached files may remain.");
       return settledResult;
+    }
+    if (
+      admitted &&
+      createdByRequest &&
+      input.rollbackNewAgent &&
+      error instanceof TemplateGatewayPlanBlockedError &&
+      (await discardAdmittedTemplateAgent(
+        admitted,
+        input.rollbackNewAgent,
+        input.signal,
+        stateContext,
+      ))
+    ) {
+      throw error;
     }
     if (admitted) {
       return {

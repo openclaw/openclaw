@@ -380,6 +380,39 @@ describe("Template Add", () => {
     );
   });
 
+  it.each(["card", "detail"] as const)(
+    "shows the blocker and adds nothing for a blocked %s review",
+    async (surface) => {
+      const { find, request, navigate, addSelector } = createAddSurface(surface, {
+        templatesEnabled: true,
+        planBlockers: [
+          {
+            code: "plugin_id_mismatch",
+            path: "$.plugins[0]",
+            message: "Resolve this OpenClaw state conflict before continuing.",
+          },
+        ],
+      });
+
+      if (surface === "card") {
+        await vi.waitFor(() => expect(find(addSelector)?.matches(":disabled")).toBe(false));
+        find(addSelector)!.click();
+      }
+      await vi.waitFor(() =>
+        expect(find('[role="alert"]')?.textContent).toContain(
+          "Resolve this OpenClaw state conflict before continuing.",
+        ),
+      );
+      if (surface === "detail") {
+        expect(find(addSelector)?.matches(":disabled")).toBe(true);
+      }
+      expect(
+        request.mock.calls.filter(([method]) => method === "templates.add.apply"),
+      ).toHaveLength(0);
+      expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
+    },
+  );
+
   it("asks before acknowledging a ClawHub trust warning", async () => {
     const { detail, request, navigate } = createDetail({
       templatesEnabled: true,
