@@ -1,0 +1,5 @@
+114
+# LOCAL 2026.11.8 row 214; source b293489d65398350303da1c4522655db9dc57012.
+# Refuses unusable ownerless trusted what-runs chat edits before provenance mutation; management and lifecycle controls remain distinct. Scope limits: Real tool-to-handler and SQLite boundary with transport replaced; no live scheduler mutation.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
