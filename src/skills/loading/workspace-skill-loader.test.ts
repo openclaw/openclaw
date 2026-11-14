@@ -577,6 +577,32 @@ describe("loadWorkspaceSkills", () => {
     );
   });
 
+  it("warns for non-UTF-8 skill files and keeps loading sibling workspace skills", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const binaryDir = path.join(workspaceDir, "skills", "binary");
+    await fs.mkdir(binaryDir, { recursive: true });
+    const binaryFile = path.join(binaryDir, "SKILL.md");
+    // Undecodable instruction bytes after valid frontmatter: the loader must reject
+    // the file instead of injecting U+FFFD replacement characters into skill prompts.
+    await fs.writeFile(
+      binaryFile,
+      Buffer.concat([
+        Buffer.from("---\nname: binary\ndescription: Binary skill\n---\nRun: ", "utf8"),
+        Buffer.from([0xff, 0xfe, 0xc3, 0x28]),
+      ]),
+    );
+    await writeNamedSkill(path.join(workspaceDir, "skills"), "valid", "Valid sibling");
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir);
+    const warningText = warn.mock.calls.flat().map(String).join("\n");
+
+    expect(names(entries)).toContain("valid");
+    expect(names(entries)).not.toContain("binary");
+    expect(warningText).toContain(binaryFile);
+    expect(warningText).toContain("must be valid UTF-8");
+  });
+
   it("warns for invalid configured-root skills while loading nested siblings", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const configuredRoot = path.join(workspaceDir, "configured-skills");

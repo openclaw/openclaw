@@ -91,7 +91,12 @@ Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 ```
 
 During grouped discovery, finding `SKILL.md` ends traversal below that directory.
-Invalid skill files are reported and skipped; valid siblings can still load.
+Invalid skill files are reported and skipped; valid siblings can still load. A
+`SKILL.md` that is not valid UTF-8 is invalid: the skill is skipped with a
+`Skill file must be valid UTF-8.` diagnostic naming the file, so its bytes never
+reach an agent prompt as replacement characters. Re-save that file as UTF-8 to
+load the skill again; a UTF-8 BOM, CRLF line endings, and non-ASCII text all
+remain valid.
 
 The folder path is for organization only. The skill's name and slash command
 come from the `name` frontmatter field (or the directory name when `name` is

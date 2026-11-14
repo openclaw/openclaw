@@ -6,6 +6,7 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../infra/boundary-file-read.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { decodeUtf8Input, Utf8InputError } from "../../infra/utf8-input.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { parseSkillFrontmatter } from "./frontmatter.js";
 import type { Skill } from "./skill-contract.js";
@@ -61,13 +62,18 @@ function readSkillFileSync(params: {
     return null;
   }
   try {
-    return params.maxBytes === undefined
-      ? fs.readFileSync(opened.fd, "utf8")
-      : readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf8");
+    const bytes =
+      params.maxBytes === undefined
+        ? fs.readFileSync(opened.fd)
+        : readFileDescriptorBoundedSync(opened.fd, params.maxBytes);
+    // Skill files are third-party instruction text bound for agent prompts;
+    // undecodable bytes must surface as an invalid-skill diagnostic instead of
+    // silently entering the prompt as U+FFFD replacement characters.
+    return decodeUtf8Input(bytes, "Skill file");
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to read skill file";
     params.onDiagnostic?.({
-      kind: error instanceof RangeError ? "invalid" : "read",
+      kind: error instanceof RangeError || error instanceof Utf8InputError ? "invalid" : "read",
       path: params.filePath,
       message,
     });
