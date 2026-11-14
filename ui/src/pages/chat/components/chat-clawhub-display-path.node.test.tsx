@@ -21,8 +21,7 @@ import { buildItems } from "../chat-thread.test-support.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
 
-// mock-isolation: Assistant-only rows do not resolve human profiles; keep the unrelated
-// profile database out of jsdom while exercising the real transcript producer below.
+// mock-isolation: Assistant-only producer proof must not initialize the unrelated profile database.
 vi.mock("../../../../../src/gateway/current-user-profile-display.js", () => ({
   resolveCurrentUserProfileDisplay: () => ({ kind: "unresolved" }),
 }));
