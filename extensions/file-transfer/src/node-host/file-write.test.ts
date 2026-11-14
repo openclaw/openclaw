@@ -336,6 +336,61 @@ describe("handleFileFetch", () => {
       );
     }
   });
+  it.each(
+    ["é", "€", "🌍"].flatMap((character) =>
+      Array.from(
+        { length: Buffer.byteLength(character) - 1 },
+        (_, index) => [character, index + 1] as const,
+      ),
+    ),
+  )(
+    "recognizes UTF-8 %s split after %i bytes at the sniff boundary",
+    async (character, prefixBytes) => {
+      const content = Buffer.from("a".repeat(8192 - prefixBytes) + character + " tail");
+      const result = await handleFileFetch({ path: await put("unicode", content) });
+      expectOk(result, {
+        mimeType: "text/plain",
+        size: content.length,
+        base64: content.toString("base64"),
+        sha256: crypto.createHash("sha256").update(content).digest("hex"),
+      });
+    },
+  );
+  it.each([
+    ["complete", Buffer.from("a".repeat(8188) + "🌍"), "text/plain"],
+    [
+      "outside-window",
+      Buffer.concat([Buffer.alloc(8192, 0x61), Buffer.from([0x80])]),
+      "text/plain",
+    ],
+    [
+      "truncated",
+      Buffer.concat([Buffer.alloc(8191, 0x61), Buffer.from([0xe2])]),
+      "application/octet-stream",
+    ],
+    [
+      "truncated-beyond-boundary",
+      Buffer.concat([Buffer.alloc(8191, 0x61), Buffer.from([0xf0, 0x9f])]),
+      "application/octet-stream",
+    ],
+    [
+      "invalid-continuation",
+      Buffer.concat([Buffer.alloc(8191, 0x61), Buffer.from([0xe2, 0x61])]),
+      "application/octet-stream",
+    ],
+    [
+      "malformed",
+      Buffer.concat([Buffer.from([0xff]), Buffer.alloc(8192, 0x61)]),
+      "application/octet-stream",
+    ],
+    [
+      "nul",
+      Buffer.concat([Buffer.from([0]), Buffer.alloc(8192, 0x61)]),
+      "application/octet-stream",
+    ],
+  ] as const)("keeps the %s text sniff control", async (name, content, mimeType) => {
+    expectOk(await handleFileFetch({ path: await put(name, content) }), { mimeType });
+  });
   it.each([
     ["hard", [Number.MAX_SAFE_INTEGER], 16 * 1024 * 1024],
     ["default", [-1, Number.NaN, "8"], 8 * 1024 * 1024],
