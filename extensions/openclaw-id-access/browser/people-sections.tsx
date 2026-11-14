@@ -5,6 +5,7 @@ import type { MemberRole } from "@openclaw/openclaw-id-protocol";
 import type { ControlUiComponentHandle, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createEffect, createSignal, For, latest, onSettled, Show } from "solid-js";
 import type { CreatedInvite } from "./invites.js";
+import { MemberDevices } from "./member-devices.js";
 import type { PeopleError, PeopleOperationError } from "./people-error.js";
 import {
   countDevices,
@@ -16,7 +17,7 @@ import {
   personInitials,
 } from "./people-format.js";
 import type { PeopleMotion } from "./people-motion.js";
-import type { Invite, Member } from "./types.js";
+import type { Invite, Member, MemberDevice, OwnerDevice } from "./types.js";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -407,6 +408,8 @@ export function PendingRequests(props: {
 function MemberRow(props: {
   motion: PeopleMotion;
   member: Member;
+  ownerDevices: OwnerDevice[];
+  onRemoveDevice: (member: Member, device: MemberDevice) => void;
   disabled: boolean;
   nowMs: number;
   sessionTitle: (sessionKey: string) => string | undefined;
@@ -484,6 +487,15 @@ function MemberRow(props: {
           </div>
         </div>
       </Show>
+      <MemberDevices
+        member={props.member}
+        ownerDevices={props.ownerDevices}
+        motion={props.motion}
+        disabled={props.disabled}
+        readOnly={props.readOnly}
+        nowMs={props.nowMs}
+        onRemove={props.onRemoveDevice}
+      />
       <div class="ocid-access__row-error">
         <OperationError
           error={props.error?.target === `member:${props.member.accountId}` ? props.error : null}
@@ -498,7 +510,8 @@ export function Members(props: {
   motion: PeopleMotion;
   members: Member[];
   invites: Invite[];
-  ownerDevices: number;
+  ownerDevices: OwnerDevice[];
+  onRemoveDevice: (member: Member, device: MemberDevice) => void;
   notice?: RemovedMemberNotice | null;
   disabled: boolean;
   locale: string;
@@ -513,7 +526,8 @@ export function Members(props: {
     <section class="ocid-access__section" aria-labelledby="ocid-access-members">
       <h3 id="ocid-access-members">Members</h3>
       <p class="ocid-access__hint">
-        Who can open this claw. Only you can change this, from one of your own devices.
+        Who can open this claw. Members can approve their own additional devices. Only you can
+        invite or remove people.
       </p>
       <OperationError
         error={
@@ -528,7 +542,7 @@ export function Members(props: {
           <Avatar name="You" />
           <div class="ocid-access__person">
             <div class="ocid-access__title">You</div>
-            <div class="ocid-access__hint">{countDevices(props.ownerDevices)}</div>
+            <div class="ocid-access__hint">{countDevices(props.ownerDevices.length)}</div>
           </div>
           <span class="chip">owner</span>
         </li>
@@ -557,6 +571,8 @@ export function Members(props: {
               <MemberRow
                 motion={props.motion}
                 member={member()}
+                ownerDevices={props.ownerDevices}
+                onRemoveDevice={props.onRemoveDevice}
                 error={props.error}
                 readOnly={props.readOnly}
                 disabled={props.disabled}

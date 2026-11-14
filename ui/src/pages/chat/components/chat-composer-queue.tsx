@@ -680,7 +680,7 @@ function ChatQueueItem(rowProps: {
         )}
       </span>
       {mentions()?.length ? (
-        <span class="chat-queue__mentions">
+        <span class="chat-queue__mentions" title={t("chat.mentions.invite")}>
           {t("chat.mentions.selected", {
             names: (mentions() ?? [])
               .map(({ start, end }) => mentionText().slice(start, end))

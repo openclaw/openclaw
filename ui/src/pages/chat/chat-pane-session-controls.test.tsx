@@ -106,6 +106,24 @@ describe("chat account selection", () => {
     };
   }
 
+  it("labels automatic selection concisely without changing its account choices", async () => {
+    const request = vi.fn().mockResolvedValue({ profileId: "owner", links: [], accounts: [] });
+    const view = mountAccountControl(request, {
+      kind: "automatic",
+      label: "Automatic account selection",
+    });
+    expect(
+      view.container.querySelector(".chat-controls__account-trigger")?.textContent?.trim(),
+    ).toBe("Account: Auto");
+    view.open();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("users.listModelAccounts", {}));
+    expect(
+      view.container.querySelector('[data-chat-account-option="current"]')?.textContent?.trim(),
+    ).toBe("Automatic");
+    view.select("manage");
+    expect(view.onManage).toHaveBeenCalledOnce();
+  });
+
   it("keeps the current chat choice separate from a saved default for new chats", async () => {
     const request = vi.fn().mockResolvedValue({
       profileId: "owner",
@@ -350,8 +368,10 @@ describe("chat pane composer controls", () => {
     await waitForSolid(() =>
       expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
     );
-    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
-      "GPT-5.6 Sol",
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+        "GPT-5.6 Sol",
+      ),
     );
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
   });
@@ -418,8 +438,11 @@ describe("chat pane composer controls", () => {
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
       expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
-      const catalogMessage = container.querySelector(".chat-controls__model-catalog-state");
-      expect(catalogMessage?.textContent).toContain(message);
+      await waitForSolid(() =>
+        expect(
+          container.querySelector(".chat-controls__model-catalog-state")?.textContent,
+        ).toContain(message),
+      );
       expect(
         container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
       ).toBe(String(!connected));

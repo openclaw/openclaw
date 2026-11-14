@@ -78,7 +78,7 @@ it("reports current decayed top scores independently of stored row order", async
   );
 });
 
-it("preserves excluded MCP identities for ambiguity checks and passes live authority", async () => {
+it("omits inventory MCP rows that do not name their server and passes live authority", async () => {
   const respond = await invoke("toolUsage.import", { agentId: "work", dryRun: true });
   expect(mocks.inventory).toHaveBeenCalledWith({
     cfg: config,
@@ -93,7 +93,6 @@ it("preserves excluded MCP identities for ambiguity checks and passes live autho
     catalog: [
       { id: "openclaw:core:read", name: "read" },
       { id: "openclaw:memory:remember", name: "remember" },
-      { id: "mcp:bundle-mcp:remote", name: "remote" },
     ],
     assertCurrent: expect.any(Function),
   });

@@ -311,6 +311,22 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
+  it("keeps the worker deploy bundle in full, package and CI artifact builds", () => {
+    const workerFlag = (profile: string, env: NodeJS.ProcessEnv) =>
+      resolveBuildAllSteps(profile, env).find(({ label }) => label === "tsdown")?.env
+        ?.OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE;
+    const optOut = { OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE: "0" };
+    for (const profile of ["full", "package", "ciArtifacts"]) {
+      expect(workerFlag(profile, optOut), profile).toBe("1");
+    }
+    expect(workerFlag("package", { ...optOut, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" })).toBe("1");
+    // Runtime-only builds leave the caller's opt-out in effect.
+    expect(
+      workerFlag("full", { ...optOut, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }),
+    ).toBeUndefined();
+    expect(workerFlag("runtime", optOut)).toBeUndefined();
+  });
+
   it("rebuilds UI after runtime cleanup without reusing stale build metadata", () => {
     const steps = resolveBuildAllSteps("full");
     const labels = steps.map(({ label }) => label);

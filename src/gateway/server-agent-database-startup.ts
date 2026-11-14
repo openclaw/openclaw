@@ -18,6 +18,7 @@ import {
 } from "../state/agent-database-startup.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewaySessionFactsBackfillScheduler } from "./server-startup-session-migration.js";
 
 function assertAgentDatabaseConfiguration(
   cfg: OpenClawConfig,
@@ -37,6 +38,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
   context: GatewayRequestContext;
   preparationReady: Promise<void>;
   waitForPostReadyWork: () => Promise<void>;
+  scheduleSessionFactsBackfill?: GatewaySessionFactsBackfillScheduler;
   getConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
   getPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
@@ -74,13 +76,15 @@ export function activateGatewayAgentDatabaseStartup(params: {
           await import("../state/agent-database-startup-verification.js");
         await verifyAgentDatabaseStartupIntegrity({
           ...input,
-          assertCurrent: createPreparationGuard(
-            input.agentId,
-            input.paths,
-            input.env,
-            input.signal,
-            input.assertCurrent,
-          ),
+          assertCurrent: input.configurationBound
+            ? createPreparationGuard(
+                input.agentId,
+                input.paths,
+                input.env,
+                input.signal,
+                input.assertCurrent,
+              )
+            : input.assertCurrent,
         });
       }),
     captureReadAdmission: ({ agentId, paths, env, signal, assertCurrent }) =>
@@ -153,6 +157,8 @@ export function activateGatewayAgentDatabaseStartup(params: {
                 ),
                 log: params.log,
               });
+              signal.throwIfAborted();
+              params.scheduleSessionFactsBackfill?.(databases);
             }),
         };
       }),

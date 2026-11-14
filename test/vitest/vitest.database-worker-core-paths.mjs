@@ -97,6 +97,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/mixed-agent-lifecycle.conformance.test.ts",
   "src/infra/database-engine/device-pairing.conformance.test.ts",
   "src/infra/database-engine/worker-environment-companion.postgres.test.ts",
+  "src/infra/database-engine/github-publication.conformance.test.ts",
   "src/infra/database-engine/gateway-session-startup.conformance.test.ts",
   "src/infra/database-engine/session-actor.conformance.test.ts",
   "src/infra/database-engine/audit-retention.conformance.test.ts",

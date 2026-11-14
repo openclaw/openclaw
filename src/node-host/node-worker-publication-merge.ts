@@ -19,7 +19,7 @@ import {
 import type { WorkspaceTransferOperation } from "./node-worker-transfer-contract.js";
 
 /** The editing checkout supplies objects only; all indexes, fetches and merges stay private. */
-export async function mergeNodeRepositoryPublication(params: {
+async function mergeNodeRepositoryPublication(params: {
   workspaceDir: string;
   inputRoot: string;
   inputDigest: string;

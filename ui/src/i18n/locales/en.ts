@@ -682,7 +682,7 @@ const startupEnglish = {
   agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
-    hint: "Pick where this session works, then say what to do.",
+    hint: "Pick where this session works.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
   },
@@ -1536,7 +1536,8 @@ const startupEnglish = {
     clawhub: {},
     modelAccounts: {
       section: "Account",
-      automatic: "Automatic (new-chat default)",
+      automatic: "Automatic",
+      automaticTrigger: "Account: Auto",
       manage: "Manage saved accounts…",
     },
     mentions: {},
