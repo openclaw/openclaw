@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { assert, afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -384,4 +385,19 @@ it("forks an exact active-path prefix without changing the source", async () => 
     entryId: "user-2",
   });
   expect(readEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
+});
+
+it("refuses an oversized history row without changing the session or losing the worker", async () => {
+  const { scope, params } = await createSession();
+  await appendEvent(scope, {
+    type: "custom",
+    id: "huge",
+    parentId: "assistant-2",
+    data: "x".repeat(8 * 1024 * 1024),
+  });
+  const before = readEntry(scope);
+  await expect(rewind(params)).rejects.toBeInstanceOf(SqliteJsonlReadBudgetExceededError);
+  expect(readEntry(scope)).toEqual(before);
+  await updateEntry(scope, (entry) => ({ ...entry, label: "still writable" }));
+  expect(readEntry(scope)?.label).toBe("still writable");
 });

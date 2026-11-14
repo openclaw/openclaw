@@ -177,6 +177,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-run-authority.principal.test.ts",
   "src/gateway/operator-run-authority.reconnect.test.ts",
   "src/gateway/operator-run-authority.worker.test.ts",
+  "src/gateway/operator-run-recovery.access-policy.test.ts",
   "src/gateway/operator-run-recovery.channel.test.ts",
   "src/gateway/operator-run-recovery.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
