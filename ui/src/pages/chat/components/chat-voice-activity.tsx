@@ -1,9 +1,10 @@
-import { createMemo, onSettled, Repeat, Show } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { createMemo, createSignal, onSettled, Repeat, Show } from "solid-js";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
+import { isRealtimeTalkMicrophoneIssueMessage } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import { createMicrophoneMeter, type MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
@@ -127,6 +128,8 @@ export function MicrophoneActivity(props: {
 export function ChatVoiceStatus(props: {
   status?: RealtimeTalkStatus;
   detail?: string | null;
+  /** Defaults to warning for microphone access problems and danger otherwise. */
+  tone?: "danger" | "warning";
   onDismissError?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
 }) {
@@ -135,35 +138,30 @@ export function ChatVoiceStatus(props: {
       when={props.status === "connecting"}
       fallback={
         <Show when={props.status === "error" && props.detail}>
-          <div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
-            <div class="agent-chat__composer-error agent-chat__talk-status" role="alert">
-              <span class="agent-chat__composer-error-icon" aria-hidden="true">
-                <Icon name="alertTriangle" />
-              </span>
-              <div class="callout__content">
-                <div class="agent-chat__talk-status-text">{props.detail}</div>
-                <Show when={props.onUseSystemDefaultMicrophone}>
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    onClick={() => void props.onUseSystemDefaultMicrophone?.()}
-                  >
-                    {t("chat.composer.useSystemDefaultMicrophoneForCall")}
-                  </button>
-                </Show>
-              </div>
-              <Show when={props.onDismissError}>
+          <InlineAlert
+            tone={
+              props.tone ??
+              (props.detail && isRealtimeTalkMicrophoneIssueMessage(props.detail)
+                ? "warning"
+                : "danger")
+            }
+            class="agent-chat__composer-alert"
+            onDismiss={props.onDismissError}
+            dismissLabel={t("chat.composer.dismissVoiceInputError")}
+            action={
+              <Show when={props.onUseSystemDefaultMicrophone}>
                 <button
-                  class="callout__dismiss"
+                  class="btn btn--sm"
                   type="button"
-                  onClick={() => props.onDismissError?.()}
-                  aria-label={t("chat.composer.dismissVoiceInputError")}
+                  onClick={() => void props.onUseSystemDefaultMicrophone?.()}
                 >
-                  <Icon name="x" />
+                  {t("chat.composer.useSystemDefaultMicrophoneForCall")}
                 </button>
               </Show>
-            </div>
-          </div>
+            }
+          >
+            {props.detail}
+          </InlineAlert>
         </Show>
       }
     >
@@ -179,40 +177,71 @@ export function ChatVoiceStatus(props: {
   );
 }
 
+// Dictation feedback starts on the click itself: pulsing bars while the microphone
+// opens, then the live input level while listening. The permission hint only
+// appears when opening takes long enough that a browser prompt is the likely cause.
+const DICTATION_PERMISSION_HINT_DELAY_MS = 1_000;
+
+function DictationStartingLabel() {
+  const [slow, setSlow] = createSignal(false);
+  onSettled(() => {
+    const timer = globalThis.setTimeout(() => setSlow(true), DICTATION_PERMISSION_HINT_DELAY_MS);
+    return () => globalThis.clearTimeout(timer);
+  });
+  return (
+    <>
+      {slow() ? t("chat.composer.microphoneAccessPending") : t("chat.composer.dictationStarting")}
+    </>
+  );
+}
+
 export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
-  const content = createMemo(() => {
+  const phase = createMemo((): MicrophoneMeterStatus | null => {
     const dictation = props.readDictation();
     if (!dictation?.active) {
       return null;
     }
-    if (dictation.connecting) {
-      return (
-        <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
-      );
-    }
-    return (
-      <div class="agent-chat__composer-status-stack">
-        <div
-          class={[
-            "agent-chat__dictation-status",
-            { "agent-chat__dictation-status--finalizing": dictation.finalizing },
-          ]}
-        >
-          <span
-            class={[
-              "agent-chat__dictation-phase",
-              { "agent-chat__dictation-phase--listening text-shimmer": !dictation.finalizing },
-            ]}
-          >
-            {dictation.finalizing
-              ? t("chat.composer.dictationFinalizing")
-              : t("chat.composer.dictationListening")}
-          </span>
-        </div>
-      </div>
-    );
+    return dictation.connecting ? "connecting" : dictation.finalizing ? "thinking" : "listening";
   });
-  return <>{content()}</>;
+  const inputLevel = createMemo(() => props.readDictation()?.inputLevel);
+  return (
+    <Show when={phase()} keyed>
+      {(current) => (
+        <div class="agent-chat__composer-status-stack">
+          <div
+            class={[
+              "agent-chat__dictation-status",
+              { "agent-chat__dictation-status--finalizing": current === "thinking" },
+            ]}
+            role={current === "connecting" ? "status" : undefined}
+            aria-live={current === "connecting" ? "polite" : undefined}
+          >
+            <MicrophoneActivity
+              status={current}
+              inputLevel={current === "listening" ? inputLevel() : undefined}
+            />
+            <span
+              class={[
+                "agent-chat__dictation-phase",
+                {
+                  "agent-chat__dictation-phase--listening text-shimmer": current === "listening",
+                  "agent-chat__dictation-phase--starting": current === "connecting",
+                },
+              ]}
+            >
+              {current === "connecting" ? (
+                <DictationStartingLabel />
+              ) : current === "thinking" ? (
+                t("chat.composer.dictationFinalizing")
+              ) : (
+                t("chat.composer.dictationListening")
+              )}
+            </span>
+          </div>
+        </div>
+      )}
+    </Show>
+  );
 }

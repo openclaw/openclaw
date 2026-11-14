@@ -87,7 +87,11 @@ vi.mock("./session-accessor.sqlite-page-reclamation.js", () => ({
   withSqliteSessionPageReclamation: vi.fn(),
 }));
 vi.mock("./session-history-archive-pruning.js", () => ({ reclaimSqliteFreePages: vi.fn() }));
-vi.mock("./session-history-eviction.js", () => ({ collectAdmissionProtectedSessionIds: vi.fn() }));
+// mock-isolation: This suite retains native maintenance publication; the conformance suite exercises runtime worker custody.
+vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>()),
+  supportsOpenClawAgentDatabaseExecution: () => false,
+}));
 
 vi.mock("./session-transcript-worker-runtime.js", () => ({
   withSessionHistoryWorkerDatabase: vi.fn(),

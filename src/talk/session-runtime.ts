@@ -4,11 +4,11 @@ import {
   buildRealtimeVoiceAgentControlSpeechMessage,
   REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE,
 } from "./agent-run-control-shared.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "./provider-contexts.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "./provider-internal.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
-  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceToolCallEvent,

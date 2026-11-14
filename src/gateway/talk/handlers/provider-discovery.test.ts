@@ -10,6 +10,7 @@ import { captureGatewayRootWorkReleaseObserver } from "../../../process/gateway-
 import { createVoiceProviderFixture } from "../../../talk/provider-discovery.test-fixtures.js";
 import { listRealtimeVoiceProviders } from "../../../talk/provider-registry.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { createApprovalClient } from "../../server-methods/approval-request.test-support.js";
 import { callGatewayHandler } from "../../server-methods/skills.test-helpers.js";
 import { talkHandlers } from "./index.js";
 
@@ -36,14 +37,24 @@ describe("Talk catalog provider discovery", () => {
         return isConfigured(context);
       };
       const context = { getRuntimeConfig: () => cfg };
-      expect(await callGatewayHandler(talkHandlers, "talk.catalog", {}, { context })).toMatchObject(
-        {
-          ok: false,
-          error: { retryable: true, details: { reason: "talk-catalog-warming" } },
-        },
-      );
+      const client = createApprovalClient({
+        connId: "catalog-reader",
+        clientId: "cli",
+        scopes: ["operator.read"],
+      });
+      expect(
+        await callGatewayHandler(talkHandlers, "talk.catalog", {}, { context, client }),
+      ).toMatchObject({
+        ok: false,
+        error: { retryable: true, details: { reason: "talk-catalog-warming" } },
+      });
       expect(await catalogReleased.promise).toBe("settled");
-      const result = await callGatewayHandler(talkHandlers, "talk.catalog", {}, { context });
+      const result = await callGatewayHandler(
+        talkHandlers,
+        "talk.catalog",
+        {},
+        { context, client },
+      );
 
       expect(result).toMatchObject({
         ok: true,

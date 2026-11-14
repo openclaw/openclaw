@@ -354,7 +354,7 @@ it("applies timeoutSeconds to manual cron.run isolated executions", async () => 
   }
 });
 
-it("keeps a queued quiet schedule event separate from its one terminal event", async () => {
+it("publishes a queued quiet run's next schedule in its one terminal event", async () => {
   vi.useRealTimers();
 
   const dueAt = Date.parse("2026-02-06T10:05:02.000Z");
@@ -387,11 +387,7 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
     await expect(waitForManualRun(state, runId, 5_000)).resolves.toBe(true);
 
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-    expect(terminal.events.map((event) => event.action)).toEqual([
-      "started",
-      "finished",
-      "scheduled",
-    ]);
+    expect(terminal.events.map((event) => event.action)).toEqual(["started", "finished"]);
     const finished = terminal.events.filter((event) => event.action === "finished");
     expect(finished[0]?.triggerFired).toBe(false);
     expectSingleEvent(finished, {
@@ -399,6 +395,7 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
       runId,
       status: "skipped",
       error: "queued manual run skipped: trigger condition not met",
+      nextRunAtMs: dueAt + 60_000,
     });
     expect(finishedContext).toMatchObject({ quietTrigger: true });
   } finally {

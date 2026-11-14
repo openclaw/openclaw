@@ -3,12 +3,14 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { containsRedactedSentinel, copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
+import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import {
   ConfigCollectionDraft,
+  createCollectionDraftSource,
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { configValuesEqual, defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
 import { configLabelInContext } from "./config-form.label-context.ts";
 import {
   configChildRenderOptions,
@@ -193,33 +195,17 @@ function ConfigMapRow(
 export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.Element {
   let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
-  let localEdit: { expected: unknown; retained: unknown } | undefined;
-  let sourceRevision = 0;
-  let sourceSnapshot: { source: unknown; revision: number } | undefined;
-  const draftSource = createMemo(() => {
-    const source = props.params.sourceIdentity ?? props.params.value;
-    if (localEdit && configValuesEqual(source, localEdit.expected)) {
-      return localEdit.retained;
-    }
-    // Returning to the pre-edit value is still an external context change.
-    // Keep its reset distinct from the retained source, without changing draft ownership.
-    if (localEdit) {
-      sourceRevision += 1;
-      localEdit = undefined;
-    }
-    // Unset maps use a symbol, which cannot survive JSON equality in a cloned wrapper.
-    if (
-      !sourceSnapshot ||
-      !Object.is(sourceSnapshot.source, source) ||
-      sourceSnapshot.revision !== sourceRevision
-    ) {
-      sourceSnapshot = { source, revision: sourceRevision };
-    }
-    return sourceSnapshot;
+  const visible = createProgressiveList(() => content().visibleEntries, {
+    initial: 2,
+    batch: 5,
+    enabled: () => props.params.progressive === true,
   });
+  const draftSource = createCollectionDraftSource(
+    () => props.params.sourceIdentity ?? props.params.value,
+  );
   const patchChild: MapParams["onPatch"] = (path, value) => {
     const root = props.params.path;
-    const previous = localEdit;
+    const dispatch = () => props.params.onPatch(path, value);
     if (path.length > root.length && root.every((segment, index) => path[index] === segment)) {
       const next = copyWithPathPatch(
         props.params.value,
@@ -228,20 +214,15 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         "copy-set",
       );
       if (next.ok) {
-        // The parent may synchronously render; record this exact local result before dispatch.
-        localEdit = { expected: next.value, retained: draftSource() };
+        return draftSource.editEntry(next.value, dispatch);
       }
     }
-    const accepted = props.params.onPatch(path, value);
-    if (accepted === false) {
-      localEdit = previous;
-    }
-    return accepted;
+    return dispatch();
   };
   const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
     <Show when={content().visible}>
-      <div class="cfg-block cfg-map">
+      <div class="cfg-block cfg-map" aria-busy={visible.pending() ? "true" : undefined}>
         <div class="settings-row cfg-collection-row">
           <Show
             when={props.heading}
@@ -312,7 +293,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         </div>
         <ConfigCollectionDraft
           {...content().draftProps}
-          sourceIdentity={draftSource()}
+          sourceIdentity={draftSource.draftSource()}
           id={content().draftId}
           ref={(handle) => (draft = handle)}
           onCommit={({ key, value }) =>
@@ -327,7 +308,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
         />
         <Show when={content().visibleEntries.length > 0}>
           <div class="settings-subrows cfg-subrows">
-            <For each={content().visibleEntries} keyed={(entry) => entry[0]}>
+            <For each={visible.items()} keyed={(entry) => entry[0]}>
               {(entry) => (
                 <ConfigMapRow
                   params={{ ...props.params, onPatch: patchChild }}

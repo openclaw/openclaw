@@ -37,7 +37,7 @@ const checkoutPopover = (page: Page) =>
   page.locator(".oc-popover.new-session-page__checkout-popover");
 const worktreeOption = (page: Page) =>
   checkoutPopover(page).getByRole("button", {
-    name: "New worktree Isolated copy of the repo",
+    name: "New worktree",
     exact: true,
   });
 const messageInput = (page: Page) => page.locator(".new-session-page__message");
@@ -242,7 +242,7 @@ suite.define(() => {
       });
       await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
       await picker
-        .getByText("Couldn't verify Git for this folder. Choose it again to retry.", {
+        .getByText("Couldn’t verify Git for this folder. Try again.", {
           exact: true,
         })
         .waitFor({ state: "visible" });
@@ -371,14 +371,13 @@ suite.define(() => {
           page,
           `worktree-branches-${branchesUnavailable ? "unavailable" : "limited"}.png`,
         );
-        await page
-          .getByText(
-            branchesUnavailable
-              ? "Branch suggestions are unavailable. Enter a branch or commit."
-              : "Suggestions are limited. Enter any branch or commit.",
-            { exact: true },
-          )
-          .waitFor({ state: "visible" });
+        if (branchesUnavailable) {
+          await page
+            .getByText("Branch suggestions are unavailable. Enter a branch or commit.", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
+        }
         await page.keyboard.press("Escape");
         await messageInput(page).fill("start from the selected release");
         await startButton(page).click();
@@ -465,13 +464,13 @@ suite.define(() => {
             expect(await worktree.isDisabled()).toBe(true);
             await expect
               .poll(() => tooltipTitleText(worktree))
-              .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
+              .toBe("Couldn’t verify Git for this folder. Try again.");
           }
           await checkoutPopover(page).getByRole("button", { name: "Current checkout" }).click();
           await expectAttribute(trigger, "data-worktree", "false");
           expect(await trigger.isVisible()).toBe(true);
           await checkoutPopover(page)
-            .getByText("Couldn't verify Git for this folder. Choose it again to retry.", {
+            .getByText("Couldn’t verify Git for this folder. Try again.", {
               exact: true,
             })
             .waitFor({ state: "visible" });

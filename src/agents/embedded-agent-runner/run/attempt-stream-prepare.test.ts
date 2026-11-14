@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Agent } from "../../../../packages/agent-core/src/agent.js";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
 import type { Context } from "../../../llm/types.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
@@ -270,6 +271,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       messageChannel: projected.messageChannel,
       hookRunner: projected.hookRunner,
       reasoningMode: projected.reasoningMode,
+      getUserTranscriptContexts: projected.getUserTranscriptContexts,
       thinkingLevel: projected.thinkingLevel,
       hasDeliveredMessageToolOnlySourceReply: projected.hasDeliveredMessageToolOnlySourceReply,
       onDeliveredMessageToolOnlySourceReply: projected.onDeliveredMessageToolOnlySourceReply,
@@ -463,7 +465,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(prepared.queueHandle.readSessionForkContext?.()?.messages).toBe(session.messages);
 
     const { prepareEmbeddedSessionForkContext } = await import("../session-fork-context.js");
-    const context = await prepareEmbeddedSessionForkContext({
+    const { context } = await prepareEmbeddedSessionForkContext({
       target: {
         agentId: "main",
         sessionId: "session-output-schema",
@@ -653,6 +655,7 @@ describe("prepareEmbeddedAttemptStream", () => {
             execute: async () => ({ content: [{ type: "text", text: "clean" }] }),
           } as never,
           toolName: "exec",
+          toolId: "openclaw:core:exec",
           source: "openclaw",
           toolCallId: "progress-detail-exec",
           input: { command: "git status" },
@@ -699,7 +702,7 @@ describe("prepareEmbeddedAttemptStream", () => {
           beforeAgentFinalizeRevisionAttempts: 0,
         },
         activeSession: {
-          agent: { hasQueuedMessages: () => false },
+          agent: new Agent({ streamFn: streamMocks.streamSimple }),
           isStreaming: false,
           messages,
           pendingMessageCount: 0,
@@ -751,7 +754,7 @@ describe("prepareEmbeddedAttemptStream", () => {
   it("keeps already-started steering authoritative over finalization", async () => {
     let resolveSteer: (() => void) | undefined;
     const activeSession = {
-      agent: { hasQueuedMessages: () => false },
+      agent: new Agent({ streamFn: streamMocks.streamSimple }),
       isStreaming: false,
       messages: [],
       pendingMessageCount: 0,

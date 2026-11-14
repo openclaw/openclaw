@@ -38,6 +38,8 @@ import type {
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
+type ContextCleanupPhase = "registry" | "resolve" | "authority" | "notify" | "dispose";
+
 export function createSubagentRegistryContextCleanup(config: {
   isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
 }) {
@@ -48,14 +50,19 @@ export function createSubagentRegistryContextCleanup(config: {
   function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
+    onPhase?: (phase: ContextCleanupPhase) => void,
   ): Promise<void> {
-    return retryAfterPluginReplacement(() => deliverContextEngineSubagentEnded(params, options));
+    return retryAfterPluginReplacement(() =>
+      deliverContextEngineSubagentEnded(params, options, onPhase),
+    );
   }
 
   async function deliverContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
+    onPhase?: (phase: ContextCleanupPhase) => void,
   ): Promise<void> {
+    onPhase?.("registry");
     const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
@@ -65,19 +72,25 @@ export function createSubagentRegistryContextCleanup(config: {
       allowGatewaySubagentBinding: true,
     });
     await withPluginRuntimeRegistryScope(registry, async () => {
+      onPhase?.("resolve");
       const engine = await resolveSubagentRegistryContextEngine(cfg, {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
       });
       let failure: { error: unknown } | undefined;
       try {
+        onPhase?.("authority");
         if ((await options?.prepareCurrent?.()) !== false && options?.isCurrent?.() !== false) {
+          onPhase?.("notify");
           await engine.onSubagentEnded?.(params);
         }
       } catch (error) {
         failure = { error };
       }
       try {
+        if (!failure) {
+          onPhase?.("dispose");
+        }
         await engine.dispose?.();
       } catch (error) {
         failure ??= { error };
@@ -93,12 +106,16 @@ export function createSubagentRegistryContextCleanup(config: {
     warning: string,
     options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<boolean> {
+    let phase: ContextCleanupPhase = "registry";
     try {
-      await runContextEngineSubagentEnded(params, options);
+      await runContextEngineSubagentEnded(params, options, (current) => {
+        phase = current;
+      });
       return true;
     } catch (err) {
       log.warn(warning, {
         error: buildSafeLifecycleErrorMeta(err),
+        phase,
         childSessionKey: params.childSessionKey,
         reason: params.reason,
       });

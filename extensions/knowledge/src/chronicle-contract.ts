@@ -39,7 +39,13 @@ const Eligibility = Type.Union([Type.Literal("current"), Type.Literal("include_i
 const common = {
   ...paging,
   entity: Type.Optional(text(96)),
-  kind: Type.Optional(text(64)),
+  kind: Type.Optional(
+    Type.String({
+      maxLength: 64,
+      description:
+        "Exact record.type filter, such as decision, event, or meeting; unlike search/lookup kind (page, claim, relationship). Omit to include all eligible dated types.",
+    }),
+  ),
   eligibility: Type.Optional(Eligibility),
   includeSources: Type.Optional(Type.Boolean()),
 };

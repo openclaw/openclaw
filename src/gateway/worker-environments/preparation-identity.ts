@@ -79,8 +79,8 @@ export function createWorkerPreparationIdentity(params: {
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
   const digest = (value: unknown) => sha256Hex(stableStringify(value));
-  // Ready workers still bind exact runtime, profile and commit facts; reusable
-  // disks only need compatible setup and boot inputs.
+  // Ready workers bind exact runtime and profile facts. Their unbound checkout
+  // can advance through the same content preparation used by snapshot forks.
   return {
     key: digest({
       ...compatibility,
@@ -90,10 +90,6 @@ export function createWorkerPreparationIdentity(params: {
         ...profile,
         machineClass: facts.target.machineClass,
         executionMode: params.profileSnapshot.executionMode ?? "worker-turn",
-      },
-      project: {
-        ...compatibility.project,
-        ...(params.project ? { baseCommit: params.project.baseCommit } : {}),
       },
     }),
     cacheKey: digest(compatibility),

@@ -158,13 +158,13 @@ it("retires and restores an unavailable context-window control with its access g
     contextWindowMutationDisabledReason: "Admin only",
   });
   expect(
-    view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
+    view.container.querySelector<HTMLButtonElement>(".chat-controls__context-trigger")?.disabled,
   ).toBe(true);
   view.update({ contextWindowTarget: { contextWindows: [] } });
-  expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+  expect(view.container.querySelector(".chat-controls__context-trigger")).toBeNull();
   view.update({ contextWindowTarget });
   expect(
-    view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
+    view.container.querySelector<HTMLButtonElement>(".chat-controls__context-trigger")?.disabled,
   ).toBe(true);
 });
 
@@ -180,22 +180,28 @@ it("refreshes context choices when a replaced session has unchanged model facts"
     contextWindowDefault: "standard",
     contextWindows,
   };
-  const onContextWindowSelect = vi.fn();
-  const view = await controls({ selectedSession, sessionsResult, onContextWindowSelect });
+  const view = await controls({ selectedSession, sessionsResult });
   const toggle = () =>
     expectDefined(
-      view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]"),
+      view.container.querySelector<HTMLButtonElement>(".chat-controls__context-trigger"),
       "context window toggle",
     );
-  expect(toggle().getAttribute("aria-checked")).toBe("false");
+  expect(toggle().getAttribute("aria-label")).toBe("Context window: Standard");
 
   view.update({ selectedSession: { ...selectedSession, contextWindow: "extended" } });
-  expect(toggle().getAttribute("aria-checked")).toBe("true");
-  toggle().click();
-  expect(onContextWindowSelect).toHaveBeenCalledExactlyOnceWith("standard", "main");
+  expect(toggle().getAttribute("aria-label")).toBe("Context window: Extended");
+  const choices = [
+    ...view.container.querySelectorAll('.chat-controls__context-options [role="menuitemradio"]'),
+  ];
+  expect(
+    choices.map((choice) => [choice.textContent, choice.getAttribute("aria-checked")]),
+  ).toEqual([
+    ["Standard", "false"],
+    ["Extended", "true"],
+  ]);
 
   view.update({ selectedSession: { ...selectedSession, contextWindows: [] } });
-  expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+  expect(view.container.querySelector(".chat-controls__context-trigger")).toBeNull();
 });
 
 it("updates model selection against a retained and replaced catalog", async () => {
@@ -430,3 +436,55 @@ it("retains the Access selection without borrowing entitlement from another runt
   options()[0]?.click();
   expect(onSelect).not.toHaveBeenCalled();
 });
+
+it.each(["api_key", "oauth"] as const)(
+  "keeps a selected saved %s account ahead of native Claude metadata",
+  async (type) => {
+    const view = await controls({
+      modelCatalog: [
+        { id: "primary", name: "primary", provider: "example", supportsFastMode: true },
+        { id: "other", name: "other", provider: "example", supportsFastMode: true },
+        { id: "claude-test", name: "Claude test", provider: "claude-cli" },
+      ],
+      accountSelection: {
+        kind: "shared",
+        authProfileId: "anthropic:selected",
+        label: "Saved account",
+      },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "claude-cli",
+            displayName: "Claude CLI",
+            status: "ok",
+            profiles: [],
+            nativeAuth: { kind: "subscription", plan: "Max" },
+          },
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            status: "static",
+            profiles: [
+              {
+                profileId: "anthropic:selected",
+                type,
+                status: "static",
+                displayName: "Saved subscription",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    view.container
+      .querySelector<HTMLButtonElement>('[data-chat-model-provider-toggle="anthropic"]')!
+      .click();
+    flush();
+    expect(
+      view.container.querySelector(
+        '[data-chat-model-provider-group="anthropic"] .chat-controls__auth-meta-label',
+      )?.textContent,
+    ).toBe(type === "api_key" ? "API key" : "Saved subscription");
+  },
+);

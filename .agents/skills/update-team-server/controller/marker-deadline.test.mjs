@@ -12,14 +12,20 @@ const ownerPath = process.env.MARKER_DEADLINE_TEST_OWNER ??
 function fixtureRoot(t) {
   const root = mkdtempSync(join(tmpdir(), "team-marker-deadline-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "journal"), { mode: 0o700 });
+  writeFileSync(join(root, "deploy.lock"), "", { mode: 0o600 });
   return root;
 }
 
 function runShell(root, script, env, timeout, maxBuffer = 256 * 1024) {
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+  const lockedScript = 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; /usr/bin/flock -n 9 || exit 75;\n' + script;
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", lockedScript], {
     encoding: "utf8", timeout, maxBuffer,
     env: { PATH: "/usr/bin:/bin", HOME: root, LANG: "C", LC_ALL: "C",
       OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
+      OPENCLAW_TEAM_RELEASE_ROOT: root, OPENCLAW_TEAM_LOCK_FILE: join(root, "deploy.lock"),
+      OPENCLAW_TEAM_ROOT_UID: String(process.getuid()), OPENCLAW_TEAM_ROOT_GID: String(process.getgid()),
+      OPENCLAW_TEAM_ANCESTOR_BOUNDARY: root,
       FIXTURE_ROOT: root, FIXTURE_NODE: process.execPath, ...env },
   });
   assert.ifError(result.error);
@@ -437,7 +443,7 @@ proof() {
     compatibility)
       if [[ "$FIXTURE_FAULT" == stale-lease ]]; then touch "$serving_root/lease-expired"; fi
       if ((rollback_armed == 0)) && ((successor_started >= 0)); then record rollback-compatibility; else record activation-compatibility; fi ;;
-    journal-create) printf '{"phase":"A_PREPARED","originalWitness":"fixture"}' >"$journal_file" ;;
+    journal-create) cat >/dev/null; printf '{"phase":"A_PREPARED","originalWitness":"fixture"}' >"$journal_file" ;;
     journal-read) cat "$journal_file" ;;
     journal-phase) record "phase $3"; printf '{"phase":"%s","originalWitness":"fixture"}' "$3" >"$journal_file" ;;
     journal-field)

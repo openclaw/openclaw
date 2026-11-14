@@ -9,7 +9,7 @@ export type SessionRowDeltaFields = {
 type SessionRowDelta = { set: Record<string, unknown>; remove: string[] };
 
 const preparedRows = new WeakMap<object, SessionRowDeltaFields>();
-const revisionSamples = new WeakMap<object, WeakRef<Record<string, unknown>>>();
+const publicationSamples = new WeakMap<object, WeakRef<Record<string, unknown>>>();
 
 /** Keep JSON's omission/null semantics while ignoring nested object key order. */
 function canonicalJson(value: unknown): string | undefined {
@@ -26,20 +26,28 @@ function hashJson(encoded: string | undefined): bigint | undefined {
   if (encoded === undefined) {
     return undefined;
   }
-  // Seven ASCII characters plus a leading sentinel fit exactly in a JS number.
+  // Nine ASCII characters plus a leading sentinel fit in 64 bits. Build the
+  // first seven in an exact JS number, then append the remaining fourteen bits.
   // Negative integers retain no text and cannot collide with unsigned SHA fingerprints.
-  if (encoded.length <= 7) {
+  if (encoded.length <= 9) {
     let packed = 1;
+    let tail = 0;
     for (let i = 0; i < encoded.length; i++) {
       const code = encoded.charCodeAt(i);
       if (code > 127) {
         packed = 0;
         break;
       }
-      packed = packed * 128 + code;
+      if (i < 7) {
+        packed = packed * 128 + code;
+      } else {
+        tail = tail * 128 + code;
+      }
     }
     if (packed) {
-      return -BigInt(packed);
+      return encoded.length <= 7
+        ? -BigInt(packed)
+        : -((BigInt(packed) << BigInt(7 * (encoded.length - 7))) | BigInt(tail));
     }
   }
   // Accepted: a 64-bit collision can omit a changed field, ~2^-64 per comparison.
@@ -54,14 +62,14 @@ const fingerprintObject = memoizeFrozenPlainDataProjection((value: object) =>
 /** Presented row identity is immutable; fingerprints retain no row objects or text. */
 export function prepareSessionRowDeltaFields(
   row: Record<string, unknown>,
-  source?: Record<string, unknown>,
+  publicationIdentity?: object,
 ): SessionRowDeltaFields {
   const cached = preparedRows.get(row);
   if (cached) {
     return cached;
   }
-  // Reuse an existing presentation's vector without retaining its row or a second source vector.
-  const sample = source && revisionSamples.get(source)?.deref();
+  // Compare immutable samples across published revisions without retaining their rows or text.
+  const sample = publicationIdentity && publicationSamples.get(publicationIdentity)?.deref();
   const sampleFields = sample && preparedRows.get(sample);
   const fingerprints = new Map<string, number | boolean | null | bigint>();
   for (const field of Object.keys(row)) {
@@ -88,9 +96,9 @@ export function prepareSessionRowDeltaFields(
   }
   const prepared = { fingerprints, fieldCount: fingerprints.size };
   preparedRows.set(row, prepared);
-  // Keep one weak sample per immutable materialized revision; collected samples recompute normally.
-  if (source && !sample) {
-    revisionSamples.set(source, new WeakRef(row));
+  // Keep one weak sample per row lineage; collected samples recompute normally.
+  if (publicationIdentity && !sample) {
+    publicationSamples.set(publicationIdentity, new WeakRef(row));
   }
   return prepared;
 }

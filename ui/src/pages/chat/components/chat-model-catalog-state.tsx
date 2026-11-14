@@ -1,5 +1,5 @@
-import { createMemo, onSettled, Show } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import { createMemo, onSettled, Repeat, Show } from "solid-js";
+import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
@@ -17,9 +17,58 @@ type ChatModelCatalogStateProps = {
   errorLabel?: string;
   retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown };
   emptyLabel?: string;
+  loadingSkeleton?: boolean;
 };
 
-export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | undefined }) {
+export function isModelCatalogLoading(state: ModelCatalogState | undefined) {
+  return Boolean(
+    state &&
+    (state.status === "idle" ||
+      state.status === "loading" ||
+      (state.status === "ready" && state.pendingProviders?.length)),
+  );
+}
+
+function CatalogSkeleton() {
+  const widths = [118, 92, 140, 84, 126, 104];
+  return (
+    <div class="chat-controls__catalog-skeleton" aria-hidden="true">
+      <div class="chat-controls__catalog-skeleton-rail">
+        <Repeat count={5}>
+          {(index) => (
+            <div class="chat-controls__catalog-skeleton-tile">
+              <span style={{ "animation-delay": `${index * 90}ms` }} />
+            </div>
+          )}
+        </Repeat>
+      </div>
+      <div class="chat-controls__catalog-skeleton-list">
+        <div class="chat-controls__catalog-skeleton-heading">
+          <span />
+          <span />
+        </div>
+        <Repeat count={widths.length}>
+          {(index) => (
+            <div
+              class="chat-controls__catalog-skeleton-row"
+              style={{ "--skeleton-delay": `${index * 90}ms` }}
+            >
+              <span style={{ width: `${widths[index]}px` }} />
+              <span style={{ width: `${index % 2 === 0 ? 34 : 26}px` }} />
+            </div>
+          )}
+        </Repeat>
+      </div>
+    </div>
+  );
+}
+
+export function ChatModelCatalogRefresh(props: {
+  state: ModelCatalogState | undefined;
+  providerLabel?: (provider: string) => string;
+}) {
+  const providerDisplayLabel = (provider: string) =>
+    props.providerLabel?.(provider) ?? defaultProviderLabel(provider);
   const label = createMemo(() => {
     if (
       !props.state ||
@@ -135,36 +184,53 @@ export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
             "chat-controls__model-catalog-state",
             {
               "chat-controls__model-catalog-state--empty": !props.hasOptions,
+              "chat-controls__model-catalog-state--skeleton":
+                props.loadingSkeleton && isModelCatalogLoading(props.state),
             },
           ]}
           data-chat-model-catalog-state={value().status}
           role="status"
           aria-live="polite"
+          aria-label={
+            props.loadingSkeleton && isModelCatalogLoading(props.state) ? value().label : undefined
+          }
         >
-          <span class="chat-controls__model-catalog-state-label">
-            <Show
-              when={value().status === "error"}
-              fallback={
+          <Show
+            when={props.loadingSkeleton && isModelCatalogLoading(props.state)}
+            fallback={
+              <span class="chat-controls__model-catalog-state-label">
                 <Show
-                  when={
-                    value().status === "loading" ||
-                    value().status === "idle" ||
-                    (value().status === "ready" && value().checking)
+                  when={value().status === "error"}
+                  fallback={
+                    <Show
+                      when={
+                        value().status === "loading" ||
+                        value().status === "idle" ||
+                        (value().status === "ready" && value().checking)
+                      }
+                    >
+                      <span class="btn__spinner" aria-hidden="true" />
+                    </Show>
                   }
                 >
-                  <span class="btn__spinner" aria-hidden="true" />
+                  <Icon name="alertTriangle" />
                 </Show>
-              }
-            >
-              <Icon name="alertTriangle" />
-            </Show>
-            <span>{value().label}</span>
-          </span>
+                <span>{value().label}</span>
+              </span>
+            }
+          >
+            <CatalogSkeleton />
+          </Show>
           <Show when={value().status === "error" && props.retryTarget}>
             <CatalogAction {...props} action="retry" />
           </Show>
           <Show
-            when={value().status === "ready" && !props.hasSelectableOptions && props.onModelSetup}
+            when={
+              value().status === "ready" &&
+              !value().checking &&
+              !props.hasSelectableOptions &&
+              props.onModelSetup
+            }
           >
             <CatalogAction {...props} action="setup" />
           </Show>

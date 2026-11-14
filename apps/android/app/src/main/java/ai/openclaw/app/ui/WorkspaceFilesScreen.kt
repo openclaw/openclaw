@@ -141,6 +141,7 @@ private fun WorkspaceDirectoryScreen(
           listing.entries
         }
       totalEntries = listing.totalEntries
+      errorText = null
     } catch (_: Throwable) {
       errorText = nativeString("Could not load this folder.")
     } finally {
@@ -313,11 +314,18 @@ private fun WorkspaceFilePreview(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val isConnected by viewModel.isConnected.collectAsState()
   var file by remember(path) { mutableStateOf<GatewayWorkspaceFile?>(null) }
   var loading by remember(path) { mutableStateOf(false) }
   var errorText by remember(path) { mutableStateOf<String?>(null) }
 
-  LaunchedEffect(path) {
+  LaunchedEffect(path, isConnected) {
+    // Retry an unavailable preview on reconnect without replacing an already loaded file.
+    if (file != null) return@LaunchedEffect
+    if (!isConnected) {
+      errorText = nativeString("Connect the gateway to browse workspace files.")
+      return@LaunchedEffect
+    }
     loading = true
     errorText = null
     try {

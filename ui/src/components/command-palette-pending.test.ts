@@ -80,10 +80,7 @@ describe("CommandPalette pending searches", () => {
         method === "sessions.search" ? transcript.promise : catalog.promise,
       );
       const list = vi.fn(() => metadata.promise);
-      const { palette, query, queryAll } = await mountSearch(
-        { methods: ["sessions.search"], request },
-        list,
-      );
+      const { palette, query } = await mountSearch({ methods: ["sessions.search"], request }, list);
       await enterQuery(palette, "zzfixtureunique");
       await settlePalette(palette, dispatched ? 200 : 199);
       expect(list).toHaveBeenCalledTimes(dispatched ? 1 : 0);
@@ -108,12 +105,16 @@ describe("CommandPalette pending searches", () => {
       expectPalettePromptMode(palette);
       expect(input.value).toBe(prompt);
 
+      // An automatic Compose holds until the draft is emptied.
+      setInputValue(input, "zzfixtureunique");
+      await palette.updateComplete;
+      expectPalettePromptMode(palette);
+      setInputValue(input, "");
       setInputValue(input, "zzfixtureunique");
       await palette.updateComplete;
       expect(query('[inert][aria-hidden="true"]')).toBeNull();
-      if (dispatched) {
-        expect(queryAll('[role="option"]')).toHaveLength(0);
-      }
+      // Emptying the draft settled the navigation list; no stale row may return.
+      expect(palette.querySelector('[role="listbox"]')?.textContent).not.toContain("stale");
       expect(query(".cmd-palette__source-error")).toBeNull();
       expect(list).toHaveBeenCalledTimes(dispatched ? 1 : 0);
       expect(request).toHaveBeenCalledTimes(dispatched ? 2 : 0);
@@ -139,8 +140,8 @@ describe("CommandPalette pending searches", () => {
     expect(results.getAttribute("aria-busy")).toBe("false");
     expect(palette.textContent).not.toContain("Searching sessions");
     const empty = query(".cmd-palette__no-results")!;
-    expect(empty.querySelector("h2")?.textContent).toBe("No results found");
-    expect(empty.textContent).toContain("to start a new session.");
+    expect(empty.querySelector("h2")?.textContent).toBe("No results match your search.");
+    expect(empty.textContent).toContain("to compose a new session.");
     expect(empty.querySelector("button")).toBeNull();
   });
 
@@ -192,16 +193,16 @@ describe("CommandPalette pending searches", () => {
         "false",
       );
       await searchPalette(palette, "zzmissing");
-      expect(palette.textContent).toContain("No results found");
+      expect(palette.textContent).toContain("No results match your search.");
       expect(request).toHaveBeenCalledTimes(2);
       expect(list).not.toHaveBeenCalled();
     },
   );
 
   it.each([
-    ["partial", {}, "Transcript search unavailable"],
-    ["model failure", {}, "Model search unavailable"],
-    ["indexing", { indexing: true }, "Results may be incomplete — search again shortly."],
+    ["partial", {}, "Couldn’t search messages"],
+    ["model failure", {}, "Couldn’t search models"],
+    ["indexing", { indexing: true }, "Results may be incomplete. Search again shortly."],
     ["archived", { archivedTranscriptsExcluded: 2 }, "Archived sessions"],
   ] as const)(
     "does not announce empty success for %s transcript results",
@@ -338,7 +339,9 @@ describe("CommandPalette session search", () => {
     expect(items[0]?.textContent).toContain("needle");
     expect(items[1]?.textContent).toContain("Unrelated title");
     expect(items[1]?.textContent).toContain("needle appears only in the conversation body");
-    expect(palette.textContent).not.toMatch(/Search notices|may be incomplete|Chat search failed/);
+    expect(palette.textContent).not.toMatch(
+      /Search notices|may be incomplete|Couldn’t search sessions/,
+    );
     findPaletteOption(palette, "needle")!.click();
     expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
   });

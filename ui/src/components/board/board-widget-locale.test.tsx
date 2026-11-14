@@ -4,9 +4,12 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BoardPendingCapabilities } from "./board-widget-capabilities.solid.tsx";
+import {
+  BoardGrantedCapabilities,
+  BoardPendingCapabilities,
+} from "./board-widget-capabilities.solid.tsx";
 
-it("updates a mounted approval label when the locale changes", async () => {
+it("keeps mixed named-query approval details localized when the locale changes", async () => {
   const previousLocale = i18n.getLocale();
   const translate = i18n.t.bind(i18n);
   const translation = vi
@@ -21,13 +24,58 @@ it("updates a mounted approval label when the locale changes", async () => {
     await i18n.setLocale(previousLocale);
   });
   await i18n.setLocale("en");
-  const widget: BoardWidget = createBoardWidget({ name: "fixture", grantState: "pending" });
+  const widget: BoardWidget = createBoardWidget({
+    name: "fixture",
+    grantState: "pending",
+    declared: {
+      netOrigins: ["https://example.com"],
+      tools: ["health"],
+      queries: [
+        {
+          name: "main-ci",
+          bindingId: "github.actions.runs",
+          params: {
+            repository: "owner/repo",
+            workflow: "ci.yml",
+            branch: "main",
+            status: null,
+            created: null,
+            perPage: 1,
+            excludePullRequests: true,
+          },
+          fields: ["id", "conclusion"],
+        },
+      ],
+    },
+    declaredSummary: ["Network access: https://example.com", "Tool access: health"],
+  });
   const mounted = mountSolid(() => (
-    <BoardPendingCapabilities widget={widget} disabled={false} onGrant={() => {}} />
+    <>
+      <BoardPendingCapabilities widget={widget} disabled={false} onGrant={() => {}} />
+      <BoardGrantedCapabilities
+        widget={{ ...widget, grantState: "granted" }}
+        presentation="details"
+      />
+    </>
   ));
   const label = mounted.container.querySelector("strong")!;
   expect(label.textContent).toBe("Approval (en)");
-  await i18n.setLocale("de");
+  await i18n.setLocale("fr");
   flush();
-  expect(label.textContent).toBe("Approval (de)");
+  expect(label.textContent).toBe("Approval (fr)");
+  const pending = mounted.container.querySelector('[data-test-id="board-pending"]')!;
+  const granted = mounted.container.querySelector(".board-widget__menu-capabilities")!;
+  expect(pending.textContent).toContain("Origines réseau");
+  expect(pending.textContent).toContain("Outils et données de l’hôte");
+  expect(granted.textContent).toContain("Réseau : https://example.com");
+  expect(granted.textContent).toContain("Outil : health");
+  for (const surface of [pending, granted]) {
+    expect(surface.textContent).toContain(
+      'repository="owner/repo"; workflow="ci.yml"; branch="main"; status=null; created=null; perPage=1; excludePullRequests=true',
+    );
+    expect(surface.textContent).toContain("fields=id, conclusion");
+    expect(surface.textContent).toContain("résultats privés sélectionnés et les résultats futurs");
+    expect(surface.textContent).not.toContain("Network access:");
+    expect(surface.textContent).not.toContain("Tool access:");
+  }
 });

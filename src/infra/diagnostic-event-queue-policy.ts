@@ -9,6 +9,7 @@ const DIAGNOSTIC_EVENT_POLICIES = [
   { ...ASYNC_EVENT, name: "gateway.rpc", publicExcluded: true },
   { ...ASYNC_EVENT, name: "sessions.list.baseline.retired" },
   { ...ASYNC_EVENT, name: "sessions.list.retention", publicExcluded: true },
+  { ...ASYNC_EVENT, name: "sessions.projection.retention", publicExcluded: true },
   { ...ASYNC_EVENT, name: "sessions.event.retention", publicExcluded: true },
   { ...ASYNC_EVENT, name: "sessions.event.rows.reset", publicExcluded: true },
   { ...ASYNC_EVENT, name: "gateway.ws.event", publicExcluded: true },

@@ -217,7 +217,7 @@ it("finishes every revision install before starting declaration rendering", asyn
   const baseSha = commit(repo, "base");
   writeFileSync(source, "export type Fixture = number;\n");
   commit(repo, "head");
-  symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
+  expect(existsSync(join(repo, "node_modules"))).toBe(false);
 
   writePnpm(
     binDir,

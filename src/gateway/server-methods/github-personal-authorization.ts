@@ -373,6 +373,7 @@ export async function preparePersonalGitHubSessionActionV2(
           ...action,
           version: 2,
           signal: admitted.requester.signal,
+          prepareDispatchCredential: admitted.requester.prepareDispatchCredential,
           prepareSource: (selector) => {
             action.assertCurrent();
             return admitted.requester.prepareSource({

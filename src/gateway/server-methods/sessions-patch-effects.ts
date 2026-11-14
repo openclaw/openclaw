@@ -26,6 +26,7 @@ export async function publishSessionPatchEffects(params: {
     target: {
       canonicalKey: string;
       fullPatch: SessionsPatchParams;
+      initialEntry?: SessionEntry;
       requestedAgentId?: string;
       targetAgentId: string;
     };
@@ -94,7 +95,13 @@ export async function publishSessionPatchEffects(params: {
       timing?.finish();
     }
   }
-  return archivedSessionKeys.size > 0;
+  // Repeated archives and sessions without a checkout create no worktree cleanup work.
+  return params.targets.some(
+    ({ target, entry }) =>
+      target.fullPatch.archived === true &&
+      entry.worktree &&
+      target.initialEntry?.archivedAt === undefined,
+  );
 }
 
 /** Only applied assignments may repair the catalog; detached and status-model no-ops cannot. */

@@ -10,6 +10,7 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
@@ -101,11 +102,12 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
           </Show>
         </div>
       </Show>
-      <button
-        ref={(element) => (trigger = element)}
-        class="btn btn--xs btn--icon sessions-toolbar__icon sessions-transcript-search__trigger"
+      <IconButton
+        ref={(element: HTMLButtonElement) => (trigger = element)}
+        class="sessions-toolbar__icon sessions-transcript-search__trigger"
         type="submit"
-        aria-label={
+        icon={props.phoneLayout ? "textSearch" : "search"}
+        label={
           props.transcriptSearchAvailable
             ? t("sessionsView.transcriptSearchTitle")
             : t("sessionsView.transcriptSearchUnavailable")
@@ -120,9 +122,7 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
             onSettled(() => input?.focus({ preventScroll: true }));
           }
         }}
-      >
-        <Icon name={props.phoneLayout ? "textSearch" : "search"} />
-      </button>
+      />
     </form>
   );
 }

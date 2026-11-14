@@ -3,6 +3,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import * as toast from "../../lib/toast.ts";
 import {
   expectAbsent,
   expectContent,
@@ -14,10 +15,23 @@ import type { ModelProviderCard } from "./data.ts";
 import {
   ProviderAccountSummary,
   ProviderProfiles,
+  showProfileLogoutSuccess,
   type ProviderProfilesViewProps,
 } from "./profiles-view.tsx";
 import { ProviderRow } from "./provider-row.tsx";
 import { card as viewCard, props } from "./view.test-support.tsx";
+
+it("keeps visible sign-out success quiet and preserves warnings", () => {
+  const toastSpy = vi.spyOn(toast, "showToast").mockReturnValue(true);
+  showProfileLogoutSuccess();
+  expect(toastSpy).not.toHaveBeenCalled();
+  showProfileLogoutSuccess("A shared account is still in use.");
+  expect(toastSpy).toHaveBeenCalledWith({
+    message: "A shared account is still in use.",
+    severity: "warning",
+  });
+});
+
 function card(overrides: Partial<ModelProviderCard> = {}) {
   return viewCard({ apiKey: undefined, ...overrides });
 }
@@ -147,7 +161,7 @@ it("retains account summary focus while refreshed snapshots update account data 
   expect(updatedRows[0]).toBe(rows[0]);
   expect(updatedRows[1]).toBe(rows[1]);
   expectContent(rows[0]!, ["updated-one@example.invalid"]);
-  expectContent(rows[0]!, ["Credentials configured"]);
+  expectContent(rows[0]!, ["Account added"]);
   expectContent(rows[1]!, ["updated-two@example.invalid"]);
   expect(container.querySelector("p.muted")?.textContent).toBe("API key set in config");
   expectContent(container, [], ["EXAMPLE_API_KEY"]);
@@ -183,7 +197,7 @@ it("shows account provenance and removes drag handles for config-locked priority
   expectContent(document.body, [], ["Saved in OpenClaw"]);
   expectContent(document.body, ["Provider config"]);
   expectContent(document.body, ["Codex import"]);
-  expectContent(document.body, ["Shared credential"]);
+  expectContent(document.body, ["Shared account"]);
   expectContent(document.body, ["Priority is managed by provider configuration"]);
   expect(
     [...document.querySelectorAll("button")].map((button) => button.textContent),

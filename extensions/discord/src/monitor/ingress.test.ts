@@ -83,13 +83,17 @@ afterEach(async () => {
 function createPausedMonitor(
   dispatch: Parameters<typeof createDiscordIngressMonitor>[0]["dispatch"],
   ingressQueue = queue,
+  onDeadLetter?: Parameters<typeof createDiscordIngressMonitor>[0]["onDeadLetter"],
+  abortSignal?: AbortSignal,
 ) {
   const monitor = createDiscordIngressMonitor({
     accountId: "default",
     client: {} as never,
     runtime: { error: vi.fn(), log: vi.fn() },
     queue: ingressQueue,
+    abortSignal,
     dispatch,
+    onDeadLetter,
   });
   monitors.add(monitor);
   return monitor;
@@ -101,6 +105,36 @@ function createMonitor(...args: Parameters<typeof createPausedMonitor>) {
 }
 
 describe("Discord durable ingress", () => {
+  it.each(["queue-cap-old", "queue-cap-new"] as const)(
+    "does not post a repeated-failure notice for %s",
+    async (reason) => {
+      const onDeadLetter = vi.fn();
+      const settled = createDeferred<void>();
+      const monitor = createMonitor(
+        async (_event, lifecycle) => {
+          await lifecycle.onDropped?.(reason);
+          settled.resolve();
+          return { kind: "deferred" };
+        },
+        queue,
+        onDeadLetter,
+      );
+      await monitor.accept(createRawMessage("policy-drop"));
+      await settled.promise;
+      expect(onDeadLetter).not.toHaveBeenCalled();
+      expect(await queue.listFailed?.()).toMatchObject([{ id: "policy-drop", reason }]);
+    },
+  );
+  it("refuses new ingress after the account aborts", async () => {
+    const controller = new AbortController();
+    const dispatch = vi.fn();
+    const monitor = createMonitor(dispatch, queue, undefined, controller.signal);
+    controller.abort();
+    await expect(monitor.accept(createRawMessage("aborted"))).rejects.toThrow("stopped");
+    expect(await queue.listPending()).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("stores only the awaited ingress transform, before any message dispatch", async () => {
     const raw = {
       ...createRawMessage("privacy-event"),
@@ -309,43 +343,36 @@ describe("Discord durable ingress", () => {
     }
   });
 
-  it("recovers a claimed row with a fresh drain and dispatches it exactly once", async () => {
-    const firstDispatch = vi.fn(async () => ({ kind: "deferred" as const }));
-    const first = createMonitor(firstDispatch);
-    await first.accept(createRawMessage("1002"));
-    await vi.waitFor(() => expect(firstDispatch).toHaveBeenCalledTimes(1));
-    await first.stop();
-
-    const recoveredDispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
-      await lifecycle.onAdopted();
-    });
-    createMonitor(recoveredDispatch);
-
-    await vi.waitFor(async () => {
-      expect(await queue.enqueue("1002", payloadFor(createRawMessage("1002")))).toMatchObject({
+  it.each(["current", "replacement"] as const)(
+    "deduplicates concurrent delivery and completed redelivery on a %s monitor",
+    async (owner) => {
+      const started = createDeferred<DiscordIngressLifecycle>();
+      const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
+        started.resolve(lifecycle);
+        return { kind: "deferred" as const };
+      });
+      let monitor = createMonitor(dispatch);
+      const rawMessage = createRawMessage("1002");
+      await Promise.all([monitor.accept(rawMessage), monitor.accept(rawMessage)]);
+      const lifecycle = await started.promise;
+      const recovered = createDeferred<void>();
+      const recoveredDispatch = vi.fn(async (_event, next: DiscordIngressLifecycle) => {
+        await next.onAdopted();
+        recovered.resolve();
+      });
+      if (owner === "replacement") {
+        await monitor.stop();
+        monitor = createMonitor(recoveredDispatch);
+        await recovered.promise;
+      } else {
+        await lifecycle.onAdopted();
+      }
+      expect(await queue.enqueue("1002", payloadFor(rawMessage))).toMatchObject({
         kind: "completed",
       });
-    });
-    expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("deduplicates concurrent RESUME delivery and later delivery after completion", async () => {
-    let lifecycle: DiscordIngressLifecycle | undefined;
-    const dispatch = vi.fn(async (_event, claimedLifecycle: DiscordIngressLifecycle) => {
-      lifecycle = claimedLifecycle;
-      return { kind: "deferred" as const };
-    });
-    const monitor = createMonitor(dispatch);
-    const rawMessage = createRawMessage("1003");
-    await Promise.all([monitor.accept(rawMessage), monitor.accept(rawMessage)]);
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-    await lifecycle?.onAdopted();
-    await vi.waitFor(async () => {
-      const verdict = await queue.enqueue("1003", payloadFor(rawMessage));
-      expect(verdict.kind).toBe("completed");
-    });
-
-    await monitor.accept(rawMessage);
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
+      await monitor.accept(rawMessage);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(recoveredDispatch).toHaveBeenCalledTimes(owner === "replacement" ? 1 : 0);
+    },
+  );
 });

@@ -158,7 +158,9 @@ it("restores a prepared legacy source fixture through its changelog owner", () =
     "package-changelog.mjs",
     "lib/check-limits.mts",
     "lib/release-changelog.mjs",
+    "lib/release-context.mjs",
     "lib/release-notes-compaction.mjs",
+    "lib/release-version.mjs",
   ]) {
     writeFileSync(
       join(scriptsDir, file),

@@ -294,13 +294,13 @@ describe("sidebar session feedback", () => {
     );
     await selectFilter(sidebar, "status:all");
     sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = keys[0]!;
+    sidebar.sessionKey = keys.at(-1)!;
     await settleLitElement(sidebar);
     await vi.waitFor(() => expect(sidebar.querySelector(pagination)).not.toBeNull());
     const button = () => sidebar.querySelector<HTMLButtonElement>(pagination)!;
     const focusedButton = button();
     focusedButton.focus();
-    sidebar.sessionKey = keys[1]!;
+    sidebar.sessionKey = keys.at(-2)!;
     await settleLitElement(sidebar);
     expect(button()).toBe(focusedButton);
     expect(document.activeElement).toBe(focusedButton);

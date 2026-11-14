@@ -224,10 +224,15 @@ export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" 
     if (!content) {
       throw new Error("Expected the app content to expose the shell canvas");
     }
-    const canvasContrast = minContrast(content.getBoundingClientRect(), canvasLabel);
-    const transcriptContrast = transcriptColor
-      ? minContrast(content.getBoundingClientRect(), transcriptColor)
-      : null;
+    const contentBounds = content.getBoundingClientRect();
+    const canvasBounds = new DOMRect(
+      contentBounds.left + content.clientLeft,
+      contentBounds.top + content.clientTop,
+      content.clientWidth,
+      content.clientHeight,
+    );
+    const canvasContrast = minContrast(canvasBounds, canvasLabel);
+    const transcriptContrast = transcriptColor ? minContrast(canvasBounds, transcriptColor) : null;
     let composerContrast: number | null = null;
     if (composer) {
       probe.style.backgroundColor = "var(--chat-composer-surface)";

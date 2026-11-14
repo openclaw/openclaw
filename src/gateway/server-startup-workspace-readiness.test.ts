@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
+import { resolveLegacyWorkspaceSourcePaths } from "../agents/workspace-legacy-state.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
@@ -125,6 +126,11 @@ it("refuses every owned session workspace without reading its store on the main 
       workspaceDir: agent.workspace,
     });
     await writeLegacyWorkspace(sandboxWorkspaceDir, JSON.stringify({ version: 1 }));
+    // Genuine legacy copies also carry an operator-owned state-dir attestation.
+    const attestation = resolveLegacyWorkspaceSourcePaths(sandboxWorkspaceDir, { env: state.env })
+      .stateDirAttestationPaths[0]!;
+    await fs.mkdir(path.dirname(attestation), { recursive: true });
+    await fs.writeFile(attestation, "");
     return sandboxWorkspaceDir;
   };
   const workspaces: string[] = [];

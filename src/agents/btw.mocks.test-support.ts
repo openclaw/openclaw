@@ -267,7 +267,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 // Provider ownership and public-surface loading have dedicated owner suites. BTW stubs those
 // boundaries so its orchestration tests do not rediscover every plugin.
-vi.mock("../plugins/providers.js", () => ({
+vi.mock("../plugins/providers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
   resolveProviderRefOwnership: () => ({ status: "unowned" as const }),
 }));
 

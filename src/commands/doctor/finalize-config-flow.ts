@@ -1,6 +1,13 @@
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 
+export function doctorConfigRevision(snapshot: Pick<ConfigFileSnapshot, "path" | "hash" | "raw">) {
+  return {
+    path: snapshot.path,
+    hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
+  };
+}
+
 export async function finalizeDoctorConfigFlow(params: {
   cfg: OpenClawConfig;
   candidate: OpenClawConfig;
@@ -15,10 +22,7 @@ export async function finalizeDoctorConfigFlow(params: {
   shouldWriteConfig: boolean;
   confirmedConfigSource: { path: string; hash: string };
 }> {
-  const confirmedConfigSource = {
-    path: params.snapshot.path,
-    hash: params.snapshot.hash ?? hashConfigRaw(params.snapshot.raw),
-  };
+  const confirmedConfigSource = doctorConfigRevision(params.snapshot);
   let cfg = params.cfg;
   let shouldWriteConfig = params.shouldRepair && params.pendingChanges;
   if (!params.shouldRepair && params.pendingChanges) {

@@ -29,6 +29,8 @@ import {
 export const INVITE_SECRET_BYTES = 32;
 /** A pending redemption expires after this long without an owner decision (spec open question 6). */
 export const PENDING_REDEMPTION_TTL_SECONDS = 7 * 86400;
+/** The longest an invite may last: the Gateway refuses to register one expiring later than this from now. */
+export const MAX_INVITE_LIFETIME_SECONDS = 7 * 86400;
 
 const PROOF_DOMAIN = "openclaw/invite-proof/v1\0";
 

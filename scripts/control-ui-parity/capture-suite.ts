@@ -6,10 +6,8 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../../ui/src/test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  installMockGateway,
-  waitForControlUiRoute,
-} from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { waitForControlUiRoute } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { fingerprintFixtures } from "./fixture-fingerprint.ts";
 import { hash, writeGallery, type Capture } from "./report.ts";
 import { baseScenario, fixedTime, profiles, scenes } from "./scenarios.ts";
@@ -173,7 +171,7 @@ suite.define(() => {
                     frameTime = (event as CustomEvent<number>).detail;
                   });
                 });
-                const gateway = await installMockGateway(page, {
+                const gateway = await installNativePluginMockGateway(page, {
                   ...baseScenario,
                   ...scene.scenario,
                   methodResponses: {

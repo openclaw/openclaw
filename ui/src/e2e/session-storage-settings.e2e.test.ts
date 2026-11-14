@@ -132,8 +132,10 @@ suite.define(() => {
         await gateway.setMethodResponse("sessions.storage.status", running);
         await gateway.resolveDeferred("sessions.storage.run", running);
         const notice = page.getByRole("status");
-        await notice.filter({ hasText: "Background batch started." }).waitFor();
-        expect(await page.getByText("Batch completed", { exact: false }).count()).toBe(0);
+        await notice.filter({ hasText: "Maintenance batch started." }).waitFor();
+        expect(await page.getByText("Maintenance batch completed", { exact: false }).count()).toBe(
+          0,
+        );
         await expectRow(page, "Background maintenance", "Running");
         const initialReads = (await gateway.getRequests("sessions.storage.status")).length;
         await page.clock.runFor(3_000); // Include the poll's queued reply.
@@ -183,7 +185,7 @@ suite.define(() => {
       });
       await run.click();
       await page.getByRole("alert").filter({ hasText: "Not enough disk space" }).waitFor();
-      expect(await page.getByText("Batch completed", { exact: false }).count()).toBe(0);
+      expect(await page.getByText("Maintenance batch completed", { exact: false }).count()).toBe(0);
     });
   });
 
@@ -192,9 +194,7 @@ suite.define(() => {
       const gateway = await openStorage(page, {
         operatorScopes: ["operator.read"],
       });
-      await page
-        .getByText("Administrator access is required to inspect session storage.")
-        .waitFor();
+      await page.getByText("You need admin access to inspect session storage.").waitFor();
       expect(await ageInput(page).isDisabled()).toBe(true);
       expect(await archiveSwitch(page).isDisabled()).toBe(true);
       for (const method of ["sessions.storage.status", "config.set"]) {

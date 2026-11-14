@@ -17,7 +17,7 @@ import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-st
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../media/configured-max-bytes.js";
-import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
+import type { OutboundMediaAccess } from "../media/load-options.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { createImageProcessor, getImageMetadata } from "../media/media-services.js";
 import {
@@ -26,7 +26,7 @@ import {
   resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
-import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { MEDIA_MAX_BYTES, saveMediaBuffer } from "../media/store.js";
 import { unlinkIfExists } from "../media/temp-files.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
@@ -76,6 +76,7 @@ import {
   type ManagedMediaKind,
 } from "./managed-image-attachments.media-kind.js";
 import {
+  createManagedMediaSourceLoader,
   toRecordFilename,
   type PreparedOutgoingMedia,
 } from "./managed-image-attachments.prepare.js";
@@ -280,7 +281,7 @@ function parseMediaDataUrl(
 
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits.maxBytes);
   const base64 = base64Part.replace(/\s+/g, "");
-  const padding = Math.min(/=+$/u.exec(base64)?.[0].length ?? 0, 2);
+  const padding = Math.min(/[=]+$/u.exec(base64)?.[0].length ?? 0, 2);
   assertManagedMediaByteLimit(
     Math.floor((base64.length * 3) / 4) - padding,
     mediaKind,
@@ -887,6 +888,8 @@ export async function createManagedOutgoingMediaBlocks(params: {
   messageId?: string | null;
   limits?: ManagedImageAttachmentLimitsConfig | null;
   localRoots?: readonly string[] | "any";
+  /** Preserve the already-authorized sender/remote-workspace reader for delivered media. */
+  mediaAccess?: OutboundMediaAccess;
   continueOnPrepareError?: boolean;
   onPrepareError?: (error: Error) => void;
   /** Reports each complete source group, including warnings or a failure card. */
@@ -912,7 +915,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         { blocks, messageId: params.messageId ?? null, stateDir },
         context,
       );
-    let resolvedLocalRoots: readonly string[] | undefined;
+    const saveSource = createManagedMediaSourceLoader(params);
     for (const [index, item] of items.entries()) {
       const groupStart = blocks.length;
       const mediaUrl = item.url;
@@ -954,24 +957,10 @@ export async function createManagedOutgoingMediaBlocks(params: {
               maxBytesForManagedMediaKind(parsedDataUrl.mediaKind, limits.maxBytes),
               `generated-${parsedDataUrl.mediaKind}-${index + 1}`,
             )
-          : await (async () => {
-              if (localMediaPath) {
-                const localRoots = params.localRoots;
-                const localMediaOptions =
-                  localRoots === "any"
-                    ? undefined
-                    : {
-                        resolveRoots: async () => {
-                          resolvedLocalRoots ??= await resolveLocalMediaRoots(localRoots);
-                          return resolvedLocalRoots;
-                        },
-                      };
-                await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
-              }
-              // File URLs have already been normalized for display metadata and policy checks.
-              // Pass that path to the store instead of treating URI syntax as a filename.
-              const ingestSource = localMediaPath ?? mediaUrl;
-              const maxBytes = Math.max(
+          : await saveSource({
+              source: mediaUrl,
+              localMediaPath,
+              maxBytes: Math.max(
                 limits.maxBytes,
                 localMediaPath && (inferredKind === "audio" || inferredKind === "video")
                   ? WEBCHAT_LOCAL_MEDIA_MAX_BYTES
@@ -980,19 +969,8 @@ export async function createManagedOutgoingMediaBlocks(params: {
                 maxBytesForKind("video"),
                 maxBytesForKind("document"),
                 MEDIA_MAX_BYTES,
-              );
-              if (hasHttpUrlPrefix(ingestSource)) {
-                const { saveRemoteMediaForStore } =
-                  await import("../media/store.remote.runtime.js");
-                return await saveRemoteMediaForStore({
-                  source: ingestSource,
-                  subdir: "outgoing/originals",
-                  maxBytes,
-                  abortSignal: params.abortSignal,
-                });
-              }
-              return await saveMediaSource(ingestSource, undefined, "outgoing/originals", maxBytes);
-            })();
+              ),
+            });
         savedOriginalPath = savedOriginal.path;
         let savedOriginalContentType = savedOriginal.contentType ?? item.mimeType;
         if (!savedOriginalContentType) {

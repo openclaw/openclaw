@@ -32,6 +32,7 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["brave", "/tools/brave-search"],
   ["browser", "/tools/browser"],
   ["codex", "/plugins/codex-harness"],
+  ["deep-research", "/tools/deep-research"],
   ["document-extract", "/tools/pdf"],
   ["geolocation", "/plugins/geolocation"],
   ["duckduckgo", "/tools/duckduckgo-search"],
