@@ -13,7 +13,7 @@ import {
 import type { OpenClawIdStatus } from "./service-status.js";
 
 /** Ordinary editable definitions installed when OpenClaw ID is activated. */
-export const MEMBER_ROLE_PRESETS: Record<"operator" | "viewer", GatewayOperatorRoleDefinition> = {
+const MEMBER_ROLE_PRESETS: Record<"operator" | "viewer", GatewayOperatorRoleDefinition> = {
   operator: {
     sessions: { others: "write" },
     agents: "*",

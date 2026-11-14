@@ -66,7 +66,12 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
     if (!normalCi || !Array.isArray(normalCi.jobs)) {
       throw new Error("Release advisory child evidence is invalid");
     }
-    if (normalCi.jobs.some(isFailedJob)) {
+    if (
+      evaluateReleaseChildPolicy({
+        child: { ...normalCi, key: "normalCi" },
+        targetVersion: manifest.validationInputs?.targetVersion,
+      }).blockingJobs.length > 0
+    ) {
       throw new Error("Release manifest contains failed selected job evidence");
     }
   }

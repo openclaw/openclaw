@@ -1548,8 +1548,21 @@ div.new-session-page__project-search {
   }
 }
 
+/* Reserve the label track while background catalog metadata supplies the name. */
+.new-session-page .chat-controls__model-trigger .chat-controls__inline-select-label {
+  width: 8.5em;
+  flex: 0 1 8.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Keep catalog arrival inside the space between the fixed footer controls. */
 @container chat-composer (max-width: 560px) {
+  .new-session-page .chat-controls__effort-picker--reserved {
+    display: block;
+    visibility: hidden;
+  }
+
   .new-session-page .agent-chat__composer-controls,
   .new-session-page .chat-composer-model-control,
   .new-session-page .chat-controls__model-picker {
@@ -1571,10 +1584,6 @@ div.new-session-page__project-search {
 
   .new-session-page .chat-controls__trigger-provider-icon {
     display: none;
-  }
-
-  .new-session-page .chat-controls__model-trigger--loading .chat-controls__inline-select-chevron {
-    visibility: hidden;
   }
 }
 
