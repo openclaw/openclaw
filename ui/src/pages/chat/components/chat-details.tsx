@@ -380,7 +380,16 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       !props.mobileHost &&
       !docked() &&
       !event.composedPath().includes(host) &&
-      !event.composedPath().includes(panel)
+      !event.composedPath().includes(panel) &&
+      // Sibling tools own their interactions, including tab close and resize.
+      !event
+        .composedPath()
+        .some(
+          (target) =>
+            target instanceof Element &&
+            target.classList.contains("sidebar-region__right-runtime") &&
+            target.closest(".sidebar-region") === props.elements?.pane,
+        )
     ) {
       panel.removeAttribute("data-instant");
       close();
