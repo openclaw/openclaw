@@ -1882,6 +1882,64 @@ describe("ClawHub detached postpublish verification", () => {
     },
   );
 
+  it.each([
+    { lane: "core", detached: false, deferred: false, tag: "latest", complete: false },
+    { lane: "explicit deferral", detached: false, deferred: true, tag: "latest", complete: false },
+    { lane: "empty detached lane", detached: true, deferred: false, tag: "latest", complete: true },
+    {
+      lane: "extended stable",
+      detached: false,
+      deferred: false,
+      tag: "extended-stable",
+      complete: true,
+    },
+  ])(
+    "records truthful postpublish completion for $lane",
+    async ({ detached, deferred, tag, complete }) => {
+      const f = retryFixture();
+      const root = mkdtempSync(join(tmpdir(), "clawhub-dispatch-"));
+      directories.push(root);
+      const workflow = readFileSync(join(process.cwd(), parentWorkflow), "utf8");
+      const writer = workflow.match(
+        /NORMAL_CLAWHUB_RUN_ID=.*node --input-type=module <<'NODE'\n([\s\S]*?)\n {10}NODE/u,
+      )?.[1];
+      if (!writer) {
+        throw new Error("release child dispatch writer not found");
+      }
+      const written = spawnSync(process.execPath, ["--input-type=module", "-e", writer], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          RUNNER_TEMP: root,
+          GITHUB_REPOSITORY: f.dispatch.repository,
+          GITHUB_RUN_ID: f.dispatch.parentRunId,
+          GITHUB_RUN_ATTEMPT: f.dispatch.parentRunAttempt,
+          GITHUB_REF_NAME: f.dispatch.toolingRef,
+          GITHUB_REF: f.dispatch.toolingFullRef,
+          GITHUB_WORKFLOW_SHA: f.dispatch.toolingSha,
+          TARGET_SHA: f.dispatch.candidateSha,
+          CLAWHUB_ONLY: String(detached),
+          DEFER_CLAWHUB: String(deferred),
+          RELEASE_NPM_DIST_TAG: tag,
+          NORMAL_CLAWHUB_RUN_ID: "",
+        },
+      });
+      expect(written.status, written.stderr).toBe(0);
+      replaceJsonArtifact(
+        f,
+        f.dispatchArtifact,
+        "dispatch.json",
+        JSON.parse(readFileSync(join(root, "openclaw-release-children/dispatch.json"), "utf8")),
+      );
+      expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
+        complete,
+        outcome: complete ? "no-normal-clawhub-publication" : "clawhub-deferred",
+        packages: [],
+      });
+      expect(f.registryReads).toEqual([]);
+    },
+  );
+
   it.each([false, true])(
     "preserves deferred publication as incomplete (conflicting child=%s)",
     async (conflict) => {

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
@@ -12,8 +13,11 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.j
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
+  TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION,
+  TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION_DESCRIPTION,
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
+  omitDescribedOutputSchema,
   resolveCatalog,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
@@ -45,7 +49,12 @@ import {
   formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
-import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
+import type {
+  ToolSearchCatalogRef,
+  ToolSearchCatalogSession,
+  ToolSearchToolContext,
+} from "./tool-search-types.js";
+import { hasToolUsageRanking, type ToolUsageRankingSnapshot } from "./tool-usage-ranking.js";
 import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
@@ -57,6 +66,7 @@ export {
 } from "./tool-search-catalog.js";
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {
+  buildRunGrantedToolDirectory,
   buildToolSchemaDirectoryPrompt,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
@@ -259,10 +269,42 @@ export function applyToolSearchCatalog(params: {
   };
 }
 
+/**
+ * The ranking snapshot depends on the registered catalog, so it reaches the MCP
+ * directory after `applyToolSearchCatalog`. Only the unranked directory this
+ * catalog produced is replaced; without learned usage the tools are unchanged.
+ */
+export function applyUsageRankedMcpToolSearchDirectory(
+  tools: AnyAgentTool[],
+  catalog: ToolSearchCatalogSession | undefined,
+  usageRanking: ToolUsageRankingSnapshot | undefined,
+): AnyAgentTool[] {
+  if (!catalog || !hasToolUsageRanking(usageRanking)) {
+    return tools;
+  }
+  const directory = buildMcpToolSearchDirectory(catalog);
+  const ranked = buildMcpToolSearchDirectory(catalog, usageRanking);
+  if (!directory || ranked === directory) {
+    return tools;
+  }
+  const unrankedDescription = `${TOOL_SEARCH_DESCRIPTION}\n\n${directory}`;
+  return tools.map((tool) =>
+    tool.name === TOOL_SEARCH_RAW_TOOL_NAME && tool.description === unrankedDescription
+      ? copyAgentToolMetadata(tool, {
+          ...tool,
+          description: `${TOOL_SEARCH_DESCRIPTION}\n\n${ranked}`,
+        })
+      : tool,
+  );
+}
+
 export { applyToolSchemaDirectoryCatalog };
 
 const describeParameters = Type.Object({
   id: Type.String({ description: "Tool search result id or tool name." }),
+  [TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION]: Type.Optional(
+    Type.Boolean({ description: TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION_DESCRIPTION }),
+  ),
 });
 const callParameters = Type.Object({
   id: Type.String({ description: "Tool search result id or tool name." }),
@@ -359,15 +401,20 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_DESCRIBE_RAW_TOOL_NAME,
       label: "Tool Describe",
       description:
-        "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
+        "Load the full input schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       parameters: describeParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
-      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
-        formatToolSearchControlResult(
-          await runtime.describe(readToolSearchId(args), { parentToolCallId: toolCallId }),
-          runtime,
-          { parentToolCallId: toolCallId },
-        ),
+      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
+        const described = await runtime.describe(readToolSearchId(args), {
+          parentToolCallId: toolCallId,
+        });
+        const includeOutputSchema =
+          isRecord(args) && args[TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION] === true;
+        return formatToolSearchControlResult(described, runtime, {
+          parentToolCallId: toolCallId,
+          modelPayload: includeOutputSchema ? described : omitDescribedOutputSchema(described),
+        });
+      },
     },
     {
       name: TOOL_CALL_RAW_TOOL_NAME,

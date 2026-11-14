@@ -187,7 +187,8 @@ it("publishes refreshed auth before catalog completion without starting catalog 
       expect(page.view.props.refreshing).toBe(true);
       const refresh = page.querySelector<HTMLButtonElement>(".model-providers__refresh-button");
       expect(refresh?.disabled).toBe(true);
-      expect(refresh?.getAttribute("aria-label")).toBe("Refreshing…");
+      expect(refresh?.getAttribute("aria-label")).toBe("Refresh");
+      expect(refresh?.querySelector(".btn__spinner")).toBeNull();
     });
     expect(requestCount(h.request, "models.list")).toBe(catalogReads + 1);
   } finally {

@@ -20,20 +20,45 @@ secretless fork CI or sanitized direct AWS, never credential-hydrated Testbox.
 Acquire only when the command is ready; reuse task-owned leases and stop them
 before handoff. Finish commands and cleanup before syncing or reusing a lease.
 
+Routine Linux proof defaults to Boat. The OpenClaw wrapper selects `class: fast`
+(8 vCPU / 16 GB) for new Boat leases unless sizing is explicit. The repository
+keeps `class: standard`, so direct native Crabbox uses 4 vCPU / 8 GB and other
+providers retain their existing sizing. An alternate `CRABBOX_CONFIG` also keeps
+its own sizing. `asciiBox.noEnv: true` excludes Boat account environment secrets at
+creation. `asciiBox.noSnapshots: true` disables snapshots and
+`asciiBox.visibility: private` keeps new VMs private. These settings do not scrub
+the VM disk or change Crabbox's configured environment allowlist. The CI and
+release workload policy tries Boat, Daytona, Azure, then AWS;
+Windows, macOS, interactive, desktop, and untrusted routes keep their own policy.
+Explicit Azure `prewarm` and `changed` jobs remain available.
+
+Use the source wrapper for changed proof, rather than the retired
+`testbox-changed` job:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --timing-json --shell -- "corepack pnpm check:changed"
+```
+
+Check usable CPU, RAM, and free disk before the workload. Boat uses lease-local
+package caches; the optional 80/40-GB cache-volume settings apply only to providers
+that support volumes.
+
+### Explicit Testbox proof
+
 Testbox `run` and `warmup` use the workflow from `main` so new allocations
 inherit the maintained spending limits. The wrapper overrides configured workflow
 refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
 source revision in your local checkout; its source capsule and frozen dependency
 install preserve that selection independently of the workflow ref. Explicit
 workflow and job selection support explicit focused, routine, and high-memory
-profiles. The default uses 4 vCPUs, preserving the observed CPU and RAM of the
-pre-November 3 16-class allocation; neither `--class` nor `--type` sizes delegated Testbox leases.
+profiles. Explicit Testbox proof uses 4 vCPUs, preserving the observed CPU and RAM
+of the pre-November 3 16-class allocation; neither `--class` nor `--type` sizes delegated Testbox leases.
 
 | Workload                                     | Workflow                           | Runner tier | Default job deadline | Maximum explicit deadline |
 | -------------------------------------------- | ---------------------------------- | ----------- | -------------------- | ------------------------- |
 | Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 2-class     | 60 minutes           | 60 minutes                |
 | Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 2-class     | 60 minutes           | 120 minutes               |
-| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 4-class     | 60 minutes           | 240 minutes               |
+| Broad compiler/lint graphs (Testbox default) | `ci-check-testbox.yml`             | 4-class     | 60 minutes           | 240 minutes               |
 | Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 8-class     | 240 minutes          | 240 minutes               |
 
 Deadlines include hydration. The larger maximum requires an explicit workflow
@@ -174,7 +199,7 @@ Linux ARM cannot provide this proof with Google's x86_64 AAPT2 artifact.
 
 ## Testbox runner sizing
 
-Use the default 4-class workflow for routine remote proof, with a 60-minute
+For explicitly selected Testbox proof, use the 4-class workflow with a 60-minute
 total-job deadline including hydration. Keep the 8-class
 rare: record the command and its measured memory need, a smaller-runner OOM,
 or a controlled comparison showing lower total billed cost before selecting it.
@@ -185,7 +210,7 @@ worker limits; do not force higher parallelism on the smaller machine.
 Select the exception explicitly with a fresh lease:
 
 ```bash
-node scripts/crabbox-wrapper.mjs run \
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox \
   --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml \
   --blacksmith-job check --idle-timeout 15m \
   --label <task-and-memory-reason> --timing-json -- <command>
@@ -216,9 +241,9 @@ node scripts/crabbox-wrapper.mjs run --help
 ```
 
 Read `.crabbox.yaml` and the resolved provider before running. The repository
-default is `blacksmith-testbox`, with `.github/workflows/ci-check-testbox.yml`
-owning its prepared environment. Direct providers use
-`.github/workflows/crabbox-hydrate.yml`. Keep the resolved provider unless the
+default is `boat`, with `.github/workflows/crabbox-hydrate.yml` owning its local
+Actions hydration. Explicit Blacksmith Testbox runs use
+`.github/workflows/ci-check-testbox.yml`. Keep the resolved provider unless the
 requested proof requires another environment; capacity or hydration failure
 does not make a different provider equivalent.
 

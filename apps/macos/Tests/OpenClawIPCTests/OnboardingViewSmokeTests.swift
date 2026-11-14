@@ -168,8 +168,14 @@ struct OnboardingViewSmokeTests {
             let requiresSetup = managedAttachment || ["unreadable", "fresh", "fresh-recommended"].contains(scenario)
 
             #expect(!view.cliInstalled)
-            try #require(view.pageOrder == (requiresSetup ? [0, 1, 2, 3] : [0, 1, 3]))
-            #expect(view.activePageIndex(for: 2) == (requiresSetup ? view.cliPageIndex : view.aiPageIndex))
+            let expectedOrder = scenario == "remote"
+                ? [0, 1, 4, 3, 9]
+                : (requiresSetup ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9])
+            try #require(view.pageOrder == expectedOrder)
+            // Remote setup visits the remote connection page (4) before AI setup.
+            #expect(view.activePageIndex(for: 2) == (scenario == "remote"
+                    ? 4
+                    : (requiresSetup ? view.cliPageIndex : view.aiPageIndex)))
             if scenario == "fresh-recommended" {
                 #expect(view.selectedConnectionMode == .local)
                 #expect(view.isConnectionSelectionBlocking)
@@ -184,6 +190,9 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `discovered gateway summary uses localized runtime strings`() {
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 0) ==
+                "Find gateways on your network.")
         #expect(
             OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 1) ==
                 "1 gateway found on your network — click for connection instructions.")
@@ -295,21 +304,21 @@ struct OnboardingViewSmokeTests {
         #expect(secondaryInvocations == (actions == "dual" ? 1 : 0))
     }
 
-    @Test func `configured flows end at AI setup and hand off to the dashboard`() {
-        // Everything after working inference (memory import, permissions,
-        // channels, hatch) belongs to the dashboard custodian onboarding.
+    @Test func `configured flows keep native reachability and final steps after AI setup`() {
+        // Memory import, permissions, channels and hatch remain Dashboard-owned.
+        // Native onboarding retains the optional reachability and final pages.
         #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: true) == [0, 1, 2, 3])
+            requiresCLIInstall: true) == [0, 1, 2, 3, 5, 9])
         #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: false) == [0, 1, 3])
+            requiresCLIInstall: false) == [0, 1, 3, 5, 9])
         #expect(OnboardingView.pageOrder(
             for: .remote,
-            requiresCLIInstall: true) == [0, 1, 3])
+            requiresCLIInstall: true) == [0, 1, 4, 3, 9])
         #expect(OnboardingView.pageOrder(
             for: .remote,
-            requiresCLIInstall: false) == [0, 1, 3])
+            requiresCLIInstall: false) == [0, 1, 4, 3, 9])
     }
 
     @Test func `set up later keeps the native ready page`() {
@@ -390,7 +399,7 @@ struct OnboardingViewSmokeTests {
                 afterFreshInstall: afterFreshInstall)
 
             #expect(!outcome.ready)
-            #expect(OnboardingView.pageOrder(for: .local, requiresCLIInstall: !outcome.ready) == [0, 1, 2, 3])
+            #expect(OnboardingView.pageOrder(for: .local, requiresCLIInstall: !outcome.ready) == [0, 1, 2, 3, 5, 9])
             #expect(outcome.status == "OpenClaw is paused. Resume it, then retry setup to start the Gateway.")
         }
     }

@@ -108,7 +108,7 @@ describe("Agents tools catalog read", () => {
     expect(
       view.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
     ).not.toBeNull();
-    expect(profileButton()?.disabled).toBe(true);
+    await waitForSolid(() => expect(profileButton()?.disabled).toBe(true));
     const identityHost = view.container.querySelector("openclaw-github-identity");
     expect(identityHost).not.toBeNull();
 

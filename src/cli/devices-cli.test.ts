@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectText } from "../test-utils/text-assertions.js";
@@ -338,36 +339,20 @@ describe("mutations", () => {
     expectCall(0, "device.pair.reject", { params: { requestId: "req-1" }, timeoutMs: 15000 });
   });
   it.each([
-    {
-      args: ["remove", "ghost"],
-      method: "device.pair.remove",
-      reason: "unknown deviceId",
-      text: "No paired device matches ghost.",
-    },
-    {
-      args: ["reject", "ghost"],
-      method: "device.pair.reject",
-      reason: "unknown requestId",
-      text: "No pending device request matches ghost.",
-    },
-  ])(
-    "explains $method unknown ids instead of the generic failure",
-    async ({ args, method, reason, text }) => {
-      callGateway.mockRejectedValueOnce(
-        Object.assign(new Error(reason), { gatewayCode: "INVALID_REQUEST" }),
-      );
-      await run(...args);
-      expectCall(0, method);
-      expectText(errors(), [text, "devices list"]);
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      runtime.error.mockClear();
-      runtime.exit.mockClear();
-      callGateway.mockRejectedValueOnce(
-        Object.assign(new Error(reason), { gatewayCode: "INVALID_REQUEST" }),
-      );
-      expect(await refusal(...args, "--json")).toContain(text);
-    },
-  );
+    ["remove", "unknown deviceId", "No paired device matches ghost."],
+    ["reject", "unknown requestId", "No pending device request matches ghost."],
+  ])("explains %s unknown ids instead of the generic failure", async (command, reason, text) => {
+    callGateway.mockRejectedValue(
+      Object.assign(new Error(reason), { gatewayCode: "INVALID_REQUEST" }),
+    );
+    await run(command, "ghost");
+    expectCall(0, `device.pair.${command}`);
+    expectText(errors(), [text, "devices list"]);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    runtime.error.mockClear();
+    runtime.exit.mockClear();
+    expect(await refusal(command, "ghost", "--json")).toContain(text);
+  });
   it("keeps other remove failures on the root handler", async () => {
     callGateway.mockRejectedValueOnce(new Error("gateway closed"));
     await expect(run("remove", "device-1")).rejects.toThrow("gateway closed");
@@ -446,10 +431,19 @@ describe("mutations", () => {
       ["opaque"],
     );
   });
-  it("returns Gateway commands without a version note or text in JSON mode", async () => {
+  it("returns JSON join commands unless Ctrl+C lands while the request is pending", async () => {
     callGateway.mockResolvedValueOnce({ joinUrl, ...joinCommands });
     await run("join-code", "--json");
-    expect(runtime.writeJson).toHaveBeenCalledWith({ joinUrl, ...joinCommands });
+    for (const rejected of [false, true]) {
+      const scope = new AsyncWorkScope();
+      callGateway.mockImplementationOnce(async ({ signal }: { signal?: AbortSignal }) => {
+        expect(signal).toBe(scope.signal);
+        scope.beginClose();
+        return rejected ? Promise.reject(new Error("aborted")) : { joinUrl, ...joinCommands };
+      });
+      await scope.run(() => run("join-code", "--json"));
+    }
+    expect(runtime.writeJson.mock.calls).toEqual([[{ joinUrl, ...joinCommands }]]);
     expect(runtime.log).not.toHaveBeenCalled();
   });
 });

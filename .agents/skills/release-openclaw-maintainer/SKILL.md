@@ -128,7 +128,9 @@ Follow the [FRV wall-time loop](../release-openclaw-ci/SKILL.md#keep-frv-off-the
 start remote validation promptly, repair failures as diagnostics drain, and
 minimize downtime between cycles. Include every known non-flake fix affecting
 the next run rather than knowingly carrying failures forward; overlap useful
-local checks with remote validation. This guides scheduling, not new gates.
+local checks with remote validation. Consider [broad CI discovery alongside initial FRV](../release-openclaw-ci/SKILL.md#optional-broad-ci-discovery-alongside-initial-frv)
+to reuse existing failures and batch repairs without delaying the initial run.
+This guides scheduling, not new gates.
 
 The operating objectives are approximately 20 minutes to seal validation and
 publication within an hour, not measured guarantees. Source-only children start
@@ -232,9 +234,15 @@ failures, repair their owner, retry the affected surface, then reassess rather
 than repeating the full release.
 
 Required publication proofs and enforced environment approvals remain required.
-A passing sibling cannot replace missing required evidence. npm + ClawHub is the
-priority path. macOS, Windows, Linux, and Android native publication runs in
-parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
+A passing sibling cannot replace missing required evidence. Successfully publish
+selected npm plugins before core npm. ClawHub publication starts at its existing
+dispatch point but runs independently from then on: planning, authorization,
+dispatch, publication, verification, and recovery never gate core npm, GitHub
+release finalization, main closeout, or the retrospective PR. Retain a separate
+owner, run/attempt, status, and follow-up for pending or failed ClawHub work; do
+not report it as complete. macOS, Windows, Linux, and Android native publication
+also runs in parallel and never gates npm/ClawHub, GitHub release finalization,
+or main closeout.
 Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
 block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.

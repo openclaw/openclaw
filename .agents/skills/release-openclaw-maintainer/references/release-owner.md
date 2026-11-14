@@ -174,8 +174,10 @@ replace final tags or rebuild immutable published versions.
 Track every selected surface independently in the handoff table. A successful
 parent does not prove detached ClawHub or native-app completion. Preserve the
 track's scope: extended-stable excludes native apps and ClawHub. Native
-publication does not hold the priority npm/GitHub/main-closeout path; pending
-platform work still needs an owner and an accurate status.
+publication does not hold the priority npm/GitHub/main-closeout path. ClawHub
+starts at its existing dispatch point and runs independently thereafter; its
+authorization, failures, and recovery never block core or the closeout and
+retrospective PRs. Pending work still needs an owner and an accurate status.
 
 Finish the [hotfix ledger integrity check](hotfix-ledger-management.md#final-closeout-integrity-check),
 `$verify-release`, required platform work, applicable

@@ -122,24 +122,56 @@ struct DashboardWindowSmokeTests {
             windowAutosaveName: windowAutosaveName,
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        controller.show()
+        controller.show(url: url, auth: controller.auth)
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
         #expect(controller.window?.isRestorable == false)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
-        // The empty unified toolbar is what grows the titlebar to 52pt so the
-        // traffic lights center against the web titlebar row; without it they
-        // hug the top edge and misalign with the hosted web buttons.
+        // The compact toolbar aligns the traffic lights with the hosted web row.
         #expect(controller.window?.toolbar != nil)
-        #expect(controller.window?.toolbarStyle == .unified)
+        #expect(controller.window?.toolbarStyle == .unifiedCompact)
         // The toolbar only exists to size the titlebar, so View > Hide Toolbar
-        // (⌥⌘T) must be refused; otherwise hiding it desyncs the 52pt web inset.
+        // (⌥⌘T) must be refused; otherwise hiding it desyncs the compact web inset.
         controller.window?.toggleToolbarShown(nil)
         #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
         #expect(controller.window?.frameAutosaveName == windowAutosaveName)
+        try await DashboardTestWait.document(controller)
+        let window = try #require(controller.window)
+        let greenButton = try #require(window.standardWindowButton(.zoomButton))
+        let readInset = """
+        parseFloat(document.documentElement.style.getPropertyValue('--openclaw-native-controls-inset')) || 0
+        """
+        try await TestWait.state("native titlebar clearance") {
+            try await (controller.webView.evaluateJavaScript(readInset) as? Double ?? 0) > 0
+        }
+        let compactInset = try #require(try await controller.webView.evaluateJavaScript(readInset) as? Double)
+        let compactEdge = controller.webView.convert(greenButton.bounds, from: greenButton).maxX
+        #expect(compactInset > compactEdge)
+
+        // AppKit's regular toolbar places the controls farther right. The live
+        // document must follow its geometry without changing the content gap.
+        window.toolbarStyle = .unified
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+        window.update()
+        let regularEdge = controller.webView.convert(greenButton.bounds, from: greenButton).maxX
+        #expect(regularEdge > compactEdge)
+        try await TestWait.state("updated native titlebar clearance") {
+            guard let inset = try await controller.webView.evaluateJavaScript(readInset) as? Double
+            else { return false }
+            return abs((inset - compactInset) - (regularEdge - compactEdge)) < 0.1
+        }
+        // A replacement document needs the same inset even when native geometry
+        // has not changed since the previous publication.
+        controller.reloadDashboard()
+        try await DashboardTestWait.document(controller)
+        try await TestWait.state("reloaded native titlebar clearance") {
+            guard let inset = try await controller.webView.evaluateJavaScript(readInset) as? Double
+            else { return false }
+            return abs((inset - compactInset) - (regularEdge - compactEdge)) < 0.1
+        }
         controller.closeDashboard()
     }
 
@@ -717,7 +749,7 @@ extension DashboardWindowSmokeTests {
         Array.from(document.querySelectorAll('.sidebar-shell, .settings-sidebar__header'))
           .map(element => getComputedStyle(element).paddingTop)
         """) as? [String]
-        #expect(padding == ["52px", "52px"])
+        #expect(padding == ["40px", "40px"])
         #expect(try await controller.webView.evaluateJavaScript(
             "document.documentElement.classList.contains('openclaw-native-web-chrome')") as? Bool == true)
     }

@@ -107,14 +107,29 @@ start before this original-byte batch is verified. Ordinary releases retain thei
 existing authorization placement after core startup; both paths use the same
 transaction authorization owner.
 
-The existing parent prefetch and child preview/load report the first and last
-allowlisted response quota headers using their own workflow token, without an
-extra request. The `fetch-metadata-only` counts separate fixed from per-package
-metadata reads; they exclude `gh` authority/evidence calls, archive redirects, and
-registry traffic. They are not a complete dispatch budget. Select a batch only
-from observed remaining capacity and measured total costs, including parent and
-ClawHub work; static request estimates alone do not justify a retry. Resume after
-the observed reset with fresh parent authorization.
+Prepared npm preview checks the current workflow token's REST core allowance
+before emitting its publisher matrix. It budgets 512 requests per selected
+package (256 each for `consume` and `authorize`) and leaves 1,024 requests of
+headroom for final authority checks and surrounding workflow work. Each command
+enforces its own ceiling across `gh` and artifact HTTP transports, including
+explicit pagination, retries, and archive API requests. Preview itself is bounded
+to 1,024 requests. Exhaustion fails closed; it never skips authority or byte
+verification. Command accounting reports the actual attempted requests, not just
+metadata fetches. The earlier `fetch-metadata-only` telemetry remains partial.
+
+An oversized selection fails before matrix or evidence-handoff output and reports
+the supported smaller selection and quota reset time. For example, 98 packages
+require an allowance of 51,200 under these ceilings; a token with 5,000 remaining
+can admit at most seven. This is admission, not a claim that the existing
+per-package authentication now uses fewer requests or that all 98 packages can
+finish in one hour. Resume smaller selections after the observed reset with fresh
+parent authorization; original bytes and per-package receipts remain unchanged.
+
+The allowance is an observation, not a global reservation. Other workflows,
+parent/ClawHub work, action-internal requests, and manual retries can consume the
+same installation quota. The headroom is not an enforced budget for those owners;
+coordinate their capacity separately. A later quota failure still requires
+original-attempt reconciliation, not blind re-publication.
 
 <a id="publication-waivers" />
 
@@ -127,7 +142,7 @@ reviewed row with an exact target version, child role, job name, and reason.
 For example (illustrative only, not an active grant):
 
 ```js
-export const RELEASE_VALIDATION_WAIVERS = [
+const RELEASE_VALIDATION_WAIVERS = [
   {
     targetVersion: "YYYY.M.PATCH",
     childRole: "releaseChecksIndependent",
@@ -176,11 +191,21 @@ admitted P. Pre-cutover frozen workflows retain strict validation; changing P
 alone does not retrofit waiver support. Readers still accept the historical empty
 `telegram_waiver` field without rewriting authenticated evidence.
 
-Only exact terminal **failed** live-provider or Telegram leaves, or the
-operator-authorized Kova threshold exceptions above, are eligible.
+The operator also authorized exact-job failure grants for `2026.11.5-beta.3`
+on November 14, 2026 at 13:30 UTC: the recorded UI reply-navigation shard,
+Android screenshots, Google Decision and Gateway runtime shards, and Docker
+package/update OpenAI test job from FRV `43594812558/1`. The checked-in list
+is authoritative. These accept failures of those named jobs, not only the
+individual observed assertions. Raw failures remain visible; the CI and release
+aggregates must contain only causes explained by granted jobs. This exception
+does not carry to another release or excuse package/receipt integrity failures.
+
+Only exact terminal **failed** live-provider or Telegram leaves, the beta.3
+operator-accepted jobs, or the Kova threshold exceptions above are eligible.
 Every other required result must pass. Missing, skipped, cancelled, timed-out,
-incomplete, or mismatched required evidence still blocks. Normal CI, npm/Docker
-artifacts, package integrity, install/upgrade, soak, performance outside the
+incomplete, or mismatched required evidence still blocks. Normal CI outside
+the exact beta.3 grants, npm/Docker artifact production, package integrity,
+install/upgrade outside the named Docker test job, soak, performance outside the
 explicit 2026.9.37 not-run exception, plugin
 prerelease, dispatch identity, and seal/evidence integrity cannot be waived.
 An aggregate failure is tolerated only when its causes are entirely explained

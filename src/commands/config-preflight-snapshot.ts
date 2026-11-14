@@ -391,7 +391,7 @@ async function assertStartupStateReady(params: {
     () => import("../state/openclaw-database-preflight.js"),
   );
   const agentCount = listAgentIds(params.cfg).length;
-  const admissionMetrics: Record<string, number> = { agentCount };
+  const admissionMetrics: Record<string, number | string> = { agentCount };
   let registeredDatabases: readonly { agentId: string; path: string }[] = [];
   await measureDoctorConfigPreflightStep(
     "admission.database-readiness",

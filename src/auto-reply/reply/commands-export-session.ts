@@ -130,14 +130,12 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   );
   const tree = scanSessionTranscriptTree(rawEntries);
   const hasLeafControl = tree.hasLeafControl;
-  const entries = hasLeafControl
-    ? rawEntries.map((fileEntry) => {
-        const node = tree.byId.get(fileEntry.id);
-        return node && fileEntry.parentId !== node.parentId
-          ? { ...fileEntry, parentId: node.parentId }
-          : fileEntry;
-      })
-    : rawEntries;
+  const entries = rawEntries.map((fileEntry) => {
+    const node = tree.byId.get(fileEntry.id);
+    return node && fileEntry.parentId !== node.parentId
+      ? Object.assign({}, fileEntry, { parentId: node.parentId })
+      : fileEntry;
+  });
   const leafId = tree.leafId;
   const warnings = skippedRows.count > 0 ? [skippedRows] : [];
 

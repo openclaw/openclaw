@@ -23,6 +23,13 @@ const readPolicy = vi.hoisted(() => vi.fn());
 const validateDelivery = vi.hoisted(() => vi.fn());
 const reloadPlugin = vi.hoisted(() => vi.fn());
 const deleteAgent = vi.hoisted(() => vi.fn());
+const captureCreator = vi.hoisted(() => vi.fn());
+// mock-isolation: Account persistence and revocation use the native inference-binding
+// suite; this adapter suite supplies capture facts while testing its other fences.
+vi.mock("./cron-input-validation.js", async (original) => ({
+  ...(await original<typeof import("./cron-input-validation.js")>()),
+  captureCronCreatorSession: captureCreator,
+}));
 vi.mock("../../templates/gateway-add-plan.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../templates/gateway-add-plan.js")>()),
   planTemplateAddForGateway: planAdd,
@@ -61,6 +68,7 @@ const ready = { ...complete, readiness: { ready: true, requirements: [] } };
 const onDisk = { ...enabled, agents: { list: [{ id: agentId }] } };
 
 beforeEach(() => {
+  captureCreator.mockResolvedValue({});
   listMcp.mockResolvedValue({ ok: true, mcpServers: {} });
   readPolicy.mockResolvedValue(enabled);
 });
@@ -71,7 +79,12 @@ const params = { source, planIntegrity: "sha256:reviewed", acknowledgeCapabiliti
 const plan = { operation: "add", planIntegrity: "sha256:reviewed", target: { agentId } };
 
 function makeCron<T extends object>(overrides: T) {
-  return { add: vi.fn(), list: vi.fn().mockResolvedValue([]), ...overrides };
+  return {
+    add: vi.fn(),
+    list: vi.fn().mockResolvedValue([]),
+    getDefaultAgentId: () => "main",
+    ...overrides,
+  };
 }
 
 async function callAdd(

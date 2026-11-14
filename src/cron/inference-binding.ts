@@ -52,19 +52,26 @@ export function normalizeCronInferenceBinding(value: unknown): CronInferenceBind
 }
 
 /**
- * The session runtime fields a run resolves its runtime from. A binding with a captured
- * runtime supplies it, so a runtime override copied into the cron session entry cannot move
- * the job onto a runtime its account was not captured for.
+ * The session runtime fields a candidate on `provider` resolves its runtime from. A binding
+ * with a captured runtime supplies it for its own provider, so a runtime override copied into
+ * the cron session entry cannot move the job onto a runtime its account was not captured for.
+ * Other providers select live and keep the session entry.
  */
 export function resolveCronRuntimeSessionEntry<
   T extends { agentRuntimeOverride?: string; agentHarnessId?: string },
->(binding: CronInferenceBinding | undefined, entry: T): T | { agentRuntimeOverride: string } {
-  return binding?.runtime ? { agentRuntimeOverride: binding.runtime } : entry;
+>(
+  binding: CronInferenceBinding | undefined,
+  entry: T,
+  provider: string,
+): T | { agentRuntimeOverride: string } {
+  return binding?.runtime && binding.provider === provider
+    ? { agentRuntimeOverride: binding.runtime }
+    : entry;
 }
 
 /** Names a binding's account and captured runtime for scheduled-run errors. */
 export function describeCronInferenceBinding(binding: CronInferenceBinding): string {
   return binding.runtime
     ? `account ${binding.profileId} on runtime ${binding.runtime}`
-    : `account ${binding.profileId} (no recorded runtime)`;
+    : `account ${binding.profileId}`;
 }

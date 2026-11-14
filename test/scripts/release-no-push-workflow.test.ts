@@ -470,6 +470,32 @@ describe("release validation no-push transport", () => {
     ).toBeUndefined();
   });
 
+  it("uploads only public repo E2E timeout diagnostics after failure", () => {
+    const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const test = job(repo, "test");
+    const run = step(test, "Run repo E2E suite");
+    const directory =
+      ".artifacts/control-ui-e2e-timeouts/repo-e2e-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}";
+    expect(run.env?.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR).toBe(directory);
+    const upload = step(test, "Upload public repo E2E timeout diagnostics");
+    expect(upload.with).toMatchObject({
+      path: `${directory}/failure-*/failure.public.json`,
+      "include-hidden-files": true,
+      "if-no-files-found": "ignore",
+      "retention-days": 7,
+    });
+    for (const failed of [false, true]) {
+      expect(
+        evaluateWorkflowCondition(upload.if ?? "true", {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed,
+        }),
+      ).toBe(failed);
+    }
+  });
+
   it("builds the sandbox image only for repo E2E consumers that require it", () => {
     const live = readWorkflow(LIVE_E2E);
     const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
@@ -1311,18 +1337,28 @@ describe("release validation no-push transport", () => {
     const dispatch = step(job(full, "summary"), "Request release evidence update");
 
     expect(verify.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
-    const stateScript = job(full, "release_decision").env?.RELEASE_STATE_SCRIPT;
+    const stateScript = job(full, "summary").env?.RELEASE_STATE_SCRIPT;
     expect(stateScript).toContain("qualificationAdmission != null");
     expect(stateScript).toContain(
       "qualification-verifier/scripts/full-release-validation-state.mjs",
     );
-    for (const name of ["release_decision", "diagnostic_drain", "summary"]) {
+    for (const name of ["summary"]) {
       const stateJob = job(full, name);
       expect(stateJob.env?.RELEASE_STATE_SCRIPT).toBe(stateScript);
       expect(step(stateJob, "Checkout admitted qualification verifier").with).toMatchObject({
         ref: "${{ fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha }}",
         path: "qualification-verifier",
       });
+    }
+    const watcher = job(readWorkflow(".github/workflows/full-release-state-watcher.yml"), "watch");
+    expect(step(watcher, "Checkout admitted qualification verifier").with).toMatchObject({
+      ref: "${{ inputs.qualification_workflow_sha }}",
+      path: "qualification-verifier",
+    });
+    for (const name of ["release_decision", "diagnostic_drain"]) {
+      expect(job(full, name).with?.qualification_workflow_sha).toContain(
+        "qualificationAdmission.workflowSha",
+      );
     }
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");
@@ -2104,6 +2140,7 @@ describe("release validation no-push transport", () => {
     expect(validation.env?.EXPECTED_SHA).toBe("${{ steps.ref.outputs.sha }}");
     expect(validation.run).toContain('--consumer publisher --manifest "$manifest"');
     expect(job(releasePublish, "finalize_github_release").needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",
@@ -2184,6 +2221,48 @@ describe("release validation no-push transport", () => {
     },
   );
 
+  it("keeps approval-only intent on the original publication route within the input budget", () => {
+    const workflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
+    expect(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {})).toHaveLength(25);
+    expect(workflow.on?.workflow_dispatch?.inputs?.wait_for_clawhub).toBeDefined();
+    const validate = step(job(workflow, "resolve_release_target"), "Validate inputs");
+    const projection = validate.run?.split('RELEASE_EVIDENCE_MODE="')[0];
+    if (!projection) {
+      throw new Error("Missing release input projection");
+    }
+    expect(projection).toContain("prepared_plugins=%s");
+    const descriptors = {
+      npm: { artifact: "original-npm" },
+      clawhub: { artifact: "original-clawhub" },
+    };
+    const intent = { corePluginDeferrals: [{ packageName: "@openclaw/demo" }] };
+    const cases: [string, string][] = [
+      ["", ""],
+      [JSON.stringify(intent), ""],
+      [JSON.stringify(descriptors), JSON.stringify(descriptors)],
+      [JSON.stringify({ ...descriptors, ...intent }), JSON.stringify(descriptors)],
+      ["{}", "{}"],
+    ];
+    for (const [input, expected] of cases) {
+      const root = tempDirs.make("release-intent-route-");
+      const output = join(root, "output");
+      const result = runWorkflowShellScript(projection, {
+        linuxWorkflow: true,
+        cwd: root,
+        env: { PREPARED_PLUGINS: input, GITHUB_OUTPUT: output },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe(`prepared_plugins=${expected}\n`);
+    }
+    const publish = job(workflow, "publish");
+    expect(step(publish, "Write release approval receipt").env?.PREPARED_PUBLICATION_INPUT).toBe(
+      "${{ inputs.prepared_plugins }}",
+    );
+    expect(step(publish, "Dispatch detached ClawHub publication").run).toContain(
+      "prepared_plugins: $prepared",
+    );
+  });
+
   it("keeps Docker required by default and activates early only after explicit approval", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
     expect(workflow.on?.workflow_dispatch?.inputs?.finalize_release_before_docker).toMatchObject({
@@ -2216,6 +2295,7 @@ describe("release validation no-push transport", () => {
             prepared_plugins: preparedPlugins,
           },
           needs: {
+            resolve_release_target: { outputs: { prepared_plugins: preparedPlugins } },
             publish: { result: npm },
             publish_docker: { result: docker },
             approve_github_release: { result: beforeDocker ? "skipped" : "success" },

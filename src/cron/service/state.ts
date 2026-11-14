@@ -406,6 +406,8 @@ export type CronServiceState = {
   /** Retains stopped generations while an immediate restart admits new work. */
   schedulerDrain: Promise<void>;
   stopped: boolean;
+  /** A reload's replacement owns scheduling; runs already executing here still publish results. */
+  handedOver?: boolean;
   /** Rotates synchronously on stop so an immediate restart cannot revive old work. */
   lifecycleGeneration: number;
   schedulingPaused: boolean;

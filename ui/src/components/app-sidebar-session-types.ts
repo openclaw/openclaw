@@ -292,6 +292,7 @@ export type SidebarSessionGroupMenuState = {
 };
 
 export type SidebarSessionSortMode = (typeof SIDEBAR_SESSION_SORT_OPTIONS)[number]["mode"];
+export const DEFAULT_SIDEBAR_SESSION_SORT_MODE: SidebarSessionSortMode = "updated";
 export type SidebarSessionStatusFilter = (typeof SIDEBAR_SESSION_STATUS_OPTIONS)[number];
 export type SidebarEmptyGroupsMode = "filtering" | "always" | "never";
 export type SidebarSessionOwnerFilter = {
@@ -439,7 +440,9 @@ export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY);
   // "people" stays readable here even when the gateway later hides the
   // capability; effectiveSessionSortMode() downgrades it at render time.
-  return stored === "updated" || stored === "people" ? stored : "created";
+  return stored === "created" || stored === "updated" || stored === "people"
+    ? stored
+    : DEFAULT_SIDEBAR_SESSION_SORT_MODE;
 }
 
 function loadStoredSidebarStringSet(

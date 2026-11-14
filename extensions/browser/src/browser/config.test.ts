@@ -33,7 +33,7 @@ function withProfile(
 }
 
 describe("browser config", () => {
-  it.each(["chromium", "lightpanda"] as const)(
+  it.each(["chromium", "lightpanda", "kitesurf"] as const)(
     "rejects Lightpanda endpoint aliases in unvalidated runtime config (%s)",
     (engine) => {
       expect(() =>
@@ -118,6 +118,30 @@ describe("browser config", () => {
         "lightweight",
       ),
     ).toThrow(/Lightpanda/);
+  });
+
+  it("keeps Kitesurf external even when local Chrome launch defaults are set", () => {
+    const profile = resolveRequiredProfile(
+      withProfile(
+        "kite",
+        {
+          engine: "kitesurf",
+          cdpUrl: "ws://127.0.0.1:8787/devtools/browser",
+          attachOnly: true,
+        },
+        { executablePath: "/usr/bin/chromium", attachOnly: false },
+      ),
+      "kite",
+    );
+    expect(profile.engine).toBe("kitesurf");
+    expect(profile.executablePath).toBeUndefined();
+    expect(isLocalManagedProfile(profile)).toBe(false);
+    expect(getBrowserProfileCapabilities(profile)).toMatchObject({
+      usesPersistentPlaywright: true,
+      supportsScreenshots: true,
+      supportsVisualActions: false,
+      browserFilesystemLocal: false,
+    });
   });
 
   it("fills defaults without changing caller-owned profiles or prototype-like names", () => {

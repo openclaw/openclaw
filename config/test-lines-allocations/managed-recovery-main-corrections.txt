@@ -1,2 +1,0 @@
-159
-# Real interrupted-helper boundary regressions cover superseded stops before recovery and during native inspection, plus candidate-writer settlement after a failed schema-changing finalize. Repair owner regressions cover absent/unavailable service warnings. Shared subprocess fixture growth is required to exercise the owning production handoff.

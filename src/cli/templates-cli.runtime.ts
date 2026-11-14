@@ -19,14 +19,11 @@ import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION, TemplateAddMutationError } from "../templates/add.js";
 import {
-  findTemplateExtensionPackageCollisions,
-  planTemplateExtensions,
-} from "../templates/application-plan.js";
-import {
   ClawHubSourceError,
   withResolvedClawHubSource,
   type ClawHubTemplateTrust,
 } from "../templates/clawhub-source.js";
+import { templateDependencyInventory } from "../templates/dependency-inventory.js";
 import {
   assertTemplatesLabsEnabled,
   TEMPLATES_LABS_DISABLED_MESSAGE,
@@ -59,16 +56,13 @@ import {
 } from "./templates-cli-output.js";
 import type { TemplatesAddOptions, TemplatesInspectOptions } from "./templates-cli.js";
 
-type TemplateCliSkillWarning = {
-  ref: string;
-  version: string;
-  integrity: string;
-  riskWarning: string;
-};
-
+type TemplateCliSkillWarning =
+  import("../templates/package-install-options.js").TemplateSkillWarning;
 function addPlanSkillWarnings(plan: TemplateAddPlan): TemplateCliSkillWarning[] {
   return collectTemplateSkillWarningReviews(plan).map(({ actionId, ...warning }) => {
-    if (actionId !== `skill:${warning.ref}`) {
+    if (
+      actionId !== ("path" in warning ? `skill:bundled:${warning.path}` : `skill:${warning.ref}`)
+    ) {
       throw new Error("The Template skill trust review is incomplete.");
     }
     return warning;
@@ -97,7 +91,11 @@ function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
     runtime.log(`Skill trust warnings (${skillWarnings.length}):`);
     for (const warning of skillWarnings) {
       runtime.log(
-        redactSensitiveText(`  ${warning.ref}@${warning.version} (${warning.integrity})`),
+        redactSensitiveText(
+          "path" in warning
+            ? `  bundled:${warning.path} (${warning.digest})`
+            : `  ${warning.ref}@${warning.version} (${warning.integrity})`,
+        ),
       );
       runtime.log(redactSensitiveText(`    ${warning.riskWarning}`));
     }
@@ -143,21 +141,8 @@ export async function runTemplatesInspectCommand(
     return;
   }
 
-  const config = getRuntimeConfig();
-  const extensionPlan = await planTemplateExtensions({
-    extensions: result.openClawProfile?.extensions ?? [],
-    workspace: result.source.packageRoot,
-    packagePreflight: (pkg, workspace) => preflightTemplatePackage(pkg, workspace, { config }),
-  });
-  const extensionCollisions = findTemplateExtensionPackageCollisions({
-    packages: result.manifest.packages,
-    extensions: result.openClawProfile?.extensions ?? [],
-  });
-  const diagnostics = [
-    ...result.diagnostics,
-    ...extensionPlan.blockers,
-    ...extensionCollisions.map(({ diagnostic }) => diagnostic),
-  ];
+  const inventory = templateDependencyInventory(result.manifest, result.snapshot.bundledSources);
+  const diagnostics = result.diagnostics;
   const valid = diagnostics.every((diagnostic) => diagnostic.level !== "error");
   const payload = {
     schemaVersion: TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION,
@@ -165,8 +150,7 @@ export async function runTemplatesInspectCommand(
     valid,
     source: result.source,
     manifest: result.manifest,
-    ...(result.openClawProfile ? { openClawProfile: result.openClawProfile } : {}),
-    extensions: extensionPlan.extensions,
+    inventory,
     diagnostics,
   };
   if (opts.json) {
@@ -182,13 +166,8 @@ export async function runTemplatesInspectCommand(
   runtime.log(
     `Agent: ${sanitizeTerminalText(result.manifest.agent.name ?? result.manifest.agent.id)}`,
   );
-  runtime.log(`Packages: ${result.manifest.packages.length}`);
-  runtime.log(`Extension requirements: ${extensionPlan.extensions.length}`);
-  for (const extension of extensionPlan.extensions) {
-    runtime.log(
-      `  ${extension.id}: ${extension.requirementState}; ${extension.detectedFormat ?? "unresolved"} -> ${(extension.mapped ?? []).join(", ") || "no mapped capabilities"}`,
-    );
-  }
+  runtime.log(`Skills: ${result.manifest.skills.length}`);
+  runtime.log(`Plugins: ${result.manifest.plugins.length}`);
   runtime.log(`MCP servers: ${Object.keys(result.manifest.mcpServers).length}`);
   runtime.log(`Automations: ${result.manifest.automations.length}`);
   if (!valid) {
@@ -271,7 +250,10 @@ export async function runTemplatesAddCommand(
     method: "templates.add",
     params: {},
     target: "Template configuration and provenance",
-    onForeignOwner: "refuse",
+    onForeignOwner: async ({ requestOwner }) => {
+      const { runTemplatesAddThroughOwner } = await import("./templates-cli.gateway-add.js");
+      await runTemplatesAddThroughOwner(sourcePath, opts, requestOwner);
+    },
     runLocal: async ({ assertCurrent, signal }) => run({ mode: "apply", assertCurrent, signal }),
   });
 }
@@ -306,7 +288,7 @@ async function runTemplatesAddFromSource(
     manifest: result.manifest,
     templateMarkdownBody: result.templateMarkdownBody,
     packageBootstrap: result.packageBootstrap,
-    openClawProfile: result.openClawProfile,
+    bundledSources: result.snapshot.bundledSources,
     source: result.source,
     diagnostics: result.diagnostics,
     context: {
@@ -318,8 +300,8 @@ async function runTemplatesAddFromSource(
         resolveAgentWorkspaceDir(config, agentId),
       ),
       existingMcpServers: listedMcpServers.mcpServers,
-      packagePreflight: (pkg: Parameters<typeof preflightTemplatePackage>[0], workspace: string) =>
-        preflightTemplatePackage(pkg, workspace, { config }),
+      packagePreflight: (pkg, workspace, sourceContext) =>
+        preflightTemplatePackage(pkg, workspace, { config, ...sourceContext }),
     },
   });
 
@@ -370,7 +352,7 @@ async function runTemplatesAddFromSource(
   let riskApproved = Boolean(opts.acknowledgeClawhubRisk);
   if (warnedPackages.length > 0 && !riskApproved) {
     if (process.stdin.isTTY && process.stdout.isTTY && !opts.json) {
-      runtime.log("ClawHub trust warnings:");
+      runtime.log("Dependency trust warnings:");
       for (const { target, warning } of warnedPackages) {
         runtime.log(redactSensitiveText(`  ${target}: ${warning}`));
       }
@@ -378,7 +360,7 @@ async function runTemplatesAddFromSource(
     }
     if (!riskApproved) {
       const message =
-        "ClawHub trust warnings require --acknowledge-clawhub-risk or interactive confirmation.";
+        "Dependency trust warnings require --acknowledge-clawhub-risk or interactive confirmation.";
       emitTemplateFailure(opts.json, message, {
         schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
         stability: TEMPLATE_OUTPUT_STABILITY,
@@ -416,18 +398,24 @@ async function runTemplatesAddFromSource(
   if (warnings.length > 0) {
     const byRef = new Map<string, TemplateCliSkillWarning>();
     for (const warning of warnings) {
-      if (byRef.has(warning.ref)) {
+      if (byRef.has("path" in warning ? `bundled:${warning.path}` : warning.ref)) {
         throw new Error("The Template skill trust review contains a duplicate package.");
       }
-      byRef.set(warning.ref, warning);
+      byRef.set("path" in warning ? `bundled:${warning.path}` : warning.ref, warning);
     }
     skillConsent = {
       assertApproved: (pkg) => {
-        const reviewed = byRef.get(pkg.ref);
+        const reviewed = byRef.get("path" in pkg ? `bundled:${pkg.path}` : pkg.ref);
         if (
           !reviewed ||
-          reviewed.version !== pkg.version ||
-          reviewed.integrity !== pkg.integrity ||
+          ("path" in pkg
+            ? !("path" in reviewed) ||
+              reviewed.path !== pkg.path ||
+              reviewed.name !== pkg.name ||
+              reviewed.digest !== pkg.digest
+            : !("ref" in reviewed) ||
+              reviewed.version !== pkg.version ||
+              reviewed.integrity !== pkg.integrity) ||
           reviewed.riskWarning !== pkg.riskWarning
         ) {
           throw new Error("Skill trust state changed; review the Template again.");

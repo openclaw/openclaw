@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
+import type { TemplatesCatalogDetailResult } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { stripFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import {
   downloadClawHubPackageArchive,
@@ -24,6 +25,7 @@ import {
   type ClawHubPackageListItem,
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
+import { projectTemplateCatalogDependencies } from "./catalog-dependencies.js";
 import { parseTemplateManifestSummary } from "./clawhub-manifest-summary.js";
 import {
   readClawHubCatalogPreview,
@@ -39,7 +41,12 @@ import {
   readVerifiedArtifactSource,
   type ResolvedClawHubSource,
 } from "./clawhub-source-artifact.js";
-import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
+import { templateDependencyInventory } from "./dependency-inventory.js";
+import {
+  clawHubTemplateRef,
+  isCanonicalClawHubPackageName,
+  isExactSemVer,
+} from "./schema-portability.js";
 
 export type { ClawHubTemplateCatalogPreview } from "./clawhub-preview-content.js";
 export { ClawHubSourceError };
@@ -80,12 +87,7 @@ export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
   plugins: number;
   mcpServers: number;
   scheduledJobs: number;
-  contents: {
-    instructions: Array<{ name: string; source: string; excerpt?: string }>;
-    skills: Array<{ name: string; version: string; excerpt?: string }>;
-    integrations: Array<{ name: string; kind: "plugin" | "mcpServer"; version?: string }>;
-    automations: Array<{ name: string; schedule: string; timezone: string }>;
-  };
+  contents: NonNullable<TemplatesCatalogDetailResult["detail"]["contents"]>;
   scanStatus?: string;
 };
 type AcceptedTrust = Extract<Awaited<ReturnType<typeof checkClawHubPackageTrust>>, { ok: true }>;
@@ -136,8 +138,8 @@ function requirePublicTemplatePackage(
   const ownerHandle = detail.owner?.handle;
   if (
     !isPublicTemplatePackage(pkg) ||
-    pkg.name !== requestedName ||
     !matchesTemplatePublisher(pkg.name, ownerHandle) ||
+    (pkg.name !== requestedName && clawHubTemplateRef(pkg.name, ownerHandle) !== requestedName) ||
     (pkg.ownerHandle !== undefined && pkg.ownerHandle !== null && pkg.ownerHandle !== ownerHandle)
   ) {
     throw new ClawHubSourceError(
@@ -495,9 +497,10 @@ async function readClawHubTemplateContents(
         ) {
           instructions.push({ name: "SOUL.md", source: "CLAW.md#body" });
         }
-        const skills = manifest.packages
-          .filter((pkg) => pkg.kind === "skill")
-          .map((pkg) => ({ name: pkg.ref, version: pkg.version }));
+        const { skills, integrations } = projectTemplateCatalogDependencies(
+          manifest,
+          verified.snapshot.bundledSources,
+        );
         const [describedInstructions, describedSkills] = requestedPreview
           ? [instructions, skills]
           : await Promise.all([
@@ -546,17 +549,10 @@ async function readClawHubTemplateContents(
             contents: {
               instructions: describedInstructions,
               skills: describedSkills,
-              integrations: [
-                ...manifest.packages
-                  .filter((pkg) => pkg.kind === "plugin")
-                  .map((pkg) => ({ name: pkg.ref, kind: "plugin" as const, version: pkg.version })),
-                ...Object.keys(manifest.mcpServers).map((name) => ({
-                  name,
-                  kind: "mcpServer" as const,
-                })),
-              ],
+              integrations,
               automations: manifest.automations.map((job) => ({
                 name: job.name || job.id,
+                enabled: job.enabled ?? true,
                 schedule: job.schedule.cron,
                 timezone: job.schedule.timezone,
               })),
@@ -592,23 +588,26 @@ export async function withResolvedClawHubSource<T>(
     ) => Promise<T>;
   },
 ): Promise<{ value: T } & ClawHubTemplateTrust> {
-  const { packageName } = params.coordinate;
-  requireTemplateName(packageName);
+  const requestedName = params.coordinate.packageName;
+  requireTemplateName(requestedName);
   if (params.coordinate.version !== undefined) {
     requireExactVersion(params.coordinate.version);
   }
   // Exact releases can fetch independent metadata together; latest needs the catalog version first.
   const [detail, exactArtifact] = await Promise.all([
-    fetchClawHubPackageDetail({ ...params, name: packageName }),
+    fetchClawHubPackageDetail({ ...params, name: requestedName }),
     params.coordinate.version === undefined
       ? Promise.resolve(undefined)
       : fetchClawHubPackageArtifact({
           ...params,
-          name: packageName,
+          name: requestedName,
           version: params.coordinate.version,
         }),
   ]);
-  const pkg = requirePublicTemplatePackage(detail, packageName);
+  // `@publisher/slug` may name an unscoped package; exact-release identity, trust
+  // and archive checks all bind to the stored name.
+  const pkg = requirePublicTemplatePackage(detail, requestedName);
+  const packageName = pkg.name;
   const version = params.coordinate.version ?? pkg.latestVersion;
   if (!version) {
     throw new ClawHubSourceError(
@@ -680,7 +679,7 @@ export async function withResolvedClawHubSource<T>(
         if (
           params.baseUrl !== undefined &&
           resolveClawHubBaseUrl(params.baseUrl) !== resolveClawHubBaseUrl() &&
-          artifactSource.manifest.packages.length > 0
+          templateDependencyInventory(artifactSource.manifest).length > 0
         ) {
           throw new ClawHubSourceError(
             "clawhub_registry_mismatch",

@@ -122,6 +122,8 @@ type ChannelApprovalNativeTransportAdapterForView<
     params: ApprovalRequestContext &
       FinalApprovalEntryContext<TPendingEntry> & {
         payload: TFinalPayload;
+        /** Delivered entries still awaiting terminal processing, in fanout order. */
+        remainingEntries?: readonly TPendingEntry[];
       },
   ) => Promise<void>;
   deleteEntry?: (params: FinalApprovalEntryContext<TPendingEntry>) => Promise<void>;

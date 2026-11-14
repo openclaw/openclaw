@@ -395,7 +395,7 @@ struct SwiftUIRenderSmokeTests {
 
     @Test @MainActor func `root prompt alert stack still presents deep link prompt`() async throws {
         let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
             .gatewayTrustPromptAlert()
@@ -418,7 +418,7 @@ struct SwiftUIRenderSmokeTests {
         GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("abc123") })
     }
 

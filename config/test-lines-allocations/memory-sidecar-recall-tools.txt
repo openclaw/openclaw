@@ -1,2 +1,0 @@
-# Prevent unselected memory sidecars from registering competing recall tools.
-1

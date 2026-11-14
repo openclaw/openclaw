@@ -34,6 +34,10 @@ if (args[0] === "warmup") {
 if (args[0] === "inspect") console.log(JSON.stringify({id: state.leaseID, serverId: "bx_owned", labels: {ascii_box_created_at: state.createdAt, private: "fixture-secret"}, sshKey: "fixture-private-key", expiresAt: new Date(Date.now() + (process.env.FIXTURE_MODE === "short-ttl" ? 3600000 : 86400000)).toISOString()}));
 if (args[0] === "actions" && args[1] === "register") {
   fs.writeFileSync(value("--receipt"), JSON.stringify({version: 1, leaseID: value("--id"), scope: "orgs/example", runnerID: 43, name: value("--name")}));
+  if (process.env.FIXTURE_MODE === "register-failed") {
+    console.error("fixture-secret fixture-private-key");
+    process.exit(23);
+  }
 }
 if (args[0] === "actions" && args[1] === "unregister" && process.env.FIXTURE_MODE === "unregister-failed") process.exit(1);
 if (args.includes("info")) console.log(JSON.stringify({sandbox: {id: "bx_owned", createdAt: process.env.FIXTURE_MODE === "changed-vm" ? "2000-01-01T00:00:00Z" : state.createdAt}}));
@@ -132,6 +136,16 @@ linuxRunnerTest.each(["short-ttl", "warmup-failed"])(
     );
   },
 );
+
+linuxRunnerTest("reports safe registration errors and retains cleanup receipts", () => {
+  const f = fixture("register-failed");
+  expect(f.run("provision").status).toBe(0);
+  const result = f.run("register", { BOAT_VM_RECEIPT: f.value("vm") });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("Boat runner registration failed (23)");
+  expect(`${result.stdout}${result.stderr}`).not.toMatch(/fixture-secret|fixture-private-key/);
+  expect(JSON.parse(f.value("runner")).runnerID).toBe(43);
+});
 
 linuxRunnerTest("deletes the VM even when deregistration fails", () => {
   const f = fixture();
