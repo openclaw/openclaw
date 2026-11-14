@@ -114,8 +114,11 @@ export function buildExecExitOutcome(params: {
   timeoutSec: number | null | undefined;
   processContinuationAvailable: boolean;
 }): ExecProcessOutcome {
+  // A missing exit status is not evidence of success. Keep the nullable code
+  // on the existing failed/aborted path instead of inventing a successful zero.
+  const hasCapturedExitCode = params.exit.exitCode !== null;
   const exitCode = params.exit.exitCode ?? 0;
-  const isNormalExit = params.exit.reason === "exit";
+  const isNormalExit = params.exit.reason === "exit" && hasCapturedExitCode;
   const isShellFailure = exitCode === 126 || exitCode === 127;
   const status: ExecProcessOutcome["status"] =
     isNormalExit && !isShellFailure ? "completed" : "failed";
