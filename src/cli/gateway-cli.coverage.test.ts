@@ -514,6 +514,8 @@ describe("gateway-cli coverage", () => {
         OPENCLAW_TEST_FILE_LOG: "1",
       },
       async () => {
+        // This fixture selects a new config after earlier exports cached their log target.
+        resetLogger();
         // A relative namespace suffix must not acquire the current home prefix.
         const cwd = vi.spyOn(process, "cwd").mockReturnValue(userProfile);
         try {
@@ -535,6 +537,7 @@ describe("gateway-cli coverage", () => {
           }
         } finally {
           cwd.mockRestore();
+          resetLogger();
         }
       },
     );
