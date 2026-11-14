@@ -123,6 +123,19 @@ beforeEach(() => {
 });
 
 describe("pw-session page enumeration", () => {
+  it("completes extension discovery when the relay omits an unattached tab", async () => {
+    const healthy = tab("HEALTHY", "Healthy", "https://example.org/");
+    const fixture = makePageEnumerationBrowser([healthy]);
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    await expect(
+      listPagesViaPlaywright({
+        cdpUrl,
+        requireCompleteTargetList: true,
+        timeoutMs: 100,
+      }),
+    ).resolves.toEqual(expectedTabs(healthy));
+  });
+
   it("does not wait for an extension-internal target that Playwright does not publish", async () => {
     const fixture = makePageEnumerationBrowser([
       {
