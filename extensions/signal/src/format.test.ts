@@ -51,6 +51,19 @@ describe("Signal formatting", () => {
     }
   });
 
+  it("does not duplicate URLs whose destination is percent-encoded", () => {
+    const wiki = "https://ja.wikipedia.org/wiki/東京";
+    expect(markdownToSignalText(`See ${wiki}`).text).toBe(`See ${wiki}`);
+    expect(markdownToSignalText(`[${wiki}](${wiki})`).text).toBe(wiki);
+    expect(markdownToSignalText("https://example.com/?q=a|b").text).toBe(
+      "https://example.com/?q=a|b",
+    );
+    // Decoded whitespace no longer reads as one URL, so the destination stays visible.
+    expect(markdownToSignalText("https://example.com/a%20b").text).toBe(
+      "https://example.com/a b (https://example.com/a%20b)",
+    );
+  });
+
   it("marks a transcript-role header promoted to a chunk boundary", () => {
     const header = "user[2026-07-02]";
     const chunks = markdownToSignalTextChunks(`padding padding ${header} question`, 25);
