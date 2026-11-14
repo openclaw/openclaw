@@ -35,6 +35,7 @@ const en = {
         waking: "Waking memory…",
         hibernating: "Memory is hibernating",
         needsAttention: "Memory needs attention",
+        unavailable: "Memory is unavailable",
         noSearchRuntime: "Host memory search is unavailable",
         noSearchRuntimeDescription:
           "{engine} does not provide a host memory search runtime. Other memory integrations may run independently.",
