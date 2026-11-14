@@ -209,7 +209,7 @@ function createPolicyFixture(storePath: string) {
     readJobs: () => loadCronStore(storePath),
     commandRunner,
     invoke,
-    tool: (identity: AgentRuntimeIdentity) => {
+    tool: (identity: AgentRuntimeIdentity, creatorToolAllowlist?: string[]) => {
       gatewayCall.mockImplementation(async (method: string, _options: unknown, params: unknown) => {
         const caller = getGatewayToolCallerIdentity();
         const response = await invoke(method, params as Record<string, unknown>, {
@@ -226,6 +226,7 @@ function createPolicyFixture(storePath: string) {
         config: getRuntimeConfigSnapshot() ?? {},
         runId: identity.operationalRunInstance.runId,
         agentSessionKey: identity.sessionKey,
+        creatorToolAllowlist,
       });
     },
   };
@@ -757,7 +758,18 @@ it("limits personal reminder reads and removal to the originating human in one t
   });
 });
 
-it("manages an accepted personal reminder from a fresh nonowner topic turn", async () => {
+it.each([
+  {
+    label: "one-shot reminder",
+    schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+    tools: [],
+  },
+  {
+    label: "tool-using recurring job",
+    schedule: { kind: "every", everyMs: 60_000 },
+    tools: ["read"],
+  },
+])("manages an accepted $label from a fresh nonowner topic turn", async ({ schedule, tools }) => {
   vi.stubEnv("OPENAI_API_KEY", "synthetic-reminder-fixture-key");
   await withCron(async ({ cron, tool, invoke }) => {
     const sessionKey = "agent:main:telegram:group:-1001234567890:topic:99";
@@ -824,7 +836,7 @@ it("manages an accepted personal reminder from a fresh nonowner topic turn", asy
       try {
         return await runWithCronCreatorAuthorityCapability(scope, () =>
           withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, () =>
-            tool(identity).execute(runId, args),
+            tool(identity, ["read"]).execute(runId, args),
           ),
         );
       } finally {
@@ -836,19 +848,33 @@ it("manages an accepted personal reminder from a fresh nonowner topic turn", asy
       action: "add",
       job: {
         name: "Personal reminder",
-        schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+        schedule,
         sessionTarget: "current",
-        payload: { kind: "agentTurn", message: "Reminder", toolsAllow: [] },
+        payload: { kind: "agentTurn", message: "Reminder", toolsAllow: tools },
         delivery: { mode: "announce" },
       },
     });
     const id = (created.details as { id: string }).id;
-    expect(cron.getJob(id)).toMatchObject({ ownerProfileId: "alice", enabled: true });
+    expect(cron.getJob(id)).toMatchObject({
+      ownerProfileId: "alice",
+      enabled: true,
+      payload: { toolsAllow: tools },
+    });
     expect((await turn("alice", { action: "list", includeDisabled: true })).details).toMatchObject({
       jobs: [expect.objectContaining({ id })],
       total: 1,
     });
     expect((await turn("alice", { action: "get", jobId: id })).details).toMatchObject({ id });
+    await turn("alice", { action: "update", jobId: id, job: { enabled: false } });
+    expect(cron.getJob(id)).toMatchObject({ enabled: false, payload: { toolsAllow: tools } });
+    await expect(
+      turn("alice", {
+        action: "update",
+        jobId: id,
+        job: { payload: { toolsAllow: ["write"] } },
+      }),
+    ).rejects.toThrow(/cannot be carried from this creator turn/);
+    expect(cron.getJob(id)).toMatchObject({ payload: { kind: "agentTurn", toolsAllow: tools } });
     for (const [profileId, route] of [
       ["bob", {}],
       ["alice", { threadId: "100" }],
