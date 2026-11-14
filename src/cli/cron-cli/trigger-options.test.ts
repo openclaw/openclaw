@@ -88,14 +88,6 @@ async function reject(args: readonly string[], message: string, reads: string[] 
   expect(methods()).toEqual(reads);
 }
 
-it("rejects an on-exit cwd on a stream metadata edit before sending a patch", async () => {
-  existing({ schedule: { kind: "stream", command: ["node", "events.mjs"], mode: "line" } });
-  await rejectEdit(
-    ["--stream-cwd", "/new-stream", "--on-exit-cwd", "/watch"],
-    "--on-exit-cwd requires --on-exit",
-  );
-});
-
 beforeEach(() => {
   callGatewayFromCli.mockReset().mockImplementation(async (method: string) => gatewayReply(method));
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -145,7 +137,7 @@ it.each`
   ${{ webhook: "https://example.invalid/hook", "clear-channel": true }} | ${"--webhook cannot be combined with chat delivery options"}
   ${{ webhook: "not-a-url" }}                                           | ${"--webhook must be a valid http(s) URL"}
   ${{ session: "main", "system-event": "wakeup", channel: "telegram" }} | ${"require an agentTurn job or a non-main command or script job with delivery"}
-  ${{ "on-exit-cwd": "/repo" }}                                         | ${"--on-exit-cwd requires --on-exit"}
+  ${{ "stream-cwd": "/new-stream", "on-exit-cwd": "/repo" }}            | ${"--on-exit-cwd requires --on-exit"}
   ${{ "on-exit": "./watch.sh", every: "5m" }}                           | ${"Choose at most one schedule change"}
   ${{ "stream-batch-ms": "100", tz: "UTC" }}                            | ${"not valid with stream schedule edits"}
 `(
