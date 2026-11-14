@@ -16,6 +16,7 @@ const historyReadKinds = [
   "transcript-watermark",
   "transcript-stats",
   "transcript-message-presence",
+  "transcript-inactive-identity",
   "transcript-anchors",
   "transcript-raw-delta",
   "transcript-visible-delta",
