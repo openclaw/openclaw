@@ -617,7 +617,7 @@ describe("channel detail", () => {
     const detail = container.querySelector(".channels-detail")!;
 
     expect(detail.querySelector(heading)).not.toBeNull();
-    expect(text(detail, ".channels-detail__status .settings-status")).toBe("Not configured");
+    expect(detail.querySelector(".channels-detail__status .settings-status")).toBeNull();
     expect(detail.querySelector(probeButton)).not.toBeNull();
     expect(texts(detail, ".channels-detail__footer button")).toEqual(["Run setup"]);
     expect(detail.textContent).not.toContain("n/a");
@@ -656,6 +656,24 @@ describe("channel detail", () => {
     );
     expect(text(container, ".channels-detail [role=alert]")).toBe("Status read failed");
   });
+
+  it.each([false, true])(
+    "withholds channel health until a snapshot exists (retrying: %s)",
+    (loading) => {
+      const props = createProps(null);
+      props.channels.channelsLoading = loading;
+      props.channels.channelsError = "Status read failed";
+      const container = document.createElement("div");
+      renderChannelView(
+        renderChannelDetail,
+        { channelId: "telegram", label: "Telegram", props, onClose: () => {}, onSetup: () => {} },
+        container,
+      );
+      expect(container.querySelector(".channels-detail__status .settings-status")).toBeNull();
+      expect(text(container, ".channels-detail [role=alert]")).toBe("Status read failed");
+      expect(container.querySelector<HTMLButtonElement>(probeButton)?.disabled).toBe(loading);
+    },
+  );
 
   it("uses the list row's words for every state", () => {
     const state = (status: Record<string, unknown> | null) =>
