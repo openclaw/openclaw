@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -17,16 +16,14 @@ import {
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { events, makeReleaseFixture, runOwner } from "./worker-config-owner-fixture.mjs";
+import { events, makeReleaseFixture, runLibrary, runOwner } from "./worker-config-owner-fixture.mjs";
 
 const candidateSha = "b".repeat(40);
 const previousSha = "c".repeat(40);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function proof(f, args, input) {
-  const result = spawnSync(process.execPath, ["--no-warnings", f.library, ...args.map(String)], {
-    cwd: f.root, env: f.env, input, encoding: "utf8", timeout: 30_000,
-  });
+  const result = runLibrary(f, args, { input });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
@@ -82,7 +79,7 @@ if (command === "recovery-finish") {
   fs.writeFileSync(${JSON.stringify(f.finishSnapshot)}, JSON.stringify(snapshot()));
   fs.writeFileSync(${JSON.stringify(f.finishArguments)}, JSON.stringify(args));
 }
-const result = spawnSync(process.execPath, ["--no-warnings", ${JSON.stringify(f.library)}, ...args], {stdio:"inherit"});
+const result = spawnSync(process.execPath, ["--no-warnings", ${JSON.stringify(f.library)}, ...args], {stdio:["inherit","inherit","inherit","ignore","ignore","ignore","ignore","ignore","ignore",9]});
 if (result.status === 0) event("proof." + command + ".ok");
 process.exit(result.status ?? 1);
 `);

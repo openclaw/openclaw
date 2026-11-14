@@ -7,7 +7,7 @@ import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { describe } from "node:test";
 import { fileURLToPath } from "node:url";
-import { events, makeReleaseFixture, runOwner } from "./worker-config-owner-fixture.mjs";
+import { events, makeReleaseFixture, runLibrary, runOwner } from "./worker-config-owner-fixture.mjs";
 import { names, descriptor, call as adoptController, ok as adoptionOK } from "./retained-controller-adoption-test-support.mjs";
 import { nativeFixture } from "./retained-repair-lifecycle-test-support.mjs";
 
@@ -240,9 +240,7 @@ function writeProcess(root, pid, startTicks) {
 const verifiedTarget = "c".repeat(40);
 
 function releaseProofResult(fixture, args, input) {
-  return spawnSync("bash", ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"', "fixture-proof", process.execPath, "--no-warnings", fixture.library, ...args], {
-    encoding: "utf8", env: fixture.env, input, timeout: 30000,
-  });
+  return runLibrary(fixture, args, { input });
 }
 
 function releaseProof(fixture, ...args) {

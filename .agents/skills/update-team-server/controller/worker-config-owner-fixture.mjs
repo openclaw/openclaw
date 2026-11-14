@@ -1040,6 +1040,14 @@ function makeOwnerFixture(t, scenario, workerConfig, schemaVersions = { state: 1
   return fixture;
 }
 
+export function runLibrary(fixture, args, { input, imports = [] } = {}) {
+  assert.ok(fixture.realCommands.flock, "library fixture requires real flock");
+  return spawnSync(fixture.realCommands.bash,
+    ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"', "fixture-library",
+      process.execPath, "--no-warnings", ...imports.flatMap(path => ["--import", path]), fixture.library, ...args.map(String)],
+    { cwd: fixture.root, env: fixture.env, input, encoding: "utf8", timeout: 30000 });
+}
+
 export function runOwner(fixture, args = [], input) {
   // The synthetic proc tree models process identity, not native process or FD lifetime.
   return spawnSync(
