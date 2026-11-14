@@ -166,6 +166,12 @@ const threadBindingSchema = z
     dynamicToolsFingerprint: optionalStringSchema,
     dynamicToolsContainDeferred: optionalBooleanSchema,
     webSearchThreadConfigFingerprint: optionalStringSchema,
+    /**
+     * Whether the turn that wrote this fingerprint requested search at all.
+     * A disabled fingerprint alone cannot tell an explicit policy denial from
+     * a capability-silent plan, so cold-support settlement needs this fact.
+     */
+    webSearchRequested: z.boolean().optional().catch(undefined),
     nativeSkillIsolationFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,

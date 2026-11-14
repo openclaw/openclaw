@@ -155,4 +155,67 @@ export function registerThreadWebSearchBindingTests({
       config/read thread/read thread/resume thread/inject_items`.split(/\s+/),
     ]);
   });
+  it("keeps the turn-1 thread when a cold unsupported verdict resolves as supported on turn 2", async () => {
+    const { sessionFile } = createPaths();
+
+    const fixture = await createSequentialLifecycleHarness((requestParams) =>
+      threadStartResult((requestParams as { threadId: string }).threadId),
+    );
+    const { client, request } = fixture;
+
+    // A cold app-server can report missing web-search capability before its
+    // model metadata hydrates; that definitive-looking "unsupported" verdict
+    // must not pin the conversation to a replacement when support resolves.
+    await startOrResumeThread({
+      client,
+      nativeProviderWebSearchSupport: "unsupported",
+      webSearchAllowed: true,
+    });
+    await fixture.endTurn("thread-1");
+    const savedAfterColdVerdict = await readCodexAppServerBinding(sessionFile);
+    expect(savedAfterColdVerdict?.threadId).toBe("thread-1");
+    expect(savedAfterColdVerdict?.webSearchThreadConfigFingerprint).toContain("disabled");
+
+    const resumedBinding = await startOrResumeThread({
+      client,
+      nativeProviderWebSearchSupport: "supported",
+      webSearchAllowed: true,
+    });
+
+    expect(resumedBinding.threadId).toBe("thread-1");
+    expect(request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(1);
+  });
+
+  it("rotates when an explicitly disabled search policy is re-enabled", async () => {
+    const { sessionFile } = createPaths();
+
+    const fixture = await createSequentialLifecycleHarness((requestParams) =>
+      threadStartResult((requestParams as { threadId: string }).threadId),
+    );
+    const { client, request } = fixture;
+
+    // The disabled fingerprint of an explicit denial has the same shape as the
+    // uninformed cold-probe plan; only the recorded request fact can tell them
+    // apart and keep the persistent policy edit rotating.
+    await startOrResumeThread({
+      client,
+      nativeProviderWebSearchSupport: "supported",
+      persistentWebSearchAllowed: false,
+      webSearchAllowed: false,
+    });
+    await fixture.endTurn("thread-1");
+    const savedAfterDenial = await readCodexAppServerBinding(sessionFile);
+    expect(savedAfterDenial?.threadId).toBe("thread-1");
+    expect(savedAfterDenial?.webSearchRequested).toBe(false);
+
+    const resumedBinding = await startOrResumeThread({
+      client,
+      nativeProviderWebSearchSupport: "supported",
+      persistentWebSearchAllowed: true,
+      webSearchAllowed: true,
+    });
+
+    expect(resumedBinding.threadId).toBe("thread-2");
+    expect(request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(2);
+  });
 }

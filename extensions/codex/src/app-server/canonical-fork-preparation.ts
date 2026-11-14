@@ -317,6 +317,7 @@ export async function prepareCanonicalCodexFork(params: {
       userMcpServersFingerprint: fingerprintUserMcpServersConfigPatch(userMcp),
       mcpServersFingerprint: bundleMcp.fingerprint,
       webSearchThreadConfigFingerprint: fingerprintJsonObject(webSearch.threadConfig),
+      webSearchRequested: webSearchAllowed,
       pluginAppsFingerprint: apps?.fingerprint,
       pluginAppsInputFingerprint: apps?.inputFingerprint,
       pluginAppPolicyContext: apps?.policyContext,
