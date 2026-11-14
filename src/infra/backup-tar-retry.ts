@@ -1,5 +1,6 @@
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { sleep } from "../utils/sleep.js";
+import { describeLockedBackupSource } from "./backup-locked-source.js";
 import { hasErrnoCode } from "./errno.js";
 
 const BACKUP_TAR_MAX_ATTEMPTS = 3;
@@ -26,7 +27,10 @@ export async function writeTarArchiveWithRetry<T>(params: {
       const suffix = offendingPath
         ? ` (last offending path: ${offendingPath}, ${attemptSuffix})`
         : ` (${attemptSuffix})`;
-      throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
+      const hint = describeLockedBackupSource(failure);
+      throw new Error(`Backup archive write failed: ${final.message}${suffix}${hint}`, {
+        cause: final,
+      });
     }
     // The writer owns checked cleanup inside the private staging directory.
     // A fresh path keeps retries independent when a changed entry is preserved.

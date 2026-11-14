@@ -885,6 +885,8 @@ permissions or close the program using that file, then retry the backup or
 update. Unreadable files are never assumed to be non-SQLite or silently skipped;
 an update must capture them safely before replacing the installation.
 
+A running managed browser keeps durable profile files such as `Default/Network/Cookies` open, and on Windows those files are locked. When a backup stops because a file under `browser/<profile>/user-data/` is in use, the error names the profile; stop it with `openclaw browser --browser-profile <profile> stop`, then run the backup again. The backup never skips a locked profile file, so a completed archive always contains the whole profile.
+
 Managed SQLite snapshots cover the shared OpenClaw database, the quarantine and
 integrity-verification store, and per-agent databases declared by configuration,
 recorded in the captured durable agent registry, or discovered at
