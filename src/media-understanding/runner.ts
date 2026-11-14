@@ -508,7 +508,7 @@ async function runAttachmentEntries(
               entry,
               entryType,
               outcome: "failed",
-              reason: String(attempt.error),
+              error: attempt.error,
             }),
           );
         }
@@ -555,7 +555,7 @@ async function runAttachmentEntries(
             entry,
             entryType,
             outcome: "failed",
-            reason: String(err),
+            error: err,
           }),
         );
         if (shouldLogVerbose()) {
@@ -790,7 +790,7 @@ export async function runCapability(
     attachmentDispositions[attachment.index] = output
       ? { kind: "handled" }
       : attempts.length > 0
-        ? { kind: "failed" }
+        ? { kind: "failed", cause: attempts.findLast((attempt) => attempt.cause)?.cause }
         : { kind: "no-model" };
     attachmentDecisions.push({
       attachmentIndex: attachment.index,

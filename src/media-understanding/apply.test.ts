@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { ProviderHttpError } from "../agents/provider-http-errors.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type {
   MediaUnderstandingCapabilityConfig,
@@ -377,6 +379,40 @@ describe("applyMediaUnderstanding", () => {
       Body: "[Audio attachment could not be analyzed]",
       BodyForAgent: ctx.Body,
     });
+  });
+
+  const httpFailure = (status: number, code?: string) =>
+    new ProviderHttpError(`Audio transcription failed (HTTP ${status})`, {
+      status,
+      code,
+      body: "provider prose that must not reach the agent",
+    });
+  const quota = "provider account is out of quota (429 insufficient_quota)";
+  it.each([
+    [
+      [httpFailure(401, "invalid_authentication")],
+      "provider rejected the credential (401 invalid_authentication)",
+    ],
+    [[httpFailure(429, "insufficient_quota")], quota],
+    [[httpFailure(429)], "provider rate limited the request (429)"],
+    [[httpFailure(400, "Bearer sk-reflected secret")], "provider rejected the request (400)"],
+    // The fallback's failure explains the outcome in both the marker and the summary.
+    [[httpFailure(401, "invalid_api_key"), httpFailure(429, "insufficient_quota")], quota],
+    [[new Error("boom")], undefined],
+  ])("names the classified provider cause (case %#)", async (failures, cause) => {
+    const ctx = await createAudioCtx();
+    const transcribeAudio = vi.fn<TranscribeAudio>();
+    failures.forEach((failure) => transcribeAudio.mockRejectedValueOnce(failure));
+    const models = failures.map((_, index) => `whisper-${index}`);
+    await applyAudio(ctx, transcribeAudio, {
+      cfg: configuredMedia(
+        models.map((model) => ({ provider: "groq", model, capabilities: ["audio"] })),
+      ),
+    });
+    expect(transcribeAudio).toHaveBeenCalledTimes(failures.length);
+    expect(ctx.Body).toBe(`[Audio attachment could not be analyzed${cause ? `: ${cause}` : ""}]`);
+    const decision = ctx.MediaUnderstandingDecisions?.find((entry) => entry.capability === "audio");
+    expect(decision && formatDecisionSummary(decision)).toMatch(`reason=${cause ?? "boom"}`);
   });
 
   it("falls back to a CLI transcript after provider failure", async () => {
