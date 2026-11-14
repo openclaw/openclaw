@@ -330,13 +330,13 @@ try {
     selectionPreparations++;
     return prepareSelection(...args);
   };
-  // This fixture supplies only the context fields consumed by sessions.catalog.list.
+  // Supply the context fields consumed by catalog and sidebar reads.
   const context = bindSessionRowProjection(
     {
       getRuntimeConfig: () => cfg,
       logGateway: createSubsystemLogger("benchmark/catalog"),
-      subscribeSessionEvents() {},
-      forgetConnectionAncestors() {},
+      subscribeSessionEvents(_connId: string) {},
+      forgetConnectionAncestors(_connId: string) {},
     },
     () => {
       projectionAcquisitions++;
