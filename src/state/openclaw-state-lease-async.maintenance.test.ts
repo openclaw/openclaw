@@ -53,6 +53,7 @@ vi.mock("./openclaw-state-db-cache.js", () => ({
 vi.mock("./openclaw-state-lease-process-exit.js", () => ({
   registerProcessExitLeaseCleanup: () => mocks.unregisterExit,
 }));
+// mock-isolation: Keep native SQLite/storage outside this controlled worker-lease fixture.
 vi.mock("./openclaw-state-lease-storage.js", () => ({
   createOpenClawStateLeaseLostErrorFromDatabase: mocks.forbidden,
   STATE_LEASE_WRITE_BACKOFF: { initialMs: 25, maxMs: 250, factor: 1.5, jitter: 0.25 },
