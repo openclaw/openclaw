@@ -27,6 +27,7 @@ import {
   runCommandForTest,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mts";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   fixtureReceiptClientSource,
@@ -168,17 +169,11 @@ async function createPackageTarball(
       typeof buildInfo === "string" ? buildInfo : JSON.stringify(buildInfo),
     );
   }
-  const tarball = path.join(dir, "openclaw.tgz");
-  await new Promise<void>((resolve, reject) => {
-    execFile("tar", ["-czf", tarball, "-C", dir, "package"], (error) => {
-      if (error) {
-        reject(toLintErrorObject(error, "Non-Error rejection"));
-        return;
-      }
-      resolve();
-    });
+  return await packToArchive({
+    pkgDir: root,
+    outDir: dir,
+    outName: "openclaw.tgz",
   });
-  return tarball;
 }
 
 async function createArtifactFixture(
