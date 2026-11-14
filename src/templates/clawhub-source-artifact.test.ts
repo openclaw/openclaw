@@ -41,6 +41,25 @@ it("rejects the obsolete openclaw.claw selector even for a verified release", as
   expect(await readFile(join(f.root, "package.json"))).toEqual(f.metadata);
 });
 
+it("includes safe manifest diagnostics when a verified release is invalid", async () => {
+  const f = await fixture({ template: "CLAW.md" });
+  await writeFile(
+    join(f.root, "CLAW.md"),
+    '---\nschemaVersion: 1\nagent: { id: published-template }\nmetadata: { "untrusted\\e[31m": 1 }\nmcpServers:\n  first: { url: https://first.example/mcp }\n  second: { url: https://second.example/mcp }\n---\nPublished instructions.\n',
+  );
+
+  const error = await f.read().catch((cause: unknown) => cause);
+  expect(error).toMatchObject({
+    code: "clawhub_manifest_invalid",
+    message: expect.stringContaining("invalid_manifest $.mcpServers.first: Invalid input"),
+  });
+  expect(error).toHaveProperty(
+    "message",
+    expect.stringContaining("invalid_manifest $.mcpServers.second: Invalid input"),
+  );
+  expect(error).toHaveProperty("message", expect.not.stringContaining("\u001b"));
+});
+
 it.each(["CLAW.md", null])(
   "rejects a legacy key alongside the canonical selector: %s",
   async (claw) => {
