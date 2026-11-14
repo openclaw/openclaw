@@ -62,7 +62,7 @@ export type WorkboardBulkDialog =
       observedCards: WorkboardCard[];
       priority: WorkboardPriority | "";
       agentId: string;
-      labels: string;
+      labels: string[];
       labelMode: "keep" | "add" | "replace" | "remove";
     };
 
@@ -103,7 +103,7 @@ export type WorkboardUiState = {
   draftNotes: string;
   draftStatus: WorkboardStatus;
   draftPriority: WorkboardPriority;
-  draftLabels: string;
+  draftLabels: string[];
   draftAgentId: string;
   draftSessionKey: string;
   draftTemplateId: WorkboardTemplateId | "";
