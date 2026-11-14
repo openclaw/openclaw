@@ -5,7 +5,7 @@ import {
   closeUpdateFixtureDatabases,
   resetUpdateFixtureModules,
 } from "./update-fixture.test-support.js";
-import { idleActiveWorkInspectors } from "./update-startup-suite.test-support.js";
+import { expectNoCalls, idleActiveWorkInspectors } from "./update-startup-suite.test-support.js";
 
 let { sessionChanges } = await import("../sessions/session-row-changes.js");
 let { createGatewaySchedulerClock, createTestGatewayScheduler } =
@@ -33,7 +33,7 @@ async function importUpdateFixtureModules() {
   ({ getUpdateSchedule } = await import("./update-status-state.js"));
 }
 
-const { checkTelemetryUpdateMock, versionMock } = await vi.hoisted(
+const { checkTelemetryUpdateMock, refreshRemoteModelCatalogMock, versionMock } = await vi.hoisted(
   () => import("./update-startup.test-support.js"),
 );
 let state: OpenClawTestState;
@@ -52,10 +52,13 @@ beforeEach(async () => {
       OPENCLAW_NO_AUTO_UPDATE: undefined,
       OPENCLAW_SUPERVISOR_MODE: undefined,
       NODE_ENV: "production",
+      TZ: "UTC",
       VITEST: undefined,
     },
   });
   versionMock.value = "1.0.0";
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+  refreshRemoteModelCatalogMock.mockClear();
   clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
   vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
   scheduler = createTestGatewayScheduler(clock.clock);
@@ -169,4 +172,31 @@ it("uses sub-hourly windows, skips clock jumps, and rearms hot schedule changes"
   await clock.advanceBy(0);
   await clock.advanceBy(60_000);
   expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
+});
+
+it("defers automatic update and catalog checks until constrained memory recovers", async () => {
+  vi.mocked(checkUpdateStatus).mockClear();
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 * 1024 * 1024);
+  const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 * 1024);
+  const applyRemoteCatalogUpdate = vi.fn(async () => "unchanged" as const);
+  check = createGatewayUpdateCheck({
+    lifecycle,
+    getConfig: () => ({}),
+    log: { info: vi.fn() },
+    isNixMode: false,
+    applyRemoteCatalogUpdate,
+  });
+  check.start();
+
+  await clock.advanceBy(0);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  await clock.advanceBy(60_000);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  available.mockReturnValue(1024 * 1024 * 1024);
+  await clock.advanceBy(59_999);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  await clock.advanceBy(1);
+  expect(checkUpdateStatus).toHaveBeenCalledOnce();
+  expect(refreshRemoteModelCatalogMock).toHaveBeenCalledOnce();
+  expect(applyRemoteCatalogUpdate).toHaveBeenCalledOnce();
 });

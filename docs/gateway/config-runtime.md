@@ -90,8 +90,10 @@ The `models` root also owns global model-catalog behavior.
   `https://catalog.openclaw.ai/models/v3/catalog.json`. Mirrors can serve v1, v2, or v3.
   After an upgrade, a catalog downloaded from the earlier v1 or v2 default keeps
   serving, including offline, until the first v3 download succeeds.
-  The Gateway checks in the background at startup and every six hours. A compatible download
-  is prepared and published as one model-and-pricing generation without a
+  The Gateway checks in the background at startup and every six hours. On constrained
+  hosts, automatic checks wait for more than 20% available process memory and retry
+  once per minute; manual `openclaw models refresh` remains immediate. A compatible
+  download is prepared and published as one model-and-pricing generation without a
   Gateway restart. Readers retain the current generation until preparation
   succeeds; a release whose bundled catalog is newer always wins.
 

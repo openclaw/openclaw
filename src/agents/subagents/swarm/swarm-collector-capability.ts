@@ -12,6 +12,9 @@ import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { ToolInputError, type AnyAgentTool } from "../../tools/common.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
+/** Requester-facing tools a non-interactive collector turn must never receive. */
+const COLLECTOR_WITHHELD_TOOL_NAMES = new Set(["ask_user", "sessions_send", "sessions_yield"]);
+
 const COLLECTOR_FIELDS = ["collect", "outputSchema", "groupId"] as const;
 const WAIT_GUIDANCE = SESSIONS_SPAWN_COLLECTOR_GUIDANCE.replace(
   /\.$/u,
@@ -38,6 +41,29 @@ type JoinedSpawn = {
   subagentProfile?: import("../../../plugins/subagent-profile.types.js").RegisteredSubagentProfile;
 };
 const joinedSpawns = new AsyncLocalStorage<JoinedSpawn>();
+
+/**
+ * Applies the collector run contract to an already policy-filtered surface.
+ * Collector output is run transport rather than an operator-configurable
+ * capability, so it survives allowlists that would otherwise drop it.
+ */
+export function applySwarmCollectorToolContract<T extends { name: string }>(
+  tools: T[],
+  params: { swarmCollector?: boolean; structuredOutputTool?: T },
+): T[] {
+  if (!params.swarmCollector) {
+    return tools;
+  }
+  const collectorTools = tools.filter((tool) => !COLLECTOR_WITHHELD_TOOL_NAMES.has(tool.name));
+  const { structuredOutputTool } = params;
+  if (
+    structuredOutputTool &&
+    !collectorTools.some((tool) => tool.name === structuredOutputTool.name)
+  ) {
+    collectorTools.push(structuredOutputTool);
+  }
+  return collectorTools;
+}
 
 export function markCollectorReaderTool<T extends AnyAgentTool>(tool: T): T {
   return bindAgentToolAvailability(tool, readerBinding);

@@ -30,7 +30,7 @@ import {
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
-import { readBackupEngineImage } from "./physical-store.js";
+import { readBackupEngineImage } from "./physical-store-inspection.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");

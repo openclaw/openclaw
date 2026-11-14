@@ -97,7 +97,6 @@ export default defineConfig({
           ],
           cwd: repoRoot,
           signal: context.signal,
-          timeoutMs: 90_000,
           maxBytes,
           env: {
             PATH: process.env.PATH,

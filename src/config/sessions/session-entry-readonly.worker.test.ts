@@ -43,7 +43,7 @@ import {
 } from "./session-entry-read-runtime.js";
 import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 const sqliteError = (message: string, errcode = 26) =>
   Object.assign(new Error(message), { code: "ERR_SQLITE_ERROR", errcode });
@@ -370,7 +370,7 @@ it("keeps source refusal outside the ordinary row-error result", () =>
 it("propagates raw worker failure without calling the optional-data consumer", () =>
   withOpenClawTestState({ label: "readonly-entry-transport" }, async ({ env, path }) => {
     const failure = new Error("worker could not start");
-    using _ = vi.spyOn(targetDiscoveryLane.pool, "run").mockRejectedValueOnce(failure);
+    using _ = vi.spyOn(sessionStoreLane.pool, "run").mockRejectedValueOnce(failure);
     const consume = vi.fn(async () => undefined);
 
     await expect(

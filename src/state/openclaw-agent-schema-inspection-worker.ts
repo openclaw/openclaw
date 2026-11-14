@@ -140,8 +140,10 @@ export function createAgentSchemaInspectionWorker() {
           if (!existsSync(snapshotPath ?? input.pathname)) {
             return null;
           }
-          const { readBackupEngine, readBackupEngineImage } =
-            await import("../infra/database-engine/physical-store.js");
+          const [{ readBackupEngine }, { readBackupEngineImage }] = await Promise.all([
+            import("../infra/database-engine/physical-store.js"),
+            import("../infra/database-engine/physical-store-inspection.js"),
+          ]);
           const physical = snapshotPath
             ? readBackupEngineImage(snapshotPath, input.pathname)
             : readBackupEngine(input.pathname);

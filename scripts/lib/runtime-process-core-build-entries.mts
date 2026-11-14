@@ -38,6 +38,7 @@ export const runtimeProcessCoreEntrypoints = [
 ];
 
 const privateChunkRuntimeProcessEntrypoints = [
+  runtimeProcessEntrypoints.cronReadOnly,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
   runtimeProcessEntrypoints.sessionDiskBudget,
   runtimeProcessEntrypoints.pluginModelCatalogRead,

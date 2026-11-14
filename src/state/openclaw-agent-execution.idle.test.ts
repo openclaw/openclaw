@@ -14,6 +14,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import * as native from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -134,13 +135,31 @@ it("retires a CLI one-shot's warm executor after the CLI window", async () => {
   expect(closedAgents()).toEqual(["one-shot"]);
 });
 
-it("keeps warm executors through restart drain until marker persistence releases cleanup", async () => {
-  await fillIdlePool();
+it("drains dependent readers before retiring warm executors during shutdown", async () => {
+  const first = await fillIdlePool();
+  const readerClosed = vi.fn();
+  registerOpenClawAgentDatabaseSyncResource({
+    agentId: first.agentId,
+    path: first.path,
+    revoke() {},
+    close: readerClosed,
+  });
+  const firstNative = opened[0];
+  assert(firstNative);
+  firstNative.close.mockImplementation(async () => {
+    expect(readerClosed).toHaveBeenCalledOnce();
+  });
+  const borrowing = capture("second");
+  await borrowing.prepare(source);
   markGatewayRestartDraining();
   await vi.advanceTimersByTimeAsync(0);
   expect(closedAgents()).toEqual([]);
   beginGatewayShutdownCleanup();
-  await vi.advanceTimersByTimeAsync(0);
+  expect(closedAgents()).toEqual([]);
+  await borrowing.release();
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
+  expect(closedAgents()).toEqual(["second"]);
+  await closeOpenClawAgentDatabasesAsync();
   expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
 });

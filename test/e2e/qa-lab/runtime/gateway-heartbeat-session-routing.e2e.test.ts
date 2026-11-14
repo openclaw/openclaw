@@ -173,7 +173,7 @@ describe("Gateway automation session routing", () => {
       const pluginDir = path.join(workspaceDir, "plugins", PROOF_CHANNEL_ID);
       const deliveryTracePath = path.join(tempHome, "heartbeat-deliveries.jsonl");
       const cronReadyEvent = nextId("cron-reconciled");
-      const cronReconciled = createDeferred<unknown>();
+      let cronReconciled = createDeferred<unknown>();
       const onCronReconciled = (event: unknown) => cronReconciled.resolve(event);
       await writeRouteCapturePlugin({ pluginDir, tracePath: deliveryTracePath, cronReadyEvent });
 
@@ -285,6 +285,7 @@ describe("Gateway automation session routing", () => {
         });
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close({ reason: "heartbeat catalog-owner restart proof" });
+        cronReconciled = createDeferred<unknown>();
         gateway = await startGatewayWithClient({
           cfg: config,
           configPath,

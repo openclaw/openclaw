@@ -1,14 +1,11 @@
 import { expect, vi } from "vitest";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { isActiveStoreWriter } from "../../shared/store-writer-queue.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { test } from "./session-entry-fixture.test-support.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
-import { projectionLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 test.for(["refusal", "eviction"] as const)(
   "settles ordered exact-entry %s without waiting on the following writer",
@@ -18,46 +15,35 @@ test.for(["refusal", "eviction"] as const)(
     writeSessionEntry(database, sessionKey, entry);
     // The test owns worker settlement, so discard the write's retained row facts.
     sessionChanges.invalidate({ sessionKey, storePath: database.path, factsInvalidated: true });
-    const cleanupEntered = createDeferredCore();
-    const releaseCleanup = createDeferredCore();
-    const writerSettled = createDeferredCore();
     let following: Promise<string> | undefined;
     let reads = 0;
-    const rotate = projectionLane.pool.rotate.bind(projectionLane.pool);
     using mocks = new DisposableStack();
+    const { pool } = sessionStoreLane;
+    const run = pool.run.bind(pool);
+    mocks.use(vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false));
     mocks.use(
-      vi.spyOn(projectionLane.pool, "rotate").mockImplementation(() => {
-        if (!isActiveStoreWriter(SQLITE_SESSION_WRITER_QUEUES, database.path)) {
-          return rotate();
+      vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+        const request = typeof input === "function" ? await input() : input;
+        if (request.kind !== "session-exact-entries") {
+          return run(request, controls);
         }
-        cleanupEntered.resolve();
-        return Promise.race([writerSettled.promise, releaseCleanup.promise]);
+        reads += 1;
+        if (settlement === "eviction") {
+          await run(request, controls);
+        }
+        return settlement === "refusal"
+          ? { ok: false, error: { kind: "projection", sessionId: entry.sessionId } }
+          : {
+              ok: true,
+              value: {
+                kind: "session-exact-entries",
+                entries: [{ sessionKey, entry }],
+                lifecycleTimestamps: {},
+              },
+              closedHistoryDatabase: request.database,
+            };
       }),
     );
-    for (const { pool } of [projectionLane, targetDiscoveryLane]) {
-      const run = pool.run.bind(pool);
-      mocks.use(vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false));
-      mocks.use(
-        vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
-          const request = typeof input === "function" ? await input() : input;
-          if (request.kind !== "session-exact-entries") {
-            return run(request, controls);
-          }
-          reads += 1;
-          return settlement === "refusal"
-            ? { ok: false, error: { kind: "projection", sessionId: entry.sessionId } }
-            : {
-                ok: true,
-                value: {
-                  kind: "session-exact-entries",
-                  entries: [{ sessionKey, entry }],
-                  lifecycleTimestamps: {},
-                },
-                closedHistoryDatabase: request.database,
-              };
-        }),
-      );
-    }
     const consume = vi.fn();
     const reading = withSessionEntriesFromStoresInWorker(
       [{ ...readInput, projection: "list" }],
@@ -68,18 +54,12 @@ test.for(["refusal", "eviction"] as const)(
       {
         ordered: true,
         onReadAdmitted: () => {
-          following = runOpenClawAgentWriteAdmission(options, () => {
-            writerSettled.resolve();
-            return "following writer";
-          });
+          following = runOpenClawAgentWriteAdmission(options, () => "following writer");
         },
       },
     );
     try {
-      const outcome = await Promise.race([
-        reading.catch((error: unknown) => error),
-        cleanupEntered.promise.then(() => new Error("Cleanup waits on its queued writer")),
-      ]);
+      const outcome = await reading.catch((error: unknown) => error);
       if (settlement === "refusal") {
         expect(outcome).toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
         expect(consume).not.toHaveBeenCalled();
@@ -90,7 +70,6 @@ test.for(["refusal", "eviction"] as const)(
       expect(reads).toBe(1);
       await expect(following).resolves.toBe("following writer");
     } finally {
-      releaseCleanup.resolve();
       await Promise.allSettled([reading, following]);
     }
   },

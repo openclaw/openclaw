@@ -18,10 +18,8 @@ import { assertExecutionPolicy } from "../cron/service/jobs-validation.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
-import {
-  loadCronRuntimeAuthorities,
-  replaceCronRuntimeAuthorityRows,
-} from "../cron/store/runtime-authority-store.js";
+import { loadCronRuntimeAuthorities } from "../cron/store/runtime-authority-store.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";

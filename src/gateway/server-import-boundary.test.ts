@@ -9,6 +9,8 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const graph = createRuntimeImportGraph(
   repoRoot,
   [
+    "src/gateway/call.ts",
+    "src/gateway/config-get-response.ts",
     "src/gateway/method-scopes.ts",
     "src/gateway/server-cron.ts",
     "src/gateway/worker-environments/worker-exec-approval.ts",
@@ -26,6 +28,8 @@ const graph = createRuntimeImportGraph(
     "src/auto-reply/reply/session-updates.ts",
     "src/agents/command/attempt-execution.ts",
     "src/gateway/agent-turn/agent-turn-service.ts",
+    "src/daemon/service-command.ts",
+    "src/config/legacy-workboard-database.ts",
   ],
   { sourceImports: true },
 );
@@ -83,6 +87,18 @@ console.log("prewarm-cold-selection-ok");`,
         expect(result.stdout).toContain("prewarm-cold-selection-ok");
       },
     );
+  });
+
+  it.each([
+    ["src/gateway/call.ts", "src/gateway/method-scopes.ts"],
+    ["src/gateway/call.ts", "src/infra/worker-task-pool.ts"],
+    ["src/gateway/call.ts", "src/infra/client-credential-store.ts"],
+    ["src/gateway/config-get-response.ts", "src/config/runtime-schema.ts"],
+    ["src/daemon/service-command.ts", "src/daemon/launchd-runtime.ts"],
+    ["src/daemon/service-command.ts", "src/daemon/schtasks-layout.ts"],
+    ["src/config/legacy-workboard-database.ts", "src/infra/database-engine/open.ts"],
+  ])("loads %s without the demand-only %s", (entry, deferred) => {
+    expect(collectStaticValueImports(entry)).not.toContain(path.normalize(deferred));
   });
 
   it("prepares worker exec approvals without loading model completion", () => {

@@ -51,7 +51,7 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
-import { maintenanceLane, rotateDatabaseWorkers } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane, rotateDatabaseWorkers } from "./session-transcript-worker-resources.js";
 import * as transcriptWorker from "./session-transcript-worker-runtime.js";
 import { messageEvent, timedMessageEvent } from "./transcript-message.test-support.js";
 
@@ -85,7 +85,7 @@ describe("SQLite session branches", () => {
       sessionKey: "agent:main:branch-reader-sibling",
       headline: "Sibling conversation",
     });
-    await rotateDatabaseWorkers(maintenanceLane);
+    await rotateDatabaseWorkers(sessionStoreLane);
     const scopes = [scope, sibling];
     const reads = vi.spyOn(transcriptWorker, "runSessionBranchSummaryWorkerRequest");
     const before = await Promise.all(scopes.map(listSessionBranches));
