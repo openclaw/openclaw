@@ -29,10 +29,38 @@ Advantages:
     on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
   </Step>
-  <Step title="Run a SearXNG instance">
+  <Step title="Run a SearXNG instance with JSON enabled">
     ```bash
-    docker run -d -p 8888:8080 searxng/searxng
+    mkdir -p ./searxng/config
+    docker run -d --name searxng -p 8888:8080 \
+      -v "$PWD/searxng/config:/etc/searxng" \
+      searxng/searxng
     ```
+
+    On first start, the container creates
+    `./searxng/config/settings.yml`. If it already has a `search.formats`
+    list, add `json` there and keep `html` enabled. If it has no `search`
+    section, add this block while preserving the other generated settings:
+
+    ```yaml
+    search:
+      formats:
+        - html
+        - json
+    ```
+
+    When a `search` section already exists, update its `formats` list instead
+    of adding a duplicate `search` key. Save the file, restart SearXNG, and
+    verify the JSON API before configuring OpenClaw:
+
+    ```bash
+    docker restart searxng
+    curl -fsS -o /dev/null -w 'HTTP %{http_code}\n' \
+      'http://localhost:8888/search?q=openclaw&format=json'
+    ```
+
+    The request should return HTTP 200. SearXNG returns HTTP 403 when a
+    requested format is disabled.
 
     Or use any existing SearXNG deployment you have access to. See the
     [SearXNG documentation](https://docs.searxng.org/) for production setup.
@@ -149,8 +177,8 @@ and `language` as per-call overrides.
 - **Version requirement** -- the plugin declares `minHostVersion: >=2026.6.9`
 
 <Tip>
-  For SearXNG JSON API to work, make sure your SearXNG instance has the `json`
-  format enabled in its `settings.yml` under `search.formats`.
+  For an existing SearXNG instance, make sure the `json` format is enabled in
+  its `settings.yml` under `search.formats`.
 </Tip>
 
 ## Related
