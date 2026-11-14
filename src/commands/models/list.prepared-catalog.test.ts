@@ -141,6 +141,30 @@ function expectModelRows(models: Partial<ModelRow>[], details: Record<string, un
   );
 }
 
+it("exposes the scoped manual-selection permission in the full inventory", async () => {
+  // The Gateway projects the scoped permission for policy-aware clients; the CLI
+  // row keeps it beside availability instead of collapsing the two (#194738).
+  vi.mocked(gateway.callGateway).mockResolvedValue({
+    models: [
+      { ...model, id: "Blocked", name: "Blocked model", manualSelectionAllowed: false },
+      { ...model, id: "Allowed", name: "Allowed model" },
+    ],
+  });
+
+  await list({ json: true });
+
+  // The CLI must advertise the policy capability so the Gateway projects the field.
+  expect(gateway.callGateway).toHaveBeenCalledWith(
+    expect.objectContaining({
+      caps: expect.arrayContaining(["model-selection-policy"]),
+    }),
+  );
+  expectModelRows([
+    { key: "catalog-provider/Blocked", available: true, manualSelectionAllowed: false },
+    { key: "catalog-provider/Allowed", available: true, manualSelectionAllowed: null },
+  ]);
+});
+
 function gatewayModels(...models: ModelChoice[]) {
   vi.mocked(gateway.callGateway).mockResolvedValue({ models });
 }
