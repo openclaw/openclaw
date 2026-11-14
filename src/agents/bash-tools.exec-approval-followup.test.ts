@@ -211,9 +211,14 @@ describe("exec approval followup", () => {
   it("ends observation at its deadline without competing direct delivery", async () => {
     const events = diagnostics(true);
     const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    // Control the monotonic clock so the observation deadline (6 min) elapses
+    // even though real wall time barely moves.
+    let jump = false;
+    const clock = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => startedAt + (jump ? 10 * 60_000 : 0));
     acceptRun().mockImplementationOnce(async () => {
-      clock.mockReturnValue(startedAt + 10 * 60_000);
+      jump = true;
       throw new Error("gateway permanently unreachable");
     });
     await expect(send(pending)).resolves.toBe(true);
@@ -235,6 +240,29 @@ describe("exec approval followup", () => {
         },
       }),
     );
+  });
+
+  it("rounds the fractional remaining observation budget to an integer agent.wait timeout", async () => {
+    // performance.now() has fractional precision; the gateway agent.wait schema
+    // requires an integer timeoutMs, so a fractional remaining budget must be
+    // rounded (up) rather than passed through and rejected at the validation
+    // boundary. Here the remaining budget is 59999.75ms (fractional).
+    let ticks = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => {
+      ticks += 1;
+      if (ticks === 1) {
+        return 1000; // observation deadline seed (integer)
+      }
+      return 301_000.25; // remainingMs = 59999.75 (fractional, below the 60s cap)
+    });
+    acceptRun().mockResolvedValueOnce({ runId, status: "ok" });
+    await send(pending);
+    const waitCall = vi.mocked(callGatewayTool).mock.calls[1];
+    expect(waitCall?.[0]).toBe("agent.wait");
+    const params = requireRecord(waitCall?.[2], "agent.wait params");
+    expect(Number.isInteger(params.timeoutMs)).toBe(true);
+    expect(params.timeoutMs).toBe(60_000);
+    expectCalls(2, 0);
   });
 
   it.each([
