@@ -17,6 +17,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystem
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -73,6 +74,30 @@ class SystemHandlerTest {
 
     assertTrue(result.ok)
     assertEquals(1, poster.posts)
+  }
+
+  @Test
+  @Config(instrumentedPackages = ["ai.openclaw.app.node"])
+  fun handleSystemNotify_keepsDistinctPostsInTheSameMillisecond() {
+    val context: Application = RuntimeEnvironment.getApplication()
+    Shadows.shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    val manager = context.getSystemService(NotificationManager::class.java)
+    val now = ShadowSystem.currentTimeMillis()
+
+    for (body in listOf("first", "second")) {
+      val result = SystemHandler(context).handleSystemNotify("""{"title":"OpenClaw","body":"$body"}""")
+      assertTrue(result.ok)
+    }
+
+    assertEquals(now, ShadowSystem.currentTimeMillis())
+    val bodies =
+      manager.activeNotifications
+        .map {
+          it.notification.extras
+            .getCharSequence("android.text")
+            .toString()
+        }.toSet()
+    assertEquals(setOf("first", "second"), bodies)
   }
 
   @Test
