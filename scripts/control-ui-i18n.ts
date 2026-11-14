@@ -22,7 +22,6 @@ import {
   createControlUiLocaleSyncPlan,
   extractTranslationPlaceholders,
   flattenTranslations,
-  type GlossaryEntry,
   type LocaleEntry,
   type LocaleMeta,
   type TranslationBatchItem,
@@ -88,19 +87,6 @@ const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id
 };
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = CONTROL_UI_LOCALE_ENTRIES;
-
-const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
-  { source: "OpenClaw", target: "OpenClaw" },
-  { source: "Gateway", target: "Gateway" },
-  { source: "Control UI", target: "Control UI" },
-  { source: "Skills", target: "Skills" },
-  { source: "Tailscale", target: "Tailscale" },
-  { source: "WhatsApp", target: "WhatsApp" },
-  { source: "Telegram", target: "Telegram" },
-  { source: "Discord", target: "Discord" },
-  { source: "Signal", target: "Signal" },
-  { source: "iMessage", target: "iMessage" },
-];
 
 function usage(): never {
   console.error(
@@ -215,10 +201,6 @@ function cacheKey(segmentId: string, textHash: string, targetLocale: string): st
   );
 }
 
-function glossaryPath(entry: LocaleEntry): string {
-  return path.join(I18N_ASSETS_DIR, `glossary.${entry.locale}.json`);
-}
-
 function metaPath(entry: LocaleEntry, assetsDir: string): string {
   return path.join(assetsDir, `${entry.locale}.meta.json`);
 }
@@ -301,15 +283,6 @@ function assertPlaceholderParity(
   );
 }
 
-async function loadGlossary(filePath: string): Promise<GlossaryEntry[]> {
-  if (!existsSync(filePath)) {
-    return [];
-  }
-  const raw = await readFile(filePath, "utf8");
-  const parsed = JSON.parse(raw) as GlossaryEntry[];
-  return Array.isArray(parsed) ? parsed : [];
-}
-
 async function loadMeta(filePath: string): Promise<LocaleMeta | null> {
   if (!existsSync(filePath)) {
     return null;
@@ -318,21 +291,8 @@ async function loadMeta(filePath: string): Promise<LocaleMeta | null> {
   return JSON.parse(raw) as LocaleMeta;
 }
 
-function buildGlossaryPrompt(glossary: readonly GlossaryEntry[]): string {
-  if (glossary.length === 0) {
-    return "";
-  }
+function buildSystemPrompt(targetLocale: string): string {
   return [
-    "Required terminology (use exactly when the source term matches):",
-    ...glossary
-      .filter((entry) => entry.source.trim() && entry.target.trim())
-      .map((entry) => `- ${entry.source} -> ${entry.target}`),
-  ].join("\n");
-}
-
-function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntry[]): string {
-  const glossaryBlock = buildGlossaryPrompt(glossary);
-  const lines = [
     "You are a translation function, not a chat assistant.",
     `Translate UI strings from ${controlUiLanguageLabel(SOURCE_LOCALE)} to ${controlUiLanguageLabel(targetLocale)}.`,
     "",
@@ -349,11 +309,7 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
     "- Use fluent, neutral product UI language.",
     "- Do not add explanations, comments, or extra keys.",
     "- Never return an empty string for a key; if unsure, return the source text unchanged.",
-  ];
-  if (glossaryBlock) {
-    lines.push("", glossaryBlock);
-  }
-  return lines.join("\n");
+  ].join("\n");
 }
 
 function buildBatchPayload(items: readonly TranslationBatchItem[]) {
@@ -512,8 +468,8 @@ class TranslationClient {
   private model: Model | undefined;
   private readonly systemPrompt: string;
 
-  constructor(targetLocale: string, glossary: readonly GlossaryEntry[]) {
-    this.systemPrompt = buildSystemPrompt(targetLocale, glossary);
+  constructor(targetLocale: string) {
+    this.systemPrompt = buildSystemPrompt(targetLocale);
   }
 
   reset() {
@@ -733,7 +689,6 @@ type NativeTranslationEntry = {
 export async function translateNativeEntries(
   entries: readonly NativeTranslationEntry[],
   targetLocale: string,
-  glossary: readonly GlossaryEntry[] = [],
   validateTranslation?: TranslationValidator,
 ): Promise<Map<string, string>> {
   if (!hasTranslationProvider()) {
@@ -748,7 +703,7 @@ export async function translateNativeEntries(
     sourceContext: entry.sourceContext,
   }));
   const batches = buildTranslationBatches(pending);
-  const client = new TranslationClient(targetLocale, glossary);
+  const client = new TranslationClient(targetLocale);
   const translated = new Map<string, string>();
   for (const [batchIndex, batch] of batches.entries()) {
     const result = await translateBatch(client, batch, {
@@ -821,8 +776,6 @@ async function syncLocale(
   // stable. Treat it as pending so the locale bot can repair source-only PRs.
   const reusableExistingFlat = filterPlaceholderCompatibleTranslations(sourceFlat, existingFlat);
   const previousMeta = await loadMeta(metaPath(entry, assetsDir));
-  const glossaryFilePath = glossaryPath(entry);
-  const glossary = await loadGlossary(glossaryFilePath);
   const allowTranslate = options.allowTranslate;
   const plan = createControlUiLocaleSyncPlan({
     allowTranslate,
@@ -865,7 +818,7 @@ async function syncLocale(
     logProgress(
       `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
-    const client = new TranslationClient(entry.locale, glossary);
+    const client = new TranslationClient(entry.locale);
     try {
       for (const [batchIndex, batch] of batches.entries()) {
         const translated = await translateBatch(client, batch, {
@@ -910,39 +863,26 @@ async function syncLocale(
   // fallback decisions and previous fallback metadata instead.
 
   const artifacts = plan.render({
-    defaultGlossary: DEFAULT_GLOSSARY,
     generatedAt: new Date().toISOString(),
-    glossary,
     workflow: CONTROL_UI_I18N_WORKFLOW,
   });
   assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);
 
   const expectedMeta = artifacts.meta;
-  const expectedGlossary = artifacts.glossary;
   const expectedTm = artifacts.translationMemory;
 
   const currentMeta = existsSync(metaPath(entry, assetsDir))
     ? await readFile(metaPath(entry, assetsDir), "utf8")
     : "";
-  const currentGlossary = existsSync(glossaryFilePath)
-    ? await readFile(glossaryFilePath, "utf8")
-    : "";
   const currentTm = existsSync(tmPath(entry, assetsDir))
     ? await readFile(tmPath(entry, assetsDir), "utf8")
     : "";
 
-  const changed =
-    currentMeta !== expectedMeta ||
-    (!catalog.authored && currentGlossary !== expectedGlossary) ||
-    currentTm !== expectedTm;
+  const changed = currentMeta !== expectedMeta || currentTm !== expectedTm;
 
   if (changed && !options.checkOnly && options.write) {
     await mkdir(assetsDir, { recursive: true });
     await writeFile(metaPath(entry, assetsDir), expectedMeta, "utf8");
-    // Plugins share the glossary read-only. Matrix patches contain only this locale's TM/meta.
-    if (!catalog.authored) {
-      await writeFile(glossaryFilePath, expectedGlossary, "utf8");
-    }
     if (expectedTm) {
       await writeFile(tmPath(entry, assetsDir), expectedTm, "utf8");
     } else if (existsSync(tmPath(entry, assetsDir))) {

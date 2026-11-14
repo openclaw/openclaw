@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { basename, dirname, extname } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { ensureGitCommit } from "./lib/merge-head-diff-base.mjs";
 
 const SCHEMA = "openclaw.release-backport-companions.v1";
 const compareText = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
@@ -27,7 +28,7 @@ function git(args, { allowEmpty = false } = {}) {
 }
 
 function resolveCommit(ref, label) {
-  const sha = git(["rev-parse", "--verify", `${ref}^{commit}`]).trim();
+  const sha = ensureGitCommit(ref);
   if (!/^[a-f0-9]{40}$/u.test(sha)) {
     throw new Error(`${label} did not resolve to an exact commit`);
   }

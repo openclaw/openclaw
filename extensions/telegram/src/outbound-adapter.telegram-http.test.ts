@@ -59,6 +59,7 @@ const telegramRegistry = () =>
   createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]);
 const approveId = "plugin:123e4567-e89b-12d3-a456-426614174000";
 const location = { latitude: 48.858844, longitude: 2.294351 };
+const effectId = "5104841245755180586";
 const droppedButton = () => ({ label: "Copy manually", value: "x".repeat(65) });
 const uploadBytes = async (fields: Record<string, unknown>, key: string) =>
   Buffer.from(await resolveTelegramTestUpload(fields, key).arrayBuffer());
@@ -171,14 +172,9 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       ...cfg,
       agents: { ownership: "explicit", entries: { main: {}, other: {} } },
     };
-    const request = {
-      cfg: ownerCfg,
-      accountId: "default",
-      to: "123",
-      text: "Owner routing control",
-      payload: { text: "Owner routing control" },
-    };
-    await expect(registeredSend(request)).rejects.toMatchObject({
+    const sendControl = () =>
+      sendPayload({ text: "Owner routing control" }, { cfg: ownerCfg, accountId: "default" });
+    await expect(sendControl()).rejects.toMatchObject({
       name: "PlatformMessageNotDispatchedError",
       retryable: false,
       message: expect.stringContaining("no explicit owner"),
@@ -186,17 +182,25 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     expect(requests).toEqual([]);
 
     ownerCfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
-    await registeredSend(request);
+    await sendControl();
     expectMethods("sendMessage");
     expect(requests[0]!.fields.text).toBe("Owner routing control");
   });
 
-  it.each([false, true])(
-    "delivers selected-account rich presentations with explicit HTML=%s",
-    async (html) => {
+  it.each([
+    [false, "123", effectId],
+    [true, "123", effectId],
+    [true, "-1001", undefined],
+  ] as const)(
+    "delivers selected-account presentations with explicit HTML=%s to %s",
+    async (html, to, expectedEffect) => {
       await sendPayload(
-        { presentation: { blocks: [pipelineTable, ...buttonPresentation(continueButton).blocks] } },
         {
+          presentation: { blocks: [pipelineTable, ...buttonPresentation(continueButton).blocks] },
+          channelData: { telegram: { messageEffectId: effectId } },
+        },
+        {
+          to,
           cfg: accountConfig(
             "selected",
             { botToken: cfg.channels.telegram.botToken, richMessages: true },
@@ -207,6 +211,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         },
       );
       expectMethods(html ? "sendMessage" : "sendRichMessage");
+      expect(requestFields().message_effect_id).toBe(expectedEffect);
       const fields = requests[0]!.fields;
       if (!html) {
         expect(fields.rich_message).toMatchObject({
@@ -443,7 +448,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       {
         text: "[origin: another conversation]",
         location: { ...location, accuracy: 5 },
-        channelData: { telegram: { quoteText: "exact quote" } },
+        channelData: { telegram: { quoteText: "exact quote", messageEffectId: effectId } },
       },
       { replyToId: "888" },
     );
@@ -451,11 +456,13 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     expect(requests[0]!.fields.text).toBe("[origin: another conversation]");
     expect(requests[0]!.fields.reply_parameters).toBeUndefined();
     expect(requests[0]!.fields.reply_to_message_id).toBeUndefined();
+    expect(requestFields().message_effect_id).toBeUndefined();
     expectFields(
       {
         ...location,
         reply_parameters: { message_id: 888, quote: "exact quote" },
         horizontal_accuracy: 5,
+        message_effect_id: effectId,
       },
       1,
     );
@@ -579,12 +586,8 @@ describe("Telegram registered adapter conformance over HTTP", () => {
 
     it("returns bounded cancellation rather than fake delivery or hook diagnostics", async () => {
       const registry = telegramRegistry();
-      addTestHook({
-        registry,
-        pluginId: "cancel",
-        hookName: "message_sending",
-        handler: () => ({ cancel: true, cancelReason: "private-hook-diagnostics" }),
-      });
+      const cancel = () => ({ cancel: true, cancelReason: "private-hook-diagnostics" });
+      addTestHook({ registry, pluginId: "cancel", hookName: "message_sending", handler: cancel });
       initializeGlobalHookRunner(registry);
       const result = await action("send", { to: "123", message: "cancel me" });
       expect(result.details).toEqual({
@@ -600,6 +603,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       const result = await send({
         to: "tg:123",
         message: "Quarterly results",
+        effect: effectId,
         presentation: {
           blocks: [
             { type: "text", text: "Do not duplicate this block" },
@@ -612,6 +616,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         expect(text).toContain(content);
       }
       expect(text).not.toContain("Do not duplicate this block");
+      expect(requestFields().message_effect_id).toBe(effectId);
       expect(requests[0]!.fields.reply_markup).toEqual(
         replyMarkup({ text: "Deploy", callback_data: "env|prod" }),
       );
@@ -659,6 +664,73 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         degradedDelivery: { fallback: "not_delivered" },
       });
     });
+
+    it.each([false, true])(
+      "never makes disabled presentation buttons clickable on action send, edit, and payload send (rich=%s)",
+      async (richMessages) => {
+        actionCfg.channels!.telegram!.richMessages = richMessages;
+        const staging = { label: "✓ Staging", value: "env|staging", disabled: true };
+        const presentation = buttonPresentation(
+          { label: "Deploy", value: "env|prod", disabled: false },
+          staging,
+        );
+        await send({ message: "Choose", presentation });
+        await action("edit", { chatId: "123", messageId: 1, presentation });
+        const inertEdit = await action("edit", {
+          chatId: "123",
+          messageId: 1,
+          presentation: buttonPresentation(staging),
+        });
+        await sendPayload({ text: "Choose", presentation }, { cfg: actionCfg });
+        // An all-disabled keyboard still retires the previous buttons on plain accounts.
+        expect(inertEdit.details).toMatchObject({ ok: true });
+        expect(asNullableRecord(inertEdit.details)?.degradedDelivery).toEqual(
+          richMessages
+            ? undefined
+            : expect.objectContaining({
+                fallback: "not_delivered",
+                reasons: ["disabled_unsupported"],
+              }),
+        );
+        const deploy = { text: "Deploy", callback_data: "env|prod" };
+        // Native disabled buttons follow the rich-message opt-in; plain accounts keep the label as text.
+        const inert: Array<Record<string, unknown>> = richMessages
+          ? [{ text: "✓ Staging", disabled: {} }]
+          : [];
+        const sendMethod = richMessages ? "sendRichMessage" : "sendMessage";
+        expect(
+          requests.map(({ method, fields }) => ({
+            method,
+            reply_markup: fields.reply_markup,
+            labelInText: JSON.stringify(fields.text ?? fields.rich_message ?? null).includes(
+              "Staging",
+            ),
+          })),
+        ).toEqual([
+          {
+            method: sendMethod,
+            reply_markup: replyMarkup(deploy, ...inert),
+            labelInText: !richMessages,
+          },
+          {
+            method: "editMessageReplyMarkup",
+            reply_markup: replyMarkup(deploy, ...inert),
+            labelInText: false,
+          },
+          {
+            method: "editMessageReplyMarkup",
+            reply_markup: { inline_keyboard: richMessages ? [inert] : [] },
+            labelInText: false,
+          },
+          {
+            method: sendMethod,
+            reply_markup: replyMarkup(deploy, ...inert),
+            labelInText: !richMessages,
+          },
+        ]);
+        expect(JSON.stringify(requests)).not.toContain("env|staging");
+      },
+    );
 
     it("uploads all action attachment aliases instead of echoing their paths", async () => {
       const firstBytes = await fs.readFile(photoPath);
@@ -781,12 +853,10 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       expect(requests[0]!.fields.name).toBe("Primary");
       expectFields({ message_thread_id: 99, icon_custom_emoji_id: "5231419410191111111" }, 2);
       resetTelegramTopicNameCacheForTest();
-      await expect(
-        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "ops" })),
-      ).resolves.toBe("Renamed");
-      await expect(
-        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "main" })),
-      ).resolves.toBeUndefined();
+      const opsStore = resolveStorePath(actionCfg.session?.store, { agentId: "ops" });
+      const mainStore = resolveStorePath(actionCfg.session?.store, { agentId: "main" });
+      await expect(getTopicName("-1001", 99, opsStore)).resolves.toBe("Renamed");
+      await expect(getTopicName("-1001", 99, mainStore)).resolves.toBeUndefined();
     });
   });
 });

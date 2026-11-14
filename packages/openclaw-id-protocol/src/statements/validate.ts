@@ -8,13 +8,19 @@ import {
   isRandomId,
   isSha256Hex,
 } from "../keys.js";
+import { checkVersion, SUPPORTED_STATEMENT_VERSIONS, type StatementVersion } from "../version.js";
 import {
-  MEMBER_ROLES,
+  MAX_NODE_DISPLAY_NAME,
+  MAX_NODE_PLATFORM,
+  MAX_NODE_SURFACE_ITEMS,
+  MAX_NODE_SURFACE_NAME,
   MEMBERSHIP_OPS,
   OWNER_CAPABILITIES,
   REVOCATION_KINDS,
   ROOT_EPOCH,
   STATEMENT_TYPES,
+  type MemberRole,
+  type NodeDescription,
   type SignedStatement,
   type StatementType,
 } from "./types.js";
@@ -69,6 +75,21 @@ const nonNegative: Check = predicate(
   (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0,
   "expected integer >= 0",
 );
+// A non-empty list of protocol versions (integers >= 1), strictly ascending: one spelling.
+const versionList: Check = predicate(
+  (v) =>
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v.length <= MAX_LIST &&
+    v.every(
+      (item, index) =>
+        typeof item === "number" &&
+        Number.isSafeInteger(item) &&
+        item >= 1 &&
+        (index === 0 || item > v[index - 1]),
+    ),
+  "expected ascending list of versions",
+);
 const clawId: Check = predicate(isClawId, "expected claw id (32 lowercase hex)");
 const randomId: Check = predicate(isRandomId, "expected id (32 lowercase hex)");
 const ed25519Key: Check = predicate(isEd25519PublicKey, "expected ed25519:<64 hex>");
@@ -96,9 +117,9 @@ function nullable(check: Check): Check {
 }
 
 // A list of unique items, each passing `check`.
-function list(check: Check, minLength = 0): Check {
+function list(check: Check, minLength = 0, maxLength = MAX_LIST): Check {
   return (value, path) => {
-    if (!Array.isArray(value) || value.length < minLength || value.length > MAX_LIST) {
+    if (!Array.isArray(value) || value.length < minLength || value.length > maxLength) {
       fail(path, "expected list");
     }
     value.forEach((item, index) => check(item, `${path}[${index}]`));
@@ -108,7 +129,18 @@ function list(check: Check, minLength = 0): Check {
   };
 }
 
-// An object with exactly these members. Unknown members are rejected in v1-draft.
+const OPTIONAL = new WeakSet<Check>();
+
+// A member that may be absent; when present it must pass `check`.
+function optional(check: Check): Check {
+  const wrapped: Check = (value, path) => check(value, path);
+  OPTIONAL.add(wrapped);
+  return wrapped;
+}
+
+// An object with exactly these members. Unknown members are rejected: a new signed field
+// needs a new envelope version (docs/versioning.md, "Unknown fields"). Pre-release v1-draft
+// additions use `optional` instead (statements.md, "Node-only statements and membership").
 function object(shape: Record<string, Check>): Check {
   return (value, path) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -123,6 +155,9 @@ function object(shape: Record<string, Check>): Check {
     }
     for (const [key, check] of Object.entries(shape)) {
       if (!Object.hasOwn(record, key)) {
+        if (OPTIONAL.has(check)) {
+          continue;
+        }
         fail(`${path}.${key}`, "missing field");
       }
       check(record[key], `${path}.${key}`);
@@ -145,7 +180,42 @@ function tagged(field: string, variants: Record<string, Check>): Check {
   };
 }
 
-const role = oneOf(MEMBER_ROLES);
+// These fields are shown in a terminal; reject embedded terminal controls at the signed boundary.
+// oxlint-disable-next-line no-control-regex
+const NODE_CONTROL_RE = /[\u0000-\u001f\u007f]/;
+const nodeText = (max: number): Check =>
+  predicate(
+    (v) => isText(v) && v.length > 0 && v.length <= max && !NODE_CONTROL_RE.test(v),
+    `expected non-empty text of at most ${max} UTF-16 code units without control characters`,
+  );
+const nodeDescription = object({
+  display_name: nodeText(MAX_NODE_DISPLAY_NAME),
+  platform: nodeText(MAX_NODE_PLATFORM),
+  commands: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
+  caps: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
+});
+/** Validates an opaque, signed member role name without assigning it authority or rank. */
+export function isMemberRole(value: unknown): value is MemberRole {
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value);
+}
+
+const role = predicate(
+  isMemberRole,
+  "expected role name: 1-64 lowercase ASCII letters, digits, - or _, starting with a letter",
+);
+
+/** Whether an untrusted value is a bounded node description (as signed in NodeRedemption). */
+export function isNodeDescription(value: unknown): value is NodeDescription {
+  try {
+    nodeDescription(value, "$");
+    return true;
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      return false;
+    }
+    throw error;
+  }
+}
 const ownerDeviceCertBody = object({
   device_pub: ed25519Key,
   peer_keys: list(irohKey),
@@ -157,10 +227,10 @@ const ownerDeviceCertBody = object({
   root_epoch: rootEpoch,
 });
 
-// Envelope check for one statement type.
-function envelope(type: StatementType, body: Check): Check {
+// Envelope check for one statement type under one envelope version.
+function envelope(type: StatementType, version: StatementVersion, body: Check): Check {
   return object({
-    v: predicate((v) => v === 1, "expected 1"),
+    v: predicate((v) => v === version, `expected ${version}`),
     type: oneOf([type]),
     body,
     signer: ed25519Key,
@@ -172,7 +242,8 @@ function envelope(type: StatementType, body: Check): Check {
   });
 }
 
-const BODIES: Record<StatementType, Check> = {
+// Body schemas of envelope version 1.
+const V1_BODIES: Record<StatementType, Check> = {
   OwnerDeviceCert: ownerDeviceCertBody,
   ServerBinding: object({
     claw_id: clawId,
@@ -197,6 +268,22 @@ const BODIES: Record<StatementType, Check> = {
     single_use: bool,
     secret_hash: sha256Hex,
   }),
+  NodeInviteCap: object({
+    claw_id: clawId,
+    invite_id: randomId,
+    label: text,
+    created_at: seconds,
+    expires_at: seconds,
+    secret_hash: sha256Hex,
+  }),
+  NodeRedemption: object({
+    description: nodeDescription,
+    claw_id: clawId,
+    invite_id: randomId,
+    peer_key: irohKey,
+    proof: sha256Hex,
+    requested_at: seconds,
+  }),
   MembershipChange: object({
     claw_id: clawId,
     seq: positive,
@@ -208,18 +295,36 @@ const BODIES: Record<StatementType, Check> = {
         peer_keys: list(irohKey, 1),
         invite_id: nullable(randomId),
       }),
+      add_member_device: object({
+        op: oneOf(["add_member_device"]),
+        account_id: nonEmptyText,
+        peer_key: irohKey,
+        device_pub: ed25519Key,
+        label: text,
+      }),
+      add_node: object({
+        op: oneOf(["add_node"]),
+        peer_key: irohKey,
+        label: text,
+        invite_id: randomId,
+      }),
+      remove_node: object({ op: oneOf(["remove_node"]), peer_key: irohKey }),
       remove: object({ op: oneOf(["remove"]), account_id: nonEmptyText }),
       set_role: object({ op: oneOf(["set_role"]), account_id: nonEmptyText, role }),
       revoke_device: object({ op: oneOf(["revoke_device"]), peer_key: irohKey }),
       add_owner_device: object({
         op: oneOf(["add_owner_device"]),
-        cert: (value, path) => envelope("OwnerDeviceCert", ownerDeviceCertBody)(value, path),
+        // A v1 MembershipChange carries a v1 certificate.
+        cert: (value, path) => envelope("OwnerDeviceCert", 1, ownerDeviceCertBody)(value, path),
+        node: optional(object({ peer_key: irohKey, label: text, description: nodeDescription })),
       }),
       deny_invite: object({ op: oneOf(["deny_invite"]), invite_id: randomId }),
     } satisfies Record<(typeof MEMBERSHIP_OPS)[number], Check>),
     issued_at: seconds,
   }),
   Revocation: object({
+    claw_id: clawId,
+    seq: nonNegative,
     target_fp: keyFp,
     target_kind: oneOf(REVOCATION_KINDS),
     reason: text,
@@ -232,10 +337,13 @@ const BODIES: Record<StatementType, Check> = {
     binding_seq: positive,
     owner_devices: list(object({ device_pub: ed25519Key, caps: list(oneOf(OWNER_CAPABILITIES)) })),
     owner_peer_keys: list(irohKey),
+    node_peer_keys: list(irohKey),
     members: list(object({ account_id: nonEmptyText, role, peer_keys: list(irohKey) })),
+    protocols: object({ statement: versionList, descriptor: versionList }),
     issued_at: seconds,
   }),
   InviteRedemption: object({
+    label: text,
     claw_id: clawId,
     invite_id: randomId,
     account_id: nonEmptyText,
@@ -244,12 +352,25 @@ const BODIES: Record<StatementType, Check> = {
     proof: sha256Hex,
     requested_at: seconds,
   }),
+  // Added to v1-draft in place (pre-release); see docs/versioning.md, "Owner reset".
+  RootReset: object({
+    claw_id: clawId,
+    new_root_pub: ed25519Key,
+    binding_seq: positive,
+    issued_at: seconds,
+  }),
 };
 
-/** Result of {@link parseStatement}. */
+// Body schemas per envelope version. Every supported version has its own complete table.
+const BODIES: Record<StatementVersion, Record<StatementType, Check>> = { 1: V1_BODIES };
+
+/**
+ * Result of {@link parseStatement}. `unsupported_version` is a well-formed envelope version
+ * this build does not implement; callers report it as "update required", not as tampering.
+ */
 export type ParseResult<T extends StatementType> =
   | { ok: true; statement: SignedStatement<T> }
-  | { ok: false; code: "malformed"; detail: string };
+  | { ok: false; code: "malformed" | "unsupported_version"; detail: string };
 
 /**
  * Validates an untrusted value as a signed statement, optionally of an expected type.
@@ -259,6 +380,20 @@ export function parseStatement<T extends StatementType = StatementType>(
   value: unknown,
   expectedType?: T,
 ): ParseResult<T> {
+  // The version is checked first: a later version may add statement types this build does
+  // not know, and those are unsupported, not malformed.
+  // SAFETY: optional member read; primitives and null yield undefined.
+  const version = checkVersion((value as { v?: unknown } | null)?.v, SUPPORTED_STATEMENT_VERSIONS);
+  if (version.kind === "malformed") {
+    return { ok: false, code: "malformed", detail: "$.v: expected envelope version" };
+  }
+  if (version.kind === "unsupported") {
+    return {
+      ok: false,
+      code: "unsupported_version",
+      detail: `$.v: envelope version ${version.version} is not supported`,
+    };
+  }
   // SAFETY: optional member read; primitives and null yield undefined or a non-string type.
   const type = (value as { type?: unknown } | null)?.type;
   // SAFETY: widening a literal tuple to its element supertype only for the membership test.
@@ -271,7 +406,7 @@ export function parseStatement<T extends StatementType = StatementType>(
   // SAFETY: `type` was checked against STATEMENT_TYPES above.
   const statementType = type as StatementType;
   try {
-    envelope(statementType, BODIES[statementType])(value, "$");
+    envelope(statementType, version.version, BODIES[version.version][statementType])(value, "$");
   } catch (error) {
     if (error instanceof SchemaError) {
       return { ok: false, code: "malformed", detail: error.message };

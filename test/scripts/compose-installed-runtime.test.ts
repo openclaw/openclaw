@@ -13,6 +13,7 @@ import {
   resolveInstalledRuntimeImageRecipe,
 } from "../../scripts/compose-installed-runtime.mts";
 import { verifyInstalledRuntimeImageInputs } from "../../scripts/lib/installed-runtime-image-inputs.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const runtimeCommit = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -675,6 +676,44 @@ describe("offline installed runtime composition", () => {
           "dist/extensions/demo/package.json",
         ]),
       );
+      const manifestPath = path.join(app, "package.json");
+      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+      manifest.exports = { "./plugin-sdk/demo": "./dist/plugin-sdk/demo.js" };
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+      const sdkFiles = {
+        "dist/plugin-sdk/demo.js": "export const singleton = {};\n",
+        "dist/plugin-sdk/private.js": "export const privateValue = true;\n",
+        "dist/extensions/demo/.setup/session-binding.mjs":
+          'export { singleton } from "openclaw/plugin-sdk/demo";\n' +
+          'export const loadPrivate = () => import("openclaw/plugin-sdk/private");\n',
+        "dist/extensions/demo/catalog-page.worker.js":
+          'export { singleton } from "openclaw/plugin-sdk/demo";\n',
+      };
+      for (const [file, contents] of Object.entries(sdkFiles)) {
+        await write(app, file, contents);
+      }
+      const inventoryPath = path.join(app, "dist/postinstall-inventory.json");
+      const inventory = JSON.parse(await fs.readFile(inventoryPath, "utf8"));
+      await fs.writeFile(inventoryPath, JSON.stringify([...inventory, ...Object.keys(sdkFiles)]));
+      const nativeImport = (cwd: string) =>
+        spawnSync(
+          resolveTestNodeExecPath(),
+          [
+            "--input-type=module",
+            "-e",
+            `
+import assert from "node:assert/strict";
+import { singleton } from "./dist/plugin-sdk/demo.js";
+import * as setup from "./dist/extensions/demo/.setup/session-binding.mjs";
+import * as worker from "./dist/extensions/demo/catalog-page.worker.js";
+assert.equal(setup.singleton, singleton);
+assert.equal(worker.singleton, singleton);
+await assert.rejects(setup.loadPrivate(), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
+`,
+          ],
+          { cwd, encoding: "utf8" },
+        );
+      expect(nativeImport(app).stderr).toContain("ERR_MODULE_NOT_FOUND");
       await write(app, "dist/stale.js", "obsolete");
       const finalize = () =>
         spawnSync(
@@ -696,6 +735,11 @@ describe("offline installed runtime composition", () => {
       }
       const finalized = finalize();
       expect(finalized.status, finalized.stderr).toBe(0);
+      const relocated = path.join(options.outputDir, "relocated");
+      await fs.rename(app, relocated);
+      const imported = nativeImport(relocated);
+      expect(imported.status, imported.stderr).toBe(0);
+      await fs.rename(relocated, app);
       await expect(fs.access(path.join(app, ".openclaw-lifecycle-pending"))).rejects.toThrow();
       await expect(fs.access(path.join(app, "dist/stale.js"))).rejects.toThrow();
       expect(

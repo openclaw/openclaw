@@ -14,7 +14,6 @@ import type { AgentHarnessCompletionScope } from "../../agent-harness-completion
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { PreparedAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { AgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
-import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type { ContextWindowInfo } from "../../context-window-guard.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
@@ -35,6 +34,7 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolEffectReceipt } from "../../tool-effect-receipt.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
+import type { ToolOutcomeObserver } from "../../tool-outcome-observation.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";

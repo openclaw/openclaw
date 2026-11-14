@@ -1,11 +1,13 @@
 // Reads transcript artifacts; live store acquisition stays with the caller.
 import fs from "node:fs";
-import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import {
+  isSessionArchiveDecodeError,
+  openSessionArchiveReader,
+} from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -95,15 +97,15 @@ async function readRecentSessionSnapshotFromPathAsync(
     return { messages: [], transcriptEvents: [] };
   }
   const { maxBytes, maxLines } = opts;
-  const handle = await fs.promises.open(filePath, "r");
+  const handle = await openSessionArchiveReader(filePath);
   let lines: string[];
   try {
     const stat = await handle.stat();
     assertArchiveTranscriptSource(filePath, stat, index.displaySource, sessionId);
-    const readLen = Math.min(stat.size, maxBytes);
-    const readStart = Math.max(0, stat.size - readLen);
+    const readLen = Math.min(index.byteSize, maxBytes);
+    const readStart = Math.max(0, index.byteSize - readLen);
     const buffer = Buffer.alloc(readLen);
-    const bytesRead = await readFileWindowFully(handle, buffer, readStart);
+    const bytesRead = await handle.read(buffer, readStart);
     const finalStat = await handle.stat();
     assertArchiveTranscriptSource(filePath, finalStat, index.displaySource, sessionId);
     if (bytesRead <= 0) {
@@ -154,34 +156,53 @@ function parseRecentTranscriptTailSnapshot(
 export class ArchivedTranscriptReader {
   constructor(private readonly scope: ArchivedTranscriptReadScope) {}
 
-  private async resolvePath(): Promise<string | null> {
-    if (this.scope.exactArchivePath) {
-      const exactPath = this.scope.exactArchivePath;
-      if ((await fs.promises.stat(exactPath).catch(() => null))?.isFile()) {
-        return materializeSessionArchiveForRead(exactPath);
-      }
-      return null;
-    }
-    const archives = await resolveSessionTranscriptResetArchiveCandidatesAsync(
-      this.scope.sessionId,
-      this.scope.storePath,
-      this.scope.sessionFile,
-      this.scope.agentId,
-    );
-    for (const archivePath of archives) {
-      if (!(await fs.promises.stat(archivePath).catch(() => null))?.isFile()) {
-        continue;
-      }
-      try {
-        return materializeSessionArchiveForRead(archivePath);
-      } catch (error) {
-        if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
-          throw error;
-        }
-        continue;
+  private async resolvePaths(): Promise<string[]> {
+    return this.scope.exactArchivePath
+      ? [this.scope.exactArchivePath]
+      : resolveSessionTranscriptResetArchiveCandidatesAsync(
+          this.scope.sessionId,
+          this.scope.storePath,
+          this.scope.sessionFile,
+          this.scope.agentId,
+        );
+  }
+
+  private async resolvePath(afterPath?: string): Promise<string | null> {
+    const archives = await this.resolvePaths();
+    for (const filePath of archives.slice(afterPath ? archives.indexOf(afterPath) + 1 : 0)) {
+      if ((await fs.promises.stat(filePath).catch(() => null))?.isFile()) {
+        return filePath;
       }
     }
     return null;
+  }
+
+  private canTryOlderArchive(error: unknown): boolean {
+    return (
+      !this.scope.exactArchivePath &&
+      isSessionArchiveDecodeError(error) &&
+      !hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")
+    );
+  }
+
+  private async *readableIndexes() {
+    for (const filePath of await this.resolvePaths()) {
+      try {
+        const index = await readSessionTranscriptIndex(filePath, this.scope.sessionId);
+        if (index) {
+          yield { filePath, index };
+        }
+      } catch (error) {
+        if (!this.canTryOlderArchive(error)) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  private async resolveIndexedPath() {
+    const first = await this.readableIndexes().next();
+    return first.done ? null : first.value;
   }
 
   async readSourcePage(
@@ -189,7 +210,7 @@ export class ArchivedTranscriptReader {
     snapshot: SessionTranscriptSourceSnapshot,
   ): Promise<ReadSessionMessagesResult> {
     const cursor = opts.cursor?.kind === "archive" ? opts.cursor : undefined;
-    const filePath = cursor?.path ?? (await this.resolvePath());
+    let filePath = cursor?.path ?? (await this.resolvePath());
     const nextBranch =
       opts.includeOffPathMessages && snapshot.indexedSeq >= 0
         ? { kind: "off-path" as const, snapshot, position: -1, messageSeq: snapshot.totalMessages }
@@ -197,11 +218,25 @@ export class ArchivedTranscriptReader {
     if (!filePath) {
       return { messages: [], nextCursor: nextBranch };
     }
-    const prepared = await prepareSessionTranscriptIndex(filePath, this.scope.sessionId);
-    if (cursor && prepared?.displaySource !== cursor.source) {
+    let start = cursor?.position ?? 0;
+    let prepared;
+    try {
+      prepared = await prepareSessionTranscriptIndex(filePath, this.scope.sessionId);
+    } catch (error) {
+      if (!this.canTryOlderArchive(error)) {
+        throw error;
+      }
+      filePath = await this.resolvePath(filePath);
+      if (!filePath) {
+        return { messages: [], nextCursor: nextBranch };
+      }
+      // A failed preparation already spent this call's budget; only pin the next source.
+      prepared = await prepareSessionTranscriptIndex(filePath, this.scope.sessionId, true);
+      start = 0;
+    }
+    if (cursor && filePath === cursor.path && prepared?.displaySource !== cursor.source) {
       throw new Error("Transcript archive changed during source pagination; retry the read");
     }
-    const start = cursor?.position ?? 0;
     if (prepared && !prepared.index) {
       return {
         messages: [],
@@ -266,13 +301,13 @@ export class ArchivedTranscriptReader {
     messageId: string,
     historyVisibility?: { sessionStartedAt?: number },
   ): Promise<ReadSessionMessageByIdResult> {
-    const filePath = await this.resolvePath();
-    if (!filePath) {
+    const resolved = await this.resolveIndexedPath();
+    if (!resolved) {
       return { oversized: false, found: false };
     }
-    const index = await readSessionTranscriptIndex(filePath, this.scope.sessionId);
-    const selected = index?.byId.get(messageId);
-    if (!index || !selected) {
+    const { filePath, index } = resolved;
+    const selected = index.byId.get(messageId);
+    if (!selected) {
       return { oversized: false, found: false };
     }
     const [entry] = await readIndexedTranscriptEntries(
@@ -319,14 +354,11 @@ export class ArchivedTranscriptReader {
   }
 
   async readMessageCandidatesById(messageId: string): Promise<unknown[]> {
-    const filePath = await this.resolvePath();
-    if (!filePath) {
+    const resolved = await this.resolveIndexedPath();
+    if (!resolved) {
       return [];
     }
-    const index = await readSessionTranscriptIndex(filePath, this.scope.sessionId);
-    if (!index) {
-      return [];
-    }
+    const { filePath, index } = resolved;
     // Preserve duplicate/oversized full-reader entries and ID-less rows whose
     // projected metadata can supply the ID. The caller matches after projection.
     const entries = await readIndexedTranscriptEntries(
@@ -341,23 +373,21 @@ export class ArchivedTranscriptReader {
   async readRecentWithStats(
     opts: ReadRecentSessionMessagesOptions,
   ): Promise<ReadRecentSessionMessagesResult> {
-    const filePath = await this.resolvePath();
-    if (!filePath) {
+    const resolved = await this.resolveIndexedPath();
+    if (!resolved) {
       return { messages: [], totalMessages: 0 };
     }
-    const transcriptIndex = await readSessionTranscriptIndex(filePath, this.scope.sessionId);
-    const totalMessages = transcriptIndex?.entries.length ?? 0;
+    const { filePath, index: transcriptIndex } = resolved;
+    const totalMessages = transcriptIndex.entries.length;
     const normalized = normalizeRecentSessionReadOptions(opts);
-    const snapshot = !transcriptIndex
-      ? { messages: [], transcriptEvents: [] }
-      : await readRecentSessionSnapshotFromPathAsync(
-          filePath,
-          normalized,
-          transcriptIndex,
-          this.scope.sessionId,
-        );
+    const snapshot = await readRecentSessionSnapshotFromPathAsync(
+      filePath,
+      normalized,
+      transcriptIndex,
+      this.scope.sessionId,
+    );
     return {
-      displaySource: transcriptIndex?.displaySource,
+      displaySource: transcriptIndex.displaySource,
       messages: snapshot.messages,
       transcriptEvents: snapshot.transcriptEvents,
       totalMessages,
@@ -367,14 +397,11 @@ export class ArchivedTranscriptReader {
   }
 
   async readPage(opts: ReadSessionMessagesPageOptions): Promise<ReadRecentSessionMessagesResult> {
-    const filePath = await this.resolvePath();
-    if (!filePath) {
+    const resolved = await this.resolveIndexedPath();
+    if (!resolved) {
       return { messages: [], totalMessages: 0 };
     }
-    const index = await readSessionTranscriptIndex(filePath, this.scope.sessionId);
-    if (!index) {
-      return { messages: [], totalMessages: 0, transcriptPath: filePath };
-    }
+    const { filePath, index } = resolved;
     const totalMessages = index.entries.length;
     const endExclusive = resolveTranscriptPageEnd(totalMessages, opts);
     let snapshot: { messages: unknown[]; transcriptEvents: TranscriptEvent[] };
@@ -419,29 +446,7 @@ export class ArchivedTranscriptReader {
     }
   > {
     let displaySource: string | undefined;
-    const candidates = this.scope.exactArchivePath
-      ? [this.scope.exactArchivePath]
-      : await resolveSessionTranscriptResetArchiveCandidatesAsync(
-          this.scope.sessionId,
-          this.scope.storePath,
-          this.scope.sessionFile,
-          this.scope.agentId,
-        );
-    for (const archivePath of candidates) {
-      let filePath: string;
-      try {
-        filePath = materializeSessionArchiveForRead(archivePath);
-      } catch (error) {
-        if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
-          throw error;
-        }
-        // Try the next valid retained generation.
-        continue;
-      }
-      const index = await readSessionTranscriptIndex(filePath, this.scope.sessionId);
-      if (!index) {
-        continue;
-      }
+    for await (const { filePath, index } of this.readableIndexes()) {
       displaySource ??= index.displaySource;
       const anchorIndex = index.entries.findIndex((entry) => entry.id === opts.messageId);
       if (anchorIndex < 0) {

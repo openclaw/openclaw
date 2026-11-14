@@ -322,7 +322,6 @@ jobs:
             ui/src/i18n/locales/*.ts
             ui/src/i18n/locales/en.ts
             ui/src/i18n/locales/en-agents.ts
-            ui/src/i18n/.i18n/glossary.*.json
             ui/src/i18n/.i18n/raw-copy-baseline.json
             ui/src/i18n/lib/types.ts
             ui/src/i18n/lib/registry.ts

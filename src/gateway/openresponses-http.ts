@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
+import { isClientToolNameConflictError } from "../agents/embedded-agent-runner/tool-name-allowlist.js";
 import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
@@ -61,6 +61,7 @@ import {
 } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
@@ -136,9 +137,11 @@ export async function handleOpenResponsesHttpRequest(
   }
   const creationAuth = authorizeGatewaySessionCreation({
     cfg: getRuntimeConfig(),
-    ...(handled.requestAuth.operatorRoleActor
-      ? { actor: handled.requestAuth.operatorRoleActor }
-      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    client: createSyntheticPluginRuntimeClient({
+      authenticatedUserProfile: handled.requestAuth.authenticatedUserProfile,
+      operatorRoleActor: handled.requestAuth.operatorRoleActor,
+      openclawIdPrincipal: handled.requestAuth.openclawIdPrincipal,
+    }),
     agentId,
   });
   if (creationAuth) {

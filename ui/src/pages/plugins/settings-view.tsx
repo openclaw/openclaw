@@ -1,7 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, Loading, Show, createMemo } from "solid-js";
+import { flattenConfigLeafFields } from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -15,14 +17,13 @@ import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../li
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
+import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
-import "./custom-elements.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
-  renderPluginCompatibilityNotices,
   renderPluginContentCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
@@ -37,7 +38,6 @@ import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
-  flattenPluginSettingsFields,
   pluginSettingsNodeOptions,
   PluginSettingsEditor,
   type PluginSettingsEditorProps,
@@ -147,28 +147,32 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
       loading: true,
     };
   }
-  const fields =
+  const fields: PluginSettingsField[] =
     options.hostControlsSchema && options.configValue
       ? resolveConfigObjectFields({
           schema: options.hostControlsSchema,
           value: pluginEntryValue(options.configValue, options.pluginId),
           path: ["plugins", "entries", options.pluginId],
           ...pluginSettingsNodeOptions(options),
-        }).fields.flatMap((field) => flattenPluginSettingsFields(field, String(field.path.at(-1))))
+        }).fields.flatMap((field) => flattenConfigLeafFields(field, String(field.path.at(-1))))
       : [];
   for (const field of fields) {
     const key = field.path[4];
     if (
       field.path[3] !== "hooks" ||
       field.path.length !== 5 ||
-      (key !== "allowPromptInjection" && key !== "allowConversationAccess")
+      (key !== "allowPromptModification" && key !== "allowConversationAccess")
     ) {
       continue;
     }
-    const labelKey = key === "allowPromptInjection" ? "promptContextAccess" : "conversationAccess";
+    const labelKey =
+      key === "allowPromptModification" ? "promptContextAccess" : "conversationAccess";
     field.label = t(`pluginsPage.${labelKey}`);
     field.help = t(`pluginsPage.${labelKey}Description`);
-    field.effectiveValue = options.inspection.grants.hooks[key].effective;
+    field.effectiveValue =
+      options.inspection.grants.hooks[
+        key === "allowPromptModification" ? "allowPromptInjection" : key
+      ].effective;
   }
   return {
     fields,
@@ -210,12 +214,9 @@ function PluginNotices(props: DetailProps) {
       {props.error ? <PluginRetryError error={props.error} onRetry={props.onRefresh} /> : null}
       <PluginInspectionStatus {...props} />
       {plugin()?.error ? (
-        <div class="callout danger oc-banner oc-banner-error" role="alert">
-          {formatUiExternalText(plugin()!.error!)}
-        </div>
+        <InlineAlert tone="danger">{formatUiExternalText(plugin()!.error!)}</InlineAlert>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
-      {renderPluginCompatibilityNotices(plugin()?.compatibilityNotices, true)}
     </>
   );
 }

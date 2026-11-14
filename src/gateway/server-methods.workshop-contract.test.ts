@@ -3,9 +3,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
+import {
+  disposePluginRegistryInstances,
+  resetPluginRuntimeStateForTest,
+} from "../plugins/runtime.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { historicalWorkshopChangesSchema } from "../skills/test-support/workshop-schema.test-support.js";
-import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -21,6 +27,7 @@ const reviewId = "11111111-1111-4111-8111-111111111111";
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 let root: string;
+let registry: ReturnType<typeof loadOpenClawPlugins> | undefined;
 
 type RequestOptions = GatewayRequestOptions;
 async function dispatch(
@@ -62,15 +69,26 @@ beforeEach(async () => {
   config = {
     agents: { ownership: "explicit", entries: { ops: { workspace: state.workspaceDir } } },
     skills: { load: { watch: false } },
-    ...workshopPluginConfig({ autonomous: { mode: "off" } }),
+    ...workshopPluginConfig(
+      { autonomous: { mode: "off" } },
+      { plugins: { enabled: true, allow: ["skill-workshop"] } },
+    ),
   };
   await state.writeConfig(config);
+  // The skills.workshop.* methods belong to the bundled skill-workshop plugin.
+  await shareCoreWithWorkshopPluginForTest();
+  registry = loadOpenClawPlugins({ config, cache: false, activate: true });
   root = path.join(state.agentDir("ops"), "workshop-skills");
   await fs.mkdir(path.join(root, "deploy-notes"), { recursive: true });
   await fs.writeFile(path.join(root, "deploy-notes", "SKILL.md"), skill);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
+  if (registry) {
+    await disposePluginRegistryInstances(registry);
+    registry = undefined;
+  }
+  resetPluginRuntimeStateForTest();
   await closeSkillsWatchers(true);
   await state?.cleanup();
 });

@@ -15,7 +15,7 @@ describe("lazy locale registry", () => {
       ),
     );
     for (const [locale, catalog] of catalogs) {
-      expect(catalog?.common, locale).toHaveProperty("health");
+      expect(catalog?.common, locale).toHaveProperty("loading");
     }
   });
 });

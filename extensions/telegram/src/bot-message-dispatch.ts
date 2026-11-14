@@ -3,6 +3,7 @@ import {
   formatMediaPlaceholderText,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -319,11 +320,17 @@ export const dispatchTelegramMessage = async (
   try {
     turnDispatched = await runTelegramDispatchTurn(turn);
   } catch (err) {
-    turn.dispatchError = err;
     turn.previewLifecycle.observeFailure(
       isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
     );
-    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    // A flood-refused final that the delivery queue still holds is not a turn failure:
+    // recovery owns its resend, so it must not trigger the "something went wrong" fallback.
+    if (turn.finalHandoff === "delivery-queue" && err === turn.finalDeliveryError) {
+      logVerbose(`telegram: final reply queued for recovery after flood refusal: ${String(err)}`);
+    } else {
+      turn.dispatchError = err;
+      runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    }
   } finally {
     // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
     turn.progressCompositor.cancel();
@@ -368,7 +375,7 @@ export const dispatchTelegramMessage = async (
     (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.previewLifecycle.finalDelivered &&
     (terminalFailure ||
-      (!turn.progressContinuationAdopted &&
+      (turn.finalHandoff === undefined &&
         (deliverySummary.failedNonSilent > 0 ||
           (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback))));
   if (shouldSendFailureFallback) {
@@ -392,6 +399,7 @@ export const dispatchTelegramMessage = async (
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&
     !turn.finalDispatchClaimed &&
+    turn.finalHandoff === undefined &&
     turn.noVisibleReplyFallbackEligible
   ) {
     sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
@@ -411,13 +419,14 @@ export const dispatchTelegramMessage = async (
   const hasFinalResponse =
     intentionalNoResponse ||
     turn.previewLifecycle.finalDelivered ||
-    turn.progressContinuationAdopted ||
+    // The handoff owner delivers the final; do not re-run the turn.
+    turn.finalHandoff !== undefined ||
     sentFallback;
   const hasVisibleResponse = deliverySummary.delivered || sentFallback;
   const deliveryFailureWithoutFinalResponse =
     !intentionalNoResponse &&
     !turn.previewLifecycle.finalDelivered &&
-    !turn.progressContinuationAdopted &&
+    turn.finalHandoff === undefined &&
     (turn.previewLifecycle.finalFailed ||
       deliverySummary.skippedNonSilent > 0 ||
       deliverySummary.failedNonSilent > 0);
@@ -445,7 +454,8 @@ export const dispatchTelegramMessage = async (
   }
 
   const scheduleDmTopicLabel = () => {
-    if (!isDmTopic || !shouldLabelDmTopic) {
+    // Control commands (/reset, /model) leave the topic eligible for its first real message.
+    if (!isDmTopic || !shouldLabelDmTopic || dispatchContext.ctxPayload.CommandSource) {
       return;
     }
     const { RawBody, BodyForAgent, Body, media } = dispatchContext.ctxPayload;
@@ -464,7 +474,8 @@ export const dispatchTelegramMessage = async (
       return;
     }
     const topicThreadId = dispatchContext.threadSpec.id!;
-    void (async () => {
+    // The turn's work scope closes on return; the label outlives it.
+    void runInDetachedAsyncContext(async () => {
       try {
         const label = await generateTopicLabel({
           userMessage,
@@ -501,7 +512,7 @@ export const dispatchTelegramMessage = async (
       } catch (err) {
         logVerbose(`auto-topic-label: failed: ${String(err)}`);
       }
-    })();
+    });
   };
   scheduleDmTopicLabel();
   if (statusReactionController) {

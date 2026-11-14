@@ -20,6 +20,7 @@ import { isSubagentSessionKey } from "../routing/session-key.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+import { resolveAttendedSessionPermissionDefault } from "./session-create-permission-default.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
@@ -234,7 +235,8 @@ export function prepareSessionCreatePermissionSelection(
   ) {
     return { ok: true, mode: request.permissionMode };
   }
-  const mode = resolveAgentConfig(request.cfg, target.agentId)?.newSessionPermissionMode;
+  const configuredMode = resolveAgentConfig(request.cfg, target.agentId)?.newSessionPermissionMode;
+  const mode = resolveAttendedSessionPermissionDefault(configuredMode, authority.scopes);
   if (!mode) {
     return { ok: true };
   }
@@ -249,7 +251,7 @@ export function prepareSessionCreatePermissionSelection(
     authority.assertCurrent();
     if (
       resolveAgentConfig(request.getCurrentConfig?.() ?? request.cfg, target.agentId)
-        ?.newSessionPermissionMode !== mode
+        ?.newSessionPermissionMode !== configuredMode
     ) {
       throw new SessionMutationAuthorizationChangedError(
         errorShape(

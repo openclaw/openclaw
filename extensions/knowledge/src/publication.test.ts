@@ -51,7 +51,7 @@ it("UI creates sourced page; agent reads and edits; durable retry/history/readba
   const receipt = await f.service.save_page(input, f.operator);
   expect(receipt.state).toBe("published");
   expect(Check(contract.operations.save_page.output, receipt)).toBeTruthy();
-  const read = await f.service.record({ id: receipt.id, includeEvidence: true }, f.owner);
+  const read = await f.service.record_detail({ id: receipt.id, includeEvidence: true }, f.owner);
   expect(read.record!.body).toBe(input.body);
   expect(read.evidence![0]!.verified).toBe(true);
   const changed = await f.service.save_page(
@@ -59,7 +59,7 @@ it("UI creates sourced page; agent reads and edits; durable retry/history/readba
     f.owner,
   );
   expect(changed.revision).toBe(2);
-  expect((await f.service.record({ id: receipt.id }, f.operator)).record!.body).toBe(
+  expect((await f.service.record_detail({ id: receipt.id }, f.operator)).record!.body).toBe(
     "Agent revision\n",
   );
   expect(await createKnowledgeService(f.api).save_page(input, f.operator)).toStrictEqual(receipt);
@@ -76,11 +76,11 @@ it("UI creates sourced page; agent reads and edits; durable retry/history/readba
 it("stale hash/revision, rename, deletion, and unknown metadata preservation", async () => {
   const f = await fixture(),
     created = await f.service.save_page(draft(), f.owner);
-  const original = (await f.service.record({ id: created.id }, f.owner)).record;
+  const original = (await f.service.record_detail({ id: created.id }, f.owner)).record;
   const full = path.join(f.root, "private", created.path);
   await writeFile(
     full,
-    (await f.service.record({ id: created.id, view: "raw" }, f.owner))
+    (await f.service.record_detail({ id: created.id, view: "raw" }, f.owner))
       .record!.raw!.replace("title:", "custom: preserve-me\n# authored comment\ntitle:")
       .replace("Authored text.", "External prose."),
   );
@@ -90,21 +90,22 @@ it("stale hash/revision, rename, deletion, and unknown metadata preservation", a
     receipt: null,
     files: [],
   });
-  let current = (await f.service.record({ id: created.id }, f.owner)).record;
+  let current = (await f.service.record_detail({ id: created.id }, f.owner)).record;
   expect(current!.revision).toBe(2);
   await rename(full, full + "-renamed.md");
-  current = (await f.service.record({ id: created.id }, f.owner)).record;
+  current = (await f.service.record_detail({ id: created.id }, f.owner)).record;
   expect(current!.revision).toBe(3);
   const saved = await f.service.save_page(edit(current, { title: "New title" }), f.owner);
-  const updated = (await f.service.record({ id: created.id }, f.owner)).record;
-  const updatedRaw = (await f.service.record({ id: created.id, view: "raw" }, f.owner)).record!.raw;
+  const updated = (await f.service.record_detail({ id: created.id }, f.owner)).record;
+  const updatedRaw = (await f.service.record_detail({ id: created.id, view: "raw" }, f.owner))
+    .record!.raw;
   expect(updatedRaw).toMatch(/custom: preserve-me/);
   expect(updatedRaw).toMatch(/# authored comment/);
   expect(updated!.body).toBe("External prose.\n");
   expect(saved.revision).toBe(4);
   await rm(full + "-renamed.md");
   await expect(f.service.save_page(edit(updated), f.owner)).rejects.toThrow(/conflict/);
-  expect((await f.service.record({ id: created.id }, f.owner)).record).toBe(null);
+  expect((await f.service.record_detail({ id: created.id }, f.owner)).record).toBe(null);
   expect((await f.service.history({}, f.owner)).entries[0]!.provenance).toBe(
     "external-unavailable",
   );
@@ -132,11 +133,11 @@ for (const stage of [
     });
     await expect(publisher.save(input, f.access(), "agent")).rejects.toThrow(/simulated crash/);
     if (stage === "before-accept-commit" || stage === "after-settlement") {
-      expect((await f.service.records({}, f.owner)).total).toBe(
+      expect((await f.service.records_detail({}, f.owner)).total).toBe(
         stage === "after-settlement" ? 1 : 0,
       );
     } else {
-      await expect(f.service.records({}, f.owner)).rejects.toThrow(/publication|identity/);
+      await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/publication|identity/);
     }
     const service = createKnowledgeService(f.api);
     let resumed;
@@ -151,7 +152,7 @@ for (const stage of [
       resumed = await service.save_page(input, f.owner);
     }
     expect(resumed.state).toBe("published");
-    expect((await f.service.records({}, f.owner)).total).toBe(1);
+    expect((await f.service.records_detail({}, f.owner)).total).toBe(1);
     expect((await f.service.history({}, f.owner)).mutations.length).toBe(1);
     expect(await f.service.save_page(input, f.owner)).toStrictEqual(resumed);
   });
@@ -175,7 +176,9 @@ it("publication and authority callbacks leave the SQLite writer available", asyn
     expect(receipt.state).toBe("published");
     expect(storage.resume(access, input.requestId)).toStrictEqual(receipt);
     expect(checkpoints).toBeGreaterThan(10);
-    expect((await f.service.record({ id: receipt.id }, f.owner)).record!.body).toBe(input.body);
+    expect((await f.service.record_detail({ id: receipt.id }, f.owner)).record!.body).toBe(
+      input.body,
+    );
   } finally {
     peer.close();
   }
@@ -184,10 +187,10 @@ it("publication and authority callbacks leave the SQLite writer available", asyn
 it("external rewrite immediately before displacement retains editor and intended versions", async () => {
   const f = await fixture(),
     created = await f.service.save_page(draft(), f.owner);
-  const r = (await f.service.record({ id: created.id }, f.owner)).record,
+  const r = (await f.service.record_detail({ id: created.id }, f.owner)).record,
     input = edit(r, { body: "Plugin proposal\n" });
-  const originalRaw = (await f.service.record({ id: created.id, view: "raw" }, f.owner)).record!
-    .raw;
+  const originalRaw = (await f.service.record_detail({ id: created.id, view: "raw" }, f.owner))
+    .record!.raw;
   const publisher = new KnowledgeStorage(f.config, f.store, (where) => {
     if (where === `before-displace:private/${r!.path}`) {
       writeFileSync(
@@ -208,7 +211,7 @@ it("external rewrite immediately before displacement retains editor and intended
     db.prepare("SELECT plan FROM mutations WHERE request=?").get(input.requestId),
   );
   expect(row!.plan).toMatch(/Plugin proposal/);
-  await expect(f.service.records({}, f.owner)).rejects.toThrow(/publication/);
+  await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/publication/);
   expect((await f.service.history({}, f.owner)).mutations[0]!.state).toBe("conflict");
   const detail = await f.service.mutation({ requestId: input.requestId }, f.owner);
   expect(detail.files[0]!.displaced).toMatch(/Racing editor/);
@@ -218,7 +221,7 @@ it("external rewrite immediately before displacement retains editor and intended
 it("new editor file between displacement and installation is never overwritten", async () => {
   const f = await fixture(),
     created = await f.service.save_page(draft(), f.owner);
-  const r = (await f.service.record({ id: created.id }, f.owner)).record;
+  const r = (await f.service.record_detail({ id: created.id }, f.owner)).record;
   const publisher = new KnowledgeStorage(f.config, f.store, (where) => {
     if (where === `before-install:private/${r!.path}`) {
       writeFileSync(path.join(f.root, "private", r!.path), "New editor file");
@@ -250,8 +253,8 @@ it("write authority, scope isolation, missing conversation creation and disabled
   );
   const shared = await f.service.save_page(input, f.owner);
   expect(shared.id).not.toBe(privateReceipt.id);
-  expect((await f.service.record({ id: privateReceipt.id }, f.owner)).record).toBe(null);
-  expect((await f.service.record({ id: shared.id }, f.operator)).record).toBe(null);
+  expect((await f.service.record_detail({ id: privateReceipt.id }, f.owner)).record).toBe(null);
+  expect((await f.service.record_detail({ id: shared.id }, f.operator)).record).toBe(null);
   await expect(
     createKnowledgeService({ ...f.api, pluginConfig: { writesEnabled: false } }).save_page(
       draft(),
@@ -303,7 +306,7 @@ for (const stage of [
     expect(killed.code).toBe(77);
     const receipt = await f.service.save_page(input, f.owner);
     expect(receipt.state).toBe("published");
-    expect((await f.service.records({}, f.owner)).total).toBe(1);
+    expect((await f.service.records_detail({}, f.owner)).total).toBe(1);
     expect((await f.service.history({}, f.owner)).entries).toHaveLength(1);
     expect(await f.service.save_page(input, f.owner)).toStrictEqual(receipt);
   });
@@ -312,13 +315,13 @@ for (const stage of [
 it("cross-process publishers fence competing edits and never lose the winner", async () => {
   const f = await fixture(),
     created = await f.service.save_page(draft(), f.owner);
-  const r = (await f.service.record({ id: created.id }, f.owner)).record;
+  const r = (await f.service.record_detail({ id: created.id }, f.owner)).record;
   const inputs = [edit(r, { body: "Writer one" }), edit(r, { body: "Writer two" })];
   const results = await Promise.all(inputs.map((input) => childWrite(f, input)));
   expect(results.filter((result) => result.code === 0).length, JSON.stringify(results)).toBe(1);
   const winner = JSON.parse(results.find((result) => result.code === 0)!.stdout);
   expect(winner.state).toBe("published");
-  const current = (await f.service.record({ id: created.id }, f.owner)).record;
+  const current = (await f.service.record_detail({ id: created.id }, f.owner)).record;
   expect(current!.hash).toBe(winner.hash);
   expect(current!.revision).toBe(2);
 });
@@ -401,5 +404,5 @@ it("published generation restore and pending replacement roots are fenced", asyn
   await f.service.save_page(draft(), f.owner);
   await writeFile(path.join(f.root, "vault.json"), JSON.stringify(f.manifest));
   await expect(f.service.history({}, f.owner)).rejects.toThrow(/identity/);
-  await expect(f.service.records({}, f.owner)).rejects.toThrow(/identity/);
+  await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/identity/);
 });

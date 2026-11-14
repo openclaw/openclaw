@@ -74,7 +74,8 @@ export function resolveChannelHealthState(
   policy: ChannelHealthPolicy,
 ): string | undefined {
   const evaluation = evaluateChannelHealth(snapshot, policy);
-  return !evaluation.healthy && !(snapshot.lifecycle === "blocked" && snapshot.healthState)
+  return (!evaluation.healthy || evaluation.reason === "reconnect-grace") &&
+    !(snapshot.lifecycle === "blocked" && snapshot.healthState)
     ? evaluation.reason
     : snapshot.healthState;
 }
@@ -119,6 +120,7 @@ export function evaluateChannelHealth(
   if (
     (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") &&
     lastStartAt !== null &&
+    (snapshot.lastConnectedAt == null || snapshot.lastConnectedAt < lastStartAt) &&
     policy.now - lastStartAt < policy.channelConnectGraceMs
   ) {
     return { healthy: true, reason: "startup-connect-grace" as const };
@@ -137,7 +139,11 @@ export function evaluateChannelHealth(
   // Runtime snapshots are patch-merged, so a restarted lifecycle can temporarily
   // inherit stale busy fields from the previous instance. Ignore busy short-circuit
   // until run activity is known to belong to the current lifecycle.
-  if (isBusy && busyStateInitializedForLifecycle) {
+  if (
+    isBusy &&
+    busyStateInitializedForLifecycle &&
+    !(snapshot.lifecycle === "recovering" && snapshot.connected === false)
+  ) {
     const runActivityAge =
       lastRunActivityAt == null
         ? Number.POSITIVE_INFINITY

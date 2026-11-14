@@ -215,9 +215,13 @@ async function listArchiveBatch(
         throw error;
       }
       const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed migrating transcript archive ${archivePath} (${owner}): ${detail}`, {
-        cause: error,
-      });
+      // Update diagnostics keep only the first 256 bytes of Doctor output; lead with the cause.
+      throw new Error(
+        `Failed migrating transcript archive (${owner}): ${detail} [${archivePath}]`,
+        {
+          cause: error,
+        },
+      );
     }
   }
   return plans;

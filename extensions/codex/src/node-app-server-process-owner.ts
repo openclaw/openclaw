@@ -1,10 +1,10 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import type { CodexStdioChild } from "./app-server/stdio-worker.js";
 import { closeCodexAppServerTransportAndWait } from "./app-server/transport.js";
 
 /** Keeps worker placement custody until native process exit is observed. */
 export function createCodexNodeAppServerProcessOwner(params: {
-  child: () => ChildProcessWithoutNullStreams | undefined;
+  child: () => CodexStdioChild | undefined;
   unsubscribe: () => void;
   release: () => Promise<void> | void;
   activeProcesses: Set<() => Promise<void>>;

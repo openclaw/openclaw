@@ -61,6 +61,7 @@ describe("worker provider registry", () => {
     ["resolveAllocation", undefined, "missing method: resolveAllocation"],
     ["renew", "later", "renew must be a function"],
     ["runSetupCommand", "later", "runSetupCommand must be a function"],
+    ["refreshPreparedProject", "later", "refreshPreparedProject must be a function"],
     ["resolveSshIdentity", "later", "resolveSshIdentity must be a function"],
     ["provisionBeforeInstallation", "sometimes", "provisionBeforeInstallation must be a boolean"],
     [

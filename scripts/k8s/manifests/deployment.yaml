@@ -19,6 +19,9 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
+        # Avoid repeating kubelet's recursive mode changes when the root matches.
+        # This does not repair existing modes or govern delegated CSI ownership.
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       initContainers:

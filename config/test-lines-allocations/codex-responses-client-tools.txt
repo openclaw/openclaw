@@ -1,2 +1,0 @@
-# Codex /v1/responses client functions: Codex boundary regression, eligibility guard, harness helper contract.
-96

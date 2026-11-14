@@ -8,6 +8,7 @@ import {
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { postgresIndexOrderingMigration } from "../infra/database-engine/postgres-index-ordering.js";
 import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
+import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
 import { isStatePostgres, stateEngineSchema } from "./openclaw-state-db-engine.js";
 
@@ -22,11 +23,13 @@ vi.mock("../infra/database-engine/postgres-index-ordering.js", async (importOrig
 
 it("does not derive PostgreSQL migrations for SQLite startup and retains the requested plan", () => {
   expect(vi.mocked(postgresIndexOrderingMigration).mock.calls.length).toBe(0);
-  const migrations = stateEngineSchema.postgresMigrations;
-  expect(migrations?.at(-1)?.version).toBe(stateEngineSchema.version);
-  expect(postgresIndexOrderingMigration).toHaveBeenCalledTimes(2);
-  expect(stateEngineSchema.postgresMigrations).toBe(migrations);
-  expect(postgresIndexOrderingMigration).toHaveBeenCalledTimes(2);
+  for (const [index, schema] of [stateEngineSchema, agentEngineSchema].entries()) {
+    const migrations = schema.postgresMigrations;
+    expect(migrations?.at(-1)?.version).toBe(schema.version);
+    expect(postgresIndexOrderingMigration).toHaveBeenCalledTimes((index + 1) * 2);
+    expect(schema.postgresMigrations).toBe(migrations);
+    expect(postgresIndexOrderingMigration).toHaveBeenCalledTimes((index + 1) * 2);
+  }
 });
 
 it("preserves explicit backend selection and the test-only state connection fallback", () => {

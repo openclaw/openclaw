@@ -9,7 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, resolveDefaultModelMaxTokens } from "../agents/defaults.js";
 import { resolveCatalogOwnedModelCompat } from "../agents/model-compat-catalog.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -58,7 +58,8 @@ const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
   cacheWrite: 0,
 };
 const DEFAULT_MODEL_INPUT: ModelDefinitionConfig["input"] = ["text"];
-const DEFAULT_MODEL_MAX_TOKENS = 8192;
+// Mistral rejects output caps that fill the context window; keep its repair value conservative.
+const MISTRAL_UNKNOWN_MODEL_SAFE_MAX_TOKENS = 8_192;
 const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
   "devstral-medium-latest": 32_768,
   "magistral-small": 40_000,
@@ -105,7 +106,7 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
   }
   return clamped < params.contextWindow
     ? clamped
-    : Math.min(DEFAULT_MODEL_MAX_TOKENS, params.contextWindow);
+    : Math.min(MISTRAL_UNKNOWN_MODEL_SAFE_MAX_TOKENS, params.contextWindow);
 }
 
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
@@ -283,10 +284,13 @@ export function applyModelDefaults(
           asPositiveFiniteNumber(catalogModel?.contextTokens);
 
         const maxTokenContextWindow = contextWindow ?? DEFAULT_CONTEXT_TOKENS;
-        const defaultMaxTokens = Math.min(
-          providerMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
-          maxTokenContextWindow,
-        );
+        // An authored provider cap wins; otherwise size the invented cap to the usable window.
+        const defaultMaxTokens =
+          providerMaxTokens !== undefined
+            ? Math.min(providerMaxTokens, maxTokenContextWindow)
+            : resolveDefaultModelMaxTokens(
+                Math.min(contextTokens ?? maxTokenContextWindow, maxTokenContextWindow),
+              );
         const rawMaxTokens =
           asPositiveFiniteNumber(raw.maxTokens) ??
           asPositiveFiniteNumber(catalogModel?.maxTokens) ??

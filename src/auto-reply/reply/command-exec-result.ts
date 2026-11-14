@@ -1,4 +1,4 @@
-import type { ExecToolDetails } from "../../agents/bash-tools.js";
+import type { ExecToolDetails } from "../../agents/bash-tools.exec-result.types.js";
 
 export function formatCommandExecText(text: string): string {
   return text.trim() || "(no exec output)";

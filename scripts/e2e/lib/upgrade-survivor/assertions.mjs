@@ -1390,13 +1390,20 @@ function readInstalledPluginIndex() {
 
 function assertBaselinePlugin([expectedVersion, pluginId, tag]) {
   assert(["latest", "beta", "alpha"].includes(tag), "baseline plugin selector is not moving");
-  const record = readInstalledPluginIndex().installRecords[pluginId];
-  assert(record?.source === "npm", "baseline plugin was not installed from npm");
-  assert(record.spec === `@openclaw/${pluginId}@${tag}`, "baseline plugin selector changed");
-  const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
+  const records = readInstalledPluginIndex().installRecords;
+  const record = records[pluginId];
+  const installed =
+    record?.source === "npm"
+      ? readJson(path.join(resolveHomePath(record.installPath), "package.json"))
+      : assertExternalPluginInstall(records, pluginId, `@openclaw/${pluginId}`);
+  const prefix = record.source === "clawhub" ? "clawhub:" : "";
+  assert(
+    record.spec === `${prefix}@openclaw/${pluginId}@${tag}`,
+    "baseline plugin selector changed",
+  );
   assert(installed.name === `@openclaw/${pluginId}`, "baseline plugin package identity changed");
   assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
-  console.log(`Baseline npm plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
+  console.log(`Baseline plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {
@@ -1534,7 +1541,6 @@ function assertNpmPluginInstall([
   const records = readInstalledPluginIndex().installRecords ?? {};
   const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
   const record = records[pluginId];
-  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
   assertPluginArtifactConsent(
     record,
     pluginId,
@@ -1561,8 +1567,25 @@ function assertNpmPluginInstall([
     expectedTarball = publishedCompanionTarball;
   }
   const archive = fs.readFileSync(expectedTarball);
-  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
-  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
+  const npmIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  // ClawHub records the archive's SHA-256 separately from npm's SHA-512.
+  // Check every recorded digest so a matching field cannot hide stale provenance.
+  const expectedDigests =
+    record.source === "clawhub"
+      ? {
+          integrity: `sha256-${createHash("sha256").update(archive).digest("base64")}`,
+          npmIntegrity,
+          clawpackSha256: createHash("sha256").update(archive).digest("hex"),
+        }
+      : { integrity: npmIntegrity };
+  const recordedDigests = Object.keys(expectedDigests).filter(
+    (field) => record[field] !== undefined,
+  );
+  assert(
+    recordedDigests.length > 0 &&
+      recordedDigests.every((field) => record[field] === expectedDigests[field]),
+    `${pluginId} plugin registry artifact integrity changed`,
+  );
 }
 
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {

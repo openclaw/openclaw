@@ -6,12 +6,19 @@
  * Add --reuse-fixture on later invocations to measure fresh owners reopening the
  * populated store without rewriting files, session rows, or initial checkpoints.
  * Repeat in fresh processes, alternating --baseline-dir <saved owner sources> and
- * current source at least five times. Cold includes lazy provider/storage startup;
+ * current source at least five times. Modules are preloaded; cold includes provider/store startup;
  * warm holds the real registry, audience, workers and store. This is the Gateway's
  * owner path, not a chat.send/Gateway latency measurement. Allocation sampling is
  * main-thread only; process CPU includes storage/registry worker CPU.
  * Acceptance: identical prompt bytes and no material timing/CPU/allocation regression
  * for diagnostic-only changes. Keep untraced timing and --mode allocation separate.
+ * Latency-budget proof: --candidate-delay-ms 2600 delays native results after real
+ * selection; the candidate also uses --expect-skips. Accept bounded prompt latency
+ * with recorded omissions, native-lease CPU/allocation, and unchanged fast recall.
+ * providerStarted=false means caller admission may remain outstanding; that cold
+ * sample does not claim complete settlement CPU. Warm samples require a native lease.
+ * Cold omissions are recorded separately. Explicit native retrieval then warms the
+ * store outside timing; warm recall must succeed without the injected delay.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -20,7 +27,10 @@ import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { onTrustedInternalDiagnosticEvent } from "../../src/infra/diagnostic-events.js";
+import type { MemoryProviderHandle } from "../../src/plugins/memory-provider-runtime-types.js";
 import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
@@ -28,19 +38,34 @@ const { values } = parseArgs({
     root: { type: "string" },
     "baseline-dir": { type: "string" },
     "reuse-fixture": { type: "boolean", default: false },
+    "seed-only": { type: "boolean", default: false },
     records: { type: "string", default: "6000" },
     projects: { type: "string", default: "200" },
+    "body-bytes": { type: "string", default: "1040" },
+    sessions: { type: "string", default: "0" },
+    "transcript-mib": { type: "string", default: "0" },
     iterations: { type: "string", default: "20" },
     mode: { type: "string", default: "timing" },
+    "candidate-delay-ms": { type: "string", default: "0" },
+    "expect-skips": { type: "boolean", default: false },
+    "allow-skips": { type: "boolean", default: false },
   },
 });
 assert(values.root, "--root must name an isolated synthetic fixture directory");
 const root = path.resolve(values.root);
 const count = Number(values.records);
 const projects = Number(values.projects);
+const bodyBytes = Number(values["body-bytes"]);
+const sessions = Number(values.sessions);
+const transcriptBytes = Number(values["transcript-mib"]) * 1024 * 1024;
 const iterations = Number(values.iterations);
+const candidateDelayMs = Number(values["candidate-delay-ms"]);
+assert(Number.isSafeInteger(candidateDelayMs) && candidateDelayMs >= 0);
 for (const n of [count, projects, iterations]) {
   assert(Number.isSafeInteger(n) && n > 0);
+}
+for (const n of [bodyBytes, sessions, transcriptBytes]) {
+  assert(Number.isSafeInteger(n) && n >= 0);
 }
 assert(["timing", "allocation"].includes(values.mode));
 process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
@@ -125,6 +150,9 @@ const [
   import("../../src/agents/project-memory-bootstrap.js"),
 ]);
 
+// Exclude module loading from cold provider/store startup and lifetime accounting.
+await import("../../src/plugins/memory-runtime.js");
+
 const cfg = {
   agents: {
     entries: { main: {} },
@@ -175,7 +203,10 @@ if (values["reuse-fixture"]) {
         approved_at: "2026-01-01T00:00:00Z",
       },
     };
-    const content = `---\n${JSON.stringify(metadata)}\n---\n\n${"Synthetic durable context. ".repeat(40)}\n`;
+    const body = "Synthetic durable context. "
+      .repeat(Math.ceil(bodyBytes / 27))
+      .slice(0, bodyBytes);
+    const content = `---\n${JSON.stringify(metadata)}\n---\n\n${body}\n`;
     writeFileSync(path.join(vaultRoot, "private", `${metadata.id}.md`), content);
     fixtureBytes += Buffer.byteLength(content);
   }
@@ -197,7 +228,24 @@ const entry = {
   chatType: "direct" as const,
 };
 if (!values["reuse-fixture"]) {
+  if (sessions) {
+    const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
+    await seedTeamShapeSessions({
+      stateDir: process.env.OPENCLAW_STATE_DIR,
+      sessions,
+      retainedRuns: 0,
+      transcriptBytes,
+      longTranscriptEntries: 5_000,
+      longTranscriptSessions: 4,
+      seed: "project-memory-recall",
+      now: Date.parse("2026-11-13T00:00:00Z"),
+    });
+  }
   replaceSessionEntrySync({ agentId: "main", sessionKey }, entry);
+}
+if (values["seed-only"]) {
+  console.log(JSON.stringify({ count, projects, fixtureBytes, sessions, transcriptBytes }));
+  process.exit(0);
 }
 const audience = await resolveMemoryAudienceFromEntry(
   {
@@ -229,9 +277,88 @@ const record = createPluginRecord({
 record.kind = "memory";
 record.memorySlotSelected = true;
 registry.registry.plugins.push(record);
-registry
-  .createApi(record, { config: cfg })
-  .registerMemoryCapability({ providerRuntime: createKnowledgeMemoryRuntime(stores) });
+const nativeRuntime = createKnowledgeMemoryRuntime(stores);
+let storagePhases = { queueMs: 0, operationMs: 0 };
+const measuredRuntimes = new WeakSet();
+const openStore = stores.open.bind(stores);
+stores.open = async (...args) => {
+  const opened = await openStore(...args);
+  if (opened.kind === "ready" && !measuredRuntimes.has(opened.runtime)) {
+    measuredRuntimes.add(opened.runtime);
+    const enqueue = opened.runtime.enqueue.bind(opened.runtime);
+    opened.runtime.enqueue = (check, operation) => {
+      const queued = performance.now();
+      return enqueue(check, async () => {
+        const started = performance.now();
+        storagePhases.queueMs += started - queued;
+        try {
+          return await operation();
+        } finally {
+          storagePhases.operationMs += performance.now() - started;
+        }
+      });
+    };
+  }
+  return opened;
+};
+const pendingProviders = new Set<Promise<void>>();
+let providerOpens = 0;
+let candidateCalls = 0;
+let delayEnabled = false;
+registry.createApi(record, { config: cfg }).registerMemoryCapability({
+  providerRuntime: {
+    ...nativeRuntime,
+    async open(params) {
+      providerOpens++;
+      const lifetime = Promise.withResolvers<void>();
+      pendingProviders.add(lifetime.promise);
+      const settled = () => {
+        lifetime.resolve();
+        pendingProviders.delete(lifetime.promise);
+      };
+      try {
+        const opened = await nativeRuntime.open(params);
+        if (!opened.provider) {
+          settled();
+          return opened;
+        }
+        const provider = opened.provider;
+        const candidates = provider.candidates?.bind(provider);
+        return {
+          ...opened,
+          provider: {
+            ...provider,
+            async close() {
+              try {
+                await provider.close();
+              } finally {
+                settled();
+              }
+            },
+            ...(candidates
+              ? {
+                  async candidates(
+                    request: Parameters<NonNullable<MemoryProviderHandle["candidates"]>>[0],
+                  ) {
+                    candidateCalls++;
+                    const result = await candidates(request);
+                    // Exercise a slow boundary without replacing real storage selection.
+                    if (delayEnabled && candidateDelayMs) {
+                      await delay(candidateDelayMs, undefined, { signal: params.context.signal });
+                    }
+                    return result;
+                  },
+                }
+              : {}),
+          },
+        };
+      } catch (error) {
+        settled();
+        throw error;
+      }
+    },
+  },
+});
 const owner = createPluginRegistryOwner(registry.registry);
 let active = true;
 const context = {
@@ -247,11 +374,26 @@ const context = {
   },
 };
 let expected: string | undefined;
-const run = async () => {
+const run = async (cold = false) => {
+  storagePhases = { queueMs: 0, operationMs: 0 };
   const phases: Record<string, number> = {};
+  const opensBefore = providerOpens;
   const cpu = process.cpuUsage();
   const thread = process.threadCpuUsage();
   const started = performance.now();
+  let skipDiagnosticCount = 0;
+  const stopDiagnostics = onTrustedInternalDiagnosticEvent(
+    (event) => {
+      if (
+        event.type === "diagnostic.phase.completed" &&
+        event.name === "project-memory.recall" &&
+        event.details?.outcome === "skipped"
+      ) {
+        skipDiagnosticCount++;
+      }
+    },
+    { includeTrusted: ["diagnostic.phase.completed"] },
+  );
   const lines = await withDiagnosticsTimelineObserver(
     (name, _attributes, duration) => {
       const phaseStart = performance.now();
@@ -268,29 +410,60 @@ const run = async () => {
       }),
   );
   const wallMs = performance.now() - started;
+  // Include complete native lease settlement, including timed-out opens and cleanup.
+  // If no lease started, caller admission can still be pending: report that gap.
+  const providerStarted = providerOpens > opensBefore;
+  await Promise.all(pendingProviders);
+  stopDiagnostics();
+  const settledMs = performance.now() - started;
   const used = process.cpuUsage(cpu);
   const main = process.threadCpuUsage(thread);
+  if (!cold) {
+    assert(providerStarted, "warm measurement must include a native provider lease");
+  }
   const bytes = lines.join("\n");
-  assert(
-    bytes.includes("Synthetic project 0 fact 0"),
-    "native provider must return the seeded project memory",
-  );
-  expected ??= bytes;
-  assert.equal(bytes, expected, "project prompt bytes changed between preparations");
+  if (!cold && values["expect-skips"]) {
+    assert.equal(bytes, "", "slow provider must omit project recall");
+  } else if (bytes || (!cold && !values["allow-skips"])) {
+    assert(
+      bytes.includes("Synthetic project 0 fact 0"),
+      "native provider must return the seeded project memory",
+    );
+    expected ??= bytes;
+    assert.equal(bytes, expected, "project prompt bytes changed between preparations");
+  }
   return {
     wallMs,
+    settledMs,
+    providerStarted,
+    skipped: !bytes,
+    skipDiagnosticCount,
     cpuMs: (used.user + used.system) / 1000,
     mainCpuMs: (main.user + main.system) / 1000,
+    storagePhases: { ...storagePhases },
     phases,
   };
 };
 const inspector = new Session();
 try {
   await withPluginRuntimeRegistryScope(registry.registry, async () => {
-    const cold = await run();
+    const cold = await run(true);
     if (values["baseline-dir"]) {
       assert.equal(loadedReplacements.size, replacements.size);
     }
+    // Explicit retrieval may warm the store even when optional cold recall timed out.
+    // Keep this visible and outside warm measurements rather than hiding cold omissions.
+    const warmupStart = performance.now();
+    const warmup = await nativeRuntime.open({ cfg, agentId: "main", context });
+    assert(typeof warmup.provider?.candidates === "function");
+    try {
+      const page = await warmup.provider.candidates({ kind: "project", limit: 48 });
+      assert(page.hits.some((hit) => hit.excerpt.includes("Synthetic project 0 fact 0")));
+    } finally {
+      await warmup.provider.close();
+    }
+    const explicitWarmupMs = performance.now() - warmupStart;
+    delayEnabled = true;
     global.gc?.();
     if (values.mode === "allocation") {
       await startCollectedHeapSampling(inspector, 4096);
@@ -310,12 +483,25 @@ try {
         mode: values.mode,
         baseline: values["baseline-dir"] ?? null,
         ownerSources,
-        fixture: { count, projects, fixtureBytes, reused: values["reuse-fixture"] },
+        fixture: {
+          count,
+          projects,
+          fixtureBytes,
+          sessions,
+          transcriptBytes,
+          agentDatabaseBytes: statSync(resolveOpenClawAgentSqlitePath({ agentId: "main" })).size,
+          reused: values["reuse-fixture"],
+        },
+        candidateDelayMs,
+        candidateCalls,
+        explicitWarmupMs,
         cold,
         warm,
         allocatedBytes,
         bytesPerOperation: allocatedBytes === undefined ? undefined : allocatedBytes / iterations,
-        promptSha256: createHash("sha256").update(expected!).digest("hex"),
+        promptSha256: createHash("sha256")
+          .update(expected ?? "")
+          .digest("hex"),
         hostLoad: loadavg(),
         memory: process.memoryUsage(),
       }),

@@ -221,7 +221,9 @@ it("refreshes retained runtime labels, descriptions, and search without new prop
       search.dispatchEvent(new InputEvent("input", { bubbles: true }));
       installRoute("Synthetic runtime label", "Synthetic runtime detail");
       await waitForSolid(() =>
-        expect(option()?.closest("openclaw-tooltip")?.content).toBe("Synthetic runtime detail"),
+        expect(option()?.closest("openclaw-tooltip")?.content).toContain(
+          "Synthetic runtime detail",
+        ),
       );
       installRoute(
         "Synthetic runtime label",
@@ -237,7 +239,7 @@ it("refreshes retained runtime labels, descriptions, and search without new prop
       expect(translatedLabel).not.toBe(original.label);
       await waitForSolid(() => {
         expect(option()?.getAttribute("aria-label")).toContain(translatedLabel);
-        expect(option()?.closest("openclaw-tooltip")?.content).toBe(t(detailKey));
+        expect(option()?.closest("openclaw-tooltip")?.content).toContain(t(detailKey));
         expect(option()?.textContent).toContain(t(contextKey, { active: "1k", maximum: "2k" }));
       });
       search.value = translatedLabel;
@@ -341,7 +343,7 @@ it("retains accepted rows and search through failed refresh, then retires them o
     expect(container.querySelector("[data-chat-model-search]")).toBe(input);
     refresh.reject(new Error("Fixture metadata unavailable"));
     await waitForSolid(() =>
-      expect(container.textContent).toContain("Some models could not be refreshed"),
+      expect(container.textContent).toContain("Couldn’t refresh some models"),
     );
     expect(current()).toBe(row);
     expect(input.value).toBe("current");
@@ -354,7 +356,7 @@ it("retains accepted rows and search through failed refresh, then retires them o
     );
     retry.resolve(initial);
     await waitForSolid(() => {
-      expect(container.textContent).not.toContain("Some models could not be refreshed");
+      expect(container.textContent).not.toContain("Couldn’t refresh some models");
       expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
     });
     expect(current()).toBe(row);

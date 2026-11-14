@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { create } from "tar";
+import { writeCombinedBuildFixture } from "./prepublish-plugin-registry-build.fixture.js";
 
 export const SOURCE_SHA = "a".repeat(40);
 export const VERSION = "2026.8.1-beta.1";
@@ -79,4 +81,66 @@ export function registryFixture(
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: sha256(manifestPath),
     },
   };
+}
+
+export function commitRegistrySource(repoRoot: string) {
+  const fixtureCommitArgs = [
+    "-c",
+    "user.email=release-test@example.invalid",
+    "-c",
+    "user.name=Release Test",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
+    "test: seed release source",
+  ];
+  execFileSync("git", ["add", "."], { cwd: repoRoot });
+  execFileSync("git", fixtureCommitArgs, { cwd: repoRoot });
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+}
+
+export function createRegistrySource(
+  repoRoot: string,
+  packageNames: string[],
+  combinedBuild = false,
+) {
+  const scriptsDir = join(repoRoot, "scripts", "lib");
+  mkdirSync(scriptsDir, { recursive: true });
+  writeJson(join(repoRoot, "package.json"), { name: "openclaw", version: VERSION });
+  for (const name of packageNames) {
+    const packageDir = join(repoRoot, "extensions", name.split("/")[1]!);
+    mkdirSync(packageDir, { recursive: true });
+    writeJson(join(packageDir, "package.json"), {
+      name,
+      version: VERSION,
+      openclaw: { release: { publishToNpm: true } },
+    });
+  }
+  writeFileSync(
+    join(scriptsDir, "plugin-npm-runtime-build.mjs"),
+    'import fs from "node:fs"; fs.writeFileSync(".build-fixture", "built"); console.log("runtime build stdout");\n',
+  );
+  writeFileSync(
+    join(scriptsDir, "plugin-npm-package-manifest.mjs"),
+    `import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import { join } from "node:path";
+const repoRoot = process.cwd();
+const packageDir = process.argv[process.argv.indexOf("--run") + 1];
+const outputDir = process.argv[process.argv.indexOf("--pack-destination") + 1];
+const staging = join(repoRoot, ".pack-fixture");
+fs.mkdirSync(join(staging, "package"), { recursive: true });
+fs.copyFileSync(join(repoRoot, packageDir, "package.json"), join(staging, "package", "package.json"));
+const pkg = JSON.parse(fs.readFileSync(join(staging, "package", "package.json"), "utf8"));
+const tarball = pkg.name.slice(1).replace("/", "-") + "-" + pkg.version + ".tgz";
+execFileSync("tar", ["-czf", join(outputDir, tarball), "-C", staging, "package"]);
+console.log("package manifest stdout");
+`,
+  );
+  if (combinedBuild) {
+    writeCombinedBuildFixture(repoRoot, packageNames, VERSION);
+  }
+  execFileSync("git", ["init"], { cwd: repoRoot });
+  return { repoRoot, sourceSha: commitRegistrySource(repoRoot) };
 }

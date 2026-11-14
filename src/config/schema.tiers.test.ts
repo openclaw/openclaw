@@ -17,7 +17,7 @@ describe("config schema tiers", () => {
     const merged = buildConfigSchemaCore({
       plugins: [{ id: "setup-fixture", configSchema: { type: "object", properties: {} } }],
     });
-    for (const suffix of ["hooks.timeoutMs", "hooks.timeouts.*", "hooks.allowPromptInjection"]) {
+    for (const suffix of ["hooks.timeoutMs", "hooks.timeouts.*", "hooks.allowPromptModification"]) {
       expect(merged.uiHints[`plugins.entries.setup-fixture.${suffix}`]).toEqual(
         baseSchema.uiHints[`plugins.entries.*.${suffix}`],
       );

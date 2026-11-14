@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../channels/plugins/read-only.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { withProgress } from "../cli/progress.js";
@@ -63,6 +63,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   ignoreEnvUrlOverride?: boolean;
   localPortOverride?: number;
   json?: boolean;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   const directRateLimit = gatewayConnectErrorWasRateLimited(params.error);
   if (!directRateLimit && !isGatewayHealthAuthUnavailableError(params.error)) {
@@ -70,21 +71,30 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   }
   let rateLimited = directRateLimit;
   if (!directRateLimit) {
-    const details = await buildGatewayProbeConnectionDetails(params);
-    const probe = await probeGatewayStatus({
-      url: details.url,
-      token: params.token,
-      password: params.password,
-      tlsFingerprint: details.tlsFingerprint,
-      preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
-      timeoutMs: params.timeoutMs ?? DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
-      config: params.config,
-      json: params.json,
-    });
-    if (!gatewayProbeResultSawGateway(probe)) {
-      return false;
+    try {
+      const details = await buildGatewayProbeConnectionDetails(params);
+      const probe = await probeGatewayStatus({
+        url: details.url,
+        token: params.token,
+        password: params.password,
+        tlsFingerprint: details.tlsFingerprint,
+        preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+        timeoutMs: params.timeoutMs ?? DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
+        config: params.config,
+        json: params.json,
+        signal: params.signal,
+      });
+      if (!gatewayProbeResultSawGateway(probe)) {
+        return false;
+      }
+      rateLimited = gatewayProbeResultWasRateLimited(probe);
+    } catch (error) {
+      // Interrupted: the caller has nothing left to report.
+      if (params.signal?.aborted) {
+        return true;
+      }
+      throw error;
     }
-    rateLimited = gatewayProbeResultWasRateLimited(probe);
   }
   const diagnostic = rateLimited
     ? buildRateLimitedHealthDiagnostic(directRateLimit ? params.error : undefined)
@@ -140,6 +150,7 @@ export async function healthCommand(
     password?: string;
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    signal?: AbortSignal;
   },
   runtime: RuntimeEnv,
 ) {
@@ -168,9 +179,13 @@ export async function healthCommand(
           sharedStateMode: "read-only",
           ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
+          signal: opts.signal,
         }),
     );
   } catch (error) {
+    if (opts.signal?.aborted) {
+      return;
+    }
     if (
       await emitReachableGatewayAuthDiagnostic({
         ...opts,
@@ -185,6 +200,9 @@ export async function healthCommand(
       return;
     }
     throw error;
+  }
+  if (opts.signal?.aborted) {
+    return;
   }
   if (opts.json) {
     writeRuntimeJson(runtime, summary);
@@ -210,7 +228,7 @@ export async function healthCommand(
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
     const collectLocalAgents = agents.length === 0 && localAgents.ordered.length > 0;
     const channelBindings = buildChannelAccountBindings(cfg);
-    const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    const displayPlugins = await listReadOnlyChannelPluginsForConfigAsync(cfg, {
       includeSetupFallbackPlugins: false,
     });
     if (debugEnabled) {

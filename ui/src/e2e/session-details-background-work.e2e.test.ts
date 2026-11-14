@@ -411,7 +411,17 @@ suite.define(() => {
               });
               await expect.poll(() => stop.isDisabled()).toBe(true);
               expect(await first.getByRole("status").textContent()).toBe("Stopping…");
-              expect(await badge.isVisible()).toBe(true);
+              expect(await badge.isVisible()).toBe(false);
+              const stopSpinner = stop.locator(".chat-details-processes__spinner");
+              expect(await stopSpinner.isVisible()).toBe(true);
+              expect(
+                await stop.evaluate((element) => getComputedStyle(element).backgroundColor),
+              ).toBe("rgba(0, 0, 0, 0)");
+              expect(await stopSpinner.evaluate((element) => getComputedStyle(element).color)).toBe(
+                await first
+                  .locator(".chat-details-processes__icon")
+                  .evaluate((element) => getComputedStyle(element).color),
+              );
               expect(await pane.locator("openclaw-chat-processes-panel").count()).toBe(0);
               if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
                 await checkThemes(async () => {
@@ -630,7 +640,7 @@ suite.define(() => {
           expect(await panel.locator(".chat-processes__output").textContent()).toContain(
             target.tail,
           );
-          await panel.getByRole("button", { name: "Back to Details", exact: true }).click();
+          await panel.getByRole("button", { name: "Back to details", exact: true }).click();
           await processGroup.waitFor({ state: "visible" });
           await waitForLayoutSettled(
             page,
@@ -646,7 +656,7 @@ suite.define(() => {
             .click();
           await panel.getByRole("button", { name: processes[0]!.name, exact: true }).waitFor();
           await panel.getByRole("button", { name: processes[0]!.name, exact: true }).click();
-          await panel.getByRole("button", { name: "Back to Processes", exact: true }).click();
+          await panel.getByRole("button", { name: "Back to processes", exact: true }).click();
           await panel.getByRole("button", { name: processes[0]!.name, exact: true }).waitFor();
           if (width === 390) {
             await pane

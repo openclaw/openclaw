@@ -27,6 +27,10 @@
   "ignorePatterns": [
     // Preserve the imported controller closure and its exact-source fixtures.
     ".agents/skills/update-team-server/controller/*.mjs",
+    // Preserve official-client fixture bytes and their recorded upstream hashes.
+    "test/fixtures/beam-live-handoff-client/beam.mjs",
+    "test/fixtures/beam-live-handoff-client/beam-handoff.js",
+    "test/fixtures/beam-live-handoff-client/beam-session.js",
     "/apps/",
     "CHANGELOG.md",
     "CHANGELOG/**",
@@ -46,7 +50,6 @@
     "patches/",
     "pnpm-lock.yaml/",
     "src/auto-reply/reply/export-html/",
-    "test/fixtures/agents/prompt-snapshots/codex-model-catalog/*.instructions.md",
     "test/fixtures/agents/prompt-snapshots/happy-path/*.md",
     "vendor/",
   ],

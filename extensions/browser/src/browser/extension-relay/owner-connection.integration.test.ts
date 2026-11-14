@@ -13,6 +13,7 @@ import * as ownerAuth from "./owner-auth-client.js";
 import { withConnectedDaemon } from "./relay-coexistence.test-support.js";
 
 afterEach(clearRuntimeConfigSnapshot);
+afterEach(() => vi.restoreAllMocks());
 
 const connectOwner = (port: number, token: string) =>
   authenticateRelayOwner({ port, token, profile: "chrome", signal: new AbortController().signal });
@@ -53,6 +54,9 @@ it("scopes references to their authenticated connection and releases native clai
       await createBrowserControlContext().forProfile("chrome").listTabs();
       const { result: ref } = await request("capture", { targetId: "fixture-target" });
       expect(ref).toBeTypeOf("string");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 360_000);
+      await expect(request("resolve", { ref })).resolves.toHaveProperty("result", "fixture-target");
+      clock.mockRestore();
       await expect(other("resolve", { ref })).resolves.toEqual({ id: 1, result: null });
       await request("release", { ref });
       await expect(request("cdp.open", { ref })).resolves.toHaveProperty("error");

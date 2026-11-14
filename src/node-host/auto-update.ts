@@ -5,10 +5,10 @@ import { createConfigIO } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { ignoreMissingPath } from "../infra/errno.js";
+import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import {
-  compareSemverStrings,
   resolveNpmChannelTag,
   resolveUpdateInstallKind,
   resolveUpdateRegistryTarget,

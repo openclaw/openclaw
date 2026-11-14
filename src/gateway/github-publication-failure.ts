@@ -1,8 +1,18 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GatewayErrorDetailCodes,
   type GitHubPublicationSelectionRejectedErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { extractErrorCode } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createCommandError } from "../process/command-error.js";
+import type { BufferedCommandResult } from "../process/exec.js";
+import {
+  NodeWorkerWorkspaceTransferError,
+  NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE,
+} from "../worker/node-workspace-transfer-protocol.js";
+import { WORKSPACE_RESULT_LIMIT_ERROR_CODE } from "./worker-environments/workspace-inventory-limits.js";
 
 type PublicationFailure = Pick<
   Extract<SessionGitHubPublicationResult, { status: "failed" }>,
@@ -14,7 +24,7 @@ export type GitHubPublicationPreparation = {
   hasRequest: () => boolean;
 };
 const identityNextAction =
-  "Reconnect My GitHub or System GitHub in Settings → Profile → GitHub connections (agent overrides: Agents → Tools), then request publication again.";
+  "Reconnect My GitHub, the shared agent account, or the agent’s own account in Settings → Profile → GitHub accounts, then request publication again.";
 
 /** An owner observed a definitive outcome; an unavailable probe is not this failure. */
 export class GitHubPublicationKnownFailure extends Error {
@@ -25,6 +35,47 @@ export class GitHubPublicationKnownFailure extends Error {
   ) {
     super(message);
   }
+}
+
+/** Only transport outcome facts cross into a public receipt, never command output. */
+export class GitHubPublicationApiError extends Error {
+  constructor(result: BufferedCommandResult, timeoutMs: number) {
+    const reason = createCommandError(
+      "GitHub API command",
+      {
+        ...result,
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        error: undefined,
+      },
+      { timeoutMs },
+    ).message;
+    const status = /\(HTTP ([1-5]\d{2})\)/u.exec(result.stderr.toString("utf8"))?.[1];
+    super(`${reason}${status ? `; HTTP ${status}` : ""}.`);
+  }
+}
+
+/** Shared Git reads and personal publication can have different repository permissions. */
+export function gitHubPublicationWorkerReadFailure(error: unknown): unknown {
+  // GitHub also uses 403 for throttling; status alone cannot prove access was lost.
+  if (error instanceof GitHubPublicationApiError && /HTTP 403/u.test(error.message)) {
+    return new GitHubPublicationKnownFailure("Worker repository read is unavailable (HTTP 403).", {
+      code: "unavailable",
+      nextAction:
+        "GitHub may be rate-limiting this read. Wait before retrying; if the refusal persists, verify the normal worker execution account's repository access. The personal publisher connection is separate.",
+    });
+  }
+  if (error instanceof GitHubPublicationApiError && /HTTP 404/u.test(error.message)) {
+    return new GitHubPublicationKnownFailure(
+      "Worker execution identity cannot read the publication repositories.",
+      {
+        code: "identity_unavailable",
+        nextAction:
+          "The normal worker GitHub execution account could not read the source or target repository. Review its existing access, then explicitly request publication again. This failed request and checkpoint remain saved; the personal publisher connection is separate.",
+      },
+    );
+  }
+  return error;
 }
 
 export function rejectGitHubPublicationSelection(
@@ -146,17 +197,67 @@ export class GitHubPublicationWorkflowChangesError extends GitHubPublicationKnow
   }
 }
 
+/** Diagnostic bookkeeping must not replace the original outcome or record tool output. */
+export function recordGitHubPublicationFailure(
+  error: unknown,
+  row: { request_id: string; session_id: string },
+): PublicationFailure {
+  const failure = resolveGitHubPublicationFailure(error);
+  if (!(error instanceof GitHubPublicationKnownFailure)) {
+    try {
+      createSubsystemLogger("gateway/github-publication").warn("Repository publication failed", {
+        requestId: row.request_id,
+        sessionId: row.session_id,
+        failureCode: failure.code,
+        errorCode: extractErrorCode(error),
+      });
+    } catch {
+      // A diagnostic sink cannot change publication settlement.
+    }
+  }
+  return failure;
+}
+
 /**
  * Resolve the persisted failure code and guidance. A known failure's message is code-authored,
  * so it leads the guidance as the specific reason; other errors may carry raw command output
  * and only select generic guidance.
  */
 export function resolveGitHubPublicationFailure(error: unknown): PublicationFailure {
+  if (extractErrorCode(error) === NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE) {
+    return {
+      code: "workspace_changed",
+      nextAction:
+        "The accepted checkpoint conflicts with the current publication base. Your saved work is retained; resolve the conflicts before requesting a new publication.",
+    };
+  }
+  if (error instanceof NodeWorkerWorkspaceTransferError) {
+    const reason =
+      /Publication integration [a-z-]{1,48} failed \((?:exit|error|timeout|signal|no-output-timeout|output-limit); exit (?:null|-?\d+)\)\./u.exec(
+        error.message,
+      )?.[0] ??
+      /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|HTTP [1-5]\d{2}|gateway returned [1-5]\d{2})\b/u.exec(
+        error.message,
+      )?.[0];
+    return {
+      code: "unavailable",
+      nextAction: `${reason ? `${reason} ` : ""}Worker publication transfer failed. Restore worker and repository connectivity, then retry the same request.`,
+    };
+  }
+  if (error instanceof GitHubPublicationApiError) {
+    return {
+      code: "unavailable",
+      nextAction: `${error.message} Retry after the Gateway and GitHub are available.`,
+    };
+  }
   if (error instanceof GitHubPublicationKnownFailure) {
     const reason = /[.!?]$/u.test(error.message) ? error.message : `${error.message}.`;
     return { code: error.failure.code, nextAction: `${reason} ${error.failure.nextAction}` };
   }
   const message = error instanceof Error ? error.message : "";
+  if (message && asOptionalRecord(error)?.code === WORKSPACE_RESULT_LIMIT_ERROR_CODE) {
+    return { code: "workspace_changed", nextAction: message };
+  }
   if (message.includes("publication workspace base")) {
     return {
       code: "unavailable",

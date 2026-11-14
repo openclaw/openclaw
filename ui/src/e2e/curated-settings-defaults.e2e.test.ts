@@ -8,10 +8,9 @@ import {
   settingsRow,
 } from "./config-composer-fixtures.test-support.ts";
 const suite = createConfigSuite("Control UI curated settings defaults mocked Gateway E2E");
-const thinkingDefaultExplanation =
-  "Uses the selected model's thinking policy instead of saving a global thinking override.";
+const thinkingDefaultExplanation = "Default: use the model’s own effort setting.";
 const fastModeDefaultExplanation =
-  "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.";
+  "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.";
 function configResponse(config: Record<string, unknown>, hash: string) {
   return { ...configSnapshot(config, hash), appliedConfigHash: hash };
 }
@@ -79,6 +78,7 @@ async function expectModelPatch(
 suite.define(() => {
   it("persists Full tools and restores inherited Labs, browser, and Models defaults across reloads", async () => {
     await suite.withPage(settingsPageOptions, async ({ page }) => {
+      await page.clock.install();
       const initialConfig = {
         agents: {
           defaults: {
@@ -166,9 +166,11 @@ suite.define(() => {
           };
         })
         .toMatchObject({ browserEnabledOverridden: false, tools: { profile: "full" } });
+      const indicator = page.locator("openclaw-settings-save-indicator");
       await expect
-        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+        .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
         .toContain("Apply changes");
+      await page.clock.resume();
 
       expect((await page.reload())?.status()).toBe(200);
       await expectQuietDefault(settingsRow(page, "Browser tools"));

@@ -58,7 +58,15 @@ async function runParentAgentTurn(
     { timeoutMs: 35_000 },
   );
   expect(completed.status).toBe("ok");
-  return requests.slice(cursor).join("\n");
+  return requests
+    .slice(cursor)
+    .map((raw) => {
+      const request = JSON.parse(raw) as { input: Array<{ role?: string }> };
+      // Earlier runtime snapshots stay in history; inspect this turn's appended context.
+      const previousReply = request.input.findLastIndex((item) => item.role === "assistant");
+      return JSON.stringify(request.input.slice(previousReply + 1));
+    })
+    .join("\n");
 }
 
 test.each(["lifecycle", "outstanding"] as const)(

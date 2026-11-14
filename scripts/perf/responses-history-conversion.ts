@@ -17,13 +17,22 @@
  * identical wireSha256 and consistent CPU/allocation reductions without material
  * controlled GC regression. Timing/GC gates use untraced runs, allocation is separate.
  * Compare wireSha256 across revisions before interpreting CPU/allocated bytes per request.
+ * --histories 128 rotates independent frozen histories through the bounded shared
+ * immutability proof set. Strings are shared; message/container identities are not.
+ * --builder-module <path> selects an adjacent baseline params owner whose converter
+ * import points at the matching baseline converter (all other dependencies unchanged).
+ * Assistant fixtures carry response IDs so signed text exercises the real fallback-ID
+ * decision. Compare --messages 200/1000/2000 with and without --frozen to separate
+ * warm projection reuse from per-message conversion of mutable histories.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { resolve } from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { getHeapSnapshot } from "node:v8";
 import { configureAiTransportHost } from "../../packages/ai/src/host.js";
 import {
@@ -31,7 +40,7 @@ import {
   captureOpenAIResponsesCompaction,
 } from "../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { recordResponsesContextUsage } from "../../packages/ai/src/transports/openai-responses-context-usage.js";
-import { buildOpenAIResponsesParams } from "../../packages/ai/src/transports/openai-responses-params-internal.js";
+import { cloneResponsesInputForPayloadHook } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
 import { createAssistantMessageEventStream } from "../../packages/ai/src/utils/event-stream.js";
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
@@ -48,9 +57,21 @@ const frozen = process.argv.includes("--frozen");
 const hook = process.argv.includes("--hook");
 const conversionOnly = process.argv.includes("--conversion-only");
 const contextUsage = process.argv.includes("--context-usage");
+const histories = Number(process.argv[process.argv.indexOf("--histories") + 1]) || 1;
+assert(Number.isSafeInteger(histories) && histories > 0 && (!contextUsage || histories === 1));
+const builderIndex = process.argv.indexOf("--builder-module");
+const {
+  buildOpenAIResponsesParams,
+}: typeof import("../../packages/ai/src/transports/openai-responses-params-internal.js") =
+  await import(
+    builderIndex < 0
+      ? "../../packages/ai/src/transports/openai-responses-params-internal.js"
+      : pathToFileURL(resolve(process.argv[builderIndex + 1]!)).href
+  );
 const initialOptions = hook ? { onPayload: () => undefined } : undefined;
 let options: Parameters<typeof buildOpenAIResponsesParams>[2] = initialOptions;
 let conversions = 0;
+let plainDataChecks = 0;
 if (messageCount !== undefined) {
   assert(Number.isSafeInteger(messageCount) && messageCount > 0, "--messages must be positive");
 }
@@ -60,7 +81,13 @@ if (messageCount !== undefined || frozen || contextUsage) {
       conversions += 1;
       return transformTransportMessages(...args);
     },
-    immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    immutableData: {
+      freezeJsonSnapshot,
+      isDeeplyFrozenPlainData(value) {
+        plainDataChecks++;
+        return isDeeplyFrozenPlainData(value);
+      },
+    },
   });
 }
 const model: Model = {
@@ -199,6 +226,7 @@ for (let turn = 0; turn < Math.max(200, Math.ceil((messageCount ?? 0) / 2)); tur
     provider: model.provider,
     api: model.api,
     model: model.id,
+    responseId: `resp_${turn}`,
     timestamp: turn,
     stopReason: call ? "toolUse" : "stop",
     usage: {
@@ -289,8 +317,16 @@ if (contextUsage) {
   }
 }
 let pressure: ReturnType<typeof resolveProjectedRequestPressure> | undefined;
+const contexts = Array.from({ length: histories }, (_, index) => {
+  const copy = index === 0 ? context : cloneResponsesInputForPayloadHook(context);
+  if (frozen) {
+    copy.messages.forEach(freezeJsonSnapshot);
+  }
+  return copy;
+});
+let requestIndex = 0;
 const request = () => {
-  const requestContext = contextUsage ? { ...context } : context;
+  const requestContext = contextUsage ? { ...context } : contexts[requestIndex++ % histories]!;
   if (contextUsage) {
     pressure = resolveProjectedRequestPressure({
       context: requestContext,
@@ -315,7 +351,7 @@ const wireSha256 = createHash("sha256").update(wire).digest("hex");
 const pressureSha256 = pressure
   ? createHash("sha256").update(JSON.stringify(pressure)).digest("hex")
   : undefined;
-const warmup = contextUsage ? 200 : 50;
+const warmup = Math.max(contextUsage ? 200 : 50, histories * 2);
 for (let i = 0; i < warmup; i++) {
   request();
 }
@@ -343,6 +379,7 @@ const threadCpu = process.threadCpuUsage();
 const start = performance.now();
 started = start;
 conversions = 0;
+plainDataChecks = 0;
 for (let i = 0; i < iterations; i++) {
   request();
 }
@@ -351,11 +388,17 @@ const wallMs = finished - start;
 const mainThreadUsed = process.threadCpuUsage(threadCpu);
 const used = process.cpuUsage(cpu);
 let sampledBytes: number | undefined;
+let sampledInspectionBytes: number | undefined;
 if (allocation) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   const sum = (node: typeof profile.head): number =>
     node.selfSize + node.children.reduce((n, child) => n + sum(child), 0);
   sampledBytes = sum(profile.head);
+  const inspections = (node: typeof profile.head): number =>
+    node.callFrame.functionName === "inspectPlainData"
+      ? sum(node)
+      : node.children.reduce((n, child) => n + inspections(child), 0);
+  sampledInspectionBytes = inspections(profile.head);
   inspector.disconnect();
 }
 await nextTurn();
@@ -369,11 +412,13 @@ console.log(
     iterations,
     warmup,
     messages: messages.length,
+    histories,
     frozen,
     hook,
     conversionOnly,
     contextUsage,
     conversionsPerRequest: conversions / iterations,
+    plainDataChecksPerRequest: plainDataChecks / iterations,
     pressureSha256,
     images: messages.filter(
       (message) =>
@@ -405,6 +450,8 @@ console.log(
     memoryBeforeFinalGc,
     hostLoadBefore,
     sampledBytesPerRequest: sampledBytes === undefined ? undefined : sampledBytes / iterations,
+    sampledInspectionBytesPerRequest:
+      sampledInspectionBytes === undefined ? undefined : sampledInspectionBytes / iterations,
     hostLoad: loadavg(),
     memory: process.memoryUsage(),
   }),

@@ -371,7 +371,7 @@ it.each([
   },
 );
 
-it("projects the declared Jev routes as decision-only without fabricated chat fields", () => {
+it("projects declared decision routes without fabricated chat fields", () => {
   const manifest = readOpenRouterManifest();
   const catalog = manifest.modelCatalog;
   const providerCatalog = catalog?.providers?.openrouter;
@@ -385,22 +385,41 @@ it("projects the declared Jev routes as decision-only without fabricated chat fi
   });
   expect(rows.map((row) => row.id)).toEqual([
     "~typesafe/jev-latest",
+    "parallel/decisions-fast",
+    "parallel/decisions-fast:free",
     "typesafe/jev-1.13",
     "typesafe/jev-1.14",
   ]);
   for (const row of rows) {
+    const parallel = row.id.startsWith("parallel/");
+    expect(row.inference?.chat).toBe(false);
     expect({ maxTokens: row.maxTokens, cost: row.cost }).toEqual({
       maxTokens: undefined,
       cost: undefined,
     });
-    expect(row.inference?.decision).toMatchObject({
-      input: ["text", "image"],
-      limits: {
-        maxStateAndQuestionTokens: 262144,
-        image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg"], remoteUrls: false },
-      },
-    });
-    expect(Boolean(row.inference?.decision?.questions?.box)).toBe(row.id !== "typesafe/jev-1.13");
+    expect(row.inference?.decision).toMatchObject(
+      parallel
+        ? {
+            input: ["text"],
+            grounding: { webSearch: true },
+            limits: { maxQuestions: 100, maxStateAndQuestionTokens: 32000 },
+            billing: { unit: "requests" },
+          }
+        : {
+            input: ["text", "image"],
+            limits: {
+              maxStateAndQuestionTokens: 262144,
+              image: {
+                maxBytes: 4194304,
+                mimeTypes: ["image/png", "image/jpeg"],
+                remoteUrls: false,
+              },
+            },
+          },
+    );
+    expect(Boolean(row.inference?.decision?.questions?.box)).toBe(
+      !parallel && row.id !== "typesafe/jev-1.13",
+    );
   }
   const conversational = buildAllowedModelSet({
     cfg: {},

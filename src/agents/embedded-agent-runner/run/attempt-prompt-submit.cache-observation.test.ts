@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -12,6 +12,15 @@ import { createPromptCacheRequestObserver } from "../prompt-cache-request-observ
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput, createSession, sessionId } from "./attempt-prompt-submit.test-support.js";
+
+// This suite feeds synthetic request prefixes to the cache observer on purpose; it exercises
+// observation and compaction skipping, not the session prefix invariant.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 afterEach(() => clearEmbeddedSessionPromptStates([sessionId]));
 

@@ -2,8 +2,9 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { captureAdaptiveGraphDecision } from "./ci-adaptive-decision.mts";
 import { readCiTestLaunchInputs } from "./ci-test-launch-inputs.mts";
-import { collectTestObservations } from "./ci-test-observations.mjs";
+import { collectTestObservations, compactTestObservations } from "./ci-test-observations.mjs";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const semanticEnv = [
@@ -105,6 +106,7 @@ export function createCiTestObservationCapture(options: {
   if (!directory) {
     return undefined;
   }
+  const auditOnly = env.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY === "1";
   const startedAt = new Date().toISOString();
   const launchInputs = readCiTestLaunchInputs(directory);
   const records: string[] = [];
@@ -117,6 +119,7 @@ export function createCiTestObservationCapture(options: {
         observations: ReturnType<typeof collectTestObservations>;
         graphInputs: ReturnType<typeof graphInputs>;
         launchInputs: ReturnType<typeof readCiTestLaunchInputs>;
+        decision: ReturnType<typeof captureAdaptiveGraphDecision> | undefined;
       }
     | undefined;
   const warn = () => console.warn("[adaptive-ci] observation export unavailable; tests unchanged");
@@ -178,20 +181,31 @@ export function createCiTestObservationCapture(options: {
             ]),
           };
           const observations = collectTestObservations(records.join("\n"), context);
+          const recordedAt = new Date().toISOString();
           preExecution = {
-            recordedAt: new Date().toISOString(),
+            recordedAt,
             observations,
             launchInputs,
-            graphInputs: options.graphConfiguration
-              ? graphInputs(root, options.graphConfiguration, env)
-              : null,
+            graphInputs:
+              !auditOnly && options.graphConfiguration
+                ? graphInputs(root, options.graphConfiguration, env)
+                : null,
+            decision: auditOnly
+              ? undefined
+              : captureAdaptiveGraphDecision({
+                  repositoryRoot: root,
+                  observations,
+                  env,
+                  recordedAt,
+                }),
           };
         }
         if (!preExecution) {
           throw new Error("Observation completion without inventory");
         }
         let dependencies: unknown = null;
-        if (kind === "run") {
+        // Audit-only invocations must not inherit a cached native dependency index.
+        if (kind === "run" && !auditOnly) {
           try {
             dependencies = JSON.parse(
               readBounded(path.join(options.cacheDirectory, "dependencies.json")),
@@ -227,6 +241,12 @@ export function createCiTestObservationCapture(options: {
         };
         let output = JSON.stringify(exported);
         let omittedDependencies = false;
+        if (kind === "run" && Buffer.byteLength(output) > MAX_BYTES) {
+          output = JSON.stringify({
+            ...exported,
+            observations: compactTestObservations(observations),
+          });
+        }
         if (kind === "run" && Buffer.byteLength(output) > MAX_BYTES) {
           // Native indexes can expand far beyond their on-disk size. Keep outcomes usable.
           for (const invocation of observations.invocations) {

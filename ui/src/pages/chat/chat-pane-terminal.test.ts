@@ -131,7 +131,6 @@ it("disables terminal continuation with query-specific guidance", async () => {
   paint(row);
 
   const menu = container.querySelector<HTMLElement>("openclaw-chat-header-session-menu")!;
-  await selectNativeMenu(menu, "submenu:advanced");
   await selectNativeMenu(menu, "submenu:open-in");
   const continuation = await waitForSolid(() => {
     const item = menu.querySelector<HTMLButtonElement>('[data-value="continue-in-terminal"]');
