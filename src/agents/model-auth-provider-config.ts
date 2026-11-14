@@ -22,6 +22,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
@@ -62,6 +66,7 @@ export function projectResolvedProfileAuth(params: {
   store: AuthProfileStore;
   mode: ResolvedProviderAuth["mode"];
   authFlow?: string;
+  assertCurrent?: () => void;
 }): ResolvedProviderAuth {
   const credential = params.store.profiles[params.profileId];
   const ref =
@@ -70,16 +75,19 @@ export function projectResolvedProfileAuth(params: {
       : credential?.type === "token"
         ? parseSecretRef(credential.tokenRef)
         : null;
-  return {
-    apiKey:
-      ref && params.enabled
-        ? mintSecretSentinel(params.apiKey, { label: `model-auth:${params.provider}` })
-        : params.apiKey,
-    profileId: params.profileId,
-    source: `profile:${params.profileId}`,
-    mode: params.mode,
-    ...(params.authFlow ? { authFlow: params.authFlow } : {}),
-  };
+  return attachProviderAuthAuthority(
+    {
+      apiKey:
+        ref && params.enabled
+          ? mintSecretSentinel(params.apiKey, { label: `model-auth:${params.provider}` })
+          : params.apiKey,
+      profileId: params.profileId,
+      source: `profile:${params.profileId}`,
+      mode: params.mode,
+      ...(params.authFlow ? { authFlow: params.authFlow } : {}),
+    },
+    params.assertCurrent,
+  );
 }
 
 export function resolveConfigAwareEnvApiKey(
@@ -505,6 +513,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       kind: "profile-resolved",
       auth: projectResolvedProfileAuth({
         apiKey: resolved.apiKey,
+        assertCurrent: getProviderAuthAuthority(resolved),
         enabled: params.secretSentinels,
         profileId: resolvedProfileId,
         provider: params.provider,

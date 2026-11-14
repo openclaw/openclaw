@@ -25,17 +25,7 @@ import type {
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
-import {
-  buildModelAliasIndex,
-  inferUniqueProviderFromConfiguredModels,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "../agents/model-selection.js";
 import type { MsgContext } from "../auto-reply/templating.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
@@ -77,6 +67,7 @@ import {
   runProviderEntry,
   type MediaRequestOverrides,
 } from "./runner.entries.js";
+import { resolveImageModelFromAgentDefaults } from "./runner.image-model-config.js";
 
 export {
   createMediaAttachmentCache,
@@ -117,11 +108,11 @@ function resolveConfiguredKeyProviderOrder(params: {
   fallbackProviders: readonly string[];
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
-    .map((providerId) => normalizeMediaExecutionProviderId(providerId))
+    .map((providerId) => normalizeMediaExecutionProviderId(providerId, params.providerRegistry))
     .filter(Boolean);
   const supportedProviders = uniqueStrings(configuredProviders).filter((providerId) =>
     providerSupportsCapability(
-      params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+      params.providerRegistry.get(normalizeMediaProviderId(providerId, params.providerRegistry)),
       params.capability,
     ),
   );
@@ -225,61 +216,11 @@ async function resolveAutoImageModelId(
   const providerId = params.providerId;
   const matches = catalog.filter(
     (entry) =>
-      normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(providerId) &&
-      modelSupportsVision(entry),
+      normalizeMediaProviderId(entry.provider, params.providerRegistry) ===
+        normalizeMediaProviderId(providerId, params.providerRegistry) && modelSupportsVision(entry),
   );
   const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
-}
-
-function resolveImageModelFromAgentDefaults(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-}): MediaUnderstandingModelConfig[] {
-  const refs = [
-    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.imageModel),
-    ...resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.imageModel),
-  ]
-    .map((ref) => ref?.trim())
-    .filter((ref): ref is string => Boolean(ref));
-  if (refs.length === 0) {
-    return [];
-  }
-  const defaultProvider = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  }).provider;
-  const entries: MediaUnderstandingModelConfig[] = [];
-  for (const ref of refs) {
-    const effectiveDefaultProvider = ref.includes("/")
-      ? defaultProvider
-      : (inferUniqueProviderFromConfiguredModels({
-          cfg: params.cfg,
-          model: ref,
-          agentId: params.agentId,
-        }) ?? defaultProvider);
-    const aliasIndex = buildModelAliasIndex({
-      cfg: params.cfg,
-      defaultProvider: effectiveDefaultProvider,
-      agentId: params.agentId,
-    });
-    const resolved = resolveModelRefFromString({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      raw: ref,
-      defaultProvider: effectiveDefaultProvider,
-      aliasIndex,
-    });
-    if (!resolved) {
-      continue;
-    }
-    entries.push({
-      type: "provider",
-      provider: resolved.ref.provider,
-      model: resolved.ref.model,
-    });
-  }
-  return entries;
 }
 
 function hasExplicitImageUnderstandingConfig(params: {
@@ -329,6 +270,7 @@ async function* resolveAutoAudioEntries(
 ): AsyncGenerator<ResolvedMediaModelEntry> {
   const activeProvider = normalizeMediaExecutionProviderId(
     params.activeModel?.provider?.trim() ?? "",
+    params.providerRegistry,
   );
   const providers = uniqueStrings([
     ...(activeProvider ? [activeProvider] : []),
@@ -368,7 +310,10 @@ async function resolveAutoEntries(
     providerRegistry:
       params.providerRegistry ?? buildMediaUnderstandingRegistry(undefined, params.cfg),
   };
-  const activeProvider = normalizeMediaExecutionProviderId(prepared.activeModel?.provider ?? "");
+  const activeProvider = normalizeMediaExecutionProviderId(
+    prepared.activeModel?.provider ?? "",
+    prepared.providerRegistry,
+  );
   if (activeProvider) {
     const activeEntry = await resolveAutoProviderModelEntry(
       prepared,
@@ -505,6 +450,7 @@ async function runAttachmentEntries(
         ) {
           attempts.push(
             buildModelDecision({
+              providerRegistry: params.providerRegistry,
               entry,
               entryType,
               outcome: "failed",
@@ -518,7 +464,12 @@ async function runAttachmentEntries(
       // Successful empty CLI/API output was processed; unavailable auth was not.
       processing = "completed";
       if (result?.text) {
-        const decision = buildModelDecision({ entry, entryType, outcome: "success" });
+        const decision = buildModelDecision({
+          providerRegistry: params.providerRegistry,
+          entry,
+          entryType,
+          outcome: "success",
+        });
         if (result.provider) {
           decision.provider = result.provider;
         }
@@ -533,13 +484,20 @@ async function runAttachmentEntries(
         return { output: result, attempts, processing };
       }
       attempts.push(
-        buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
+        buildModelDecision({
+          providerRegistry: params.providerRegistry,
+          entry,
+          entryType,
+          outcome: "skipped",
+          reason: "empty output",
+        }),
       );
     } catch (err) {
       assertMediaExecutionCurrent(params.execution);
       if (isMediaUnderstandingSkipError(err)) {
         attempts.push(
           buildModelDecision({
+            providerRegistry: params.providerRegistry,
             entry,
             entryType,
             outcome: "skipped",
@@ -552,6 +510,7 @@ async function runAttachmentEntries(
       } else {
         attempts.push(
           buildModelDecision({
+            providerRegistry: params.providerRegistry,
             entry,
             entryType,
             outcome: "failed",

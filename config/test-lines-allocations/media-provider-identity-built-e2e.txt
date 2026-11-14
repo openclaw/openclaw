@@ -1,0 +1,2 @@
+462
+# Built launcher/channel and public host-tool image routing: native/model-only ownership, synthetic credential isolation, legacy aliases, and closed-attempt refusal before I/O.
