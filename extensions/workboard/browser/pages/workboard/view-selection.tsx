@@ -40,7 +40,7 @@ import {
   formatStatusLabel,
   type WorkboardProps,
 } from "./view-helpers.tsx";
-import { liveInputValue } from "./view-input-value.ts";
+import { LabelChoices } from "./view-label-choices.tsx";
 const KEEP_AGENT = "workboard:keep-agent";
 type CardPatch = Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId">>;
 type SelectionAction =
@@ -287,7 +287,7 @@ export function SelectionActions(input: {
             observedCards,
             priority: "",
             agentId: KEEP_AGENT,
-            labels: "",
+            labels: [],
             labelMode: "keep",
           };
     input.workboard.onRequestUpdate?.();
@@ -418,7 +418,7 @@ function editPatch(
   if (draft.agentId !== KEEP_AGENT) {
     patch.agentId = draft.agentId;
   }
-  const labels = normalizeUniqueTrimmedStringList(draft.labels.split(","));
+  const labels = normalizeUniqueTrimmedStringList(draft.labels);
   switch (draft.labelMode) {
     case "keep":
       break;
@@ -445,29 +445,6 @@ export function SelectionDialog(props: { workboard: WorkboardProps }) {
     </Show>
   );
 }
-function SelectionLabelsInput(props: {
-  draft: Extract<
-    WorkboardBulkDialog,
-    {
-      kind: "edit";
-    }
-  >;
-  disabled: boolean;
-}) {
-  const bindValue = liveInputValue(() => props.draft.labels);
-  return (
-    <input
-      class="settings-input"
-      aria-label={t("workboard.fieldLabels")}
-      placeholder={t("workboard.bulkLabelsPlaceholder")}
-      ref={bindValue}
-      disabled={props.disabled}
-      onInput={(event) => {
-        props.draft.labels = event.currentTarget.value;
-      }}
-    />
-  );
-}
 function SelectionDialogContent(props: { workboard: WorkboardProps; draft: WorkboardBulkDialog }) {
   const state = workboardViewState(() => props.workboard);
   const draft = () => {
@@ -489,6 +466,13 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
       Boolean(current.priority || current.agentId !== KEEP_AGENT || current.labelMode !== "keep")
     );
   };
+  const labelsTooMany = () => {
+    const current = editDraft();
+    return (
+      current?.labelMode === "add" &&
+      current.observedCards.some((card) => new Set([...card.labels, ...current.labels]).size > 12)
+    );
+  };
   const close = () => {
     if (state().bulkSaving) {
       return false;
@@ -498,6 +482,9 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
     return true;
   };
   const save = () => {
+    if (labelsTooMany()) {
+      return;
+    }
     const current = draft();
     void applySelection(
       props.workboard,
@@ -617,12 +604,24 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
                     }}
                   />
                   <Show when={edit().labelMode !== "keep"}>
-                    <SelectionLabelsInput draft={edit()} disabled={state().bulkSaving} />
+                    <LabelChoices
+                      owner={props.workboard}
+                      value={edit().labels}
+                      limit={edit().labelMode === "remove" ? undefined : 12}
+                      disabled={state().bulkSaving}
+                      onChange={(labels) => {
+                        edit().labels = labels;
+                        props.workboard.onRequestUpdate?.();
+                      }}
+                    />
                   </Show>
                 </div>
               </>
             );
           }}
+        </Show>
+        <Show when={labelsTooMany()}>
+          <p role="alert">{t("workboard.bulkLabelLimit")}</p>
         </Show>
         <openclaw-modal-actions class="workboard-modal__actions">
           <button class="btn" type="button" autofocus disabled={state().bulkSaving} onClick={close}>
@@ -634,6 +633,7 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
             disabled={
               state().bulkSaving ||
               !changed() ||
+              labelsTooMany() ||
               !props.workboard.connected ||
               !canMutate(props.workboard)
             }

@@ -4872,3 +4872,39 @@ workboard-inline-text {
     height: 16px;
   }
 }
+
+.workboard-label-choices {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.workboard-label-choices__list {
+  display: grid;
+  gap: 2px;
+  max-height: 168px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.workboard-label-choices__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.workboard-label-choices__option:hover {
+  background: var(--bg-hover);
+}
+.workboard-label-choices__option > input {
+  flex: none;
+  accent-color: var(--accent);
+}
+.workboard-label-choices__option > span {
+  overflow-wrap: anywhere;
+}
+.workboard-label-choices__create {
+  justify-content: flex-start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
