@@ -246,7 +246,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
-  installMessageToolTerminalHook({
+  const refreshMessageToolSteeringAllowance = installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     messageToolFinalByDefault: attempt.messageToolFinalByDefault,
@@ -278,6 +278,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       const currentPrompt = activeSession.agent.state.systemPrompt;
       preparedClientTools.refreshTools();
       activeSession.replaceCustomTools(allCustomTools, sessionToolAllowlist);
+      refreshMessageToolSteeringAllowance();
       setActiveSessionSystemPrompt(currentPrompt);
     },
     setPermissionPromptPreparation,
