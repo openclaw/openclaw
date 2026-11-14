@@ -318,8 +318,8 @@ describe("handleFileFetch", () => {
     ["empty.png", "", "image/png"],
     ["LICENSE", "Permission is hereby granted\n", "text/plain"],
     ["opaque", Buffer.from([0x00, 0x01, 0x02, 0xff]), "application/octet-stream"],
-    ...["é", "€", "🌍"].map((c) => [c, "a".repeat(8191) + c + " tail", "text/plain"]),
-  ])("fetches %s with detected MIME and exact bytes", async (name, content, mimeType) => {
+    ...["é", "€", "🌍"].map((c) => [c, "a".repeat(8191) + c + " tail", "text/plain"] as const),
+  ] as const)("fetches %s with detected MIME and exact bytes", async (name, content, mimeType) => {
     const peer = duplexPeer();
     const result = await handleFileFetch({ path: await put(name, content) }, peer.io);
     assert(result.ok);
