@@ -2,13 +2,14 @@
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type {
   ExecApprovalsNodeSnapshot as GatewayExecApprovalsNodeSnapshot,
   ExecApprovalsSnapshot as GatewayExecApprovalsSnapshot,
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import { copyWithPathPatch } from "../config-form-utils.ts";
+import { copyWithPathPatch, pruneEmptyConfigForm } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { clearDeviceAuthToken, loadOrCreateDeviceIdentity, storeDeviceAuthToken } from "./index.ts";
 
@@ -589,10 +590,13 @@ function mutateExecApprovalsForm(
       "Device approvals are read-only here. Use the companion app or approvals set --node.";
     return;
   }
-  const base = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
+  const original = state.execApprovalsSnapshot?.file ?? {};
+  const base = state.execApprovalsForm ?? original;
   const next = copyWithPathPatch(base, path, value, mode);
   state.execApprovalsForm = (next.ok ? asOptionalRecord(next.value) : undefined) ?? base;
-  state.execApprovalsDirty = true;
+  state.execApprovalsDirty =
+    stableStringify(pruneEmptyConfigForm(state.execApprovalsForm, original)) !==
+    stableStringify(original);
   state.execApprovalsSavedNotice = false;
 }
 

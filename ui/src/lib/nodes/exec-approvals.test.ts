@@ -51,6 +51,42 @@ it("copies only the edited policy path and keeps earlier receipts immutable", as
   expect(file.agents.main.allowlist).toEqual([{ pattern: "old" }, { pattern: "keep" }]);
 });
 
+it("clears dirty state after reverting values, inheritance and temporary patterns", async () => {
+  const file = {
+    version: 1,
+    defaults: { ask: "on-miss", security: "deny" },
+    agents: { retained: {} },
+  };
+  request.mockResolvedValue(snapshot(file));
+  await approvals.loadExecApprovals(state);
+  approvals.updateExecApprovalsFormValue(state, ["defaults", "security"], "allowlist");
+  expect(state.execApprovalsDirty).toBe(true);
+  approvals.updateExecApprovalsFormValue(state, ["defaults", "security"], "deny");
+  expect(state.execApprovalsDirty).toBe(false);
+  approvals.removeExecApprovalsFormValue(state, ["defaults", "ask"]);
+  expect(state.execApprovalsDirty).toBe(true);
+  approvals.updateExecApprovalsFormValue(state, ["defaults", "ask"], "on-miss");
+  expect(state.execApprovalsDirty).toBe(false);
+  approvals.updateExecApprovalsFormValue(state, ["agents", "main", "autoAllowSkills"], false);
+  expect(state.execApprovalsDirty).toBe(true);
+  approvals.removeExecApprovalsFormValue(state, ["agents", "main", "autoAllowSkills"]);
+  expect(state.execApprovalsDirty).toBe(false);
+  approvals.updateExecApprovalsFormValue(
+    state,
+    ["agents", "main", "allowlist"],
+    [{ pattern: "temporary" }],
+  );
+  expect(state.execApprovalsDirty).toBe(true);
+  approvals.removeExecApprovalsFormValue(state, ["agents", "main", "allowlist"]);
+  expect(state.execApprovalsDirty).toBe(false);
+  request.mockResolvedValue(snapshot(file, "refreshed"));
+  await approvals.loadExecApprovals(state);
+  expect(state.execApprovalsSnapshot).toMatchObject({ hash: "refreshed" });
+  approvals.removeExecApprovalsFormValue(state, ["agents", "retained"]);
+  expect(state.execApprovalsDirty).toBe(true);
+  expect(file.agents).toEqual({ retained: {} });
+});
+
 it("keeps an edited policy on its original base when a refresh sees another writer", async () => {
   let hash = "original";
   request.mockImplementation(async () =>
