@@ -638,7 +638,6 @@ const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
 // Keep these config-scoped work hints through file regrouping. The two-slot
 // work estimate was 369.995s; its 389.731s wrapper included 12.745s preparation.
 const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
-  ["src/infra/sqlite-readonly-location.copy.test.ts", 0.852],
   ["src/infra/sqlite-snapshot-staging-cancelled-owner.test.ts", 0.368],
   ["src/infra/sqlite-worker-client.test.ts", 0.379],
   ["src/infra/sqlite-worker-store.generation.test.ts", 2.427],
