@@ -116,7 +116,7 @@ export async function applyAnthropicPayloadHook(
   }
   const immutable = getAiTransportHost().immutableData;
   const plain = immutable?.isPlainData;
-  const snapshot = plain?.(params) ? copyPlainData(params, true) : undefined;
+  const snapshot = plain?.(params) ? copyPlainData(params.messages, true) : undefined;
   // Opaque caller values retain their original behavior. Converter-owned plain
   // messages still need detaching when an unrelated envelope value is opaque.
   const editable = snapshot
@@ -131,25 +131,31 @@ export async function applyAnthropicPayloadHook(
     () => options.onPayload?.(editable, model),
     options.signal,
   );
-  const unchanged =
-    (replacement === undefined || replacement === editable) &&
-    snapshot !== undefined &&
-    (samePlainData(snapshot, editable) ||
-      (plain?.(editable) && samePlainData(snapshot.messages, editable.messages)));
-  if (unchanged && !("toJSON" in Object.prototype) && !("toJSON" in Array.prototype)) {
-    // Encode equal editable copies before yielding: hooks may retain and mutate them.
-    // Keep frozen keys, while avoiding the slow JSON path for their frozen arrays.
-    for (let index = 0; index < snapshot.messages.length; index++) {
-      const source = snapshot.messages[index];
-      if (immutable?.isDeeplyFrozenPlainData(source)) {
-        encodeMessageFragment(editable.messages[index], source);
+  let unchanged = false;
+  if ((replacement === undefined || replacement === editable) && snapshot !== undefined) {
+    const { messages, ...envelope } = Object.getOwnPropertyDescriptors(editable);
+    // Equality already checks every message descriptor. Admit only the remaining
+    // envelope, preserving accessors/prototypes without invoking hook-created getters.
+    unchanged =
+      messages !== undefined &&
+      "value" in messages &&
+      samePlainData(snapshot, messages.value) &&
+      plain?.(Object.create(Object.getPrototypeOf(editable), envelope)) === true;
+    if (unchanged && !("toJSON" in Object.prototype) && !("toJSON" in Array.prototype)) {
+      // Encode equal editable copies before yielding: hooks may retain and mutate them.
+      // Keep frozen keys, while avoiding the slow JSON path for their frozen arrays.
+      for (let index = 0; index < snapshot.length; index++) {
+        const source = snapshot[index];
+        if (immutable?.isDeeplyFrozenPlainData(source)) {
+          encodeMessageFragment(editable.messages[index], source);
+        }
       }
     }
   }
   return {
     // SAFETY: The public payload hook owns its replacement shape.
     params: (replacement === undefined ? editable : replacement) as MessageCreateParamsStreaming,
-    messageSources: unchanged ? snapshot.messages : null,
+    messageSources: unchanged ? snapshot : null,
   };
 }
 
