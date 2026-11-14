@@ -129,6 +129,12 @@ export function resolveCandidateThinkingLevel(
   params: Parameters<typeof resolveCandidateAgentRuntime>[0] & {
     level?: ThinkLevel;
     catalog?: ThinkingCatalogEntry[];
+    /**
+     * Logical model's reasoning policy. A runtime row carries only its own
+     * capabilities, so callers that grade against a selected row must supply
+     * the logical policy the session validator also applies.
+     */
+    configuredReasoning?: boolean;
   },
 ): ThinkLevel | undefined {
   if (!params.level) {
@@ -139,6 +145,7 @@ export function resolveCandidateThinkingLevel(
     model: params.modelId,
     level: params.level,
     catalog: params.catalog,
+    configuredReasoning: params.configuredReasoning,
     agentRuntime: resolveCandidateAgentRuntime(params),
   });
 }

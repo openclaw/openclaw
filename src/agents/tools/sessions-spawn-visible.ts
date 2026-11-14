@@ -46,14 +46,8 @@ import {
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
-import {
-  resolveConfiguredSubagentRunTimeoutSeconds,
-  resolveSubagentModelAndThinkingPlan,
-} from "../subagents/spawn/subagent-spawn-plan.js";
-import {
-  resolveRequesterPreferences,
-  resolveSubagentCyberAccessProgram,
-} from "../subagents/spawn/subagent-spawn-requester-prefs.js";
+import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import { resolveSubagentCyberAccessProgram } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { validateName } from "../worktrees/name.js";
@@ -72,6 +66,7 @@ import {
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
+import { resolveVisibleChildModelPlan } from "./sessions-spawn-visible-thinking.js";
 import {
   correctedVisibleSpawnCall,
   SessionsSpawnPlacementSchema,
@@ -310,21 +305,19 @@ export async function maybeSpawnVisibleSession(
     };
   }
 
-  const modelPlan = await resolveSubagentModelAndThinkingPlan({
+  const modelPlan = await resolveVisibleChildModelPlan({
     cfg,
+    requesterAgentId,
     targetAgentId,
+    requesterEntry,
     modelOverride,
     workspaceDir: spawnedWorkspaceDir,
-    inheritedModel:
-      targetAgentId === requesterAgentId
-        ? (params.options?.requesterModel ??
-          resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).model)
-        : undefined,
+    options: params.options,
   });
   if (modelPlan.status === "error") {
     return { status: "error", error: modelPlan.error };
   }
-  const { resolvedModel, inheritedModel, initialSessionPatch } = modelPlan;
+  const { resolvedModel, inheritedModel, initialSessionPatch, thinkingLevel } = modelPlan;
   const cyberAccessProgram = resolveSubagentCyberAccessProgram({
     cfg,
     requesterAgentId,
@@ -450,6 +443,7 @@ export async function maybeSpawnVisibleSession(
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
         ...(placement ? { titleSource } : taskMessage ? { task: taskMessage } : {}),
         timeoutMs:
