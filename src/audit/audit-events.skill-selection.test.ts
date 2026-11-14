@@ -1,3 +1,6 @@
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -5,6 +8,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { getOpenClawStatePredecessorSchema } from "../state/openclaw-state-schema-runtime.js";
 import {
   listAuditEvents,
   pruneExpiredAuditEventsInDatabase,
@@ -148,6 +153,97 @@ describe("audit event skill-selection persistence", () => {
       filters: { kind: "skill_selection" },
     });
     expect(skillOnly.events).toEqual([expect.objectContaining({ kind: "skill_selection" })]);
+  });
+
+  it("loads stored rows from a pre-companion database and records skill use alongside them", async () => {
+    // Simulate an installed database from before the companion table
+    // existed: v39 layout with one stored audit row, then open it with the
+    // current build the way a real upgrade would.
+    const options = {
+      env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-audit-upgrade-") },
+    };
+    const pathname = resolveOpenClawStateSqlitePath(options.env);
+    mkdirSync(path.dirname(pathname), { recursive: true });
+    const storedAt = Date.now() - 60_000;
+    const setup = new DatabaseSync(pathname);
+    try {
+      setup.exec(getOpenClawStatePredecessorSchema(39));
+      setup.exec(`PRAGMA user_version = 39;
+        INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+        VALUES ('primary', 'global', 39, 1, 1);`);
+      setup.exec(`INSERT INTO audit_events (event_id, source_id, schema_version, source_sequence,
+        occurred_at, kind, action, status, actor_type, actor_id, agent_id, session_key, session_id, run_id)
+        VALUES ('legacy-event-1', 'run-legacy:1:${storedAt}:agent.run.started', 1, 1, ${storedAt},
+        'agent_run', 'agent.run.started', 'started', 'agent', 'main', 'main',
+        'agent:main:main', 'session-legacy', 'run-legacy')`);
+    } finally {
+      setup.close();
+    }
+
+    const auditDatabase = { ...options, database: openOpenClawStateDatabase(options) };
+    const legacy = await listAuditEvents({ database: options, limit: 10 });
+    expect(legacy.events.map((event) => event.eventId)).toEqual(["legacy-event-1"]);
+
+    const skill = recordAuditEventInDatabase(
+      skillSelectionInput({ occurredAt: Date.now(), sourceSequence: 2 }),
+      auditDatabase,
+    );
+    expect(skill?.kind).toBe("skill_selection");
+    // The shared sequence continues after the stored row.
+    expect(skill?.sequence).toBe(2);
+
+    const page = await listAuditEvents({
+      database: options,
+      limit: 10,
+      filters: { includeSkillSelections: true },
+    });
+    expect(page.events.map((event) => [event.kind, event.sourceSequence])).toEqual([
+      ["skill_selection", 2],
+      ["agent_run", 1],
+    ]);
+    // The stored row survives the upgrade untouched.
+    expect(page.events[1]).toMatchObject({ eventId: "legacy-event-1", sequence: 1 });
+  });
+
+  it("returns fresh ledger sequences after companion allocation consumes a sequence", () => {
+    const database = createDatabaseOptions();
+    const now = Date.now();
+    const auditDatabase = { ...database, database: openOpenClawStateDatabase(database) };
+    const first = recordAuditEventInDatabase(
+      auditInput({ occurredAt: now, sourceSequence: 1 }),
+      auditDatabase,
+    );
+    expect(first?.sequence).toBe(1);
+    // Second ledger row warms the single-statement retention cache.
+    const second = recordAuditEventInDatabase(
+      auditInput({ occurredAt: now + 1, sourceSequence: 2 }),
+      auditDatabase,
+    );
+    expect(second?.sequence).toBe(2);
+    // Companion allocation consumes the shared sequence outside the retention
+    // fast path, so the cached high-water mark must be dropped here.
+    const skill = recordAuditEventInDatabase(
+      skillSelectionInput({ occurredAt: now + 2, sourceSequence: 3 }),
+      auditDatabase,
+    );
+    expect(skill?.sequence).toBe(3);
+    const third = recordAuditEventInDatabase(
+      auditInput({
+        occurredAt: now + 3,
+        sourceSequence: 4,
+        action: "agent.run.finished",
+        status: "succeeded",
+      }),
+      auditDatabase,
+    );
+    // A stale cache would report sequence 3 while SQLite stores the row at 4.
+    expect(third?.sequence).toBe(4);
+    const { db } = openOpenClawStateDatabase(database);
+    expect(db.prepare("SELECT sequence FROM audit_events ORDER BY sequence").all()).toEqual([
+      { sequence: 1 },
+      { sequence: 2 },
+      { sequence: 4 },
+    ]);
   });
 
   it("prunes expired skill selection records during bounded audit maintenance", async () => {

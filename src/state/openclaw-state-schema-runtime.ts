@@ -6,6 +6,7 @@ import {
   LAZY_ADDITIVE_STATE_INDEXES,
   LAZY_ADDITIVE_STATE_TABLES,
 } from "./openclaw-state-db-contract.js";
+import { withLegacySkillSelectionCompanionAbsent } from "./openclaw-state-db-schema-skill-selection.js";
 import { withLegacyStateHeadLayout } from "./openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "./openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
@@ -60,6 +61,14 @@ export function getOpenClawStateRuntimeSchema(
     );
   }
   for (const indexName of omittedIndexes) {
+    // Historical source layouts predate today's optional indexes.
+    if (
+      schemaSql !== OPENCLAW_STATE_SCHEMA_SQL &&
+      !schema.includes(`CREATE INDEX IF NOT EXISTS ${indexName}`) &&
+      !schema.includes(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`)
+    ) {
+      continue;
+    }
     const plainStart = schema.indexOf(`CREATE INDEX IF NOT EXISTS ${indexName}`);
     const uniqueStart = schema.indexOf(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName}`);
     const start = plainStart >= 0 ? plainStart : uniqueStart;
@@ -75,7 +84,10 @@ export function getOpenClawStateRuntimeSchema(
 
 /** Keep runtime predecessor admission and generated catalog inputs on the same transform chain. */
 export function getOpenClawStatePredecessorSchema(version: number): string {
-  let schema = OPENCLAW_STATE_SCHEMA_SQL;
+  // The skill-selection companion table postdates every released layout, so
+  // no predecessor may inherit it; this preserves the exact historical inputs
+  // installed readers resolve during a build swap.
+  let schema = withLegacySkillSelectionCompanionAbsent(OPENCLAW_STATE_SCHEMA_SQL);
   for (const [introduced, transform] of [
     [40, withLegacyWorkerProvisionSource],
     [40, withLegacyStateV40Additions],

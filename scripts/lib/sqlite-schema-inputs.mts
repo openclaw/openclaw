@@ -28,6 +28,7 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { withLegacyAgentStorageSchema } from "../../src/state/openclaw-agent-storage-schema.js";
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcript-fts-schema-source.js";
+import { withLegacySkillSelectionCompanionAbsent } from "../../src/state/openclaw-state-db-schema-skill-selection.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import {
@@ -63,7 +64,9 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
   }
   // An already-loaded updater can read replacement catalog assets after a build swap.
-  const beforeProvisionSource = withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL);
+  const beforeProvisionSource = withLegacyWorkerProvisionSource(
+    withLegacySkillSelectionCompanionAbsent(OPENCLAW_STATE_SCHEMA_SQL),
+  );
   add("state-before-provision-source", "state", beforeProvisionSource);
   const beforeBootstrap = withLegacyWorkspaceBootstrapDeferred(beforeProvisionSource);
   add("state-before-bootstrap-deferred", "state", beforeBootstrap);

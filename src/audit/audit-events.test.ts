@@ -529,6 +529,11 @@ describe("agent activity audit projection", () => {
           selectionConfidence: "observed",
           selectionRule: "tool_invocation",
           redaction: "metadata_only",
+          // Prompt text, tool arguments, and skill file contents must never
+          // survive the metadata-only projection, even when present upstream.
+          prompt: "PRIVATE_PROMPT_CONTENT",
+          toolInput: "PRIVATE_PROMPT_CONTENT",
+          skillFileContents: "PRIVATE_PROMPT_CONTENT",
         },
       }),
     );

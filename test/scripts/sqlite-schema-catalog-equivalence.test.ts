@@ -14,6 +14,7 @@ import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
 import { getOpenClawAgentMigrationSchema } from "../../src/state/openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
+import { withLegacySkillSelectionCompanionAbsent } from "../../src/state/openclaw-state-db-schema-skill-selection.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import {
@@ -99,10 +100,10 @@ describe("generated SQLite schema catalogs", () => {
   });
 
   it.each([
-    [false, false, "d867544f0eef2a762dc9051ea0e15b8091c270bbb2a73b4903ecd0928e04aaef"],
-    [false, true, "413ccc65b8a2461f1b8a0d51d1b5dcf815a0adbe5f2d6d9639096b9217deccb4"],
-    [true, false, "18180a4cb062b9b3a7591243f04344a87a771d9c15ed915ec0d5613f0fc90f02"],
-    [true, true, "49992d8ed832224f1aa240a8453cc509cdcebadc48879674be554c8c02d5f902"],
+    [false, false, "40222aeec53b8897045719a8d38a4b0658ffd1d21d4fd0fef11458c48ed5625b"],
+    [false, true, "5ed7c4627eed8b68ddfcf5b4ffbd98c2085cc17c1ab55a1d69f07aee108f202d"],
+    [true, false, "41b7ccaf89f2ce0b2e8898c714693b62ccdeba93e7eea48612a2783d77a97f28"],
+    [true, true, "126f5f0137d7c19fb0907ad7f763a83d4b675d38190526623081dff1dad6ab99"],
   ] as const)("retains the pre-browser-request runtime projection %s/%s", (lazy, journal, hash) => {
     const options = {
       includeVersionLazyAdditiveTables: lazy,
@@ -119,15 +120,17 @@ describe("generated SQLite schema catalogs", () => {
   });
 
   it.each([
-    [undefined, "3e69be25aa64d744c4dbe3a82aeb19e282e4921b53ebc3c530c3961f9971a078"],
-    [[false, false], "1e0d269930a1d67272f2abba63d124b3334e409e0c70da34ef1f7fb0f6c77401"],
-    [[false, true], "70a1959c27096a3bce2f88f145b5b7cb334cb23b0c319d6bd8d4dcfb9c872e14"],
-    [[true, false], "002d221c278c58836d140db820dcbef0d7f59933caa80a9d0b6bb6df735e7004"],
-    [[true, true], "609552a7a9cc616c87500badcdae12dfae764bf0fb12758d249265c9475d5ede"],
+    [undefined, "f32dcffad8239a4de64de63074202b82a2a8b8671148ade2a5bf66a296a24c94"],
+    [[false, false], "1e2662ff71a59cc056f70d661bddb4c6c0e86b36c4151490343ffd787b15891a"],
+    [[false, true], "a65a121da4de231f2d96dcf4503136c5f7cc2f80e54aa9d630fb2e5a9de9a97a"],
+    [[true, false], "a99f466c73b07f39b54a6711d7e5df7767e45c7c9b2a45943ed96726ba8f4608"],
+    [[true, true], "269874b20b213faf7f8c8ecb6cc4c759853ffd1d63b5f6a395180667ffb2a9b3"],
   ] as const)(
     "keeps the pre-provision-source catalog readable after a build swap (%s)",
     (flags, hash) => {
-      const predecessor = withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL);
+      const predecessor = withLegacyWorkerProvisionSource(
+        withLegacySkillSelectionCompanionAbsent(OPENCLAW_STATE_SCHEMA_SQL),
+      );
       const historical = flags
         ? getOpenClawStateRuntimeSchema(
             { includeVersionLazyAdditiveTables: flags[0], includeAgentDeletionJournal: flags[1] },
@@ -147,11 +150,13 @@ describe("generated SQLite schema catalogs", () => {
     const historical = getOpenClawStateRuntimeSchema(
       options,
       withLegacyWorkspaceBootstrapDeferred(
-        withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL),
+        withLegacyWorkerProvisionSource(
+          withLegacySkillSelectionCompanionAbsent(OPENCLAW_STATE_SCHEMA_SQL),
+        ),
       ),
     );
     expect(createHash("sha256").update(historical).digest("hex")).toBe(
-      "afbcc7fdd91f9a30199ca909e0429d8faf48ab2c4ed4c97e8e967920f76b5e52",
+      "d99906589af97e0bc4e77af6f5e155e6eb689abfde8ef42d8534862f0c0f4d7d",
     );
     expect(historical).toContain("CREATE TABLE IF NOT EXISTS device_pairing_browser_requests");
     expect(readGeneratedSqliteCatalog(historical)).toBeDefined();

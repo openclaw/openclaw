@@ -53,7 +53,10 @@ function sanitizeSkillName(value: string): string {
   const prefixLength = needsFlagPrefix ? 3 : 0;
   const budget = ENCODED_SKILL_NAME_MAX_CHARS - prefixLength - digestSuffix.length;
   let encoded = "";
-  let truncated = false;
+  // Names cut at the input budget are marked truncated up front, so two
+  // distinct loaded names that share the first 64 characters keep distinct
+  // audit identities via the digest suffix.
+  let truncated = normalized.length > SKILL_NAME_MAX_INPUT_CHARS;
   const pushToken = (token: string): boolean => {
     if (encoded.length + token.length > budget) {
       truncated = true;

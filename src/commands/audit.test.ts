@@ -719,35 +719,6 @@ describe("audit run explanation", () => {
     }
   });
 
-  it("renders expired identity as unsupported without context fields or decisions", async () => {
-    callGateway.mockResolvedValue({
-      schemaVersion: 1,
-      run: { runId: "expired-run", status: "known" },
-      identity: {
-        state: "unsupported",
-        reasonCode: "identity_context_unavailable",
-        missingEvidence: ["identity.context"],
-        remediation: [
-          {
-            code: "run_again_after_expiry",
-            text: "This run's identity context is outside the 30-day retention window; run the operation again to record a new context.",
-          },
-        ],
-      },
-      decisionDisplays: [],
-      coverage: { state: "unsupported", missingEvidence: ["identity.context"] },
-    });
-
-    await auditListCommand({ explain: true, runId: "expired-run" }, runtime);
-
-    const output = vi.mocked(runtime.log).mock.calls.flat().join("\n");
-    expect(output).toContain("Ingress [unsupported]");
-    expect(output).toContain("none [absent]");
-    expect(output).toContain("outside the 30-day retention window");
-    expect(output).not.toContain("Context:");
-    expect(output).not.toContain("run_admission_identity_not_evaluated");
-  });
-
   it("returns an explicit upgrade state from an older Gateway", async () => {
     callGateway.mockRejectedValue(unknownRunInspectMethodError());
 

@@ -85,6 +85,27 @@ describe("runtime skill selection marker", () => {
     expect(second.selectedSkill).toMatch(/-[0-9a-f]{10}$/u);
   });
 
+  it("keeps input-truncated identities distinct when the first 64 chars match", () => {
+    // Loader keeps names longer than 64 chars: slicing the input must still
+    // mark the identity truncated so the digest suffix keeps them distinct.
+    const first = buildRuntimeSkillSelectionMarker({
+      skillName: `${"a".repeat(64)}alpha`,
+      skillSource: "workspace",
+      activation: "read",
+    });
+    const second = buildRuntimeSkillSelectionMarker({
+      skillName: `${"a".repeat(64)}beta`,
+      skillSource: "workspace",
+      activation: "read",
+    });
+
+    expect(first.selectedSkill).not.toBe(second.selectedSkill);
+    expect(first.selectedSkill.length).toBeLessThanOrEqual(128);
+    expect(second.selectedSkill.length).toBeLessThanOrEqual(128);
+    expect(first.selectedSkill).toMatch(/-[0-9a-f]{10}$/u);
+    expect(second.selectedSkill).toMatch(/-[0-9a-f]{10}$/u);
+  });
+
   it("returns unknown for empty skill names", () => {
     const marker = buildRuntimeSkillSelectionMarker({
       skillName: "   ",
