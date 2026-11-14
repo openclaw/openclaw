@@ -63,7 +63,7 @@ export function usageQueryFilterSearchLabel(filterKey: UsageQueryFilterKey): str
 export function UsageQueryFilter(props: {
   filterKey: UsageQueryFilterKey;
   label: string;
-  options: string[];
+  options: string[] | undefined;
   counts?: Readonly<Record<string, number>>;
   queryDraft: string;
   queryTerms: ReturnType<typeof extractQueryTerms>;
@@ -74,7 +74,9 @@ export function UsageQueryFilter(props: {
   const selectedSet = createMemo(
     () => new Set(selected().map((value) => normalizeLowercaseStringOrEmpty(value))),
   );
-  const options = createMemo(() => usageQueryFieldOptions(props.options, props.counts, selected()));
+  const options = createMemo(() =>
+    usageQueryFieldOptions(props.options ?? [], props.counts, selected()),
+  );
   // The pill renders before its options load so the filter row keeps its height.
   return (
     <UsageValuePicker
@@ -85,6 +87,7 @@ export function UsageQueryFilter(props: {
       placement={props.placement ?? "bottom-start"}
       multiple
       options={options}
+      optionsReady={() => props.options !== undefined}
       isSelected={(value) => selectedSet().has(normalizeLowercaseStringOrEmpty(value))}
       searchLabel={() => usageQueryFilterSearchLabel(props.filterKey)}
       onToggle={(value) =>
