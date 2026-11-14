@@ -1,8 +1,8 @@
 // Creates isolated OpenClaw state directories for integration-style tests.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
+import { resolveTestTempRoot } from "../../test/helpers/temp-dir.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
@@ -281,7 +281,7 @@ export async function createOpenClawTestState(
   const prefix = options.prefix ?? `${DEFAULT_PREFIX}${label}-`;
   const layout = options.layout ?? "home";
   const config = scenarioConfig(options);
-  let root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  let root = await fs.mkdtemp(path.join(resolveTestTempRoot(), prefix));
   const removeRoot = () =>
     fs.rm(root, {
       recursive: true,
