@@ -1,0 +1,2 @@
+# Secondary-agent catalog isolation: focused source/auth/route regressions and real Gateway credential-rotation proof (E2E execution pending). Exact net test growth.
+561

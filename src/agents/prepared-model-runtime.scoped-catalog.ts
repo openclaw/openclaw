@@ -6,7 +6,6 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { captureModelsJsonSource } from "./models-config-state.js";
 import {
   ensureOpenClawModelsJsonWithInput,
   planOpenClawModelsJsonSourceWithInput,
@@ -20,6 +19,7 @@ import {
   materializePreparedModelCatalog,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
+import { capturePreparedModelsJsonSource } from "./prepared-model-runtime.inherited-catalog.js";
 import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -127,8 +127,13 @@ export async function prepareAgentCatalogSource(
         ...options,
         ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
       });
+      const captured =
+        source.modelsJsonContents === null
+          ? await capturePreparedModelsJsonSource(input)
+          : { contents: source.modelsJsonContents, sanitizedFallback: false };
       return {
-        modelsJsonContents: source.modelsJsonContents,
+        modelsJsonContents: captured.contents,
+        ...(captured.sanitizedFallback ? { modelsJsonSanitizedFallback: true } : {}),
         pluginCatalogs: source.pluginCatalogs,
         providerOutcomes: resultOutcomes(),
       };
@@ -143,8 +148,10 @@ export async function prepareAgentCatalogSource(
         return { ...publishedSource, providerOutcomes: resultOutcomes() };
       }
     }
+    const captured = await capturePreparedModelsJsonSource(input);
     return {
-      modelsJsonContents: (await captureModelsJsonSource(input.agentDir)).contents,
+      modelsJsonContents: captured.contents,
+      ...(captured.sanitizedFallback ? { modelsJsonSanitizedFallback: true } : {}),
       pluginCatalogs: await loadPersistedPluginModelCatalogs(input.agentDir, undefined, env),
       providerOutcomes: resultOutcomes(),
     };

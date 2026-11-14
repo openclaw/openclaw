@@ -36,7 +36,6 @@ import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
-import { captureModelsJsonSource } from "./models-config-state.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import { resolvePluginModelCatalogOwnerPluginId } from "./plugin-model-catalog.js";
@@ -61,6 +60,7 @@ import {
   prepareWorkspacePluginRegistries,
   type PreparedInboundRegistryLoader,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { capturePreparedModelsJsonSource } from "./prepared-model-runtime.inherited-catalog.js";
 import {
   prepareOwnedPluginLoadContext,
   prepareOwnedPluginMetadataSnapshotParams,
@@ -545,7 +545,8 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   for (const facts of params.agentFacts) {
     await nextTurn();
     params.assertCurrent?.(facts.input);
-    const { contents: modelsJsonContents } = await captureModelsJsonSource(facts.input.agentDir);
+    const modelsJsonSource = await capturePreparedModelsJsonSource(facts.input);
+    const modelsJsonContents = modelsJsonSource.contents;
     // Signed-in providers browse known manifest rows until their account listing publishes. Scope
     // by current credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
     // credential-only providers out of facts.providerIds.
@@ -570,6 +571,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       sourceModels: projectConfigOntoRuntimeSourceSnapshot(facts.input.config).models,
       credentials: facts.credentials,
       modelsJsonContents,
+      modelsJsonSanitizedFallback: modelsJsonSource.sanitizedFallback,
       pluginCatalogs,
       staticProviderConfigs,
     });
@@ -599,6 +601,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
           config: facts.input.config,
           includePluginCatalogs: true,
           modelsJsonContents,
+          modelsJsonSanitizedFallback: modelsJsonSource.sanitizedFallback,
           pluginCatalogs,
           staticProviderConfigs,
           pluginMetadataSnapshot,
