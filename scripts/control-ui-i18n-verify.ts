@@ -6,7 +6,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as ts from "typescript/ast";
 import {
-  loadControlUiTranslationMemory,
   materializePreparedControlUiLocaleCatalog,
   prepareControlUiCatalogSource,
   type PreparedControlUiCatalogSource,
@@ -20,6 +19,10 @@ import {
   CONTROL_UI_TEST_FILE_PATTERN,
   syncControlUiRawCopyBaseline,
 } from "./lib/control-ui-i18n-raw-copy.ts";
+import {
+  controlUiBuildMemoryPath,
+  loadControlUiBuildMemory,
+} from "./lib/control-ui-i18n-storage.ts";
 import {
   compareStringArrays,
   extractTranslationPlaceholders,
@@ -214,7 +217,7 @@ async function buildCatalogFallbackBaseline(
     let prepared: PreparedControlUiCatalogSource | undefined;
     for (const [index, entry] of CONTROL_UI_LOCALE_ENTRIES.entries()) {
       const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
-      if (!existsSync(memoryPath)) {
+      if (!existsSync(controlUiBuildMemoryPath(memoryPath))) {
         // A newly registered source-only locale has no memory until its own refresh
         // worker creates it; sibling workers must not block that bootstrap. The
         // aggregate sync and check still require every locale's memory.
@@ -223,7 +226,7 @@ async function buildCatalogFallbackBaseline(
         }
         throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
       }
-      const memory = loadControlUiTranslationMemory(memoryPath);
+      const memory = loadControlUiBuildMemory(memoryPath);
       prepared ??= prepareControlUiCatalogSource(sourceFlat);
       // Match the source + translation-memory materialization served by the runtime Vite module.
       const localeMap = materializePreparedControlUiLocaleCatalog(prepared, memory);

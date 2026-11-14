@@ -15,6 +15,9 @@ on:
       - ui/config/control-ui-locales.ts
       - scripts/control-ui-i18n.ts
       - scripts/control-ui-locale-artifacts.ts
+      - scripts/control-ui-i18n-memory.ts
+      - scripts/lib/control-ui-i18n-storage.ts
+      - .github/actions/control-ui-memory/**
       - scripts/control-ui-i18n-verify.ts
       - scripts/lib/control-ui-i18n-catalog.ts
       - scripts/lib/control-ui-i18n-catalog-values.ts
@@ -185,6 +188,14 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Restore pinned canonical memory
+        uses: ./.github/actions/control-ui-memory
+        with:
+          command: restore
+          repository: ${{ vars.CONTROL_UI_MEMORY_REPOSITORY }}
+          app-client-id: ${{ vars.CONTROL_UI_MEMORY_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.CONTROL_UI_MEMORY_APP_PRIVATE_KEY }}
+
       - name: Refresh locale translations
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
@@ -262,6 +273,14 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Restore pinned canonical memory
+        uses: ./.github/actions/control-ui-memory
+        with:
+          command: restore
+          repository: ${{ vars.CONTROL_UI_MEMORY_REPOSITORY }}
+          app-client-id: ${{ vars.CONTROL_UI_MEMORY_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.CONTROL_UI_MEMORY_APP_PRIVATE_KEY }}
+
       # Reconcile once against the fresh canonical checkout. A second source
       # movement still defers through the unchanged publisher freshness checks.
       - name: Restore same-run locale memory
@@ -299,6 +318,19 @@ jobs:
       - name: Validate control UI locale refresh
         run: node --import tsx scripts/control-ui-i18n.ts check
 
+      - name: Publish canonical memory before main pin
+        uses: ./.github/actions/control-ui-memory
+        with:
+          command: publish
+          repository: ${{ vars.CONTROL_UI_MEMORY_REPOSITORY }}
+          app-client-id: ${{ vars.CONTROL_UI_MEMORY_APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.CONTROL_UI_MEMORY_APP_PRIVATE_KEY }}
+
+      - name: Select generated core publication paths
+        id: memory_paths
+        shell: bash
+        run: node --import tsx scripts/control-ui-i18n-memory.ts paths
+
       - name: Open or update generated locale PR
         uses: ./.github/actions/publish-generated-pr
         with:
@@ -312,7 +344,8 @@ jobs:
           pr-title: "chore(ui): refresh control ui locales"
           auto-merge: "true"
           generated-paths: |
-            ui/src/i18n/.i18n/*.tm.jsonl
+            ${{ steps.memory_paths.outputs.core }}
+            ${{ steps.memory_paths.outputs.pin }}
             ui/src/i18n/.i18n/*.meta.json
             ui/src/i18n/.i18n/catalog-fallbacks.json
             extensions/**/i18n/.i18n/*
@@ -330,6 +363,9 @@ jobs:
             ui/config/control-ui-locales.ts
             scripts/control-ui-i18n.ts
             scripts/control-ui-locale-artifacts.ts
+            scripts/control-ui-i18n-memory.ts
+            scripts/lib/control-ui-i18n-storage.ts
+            .github/actions/control-ui-memory/**
             scripts/control-ui-i18n-verify.ts
             scripts/lib/control-ui-i18n-catalog.ts
             scripts/lib/control-ui-i18n-catalog-values.ts

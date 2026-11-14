@@ -50,7 +50,7 @@ imports inside their route's `component` loader.
 
 ## i18n Rules
 
-- Foreign `src/i18n/locales/*.ts` = stable source-owned lazy adapters; translations from canonical grouped `src/i18n/.i18n/*.tm.jsonl`. Never hand-edit translation memory, locale/fallback metadata unless targeted generated-output fix requested.
+- Foreign `src/i18n/locales/*.ts` = stable source-owned lazy adapters. Before bootstrap, builds read canonical grouped `src/i18n/.i18n/*.tm.jsonl`; after explicit external-memory bootstrap, builds read digest-pinned `*.catalog.jsonl` projections and generation restores the canonical snapshot. Follow [memory ownership and recovery](../docs/ci/control-ui-memory.md). Never hand-edit memory, projections, pins or locale/fallback metadata unless a targeted generated-output fix is requested.
 - English: `src/i18n/locales/en.ts`, static `en-agents.ts`, lazy `en-*.ts` registrars. `scripts/lib/control-ui-i18n-catalog.ts` owns ordered composition + raw source hashes for generation, verification, Vite; reads `.catalog` data without runtime registration. Wiring owners: `scripts/control-ui-i18n.ts`, `scripts/lib/control-ui-i18n-sync-plan.ts`, `ui/config/control-ui-locales.ts`, `ui/src/i18n/lib/{types,registry}.ts`.
 - Standalone reader English: `src/shared/public-session-copy.ts` (the `publicReader` namespace in the catalog owner above). `scripts/lib/public-session-locales.mts` projects reader-only dictionaries from canonical memory into Gateway builds; source execution and untranslated keys use English. No runtime filesystem reads or separate foreign reader catalogs.
 - `src/shared/control-ui-locale.ts` owns supported locales, ordered browser-language matching, and direction for UI and public reader; UI registry owns only lazy imports.

@@ -2,6 +2,11 @@ import { hash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { TranslationMap, TranslationMemoryEntry } from "./control-ui-i18n-sync-plan.ts";
 
+export type ControlUiTranslationValue = Pick<
+  TranslationMemoryEntry,
+  "text_hash" | "segment_id" | "segment_ids" | "translated"
+>;
+
 export function hashControlUiTranslationText(text: string): string {
   return hash("sha256", text.trim().split(/\s+/).join(" "), "hex");
 }
@@ -66,7 +71,7 @@ export function setControlUiCatalogValue(
 
 export function materializeControlUiLocaleCatalog(
   sourceFlat: ReadonlyMap<string, string>,
-  memory: ReadonlyMap<string, TranslationMemoryEntry>,
+  memory: ReadonlyMap<string, ControlUiTranslationValue>,
 ): TranslationMap {
   return materializePreparedControlUiLocaleCatalog(
     prepareControlUiCatalogSource(sourceFlat),
@@ -90,7 +95,7 @@ export function prepareControlUiCatalogSource(
 
 export function materializePreparedControlUiLocaleCatalog(
   source: PreparedControlUiCatalogSource,
-  memory: ReadonlyMap<string, TranslationMemoryEntry>,
+  memory: ReadonlyMap<string, ControlUiTranslationValue>,
 ): TranslationMap {
   const translations = new Map<string, string>();
 

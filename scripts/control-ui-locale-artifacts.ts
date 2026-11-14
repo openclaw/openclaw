@@ -13,6 +13,8 @@ const POLICY_PATHS = new Set([
   "scripts/control-ui-locale-artifacts.ts",
   "scripts/lib/control-ui-i18n-catalog-values.ts",
   "scripts/lib/control-ui-i18n-sync-plan.ts",
+  "scripts/lib/control-ui-i18n-storage.ts",
+  "scripts/control-ui-i18n-memory.ts",
   "scripts/lib/control-ui-i18n-config.ts",
   "scripts/lib/control-ui-i18n-config.json",
   "scripts/lib/control-ui-plugin-i18n-catalog.ts",
@@ -190,7 +192,9 @@ export async function restoreControlUiLocaleArtifacts(params: {
   ])
     .split("\0")
     .filter(Boolean);
-  const policyChanged = changed.some((file) => POLICY_PATHS.has(file));
+  const policyChanged = changed.some(
+    (file) => POLICY_PATHS.has(file) || file === "ui/src/i18n/.i18n/memory-revision.json",
+  );
   const assets = await catalogAssets(root);
   const invalidated: string[] = [];
   const writes: Array<{ path: string; content: string }> = [];

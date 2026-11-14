@@ -1,0 +1,79 @@
+name: Control UI canonical memory
+description: Restore a pinned canonical snapshot or publish raw memory before its main pin.
+inputs:
+  command:
+    description: restore or publish
+    required: true
+  repository:
+    description: Approved separate canonical owner/repository matching the source pin.
+    required: false
+  app-client-id:
+    description: GitHub App installed on the approved canonical repository.
+    required: false
+  app-private-key:
+    description: Private key for the canonical repository App.
+    required: false
+outputs:
+  active:
+    description: Whether this source revision has completed bootstrap.
+    value: ${{ steps.pin.outputs.active }}
+runs:
+  using: composite
+  steps:
+    - name: Read canonical memory pin
+      id: pin
+      shell: bash
+      env:
+        CONTROL_UI_MEMORY_REPOSITORY: ${{ inputs.repository }}
+      run: node --import tsx scripts/control-ui-i18n-memory.ts status
+
+    - name: Create canonical memory token
+      if: steps.pin.outputs.active == 'true'
+      id: token
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+      with:
+        client-id: ${{ inputs.app-client-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ steps.pin.outputs.owner }}
+        repositories: ${{ steps.pin.outputs.repository }}
+        permission-contents: ${{ inputs.command == 'publish' && 'write' || 'read' }}
+
+    - name: Checkout retained canonical history
+      if: steps.pin.outputs.active == 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: ${{ inputs.repository }}
+        ref: main
+        token: ${{ steps.token.outputs.token }}
+        path: .openclaw/tmp/control-ui-memory-store
+        fetch-depth: 0
+        persist-credentials: false
+        submodules: false
+
+    - name: Prepare canonical Git owner
+      if: steps.pin.outputs.active == 'true'
+      uses: openclaw/openclaw/.github/actions/git-owner@8743f1bfafa41aebdb3a33a7137eaa6d70bd0eb7
+
+    - name: Restore or publish the pinned memory
+      if: steps.pin.outputs.active == 'true'
+      shell: bash
+      env:
+        MEMORY_COMMAND: ${{ inputs.command }}
+        MEMORY_REPOSITORY: ${{ inputs.repository }}
+        MEMORY_REVISION: ${{ steps.pin.outputs.revision }}
+        MEMORY_TOKEN: ${{ steps.token.outputs.token }}
+        MEMORY_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        store="${GITHUB_WORKSPACE}/.openclaw/tmp/control-ui-memory-store"
+        python3 "${CI_GIT_OWNER}" --git 0 -C "${store}" merge-base --is-ancestor "${MEMORY_REVISION}" HEAD
+        case "${MEMORY_COMMAND}" in
+          restore)
+            node --import tsx scripts/control-ui-i18n-memory.ts restore "${store}" "${MEMORY_REPOSITORY}"
+            ;;
+          publish)
+            node --import tsx scripts/control-ui-i18n-memory.ts export "${store}"
+            python3 "${CI_GIT_OWNER}" --policy "${MEMORY_ACTION_PATH}/publish.py"
+            ;;
+          *) echo "Unknown canonical memory command" >&2; exit 1 ;;
+        esac

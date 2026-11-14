@@ -282,7 +282,7 @@ const withSourceImport = (
   });
 const withMemory = (memory: string, run: () => Promise<void>) =>
   fsMocks.existsSync.withImplementation(
-    () => true,
+    (file) => String(file).endsWith(".tm.jsonl"),
     () => fsMocks.readFileSync.withImplementation(() => memory, run),
   );
 
