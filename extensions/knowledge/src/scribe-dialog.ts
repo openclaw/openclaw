@@ -453,7 +453,7 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
     lead,
     el(
       "p",
-      `Uses ${input.agentName}’s default model. You can read everything it does in that conversation${mode === "once" ? "." : ", and manage its schedule from Scribes."}`,
+      `Uses ${input.agentName}’s default model. You can read everything it does in that conversation${mode === "once" ? "." : ", and pause or turn it off from Scribes."}`,
       "knowledge-muted",
     ),
   );

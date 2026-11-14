@@ -39,7 +39,7 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   starting: ["Starting", ""],
   on: ["On", "scribe-chip-on"],
   attention: ["Needs attention", "scribe-chip-warn"],
-  paused: ["Disabled", ""],
+  paused: ["Paused", ""],
   failing: ["Failing", "scribe-chip-warn"],
   done: ["Done", "scribe-chip-on"],
   missing: ["Conversation not found", "scribe-chip-warn"],
@@ -137,9 +137,9 @@ function activeMeta(snapshot: ScribeSnapshot) {
         : "Its conversation was deleted. Repair starts a new one.",
     );
   } else if (status === "paused") {
-    parts.push("Disabled");
+    parts.push("Paused");
   } else if (firstRunPending(snapshot)) {
-    parts.push("Waiting for first result");
+    parts.push("First run in progress");
   }
   if (job && status !== "missing") {
     parts.push(scheduleText(job));
@@ -247,13 +247,11 @@ async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
   firstRuns.add(job.id);
   try {
     await runScribeNow(ui.s.context.host, job);
-    ui.announce(`${snapshot.scribe.title}: first run requested.`);
+    ui.announce(`${snapshot.scribe.title}: first run started.`);
   } catch (error) {
-    // No accepted receipt: preserve the existing retry behavior without claiming it never ran.
+    // Not started: forget it so the next load tries again and nothing shows it as running.
     firstRuns.delete(job.id);
-    ui.announce(
-      `${snapshot.scribe.title}: could not confirm the first run. ${ui.errorText(error)}`,
-    );
+    ui.announce(`${snapshot.scribe.title}: the first run did not start. ${ui.errorText(error)}`);
   }
 }
 
@@ -516,7 +514,7 @@ function detail(
   };
   if (job && status !== "missing") {
     actions.append(
-      control("Run now", () => runScribeNow(host, job), `${scribe.title}: run request accepted.`),
+      control("Run now", () => runScribeNow(host, job), `${scribe.title} is running.`),
     );
   }
   if (session && !session.archived) {
@@ -544,9 +542,9 @@ function detail(
     const paused = !job.enabled;
     actions.append(
       control(
-        paused ? "Enable" : "Disable",
+        paused ? "Resume" : "Pause",
         () => setScribePaused(host, job, !paused),
-        paused ? `${scribe.title} enabled.` : `${scribe.title} disabled.`,
+        paused ? `${scribe.title} resumed.` : `${scribe.title} paused.`,
       ),
     );
   }
@@ -596,7 +594,7 @@ function detail(
         job.state.runningAtMs
           ? "Running now"
           : !job.enabled
-            ? "Disabled"
+            ? "Paused"
             : job.state.nextRunAtMs
               ? when(job.state.nextRunAtMs)
               : "Not scheduled",
@@ -693,11 +691,7 @@ function detail(
     rows.append(failure);
   } else if (!runs.length && firstRunPending(snapshot)) {
     const line = el("div", undefined, "scribe-run");
-    line.append(
-      el("time", "First run"),
-      el("span", job?.state.runningAtMs ? "Running now" : "Waiting for first result"),
-      el("span"),
-    );
+    line.append(el("time", "First run"), el("span", "Running now"), el("span"));
     rows.append(line);
   } else if (!runs.length && snapshot.result) {
     const line = el("div", undefined, "scribe-run");

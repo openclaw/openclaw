@@ -129,7 +129,7 @@ function savedOptions(job: ScribeJob) {
 // What a refused run means for the operator, by the scheduler's reason.
 const RUN_REFUSALS: Record<string, string> = {
   stopped: "the scheduler is stopped",
-  disabled: "the automation is disabled",
+  disabled: "the automation is paused",
   ownerless: "the automation lost its owner; open the conversation and ask it to repair its setup",
   "invalid-spec": "its schedule is invalid; open the conversation and ask it to repair its setup",
 };
