@@ -1,4 +1,5 @@
 import type { MsgContext } from "../auto-reply/templating.js";
+import { sessionPersonalProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { SessionParticipantIdentity } from "../config/sessions/session-participant-identity.js";
 import { isCronSessionKey } from "./session-key-utils.js";
 
@@ -42,6 +43,26 @@ export function isSessionPersonalBootstrapTurn(ctx: SessionParticipantInputConte
     (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user") &&
     Boolean(ctx[sessionParticipantInput]?.length)
   );
+}
+
+/**
+ * Personal profiles for one turn. bootstrapUserProfileId is the session's selected human when this
+ * turn's sender qualifies. sessionUserProfileId keys the session's prompt series and renders its
+ * personal USER.md: the same selection, except on an unqualified turn in a session people talk to,
+ * which keeps the personal file out of that request. A spawned session's turns all come from inside
+ * the Gateway (its task, sessions_send, handoffs), so its series keeps the selection on every turn.
+ * Isolated cron sessions keep shared defaults.
+ */
+export function resolveTurnPersonalProfiles(
+  sessionKey: string | undefined,
+  entry: (Parameters<typeof sessionPersonalProfileId>[0] & { spawnedBy?: string }) | undefined,
+  senderQualifies: boolean,
+): { bootstrapUserProfileId?: string; sessionUserProfileId?: string } {
+  const selected = isCronSessionKey(sessionKey) ? undefined : sessionPersonalProfileId(entry);
+  return {
+    bootstrapUserProfileId: senderQualifies ? sessionPersonalProfileId(entry) : undefined,
+    sessionUserProfileId: senderQualifies || entry?.spawnedBy ? selected : undefined,
+  };
 }
 
 /** An unqualified transport sender remains an observation, never a Gateway profile. */

@@ -226,6 +226,7 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     terminalReplyExpectation: run.terminalReplyExpectation,
     clientCaps: run.clientCaps,
     bootstrapUserProfileId: run.bootstrapUserProfileId,
+    sessionUserProfileId: run.sessionUserProfileId,
     gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
   };
