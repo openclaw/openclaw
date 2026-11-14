@@ -40,6 +40,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
+import { createMuseTurnFailure } from "./src/turn-failure.js";
 import { museTurnUsage } from "./src/usage.js";
 import { MuseCatalogReader } from "./src/verify-setup.js";
 
@@ -517,22 +518,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           throw new Error(`Muse turn ended without a terminal result (${result.outcome.kind}).`);
         }
         if (result.outcome.params.terminal === "failed") {
-          const turnError = result.outcome.params.error;
-          const quota = turnError?.quota;
-          const authRequired = turnError?.kind === "authRequired";
-          // MSP types these classes; the status lets the host classify them without parsing text.
-          throw Object.assign(
-            new Error(
-              quota
-                ? `Muse usage limit reached (${quota.limitKind}); resets at ${new Date(quota.resetsAtMs).toISOString()}. ${turnError.message}`
-                : authRequired
-                  ? `Muse Code is not signed in on the Gateway host (${turnError.message}). Run \`muse login\` there, or set META_API_KEY for the Gateway.`
-                  : (turnError?.message ??
-                    result.outcome.params.reason ??
-                    "Muse model request failed. Run muse to check login and model access."),
-            ),
-            quota ? { status: 429 } : authRequired ? { status: 401 } : {},
-          );
+          throw createMuseTurnFailure(result.outcome.params);
         }
         // A cancellation the harness started for a failure (such as an approval
         // error) reports that failure, not an external abort.

@@ -573,7 +573,9 @@ describe("Muse native MSP harness", () => {
     expectFailure(result, prompt === "loggedout" ? "muse login" : expected);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(expected));
     if (status) {
-      expect(terminal(result)).toMatchObject({ error: { cause: { status } } });
+      // A quota failure also states its reset, so the reply can say when to retry.
+      const reset = status === 429 ? { retryAfterMs: expect.any(Number) } : {};
+      expect(terminal(result)).toMatchObject({ error: { cause: { status, ...reset } } });
     }
     expect(result.replayMetadata?.replaySafe).toBe(false);
   });
