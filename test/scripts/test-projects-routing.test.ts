@@ -724,7 +724,6 @@ console.log(JSON.stringify(directImporterTests));`,
       expectedPlan("extension-discord", [
         "extensions/discord/src/channel-actions.contract.test.ts",
         "extensions/discord/src/channel.message-adapter.test.ts",
-        "extensions/discord/src/channel.test.ts",
         "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
         "extensions/discord/src/monitor/message-handler.queue.test.ts",
         "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",

@@ -23,7 +23,6 @@ const coveredAppServerPatterns = [
   "extensions/codex/src/app-server/startup-binding.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle*.test.ts",
   "extensions/codex/src/app-server/transport-*.test.ts",
-  "extensions/codex/src/app-server/approval-bridge.test.ts",
   "extensions/codex/src/app-server/computer-use.test.ts",
   "extensions/codex/src/app-server/dynamic-tool*.test.ts",
   "extensions/codex/src/app-server/dynamic-tools.test.ts",

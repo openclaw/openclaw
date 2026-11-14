@@ -1992,10 +1992,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["scripts/lib/declaration-stage.mts"],
   })),
   {
-    testFile: "test/scripts/pr-worktree-containment.test.ts",
-    watchGlobs: ["scripts/pr-lib/worktree.sh"],
-  },
-  {
     testFile: "test/scripts/vitest-worker-artifacts.ci.test.ts",
     watchGlobs: ["scripts/ci-run-node-test-shard.mts"],
   },

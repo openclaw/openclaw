@@ -955,7 +955,6 @@ const SOURCE_TEST_TARGETS = new Map([
     [
       "extensions/discord/src/channel-actions.contract.test.ts",
       "extensions/discord/src/channel.message-adapter.test.ts",
-      "extensions/discord/src/channel.test.ts",
       "extensions/discord/src/durable-delivery.test.ts",
       "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
       "extensions/discord/src/monitor/message-handler.queue.test.ts",

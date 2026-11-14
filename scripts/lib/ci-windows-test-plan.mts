@@ -135,7 +135,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "test/scripts/run-with-env.test.ts": 0.4,
   "test/scripts/ts-topology.test.ts": 3.1,
   "test/scripts/tsdown-declaration-resolution.test.ts": 86.5,
-  "test/scripts/ui.test.ts": 3.5,
   "test/scripts/vitest-process-cache.test.ts": 0.5,
   "test/scripts/vitest-process-group.test.ts": 2.1,
   "test/scripts/vitest-worker-artifacts.test.ts": 170.3,

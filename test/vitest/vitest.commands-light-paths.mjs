@@ -23,10 +23,6 @@ const commandsLightEntries = [
     test: "src/commands/doctor/shared/missing-configured-plugin-install.test.ts",
   },
   {
-    source: "src/commands/doctor/shared/preview-warnings.ts",
-    test: "src/commands/doctor/shared/preview-warnings.test.ts",
-  },
-  {
     source: "src/commands/doctor/shared/release-configured-plugin-installs.ts",
     test: "src/commands/doctor/shared/release-configured-plugin-installs.test.ts",
   },
