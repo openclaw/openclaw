@@ -870,6 +870,11 @@ close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
 
+Optional GitHub publication recovery pauses while available process memory is at
+or below 20% of a measured process limit. The next recovery pass resumes pending
+work when memory recovers; accepted publication bookkeeping and the startup
+personal-publication confirmation fence still settle normally.
+
 Transcript history and search lanes retain one warm reader for up to five idle
 minutes. Other transcript lanes retire after 90 idle seconds to span minute-spaced
 bursts, keeping their independent request ordering and growing again on demand. Whole-lane idle cleanup
