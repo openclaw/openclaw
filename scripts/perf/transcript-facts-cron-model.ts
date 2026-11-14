@@ -13,6 +13,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { z } from "zod";
+import { sessionManagerOpenTranscriptCohort } from "../../src/agents/sessions/session-manager-core.js";
 
 const { values } = parseArgs({
   options: {
@@ -81,8 +82,6 @@ const target = (storePath: string) => ({
 });
 const { createOpenClawTestState } = await import("../../src/test-utils/openclaw-test-state.js");
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
-const { sessionManagerOpenTranscriptCohort } =
-  await import("../../src/agents/sessions/session-manager-core.js");
 const { resolveEmbeddedSessionContextLimits } =
   await import("../../src/agents/embedded-agent-runner/run/session-context-limits.js");
 const { withSessionTranscriptHydrationCaller } =
@@ -481,8 +480,9 @@ try {
           await closeOpenClawAgentDatabaseByPathAsync(selected.storePath);
         }
       }
-      assert(results.every((row) => row.entriesDigest === results[0]?.entriesDigest));
-      assert(results.every((row) => row.modelMessagesDigest === results[0]?.modelMessagesDigest));
+      const first = results[0];
+      assert(results.every((row) => row.entriesDigest === first?.entriesDigest));
+      assert(results.every((row) => row.modelMessagesDigest === first?.modelMessagesDigest));
       write(`measure-${values["open-path"]}-${values.phase}`, {
         shape,
         limits,
