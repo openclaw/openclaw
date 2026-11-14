@@ -1,17 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  createMemo,
-  Errored,
-  For,
-  isPending,
-  latest,
-  lazy,
-  Loading,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, Errored, For, isPending, latest, lazy, Loading, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { TYPEFACES } from "../../app/typography.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -193,10 +182,6 @@ export function Skills(props: SkillsProps) {
 }
 
 function SkillsInventory(props: { groups: SkillGroup[]; view: SkillsProps }) {
-  onSettled(() => {
-    // Start the code font before appending the full inventory, avoiding a second layout.
-    void document.fonts?.load(`12px ${TYPEFACES["jetbrains-mono"].stack}`).catch(() => undefined);
-  });
   const skills = createMemo(() => props.groups.flatMap((group) => group.skills));
   const visible = createProgressiveList(skills, { initial: 1, batch: 500 });
   const groups = createMemo(() => {
