@@ -30,8 +30,14 @@ describe.each(["roster", "file inventory"] as const)("Agents %s native read", (k
     );
     const button = view.getByRole("button", { name: /^(Refresh|Loading.*)$/ });
     expect(button).toHaveProperty("disabled", true);
+    if (kind === "file inventory") {
+      expect(view.container.textContent).not.toContain("Load the agent workspace files");
+    }
     pending.resolve({ result: null });
     await waitForSolid(() => expect(button).toHaveProperty("disabled", false));
+    if (kind === "file inventory") {
+      expect(view.container.textContent).toContain("Load the agent workspace files");
+    }
   });
 
   it("shows current failures, clears them on retry and retains the refresh control", async () => {
