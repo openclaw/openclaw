@@ -1,2 +1,0 @@
-# Config generations must collect before row reads; diagnostics follow owner lifecycle and exporter trust.
-183

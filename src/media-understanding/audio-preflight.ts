@@ -106,18 +106,24 @@ async function transcribeAudio(
       return undefined;
     }
 
-    if (audioConfig?.echoTranscript) {
+    const facts = normalizeMediaFacts(ctx.media);
+    const echoTranscript = formatAudioTranscripts(
+      audioOutputs.filter((output) => {
+        const index = firstOnly ? firstAudio.index : output.attachmentIndex;
+        return facts[index]?.source !== "quote";
+      }),
+    ).trim();
+    if (audioConfig?.echoTranscript && echoTranscript) {
       await sendTranscriptEcho({
         ctx,
         cfg,
-        transcript,
+        transcript: echoTranscript,
         format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
       });
     }
 
     // Persist transcription state on the matching fact so later normalization
     // cannot shift or lose it through a parallel index list.
-    const facts = normalizeMediaFacts(ctx.media);
     for (const output of audioOutputs) {
       const index = firstOnly ? firstAudio.index : output.attachmentIndex;
       const fact = facts[index];

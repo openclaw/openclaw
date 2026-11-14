@@ -1441,13 +1441,8 @@ function dispatchFullReleaseUsingHelper(
     !Number.isSafeInteger(observed?.id) ||
     Number(observed?.id) < 1
   ) {
-    const resumable =
-      record.kind === "openclaw.full-release-dispatch/v2" &&
-      record.phase === "prepared" &&
-      isRecord(record.refs) &&
-      record.refs.workflow === "intended";
     throw new Error(
-      `No observed Full Release Validation run. Next: pnpm ci:full-release -- ${resumable ? "--resume-request" : "--reconcile-request"} ${shellQuote(requestFile)}. The canonical helper revalidates admission; never redispatch uncertain work.`,
+      `No observed Full Release Validation run. Follow the canonical helper's recovery advice above; only it verifies whether resume is safe. Otherwise, Next: pnpm ci:full-release -- --reconcile-request ${shellQuote(requestFile)}.`,
     );
   }
   return String(observed!.id);
@@ -1577,7 +1572,11 @@ async function waitForSuccessfulRun(
       if (info.conclusion !== "success") {
         throw new Error(summarizeFailedRun(info));
       }
-      if (info.workflowName !== expected.workflowName) {
+      const receiptRecovery =
+        expected.workflowName === "Full Release Validation" &&
+        info.workflowName === "Full Release Receipt Recovery" &&
+        info.workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
+      if (info.workflowName !== expected.workflowName && !receiptRecovery) {
         throw new Error(
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );

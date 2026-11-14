@@ -118,9 +118,7 @@ function createHistoryLane(name: string, maxWorkers?: number) {
 }
 
 export const historyLane = registerSessionTranscriptReaderLane("Session history", (closed) =>
-  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS, closed, {
-    prewarmHistory: true,
-  }),
+  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS, closed),
 );
 // Search readiness can await a host writer; it cannot occupy committed-history workers.
 export const transcriptSearchLane = createHistoryLane(
@@ -129,6 +127,8 @@ export const transcriptSearchLane = createHistoryLane(
 );
 // List materialization and full-store snapshots keep independent readers.
 export const projectionLane = createHistoryLane("Session projection");
+// Compaction waits for host setup/hooks that can themselves read session projections.
+export const compactionLane = createHistoryLane("Session compaction");
 export const maintenanceLane = createHistoryLane("Session maintenance");
 // Cold discovery retains writer FIFO without waiting behind history's host writes.
 export const targetDiscoveryLane = createHistoryLane("Session target discovery");
@@ -145,6 +145,7 @@ const historyWorkerLanes = [
   historyLane,
   transcriptSearchLane,
   projectionLane,
+  compactionLane,
   maintenanceLane,
   targetDiscoveryLane,
 ];
@@ -511,6 +512,7 @@ export async function prepareSessionStoreCandidatesInWorker(
     const reply = await lane.pool.run(
       () => ({ kind: "session-target-prepare", request: prepared }),
       {
+        diagnosticOperation: "session-target-prepare",
         inputBytes: JSON.stringify(prepared).length * 2,
         timeoutMs: 60_000,
       },
@@ -702,7 +704,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 lane.native = true;
                 return input;
               },
-              { inputBytes, timeoutMs: 60_000, signal },
+              { inputBytes, timeoutMs: 60_000, signal, diagnosticOperation: input.kind },
             ),
           admissionFamilies,
           signal,

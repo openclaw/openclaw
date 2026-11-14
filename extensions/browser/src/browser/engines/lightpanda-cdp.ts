@@ -8,16 +8,31 @@ const ROOT_REPLIES = new Set([
   "Target.getBrowserContexts",
 ]);
 
-/** Normalize the session-routing omissions observed in Lightpanda 0.4.1. */
+const NAVIGATION_EVENT_DOMAINS = new Map([
+  ["Page.frameNavigated", "Page"],
+  ["Network.requestWillBeSent", "Network"],
+  ["Network.loadingFinished", "Network"],
+  ["Network.loadingFailed", "Network"],
+]);
+
+/** Normalize Lightpanda target replies and primary-only navigation events. */
 export function createLightpandaCdpNormalizer() {
   const pendingSessions = new Map<number, string>();
-  const targetBySession = new Map<string, string>();
+  const targetBySession = new Map<string, { targetId: string; domains: Set<string> }>();
 
   return {
     send(message: object): object {
       const command = asOptionalRecord(message);
       const method = readStringField(command, "method");
       const sessionId = readStringField(command, "sessionId");
+      const attached = sessionId ? targetBySession.get(sessionId) : undefined;
+      if (attached && method) {
+        if (method === "Page.enable" || method === "Network.enable") {
+          attached.domains.add(method.slice(0, method.indexOf(".")));
+        } else if (method === "Page.disable" || method === "Network.disable") {
+          attached.domains.delete(method.slice(0, method.indexOf(".")));
+        }
+      }
       if (!command || !sessionId || !ROOT_REPLIES.has(method ?? "")) {
         return message;
       }
@@ -28,7 +43,7 @@ export function createLightpandaCdpNormalizer() {
         pendingSessions.set(command.id, sessionId);
       }
       const params = asOptionalRecord(command.params);
-      const targetId = targetBySession.get(sessionId);
+      const targetId = attached?.targetId;
       // Lightpanda treats an omitted targetId as the startup browser target,
       // even when the command is sent on an attached page session.
       if (method === "Target.getTargetInfo" && !readStringField(params, "targetId") && targetId) {
@@ -36,7 +51,7 @@ export function createLightpandaCdpNormalizer() {
       }
       return message;
     },
-    receive(message: Record<string, unknown>): Record<string, unknown> | undefined {
+    receive(message: Record<string, unknown>): Record<string, unknown>[] {
       const params = asOptionalRecord(message.params);
       const sessionId = readStringField(params, "sessionId");
       if (message.method === "Target.attachedToTarget" && sessionId) {
@@ -50,13 +65,13 @@ export function createLightpandaCdpNormalizer() {
           targetId === "TID-STARTUP" &&
           readStringField(target, "browserContextId") === "BID-STARTUP"
         ) {
-          return undefined;
+          return [];
         }
         if (readStringField(target, "type") === "page" && targetId) {
           if (targetBySession.size >= MAX_ATTACHED_PAGE_SESSIONS) {
             throw new Error("Lightpanda has too many attached page sessions; reconnect.");
           }
-          targetBySession.set(sessionId, targetId);
+          targetBySession.set(sessionId, { targetId, domains: new Set() });
         }
       } else if (message.method === "Target.detachedFromTarget" && sessionId) {
         targetBySession.delete(sessionId);
@@ -67,10 +82,28 @@ export function createLightpandaCdpNormalizer() {
         // Never replace an engine-provided session or infer routing for an
         // unsolicited response. Responses retire the request even on errors.
         if (expectedSessionId && !readStringField(message, "sessionId")) {
-          return { ...message, sessionId: expectedSessionId };
+          return [{ ...message, sessionId: expectedSessionId }];
         }
       }
-      return message;
+      const messages = [message];
+      const domain = NAVIGATION_EVENT_DOMAINS.get(readStringField(message, "method") ?? "");
+      const sourceSession = readStringField(message, "sessionId");
+      const source = sourceSession ? targetBySession.get(sourceSession) : undefined;
+      if (domain && source) {
+        // Lightpanda 1.0.x sends Page/Network events only to the first attached
+        // session, but Fetch events to the auxiliary session that enabled it.
+        // Deliver actual completion events to that target's domain subscribers;
+        // never fabricate settlement or mirror session-owned Fetch/Runtime events.
+        for (const [recipient, target] of targetBySession) {
+          if (target.targetId !== source.targetId) {
+            continue;
+          }
+          if (recipient !== sourceSession && target.domains.has(domain)) {
+            messages.push({ ...message, sessionId: recipient });
+          }
+        }
+      }
+      return messages;
     },
     clear() {
       pendingSessions.clear();

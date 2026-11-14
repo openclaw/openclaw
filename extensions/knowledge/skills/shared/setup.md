@@ -11,7 +11,9 @@
 2. Call `knowledge_ontology({})`, then
    `knowledge_ontology({view: "definitions", name: "<type>"})` for each type you
    will write. Use the canonical type name and only its declared fields. Keep the
-   fingerprint for `expectedOntologyFingerprint`.
+   fingerprint for `expectedOntologyFingerprint`. Every write receipt returns the
+   current `ontologyFingerprint`; use the latest one for the next write instead
+   of calling status or ontology again.
 
 If a tool is missing or disabled, report the limitation. Never write vault files
 directly or change configuration to work around it.
@@ -24,9 +26,11 @@ directly or change configuration to work around it.
   alias. On `missing`, search with grep before concluding nothing exists.
 - Inspect candidates with `knowledge_record`. A matching name or email domain is a
   candidate, not proof. Never pick the first ambiguous hit.
-- A grep hit with `snippet.matchLocated: false` shows the opening of the record,
-  not the match.
 - Use stable IDs in tool calls. Filenames are slugs and can change.
+- Search, lookup, listing, timeline and connection rows carry `revision` and the
+  first 16 characters of `hash`. That prefix is a valid `expectedHash` fence, so
+  annotating, withdrawing or superseding a current row needs no extra read. Any
+  write that replaces a body still needs the complete current read.
 
 ## Scope
 

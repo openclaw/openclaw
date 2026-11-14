@@ -66,8 +66,8 @@ suite.define(() => {
         ).toBeLessThanOrEqual(1);
         expect(await layout(page)).toEqual(before);
 
-        // Any tap outside dismisses it, and the line brings it back.
-        await page.locator(".new-session-page__message").click({ position: { x: 8, y: 40 } });
+        // The note can cover the middle; tap inside the editor's leading corner.
+        await page.locator(".new-session-page__message").click({ position: { x: 8, y: 8 } });
         await note.waitFor({ state: "hidden" });
         expect(
           await page

@@ -457,7 +457,9 @@ describe("renderChatComposer controls", () => {
       const tooltip = primaryButton(view.container).closest<HTMLElement & { content?: string }>(
         "openclaw-tooltip",
       );
-      expect(tooltip?.content).toBe(expected);
+      const text = tooltip?.querySelector('[slot="content"]')?.textContent ?? tooltip?.content;
+      expect(text).toContain(expected);
+      expect(text).not.toContain(" · ");
     }
   });
 

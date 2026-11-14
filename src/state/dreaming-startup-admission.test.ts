@@ -249,7 +249,7 @@ it.for(["inspection", "preparation"] as const)(
           async (admission, activate) => {
             const joining = createDeferredCore();
             const observer = admission.observation;
-            const wait = observer.waitForAgentPreparation.bind(observer);
+            const wait = observer.waitForAgentPreparation;
             vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
               expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
               const preparation = wait(...args);
@@ -303,7 +303,7 @@ it("does not wait for unrelated pending agents when the selected agent is prepar
       await expect(
         cleanupSessionLifecycleArtifacts({ ...cleanupParams, agentId: "healthy" }),
       ).resolves.toEqual(emptyCleanup);
-      expect(admission.hasPendingAgents).toBe(true);
+      expect(admission.observation.hasPendingAgents).toBe(true);
     });
   });
 });
@@ -467,7 +467,7 @@ it.for([
         async (admission, activate) => {
           const joined = createDeferredCore();
           const observer = admission.observation;
-          const wait = observer.waitForAgentPreparation.bind(observer);
+          const wait = observer.waitForAgentPreparation;
           let joinedPreparation = false;
           vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
             const preparation = wait(...args);

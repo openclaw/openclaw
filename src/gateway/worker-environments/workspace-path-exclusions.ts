@@ -19,7 +19,28 @@ const BUILD_CACHE_ROOT_PATHS = [
   ".artifacts/build-cache-inputs",
 ] as const;
 const PNPM_FALLBACK_STORE_ROOT_PATH = ".openclaw/.pnpm-store";
+// Exact tool-owned roots also cover workspaces populated before cache relocation.
+const TOOL_CACHE_ROOTS = [
+  [".npm/_cacache", "npm cache", "npm_config_cache"],
+  [".npm/_logs", "npm logs", "npm_config_cache"],
+  [".cache/pip", "pip cache", "PIP_CACHE_DIR"],
+  [".cache/uv", "uv cache", "UV_CACHE_DIR"],
+  [".pnpm-store", "pnpm store", "PNPM_CONFIG_STORE_DIR"],
+  [".bun/install/cache", "Bun cache", "BUN_INSTALL_CACHE_DIR"],
+  [".cargo/registry", "Cargo registry cache", "CARGO_HOME"],
+  [".cargo/git", "Cargo Git cache", "CARGO_HOME"],
+  [".gradle/caches", "Gradle cache", "GRADLE_USER_HOME"],
+] as const;
+
+export function workspaceToolCacheHint(entryPath: string): string {
+  const cache = TOOL_CACHE_ROOTS.find(([root]) => `/${entryPath}/`.includes(`/${root}/`));
+  return cache
+    ? `\nCache guidance: Directory class: ${cache[1]}. Set ${cache[2]} to a writable path outside the workspace, move the cache there, and retry recovery.`
+    : "";
+}
+
 const DERIVED_WORKSPACE_ROOT_PATHS = [
+  ...TOOL_CACHE_ROOTS.map(([root]) => root),
   ".cache/vitest",
   ".cache/bun-transpiler",
   ".cache/openclaw/bun",

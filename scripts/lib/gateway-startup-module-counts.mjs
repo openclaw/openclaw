@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import { registerHooks } from "node:module";
+import module from "node:module";
 
 /**
  * Counts loaded modules, not every filesystem read or native asset.
@@ -32,7 +32,7 @@ export function summarizeGatewayModuleLoads(text) {
 
 const output = process.env.OPENCLAW_BENCH_MODULE_COUNTS;
 if (output) {
-  registerHooks({
+  module.registerHooks({
     load(url, context, next) {
       const result = next(url, context);
       if (url.startsWith("file:")) {

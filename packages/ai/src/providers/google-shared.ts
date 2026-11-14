@@ -7,10 +7,7 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
-import {
-  isGoogleGemini3ProModel,
-  isGoogleGemini3ThinkingLevelModel,
-} from "../internal/google-model-family.js";
+import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -49,6 +46,7 @@ type GoogleThinkingOptions = {
 
 export type GoogleProviderOptions = StreamOptions & {
   topP?: number;
+  seed?: number;
   toolChoice?: "auto" | "none" | "any";
   thinking?: GoogleThinkingOptions;
 };
@@ -127,6 +125,7 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   const config: GenerateContentConfig = {
     ...(options.temperature !== undefined && { temperature: options.temperature }),
     ...(options.topP !== undefined && { topP: options.topP }),
+    ...(options.seed !== undefined && { seed: options.seed }),
     ...buildGoogleGenerationConfig(model, options.thinking, options.maxTokens),
     ...(options.stop !== undefined && options.stop.length > 0 && { stopSequences: options.stop }),
     ...(context.systemPrompt && {
@@ -317,9 +316,6 @@ function getDisabledGoogleThinkingConfig(model: Pick<Model, "id">): ThinkingConf
   // Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
   // do not support full thinking-off either. For Gemini 3 and 4, use the lowest supported
   // thinkingLevel without includeThoughts so hidden thinking remains invisible to OpenClaw.
-  if (isGoogleGemini3ProModel(model.id)) {
-    return { thinkingLevel: ThinkingLevel.LOW };
-  }
   if (isGoogleGemini3ThinkingLevelModel(model.id)) {
     return {
       thinkingLevel: googleFlashSupportsMinimalThinking(model.id)
@@ -344,12 +340,8 @@ function getGoogleThinkingLevel(
   effort: ClampedGoogleThinkingLevel,
   model: Pick<Model, "id">,
 ): ThinkingLevel {
-  const lowEffort = effort === "minimal" || effort === "low";
-  if (isGoogleGemini3ProModel(model.id)) {
-    return lowEffort ? ThinkingLevel.LOW : ThinkingLevel.HIGH;
-  }
   if (isGemma4Model(model)) {
-    return lowEffort ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
+    return effort === "minimal" || effort === "low" ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
   }
   switch (effort) {
     case "minimal":

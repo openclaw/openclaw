@@ -67,3 +67,57 @@ it("waits for Windows tree extinction before ending stdin", async () => {
     await transport.waitForExit();
   }
 });
+
+it.each([false, true])("settles owner loss without exit (EPIPE: %s)", async (epipe) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  const pipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+  let onChildError: Parameters<ClaudeChild["onError"]>[0] | undefined;
+  const lost = new Error("service child cleanup identity lost: anchor channel closed");
+  // The owner emits an error and rejects its waits, but no exit event ever arrives.
+  const child: ClaudeChild = {
+    supportsRawOutput: true,
+    stdin: {
+      write: (_data, callback) => callback?.(epipe ? pipe : undefined),
+      end: () => {},
+    },
+    onStdout: () => {},
+    onStderr: () => {},
+    onError: (listener) => {
+      onChildError = listener;
+    },
+    onExit: () => {},
+    consumeStdout: () => new Promise<void>(() => {}),
+    wait: () => Promise.reject(lost),
+    waitForExtinction: () => Promise.reject(lost),
+    kill: () => {},
+    dispose: () => {},
+  };
+  vi.spyOn(cliProcess, "createClaudeCliProcessOwner").mockReturnValue({
+    spawn: async () => child,
+    withDiagnostics: async (error: unknown) => error,
+    [Symbol.dispose]: () => {},
+  });
+  const onError = vi.fn();
+  const context = { command: "claude", args: [], cwd: ".", env: {} };
+  const transport = await createClaudeCliTransport({
+    context,
+    args: [],
+    initialize: {},
+    currentContext: () => context,
+    onMessage: async () => {},
+    onRequest: async () => () => ({}),
+    onError,
+  });
+  if (epipe) {
+    const initialization = transport.initialize();
+    const rejected = expect(initialization).rejects.toBe(lost);
+    onChildError?.(lost, "process");
+    await rejected;
+    expect(onError).toHaveBeenCalledExactlyOnceWith(lost);
+  }
+  transport.close();
+  await expect(transport.waitForExit()).rejects.toMatchObject({
+    message: expect.stringContaining("retry the message"),
+    cause: lost,
+  });
+});

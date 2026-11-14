@@ -192,15 +192,16 @@ describe("interactive Dev update discovery", () => {
     const cfg: OpenClawConfig = {
       update: { channel: "dev", auto: { enabled: true, schedule: "30 10 * * *" } },
     };
+    vi.setSystemTime(new Date(2026, 0, 17, 10, 0));
     mockDevGitStatus({ behind: 2 });
     await runGatewayUpdateCheck({ cfg });
     await refreshGatewayUpdateStatus(() => cfg);
     expectGitTarget("upstream-sha", 2);
     expect(campaign.getState()).toBeUndefined();
-    vi.setSystemTime(new Date("2026-01-17T10:30:00Z"));
+    vi.setSystemTime(new Date(2026, 0, 17, 10, 30));
     await runGatewayUpdateCheck({ cfg });
     expect(campaign.getState()?.state).toBe("countdown");
-    vi.setSystemTime(new Date("2026-01-17T10:32:00Z"));
+    vi.setSystemTime(new Date(2026, 0, 17, 10, 32));
     mockDevGitStatus({ behind: 3, upstreamSha: "replacement" });
     await refreshGatewayUpdateStatus(() => cfg);
     expectGitTarget("replacement", 3);
@@ -448,6 +449,83 @@ describe("interactive Dev update discovery", () => {
         expect(lifecycle.installStatus?.status.installKind).toBe("git");
         expect(resolveNpmChannelTag).toHaveBeenCalledTimes(stage === "registry" ? 1 : 0);
       });
+    },
+  );
+
+  it.each([
+    { name: "current", ahead: 0, discovery: "manual" },
+    { name: "ahead", ahead: 2, discovery: "manual" },
+    { name: "current", ahead: 0, discovery: "background" },
+    { name: "ahead", ahead: 2, discovery: "background" },
+  ])(
+    "retires an announced target after $discovery discovery of a $name checkout",
+    async ({ name, ahead, discovery }) => {
+      const published = vi.fn();
+      await runGatewayUpdateCheck({ cfg: autoConfig, onUpdateScheduleChange: published });
+      expect(campaign.getState()?.state).toBe("countdown");
+      published.mockClear();
+      lifecycle.onUpdateScheduleChange = published;
+      mockDevGitStatus({
+        currentSha: ahead === 0 ? "upstream-sha" : "ahead-sha",
+        ahead,
+        behind: 0,
+      });
+
+      if (discovery === "manual") {
+        await refreshGatewayUpdateStatus(() => autoConfig);
+      } else {
+        await runGatewayUpdateCheck({ cfg: autoConfig, onUpdateScheduleChange: published });
+      }
+
+      expect(
+        published.mock.calls.map(([schedule]) => [
+          Boolean(schedule.target),
+          Boolean(schedule.campaign),
+        ]),
+      ).toEqual(
+        discovery === "manual"
+          ? [[false, false]]
+          : [
+              [true, true],
+              [false, false],
+            ],
+      );
+      expect(getUpdateSchedule()?.install?.git?.status).toBe(name);
+      expect(getUpdateSchedule()?.target).toBeUndefined();
+      expect(getUpdateSchedule()?.campaign).toBeUndefined();
+      expect(getUpdateAvailable()).toBeNull();
+      expect(campaign.getState()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runCampaignUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["availability", "schedule"] as const)(
+    "cancels an obsolete campaign when its %s notification throws",
+    async (notification) => {
+      const onUpdateAvailableChange = vi.fn();
+      const onUpdateScheduleChange = vi.fn();
+      await runGatewayUpdateCheck({
+        cfg: autoConfig,
+        onUpdateAvailableChange,
+        onUpdateScheduleChange,
+      });
+      expect(campaign.getState()?.state).toBe("countdown");
+      lifecycle.onUpdateAvailableChange = onUpdateAvailableChange;
+      lifecycle.onUpdateScheduleChange = onUpdateScheduleChange;
+      const error = new Error("update notification failed");
+      const callback =
+        notification === "availability" ? onUpdateAvailableChange : onUpdateScheduleChange;
+      callback.mockImplementationOnce(() => {
+        throw error;
+      });
+      mockDevGitStatus({ currentSha: "upstream-sha", behind: 0 });
+
+      await expect(refreshGatewayUpdateStatus(() => autoConfig)).rejects.toBe(error);
+
+      expect(campaign.getState()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runCampaignUpdate).not.toHaveBeenCalled();
     },
   );
 

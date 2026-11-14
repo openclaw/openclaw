@@ -1,2 +1,0 @@
-# SDK-loader symbol identity and strict legacy/canonical deadline consumer compatibility.
-53

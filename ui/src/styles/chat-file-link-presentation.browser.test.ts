@@ -16,7 +16,6 @@ const CHIP_PROPERTIES = [
   "fontFamily",
   "fontSize",
   "color",
-  "display",
 ] as const;
 
 // Match styles/chat.ts: sidebar-markdown must load after chat/text.
@@ -64,10 +63,7 @@ const githubMarkup = LINK_FORMS.map(
 ).join("");
 
 const presentationMarkup = `<div class="chat-text">${links("")}</div>
-  <article class="sidebar-markdown">${links("panel-")}</article>
-  <div class="chat-group user" style="--inline-code-bg: rgb(12, 34, 56); --inline-code-border: rgb(78, 90, 123); --user-code-bg: rgb(45, 67, 89)">
-    <div class="chat-text"><p><code id="palette-code">inline</code></p><pre id="palette-user-code"><code>block</code></pre></div>
-  </div>`;
+  <article class="sidebar-markdown">${links("panel-")}</article>`;
 
 // The reported list-edge reference includes a path the parser cannot shorten.
 const LONG_CHIP_PATH = "packages/gateway-protocol/src/session-transport-envelope.ts";
@@ -144,7 +140,6 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
           const glyph = (selector: string) => {
             const css = getComputedStyle(resolve(selector), "::before");
             return {
-              backgroundColor: css.backgroundColor,
               fontSize: css.fontSize,
               height: css.height,
               maskImage: css.maskImage,
@@ -191,7 +186,6 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
           };
           return {
             presentation: {
-              chatColor: getComputedStyle(resolve(".chat-text")).color,
               chatGlyph: glyph("#from-text"),
               fromCode: read("#from-code > code"),
               fromText: read("#from-text"),
@@ -199,8 +193,6 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
               panelFromText: read("#panel-from-text"),
               panelGlyph: glyph("#panel-from-text"),
               plainCode: read("#plain-code"),
-              paletteCode: read("#palette-code"),
-              paletteUserCode: read("#palette-user-code"),
             },
             samples: measure("wrap-chip", "column", 220, 900),
             long: measure("long-chip", "column", 220, 900),
@@ -244,18 +236,11 @@ fixture.describe("chat file link presentation", () => {
   );
 
   it.each(["light", "dark"] as const)(
-    "preserves palette code colors while file links remain transparent in %s",
+    "leaves the chip on code spans that are not file links in %s",
     (themeMode) => {
-      const { fromText, plainCode, paletteCode, paletteUserCode } =
-        observation(themeMode).presentation;
+      const { fromText, plainCode } = observation(themeMode).presentation;
+      // The fill alone is the chip; neither span is outlined.
       expect(plainCode.backgroundColor).not.toBe(fromText.backgroundColor);
-      expect(plainCode.borderTopWidth).toBe("1px");
-      expect(paletteCode).toMatchObject({
-        backgroundColor: "rgb(12, 34, 56)",
-        borderTopWidth: "1px",
-        borderTopColor: "rgb(78, 90, 123)",
-      });
-      expect(paletteUserCode.backgroundColor).toBe("rgb(45, 67, 89)");
       expect(fromText).toMatchObject({
         borderTopWidth: "0px",
         backgroundColor: "rgba(0, 0, 0, 0)",
@@ -264,20 +249,14 @@ fixture.describe("chat file link presentation", () => {
   );
 
   it.each(["light", "dark"] as const)(
-    "keeps the panel's atomic accented file links while chat uses text ink and muted glyphs in %s",
+    "gives the Chat Detail Panel the same file-link treatment in %s",
     (themeMode) => {
       const probed = observation(themeMode).presentation;
-      expect(probed.fromText).toMatchObject({ display: "inline", color: probed.chatColor });
-      expect(probed.panelFromText.display).toBe("inline-block");
-      expect(probed.panelFromText.color).not.toBe(probed.fromText.color);
-      expect(probed.panelFromCode).toEqual({
-        ...probed.panelFromText,
-        paddingLeft: "0px",
-        display: "inline",
-      });
-      expect(probed.chatGlyph.backgroundColor).not.toBe(probed.fromText.color);
-      expect(probed.panelGlyph.backgroundColor).toBe(probed.panelFromText.color);
-      expect(probed.chatGlyph.maskImage).toBe(probed.panelGlyph.maskImage);
+      expect([probed.panelFromText, probed.panelFromCode, probed.panelGlyph]).toEqual([
+        probed.fromText,
+        probed.fromCode,
+        probed.chatGlyph,
+      ]);
       expect(probed.panelGlyph.maskImage).toContain("svg");
     },
   );
@@ -298,7 +277,7 @@ fixture.describe("chat file link presentation", () => {
   );
 
   it.each(WRAP_CASES)(
-    "keeps a short file reference on one line at every column width in $container/$themeMode",
+    "wraps a file link as one unit at every column width in $container/$themeMode",
     ({ container, themeMode }) => {
       const { samples } = observation(themeMode, container);
       // Prove the sweep actually changes lines.
@@ -314,11 +293,7 @@ fixture.describe("chat file link presentation", () => {
       const { long, separation } = observation(themeMode, container);
       const overflowing = long.filter((sample) => sample.width > sample.columnWidth + 0.5);
       expect(overflowing).toEqual([]);
-      if (container === "chat-text") {
-        expect(long.some((sample) => sample.fragments > 1)).toBe(true);
-      } else {
-        expect(long.every((sample) => sample.fragments === 1)).toBe(true);
-      }
+      expect(long.every((sample) => sample.fragments === 1)).toBe(true);
       const spilling = Object.values(separation)
         .flat()
         .filter((sample) => sample.labelOverflowPx > 0.5);

@@ -40,6 +40,7 @@ import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { registerStatusConfigReadTests } from "./status.gather.config.test-support.js";
 import { registerStatusInstallRecordReadTests } from "./status.gather.install-records.test-support.js";
 import { gatherDaemonStatus } from "./status.gather.js";
+import { registerStatusLaunchdScanTests } from "./status.gather.launchd.test-support.js";
 import {
   callGatewayStatusProbe,
   capturePrintedDaemonStatus,
@@ -1254,37 +1255,24 @@ describe("gatherDaemonStatus", () => {
     }
   });
 
-  it.runIf(process.platform === "darwin")(
-    "surfaces stale updater launchd jobs only during deep status",
-    async () => {
+  registerStatusLaunchdScanTests({
+    gatherStatus: (deep) => gatherStatus({ probe: false, deep }),
+    setServiceCommand: () =>
       serviceReadCommand.mockResolvedValueOnce({
         programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
         environment: {
           ...daemonEnvironment,
           OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
         },
-      });
-      const jobs = [
-        {
-          label: "ai.openclaw.update.2026.5.12",
-          lastExitStatus: 127,
-        },
-        {
-          label: "ai.openclaw.manual-update.1717168800",
-          lastExitStatus: 0,
-        },
-      ];
-      findStaleOpenClawUpdateLaunchdJobs.mockResolvedValueOnce(structuredClone(jobs));
-
-      const status = await gatherStatus({ probe: false, deep: true });
-
-      const staleScanEnv = findStaleOpenClawUpdateLaunchdJobs.mock.calls[0]?.[0];
-      expect(staleScanEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-daemon");
-      expect(staleScanEnv?.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-daemon/openclaw.json");
-      expect(staleScanEnv?.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.manual-update.gateway");
-      expect(status.service.staleUpdateLaunchdJobs).toEqual(jobs);
-    },
-  );
+      }),
+    setStaleScan: (scanFails, jobs) =>
+      findStaleOpenClawUpdateLaunchdJobs.mockImplementationOnce(() =>
+        scanFails
+          ? Promise.reject(new Error("launchctl list failed (exit 1): Operation not permitted"))
+          : Promise.resolve(structuredClone(jobs)),
+      ),
+    staleScanEnv: () => findStaleOpenClawUpdateLaunchdJobs.mock.calls[0]?.[0],
+  });
 
   it("surfaces foreign launchd jobs and restart correlation without --deep", async () => {
     const platform = Object.getOwnPropertyDescriptor(process, "platform")!;

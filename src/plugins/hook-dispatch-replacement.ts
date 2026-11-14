@@ -1,6 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 // One hook dispatch's view of plugins a reload replaced while it was dispatching.
 import type { PluginHookName, PluginHookRegistration } from "./hook-types.js";
+import { runOutsidePluginInvocationScope } from "./plugin-instance-scope.js";
 import { isPluginReloadingError } from "./plugin-replacement-retry.js";
 
 /** Settles in place of a handler result once a reload that refused the handler finishes. */
@@ -57,7 +58,12 @@ export class HookDispatchSelection<K extends PluginHookName> {
       return HOOK_REPLACED;
     };
     try {
-      const result = run();
+      // Post-turn hooks own fresh instance admission, never the finished turn's lease.
+      const result =
+        registration.hookName === "subagent_ended" ||
+        registration.hookName === "subagent_delivery_target"
+          ? runOutsidePluginInvocationScope(run)
+          : run();
       return isPromiseLike(result)
         ? Promise.resolve(result).then(undefined, replace)
         : Promise.resolve(result);

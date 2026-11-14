@@ -85,12 +85,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     isActive: () => !disposed && !topologyDirty,
     runAsOwner: inOwnerContext,
   });
-  const prepareRegistryFacts = (): Promise<void> | undefined =>
-    disposed
-      ? undefined
-      : !inOwnerContext(subagents.snapshotIdentity)
-        ? inOwnerContext(subagents.prepare)
-        : registryRead.prepare();
+  const prepareRegistryFacts = () => inOwnerContext(metadata.prepareRuntimeFacts);
   const placementFacts = createSessionRowPlacementProjection(
     params.placementFactsReader,
     () => (!disposed && topologyDirty ? topology() : prepareRegistryFacts()),
@@ -133,7 +128,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       void ensureMaterialized().catch(() => {});
     },
   });
-  const metadata = createSessionRowProjectionContext(subagents, childRows.invalidate);
+  const metadata = createSessionRowProjectionContext(subagents, {
+    state: () => ({ cfg, epoch, disposed }),
+    prepareRegistry: () => registryRead.prepare(),
+    invalidateChildren: childRows.invalidate,
+  });
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
@@ -194,12 +193,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       if (previous.generation !== row.generation) {
         transcriptUpdates.remove(records.identity(row));
       }
-      indexSessionRow(previous, indexes, true);
     }
     rows.set(records.identity(row), row);
     recents.update(row);
     rowFacts.track(row, row.unresolvedDatabaseFacts);
-    indexSessionRow(row, indexes);
+    indexSessionRow(row, indexes, false, previous);
     placementFacts.update(row, previous, (sessionId) =>
       [...(byKey.get(`id:${sessionId}`) ?? [])].flatMap((id) => rows.get(id) ?? []),
     );
@@ -240,6 +238,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }
   }
   const markStoredRow = createSessionRowPublication({
+    invalidateSelection: () => revisions.invalidate(true),
     store: (path) => stores.get(path),
     runAsOwner: inOwnerContext,
     registryFactsReady: () => Boolean(inOwnerContext(subagents.snapshotIdentity)),
@@ -306,21 +305,19 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       original,
       (path) => scope?.physicalPaths(path) ?? [path],
     );
+    const broad = "all" in change;
     if (change !== original) {
       // The original broad fence reached compact membership as well as display rows.
       membership.invalidate(change);
     }
-    if (
-      "all" in change &&
-      (change.scope === "config-presentation" || change.scope === "config-profiles")
-    ) {
+    if (broad && (change.scope === "config-presentation" || change.scope === "config-profiles")) {
       cfg = inOwnerContext(() => params.getConfig?.() ?? cfg);
       metadata.adoptPresentationConfig(rows.values(), cfg);
     }
     childRows.mark(change);
     epoch++;
     const identityRevision = metadata.current.identityProjection?.revision;
-    const catalogOnly = "all" in change && change.scope === "catalog" && !change.factsInvalidated;
+    const catalogOnly = broad && change.scope === "catalog" && !change.factsInvalidated;
     // Catalog adoption invalidates model facts only when its completed policy changes.
     const presentationOnly =
       !(catalogOnly && params.getModelCatalog) &&
@@ -328,10 +325,12 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       !change.factsInvalidated;
     revisions.publishRuntimeChange(change);
     if (!presentationOnly || metadata.current.identityProjection?.revision !== identityRevision) {
-      revisions.invalidate(!catalogOnly);
+      // Complete entry publications let the accepted-row owner compare selection facts.
+      const entryPublication = !broad && change.scope === "session-entry";
+      revisions.invalidate(!catalogOnly && (!entryPublication || Boolean(change.factsInvalidated)));
     }
     placementFacts.invalidateChange(change);
-    if ("all" in change) {
+    if (broad) {
       if (isSessionStoreTopologyChange(change) || change.scope === "config") {
         topologyDirty = true;
       }
