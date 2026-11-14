@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { publicPluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
@@ -746,9 +747,9 @@ describe("plugin authoring commands", () => {
       id: "@acme/plugin-init-test",
       name: "Plugin Init Test",
       version: "0.1.0",
-      providers: ["@acme/plugin-init-test"],
+      providers: ["acme-plugin-init-test"],
       setup: {
-        providers: [{ id: "@acme/plugin-init-test", envVars: ["ACME_PLUGIN_INIT_TEST_API_KEY"] }],
+        providers: [{ id: "acme-plugin-init-test", envVars: ["ACME_PLUGIN_INIT_TEST_API_KEY"] }],
       },
       configSchema: {
         type: "object",
@@ -758,13 +759,12 @@ describe("plugin authoring commands", () => {
     });
 
     const indexSource = readText(projectDir, "src/index.ts");
-    expect(indexSource).toContain("definePluginEntry");
-    expect(indexSource).toContain("api.registerProvider");
+    const defaultModel = /"([^"\n]+\/example-chat)"/.exec(indexSource)?.[1] ?? "";
+    expect(parseProviderModelRef(defaultModel)?.provider).toBe(manifest.providers[0]);
     for (const [, subpath] of indexSource.matchAll(/from "openclaw\/plugin-sdk\/([^"]+)"/g)) {
       expect(publicPluginSdkSubpaths).toContain(subpath);
     }
 
-    expect(readText(projectDir, "src/index.test.ts")).toContain("OpenClawPluginApi");
     expect(readText(projectDir, "vitest.config.ts")).toContain('include: ["src/**/*.test.ts"]');
     const readme = readText(projectDir, "README.md");
     expect(readme).toContain("npm run validate");

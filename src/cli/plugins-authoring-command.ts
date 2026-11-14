@@ -325,19 +325,21 @@ export async function runPluginsInitCommand(
   if (type === "feature") {
     writeFeaturePluginScaffold({ rootDir, id, name });
   } else if (type === "provider") {
-    const envVar = `${id
+    // Model references reserve `/` as the provider/model separator.
+    const providerId = id.startsWith("@") ? id.slice(1).replace("/", "-") : id;
+    const envVar = `${providerId
       .replace(/[^a-z0-9]+/giu, "_")
       .replace(/^_+|_+$/gu, "")
       .toUpperCase()}_API_KEY`;
-    const parts = id.split(/-+/u).filter(Boolean);
+    const parts = providerId.split(/-+/u).filter(Boolean);
     const optionKey = `${parts
       .map((part, index) =>
         index === 0 ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`,
       )
       .join("")}ApiKey`;
-    const flagName = `--${id}-api-key`;
+    const flagName = `--${providerId}-api-key`;
     const defaultModelId = "example-chat";
-    const defaultModelRef = `${id}/${defaultModelId}`;
+    const defaultModelRef = `${providerId}/${defaultModelId}`;
     const description = `Add ${name} models to OpenClaw.`;
     const packageManifest = {
       name: packageName,
@@ -389,6 +391,7 @@ export async function runPluginsInitCommand(
       },
     };
     const idLiteral = JSON.stringify(id);
+    const providerIdLiteral = JSON.stringify(providerId);
     const nameLiteral = JSON.stringify(name);
     const envVarLiteral = JSON.stringify(envVar);
     const defaultModelIdLiteral = JSON.stringify(defaultModelId);
@@ -397,7 +400,7 @@ export async function runPluginsInitCommand(
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 
 const PLUGIN_ID = ${idLiteral};
-const PROVIDER_ID = PLUGIN_ID;
+const PROVIDER_ID = ${providerIdLiteral};
 const DEFAULT_MODEL_ID = ${defaultModelIdLiteral};
 const DEFAULT_MODEL_REF = ${defaultModelRefLiteral};
 
@@ -409,7 +412,7 @@ export default definePluginEntry({
     api.registerProvider({
       id: PROVIDER_ID,
       label: ${nameLiteral},
-      docsPath: "/providers/${id}",
+      docsPath: "/providers/${providerId}",
       envVars: [${envVarLiteral}],
       auth: [
         createProviderApiKeyAuthMethod({
@@ -481,7 +484,7 @@ describe(${idLiteral}, () => {
 
     entry.register(api as OpenClawPluginApi);
 
-    expect(providers.map((provider) => provider.id)).toEqual([${idLiteral}]);
+    expect(providers.map((provider) => provider.id)).toEqual([${providerIdLiteral}]);
     expect(providers[0]?.label).toBe(${nameLiteral});
     expect(providers[0]?.envVars).toEqual([${envVarLiteral}]);
 
@@ -493,10 +496,10 @@ describe(${idLiteral}, () => {
       { id: "api-key", kind: "api_key", starterModel: ${defaultModelRefLiteral} },
     ]);
     for (const [apiKey, configuredId, baseUrl, expectedBaseUrl] of [
-      [undefined, ${idLiteral}, "https://configured.example/v1", null],
-      ["fixture-api-key", ${JSON.stringify(`${id}-unrelated`)}, "https://unrelated.example/v1", "https://api.example.com/v1"],
-      ["fixture-api-key", ${JSON.stringify(` ${id.toUpperCase()} `)}, " https://configured.example/v1 ", "https://configured.example/v1"],
-      ["fixture-api-key", ${idLiteral}, " ", "https://api.example.com/v1"],
+      [undefined, ${providerIdLiteral}, "https://configured.example/v1", null],
+      ["fixture-api-key", ${JSON.stringify(`${providerId}-unrelated`)}, "https://unrelated.example/v1", "https://api.example.com/v1"],
+      ["fixture-api-key", ${JSON.stringify(` ${providerId.toUpperCase()} `)}, " https://configured.example/v1 ", "https://configured.example/v1"],
+      ["fixture-api-key", ${providerIdLiteral}, " ", "https://api.example.com/v1"],
     ] as const) {
       const result = await provider.catalog.run({
         config: { models: { providers: { [configuredId]: { baseUrl, models: [] } } } },
@@ -605,17 +608,17 @@ jobs:
       name,
       description,
       version: packageManifest.version,
-      providers: [id],
+      providers: [providerId],
       setup: {
         providers: [
           {
-            id,
+            id: providerId,
             envVars: [envVar],
           },
         ],
       },
       configSchema: createConfigSchema(),
-      activation: { onStartup: true, providers: [id], capabilities: ["provider"] },
+      activation: { onStartup: true, providers: [providerId], capabilities: ["provider"] },
     });
   } else {
     const packageManifest = {
