@@ -8,6 +8,7 @@ import {
   PackageLifecycleOwnershipError,
   type PackageLifecycleScript,
 } from "./package-lifecycle.js";
+import { createPackageReleasePrefix, type PackageReleaseTarget } from "./package-release-slot.js";
 import { classifyPackageUpdatePermissionFailure } from "./package-update-manager-preflight.js";
 import type { StagedPackageInstall } from "./package-update-swap-contract.js";
 import { mergePathPrepend } from "./path-prepend.js";
@@ -112,6 +113,7 @@ export async function prepareStagedPackageInstall(
   packageName: string,
   nativeOptions?: { env: NodeJS.ProcessEnv; globalBinDir?: string; installSpec: string },
   env?: NodeJS.ProcessEnv,
+  release?: PackageReleaseTarget & { label: string },
 ): Promise<
   | { stagedInstall: StagedPackageInstall; failedStep: null }
   | { stagedInstall: null; failedStep: UpdateStepResult }
@@ -143,13 +145,17 @@ export async function prepareStagedPackageInstall(
         );
       }
       await fs.mkdir(targetLayout.globalRoot, { recursive: true });
+      // A release is installed where it will stay; the link switch moves nothing.
       // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
-      prefix = await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
+      prefix = release
+        ? await createPackageReleasePrefix(release.prefix, release.label)
+        : await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
       layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
     }
     // Isolated pnpm resolves its newly created owner after installation.
     const packageRoot = path.join(layout.globalRoot, packageName);
-    if (!native) {
+    // Release collection owns an unselected release; orphan stage cleanup does not.
+    if (!native && !release) {
       await recordManagedUpdatePackageStage({ prefix, packageRoot }, env).catch(
         (error: unknown) => {
           console.warn(
@@ -169,6 +175,7 @@ export async function prepareStagedPackageInstall(
           packageRoot,
         },
         ...(native ? { native } : {}),
+        ...(release && !native ? { release: { slot: release.slot, prefix: release.prefix } } : {}),
       },
       failedStep: null,
     };

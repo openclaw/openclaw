@@ -3,6 +3,7 @@ import path from "node:path";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
 import { pathEntryExists, realpathOrResolve } from "../../infra/path-existence.js";
 import { isPathStrictlyInside } from "../../infra/path-guards.js";
@@ -104,6 +105,29 @@ export async function inspectNpmGlobalDestination(
       (packageRootReal !== null &&
         launcherTarget !== null &&
         isPathStrictlyInside(packageRootReal, launcherTarget));
+    // A service started by a release's real path would keep running that release
+    // after the link moves. Published updaters write such paths when run through
+    // the link; refuse before any change and name the rebinding step.
+    const releaseSlot =
+      ownsPackage && ownsLauncher ? readPackageReleaseSlotSync(packageRoot) : null;
+    const releaseLayout = releaseSlot ? await summarizeGatewayServiceLayout(command) : undefined;
+    if (
+      releaseSlot &&
+      releaseLayout?.entrypoint &&
+      isPathStrictlyInside(releaseSlot.releaseRoot, path.resolve(releaseLayout.entrypoint))
+    ) {
+      const rebind = formatCliCommand("openclaw gateway install --force").replace(
+        /^openclaw\b/,
+        () => `node ${quote(path.join(packageRoot, "openclaw.mjs"))}`,
+      );
+      return {
+        kind: "foreign" as const,
+        ...destinationRefusal(
+          `The Gateway service ${releaseLayout.sourcePath ?? ""} starts ${releaseLayout.entrypoint}, a path inside the release ${releaseSlot.releaseRoot} instead of the package path ${packageRoot}; switching releases would leave it running the old one. No installation was attempted. Run \`${rebind}\` to bind the service to the package path, then rerun the update.`,
+          { ...destination, ownership: "foreign", cause: "package-mismatch" },
+        ),
+      };
+    }
     if (ownsPackage && ownsLauncher) {
       return { kind: "owned" as const, interruptedLink };
     }

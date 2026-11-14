@@ -35,6 +35,7 @@ import {
   createNpmPackageRootLinkLifecycle,
   verifyRetainedNpmRootRecovery,
 } from "./package-update-npm-root.js";
+import { switchStagedPackageRelease } from "./package-update-release-switch.js";
 import {
   PackageUpdateActivationError,
   type PackageUpdateTransaction,
@@ -66,6 +67,9 @@ export { removePackageUpdatePath } from "./package-update-filesystem.js";
 export async function swapStagedPackageInstall(
   params: StagedPackageSwapParams,
 ): Promise<StagedPackageSwapResult> {
+  if (params.stage.release) {
+    return await switchStagedPackageRelease(params);
+  }
   const startedAt = Date.now();
   let activePackageRoot = params.installTarget.packageRoot;
   const native = params.stage.native;

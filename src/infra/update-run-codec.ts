@@ -266,6 +266,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
     requester,
     sessionKey,
@@ -281,6 +282,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
   });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
@@ -296,6 +298,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
         updateRecoveryCapture,
         managedHandoff,
         packageStage,
+        packageRelease,
         windowsUserSid,
         ...routing,
       })
@@ -372,6 +375,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
     ...originDiagnostics
   } = input.origin;
@@ -403,6 +407,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
   });
   // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.

@@ -598,6 +598,8 @@ export async function executeMutableUpdate(
         }),
         managedServiceEnv: preManagedServiceStop?.serviceEnv,
         onTransaction,
+        // Recorded inside activation, after the service stop and before the link changes.
+        onPackageRelease: (r) => recordPhase("activating", { origin: { packageRelease: r } }),
       };
       result = await withMutableUpdateForwardScope(opts, () =>
         params.stagedPackage

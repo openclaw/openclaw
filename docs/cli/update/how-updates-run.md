@@ -1560,6 +1560,49 @@ reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
 
+### Release directories on OpenClaw-owned prefixes
+
+On macOS and Linux, the prefix that `install-cli.sh` creates
+(`<prefix>/tools/node-v<version>`) and the durable service copy at
+`<state dir>/npm` keep each release in its own directory. The package path
+`lib/node_modules/openclaw` is a link to
+`releases/<release>/lib/node_modules/openclaw` in the same prefix. The service
+definition, `bin/openclaw`, and the `install-cli.sh` wrapper keep naming the
+package path, so none of them changes during an update.
+
+An update installs the new release into a fresh `releases/<release>` directory
+and verifies it while the old Gateway serves. After the Gateway stops, it
+records both releases on the update run and replaces the link with one rename.
+The previous release is not modified. Rollback renames a link to the previous
+release back into place, after checking that its version, build, and directory
+identity still match the record. A release that another updater rewrote in
+place is refused as a rollback target.
+
+The first update with this layout support converts a plain package directory:
+the existing directory moves into `releases/` as the previous release and a
+link takes its place, then the update switches the link to the new release.
+Between those two renames the package path is briefly missing. If the updater
+dies there, `openclaw` cannot start, the old package is intact under
+`releases/`, and a leftover `lib/node_modules/.openclaw.release-link-*` link
+names it. Rename that link onto `lib/node_modules/openclaw` to restore the
+installation, then run the update again.
+
+The switch refuses before stopping the Gateway when the new release's `bin`
+launchers are not the links the prefix already has, and when the Gateway
+service starts a path inside a release instead of the package path (an older
+OpenClaw can write that when it reinstalls the service through the link). The
+refusal names the `openclaw gateway install --force` command that binds the
+service to the package path. npm global prefixes you
+manage yourself, pnpm, Bun, Git checkouts, and Windows keep the swap described
+above. A link to a checkout made with `npm link` is not a release and stays on
+the swap. A manual `npm install -g` into an owned prefix replaces the link with
+a plain directory; the next update converts it again.
+
+A successful update removes an unselected release only when no open update run
+names it, no running Gateway holds its lease under `releases/.leases`, and
+neither the release nor the link changed in the last 24 hours. `openclaw update
+status` lists the active and retained releases.
+
 A matching installed version skips core replacement but still converges plugins. Core updates also
 refresh core-command completion; full plugin-command completion rebuilds remain explicit
 `openclaw completion --write-state` runs.

@@ -1,4 +1,5 @@
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
+import type { PackageReleaseRecord, PackageReleaseTarget } from "./package-release-slot.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackagePostInstallVerifier } from "./package-update-verification-step.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
@@ -49,6 +50,8 @@ export type StagedPackageInstall = {
   installTarget: ResolvedGlobalInstallTarget;
   native?: NativePackageStage;
   activationCustody?: boolean;
+  /** Set when the stage is a release behind the package link of this prefix. */
+  release?: PackageReleaseTarget;
 };
 
 export type StagedPackageSwapParams = {
@@ -65,6 +68,8 @@ export type StagedPackageSwapParams = {
   activation?: PackageActivationOptions;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
   onLocalOverrides?: (result: LocalPackageOverridesResult) => void;
+  /** Records the switch before the link changes. */
+  onPackageRelease?: (release: PackageReleaseRecord) => void | Promise<void>;
 };
 
 export type StagedPackageSwapResult =

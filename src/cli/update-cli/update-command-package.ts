@@ -10,6 +10,7 @@ import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js
 import type {
   PackageActivationOptions,
   PackageUpdateTransaction,
+  StagedPackageSwapParams,
 } from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import { deferPackageStateVerification } from "../../infra/package-update-verification-step.js";
@@ -384,6 +385,7 @@ export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> &
   reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   getActivation?: () => PackageActivationOptions | undefined;
+  onPackageRelease?: StagedPackageSwapParams["onPackageRelease"];
 };
 
 /** Retain one staged target while its runtime initializes a fresh profile. */
@@ -451,6 +453,7 @@ export async function stagePackageInstallUpdate(
       reserveInstallSlot: (root) => requireActive().reserveInstallSlot?.(root),
       getActivation: () => requireActive().getActivation?.(),
       onTransaction: (transaction) => requireActive().onTransaction(transaction),
+      onPackageRelease: (release) => requireActive().onPackageRelease?.(release),
       onConfigSnapshot: (snapshot) => requireActive().onConfigSnapshot?.(snapshot),
     },
     () => requireActive(),
@@ -539,6 +542,8 @@ export async function runPackageInstallUpdate(
     reserveInstallSlot: params.reserveInstallSlot,
     onTransaction: params.onTransaction,
     getActivation: params.getActivation,
+    releaseLayout: true,
+    onPackageRelease: params.onPackageRelease,
     installTarget,
     installSpec,
     installCwd: params.invocationCwd,

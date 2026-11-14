@@ -222,6 +222,24 @@ export const UpdateRunStepSchema = z.object({
   }).optional(),
 });
 
+const packageReleaseIdentity = z.object({
+  path: z.string().max(1024),
+  identity: z
+    .string()
+    .regex(/^\d+:\d+$/u)
+    .max(64),
+  version: z.string().max(128).nullable(),
+  build: z.string().max(96).nullable(),
+});
+
+/** Bounded so three paths leave room in origin's byte budget beside the other receipts. */
+export const UpdateRunPackageReleaseSchema = z.object({
+  slot: z.string().max(1024),
+  from: packageReleaseIdentity,
+  to: packageReleaseIdentity,
+  adoption: z.literal(true).optional(),
+});
+
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -249,6 +267,8 @@ export const UpdateRunRecordSchema = z.object({
         identity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }),
       })
       .optional(),
+    // Advice for the next run about a release link switch; always rechecked on disk.
+    packageRelease: UpdateRunPackageReleaseSchema.optional(),
     previousDrivers: z
       .array(driver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)

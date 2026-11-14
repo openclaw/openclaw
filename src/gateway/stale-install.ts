@@ -20,6 +20,7 @@ import {
   resolveOpenClawInstallationRootSync,
   resolveOpenClawPackageRootSync,
 } from "../infra/openclaw-root.js";
+import { acquirePackageReleaseLease } from "../infra/package-release-lease.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -93,6 +94,15 @@ export function registerGatewayInstallationReplacementHandler(
     onReplacement,
   };
   installationState.observer = observer;
+  // A Gateway keeps loading files from its release after the link moves on.
+  let releaseLease = () => {};
+  try {
+    releaseLease = gatewayInstallRoot
+      ? acquirePackageReleaseLease(gatewayInstallRoot)
+      : releaseLease;
+  } catch {
+    // Without a lease the release still survives collection for 24 hours.
+  }
   const releaseSuspension = onGatewaySuspendAdmissionChange((phase) => {
     if (phase !== "accepting") {
       // A host operation may restore the running installation before reopening.
@@ -101,6 +111,11 @@ export function registerGatewayInstallationReplacementHandler(
   });
   return () => {
     releaseSuspension();
+    try {
+      releaseLease();
+    } catch {
+      // A lease left behind by a stopped Gateway is ignored as soon as its process is gone.
+    }
     if (installationState.observer === observer) {
       installationState.observer = undefined;
     }
