@@ -52,6 +52,19 @@ describe("claw record size", () => {
 });
 
 describe("claw record rows", () => {
+  it.each(["members", "members:1"])("refuses a malformed %s chunk", async (key) => {
+    for (const value of [null, [], 42, "not a member collection"]) {
+      storedRows.clear();
+      for (const [name, entry] of Object.entries(clawStoreRows(fullClaw("device")))) {
+        storedRows.set(name, entry);
+      }
+      storedRows.set(key, value);
+      await expect(readStoredClaw()).rejects.toThrow(
+        "OpenClaw ID claw storage has an invalid member collection",
+      );
+    }
+  });
+
   const binding = { device_id: "browser-a", role: "operator", peer_key: "iroh:a", bound_at: NOW };
   const claw = (): StoredClaw => {
     const discovery = { owner_account_id: null, published_binding_seq: 0, mailbox_cursor: null };

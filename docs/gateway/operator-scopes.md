@@ -322,8 +322,9 @@ with `role: null` exposes the configured mapping or default again.
 `users.list` keeps `role` as the explicit assignment and reports `effectiveRole`
 with `roleSource` (`"assigned"`, `"githubLogin"`, or `"default"`).
 `gateway.roles.default` is optional and must name an existing definition when set.
-Without a default, `definitions` is a role catalog only: sign-in, authorization,
-profile requirements, and session access behave as if `gateway.roles` were absent.
+Without a default, `definitions` is a role catalog only for non-member connections:
+sign-in, authorization, profile requirements, and session access behave as if
+`gateway.roles` were absent.
 Stored explicit assignments do not apply, and `users.list` reports no effective
 role. Assigning a named role requires a default; clearing an assignment remains
 available. Existing configurations with a default keep their behavior unchanged.
@@ -404,7 +405,9 @@ an older browser roster cannot restore agents excluded by the current role.
 OpenClaw ID member connections resolve the membership role directly from
 `gateway.roles.definitions`, even without `gateway.roles.default`. The membership
 role takes precedence over any profile assignment; other connection types retain
-their own authorization rules. Its `accessPolicyPlugin`, when set, is required
+their own authorization rules. The connection decides which role applies: the same
+person can have a member role over OpenClaw ID and a different profile role through
+a trusted proxy. Those permissions are not combined. Its `accessPolicyPlugin`, when set, is required
 even without named-role enforcement. `users.setRole` refuses assigning a named role to
 an OpenClaw ID member's profile and directs the owner to **Access**. Clearing a
 profile assignment with `role: null` remains allowed.
@@ -474,6 +477,14 @@ preset does not grant `operator.write` or `operator.admin`.
 Missing role definitions deny member admission across WebSocket, HTTP, the tunnel
 API, and retained/recovered work. Definition changes apply through config reload;
 removed permissions cannot survive in a connected member or its retained work.
+With OpenClaw ID enabled and a role catalog present, `openclaw doctor` checks the
+local claw record even when the Gateway is stopped. It reports missing member
+definitions, missing presets, and unavailable Docker or Podman backends needed
+by members or the named default. Its preset repair requires confirmation (or
+`--fix`/`--yes`), preserves existing definitions, and never sets a default or
+assignments. Doctor also warns when stored profile assignments have no effect
+because the named default is absent.
+
 Owner-device and node authority is independent of member definitions. See
 [OpenClaw ID remote access](/concepts/experimental-features#member-roles).
 
@@ -654,7 +665,8 @@ credential boundary and backend requirements.
 
 <a id="sandbox-exclusions" />
 
-A required sandbox contains the session's exec and file tools. It does not
+A required sandbox contains the session's exec and file tools, not the whole
+Gateway host. It does not
 contain these paths, so configure them before admitting people you do not trust
 with the Gateway host:
 
@@ -714,7 +726,7 @@ reusable device token, and device scope upgrades cannot widen its grant ceiling.
 An administrator-attested [channel identity link](/concepts/user-model#channel-identity-links)
 also lets a sender inherit channel-owner authority from their effective role's
 `operator.admin` scope. This does not require an additional identity-scope grant.
-When roles are absent, channel ownership uses a matching administrative
+When named-role enforcement is off, channel ownership uses a matching administrative
 identity-scope grant instead. Connection scope grants and ceilings are unchanged.
 
 Named roles apply to authenticated durable profiles and their attested channel

@@ -32,6 +32,7 @@ import {
   legacyOwnedRepair,
   recordDoctorHealthWarnings,
 } from "./doctor-health-contribution.js";
+import { memberRolesCheck, runMemberRolesHealth } from "./doctor-member-roles.js";
 import { appContainerSpawnCheck, nativeStatusCheck } from "./doctor-native-status-check.js";
 
 function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
@@ -612,29 +613,33 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {
-      healthChecks: {
-        id: "core/doctor/sandbox/registry-files",
-        description: "Legacy sandbox registry files are represented in SQLite registry storage.",
-        async detect() {
-          const {
-            detectLegacySandboxRegistryFileIssues,
-            legacySandboxRegistryInspectionToHealthFinding,
-          } = await import("../commands/doctor-sandbox.js");
-          return (await detectLegacySandboxRegistryFileIssues()).map(
-            legacySandboxRegistryInspectionToHealthFinding,
-          );
+      healthChecks: [
+        {
+          id: "core/doctor/sandbox/registry-files",
+          description: "Legacy sandbox registry files are represented in SQLite registry storage.",
+          async detect() {
+            const {
+              detectLegacySandboxRegistryFileIssues,
+              legacySandboxRegistryInspectionToHealthFinding,
+            } = await import("../commands/doctor-sandbox.js");
+            return (await detectLegacySandboxRegistryFileIssues()).map(
+              legacySandboxRegistryInspectionToHealthFinding,
+            );
+          },
+          repair: legacyOwnedRepair(async () => {
+            const {
+              detectLegacySandboxRegistryFileIssues,
+              legacySandboxRegistryInspectionToRepairEffect,
+            } = await import("../commands/doctor-sandbox.js");
+            return (await detectLegacySandboxRegistryFileIssues()).map(
+              legacySandboxRegistryInspectionToRepairEffect,
+            );
+          }, "legacy doctor sandbox contribution owns registry migration"),
         },
-        repair: legacyOwnedRepair(async () => {
-          const {
-            detectLegacySandboxRegistryFileIssues,
-            legacySandboxRegistryInspectionToRepairEffect,
-          } = await import("../commands/doctor-sandbox.js");
-          return (await detectLegacySandboxRegistryFileIssues()).map(
-            legacySandboxRegistryInspectionToRepairEffect,
-          );
-        }, "legacy doctor sandbox contribution owns registry migration"),
-      },
+        memberRolesCheck,
+      ],
       async run(ctx) {
+        await runMemberRolesHealth(ctx);
         const {
           maybeRepairSandboxImages,
           maybeRepairSandboxRegistryFiles,
