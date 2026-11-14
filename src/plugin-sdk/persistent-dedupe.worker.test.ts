@@ -414,3 +414,17 @@ describe("persistent dedupe worker", () => {
     });
   });
 });
+
+it("records delimiter-containing namespace/key pairs independently across restart", async () => {
+  await withOpenClawTestState({ label: "dedupe-namespace-pairs" }, async () => {
+    const settings = { ...strictOptions, stateMaxEntries: 32, memoryMaxSize: 16 };
+    const dedupe = createPersistentDedupe(settings);
+    expect(await dedupe.checkAndRecord("message", { namespace: "account:thread" })).toBe(true);
+    expect(await dedupe.checkAndRecord("thread:message", { namespace: "account" })).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
+    const reopened = createPersistentDedupe(settings);
+    expect(await reopened.hasRecent("message", { namespace: "account:thread" })).toBe(true);
+    reopened.clearMemory();
+    expect(await reopened.hasRecent("thread:message", { namespace: "account" })).toBe(true);
+  });
+});
