@@ -95,10 +95,14 @@ specific, supported step only the human can perform—for example, completing a
 browser challenge or a manual device step in an already selected surface.
 The existing question panel shows the reason, instructions, and an optional
 **Open link** action while the original agent turn waits.
+Code mode includes this handoff guidance when the built-in `ask_user` tool is
+available, even when full tool descriptions are deferred. The agent should use
+the handoff instead of ending the task with manual sign-in instructions.
 
 Opening the link does not answer the question. **Ready to recheck** returns
 `status: "ready_to_verify"`: the agent must re-observe the original target through
-its owning tool. The answer is not proof of authentication, permission, or
+its owning tool. The OpenClaw agent runtime refreshes its tool catalog before
+continuing so a completed sign-in can make its tools available. The answer is not proof of authentication, permission, or
 successful completion, and it grants no additional authority. The agent
 continues from the conversation's recorded progress only when the prerequisite
 is actually satisfied, without repeating completed or uncertain side effects.

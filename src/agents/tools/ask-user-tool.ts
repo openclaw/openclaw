@@ -20,6 +20,7 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "../harness/host-private-capabilities.js";
+import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
   AskUserToolSchema,
@@ -339,18 +340,24 @@ export function cancelAskUserPromptDelivery(
 function answeredResult(
   questions: readonly QuestionRequestQuestion[],
   answers: QuestionAnswers,
-  requiredAction = false,
+  requiredAction: boolean | undefined,
+  refreshTools: () => boolean,
 ) {
   if (requiredAction) {
     if (answers.answers.required_action?.[0] !== REQUIRED_ACTION_READY) {
       return unresolvedActionResult("declined");
     }
     const payload = { status: "ready_to_verify" as const };
-    return textResult(
-      "The user is ready for a fresh check of the required step. This is not proof of completion, authentication, or permission. Re-observe the original target through its owning tool. Continue the original task only if the prerequisite is actually satisfied; preserve completed progress and do not repeat completed or uncertain side effects. If still unresolved, report the remaining blocker without claiming success or repeating the handoff.\n\n" +
-        JSON.stringify(payload),
-      payload,
-    );
+    // Human work can make previously unavailable tools discoverable (for example, OAuth).
+    const refresh = refreshTools();
+    return {
+      ...textResult(
+        "The user is ready for a fresh check of the required step. This is not proof of completion, authentication, or permission. Re-observe the original target through its owning tool. Continue the original task only if the prerequisite is actually satisfied; preserve completed progress and do not repeat completed or uncertain side effects. If still unresolved, report the remaining blocker without claiming success or repeating the handoff.\n\n" +
+          JSON.stringify(payload),
+        payload,
+      ),
+      ...(refresh ? { terminate: true } : {}),
+    };
   }
   const payload = { status: "answered" as const, answers };
   const lines = questions.map((question) => {
@@ -486,6 +493,7 @@ export function createAskUserTool(params: {
   // Tool callbacks may run outside their creation scope; never borrow the invoker's owner.
   const questionAuthority = resolveAgentQuestionAnswerAuthority();
   const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
+  const runtimeRefresh = captureAgentPluginRuntimeRefresh();
   return {
     label: "Ask User",
     name: "ask_user",
@@ -545,7 +553,12 @@ export function createAskUserTool(params: {
             ? ((await cancelPendingQuestion("wait-timeout")) ?? waitResult)
             : waitResult;
         if (result.status === "answered") {
-          return answeredResult(normalized.questions, result.answers, normalized.requiredAction);
+          return answeredResult(
+            normalized.questions,
+            result.answers,
+            normalized.requiredAction,
+            runtimeRefresh.request,
+          );
         }
         if (
           result.status === "pending" ||
@@ -609,7 +622,12 @@ export function createAskUserTool(params: {
         if (state.claim.isCancellationRequested()) {
           const answered = await cancelPendingQuestion("superseded-input");
           return answered
-            ? answeredResult(normalized.questions, answered.answers, normalized.requiredAction)
+            ? answeredResult(
+                normalized.questions,
+                answered.answers,
+                normalized.requiredAction,
+                runtimeRefresh.request,
+              )
             : noAnswerResult("cancelled", normalized.requiredAction);
         }
         signal?.addEventListener("abort", cancelOnAbort, { once: true });
@@ -646,6 +664,7 @@ export function createAskUserTool(params: {
                 normalized.questions,
                 answered.answers,
                 normalized.requiredAction,
+                runtimeRefresh.request,
               );
             }
             if (
@@ -677,6 +696,7 @@ export function createAskUserTool(params: {
               normalized.questions,
               answered.answers,
               normalized.requiredAction,
+              runtimeRefresh.request,
             );
           }
         }

@@ -181,13 +181,20 @@ export function describeSessionStatusTool(): string {
   ].join(" ");
 }
 
+export function describeRequiredHumanActionTool(callableName: string): string {
+  return [
+    `When a task needs a supported human-only step such as browser sign-in, use \`${callableName}\` with requiredAction instead of finalizing with prose instructions.`,
+    "Give the specific observed blocker and supported instructions; an optional verified URL opens separately from the completion answer. Reuse existing approval or native permission cards when available; never add another approval prompt, invent a remediation, request credentials in chat, or hide an incorrect denial.",
+    "requiredAction parks the original task and returns ready_to_verify, not success or authorization: re-observe the original target and continue from recorded progress only after the actual prerequisite is satisfied. action_unresolved means stop dependent work, report the blocker, and wait for a new user instruction; never use best-judgment fallback or repeat the handoff.",
+  ].join(" ");
+}
+
 /** Decisions and required manual steps share the attributed human wait. */
 export function describeAskUserTool(): string {
   return [
     "Ask the human user 1-3 structured questions and wait for their answer; `multiSelect` allows picking several options and `timeoutSeconds` bounds the wait.",
     "For questions, ask only about decisions genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
-    "Instead of questions, requiredAction parks the original task for a necessary human-only step with a specific observed blocker and supported instructions; an optional verified URL opens separately from the completion answer. Reuse existing approval or native permission cards when available; never add another approval prompt, invent a remediation, or hide an incorrect denial.",
-    "requiredAction returns ready_to_verify, not success or authorization: re-observe the original target and continue from recorded progress only after the actual prerequisite is satisfied. action_unresolved means stop dependent work, report the blocker, and wait for a new user instruction; never use best-judgment fallback or repeat the handoff.",
+    describeRequiredHumanActionTool("ask_user"),
     "Ask exactly one question per call unless several answers must be submitted together; one single-select question uses native controls on supported messaging channels.",
     "Put every selectable choice in `options`, never only in the question text. Put the recommended option first and suffix its label with ` (Recommended)`.",
     "Use `multiSelect` only when the user may choose several options at once; otherwise omit it.",
