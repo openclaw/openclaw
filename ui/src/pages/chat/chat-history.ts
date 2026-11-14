@@ -122,6 +122,10 @@ export async function loadChatHistory(
     if (inFlight.refresh) {
       inFlight.refresh.startup ||= startup;
       inFlight.refresh.deferBranches &&= opts.deferBranches === true;
+      // A queued append refresh may have kept the read; stronger changes retire it.
+      if (opts.supersedeInFlight === true) {
+        inFlight.refresh.version = ++requests.historyVersion;
+      }
       return inFlight.refresh.promise;
     }
     if (!opts.supersedeInFlight && inFlight.key === requestKey) {
@@ -133,15 +137,15 @@ export async function loadChatHistory(
     if (opts.supersedeInFlight !== "append" || requests.acceptedHistory) {
       requests.historyVersion++;
     }
-    const version = requests.historyVersion;
     const refresh = {
       startup: startup || inFlight.startup,
       deferBranches: opts.deferBranches === true,
+      version: requests.historyVersion,
       promise: Promise.resolve<ObservedChatHistoryResult | undefined>(undefined),
     };
     refresh.promise = inFlight.request.then(() => {
       if (
-        requests.historyVersion !== version ||
+        requests.historyVersion !== refresh.version ||
         !connectionIsCurrent() ||
         state.sessionKey !== sessionKey ||
         !agentIsCurrent()
