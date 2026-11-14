@@ -1,13 +1,10 @@
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createComponent, flush } from "solid-js";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
-import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { i18n } from "../../i18n/index.ts";
-import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import type { CommandLaneDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -138,38 +135,13 @@ it("tolerates out-of-range event timestamps", async () => {
   expect(h.page.textContent).not.toContain("Invalid Date");
 });
 
-it("keeps the security row present while snapshots load and Manual RPC remains available", async () => {
+it("keeps Manual RPC available while snapshots load", async () => {
   const status = hold<unknown>({});
   const h = mountPage({ status: () => status.promise });
-  await waitForSolid(() =>
-    expect(h.query(".debug-security-status")?.textContent).toContain("Loading"),
-  );
-  const row = h.query(".debug-security-status")?.closest(".settings-row");
-  expect(row?.textContent).toContain("openclaw security audit --deep");
   expect(h.page.querySelector('select[aria-label="Method"]')).not.toBeNull();
-  status.resolve({ securityAudit: { summary: { critical: 0, warn: 0, info: 0 } } });
+  status.resolve({});
   await h.ready();
-  expect(h.query(".debug-security-status")?.closest(".settings-row")).toBe(row);
-  expect(row?.textContent).toContain("No critical issues");
-});
-
-it("updates security audit labels with the locale and keeps the command monospace", async () => {
-  const h = mountPage({
-    status: () => ({ securityAudit: { summary: { critical: 0, warn: 1, info: 2 } } }),
-  });
-  await h.ready();
-  expect(h.query(".settings-status")?.textContent).toContain("1 warning");
-  await i18n.setLocale("zh-CN");
-  flush();
-  const chinese = flattenTranslations(zh_CN);
-  expect(h.query(".settings-status")?.className).toContain("settings-status--warn");
-  expect(normalizedText(h.query(".settings-status"))).toBe(
-    [
-      chinese.get("debug.security.warnings")?.replace("{count}", "1"),
-      chinese.get("debug.security.info")?.replace("{count}", "2"),
-    ].join(" · "),
-  );
-  expect(h.query(".settings-row__desc .mono")?.textContent).toBe("openclaw security audit --deep");
+  expect(h.page.querySelector('select[aria-label="Method"]')).not.toBeNull();
 });
 
 it.each(["global", "per-session"] as const)(

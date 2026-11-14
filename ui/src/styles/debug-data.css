@@ -31,12 +31,6 @@
   vertical-align: top;
 }
 
-.debug-security-status {
-  /* Keep the audit row and its text column steady while the first snapshot arrives. */
-  inline-size: 14em;
-  max-inline-size: 100%;
-}
-
 .command-lanes-table-wrap {
   max-height: 420px;
 }
