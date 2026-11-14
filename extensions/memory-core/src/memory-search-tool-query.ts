@@ -14,7 +14,11 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
-import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
+import {
+  filterMemorySearchHitsBySessionVisibility,
+  prepareMemorySearchChannelRead,
+  type MemorySearchChannelTargets,
+} from "./session-search-visibility.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 
 const MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES = 200;
@@ -196,9 +200,11 @@ async function finalizeMemorySearchToolQuery(params: {
       pausedIndexIdentity,
       searchMode: undefined,
       debug: undefined,
+      channelRead: undefined,
     };
   }
 
+  let channelTargets: readonly MemorySearchChannelTargets[] = [];
   let filtered = await filterMemorySearchHitsBySessionVisibility({
     cfg: visibility.cfg,
     agentId: visibility.agentId,
@@ -206,6 +212,9 @@ async function finalizeMemorySearchToolQuery(params: {
     sandboxed: visibility.sandboxed,
     hits: searched.candidates,
     conversationRecall: query.conversationRecall,
+    captureChannelTargets: (targets) => {
+      channelTargets = targets;
+    },
   });
   if (searchSources) {
     const allowedSources = new Set(searchSources);
@@ -216,11 +225,20 @@ async function finalizeMemorySearchToolQuery(params: {
   }
 
   const rawResults = filtered.slice(0, query.resultLimit);
+  const channelRead = await prepareMemorySearchChannelRead({
+    cfg: visibility.cfg,
+    agentId: visibility.agentId,
+    requesterSessionKey: query.sessionKey,
+    sandboxed: visibility.sandboxed,
+    hits: rawResults,
+    targets: channelTargets,
+  });
   const latestDebug = runtimeDebug.at(-1);
   return {
     searchStartedAt: startedAt,
     status,
     rawResults,
+    channelRead,
     pausedIndexIdentity: undefined,
     searchMode: params.effectiveMode ?? latestDebug?.effectiveMode,
     debug: {

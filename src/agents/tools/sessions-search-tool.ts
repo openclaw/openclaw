@@ -1,5 +1,8 @@
 import { Type, type Static } from "typebox";
 import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
+import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { expandSessionRowFacts } from "../../../packages/gateway-protocol/src/session-row-fields.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isGatewayClientRequestError } from "../../gateway/call.js";
@@ -33,7 +36,12 @@ import {
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
 import {
+  withCurrentSessionChannelReadAccess,
+  type SessionChannelReadTarget,
+} from "./sessions-channel-read-result.js";
+import {
   createSessionVisibilityRowChecker,
+  resolveSessionToolChannelScope,
   formatSessionToolAccessDenial,
   isSessionToolMainAlias,
   resolveDisplaySessionKey,
@@ -155,6 +163,11 @@ const SessionsSearchOutputSchema = Type.Union([
 type SanitizedSearchHit = Static<typeof SessionsSearchHitSchema>;
 type GatewaySearchHit = Partial<Record<keyof SanitizedSearchHit, unknown>>;
 
+type BufferedSearchHit = {
+  hit: SanitizedSearchHit;
+  target: SessionChannelReadTarget;
+};
+
 type SearchSessionCandidate = {
   key: string;
   agentId?: string;
@@ -220,6 +233,7 @@ async function listVisibleSearchSessions(params: {
   effectiveRequesterKey: string;
   gatewayCall: GatewayCaller;
   rowGuard: Pick<ReturnType<typeof createSessionVisibilityRowChecker>, "check">;
+  rowMode: "sidebar" | "dashboard";
   restrictToSpawned: boolean;
 }): Promise<SearchSessionCandidate[]> {
   const candidates = new Map<string, SearchSessionCandidate>();
@@ -248,14 +262,15 @@ async function listVisibleSearchSessions(params: {
   let offset = 0;
   while (true) {
     const page = await params.gatewayCall<{
-      sessions: VisibilityRow[];
+      sessions: SessionRow[];
+      sharedFacts?: Partial<SessionRow>[];
       hasMore?: boolean;
       nextOffset?: number;
     }>({
       method: "sessions.list",
       params: {
         source: "sessions-search",
-        rowMode: "dashboard",
+        rowMode: params.rowMode,
         limit: 200,
         offset,
         archived: "all",
@@ -264,7 +279,7 @@ async function listVisibleSearchSessions(params: {
         ...(params.restrictToSpawned ? { spawnedBy: params.effectiveRequesterKey } : {}),
       },
     });
-    for (const row of page.sessions) {
+    for (const row of expandSessionRowFacts(page.sessions, page.sharedFacts)) {
       if (parseAgentSessionKey(row.key) || row.agentId === params.unscopedAgentId) {
         add(row);
       }
@@ -457,7 +472,14 @@ export function createSessionsSearchTool(opts?: {
           };
         }
 
+        const requesterChannelScope = await resolveSessionToolChannelScope({
+          visibility,
+          sessionKey: effectiveRequesterKey,
+          agentId: requesterAgentId,
+          callGateway: gatewayCall,
+        });
         const rowGuard = createSessionVisibilityRowChecker({
+          requesterChannelScope,
           action: "history",
           defaultAgentId: requesterAgentId,
           requesterAgentId,
@@ -520,13 +542,14 @@ export function createSessionsSearchTool(opts?: {
                 effectiveRequesterKey,
                 gatewayCall,
                 rowGuard,
+                rowMode: visibility === "channel" ? "sidebar" : "dashboard",
                 restrictToSpawned,
               })
         )
           // Search excerpts are re-persisted in the caller transcript; incognito
           // sessions therefore stay absent even when the caller could otherwise see them.
           .filter((candidate) => !isIncognitoSessionKey(candidate.key));
-        const visibleHits: SanitizedSearchHit[] = [];
+        const bufferedHits: BufferedSearchHit[] = [];
         let indexing = false;
         let archivedTranscriptsExcluded = 0;
         let backendTruncated = false;
@@ -547,12 +570,9 @@ export function createSessionsSearchTool(opts?: {
         for (const [agentId, candidates] of [...sessionsByAgent].toSorted(([left], [right]) =>
           left.localeCompare(right),
         )) {
-          for (
-            let offset = 0;
-            offset < candidates.length;
-            offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
-          ) {
-            const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
+          const chunkSize = visibility === "channel" ? 1 : SESSIONS_SEARCH_MAX_SESSION_KEYS;
+          for (let offset = 0; offset < candidates.length; offset += chunkSize) {
+            const chunk = candidates.slice(offset, offset + chunkSize);
             const runSearch = () =>
               gatewayCall<{
                 results?: GatewaySearchHit[];
@@ -571,17 +591,45 @@ export function createSessionsSearchTool(opts?: {
                 },
               });
             const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
+            let expectedSessionId = scopedCandidate?.expectedSessionId;
+            let revalidateCurrent: (() => Promise<void>) | undefined;
+            let admissionIdentities: string[] | undefined;
+            if (visibility === "channel" && scopedCandidate) {
+              const freshAccess = await resolveSessionToolAccess({
+                action: "history",
+                displayAction: "search",
+                requesterAgentId,
+                requesterSessionKey: effectiveRequesterKey,
+                sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
+                mainSessionKey,
+                targetAgentId: agentId,
+                targetSessionKey: scopedCandidate.key,
+                requesterOwned: false,
+                visibility,
+                a2aPolicy,
+                callGateway: gatewayCall,
+              });
+              if (!freshAccess.allowed) {
+                continue;
+              }
+              expectedSessionId = freshAccess.expectedSessionId;
+              revalidateCurrent = freshAccess.revalidateCurrent;
+              admissionIdentities = freshAccess.admissionIdentities;
+            }
             let result: Awaited<ReturnType<typeof runSearch>>;
             try {
-              result = scopedCandidate?.expectedSessionId
-                ? await runWithScopedSessionAccess({
-                    cfg,
-                    agentId,
-                    expectedSessionId: scopedCandidate.expectedSessionId,
-                    targetSessionKey: scopedCandidate.key,
-                    run: runSearch,
-                  })
-                : await runSearch();
+              result =
+                scopedCandidate && (expectedSessionId || revalidateCurrent)
+                  ? await runWithScopedSessionAccess({
+                      cfg,
+                      agentId,
+                      expectedSessionId,
+                      revalidateCurrent,
+                      admissionIdentities,
+                      targetSessionKey: scopedCandidate.key,
+                      run: runSearch,
+                    })
+                  : await runSearch();
             } catch (error) {
               if (
                 error instanceof GatewayProtocolRequestTimeoutError ||
@@ -618,32 +666,59 @@ export function createSessionsSearchTool(opts?: {
                 mainKey,
               });
               if (sanitized) {
-                visibleHits.push(sanitized);
+                bufferedHits.push({
+                  hit: sanitized,
+                  target: {
+                    key: candidate.key,
+                    agentId,
+                    ...(visibility === "channel"
+                      ? { storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }
+                      : {}),
+                    ...(expectedSessionId ? { expectedSessionId } : {}),
+                  },
+                });
               }
             }
           }
         }
-        visibleHits.sort(compareSearchHits);
-        const limited = visibleHits.slice(0, limit);
-        const capped = capSearchHits(limited);
-        const warnings = [
-          indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
-          archivedTranscriptsExcluded > 0
-            ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
-            : undefined,
-        ].filter(Boolean);
-        return jsonResult({
-          results: capped.items,
-          ...(opts?.sessionLinkBase
-            ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
-            : {}),
-          ...(indexing ? { indexing: true } : {}),
-          ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
-          ...(warnings.length ? { warning: warnings.join(" ") } : {}),
-          ...(backendTruncated || visibleHits.length > limit || capped.truncated
-            ? { truncated: true }
-            : {}),
-        });
+        const finalize = (visible: readonly boolean[]) => {
+          const visibleHits = bufferedHits
+            .filter((_, index) => visible[index])
+            .map(({ hit }) => hit);
+          visibleHits.sort(compareSearchHits);
+          const limited = visibleHits.slice(0, limit);
+          const capped = capSearchHits(limited);
+          const warnings = [
+            indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
+            archivedTranscriptsExcluded > 0
+              ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
+              : undefined,
+          ].filter(Boolean);
+          return jsonResult({
+            results: capped.items,
+            ...(opts?.sessionLinkBase
+              ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+              : {}),
+            ...(indexing ? { indexing: true } : {}),
+            ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
+            ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+            ...(backendTruncated || visibleHits.length > limit || capped.truncated
+              ? { truncated: true }
+              : {}),
+          });
+        };
+        return visibility === "channel"
+          ? await withCurrentSessionChannelReadAccess(
+              {
+                requesterAgentId,
+                requesterSessionKey: effectiveRequesterKey,
+                sandboxed: opts?.sandboxed === true,
+                a2aPolicy,
+                targets: bufferedHits.map(({ target }) => target),
+              },
+              finalize,
+            )
+          : finalize(bufferedHits.map(() => true));
       }),
     ),
   };

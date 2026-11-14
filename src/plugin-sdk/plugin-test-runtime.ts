@@ -15,7 +15,11 @@ import type { ReplyOperation } from "../sessions/session-controller.contracts.js
 export async function createTestPluginGatewayRuntime(params: {
   pluginId: string;
   config: OpenClawConfig;
-}): Promise<{ gateway: PluginRuntime["gateway"]; close: () => Promise<void> }> {
+}): Promise<{
+  gateway: PluginRuntime["gateway"];
+  runInGatewayScope: <T>(run: () => Promise<T>) => Promise<T>;
+  close: () => Promise<void>;
+}> {
   const [
     runtimeModule,
     requestScope,
@@ -46,6 +50,15 @@ export async function createTestPluginGatewayRuntime(params: {
   const resolveGatewayContext = () => gatewayContext;
   let closed = false;
   return {
+    runInGatewayScope: (run) => {
+      if (closed) {
+        throw new Error("Test Gateway runtime is closed");
+      }
+      return requestScope.withPluginRuntimeGatewayRequestScope(
+        { context: gatewayContext, isWebchatConnect: () => false },
+        run,
+      );
+    },
     gateway: {
       ...base,
       isAvailable: async () => !closed,

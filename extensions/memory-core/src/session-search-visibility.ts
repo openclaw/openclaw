@@ -1,9 +1,12 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
+  prepareSessionTranscriptChannelRead,
   readSessionResetRecallCutoff,
   loadArchivedSessionsAsync,
   loadMemorySearchSessionStore,
   parseUsageCountedSessionIdFromFileName,
+  type PreparedSessionTranscriptChannelRead,
+  type SessionTranscriptChannelReadTarget,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   resolveCanonicalMainSessionKey,
@@ -12,7 +15,10 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
-import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   resolveTranscriptStemToSessionKeys,
@@ -20,6 +26,7 @@ import {
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
@@ -37,6 +44,45 @@ function isGlobalSessionKeyForSharedScope(cfg: OpenClawConfig, key: string): boo
 type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 
 type SessionStore = Awaited<ReturnType<typeof loadMemorySearchSessionStore>>["store"];
+
+export type MemorySearchChannelTargets = {
+  hit: MemorySearchResult;
+  aliases: SessionTranscriptChannelReadTarget[];
+};
+
+export type MemorySearchChannelRead = PreparedSessionTranscriptChannelRead & {
+  sessionHits: readonly MemorySearchResult[];
+};
+
+/** Bind only the query's retained results; each query carries its own owner capability. */
+export async function prepareMemorySearchChannelRead(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  requesterSessionKey: string | undefined;
+  sandboxed: boolean;
+  hits: MemorySearchResult[];
+  targets: readonly MemorySearchChannelTargets[];
+}): Promise<MemorySearchChannelRead | undefined> {
+  if (
+    resolveEffectiveSessionToolsVisibility(params) !== "channel" ||
+    !params.hits.some((hit) => hit.source === "sessions")
+  ) {
+    return undefined;
+  }
+  if (!params.requesterSessionKey) {
+    throw new Error("Session transcript disclosure requires a requesting session.");
+  }
+  const sessionHits = params.hits.filter((hit) => hit.source === "sessions");
+  const aliases = new Map(params.targets.map((target) => [target.hit, target.aliases]));
+  const prepared: PreparedSessionTranscriptChannelRead = await prepareSessionTranscriptChannelRead({
+    cfg: params.cfg,
+    requesterAgentId: params.agentId,
+    requesterSessionKey: params.requesterSessionKey,
+    sandboxed: params.sandboxed,
+    groups: sessionHits.map((hit) => aliases.get(hit) ?? []),
+  });
+  return { ...prepared, sessionHits };
+}
 
 function isSameStoredTranscript(
   anchor: SessionStore[string] | undefined,
@@ -147,6 +193,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   conversationRecall?: ConversationRecallContext;
   /** Trusted control-plane calls may authorize only hits already scoped to this agent. */
   trustedAgentScope?: boolean;
+  /** Query-local descriptive identities, captured before other corpora can delay disclosure. */
+  captureChannelTargets?: (targets: readonly MemorySearchChannelTargets[]) => void;
 }): Promise<MemorySearchResult[]> {
   // Session visibility owns transcript hits only. Loading the catalog here for
   // memory-only results decodes every saved session prompt on the Gateway loop.
@@ -190,28 +238,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : [];
   const archivedSessionsByName = new Map(archives.map((archive) => [archive.archiveName, archive]));
-  const guard = params.requesterSessionKey
-    ? await createSessionVisibilityGuard({
-        action: "history",
-        requesterSessionKey: params.requesterSessionKey,
-        requesterAgentId,
-        mainSessionKey:
-          requesterAgentId &&
-          (!params.sandboxed || resolveSandboxSessionToolsVisibility(params.cfg) === "all")
-            ? resolveCanonicalMainSessionKey({
-                agentId: requesterAgentId,
-                mainKey: params.cfg.session?.mainKey,
-                sessionScope: params.cfg.session?.scope,
-              })
-            : undefined,
-        visibility,
-        a2aPolicy,
-      })
-    : null;
-
   const conversationRecall = params.conversationRecall;
   const trustedAgentScope = Boolean(
-    params.trustedAgentScope && scopedAgentId && !params.requesterSessionKey && !conversationRecall,
+    visibility !== "channel" &&
+    params.trustedAgentScope &&
+    scopedAgentId &&
+    !params.requesterSessionKey &&
+    !conversationRecall,
   );
   if (!params.requesterSessionKey && !trustedAgentScope) {
     return conversationRecall?.corpus === "sessions"
@@ -220,6 +253,9 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   }
   const anchorSessionKey = conversationRecall?.anchorSessionKey.trim();
   const sessionKeys = new Set(archives.map((archive) => archive.sessionKey));
+  if (visibility === "channel" && params.requesterSessionKey) {
+    sessionKeys.add(params.requesterSessionKey);
+  }
   if (anchorSessionKey) {
     sessionKeys.add(anchorSessionKey);
   }
@@ -246,14 +282,58 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       sessionIds.add(parsedId);
     }
   }
+  const sessionSelection = {
+    agentId: scopedAgentId,
+    sessionKeys: [...sessionKeys],
+    sessionIds: [...sessionIds],
+  };
+  const guard =
+    visibility !== "channel" && params.requesterSessionKey
+      ? await createSessionVisibilityGuard({
+          action: "history",
+          requesterSessionKey: params.requesterSessionKey,
+          requesterAgentId,
+          mainSessionKey:
+            requesterAgentId &&
+            (!params.sandboxed || resolveSandboxSessionToolsVisibility(params.cfg) === "all")
+              ? resolveCanonicalMainSessionKey({
+                  agentId: requesterAgentId,
+                  mainKey: params.cfg.session?.mainKey,
+                  sessionScope: params.cfg.session?.scope,
+                })
+              : undefined,
+          visibility,
+          a2aPolicy,
+        })
+      : null;
+
   const { store: combinedSessionStore, storePath } = await loadMemorySearchSessionStore(
     params.cfg,
-    {
-      agentId: scopedAgentId,
-      sessionKeys: [...sessionKeys],
-      sessionIds: [...sessionIds],
-    },
+    sessionSelection,
   );
+  const currentChannelRowForSession = (key: string) => {
+    const entry = combinedSessionStore[key];
+    return entry
+      ? {
+          key,
+          chatType: entry.chatType,
+          space: entry.space,
+          origin: sessionDeliveryOrigin(entry),
+          deliveryContext: deliveryContextFromSession(entry),
+        }
+      : undefined;
+  };
+  const channelRowChecker =
+    visibility === "channel" && params.requesterSessionKey
+      ? createSessionVisibilityRowChecker({
+          action: "history",
+          requesterSessionKey: params.requesterSessionKey,
+          requesterAgentId,
+          visibility,
+          a2aPolicy,
+          requesterChannelRow: currentChannelRowForSession(params.requesterSessionKey),
+        })
+      : null;
   const recallAgentId = anchorSessionKey
     ? resolveSessionAgentIdStrict({ sessionKey: anchorSessionKey, config: params.cfg })
     : undefined;
@@ -277,6 +357,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   };
   const recallAuthorized = Boolean(
     conversationRecall &&
+    visibility !== "channel" &&
     !params.sandboxed &&
     conversationRecall.scope === "same-agent-private" &&
     (conversationRecall.corpus === "sessions" || conversationRecall.corpus === "configured") &&
@@ -313,7 +394,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
         scopedAgentId && isGlobalSessionKeyForSharedScope(params.cfg, key)
           ? `agent:${scopedAgentId}:global`
           : key;
-      return trustedAgentScope || guard?.check(visibilityKey).allowed === true;
+      return (
+        trustedAgentScope ||
+        (channelRowChecker
+          ? channelRowChecker.check({ ...currentChannelRowForSession(key), key: visibilityKey })
+              .allowed
+          : guard?.check(visibilityKey).allowed === true)
+      );
     }
     const candidateEntry = combinedSessionStore[key];
     // Canonical and legacy alias keys can identify one transcript. Exclude the
@@ -337,23 +424,29 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     });
   };
 
+  const expandRecallAliasKeys = (keys: string[]): string[] => {
+    // The narrowed store includes every alias for each selected transcript ID.
+    const expanded = new Set(keys);
+    for (const key of keys) {
+      for (const [candidateKey, candidateEntry] of Object.entries(combinedSessionStore)) {
+        if (isSameStoredTranscript(combinedSessionStore[key], candidateEntry)) {
+          expanded.add(candidateKey);
+        }
+      }
+    }
+    return [...expanded];
+  };
+
   const areSessionKeysAllowed = (keys: string[], allowAnchorTranscript = false): boolean => {
     // Product recall fails closed when aliases disagree about privacy. Ordinary
     // session-tool visibility keeps its existing any-visible-alias behavior.
-    if (!conversationRecall) {
-      return keys.some((key) => isSessionKeyAllowed(key));
-    }
-    return (
-      keys.every((key) => isSessionKeyAllowed(key, allowAnchorTranscript)) &&
-      Object.entries(combinedSessionStore).every(
-        ([key, candidate]) =>
-          !keys.some((source) => isSameStoredTranscript(combinedSessionStore[source], candidate)) ||
-          isSessionKeyAllowed(key, allowAnchorTranscript),
-      )
-    );
+    return conversationRecall || visibility === "channel"
+      ? expandRecallAliasKeys(keys).every((key) => isSessionKeyAllowed(key, allowAnchorTranscript))
+      : keys.some((key) => isSessionKeyAllowed(key));
   };
 
   const next: MemorySearchResult[] = [];
+  const channelTargets: MemorySearchChannelTargets[] = [];
   for (const hit of params.hits) {
     if (hit.source !== "sessions") {
       if (!conversationRecall || conversationRecall.corpus === "configured") {
@@ -363,6 +456,11 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     }
     const identity = identities.get(hit.path);
     if (!identity) {
+      continue;
+    }
+    // A reused live key cannot prove an archived transcript's former channel.
+    // Keep archives out until their own immutable route facts are available.
+    if (visibility === "channel" && identity.archived) {
       continue;
     }
     const archiveReason = readSessionArchiveReasonFromHitPath(hit.path);
@@ -433,7 +531,36 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!allowed) {
       continue;
     }
+    if (visibility === "channel") {
+      const requesterEntry = params.requesterSessionKey
+        ? combinedSessionStore[params.requesterSessionKey]
+        : undefined;
+      const crossSession = !keys.some(
+        (key) =>
+          key === params.requesterSessionKey ||
+          isSameStoredTranscript(requesterEntry, combinedSessionStore[key]),
+      );
+      // Channel authorization is an owner-held final-disclosure capability, not
+      // a reusable predicate result. Consumers that cannot carry that capability
+      // may keep self-transcript and ordinary memory results, but must fail closed
+      // for sibling transcript snippets and citations.
+      if (crossSession && !params.captureChannelTargets) {
+        continue;
+      }
+      if (params.captureChannelTargets) {
+        channelTargets.push({
+          hit,
+          aliases: expandRecallAliasKeys(keys).map((key) => ({
+            key,
+            agentId: scopedAgentId ?? requesterAgentId ?? "",
+            expectedSessionId: combinedSessionStore[key]?.sessionId ?? "",
+            storePath,
+          })),
+        });
+      }
+    }
     next.push(hit);
   }
+  params.captureChannelTargets?.(channelTargets);
   return next;
 }
