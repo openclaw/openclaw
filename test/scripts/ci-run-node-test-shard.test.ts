@@ -317,7 +317,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       configs: ["test/vitest/vitest.infra.config.ts"],
       files: [
         "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
-        "src/agents/subagents/registry/subagent-control.accounting.test.ts",
         "src/agents/tools/sessions-send-communication.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/state/dreaming-startup-admission.test.ts",
@@ -359,11 +358,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       preset: "runtime",
     },
     {
-      configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
-      files: ["src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts"],
-      preset: "runtime",
-    },
-    {
       configs: ["test/vitest/vitest.runtime-config.config.ts"],
       files: ["src/config/io.load-async.test.ts"],
       preset: "runtime",
@@ -397,10 +391,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.agents-spawn-production-boundary.config.ts"],
-      files: [
-        "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
-        "unknown.test.ts",
-      ],
+      files: ["unknown.test.ts"],
       preset: "full",
     },
     {

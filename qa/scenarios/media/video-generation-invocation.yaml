@@ -24,8 +24,8 @@ scenario:
     - src/agents/tools/video-generate-tool.ts
     - src/video-generation/runtime.ts
     - src/media/store.ts
-    - src/agents/tools/video-generate-tool.storage.test.ts
+    - src/agents/tools/video-generate-tool.test.ts
   execution:
     kind: vitest
-    path: src/agents/tools/video-generate-tool.storage.test.ts
+    path: src/agents/tools/video-generate-tool.test.ts
     summary: Run video_generate through deterministic prepared providers, capability fallback, provider option validation, and real media persistence.

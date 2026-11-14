@@ -2186,8 +2186,6 @@
     "src/agents/model-fallback.run-embedded.e2e.test.ts": 9,
     "src/agents/sandbox-agent-config.agent-specific-sandbox-config.e2e.test.ts": 3,
     "src/agents/sandbox/fs-bridge.backend.e2e.test.ts": 1,
-    "src/agents/subagents/announce/subagent-announce.format.e2e.test.ts": 1,
-    "src/agents/subagents/registry/subagent-registry.archive.e2e.test.ts": 1,
     "src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts": 1,
     "src/agents/subagents/registry/subagent-registry.nested.e2e.test.ts": 1,
     "src/auto-reply/reply.triggers.trigger-handling.e2e.test.ts": 11,

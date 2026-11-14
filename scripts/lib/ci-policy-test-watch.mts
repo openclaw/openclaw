@@ -450,7 +450,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
-    "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
@@ -517,17 +516,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/process/spawn-broker/worker.ts"],
   })),
   {
-    testFile: "src/agents/subagents/registry/subagent-control.publication.test.ts",
-    watchGlobs: [
-      "src/agents/subagents/registry/subagent-registry.store.worker.ts",
-      "src/config/sessions/session-cold-storage-worker.ts",
-      "src/config/sessions/session-entry-read.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
-  {
     testFile: "src/agents/subagents/registry/subagent-reset.lifecycle.test.ts",
     watchGlobs: [
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
@@ -535,10 +523,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/config/sessions/session-transcript.worker.ts",
       "src/state/openclaw-state.worker.ts",
     ],
-  },
-  {
-    testFile: "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
-    watchGlobs: ["src/state/openclaw-state.worker.ts"],
   },
   ...[
     "src/agents/workspace-state-read.worker.test.ts",
@@ -578,15 +562,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state.worker.ts",
     ],
   })),
-  {
-    testFile: "src/agents/worktrees/service.canonical-paths.test.ts",
-    watchGlobs: [
-      "src/agents/worktrees/git-worktree-operations.runtime.ts",
-      "src/agents/worktrees/registry-read.worker.ts",
-      "src/infra/git-operation.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
   ...[
     "src/auto-reply/reply/commands-login.consent.test.ts",
     "src/auto-reply/reply/commands-login.test.ts",

@@ -32,7 +32,6 @@ whether any removable overhead remains.
 
 | File                                                                            | Selections / 300 | Case-seconds / 100 |
 | ------------------------------------------------------------------------------- | ---------------: | -----------------: |
-| `src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts`         |               14 |            513.427 |
 | `src/commands/agent.test.ts`                                                    |               21 |            477.414 |
 | `src/config/sessions/session-history-eviction.test.ts`                          |               21 |            198.758 |
 | `src/agents/prepared-model-catalog-worker.pool.integration.test.ts`             |               14 |            132.309 |

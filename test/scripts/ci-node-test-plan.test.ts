@@ -3716,8 +3716,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
       "src/plugin-sdk/session-transcript-runtime.test.ts",
       "src/agents/sessions/sdk.auth-migration.test.ts",
-      "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
-      "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
       "src/agents/tools/swarm-tools.integration.test.ts",
       "src/config/sessions/disk-budget.physical-usage.test.ts",
     ]) {

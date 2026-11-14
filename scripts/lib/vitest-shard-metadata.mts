@@ -287,7 +287,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/worktrees/service.gc.test.ts", 41],
   ["src/agents/worktrees/service.test.ts", 43],
   ["src/agents/worktrees/service.input-files.test.ts", 21],
-  ["src/agents/worktrees/service.canonical-paths.test.ts", 17],
   ["src/agents/worktrees/service.remove-lease.test.ts", 16],
   ["src/agents/sessions/agent-session-code-mode-source.test.ts", 28],
   ["src/agents/worktrees/run-lease.test.ts", 13],
@@ -297,11 +296,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/command/attempt-execution.cli.test.ts", 14],
   ["src/agents/harness/selection.test.ts", 10],
   ["src/agents/runtime-plan/prepare-auth.test.ts", 11],
-  ["src/agents/subagents/registry/subagent-control.retirement.test.ts", 10],
-  ["src/agents/subagents/spawn/subagent-spawn.authority.test.ts", 10],
   ["src/agents/worktrees/service.capacity.test.ts", 19],
-  ["src/agents/worktrees/service.diagnostics.test.ts", 18],
-  ["src/agents/worktrees/service.provisioned.test.ts", 24],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).

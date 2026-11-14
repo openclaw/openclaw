@@ -4,9 +4,7 @@ import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths
 
 const agentsRoot = "src/agents";
 const embeddedRoot = `${agentsRoot}/embedded-agent-runner`;
-const spawnProductionBoundaryFiles = [
-  "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
-];
+const spawnProductionBoundaryFiles = [];
 
 // These suites mock shared runtime, network, or plugin modules and cannot
 // share the non-isolated core worker without leaking module state.
@@ -25,7 +23,6 @@ const coreIsolatedFiles = [
   "src/agents/model-auth.plugin-scope.test.ts",
   "src/agents/model-selection.plugin-runtime.test.ts",
   "src/agents/subagents/announce/subagent-announce.test.ts",
-  "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
   "src/agents/subagents/registry/subagent-registry-requester-wake-commit.test.ts",
 ];
 const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.classification.test.ts`];
