@@ -603,13 +603,58 @@ function formatIssuePath(path: PropertyKey[]): string {
     .join("")}`;
 }
 
+/**
+ * Zod collapses a failed union into a single valueless "Invalid input" issue and nests each
+ * branch's field-level reasons under `issue.errors`. Template MCP declarations are a union of the
+ * stdio and remote shapes, so a declaration matching neither reported only
+ * `$.mcpServers.<name>: Invalid input`. Returns the issues of the branch that got furthest through
+ * the schema (uniquely the fewest), or null when no branch is the clear match so the caller keeps
+ * the union-level diagnostic instead of guessing which shape the author meant.
+ */
+function closestUnionBranchIssues(issue: z.core.$ZodIssue): z.core.$ZodIssue[] | null {
+  if (issue.code !== "invalid_union") {
+    return null;
+  }
+  let closest: z.core.$ZodIssue[] | null = null;
+  for (const branch of issue.errors) {
+    if (branch.length === 0) {
+      return null;
+    }
+    if (closest === null || branch.length < closest.length) {
+      closest = branch;
+    } else if (branch.length === closest.length) {
+      return null;
+    }
+  }
+  return closest;
+}
+
+/** Flattens union branch issues into their full manifest paths, keeping other issues as-is. */
+function locatedIssues(error: z.ZodError): { path: PropertyKey[]; message: string }[] {
+  const located: { path: PropertyKey[]; message: string }[] = [];
+  for (const issue of error.issues) {
+    const branchIssues = closestUnionBranchIssues(issue);
+    if (!branchIssues) {
+      located.push({ path: issue.path, message: issue.message });
+      continue;
+    }
+    for (const branchIssue of branchIssues) {
+      located.push({
+        path: [...issue.path, ...branchIssue.path],
+        message: branchIssue.message,
+      });
+    }
+  }
+  return located;
+}
+
 function diagnosticsFromZodError(error: z.ZodError): TemplateDiagnostic[] {
-  return error.issues.map((issue) => ({
+  return locatedIssues(error).map(({ path, message }) => ({
     level: "error",
     code: "invalid_manifest",
     phase: "schema",
-    path: formatIssuePath(issue.path),
-    message: issue.message,
+    path: formatIssuePath(path),
+    message,
   }));
 }
 
