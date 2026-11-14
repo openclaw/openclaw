@@ -68,11 +68,18 @@ suite.define(() => {
         await page.keyboard.press("Escape");
       }
       const thread = page.locator(".chat-thread");
-      await thread.focus();
-      await page.keyboard.press("ControlOrMeta+A");
-      const allText = await selection();
-      await thread.dblclick({ position: { x: 100, y: 400 } });
-      expect.soft(await selection(), "blank double-click preserves the native range").toBe(allText);
+      const bounds = await thread.boundingBox();
+      if (!bounds) {
+        throw new Error("Transcript has no visible bounds");
+      }
+      for (const x of [70, bounds.width - 30]) {
+        await thread.focus();
+        await page.keyboard.press("ControlOrMeta+A");
+        expect(await selection()).toContain(prompt);
+        expect(await selection()).toContain(reply);
+        await thread.click({ position: { x, y: 400 } });
+        expect.soft(await selection(), "clicking either blank side clears selection").toBe("");
+      }
       const from = await user.boundingBox();
       const outside = await page.locator(".agent-chat__composer-combobox textarea").boundingBox();
       if (!from || !outside) {

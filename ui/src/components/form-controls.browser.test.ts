@@ -751,7 +751,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           ],
           "userSelect",
         ),
-      ).toEqual(["none", "text", "auto", "text", "none", "none"]);
+      ).toEqual(["text", "text", "auto", "text", "none", "none"]);
       expect(
         await readStyles(
           page,
