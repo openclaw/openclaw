@@ -29,7 +29,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 describe("prepareWorkerGitHubEnvironment", () => {
   const remoteUrl = "https://github.com/openclaw/worker-fixture.git";
   const binding = {
-    token: "worker-checkout-synthetic-token",
+    token: "worker-checkout-fixture-value",
     login: "worker-fixture",
     branch: "openclaw/session-fixture",
     remoteUrl,
@@ -180,45 +180,43 @@ describe("prepareWorkerGitHubEnvironment", () => {
   });
 
   it("keeps non-GitHub credential helpers while using the managed GitHub identity", async () => {
-    const forgejoCredentials = path.join(root, "forgejo.credentials");
-    await fs.writeFile(
-      forgejoCredentials,
-      "https://forgejo-fixture:forgejo-synthetic-secret@forgejo.example\n",
-      { mode: 0o600 },
-    );
+    const forgejoHelper = "printf 'forgejo-helper-invoked\\n' >&2";
     await git(
       root,
       "config",
       "--global",
       "credential.https://forgejo.example.helper",
-      `store --file=${forgejoCredentials}`,
+      `!${forgejoHelper}`,
     );
 
     const prepared = await prepare();
     if (!prepared) {
       throw new Error("Expected a turn-owned GitHub profile");
     }
-    const fill = async (host: string) => {
-      const result = await exec.runExec("git", ["credential", "fill"], {
+    // This helper records invocation only; it never supplies or stores credentials.
+    const env = {
+      ...process.env,
+      ...prepared.localIdentityEnv,
+      ...prepared.credentialScrubEnv,
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    await expect(
+      exec.runExec("git", ["credential", "fill"], {
         timeoutMs: 10_000,
         logOutput: false,
-        input: `protocol=https\nhost=${host}\n\n`,
-        env: {
-          ...process.env,
-          ...prepared.localIdentityEnv,
-          ...prepared.credentialScrubEnv,
-        },
-      });
-      return result.stdout;
-    };
+        input: "protocol=https\nhost=forgejo.example\n\n",
+        env,
+      }),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("forgejo-helper-invoked") });
 
-    const forgejo = await fill("forgejo.example");
-    expect(forgejo).toContain("username=forgejo-fixture");
-    expect(forgejo).toContain("password=forgejo-synthetic-secret");
-
-    const github = await fill("github.com");
-    expect(github).toContain("password=worker-checkout-synthetic-token");
-    expect(github).not.toContain("forgejo-synthetic-secret");
+    const githubHelpers = await exec.runExec(
+      "git",
+      ["config", "--get-all", "credential.https://github.com.helper"],
+      { timeoutMs: 10_000, logOutput: false, env },
+    );
+    expect(githubHelpers.stdout.split(/\r?\n/).filter(Boolean)).toEqual([
+      "!gh auth git-credential",
+    ]);
     await disposeWorkerGitHubEnvironment(path.join(root, "state"), "turn");
   });
 
