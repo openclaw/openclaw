@@ -3,10 +3,11 @@
  * Run on each revision with Node 26:
  * node --import ./scripts/tsx.mjs scripts/perf/web-push-measure.ts --mode prepare --fanout 16
  * Modes: prepare (request crypto, no network), allocation (separate sampled-allocation pass),
- * https (real local HTTPS sends). Use five interleaved revision pairs, --iterations 2000
+ * https (real local HTTPS sends; requires OpenSSL). Use five interleaved revision pairs, --iterations 2000
  * for preparation/allocation and --iterations 1600 for HTTPS (100 batches of 16).
  * Reports caller-blocked time separately from delivery latency; no Gateway-wide claims.
  */
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import https from "node:https";
@@ -17,7 +18,6 @@ import { PerformanceObserver, performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import webPush from "web-push";
 import { prepareWebPushNotificationSender } from "../../src/infra/push-web.js";
-import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 
 const { values } = parseArgs({
   options: {
@@ -46,17 +46,14 @@ process.env.OPENCLAW_VAPID_SUBJECT = "mailto:synthetic@example.com";
 const originalSend = webPush.sendNotification;
 const originalAgent = https.globalAgent;
 let received = 0;
-const server = https.createServer(
-  { key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM },
-  (request, response) => {
-    request.resume();
-    request.on("end", () => {
-      received++;
-      response.writeHead(201);
-      response.end();
-    });
-  },
-);
+const server = https.createServer((request, response) => {
+  request.resume();
+  request.on("end", () => {
+    received++;
+    response.writeHead(201);
+    response.end();
+  });
+});
 const inspector = new Session();
 const gc: number[] = [];
 const observer = new PerformanceObserver((list) => {
@@ -67,6 +64,31 @@ const observer = new PerformanceObserver((list) => {
 try {
   let port = 41071;
   if (values.mode === "https") {
+    const keyPath = path.join(stateDir, "key.pem");
+    const certPath = path.join(stateDir, "cert.pem");
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-days",
+        "1",
+        "-subj",
+        "/CN=localhost",
+        "-addext",
+        "subjectAltName=IP:127.0.0.1",
+        "-keyout",
+        keyPath,
+        "-out",
+        certPath,
+      ],
+      { stdio: "ignore", timeout: 10_000 },
+    );
+    const [key, cert] = await Promise.all([fs.readFile(keyPath), fs.readFile(certPath)]);
+    server.setSecureContext({ key, cert });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", resolve);
@@ -76,8 +98,8 @@ try {
       throw new Error("Missing HTTPS listener address");
     }
     port = address.port;
-    // This agent is used only by this process's synthetic loopback requests.
-    https.globalAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
+    // Trust only the fresh loopback certificate; retain normal hostname and expiry checks.
+    https.globalAgent = new https.Agent({ ca: cert, keepAlive: true });
   } else {
     webPush.sendNotification = async (subscription, payload, options) => {
       if (typeof payload !== "string") {
