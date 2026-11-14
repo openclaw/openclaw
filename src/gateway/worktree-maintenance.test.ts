@@ -1,9 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { WorktreesGcResultSchema } from "../../packages/gateway-protocol/src/schema/worktrees.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
+import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
 import type { ManagedWorktreeGcResult, ManagedWorktreeRecord } from "../agents/worktrees/types.js";
@@ -182,23 +185,72 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
   };
 }
 
-it.each(["custody unavailable", "host IO pressure"])(
-  "still collects worktrees under %s",
-  async (reason) => {
-    if (reason === "host IO pressure") {
-      vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => true);
-    } else {
-      vi.mocked(prepareScratchMaintenanceTargets).mockRejectedValueOnce(new Error(reason));
-    }
-    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
-    await using fixture = maintenanceFixture();
-    const owner = fixture.start();
-    const receipt = owner.request();
-    await fixture.run();
-    expect(owner.request({ jobId: receipt.jobId }).state).toBe("completed");
+it.each([
+  ["custody unavailable", "completed"],
+  ["host IO pressure", "completed"],
+  ["host IO pressure", "partial"],
+] as const)("still collects worktrees under %s with a %s GC outcome", async (reason, outcome) => {
+  if (reason === "host IO pressure") {
+    vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => true);
+  } else {
+    vi.mocked(prepareScratchMaintenanceTargets).mockRejectedValueOnce(new Error(reason));
+  }
+  vi.spyOn(managedWorktrees, "gc").mockResolvedValue({ ...completedResult(), outcome });
+  await using fixture = maintenanceFixture();
+  const owner = fixture.start();
+  const receipt = owner.request();
+  await fixture.run();
+  expect(owner.request({ jobId: receipt.jobId }).state).toBe("completed");
+  if (reason === "host IO pressure") {
+    expect(fixture.onError).not.toHaveBeenCalled();
+    const result = fixture.onComplete.mock.calls[0]![0];
+    expect(result.scratchDeferred).toBe("host IO pressure");
+    expect(Value.Check(WorktreesGcResultSchema, result)).toBe(true);
+    expect(formatWorktreeGcResult(result)).toContain("scratch cleanup deferred: host IO pressure");
+    expect(result.outcome).toBe(outcome);
+    expect(owner.request({ jobId: receipt.jobId }).scratchDeferred).toBe("host IO pressure");
+  } else {
     expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(reason));
-  },
-);
+  }
+});
+
+it("preserves scratch progress when host IO pressure arrives between deletion batches", async () => {
+  const dirs = createTrackedTempDirs();
+  try {
+    const root = await fs.realpath(await dirs.make("worktree-maintenance-pressure-"));
+    const scratch = path.join(root, ".openclaw/tmp");
+    await fs.mkdir(scratch, { recursive: true });
+    for (let index = 0; index < 129; index++) {
+      const file = path.join(scratch, `${index}.txt`);
+      await fs.writeFile(file, "proof");
+      await fs.utimes(file, 1, 1);
+    }
+    vi.mocked(prepareScratchMaintenanceTargets).mockResolvedValueOnce({
+      targets: [{ root, kind: "checkout", isLive: () => false }],
+      release: () => {},
+    });
+    vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(
+      vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true),
+    );
+    await using fixture = maintenanceFixture();
+    fixture.clock.setTime(1_800_000_000_000);
+    fixture.start().request();
+    const running = fixture.run();
+    await vi.waitFor(() => expect(fixture.clock.armedAtMs).toBe(1_800_000_000_100));
+    await fixture.clock.advanceBy(100);
+    await running;
+    expect(fixture.onError).not.toHaveBeenCalled();
+    expect(fixture.onComplete).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        scratch: expect.objectContaining({ filesRemoved: 128, bytesRemoved: 640, errors: [] }),
+        scratchDeferred: "host IO pressure",
+      }),
+    );
+    expect(await fs.readdir(scratch)).toHaveLength(1);
+  } finally {
+    await dirs.cleanup();
+  }
+});
 
 function holdGc(repeat = false, onRun = () => {}) {
   const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();

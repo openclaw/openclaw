@@ -20,6 +20,7 @@ export function formatWorktreeGcResult(
       result.scratch &&
         `scratch (24 h): removed ${result.scratch.entriesRemoved} entries / ${result.scratch.bytesRemoved} bytes, skipped-live ${result.scratch.skippedLive}, deferred ${result.scratch.deferred}`,
       ...(result.scratch?.errors ?? []),
+      result.scratchDeferred && `scratch cleanup deferred: ${result.scratchDeferred}`,
       result.gitMaintenance &&
         `Git ${result.gitMaintenance.stage}: ${result.gitMaintenance.repoRoot}`,
       result.gitMaintenance?.packsBefore !== undefined &&
