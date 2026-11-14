@@ -510,18 +510,6 @@
     background: var(--chat-composer-surface, var(--popover));
   }
 
-  :root[data-theme-mode="dark"] .question-page .approval-page__state {
-    border-color: color-mix(in srgb, var(--text-strong) 9%, transparent);
-  }
-
-  :root[data-theme-mode="light"] .question-page .approval-page__state {
-    border-color: transparent;
-    box-shadow:
-      0 0 0 1px rgb(0 0 0 / 6%),
-      0 1px 2px -1px rgb(0 0 0 / 6%),
-      0 2px 4px rgb(0 0 0 / 4%);
-  }
-
   /* The chat dock caps this panel; on its own document the page is the one scroller. */
   .question-page .chat-question-panel:not(.chat-question-panel--collapsed) {
     gap: 10px;
@@ -529,17 +517,14 @@
     overflow-y: visible;
   }
 
-  /* The panel takes focus on load for its keys; on a document that isn't a state to draw. */
-  .question-page .chat-question-panel:focus-visible {
-    outline: none;
-  }
-
   /* Nothing sits under this panel, so collapsing it would only empty the page. */
   .question-page .chat-question-panel__collapse {
     display: none;
   }
 
-  .question-page .chat-question-panel__title {
+  .question-page
+    .chat-question-panel:not(.chat-question-panel--credential)
+    .chat-question-panel__title {
     color: var(--muted);
     font-weight: 500;
   }
@@ -586,6 +571,11 @@
 
   .question-page .chat-question-panel__footer {
     flex-wrap: wrap;
+  }
+
+  .question-page
+    .chat-question-panel:not(.chat-question-panel--credential)
+    .chat-question-panel__footer {
     justify-content: flex-start;
   }
 
@@ -597,7 +587,10 @@
   }
 
   /* Answer first; taking the free width holds Skip still while the label changes. */
-  .question-page .chat-question-panel__footer .chat-question-panel__advance {
+  .question-page
+    .chat-question-panel:not(.chat-question-panel--credential)
+    .chat-question-panel__footer
+    .chat-question-panel__advance {
     flex: 1 1 auto;
     order: -1;
   }

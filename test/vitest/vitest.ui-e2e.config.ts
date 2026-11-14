@@ -95,6 +95,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/presentation-primitives.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
+  "ui/src/e2e/question-secrets.real-gateway.e2e.test.ts",
   "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/required-human-action.real-gateway.e2e.test.ts",

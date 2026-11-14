@@ -49,11 +49,38 @@ export async function sendQuestionToolPrompt(params: {
       return;
     }
     const controlUiBase = resolveControlUiSessionLinkBase(params.config);
-    const text = controlUiBase
-      ? `🔑 Agent requests credential ${binding.name} (${binding.kind}). Reply is disabled for secrets — open to provide it: ${controlUiBase}/ask/${encodeURIComponent(questionId)}`
-      : "Credential request unavailable here: no reachable Control UI link. Open a trusted Control UI or native app and retry, or ask the operator to enable Control UI and configure gateway.publicOrigin. Never send credentials in chat.";
-    // Correlation keeps this durable without adding answer controls or a plaintext claim.
-    await send({ text, channelData: { askUser: { questionId } } });
+    const url = controlUiBase
+      ? `${controlUiBase}/ask/${encodeURIComponent(questionId)}`
+      : undefined;
+    const prompt = [
+      binding.name,
+      ...(binding.reason ? [binding.reason] : []),
+      "Enter the value in the form, not in chat.",
+      ...(controlUiBase ? [`${new URL(controlUiBase).host} · Gateway sign-in required.`] : []),
+    ].join("\n\n");
+    const text = url
+      ? `${prompt}\n\nOpen form: ${url}`
+      : "No credential form link is configured. Retry in a trusted Control UI or native app, or use Settings or the masked CLI. Never paste credentials in chat.";
+    await send({
+      text,
+      ...(url
+        ? {
+            presentation: {
+              blocks: [
+                { type: "text" as const, text: prompt },
+                {
+                  type: "buttons" as const,
+                  buttons: [{ label: "Open form", action: { type: "url" as const, url } }],
+                },
+              ],
+            },
+            presentationTextMode: "fallback" as const,
+          }
+        : {}),
+      // Navigation does not answer the request. Correlation lets the existing
+      // channel lifecycle owner retire the form button after resolution.
+      channelData: { askUser: { questionId } },
+    });
     if (!controlUiBase) {
       // A visible blocker is not a delivered entry form; cancel the pending wait.
       throw new QuestionPromptUnavailableError(text);

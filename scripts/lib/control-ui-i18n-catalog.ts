@@ -76,6 +76,7 @@ import { registerPreferencesEnglish } from "../../ui/src/i18n/locales/en-prefere
 import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
 import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
+import { registerQuestionStoreEnglish } from "../../ui/src/i18n/locales/en-question-store.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
@@ -157,6 +158,7 @@ const sourceFiles = [
   "en-chat-provider-review.ts",
   "en-chat-public-qr.ts",
   "en-chat-questions.ts",
+  "en-question-store.ts",
   "en-chat-session.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
@@ -599,7 +601,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
         toolCards,
         systemNotice: registerChatMessageMetadataEnglish.catalog.chat.systemNotice,
-        questions: registerChatQuestionsEnglish.catalog.chat.questions,
+        questions: {
+          ...registerChatQuestionsEnglish.catalog.chat.questions,
+          ...registerQuestionStoreEnglish.catalog.chat.questions,
+        },
         imageLightbox: registerChatMediaEnglish.catalog.chat.imageLightbox,
         mediaPlayer: registerChatMediaEnglish.catalog.chat.mediaPlayer,
         attachments: registerChatComposerEnglish.catalog.chat.attachments,

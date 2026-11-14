@@ -203,7 +203,10 @@ function FreeTextControl(props: FreeTextControlProps) {
             class={props.class}
             type={revealed() ? "text" : "password"}
             autocomplete="off"
+            autocapitalize="none"
+            autocorrect="off"
             spellcheck="false"
+            enterkeyhint="done"
             placeholder={props.placeholder}
             aria-label={props.label}
             value={props.value}
@@ -238,7 +241,10 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
           <>
             {props.question.options.length === 0 ? (
               <div class="field">
-                <label for={inputId}>
+                <label
+                  for={inputId}
+                  class={{ "sr-only": props.question.secretStore?.kind === "secret" }}
+                >
                   <span>{answerLabel()}</span>
                 </label>
                 <FreeTextControl
@@ -246,7 +252,7 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
                   id={inputId}
                   class="input"
                   placeholder={t("chat.questions.answerPlaceholder", {
-                    label: props.question.secretStore?.name ?? answerLabel(),
+                    label: answerLabel(),
                   })}
                 />
               </div>

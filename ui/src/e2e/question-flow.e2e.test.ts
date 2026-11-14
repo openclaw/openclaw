@@ -1,6 +1,7 @@
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import { normalizeSecretsRequestParams } from "../../../src/agents/tools/secrets-tool.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
@@ -71,17 +72,12 @@ async function newPage(viewport = { height: 900, width: 1440 }, hasTouch = false
 
 function secretStoreQuestion(id: string) {
   return questionRecord(id, {
-    questionId: "api_key",
-    header: "API key",
-    question: "Provide the deployment API key",
-    options: [],
-    isSecret: true,
-    secretStore: {
+    ...normalizeSecretsRequestParams({
+      action: "request",
       name: "DEPLOY_API_KEY",
-      kind: "secret",
       allowedHosts: ["api.example.test"],
       reason: "Publish the release artifacts.",
-    },
+    }).questions[0],
     secretStoreExisting: {
       updatedAtMs: Date.now() - 60_000,
       updatedBy: "release-operator",
@@ -90,7 +86,7 @@ function secretStoreQuestion(id: string) {
 }
 
 function storedSecretAnswer(): QuestionResolveResult {
-  return { status: "answered", answers: { answers: { api_key: ["stored"] } } };
+  return { status: "answered", answers: { answers: { secret_value: ["stored"] } } };
 }
 
 function historyMessages() {
@@ -198,7 +194,10 @@ async function showQuestion(
   request: ReturnType<typeof questionRecord>,
 ) {
   await gateway.emitGatewayEvent("question.requested", request);
-  const panel = panelFor(page, request.questions[0]!.question);
+  const panel = panelFor(
+    page,
+    request.questions[0]!.secretStore?.name ?? request.questions[0]!.question,
+  );
   await panel.waitFor();
   return panel;
 }
@@ -577,7 +576,11 @@ suite.define(() => {
       status: "answered",
       answers,
     } satisfies QuestionResolveResult);
-    await panel.getByRole("radio", { name: /Staging \(Recommended\)/ }).click();
+    const selected = panel.getByRole("radio", { name: /Staging \(Recommended\)/ });
+    await selected.click();
+    await selected.hover();
+    await expectCount(selected.locator(".oc-radio[data-checked]"), 1);
+    expect(await selected.getAttribute("aria-checked")).toBe("true");
     await button(panel, "Submit").click();
     await expectResolution(gateway, { id: request.id, answers });
 
@@ -635,14 +638,24 @@ suite.define(() => {
       __mockError: { code: "INVALID_REQUEST", message: validationMessage },
     });
     const panel = await showQuestion(page, gateway, request);
-    await expectCount(panel.getByText("Requested by main", { exact: false }), 1);
+    await expectCount(panel.locator('.agent-row-chip[data-agent-id="main"]'), 1);
     await expectCount(panel.getByText("Publish the release artifacts."), 1);
-    await expectCount(panel.getByText("Replaces DEPLOY_API_KEY", { exact: false }), 1);
+    await expectCount(panel.getByText("Replaces the saved value", { exact: false }), 1);
     const secretInput = panel.getByLabel("API key", { exact: true });
     await expectCount(secretInput, 1);
     expect(await secretInput.getAttribute("type")).toBe("password");
     expect(await secretInput.getAttribute("autocomplete")).toBe("off");
-    expect(await secretInput.getAttribute("placeholder")).toBe("DEPLOY_API_KEY");
+    expect(await secretInput.getAttribute("autocapitalize")).toBe("none");
+    expect(await secretInput.getAttribute("autocorrect")).toBe("off");
+    const details = button(panel, "Credential details");
+    await details.focus();
+    await details.press("Enter");
+    const metadata = page.getByRole("dialog", { name: "Credential details", exact: true });
+    await metadata.getByText("Saved outside chat. The agent cannot read the value.").waitFor();
+    await page.keyboard.press("Escape");
+    await expectFocused(details);
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+    expect(await secretInput.getAttribute("placeholder")).toBe("API key");
     await expectCount(panel.locator('[role="radiogroup"]'), 0);
     const hostsInput = panel.locator(".chat-question-panel__hosts");
     expect(await hostsInput.inputValue()).toBe("api.example.test");
@@ -664,7 +677,7 @@ suite.define(() => {
     await expectSecretInput(secretInput, "password", fakeSecret);
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
 
-    await button(panel, "Submit").click();
+    await button(panel, "Save credential").click();
     await gateway.waitForRequest("question.resolve");
     await panel.getByText(validationMessage, { exact: false }).waitFor();
     await expect.poll(() => secretInput.isEnabled()).toBe(true);
@@ -674,12 +687,12 @@ suite.define(() => {
     await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
     await hostsInput.fill("corrected.example.test, uploads.example.test extra.example.test");
     const previousRequestCount = (await gateway.getRequests("question.resolve")).length;
-    await button(panel, "Submit").click();
+    await button(panel, "Save credential").click();
     await expectResolution(
       gateway,
       {
         id: request.id,
-        answers: { answers: { api_key: [fakeSecret] } },
+        answers: { answers: { secret_value: [fakeSecret] } },
         secretStoreAllowedHosts: [
           "corrected.example.test",
           "uploads.example.test",
@@ -696,56 +709,65 @@ suite.define(() => {
     await expectSecretNotEchoed(page, fakeSecret);
   });
 
-  it("loads a mounted /ask document and resolves its secret through the shared question card", async () => {
-    const page = await newPage();
-    const request = secretStoreQuestion("question-store-secret-deep-link");
-    const fakeSecret = "fake-secret-never-use-deep-link-proof-789";
-    const gateway = await installMockGateway(page, {
-      basePath: "/operator",
-      featureMethods: ["question.get", "question.resolve"],
-      methodResponses: {
-        "question.get": { question: request },
-        "question.resolve": storedSecretAnswer(),
-      },
-    });
-    const documentUrl = new URL(
-      `operator/ask/${encodeURIComponent(request.id)}`,
-      suite.server.baseUrl,
-    );
-    await page.goto(documentUrl.toString());
-    const getRequest = await gateway.waitForRequest("question.get");
-    expect(getRequest.params).toEqual({ id: request.id });
+  it.each([
+    { height: 900, width: 1440 },
+    { height: 844, width: 390 },
+  ])(
+    "loads a mounted /ask document and resolves its secret through the shared question card at $width px",
+    async (viewport) => {
+      const page = await newPage(viewport);
+      const request = secretStoreQuestion("question-store-secret-deep-link");
+      const fakeSecret = "fake-secret-never-use-deep-link-proof-789";
+      const gateway = await installMockGateway(page, {
+        basePath: "/operator",
+        featureMethods: ["question.get", "question.resolve"],
+        methodResponses: {
+          "question.get": { question: request },
+          "question.resolve": storedSecretAnswer(),
+        },
+      });
+      const documentUrl = new URL(
+        `operator/ask/${encodeURIComponent(request.id)}`,
+        suite.server.baseUrl,
+      );
+      await page.goto(documentUrl.toString());
+      const getRequest = await gateway.waitForRequest("question.get");
+      expect(getRequest.params).toEqual({ id: request.id });
 
-    const document = page.locator("openclaw-question-page");
-    await document.waitFor();
-    expect(await page.locator("openclaw-app-shell, openclaw-app-sidebar").count()).toBe(0);
-    const panel = document.locator("openclaw-chat-question-panel");
-    await panel.waitFor();
-    expect(await document.getByRole("heading", { level: 1 }).textContent()).toContain(
-      "Waiting for your answer",
-    );
-    expect(await page.title()).toBe("Waiting for your answer — OpenClaw");
-    const secretInput = panel.getByLabel("API key", { exact: true });
-    expect(await secretInput.getAttribute("type")).toBe("password");
-    await secretInput.fill(fakeSecret);
-    await expectSecretNotEchoed(page, fakeSecret, true);
-    await button(panel, "Show secret").click();
-    await expectSecretInput(secretInput, "text", fakeSecret);
-    await button(panel, "Submit").click();
+      const document = page.locator("openclaw-question-page");
+      await document.waitFor();
+      expect(await page.locator("openclaw-app-shell, openclaw-app-sidebar").count()).toBe(0);
+      const panel = document.locator("openclaw-chat-question-panel");
+      await panel.waitFor();
+      expect(await document.getByRole("heading", { level: 1 }).textContent()).toContain(
+        "DEPLOY_API_KEY",
+      );
+      expect(await page.title()).toBe("DEPLOY_API_KEY — OpenClaw");
+      const secretInput = panel.getByLabel("API key", { exact: true });
+      expect(await secretInput.getAttribute("type")).toBe("password");
+      await secretInput.fill(fakeSecret);
+      await expectSecretNotEchoed(page, fakeSecret, true);
+      await button(panel, "Show secret").click();
+      await expectSecretInput(secretInput, "text", fakeSecret);
+      await button(panel, "Save credential").click();
 
-    await expectResolution(gateway, {
-      id: request.id,
-      answers: { answers: { api_key: [fakeSecret] } },
-      secretStoreAllowedHosts: ["api.example.test"],
-    });
-    const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
-    await outcomeHeading.waitFor();
-    await expectFocused(outcomeHeading);
-    expect(await page.title()).toBe("Answered — OpenClaw");
-    expect(await document.textContent()).not.toContain(fakeSecret);
-    expect(await document.textContent()).not.toContain("stored");
-    expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
-  });
+      await expectResolution(gateway, {
+        id: request.id,
+        answers: { answers: { secret_value: [fakeSecret] } },
+        secretStoreAllowedHosts: ["api.example.test"],
+      });
+      const outcomeHeading = document.getByRole("heading", {
+        name: "Credential saved",
+        exact: true,
+      });
+      await outcomeHeading.waitFor();
+      await expectFocused(outcomeHeading);
+      expect(await page.title()).toBe("Credential saved — OpenClaw");
+      expect(await document.textContent()).not.toContain(fakeSecret);
+      expect(await document.textContent()).not.toContain("stored");
+      expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
+    },
+  );
 
   it("keeps a long /ask document on one scroller with reachable answers at phone width", async () => {
     const page = await newPage({ height: 844, width: 390 }, true);

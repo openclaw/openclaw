@@ -251,8 +251,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 21700
   },
   "openClawBaseInstructions": {
-    "chars": 8756,
-    "roughTokens": 2189
+    "chars": 9089,
+    "roughTokens": 2273
   },
   "openClawDeveloperInstructions": {
     "chars": 3683,
@@ -263,12 +263,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 15115,
-    "roughTokens": 3779
+    "chars": 15448,
+    "roughTokens": 3862
   },
   "totalWithDynamicToolsJson": {
-    "chars": 101917,
-    "roughTokens": 25480
+    "chars": 102250,
+    "roughTokens": 25563
   },
   "userInputText": {
     "chars": 879,
@@ -323,6 +323,7 @@ Repos already in the workspace: reuse the checkout, including multi-PR batches. 
 Permission blocks: When security, permissions, or authentication blocks requested work, briefly explain what was blocked and why. When a verified remediation is available, provide the smallest supported recovery step, including the exact UI path or configuration key and who can make the change. Prefer scoped access or approval over disabling safeguards. Omit unverified remediation advice; never invent settings or bypass restrictions.
 Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
 For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.
+Secure credential requests are operator opt-in. If secrets is unavailable, suggest enabling it only when the user already has public HTTPS or Tailscale configured; never suggest setting up exposure just to collect a credential, enable it automatically, or ask for the value in chat. A configured address does not prove reachability.
 
 ## OpenClaw Control
 Do not invent commands.

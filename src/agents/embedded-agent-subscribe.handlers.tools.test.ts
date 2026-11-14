@@ -419,18 +419,40 @@ describe("handleToolExecutionStart read path checks", () => {
           await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
           const payload = onToolResult.mock.calls[0]?.[0];
           if (available) {
-            expect(payload?.text).toBe(
-              `🔑 Agent requests credential TEST_API_KEY (secret). Reply is disabled for secrets — open to provide it: https://console.example.test/control/ask/${questionId}`,
+            expect(payload?.text).toContain("TEST_API_KEY");
+            expect(payload?.text).toContain("not in chat");
+            expect(payload?.text).toContain(
+              `https://console.example.test/control/ask/${questionId}`,
             );
+            expect(payload?.presentation).toMatchObject({
+              blocks: [
+                { type: "text", text: expect.stringContaining("console.example.test") },
+                {
+                  type: "buttons",
+                  buttons: [
+                    {
+                      label: "Open form",
+                      action: {
+                        type: "url",
+                        url: `https://console.example.test/control/ask/${questionId}`,
+                      },
+                    },
+                  ],
+                },
+              ],
+            });
+            expect(payload?.presentationTextMode).toBe("fallback");
           } else {
-            expect(payload?.text).toContain("Credential request unavailable here");
+            expect(payload?.text).toContain("No credential form link is configured");
             expect(payload?.text).toContain("Control UI or native app");
-            expect(payload?.text).toContain("retry");
-            expect(payload?.text).toContain("Never send credentials in chat");
+            expect(payload?.text).toContain("Retry");
+            expect(payload?.text).toContain("Never paste credentials in chat");
             expect(payload?.text).not.toMatch(/https?:/);
           }
           expect(payload?.channelData).toEqual({ askUser: { questionId } });
-          expect(payload).not.toHaveProperty("presentation");
+          if (!available) {
+            expect(payload).not.toHaveProperty("presentation");
+          }
           expect(payload).not.toHaveProperty("interactive");
           expect(payload?.text).not.toContain("Reply with your answer");
         }
@@ -451,11 +473,10 @@ describe("handleToolExecutionStart read path checks", () => {
             false,
           );
         } else {
-          await expect(outcome).resolves.toMatchObject({
-            error: expect.objectContaining({
-              message: expect.stringContaining("Open a trusted Control UI or native app and retry"),
-            }),
-          });
+          await expect(outcome).resolves.toHaveProperty(
+            "error.message",
+            expect.stringContaining("Retry in a trusted Control UI or native app"),
+          );
           expect(gatewayCall).toHaveBeenCalledWith(
             "question.resolve",
             { timeoutMs: 10_000 },

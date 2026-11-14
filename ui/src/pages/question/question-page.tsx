@@ -18,6 +18,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { registerChatQuestionsEnglish } from "../../i18n/locales/en-chat-questions.ts";
+import { registerQuestionStoreEnglish } from "../../i18n/locales/en-question-store.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -29,6 +30,7 @@ import { createGatewayQuestionPanelProps } from "../chat/components/chat-questio
 import { terminalAnswer } from "../chat/components/chat-question-summary.tsx";
 
 registerEnglishCatalog(registerChatQuestionsEnglish);
+registerEnglishCatalog(registerQuestionStoreEnglish);
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
@@ -232,6 +234,13 @@ function QuestionPageContent(
   }
 
   function questionStatusLabel(value: QuestionPrompt): string {
+    if (
+      value.status === "answered" &&
+      value.questions.length === 1 &&
+      value.questions[0]?.secretStore?.kind === "secret"
+    ) {
+      return t("chat.questions.storeSaved");
+    }
     return t(
       {
         answered: "chat.questions.answered",
@@ -282,7 +291,7 @@ function QuestionPageContent(
       }
       return value && value.status !== "pending"
         ? questionStatusLabel(value)
-        : t("chat.questions.eyebrow");
+        : (panelProps()?.model.title ?? t("chat.questions.eyebrow"));
     };
     createDocumentTitle(() => `${title()} — ${t("approvalPage.brandName")}`);
     createPendingFocus(title, {
@@ -342,6 +351,11 @@ function QuestionPageContent(
                         >
                           {questionStatusLabel(prompt())}
                         </h1>
+                        {prompt().status === "answered" &&
+                          prompt().questions.length === 1 &&
+                          prompt().questions[0]?.secretStore?.kind === "secret" && (
+                            <p>{t("chat.questions.storeDone")}</p>
+                          )}
                         <QuestionSummary prompt={prompt()} />
                       </div>
                     }
