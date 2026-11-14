@@ -118,7 +118,6 @@ Choose the narrowest proof that covers the touched surface:
 - `pnpm docs:list`
 - `pnpm docs:check-mdx`
 - `pnpm docs:check-links`
-- `pnpm docs:check-i18n-glossary`
 - `pnpm format:docs:check` or `pnpm lint:docs`
 - `git diff --check`
 - generated-doc or inventory checks when generated references, plugin catalogs,

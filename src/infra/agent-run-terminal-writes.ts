@@ -80,6 +80,21 @@ export function bindAgentRunTerminalWriteContext(
   current.context = context;
 }
 
+/**
+ * Run a transcript write that a live run produced outside its own async context (its message
+ * tool's delivery mirror) inside the run's bound write context, so the run's CLI history writer
+ * covers the row like the run's other rows. Without a current binding the write runs as before.
+ */
+export function runInAgentRunWriteContext<T>(runId: string | undefined, write: () => T): T {
+  const owner = runId ? getAgentRunContext(runId) : undefined;
+  const current = owner ? terminalWrites.get(owner) : undefined;
+  const context =
+    owner?.delegatedAuthority?.operationalRunInstance === current?.instance
+      ? current?.context
+      : undefined;
+  return context ? context.run(write) : write();
+}
+
 /** A new fallback candidate cannot borrow the preceding runtime's account context. */
 export function clearAgentRunTerminalWriteContext(instance: OperationalRunInstance): void {
   const owner = getAgentRunContext(instance.runId);

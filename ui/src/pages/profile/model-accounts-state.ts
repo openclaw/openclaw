@@ -238,7 +238,9 @@ export class ModelAccountsState {
       }
     } catch (error) {
       if (this.isCurrent(target, generation)) {
-        this.error = formatUiError(error, t("profilePage.modelAccounts.actionFailed"));
+        this.error = [t("profilePage.modelAccounts.actionFailed"), formatUiError(error)]
+          .filter(Boolean)
+          .join(" ");
       }
     } finally {
       if (this.isCurrent(target, generation)) {
@@ -337,7 +339,9 @@ export class ModelAccountsState {
   applyConnectStatus(result: UsersAuthConnectStatusResult) {
     if (result.status === "pending") {
       if (result.error) {
-        this.error = formatUiError(result.error);
+        this.error = [t("profilePage.modelAccounts.signInFailed"), formatUiError(result.error)]
+          .filter(Boolean)
+          .join(" ");
       }
       if (this.connectFlow) {
         if (this.connectFlow.step?.id !== result.step?.id) {
@@ -474,7 +478,9 @@ export class ModelAccountsState {
     } catch (error) {
       if (this.isCurrent(target, generation)) {
         this.statusUnavailable = true;
-        this.error = formatUiError(error, t("profilePage.modelAccounts.statusFailed"));
+        this.error = [t("profilePage.modelAccounts.statusFailed"), formatUiError(error)]
+          .filter(Boolean)
+          .join(" ");
         this.publish();
       }
     }

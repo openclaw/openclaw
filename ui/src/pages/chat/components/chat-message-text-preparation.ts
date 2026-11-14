@@ -3,7 +3,7 @@ import {
   MARKDOWN_PARSE_LIMIT,
   type MarkdownRenderOptions,
 } from "../../../components/markdown-render-options.ts";
-import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { partitionMarkdownHtml, toSanitizedMarkdownContent } from "../../../components/markdown.ts";
 import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
@@ -25,13 +25,11 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
-export function prepareMessageMarkdown(
+/** The rendered source and policy also govern lazy inline-image discovery. */
+export function resolveMessageMarkdownRender(
   markdown: string,
-  messageKey: string,
-  opts: MessageTextOptions,
+  opts: Pick<MessageTextOptions, "role" | "assistantMessageDisclosure">,
   markdownRenderOptions: MarkdownRenderOptions,
-  renderStreaming?: typeof toStreamingMarkdownDomParts,
-  mutableStreaming = false,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
   const isAssistant = opts.role === "assistant";
@@ -42,12 +40,33 @@ export function prepareMessageMarkdown(
   const options: MarkdownRenderOptions = recovered
     ? { ...markdownRenderOptions, mode: "document" }
     : markdownRenderOptions;
+  return { source, options, recoverFullMessage, recovered };
+}
+
+export function prepareMessageMarkdown(
+  markdown: string,
+  messageKey: string,
+  opts: MessageTextOptions,
+  markdownRenderOptions: MarkdownRenderOptions,
+  renderStreaming?: typeof toStreamingMarkdownDomParts,
+  mutableStreaming = false,
+) {
+  const { source, options, recoverFullMessage, recovered } = resolveMessageMarkdownRender(
+    markdown,
+    opts,
+    markdownRenderOptions,
+  );
+  const isAssistant = opts.role === "assistant";
   const streaming = opts.isStreaming;
   const prepare = () => {
-    let parts: [MarkdownContent, MarkdownContent] =
-      streaming && renderStreaming
-        ? renderStreaming(source, options, isAssistant ? messageKey : undefined)
-        : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
+    let parts: [MarkdownContent, MarkdownContent];
+    if (streaming && renderStreaming) {
+      parts = renderStreaming(source, options, isAssistant ? messageKey : undefined);
+    } else {
+      const content = toSanitizedMarkdownContent(source, options);
+      const [stable, tail] = partitionMarkdownHtml(markdownContentHtml(content), messageKey);
+      parts = [tail ? stable : content, tail];
+    }
     if (mutableStreaming) {
       parts = ["", markdownContentHtml(parts[0]) + markdownContentHtml(parts[1])];
     }

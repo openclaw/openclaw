@@ -94,7 +94,7 @@ export function ChatImageActions(props: {
     }
     try {
       await copyImageToClipboard(props.readOriginalBlob);
-      showToast({ message: t("common.copied") });
+      showToast({ severity: "success", message: t("common.copied") });
     } catch {
       showToast({ severity: "error", message: t("chat.imageLightbox.copyFailed") });
     }

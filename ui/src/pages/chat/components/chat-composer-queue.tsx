@@ -11,13 +11,17 @@ import {
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
-import { isChatSendReconnecting } from "../chat-send-presentation.ts";
+import {
+  describeChatQueueAttachmentLabels,
+  isChatSendReconnecting,
+} from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
@@ -32,6 +36,9 @@ type ChatQueueProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
+  queuePaused?: boolean;
+  onQueueResume?: () => void;
+  onQueueClear?: () => void;
   queuedEdit?: ChatComposerProps["queuedEdit"];
   onQueueRemove: (id: string) => void;
 };
@@ -131,8 +138,8 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
   queueMicrotask(() => {
     if (element.isConnected) {
       fitQueueEditInput(element);
-      element.focus();
-      element.setSelectionRange(value.length, value.length);
+      focusComposerInput(element);
+      selectComposerInput(element, value.length, value.length);
     }
   });
 }
@@ -173,9 +180,11 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
     const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
     return head?.sendState === "held" && isQueuedSendInlineState(head)
       ? { label: t("chat.queue.states.blockedByReview"), tone: "warn" }
-      : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
-        ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
-        : null;
+      : props.queuePaused
+        ? { label: t("chat.queue.states.pausedByStop"), tone: "paused" }
+        : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
+          ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
+          : null;
   });
   let scrollRegion: HTMLDivElement | undefined;
   onSettled(() => () => {
@@ -187,7 +196,41 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
     <>
       {visibleQueue().length > 0 ? (
         <div class="chat-queue" role="status" aria-live="polite">
-          {globalState() ? (
+          {globalState()?.tone === "paused" ? (
+            <div class="chat-queue__paused" data-chat-queue-global-state="paused">
+              <span class="chat-queue__leading">
+                <Icon name="pause" />
+              </span>
+              <span class="chat-queue__paused-copy">
+                <span class="chat-queue__paused-title">{globalState()!.label}</span>
+                <span class="chat-queue__paused-reason">
+                  {t("chat.queue.states.pausedByStopReason")}
+                </span>
+              </span>
+              <span class="chat-queue__actions">
+                {props.onQueueClear ? (
+                  <button
+                    class={["chat-queue__action", "chat-queue__clear"]}
+                    type="button"
+                    aria-label={t("chat.queue.clearPausedQueue")}
+                    onClick={() => props.onQueueClear?.()}
+                  >
+                    {t("chat.queue.clearPaused")}
+                  </button>
+                ) : null}
+                {props.onQueueResume ? (
+                  <button
+                    class={["chat-queue__action", "chat-queue__resume"]}
+                    type="button"
+                    onClick={() => props.onQueueResume?.()}
+                  >
+                    <Icon name="play" />
+                    <span>{t("chat.queue.resume")}</span>
+                  </button>
+                ) : null}
+              </span>
+            </div>
+          ) : globalState() ? (
             <div
               class="chat-queue__global-state"
               data-chat-queue-global-state={globalState()!.tone}
@@ -269,6 +312,9 @@ function ChatQueueItem(rowProps: {
     (rowProps.controls.offline === true ||
       isChatSendReconnecting(item().sendState, rowProps.controls.connected));
   const stateLabel = (): string | null => {
+    if (item().serverQueued) {
+      return t("chat.queue.states.followup");
+    }
     const queueItem: ChatQueueItem = item();
     const offline: boolean = !item().serverQueued && rowProps.controls.offline === true;
     const connected: boolean | undefined = rowProps.controls.connected;
@@ -320,11 +366,18 @@ function ChatQueueItem(rowProps: {
   const editable = () =>
     Boolean(edit()?.onEdit) && isMovableChatQueueItem(item()) && !item().localCommandName;
   const canEdit = () => editable() && !edit()?.editingId;
-  const text = () =>
-    item().text ||
-    (item().attachments?.length
-      ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
-      : "");
+  const text = () => {
+    const attachments = item().attachments ?? [];
+    return (
+      item().text.trim() ||
+      describeChatQueueAttachmentLabels(
+        attachments.some((attachment) => attachment.selectionAnnotation)
+          ? attachments.map(({ fileName }) => fileName)
+          : [],
+        attachments.length,
+      )
+    );
+  };
   const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => (
     <button
       class={["chat-queue__action", `chat-queue__${action}`]}
@@ -573,23 +626,21 @@ function ChatQueueItem(rowProps: {
           </>
         ) : null}
         {busy() || editing() ? null : (
-          <openclaw-tooltip prop:content={t("chat.queue.removeQueuedMessage")}>
-            <button
-              class="chat-queue__remove"
-              type="button"
-              disabled={item().serverQueued && !rowProps.controls.canRemoveServerQueued}
-              aria-label={t("chat.queue.removeQueuedMessage")}
-              onClick={(event: MouseEvent) => {
-                // Chromium retargets click 2 after row removal; detail still owns the gesture.
-                if (event.detail <= 1) {
-                  rowProps.controls.onQueueRemove(item().id);
-                }
-              }}
-              onDblClick={(event: MouseEvent) => event.stopPropagation()}
-            >
-              <Icon name="trash" />
-            </button>
-          </openclaw-tooltip>
+          <button
+            class="chat-queue__remove"
+            type="button"
+            disabled={item().serverQueued && !rowProps.controls.canRemoveServerQueued}
+            aria-label={t("chat.queue.removeQueuedMessage")}
+            onClick={(event: MouseEvent) => {
+              // Chromium retargets click 2 after row removal; detail still owns the gesture.
+              if (event.detail <= 1) {
+                rowProps.controls.onQueueRemove(item().id);
+              }
+            }}
+            onDblClick={(event: MouseEvent) => event.stopPropagation()}
+          >
+            <Icon name="trash" />
+          </button>
         )}
         {editing() || !editable() ? null : (
           <Menu
@@ -629,7 +680,7 @@ function ChatQueueItem(rowProps: {
         )}
       </span>
       {mentions()?.length ? (
-        <span class="chat-queue__mentions">
+        <span class="chat-queue__mentions" title={t("chat.mentions.invite")}>
           {t("chat.mentions.selected", {
             names: (mentions() ?? [])
               .map(({ start, end }) => mentionText().slice(start, end))

@@ -346,12 +346,19 @@ export function resolveBuildAllSteps(
         ? ["clean:dist", ...RUNTIME_ONLY_STEP_LABELS]
         : profileLabels;
   const envOverrides = BUILD_ALL_PROFILE_STEP_ENV[profile === "runtime" ? "full" : profile] ?? {};
+  // Only runtime-only builds may omit the sealed worker deploy bundle. Full, package and
+  // CI artifact builds run tsdown without declarations too, so pin the bundle on for them.
+  const keepsWorkerBundle =
+    (profile === "full" && !runtimeOnly) || profile === "package" || profile === "ciArtifacts";
   return labels.map((label) => {
     const step = BUILD_ALL_STEPS.find((candidate) => candidate.label === label);
     if (!step) {
       throw new Error(`Build profile ${profile} references unknown step: ${label}`);
     }
-    const env = envOverrides[step.label];
+    const env =
+      keepsWorkerBundle && step.label === "tsdown"
+        ? { ...envOverrides[step.label], OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE: "1" }
+        : envOverrides[step.label];
     if (!env && profile !== "runtime") {
       return step;
     }
@@ -426,10 +433,6 @@ export function resolveBuildAllStep(step: BuildAllStep, params: BuildAllStepPara
       ...assetArgs,
       ...(params.controlUiAssetsPrepared && step.label === "external-plugins:local-dist"
         ? ["--control-ui-assets-prepared"]
-        : []),
-      // Native allocations are outside the JS heap. Keep small build hosts serial.
-      ...(step.label === "tsdown"
-        ? ["--concurrency", Number(env[TSDOWN_MAX_OLD_SPACE_MB_ENV]) >= 12288 ? "2" : "1"]
         : []),
     ],
     options: {

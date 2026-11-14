@@ -1,6 +1,9 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import {
   retainPreparedSessionSharingFacts,
@@ -15,7 +18,10 @@ import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-st
 import type { SessionEntry } from "../config/sessions/types.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  resolveMissingOperatorScope,
+} from "../shared/operator-scope-compat.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
   prepareUserProfileIdentity,
@@ -23,8 +29,12 @@ import {
 } from "../state/user-profile-list.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  captureGatewayOperatorRunAuthority,
+  intersectOperatorRunModelPolicy,
+} from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -74,8 +84,9 @@ export async function prepareSessionPrincipalRunAuthority(
   params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
 ): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
   const source = await prepareSessionPrincipalRunAccess(params);
+  let admitted: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
   try {
-    const admitted = await captureGatewayOperatorRunAuthority({
+    admitted = await captureGatewayOperatorRunAuthority({
       client: source.client,
       context: params.context,
       sourceAuthority: source,
@@ -83,9 +94,26 @@ export async function prepareSessionPrincipalRunAuthority(
     if (!admitted) {
       throw new Error("Session principal has no current run authority.");
     }
+    const original = source.recordedOperatorAuthority;
+    if (original) {
+      const current = admitted.authority;
+      admitted.authority = createAdmittedRunOperatorAuthority({
+        ...current,
+        scopes: intersectOperatorScopes(current.scopes, original.scopes),
+        gatewayAccessGrant: original.gatewayAccessGrant,
+        recoverySnapshot: original.recoverySnapshot,
+        get modelPolicy() {
+          return intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy);
+        },
+      });
+    }
     return admitted;
   } catch (error) {
-    source.release();
+    if (admitted) {
+      admitted.release();
+    } else {
+      source.release();
+    }
     throw error;
   }
 }
@@ -106,6 +134,8 @@ async function prepareSessionPrincipalRunAccess(params: {
   storePath?: string;
   /** System turns retain the session's principal, rather than an explicit input sender. */
   sessionPrincipal?: true;
+  /** Restart continuations retain a recorded original source when one exists. */
+  preserveRecordedSource?: true;
   assertCurrent?: () => void;
 }) {
   params.assertCurrent?.();
@@ -132,7 +162,9 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Without roles a profile carries no authority of its own; only the person's recorded
     // authenticated source for this session, revalidated on every use, supplies it.
     const scopes =
-      !cfg.gateway?.roles && recorded
+      recorded &&
+      (recorded.authority.openclawIdPrincipal?.kind === "member" ||
+        !isNamedOperatorRoleEnforcementEnabled(cfg))
         ? currentRecordedScopes(recorded.authority)
         : resolveOperatorRolePolicyForAssignment(
             params.profileId,
@@ -146,19 +178,25 @@ async function prepareSessionPrincipalRunAccess(params: {
     return scopes;
   };
   try {
-    if (params.profileId !== GATEWAY_OWNER_PROFILE_ID && !getConfig().gateway?.roles) {
+    // Fresh role-based principals keep their existing admission semantics. A
+    // restart may additionally transfer the original authenticated custody;
+    // source-less legacy sessions remain non-durable when roles authorize them.
+    if (params.profileId !== GATEWAY_OWNER_PROFILE_ID) {
       recorded = await restoreSessionOperatorSource({
         context: params.context,
         profileId: params.profileId,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        memberOnly:
+          !params.preserveRecordedSource && isNamedOperatorRoleEnforcementEnabled(getConfig()),
         assertCurrent: () => params.assertCurrent?.(),
       });
     }
     const scopes = readScopes();
     const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
       requireLivePolicySet: true,
+      openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
     });
     // A policy adapter identifies the resolved person without manufacturing a transport grant.
     const client: GatewayClient = {
@@ -172,12 +210,16 @@ async function prepareSessionPrincipalRunAccess(params: {
       internal: {
         syntheticClient: true,
         operatorRoleActor: { kind: "operator", profileId: params.profileId },
+        openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
       },
     };
     const assertPrincipalCurrent = () => {
       params.assertCurrent?.();
       access?.signal.throwIfAborted();
       access?.assertCurrent();
+      if (params.preserveRecordedSource) {
+        recorded?.authority.assertCurrent();
+      }
       // readScopes validates the retained identity before consuming its current role.
       if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
         throw new Error("Session principal has no current run authority.");
@@ -227,6 +269,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       assertCurrent,
       signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
       gatewayAccessGrant: access ? access.gatewayAccessGrant : null,
+      recordedOperatorAuthority: params.preserveRecordedSource ? recorded?.authority : undefined,
       release,
     };
   } catch (error) {
@@ -370,6 +413,8 @@ export async function resolveSessionMutationAuthorizationAsync(
         }
       };
       const readSource = initialFacts.readSource;
+      let previousFacts: typeof initialFacts | undefined;
+      let preparedRead: import("./session-sharing-read.js").PreparedMutationSharing;
       preparedTargets.push({
         ...target,
         storageTarget: retained.storageTarget,
@@ -379,7 +424,11 @@ export async function resolveSessionMutationAuthorizationAsync(
         prepareRead: retained.prepareRead,
         read: () => {
           const facts = readCurrent();
-          return {
+          if (facts === previousFacts) {
+            return preparedRead;
+          }
+          previousFacts = facts;
+          return (preparedRead = {
             target: facts.target && { ...facts.target, readSource },
             storageTarget: retained.storageTarget,
             members: [],
@@ -387,7 +436,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             assertCurrent: () => {
               readCurrent();
             },
-          };
+          });
         },
       });
     }

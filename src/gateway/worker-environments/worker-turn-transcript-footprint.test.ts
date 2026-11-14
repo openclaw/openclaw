@@ -154,8 +154,8 @@ describe("Gateway worker-turn selected transcript preparation", () => {
           inactiveLoadedMessages: 0,
         });
         if (recorder) {
-          expect(recorder.hasPersisted()).toBe(true);
-          expect(recorder.getAdmissionReceipt()?.entryId).toEqual(expect.any(String));
+          expect(recorder.hasPersisted()).toBe(false);
+          expect(recorder.getAdmissionReceipt()).toBeUndefined();
         }
       } finally {
         releaseCredential.resolve();

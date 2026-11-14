@@ -21,7 +21,6 @@ import {
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { AppSidebarElement, AppSidebarMethods } from "./app-sidebar.tsx";
-import type { SessionTitleDisplay } from "./markdown-link-display.ts";
 import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { controlsForHovercard, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
@@ -32,6 +31,7 @@ import {
   SESSION_MENU_OPEN_EVENT,
   sessionProgressHoverPlacementForTarget,
   sessionProgressHoverTargetFromEvent,
+  type SessionTitleDisplay,
 } from "./session-progress-hovercard-target.ts";
 
 const OPEN_DELAY_MS = 450;
@@ -133,8 +133,15 @@ function createSessionProgressHovercard(
     if (!target || sessionHovercardMenuOpen(host)) {
       return;
     }
-    activate(target, target, delayed ? OPEN_DELAY_MS : SWEEP_OPEN_DELAY_MS, delayed);
-    hovercard.pointerInside = true;
+    const enter = () => {
+      activate(target, target, delayed ? OPEN_DELAY_MS : SWEEP_OPEN_DELAY_MS, delayed);
+      hovercard.pointerInside = true;
+    };
+    // Rows and links crossed on the way to the open card must not take it over.
+    if (target !== activeTarget && hovercard.deferPointerSwitch(event, target, enter)) {
+      return;
+    }
+    enter();
   };
 
   const handlePointerOut = (event: PointerEvent) => {
@@ -145,7 +152,7 @@ function createSessionProgressHovercard(
     if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) {
       return;
     }
-    hovercard.schedulePointerExit();
+    hovercard.schedulePointerExit(event);
   };
 
   const handleFocusIn = (event: FocusEvent) => {

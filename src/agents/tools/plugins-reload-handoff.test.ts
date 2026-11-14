@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { withinTest } from "../../../test/helpers/promise.js";
-import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
 import {
   configureEventState,
@@ -39,7 +38,6 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
-import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
 import {
@@ -67,6 +65,12 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
+import {
+  queueReloadSuccessor,
+  reloadOrder,
+  runAdversarialReloadHandoff,
+  runningOperation,
+} from "./plugins-reload-handoff.test-support.js";
 import { createPluginsTool } from "./plugins-tool.js";
 
 // mock-isolation: Real reply admission and plugin tools, with deterministic model execution.
@@ -81,20 +85,13 @@ await Promise.all([
 
 const request = { action: "reloadAndResume", pluginId: "reload-fixture" };
 const callerRequired = "active Gateway conversation";
-function runningOperation(sessionKey: string, sessionId: string, storeScope: string) {
-  const operation = createTestReplyOperation({
-    sessionKey,
-    sessionId,
-    target: captureSessionTarget({ storeScope, sessionKey, incarnation: sessionId }),
-  });
-  operation.setPhase("running");
-  return operation;
-}
 afterEach(() => {
   vi.restoreAllMocks();
   resetGatewayWorkAdmission();
 });
 it.each([
+  ["adversarial native", '"generation":2'],
+  ["code mode", '"generation":2'],
   ["host system", '"generation":2'],
   ["same-ID without run ID", ""],
   ["same-ID callback", '"generation":2'],
@@ -129,7 +126,12 @@ it.each([
     const cleanup = createDeferredCore();
     const resumed = createDeferredCore<string>();
     const order: string[] = [];
+    let successorAdmitted = false;
     const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(successorAdmitted).toBe(false);
       order.push("reload");
       respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
     });
@@ -161,14 +163,18 @@ it.each([
       expect(endpoint).not.toHaveBeenCalled();
       expect(enqueue).not.toHaveBeenCalled();
     };
+    const adversarial = outcome === "code mode" || outcome === "adversarial native";
     const run = async () => {
       const createTool = () =>
         createPluginsTool({
           sessionId,
           ...(withoutRunId ? {} : { runId }),
-          onYield: () => {
+          onYield: (_message, _acknowledgment, _registered, options) => {
             order.push("yield");
-            runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
+            if (!adversarial || options?.terminal) {
+              const reason = options?.terminal ?? SESSIONS_YIELD_ABORT_REASON;
+              runAbort.abort(reason);
+            }
             operation.completeWithAfterClearBarrier(
               cleanup.promise.then(() => {
                 order.push("cleanup");
@@ -182,10 +188,21 @@ it.each([
             ? withSessionControllerOwner(other, createTool)
             : withSessionControllerOwner(operation, createTool);
         const tool = wrapToolWithAbortSignal(sourceTool, runAbort.signal);
-        const execute = () =>
-          other
+        const execute = async () => {
+          if (outcome === "code mode" || outcome === "adversarial native") {
+            return await runAdversarialReloadHandoff({
+              tool,
+              runAbort,
+              outcome,
+              order,
+              request,
+              effectPath: state.path("append-once.txt"),
+            });
+          }
+          return other
             ? withSessionControllerOwner(other, () => tool.execute("handoff", request))
             : tool.execute("handoff", request);
+        };
         if (refusesHandoff) {
           await expect(execute()).rejects.toThrow(
             outcome.includes("permission denied") ? "operator.admin" : callerRequired,
@@ -200,7 +217,7 @@ it.each([
         }
         const result = await execute();
         expect(result.details).toMatchObject({ status: "started", async: true, yielded: true });
-        expect(order).toEqual(["yield"]);
+        expect(order).toEqual(adversarial ? ["yield", "physical-cleanup"] : ["yield"]);
         expectNoHandoff();
         await expect(sourceTool.execute("duplicate", request)).rejects.toThrow(
           outcome === "same-ID prepublication"
@@ -252,9 +269,15 @@ it.each([
       if (refusesHandoff) {
         return;
       }
+      // A queued turn arriving during cleanup must not enter the retiring generation.
+      const queued = queueReloadSuccessor(sessionKey, sessionId, storePath, () => {
+        successorAdmitted = true;
+      });
+      expect(successorAdmitted).toBe(false);
       cleanup.resolve();
       const text = await resumed.promise;
-      expect(order).toEqual(["yield", "cleanup", "reload", "resume"]);
+      expect((await queued).settled).toBe(true);
+      expect(order).toEqual(reloadOrder(adversarial));
       expect(text).toContain(expectedText);
       expect(enqueue).toHaveBeenCalledOnce();
       if (other) {

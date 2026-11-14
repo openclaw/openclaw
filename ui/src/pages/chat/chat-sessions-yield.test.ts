@@ -5,7 +5,7 @@ import {
   emptyAssistantAcknowledgment,
   emptyAssistantHistory,
 } from "../../test-helpers/empty-assistant-history.ts";
-import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
+import { resetWorkingProgress } from "./chat-progress.ts";
 import { pendingSessionsYield, readHandoffDisplay } from "./chat-sessions-yield.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps } from "./chat-thread.test-support.ts";
@@ -86,7 +86,6 @@ describe("sessions_yield transcript projection", () => {
     expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
     expect(messages).toEqual(original);
   });
-
   it.each([false, true])(
     "never displays private yield inputs before confirmation (failed=%s)",
     (failed) => {
@@ -112,7 +111,6 @@ describe("sessions_yield transcript projection", () => {
       expect(messages).toEqual(original);
     },
   );
-
   it("keeps a nested handoff pending when its exec wrapper completes in the same run", () => {
     const messages = [
       ...nestedHistory,
@@ -133,7 +131,6 @@ describe("sessions_yield transcript projection", () => {
     ];
     expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
   });
-
   it("preserves sibling tools and prose without displaying private yield arguments", () => {
     const messages = [
       {
@@ -156,13 +153,11 @@ describe("sessions_yield transcript projection", () => {
     expect(transcriptTools(hidden)).toEqual([]);
     expect(JSON.stringify(hidden)).toContain("Delegated implementation.");
   });
-
   it("requires a successful call/result pair", () => {
     const messages = [separateHistory[1]!];
     expect(pendingSessionsYield(messages)).toBeNull();
     expect(projectHistory(messages, { showToolCalls: false })).toEqual([]);
   });
-
   it("reads a leading receipt with annotations without changing its public acknowledgment", () => {
     const acknowledgment = 'I’ll check {docs} and the "CLI".\nThen report back.';
     const messages = withYieldResult(
@@ -181,7 +176,6 @@ describe("sessions_yield transcript projection", () => {
     expect(groupTexts(items)).toEqual([expect.stringContaining(JSON.stringify(acknowledgment))]);
     expect(JSON.stringify(items)).not.toContain("The session will resume");
   });
-
   it.each([
     { name: "malformed primary object", output: '{"status":"yielded",}\n{"status":"yielded"}' },
     { name: "unterminated primary object", output: '{"status":"yielded"\n{"status":"yielded"}' },
@@ -200,7 +194,6 @@ describe("sessions_yield transcript projection", () => {
     expect(pendingSessionsYield(messages)).toBeNull();
     expect(projectHistory(messages, { showToolCalls: false })).toEqual([]);
   });
-
   it("uses only the selected structured receipt's public acknowledgment", () => {
     const messages = withYieldResult(
       [{ type: "text", text: '{"status":"error","acknowledgment":"Not selected"}' }],
@@ -255,21 +248,12 @@ describe("sessions_yield transcript projection", () => {
         messages,
         subagentWait: { startedAt: 3_500, runId },
       });
-      const { workingIndicator, runOutputTokens } = projectTranscriptActivity(
-        buildChatItems(props),
-        { ...props, runUsageById: usageByRun },
-      );
+      const { runOutputTokens } = projectTranscriptActivity(buildChatItems(props), {
+        ...props,
+        runUsageById: usageByRun,
+      });
       const expectedTokens = handoffCount === 1 ? 4_100 : 4_356;
       expect(runOutputTokens).toBe(expectedTokens);
-      const host = { turnRecapWatch: null };
-      const params = { sessionKey: props.sessionKey, usageByRun };
-      resolveTurnRecap(host, { ...params, indicator: workingIndicator });
-      expect(
-        resolveTurnRecap(host, {
-          ...params,
-          row: { lastRunId: runId, status: "done", runtimeMs: 1_000, endedAt: 5_000 },
-        }),
-      ).toEqual({ runId, runtimeMs: 4_000, outputTokens: expectedTokens });
     });
 
     it("is recognized before the pane knows its run id", () => {
@@ -387,4 +371,13 @@ it("keeps Code Mode activity and speaks its yield acknowledgment without an empt
     "sessions_list",
   ]);
   expect(JSON.stringify(items)).not.toContain("PRIVATE_CONTINUATION");
+});
+
+it("preserves commentary beside anonymous calls when tools are hidden", () => {
+  const content = [
+    { type: "text", text: "Visible" },
+    { type: "toolCall", name: "exec" },
+  ];
+  const hidden = projectHistory([{ role: "assistant", content }], { showToolCalls: false });
+  expect(JSON.stringify(hidden)).toContain("Visible");
 });

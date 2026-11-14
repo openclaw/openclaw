@@ -124,7 +124,9 @@ function guildSnapshot(
   return { id: "guild-1", member_count: memberCount, presences } as GatewayGuildCreateDispatchData;
 }
 
-function presenceClient(fetchUser = async () => ({ bot: false })): Client {
+function presenceClient(
+  fetchUser: (userId: string) => Promise<object> = async () => ({ bot: false }),
+): Client {
   return { fetchUser: vi.fn(fetchUser) } as unknown as Client;
 }
 
@@ -700,6 +702,61 @@ describe("DiscordPresenceListener", () => {
     expect(stopped).toHaveBeenCalledOnce();
     expect(await store.lookup("molty:guild-1:user-1")).toBeUndefined();
     expectWake();
+  });
+
+  it.each([
+    ["guild users", { users: ["111"] }, false],
+    ["guild roles", { roles: ["333"] }, false],
+    ["named target channel users", { channels: { greetings: { users: ["111"] } } }, false],
+    ["break-glass user name", { users: ["alice"] }, true],
+  ])("only wakes members the %s allowlist admits", async (_, access, allowNameMatching) => {
+    const fetchMember = vi.fn(async (_guildId: string, userId: string) => ({
+      roles: userId === "111" ? ["333"] : [],
+    }));
+    const client = Object.assign(
+      presenceClient(async (userId: string) => ({
+        id: userId,
+        bot: false,
+        username: userId === "111" ? "alice" : "mallory",
+      })),
+      {
+        fetchMember,
+        fetchChannel: async () => ({
+          id: "channel-1",
+          name: "greetings",
+          type: ChannelType.GuildText,
+        }),
+      },
+    );
+    const listener = createPresenceListener({
+      allowNameMatching,
+      guildEntries: { "guild-1": { ...access, presenceEvents: { channelId: "channel-1" } } },
+    });
+    await listener.transition("222", client);
+    expectWake();
+    expect(await listener.store.entries()).toEqual([]);
+    await listener.transition("111", client);
+    expectWake("111");
+    expect(fetchMember).toHaveBeenCalledTimes("roles" in access ? 2 : 0);
+  });
+
+  it("skips the wake when the greeting channel lookup fails", async () => {
+    const client = Object.assign(presenceClient(), {
+      fetchChannel: async () => {
+        throw new Error("discord unavailable");
+      },
+    });
+    const listener = createPresenceListener({
+      guildEntries: {
+        "guild-1": {
+          channels: { greetings: { users: ["111"] } },
+          presenceEvents: { channelId: "channel-lookup-fails" },
+        },
+      },
+    });
+    await listener.transition("222", client);
+    expectWake();
+    expect(await listener.store.entries()).toEqual([]);
   });
 
   it("caches snapshot activities even when presence events are disabled", async () => {

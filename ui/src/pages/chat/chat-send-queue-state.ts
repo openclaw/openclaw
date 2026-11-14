@@ -30,7 +30,7 @@ import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
   chatSendHoldReason,
   surfaceChatDeliveryFailure,
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
 } from "./chat-send-support.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
@@ -169,7 +169,7 @@ export function finishChatDeliveryAdmission(
   ) {
     const parked = setState(reconnectSafeQueuedSendState(host));
     if (!parked) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      setChatError(host, chatOfflineQueueStorageError());
       return "failed";
     }
     return "pending";
@@ -200,7 +200,7 @@ export async function settleDeliverySettings(
     if (current?.sendState !== "waiting-model") {
       current = setState("waiting-model");
       if (!current) {
-        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+        setChatError(host, chatOfflineQueueStorageError());
       }
     }
     const ready = await pendingSettings;
@@ -216,7 +216,7 @@ export async function settleDeliverySettings(
       const restored =
         routeVisible(current.agentId) && restoreRejectedChatDelivery(host, current, options);
       if (!restored && !setState("failed", INTERRUPTED_SETTINGS_WAIT_ERROR)) {
-        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+        setChatError(host, chatOfflineQueueStorageError());
       }
       return "failed";
     }
@@ -228,7 +228,7 @@ export async function settleDeliverySettings(
     current = setState(reconnectSafeQueuedSendState(host));
   }
   if (!current) {
-    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    setChatError(host, chatOfflineQueueStorageError());
     return "failed";
   }
   return deliver(current);

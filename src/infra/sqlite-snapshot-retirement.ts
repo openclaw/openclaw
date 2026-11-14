@@ -8,6 +8,7 @@ import {
 } from "./sqlite-staging-token.js";
 
 export const SQLITE_SNAPSHOT_PREFIX = "openclaw-sqlite-readonly-v2-";
+export const SCHEMA_DISCOVERY_OWNERSHIP_FILENAME = "schema-discovery-ownership.json";
 const suffix = "(?:[A-Za-z0-9]{6}|[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12})$";
 const SQLITE_SNAPSHOT_LEGACY_MARKER = new RegExp(
   `^openclaw-sqlite-readonly-[1-9]\\d*-${suffix}`,
@@ -17,7 +18,7 @@ const tokenMarker = new RegExp(`^${SQLITE_SNAPSHOT_PREFIX}${suffix}`, "u");
 // fs-safe stages publication beside the target using a lowercase randomUUID().
 const fsSafeTemporaryPayload =
   /^\.fs-safe-[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u;
-const SQLITE_SNAPSHOT_LEGACY_AGE_MS = 24 * 60 * 60 * 1000;
+export const SQLITE_SNAPSHOT_LEGACY_AGE_MS = 24 * 60 * 60 * 1000;
 function releaseTokens(tokens: Iterable<SqliteStagingToken>): void {
   const failures = collectSynchronousErrors(tokens, (token) => token());
   if (failures.length) {
@@ -131,6 +132,7 @@ export function beginSqliteSnapshotRetirement(
               (/^(?:first|database\.sqlite(?:\.partial)?(?:-wal|-shm|-journal)?)$/u.test(
                 entry.name,
               ) ||
+                entry.name === SCHEMA_DISCOVERY_OWNERSHIP_FILENAME ||
                 fsSafeTemporaryPayload.test(entry.name) ||
                 /^inspection-result-[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.json$/u.test(
                   entry.name,

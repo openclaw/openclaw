@@ -30,6 +30,21 @@ type SkillArtifact = NonNullable<
 
 function skillArtifact(details: Record<string, unknown> | undefined): SkillArtifact {
   const source = details?.source;
+  if (
+    details &&
+    source === "bundled" &&
+    typeof details.path === "string" &&
+    isSafeTemplateRelativePath(details.path) &&
+    typeof details.name === "string" &&
+    details.name &&
+    typeof details.snapshot === "object" &&
+    details.snapshot !== null &&
+    "digest" in details.snapshot &&
+    typeof details.snapshot.digest === "string" &&
+    /^sha256:[a-f0-9]{64}$/.test(details.snapshot.digest)
+  ) {
+    return { source, path: details.path, name: details.name, digest: details.snapshot.digest };
+  }
   const ref = details?.ref;
   const version = details?.version;
   const rawIntegrity = details?.integrity;
@@ -48,7 +63,20 @@ function skillArtifact(details: Record<string, unknown> | undefined): SkillArtif
   return { source, ref, version, integrity };
 }
 
-function assertSkillActionTarget(action: { id: string; target: string }, artifact: SkillArtifact) {
+function assertSkillActionTarget(
+  action: { id: string; target: string; digest?: string },
+  artifact: SkillArtifact,
+) {
+  if (artifact.source === "bundled") {
+    if (
+      action.id !== `skill:bundled:${artifact.path}` ||
+      action.target !== `bundled:${artifact.path}` ||
+      action.digest !== artifact.digest
+    ) {
+      throw new Error("Template bundled skill action does not match its artifact.");
+    }
+    return;
+  }
   if (
     action.id !== `skill:${artifact.ref}` ||
     action.target !== `${artifact.source}:${artifact.ref}@${artifact.version}`
@@ -261,7 +289,9 @@ export function projectTemplateAddPlan(
         assertSkillActionTarget(action, desired);
         if (
           !action.digest ||
-          normalizeClawHubSha256Integrity(action.digest) !== desired.integrity
+          (desired.source === "clawhub"
+            ? normalizeClawHubSha256Integrity(action.digest) !== desired.integrity
+            : action.digest !== desired.digest)
         ) {
           throw new Error("Template skill package integrity does not match its preflight.");
         }
@@ -324,9 +354,11 @@ export function projectTemplateAddPlan(
         reason: change.reason,
       })),
       pluginReviews,
-      skillReviews: collectTemplateSkillWarningReviews(plan).map((review) =>
-        Object.assign(review, { reviewToken: digestTemplateValue(review) }),
-      ),
+      skillReviews: collectTemplateSkillWarningReviews(plan).map((review) => {
+        const sourcedReview =
+          "path" in review ? review : Object.assign(review, { source: "clawhub" as const });
+        return Object.assign(sourcedReview, { reviewToken: digestTemplateValue(sourcedReview) });
+      }),
       blockers: [
         ...plan.blockers.map((diagnostic) => ({
           code: diagnostic.code,
@@ -351,7 +383,7 @@ export function projectTemplateAddPlan(
           ? [
               {
                 code: "schedule_disclosure_unavailable",
-                path: "$.cronJobs",
+                path: "$.automations",
                 message: "Scheduled work cannot be reviewed safely. Refresh or repair the plan.",
               },
             ]

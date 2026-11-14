@@ -213,7 +213,7 @@ describe("chat metadata store", () => {
     request.mockResolvedValue(metadata("recovered"));
     mount(retained);
     publish(metadata("previous"));
-    expect(() => publish({ revision: "failed" })).toThrow("Chat commands are unavailable");
+    expect(() => publish({ revision: "failed" })).toThrow("Couldn’t load session commands");
     expect(peek(retained)).toBeUndefined();
     invalidateChatMetadataStore(client, undefined, undefined, "refresh", {
       commandsChanged: false,

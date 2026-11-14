@@ -6,6 +6,10 @@ export type CronRunRecoveryInput = {
   storeKey: string;
   nowMs: number;
   cronConfig?: CronConfig;
+  /** Owner for agent-less jobs when selecting agent-scoped failure routes. */
+  defaultAgentId?: string;
+  /** Receipts a cron owner in this process still holds; that owner settles them. */
+  liveReceiptIds?: string[];
   failureRepairTimeoutMs?: number;
 };
 

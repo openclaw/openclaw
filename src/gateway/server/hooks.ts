@@ -30,6 +30,7 @@ import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resol
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -199,6 +200,7 @@ export function createGatewayHookDispatcher(params: {
    * the run is contextless and trusted built-in tools fail mid-run.
    */
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
+  resolvePluginRegistry?: () => PluginRegistry | undefined;
 }) {
   const {
     deps,
@@ -208,7 +210,10 @@ export function createGatewayHookDispatcher(params: {
   } = params;
   const scheduledGatewayContextResolver =
     fenceScheduledGatewayContextResolver(resolveGatewayContext);
-  const runScheduledHook = createScheduledGatewayRunner(scheduledGatewayContextResolver);
+  const runScheduledHook = createScheduledGatewayRunner(
+    scheduledGatewayContextResolver,
+    params.resolvePluginRegistry,
+  );
   const enqueueHookAgentDispatch = createSessionKeyedHookDispatchQueue();
   const announcedFailureReplays = new Map<string, number>();
   const claimFailureNotice = (replayKey: string | undefined) => {
@@ -731,6 +736,7 @@ export function createGatewayHooksRequestHandler(params: {
   agentStartAdmissionTimeoutMs?: number;
   deferHookWake?: DeferredHookWake;
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
+  resolvePluginRegistry?: () => PluginRegistry | undefined;
   dispatcher?: GatewayHookDispatcher;
 }) {
   const { getHooksConfig, bindHost, port, logHooks, getClientIpConfig } = params;

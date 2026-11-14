@@ -622,6 +622,21 @@ openclaw channels status
 
   </Accordion>
 
+  <Accordion title="Connection remains locked after a crash">
+    An interrupted lock acquisition can leave an empty or malformed `<authDir>.lock` next to the account's auth directory. WhatsApp reports `whatsapp_connection_owner_busy`; `openclaw doctor` identifies locks without a valid owner PID and prints recovery guidance.
+
+    Doctor leaves ambiguous locks in place, including with `--fix`: an empty file can still belong to a suspended live process. Its age and the absence of an open file handle do not prove that it is abandoned.
+
+    For offline recovery:
+
+    1. Stop every process using that auth directory, including Gateways, login commands, standalone lookups, and processes on other hosts sharing the directory. Disable automatic restarts while repairing it, and verify that no owner remains running or suspended.
+    2. Move only the exact `.lock` sidecar reported by Doctor to a backup location outside the auth directory. Keep the account directory and its credentials unchanged. If you cannot establish that all owners have stopped, leave the lock in place.
+    3. Start one Gateway and run `openclaw channels status --probe` to check reconnection. Re-linking is not required solely to clear an orphaned ownership lock.
+
+    This is an explicit offline repair; OpenClaw does not reclaim empty locks automatically or by age.
+
+  </Accordion>
+
   <Accordion title="QR login times out behind a proxy">
     Symptom: `openclaw channels login --channel whatsapp` fails before showing a usable QR with `status=408 Request Time-out` or a TLS socket disconnect.
 

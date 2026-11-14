@@ -65,7 +65,7 @@ suite.define(() => {
           .poll(() => page.locator(".cron-detail-title").textContent())
           .toContain(selected.name);
         await expect.poll(() => selectedRun.isEnabled()).toBe(false);
-        expect(await page.locator(".cron-error-banner").count()).toBe(0);
+        expect(await page.locator(".callout.danger").count()).toBe(0);
       }
       if (reason === "error") {
         await gateway.rejectDeferred("cron.run", { code: "UNAVAILABLE", message });
@@ -85,7 +85,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole(role).filter({ hasText: message }).allTextContents())
         .toEqual([selection === "same" ? message : alpha.name + ": " + message]);
-      expect(await page.locator(".cron-error-banner").count()).toBe(reason === "error" ? 1 : 0);
+      expect(await page.locator(".callout.danger").count()).toBe(reason === "error" ? 1 : 0);
       expect(await gateway.getRequests("cron.run")).toHaveLength(1);
     });
   });
@@ -119,7 +119,7 @@ suite.define(() => {
       const alpha = { ...job("feedback-alpha", "Alpha synthetic automation"), agentId: "main" };
       const gateway = await installMockGateway(page, {
         // The agent panel gates its automation reads and Run now on the advertised methods.
-        featureMethods: [...defaultControlUiFeatureMethods, "cron.list", "cron.run"],
+        featureMethods: [...defaultControlUiFeatureMethods, "cron.list", "cron.status", "cron.run"],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "cron.list": cronResponses([alpha])["cron.list"],

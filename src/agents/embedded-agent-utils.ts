@@ -435,7 +435,7 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   };
 
   for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
-    const index = match.index ?? 0;
+    const index = match.index;
     const isClose = match[1]?.includes("/") ?? false;
 
     // Ignore nested opens and unmatched closes.
@@ -504,7 +504,7 @@ export function extractThinkingFromTaggedText(text: string): string {
   let lastIndex = 0;
   let inThinking = false;
   for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
-    const idx = match.index ?? 0;
+    const idx = match.index;
     if (inThinking) {
       result += text.slice(lastIndex, idx);
     }

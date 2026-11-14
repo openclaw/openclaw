@@ -90,7 +90,7 @@ export async function readRegistry(
   const install = captureSandboxRegistryFacts(context);
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "sandboxRegistry.list", workspaceDir: options.workspaceDir },
+    { type: "sandboxRegistry.list", input: { workspaceDir: options.workspaceDir } },
     { context },
   );
   if (!reply) {
@@ -108,7 +108,7 @@ export async function readRegistryEntry(
   const install = captureSandboxRegistryFacts(context);
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "sandboxRegistry.get", containerName },
+    { type: "sandboxRegistry.get", input: { containerName } },
     { context },
   );
   if (!reply) {
@@ -124,7 +124,7 @@ export async function readRegisteredSandboxRuntimeIds(params: {
 }): Promise<string[]> {
   const reply = await executeExistingOpenClawStateRead(
     {},
-    { type: "sandboxRegistry.runtimeIds", ...params },
+    { type: "sandboxRegistry.runtimeIds", input: params },
   );
   if (!reply) {
     return [];
@@ -297,7 +297,7 @@ export async function removeSandboxRegistryRuntime(
         assertCurrent();
         const reply = await executeExistingOpenClawStateRead(
           { path: context.admission.databasePath, env: context.environment },
-          { type: "sandboxRegistry.get", containerName: selected.containerName },
+          { type: "sandboxRegistry.get", input: { containerName: selected.containerName } },
           { context, current: true },
         );
         assertCurrent();
@@ -327,7 +327,7 @@ export async function readBrowserRegistry(
   const install = captureSandboxRegistryFacts(context);
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "sandboxRegistry.browsers", workspaceDir: options.workspaceDir },
+    { type: "sandboxRegistry.browsers", input: { workspaceDir: options.workspaceDir } },
     { context },
   );
   if (!reply) {

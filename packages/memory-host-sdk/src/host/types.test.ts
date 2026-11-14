@@ -22,13 +22,18 @@ const diagnose = (indexIdentity: Record<string, unknown>) =>
   resolveMemoryIndexIdentityDiagnostic(withIdentity(indexIdentity));
 
 describe("memory search staleness", () => {
-  it("keeps routine pending index work silent", () => {
+  it("reports pending index work without discarding published results", () => {
     const status: MemoryProviderStatus = {
       backend: "builtin",
       provider: "none",
       dirty: true,
     };
-    expect(staleness(status)).toBeNull();
+    expect(staleness(status, "support")).toMatchObject({
+      stale: true,
+      warning: expect.stringContaining("pending updates"),
+      action:
+        "Retry after background indexing, or run: openclaw memory status --index --agent support. Rebuilding uses keyword indexing only and does not call an embedding provider.",
+    });
   });
 
   it("reports the latest automatic sync failure", () => {

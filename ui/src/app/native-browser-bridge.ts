@@ -24,6 +24,7 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 
@@ -213,7 +214,10 @@ export async function postNativeBrowserMessage(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "Native browser request failed",
+      error:
+        error instanceof Error
+          ? formatUiError(error, "Native browser request failed")
+          : "Native browser request failed",
     };
   }
 }

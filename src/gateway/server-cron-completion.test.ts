@@ -341,40 +341,46 @@ async function withCompletionFixture(
 describe("completion announcement", () => {
   const confirmed = { deliveryAttempted: true, delivered: true };
 
-  it("records a failure alert once in its destination, not the creating conversation", async () => {
-    await withCompletionFixture("command", async (fixture) => {
-      fixture.cfg.gateway = undefined;
-      fixture.job.sessionKey = fixture.destination.sessionKey;
-      const onDeliverySettled = vi.fn(async () => {});
-      await sendGatewayCronFailureAlert({
-        deps: {},
-        logger: { warn: vi.fn() },
-        resolveCronAgent: () => ({ agentId: "main", cfg: fixture.cfg }),
-        job: fixture.job,
-        routing: { defaultAgentId: "main" },
-        payload: { text: "Scheduled command failed." },
-        channel: "telegram",
-        to: "123",
-        mode: "announce",
-        onDeliverySettled,
+  it.each(["explicit", "session"])(
+    "records a failure alert once for its %s owner, not the creating conversation",
+    async (ownership) => {
+      await withCompletionFixture("command", async (fixture) => {
+        fixture.cfg.gateway = undefined;
+        fixture.job.sessionKey = fixture.destination.sessionKey;
+        if (ownership === "session") {
+          fixture.job.agentId = undefined;
+        }
+        const onDeliverySettled = vi.fn(async () => {});
+        await sendGatewayCronFailureAlert({
+          deps: {},
+          logger: { warn: vi.fn() },
+          resolveCronAgent: (requested) => ({ agentId: requested ?? "other", cfg: fixture.cfg }),
+          job: fixture.job,
+          routing: { defaultAgentId: "other" },
+          payload: { text: "Scheduled command failed." },
+          channel: "telegram",
+          to: "123",
+          mode: "announce",
+          onDeliverySettled,
+        });
+        expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: "Scheduled command failed." }),
+        );
+        expect(await fixture.messages(fixture.destination)).toEqual([
+          expect.objectContaining({
+            content: [{ type: "text", text: "Scheduled command failed." }],
+            provider: "openclaw",
+            model: "automation-result",
+          }),
+        ]);
+        await fixture.assertText("Scheduled command failed.");
+        expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
+          delivered: true,
+          status: "delivered",
+        });
       });
-      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ text: "Scheduled command failed." }),
-      );
-      expect(await fixture.messages(fixture.destination)).toEqual([
-        expect.objectContaining({
-          content: [{ type: "text", text: "Scheduled command failed." }],
-          provider: "openclaw",
-          model: "automation-result",
-        }),
-      ]);
-      await fixture.assertText("Scheduled command failed.");
-      expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
-        delivered: true,
-        status: "delivered",
-      });
-    });
-  });
+    },
+  );
 
   it("commits the effective post-hook payload shown to the recipient", async () => {
     await withCompletionFixture(
@@ -630,6 +636,28 @@ describe("completion announcement", () => {
       });
     },
   );
+
+  it("routes a route-less job to its session-key owner's default destination", async () => {
+    await withCompletionFixture("script", async (fixture) => {
+      // The job names its agent only through its session key; the resolver's
+      // fallback agent must not select the defaults.
+      fixture.job.agentId = undefined;
+      fixture.job.delivery = { mode: "announce" };
+      const cfg = {
+        ...fixture.cfg,
+        cron: {
+          delivery: { channel: "telegram", to: "999" },
+          agents: { main: { delivery: { channel: "telegram", to: "123" } } },
+        },
+      };
+      const result = await fixture.finalize({
+        resolveCronAgent: (requested) => ({ agentId: requested ?? "other", cfg }),
+      });
+      expect(result.delivery.intended).toMatchObject({ channel: "telegram", to: "123" });
+      expect(result).toMatchObject(confirmed);
+      await fixture.assertResult();
+    });
+  });
 
   it("does not commit or notify an aborted occurrence", async () => {
     await withCompletionFixture("script", async (fixture) => {

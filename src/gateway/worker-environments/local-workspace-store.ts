@@ -1,6 +1,7 @@
 import { promisify } from "node:util";
 import { deserialize, serialize } from "node:v8";
 import { deflateRaw, deflateRawSync, inflateRawSync } from "node:zlib";
+import { startWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRunEndContext,
   retainWorktreeRunEndFailure,
@@ -32,6 +33,7 @@ import type {
   LocalWorkspaceMutation,
   LocalWorkspacePreparedUpdate,
   LocalWorkspaceProjection,
+  LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
 
 export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
@@ -58,7 +60,7 @@ export type LocalWorkspaceStore = {
     action: LocalWorkspaceManifestAction,
   ) => Promise<LocalWorkspaceManifestValue>;
   create: (
-    row: Omit<LocalWorkspaceProjection, "revision">,
+    row: Omit<LocalWorkspaceProjection, "revision" | "rejectedResult">,
     authority?: WorktreeWorkerAuthority,
   ) => Promise<LocalWorkspaceProjection>;
   update: (
@@ -72,6 +74,11 @@ export type LocalWorkspaceStore = {
     authority?: WorktreeWorkerAuthority,
   ) => Promise<LocalWorkspaceProjection>;
   delete: (row: LocalWorkspaceProjection, authority?: WorktreeWorkerAuthority) => Promise<void>;
+  reject: (
+    row: LocalWorkspaceProjection,
+    rejection: Omit<LocalWorkspaceRejectedResult, "ref">,
+    authority?: WorktreeWorkerAuthority,
+  ) => Promise<LocalWorkspaceProjection>;
 };
 
 /** The reconciliation lease owns present and absent rows through effects and settlement. */
@@ -94,8 +101,9 @@ export function withLocalWorkspaceStore<T>(
   if (context.admission.coordinationKey !== captured.admission.coordinationKey) {
     throw new Error("Local workspace lease belongs to another database");
   }
-  return withWorktreeRunEnd(env, () =>
-    withOpenClawStateLeaseAsync(
+  return withWorktreeRunEnd(env, () => {
+    const finishWait = startWorktreePreparationPhase("workspaceWait");
+    return withOpenClawStateLeaseAsync(
       {
         scope: "workspace.local-reconciliation",
         key: params.worktreeId,
@@ -107,6 +115,7 @@ export function withLocalWorkspaceStore<T>(
       },
       context,
       (lease) => {
+        finishWait();
         const leases = [...(inherited?.leases ?? []), lease];
         return withOpenClawStateLeasesWorkerAdmission(leases, context, async (authority) => {
           let active = true;
@@ -417,6 +426,27 @@ export function withLocalWorkspaceStore<T>(
                   },
                   manifest: readManifest,
                   accept,
+                  reject: async (previous, rejection, guard) => {
+                    if (
+                      previous.worktree_id !== params.worktreeId ||
+                      !previous.pending_ref ||
+                      previous.journal_json
+                    ) {
+                      throw new Error(
+                        "Local workspace rejection requires an unapplied pending result",
+                      );
+                    }
+                    await mutate(
+                      {
+                        kind: "update",
+                        revision: previous.revision,
+                        patch: {},
+                        rejectedResult: { ref: previous.pending_ref, ...rejection },
+                      },
+                      guard,
+                    );
+                    return row!;
+                  },
                   create: async (value, guard) => {
                     await mutate({ kind: "create", row: value }, guard);
                     return row!;
@@ -469,6 +499,6 @@ export function withLocalWorkspaceStore<T>(
           }
         });
       },
-    ),
-  );
+    ).finally(finishWait);
+  });
 }

@@ -5,10 +5,10 @@ import {
   MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
   MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
   MAX_TOOL_SEARCH_RESULTS,
-  type ToolSearchCatalogSession,
   type ToolSearchConfig,
   type ToolSearchRequest,
-} from "./tool-search-types.js";
+} from "./tool-search-protocol.js";
+import type { ToolSearchCatalogSession } from "./tool-search-types.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
 const TOOL_SEARCH_SELECTOR_KEYS = ["id", "toolId", "name"] as const;

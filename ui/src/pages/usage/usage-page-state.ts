@@ -6,12 +6,10 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
@@ -353,8 +351,11 @@ export function createUsagePage(context: ApplicationContext) {
       (projection === "roster" ||
         JSON.stringify(query.selectedSessions) === JSON.stringify(current.selectedSessions)) &&
       (projection === "calendar" ||
-        (JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys) &&
-          query.offset === current.offset &&
+        JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys)) &&
+      // Chart/filter projections describe the whole selection, not its roster page or order.
+      (projection === "calendar" ||
+        projection === "filterOptions" ||
+        (query.offset === current.offset &&
           query.sort === current.sort &&
           query.sortDirection === current.sortDirection))
     );

@@ -75,7 +75,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
           }),
         );
       if (!handled) {
-        showToast({ message: t("sessionsView.splitUnavailable") });
+        showToast({ severity: "error", message: t("sessionsView.splitUnavailable") });
       }
       return;
     }
@@ -99,7 +99,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
         copied = await copyToClipboard(params.session.sessionId ?? "");
       }
       showToast({
-        severity: copied ? undefined : "error",
+        severity: copied ? "success" : "error",
         message: t(copied ? "common.copied" : "common.copyFailed"),
       });
       return;
@@ -113,8 +113,11 @@ export async function runSessionNavigationAction<TRouteId extends string>(
     const copyLink = kind === "copy-session-link" || kind === "copy-session-preview-link";
     // Shared links belong to the Gateway; the UI document may be a local SSH
     // tunnel or a dev server with a different mount path. New windows stay local.
+    // A direct link from a claw member stays on the claw's address; preview links are for
+    // anonymous readers and keep the public one.
     const linkBase = copyLink
-      ? (gateway.snapshot.hello?.controlUiUrl ??
+      ? ((kind === "copy-session-link" ? gateway.snapshot.hello?.controlUiClawUrl : undefined) ??
+        gateway.snapshot.hello?.controlUiUrl ??
         gateway.snapshot.client?.gatewayUrl ??
         gateway.connection.gatewayUrl)
       : undefined;
@@ -134,7 +137,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
     if (copyLink) {
       const copied = await copyToClipboard(href);
       showToast({
-        severity: copied ? undefined : "error",
+        severity: copied ? "success" : "error",
         message: t(copied ? "common.copied" : "common.copyFailed"),
       });
       return;
@@ -147,7 +150,7 @@ export async function runSessionNavigationAction<TRouteId extends string>(
     if (opened) {
       opened.location.replace(href);
     } else {
-      showToast({ message: t("sessionsView.openWindowBlocked") });
+      showToast({ severity: "error", message: t("sessionsView.openWindowBlocked") });
     }
   } catch (error) {
     showToast({ severity: "error", message: formatUiError(error) });

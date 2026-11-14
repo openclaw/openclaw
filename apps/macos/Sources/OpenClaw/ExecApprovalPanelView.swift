@@ -78,7 +78,6 @@ struct ExecApprovalPanelView: View {
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
-                .help("Copy displayed command")
                 .accessibilityLabel("Copy displayed command")
             }
             .padding(.horizontal, 16)
@@ -139,7 +138,6 @@ struct ExecApprovalPanelView: View {
             HStack(spacing: 10) {
                 if self.decisions.contains(.allowAlways) {
                     Button("Always Allow Here") { self.onDecision(.allowAlways) }
-                        .help("Save a reusable approval for this execution")
                 }
                 Spacer(minLength: 8)
                 if self.decisions.contains(.deny) {
@@ -150,7 +148,7 @@ struct ExecApprovalPanelView: View {
                     Button("Allow Once") { self.onDecision(.allowOnce) }
                         .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.return, modifiers: .command)
-                        .help("Allow only this request (⌘Return)")
+                        .help("⌘↩")
                 }
             }
             .controlSize(.large)

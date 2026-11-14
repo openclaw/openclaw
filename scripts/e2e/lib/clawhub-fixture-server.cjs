@@ -89,10 +89,14 @@ function json(response, value, status = 200) {
 }
 
 function listen(server) {
-  server.listen(0, "127.0.0.1", () => {
-    fs.writeFileSync(portFile, String(server.address().port));
-    process.send?.({ port: server.address().port });
-  });
+  server.listen(
+    profile === "prepublish-artifacts" ? Number(process.argv[5] ?? 0) : 0,
+    "127.0.0.1",
+    () => {
+      fs.writeFileSync(portFile, String(server.address().port));
+      process.send?.({ port: server.address().port });
+    },
+  );
 }
 
 /** @param {unknown} error */
@@ -203,7 +207,7 @@ function startPrepublishArtifactServer() {
           channel: "official",
           isOfficial: true,
           latestVersion: entry.version,
-          tags: { latest: entry.version, beta: entry.version },
+          tags: { latest: entry.version, beta: entry.version, alpha: entry.version },
         },
       });
     } else if (!match[3]) {

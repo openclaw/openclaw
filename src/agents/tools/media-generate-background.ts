@@ -200,10 +200,6 @@ export async function prepareMediaGenerationTask<
   resolveProviders: (
     resources: Resources,
   ) => Parameters<typeof resolveCapabilityModelConfigForTool>[0]["providers"];
-  findDuplicate: (
-    sessionKey: string | undefined,
-    request: { prompt: string; agentId?: string },
-  ) => Promise<MediaGenerateActionResult | undefined>;
   signal?: AbortSignal;
   prepare: (context: {
     resources: Resources;
@@ -233,20 +229,8 @@ export async function prepareMediaGenerationTask<
           providers: [],
         })
       : null;
-  const readRequest = async () => {
-    const prompt = readToolStringParam(params.args, "prompt", { required: true });
-    return {
-      prompt,
-      duplicate: await params.findDuplicate(options?.agentSessionKey, {
-        prompt,
-        agentId: options?.requesterAgentId,
-      }),
-    };
-  };
-  const configuredRequest = configuredModel ? await readRequest() : undefined;
-  if (configuredRequest?.duplicate) {
-    return configuredRequest.duplicate;
-  }
+  // Only the tool can identify a duplicate from its complete prepared inputs.
+  const prompt = readToolStringParam(params.args, "prompt", { required: true });
   signal?.throwIfAborted();
   const resources = await params.acquire(
     configuredModel
@@ -274,10 +258,6 @@ export async function prepareMediaGenerationTask<
       throw new ToolInputError(`No ${generationLabel}-generation model configured.`);
     }
     const effectiveCfg = applyAgentDefaultModelConfig(cfg, generationLabel, modelConfig) ?? cfg;
-    const { prompt, duplicate } = configuredRequest ?? (await readRequest());
-    if (duplicate) {
-      return { kind: "result" as const, result: duplicate };
-    }
     signal?.throwIfAborted();
     resources?.assertOpen();
     return params.prepare({ resources, modelConfig, effectiveCfg, prompt, explicitModelConfig });
@@ -321,6 +301,7 @@ export async function runMediaGenerationTask(params: {
   inputProvenance?: InputProvenance;
   prompt: string;
   requestKey: string;
+  deliveryMode?: "review";
   providerId?: string;
   scheduleBackgroundWork: MediaGenerateBackgroundScheduler;
   onFailure: (message: string, meta?: Record<string, unknown>) => void;
@@ -367,8 +348,13 @@ export async function runMediaGenerationTask(params: {
       inputProvenance: params.inputProvenance ?? { kind: "external_user" },
       prompt: params.prompt,
       providerId: params.providerId,
+      deliveryMode: params.deliveryMode,
       assertCurrent: assertAdmissionCurrent,
     });
+    if (params.deliveryMode === "review" && (!handle?.detach || !handle.deliveryQueueContext)) {
+      lifecycle.failTaskRun({ handle });
+      throw new ToolInputError("Review-before-delivery requires a durable chat session.");
+    }
     const admitExecution = async <T>(start: () => T): Promise<{ execution: T }> => {
       try {
         return await runWithAgentToolSourceExecutionScope(assertAdmissionCurrent, async () => {
@@ -402,7 +388,12 @@ export async function runMediaGenerationTask(params: {
           {
             type: "text" as const,
             text: [
-              `Background task started for ${generationLabel} generation (${handle.taskId}). Do not call ${toolName} again for this request. Do not wait, poll, or yield for it: end this turn (a short acknowledgement at most); the completion arrives as a later turn and sends the finished ${generationLabel} here.`,
+              ...(params.deliveryMode === "review"
+                ? [
+                    "Review-before-delivery is enabled. Produced candidates remain private until an exact-task delivery decision; do not send them automatically.",
+                  ]
+                : []),
+              `Background task started for ${generationLabel} generation (${handle.taskId}). Do not call ${toolName} again for this request. Do not wait, poll, or yield for it: end this turn (a short acknowledgement at most); ${params.deliveryMode === "review" ? "a later review turn inspects the saved candidate before an explicit delivery decision." : `the completion arrives as a later turn and sends the finished ${generationLabel} here.`}`,
               ...(params.messages ?? []),
             ]
               .filter((entry): entry is string => Boolean(entry))

@@ -67,7 +67,11 @@ starts them over.
 The review reads a recent excerpt through the finished turn, bounded to 64
 transcript events and 32 KiB. Large tool results can be replaced with explicit
 omission notices; missing outcomes must not be inferred. If a required context
-boundary cannot fit, the review stops without a model call.
+boundary cannot fit, the review stops without a model call. The initiating sender
+and model are looked up separately within 20,000 events and 8 MiB, omitting large
+tool-result bodies. If that window cannot retain the initiating input, the review
+reports that the input is outside its bounded context instead of guessing who
+requested the turn.
 
 It reuses the foreground provider, model, and auth profile, with a minimal
 prompt and only the `skill_workshop` tool. Workspace bootstrap files, the full

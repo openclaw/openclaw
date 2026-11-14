@@ -264,6 +264,9 @@ it("keeps settings available after an admitted command rejects", async () => {
   await waitForSolid(() =>
     expect(view.container.textContent).toContain("Example notification service is unavailable."),
   );
+  expect(view.container.textContent).toContain(
+    "Couldn’t complete the notification request. Try again.",
+  );
   expect(view.getByRole("button", { name: "Unsubscribe" })).toBeTruthy();
   expect(view.container.querySelectorAll(".cfg-field__error")).toHaveLength(1);
   expect(view.getByRole("button", { name: "Send test" }).hasAttribute("disabled")).toBe(false);

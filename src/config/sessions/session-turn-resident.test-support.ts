@@ -228,7 +228,7 @@ export function runSessionTurnResidentTests(
       }),
   );
 
-  it("uses committed identities for fresh inputs and returns stored bytes on retry", () =>
+  it("checks absent pending keys and returns stored bytes on retry", () =>
     withActor(async (f) => {
       expect((await accept(f, { turn: turn(f, "committed-input") })).kind).toBe("committed");
       withReads(f, (reads) => {
@@ -236,7 +236,8 @@ export function runSessionTurnResidentTests(
           version: { rawSeq: 1 },
           expectedSessionState: { abortedLastRun: false },
         });
-        expect(reads.read).toBe(0);
+        // Active residency cannot prove that a key has no retained source receipt.
+        expect(reads.read).toBe(1);
         const retry = turn(f, "committed-input", "different retry bytes");
         expect(f.prepareTurn(retry).messages?.[0]?.existing).toMatchObject({
           message: { content: "committed-input" },
@@ -263,7 +264,8 @@ export function runSessionTurnResidentTests(
       }
       withReads(f, (reads) => {
         expect(f.prepareTurn(turn(f)).messages?.[0]?.existing).toBeUndefined();
-        expect(reads.read).toBe(1);
+        // One indexed source-receipt lookup and one transcript identity lookup.
+        expect(reads.read).toBe(2);
       });
     }));
 

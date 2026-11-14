@@ -68,7 +68,7 @@ it.each([
   {
     interrupted: false,
     screenshots: 0,
-    label: "keeps genuinely completed work successful after summary recovery",
+    label: "summarizes completed work when reasoning display is on",
   },
   // The summary reopens the session within contextWindow * 8 bytes; screenshots
   // fill those bytes long before the token budget, so the request must survive.
@@ -78,11 +78,7 @@ it.each([
     label: "keeps the user's request in view after a screenshot-heavy cut-off",
   },
 ])("$label", async ({ interrupted, screenshots }) => {
-  const sessionId = screenshots
-    ? "screenshot-finalization"
-    : interrupted
-      ? "interrupted-finalization"
-      : "completed-finalization";
+  const sessionId = `finalization-${interrupted}-${screenshots}`;
   await withOpenClawTestState({ label: sessionId }, async (state) => {
     const bundled = state.path("bundled");
     await fs.mkdir(bundled);
@@ -205,6 +201,7 @@ it.each([
               models: [
                 completionModelDefinition({
                   id: modelId,
+                  reasoning: true,
                   ...(screenshots
                     ? { contextWindow: 65_536, input: ["text", "image"] }
                     : { contextWindow: 200_000 }),
@@ -246,6 +243,7 @@ it.each([
               },
               provider: "anthropic",
               model: modelId,
+              reasoningLevel: interrupted ? "off" : "on",
               prompt,
               toolsAllow: ["read", "write"],
               cleanupBundleMcpOnRunEnd: true,

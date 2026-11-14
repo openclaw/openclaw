@@ -10,8 +10,11 @@ import {
   hasAgentScopeColumn,
   legacyMemorySchemaError,
   memoryAgentPredicate,
+  MEMORY_QUERY_COLUMNS,
   MEMORY_TABLE_NAME,
   quoteLanceSqlString,
+  type MemoryQueryColumn,
+  type MemoryQueryFilter,
 } from "./lancedb-schema.js";
 
 // LanceDB's CJS serializer needs Arrow datatypes from the same module instance.
@@ -39,14 +42,6 @@ type MemoryListOptions = {
 export type MemorySearchResult = {
   entry: MemoryEntry;
   score: number;
-};
-
-export const MEMORY_QUERY_COLUMNS = ["id", "text", "importance", "category", "createdAt"] as const;
-export type MemoryQueryColumn = (typeof MEMORY_QUERY_COLUMNS)[number];
-export type MemoryQueryFilter = {
-  column: MemoryQueryColumn;
-  operator: "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" | "LIKE";
-  value: string | number;
 };
 
 type MemoryReadGuard = {

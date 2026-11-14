@@ -54,6 +54,7 @@ export type ChannelIngressQueuePruneOptions = {
   failedTtlMs?: number;
   pendingMaxEntries?: number;
   completedMaxEntries?: number;
+  /** Separate caps for actual failures and queue-policy drop replay guards. */
   failedMaxEntries?: number;
   protectIds?: Iterable<string>;
   now?: number;
