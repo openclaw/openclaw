@@ -66,6 +66,12 @@ describe("audit command parsing", () => {
     { flag: "--after", options: { after: "2026-02-30T00:00:00Z" } },
     { flag: "--before", options: { before: "July 1, 2026" } },
     { flag: "--after", options: { after: "" } },
+    { flag: "--agent", options: { agentId: "" } },
+    { flag: "--session", options: { sessionKey: "" } },
+    { flag: "--run", options: { runId: "" } },
+    { flag: "--execution", options: { executionId: "" } },
+    { flag: "--channel", options: { channel: "" } },
+    { flag: "--cursor", options: { cursor: "" } },
   ])("rejects invalid $flag before calling the Gateway", async ({ flag, options }) => {
     await expect(auditListCommand(options, runtime)).rejects.toThrow(flag);
     expect(callGateway).not.toHaveBeenCalled();
