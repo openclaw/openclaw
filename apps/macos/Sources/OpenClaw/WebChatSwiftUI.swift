@@ -733,7 +733,8 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                     webChatSwiftLogger.error("gateway refresh failed \(error.localizedDescription, privacy: .public)")
                 }
 
-                let stream = await self.connection.subscribe()
+                let stream = await self.connection.subscribe(
+                    matching: { OpenClawChatGatewayPayloadCodec.acceptsEvent($0) })
                 var previousLease: GatewayConnection.ServerLease?
                 for await delivery in stream {
                     if Task.isCancelled {
