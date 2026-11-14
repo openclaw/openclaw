@@ -325,4 +325,22 @@ describe("openclaw-file-preview-modal", () => {
       expect(modal.querySelector(".chip.accent")?.textContent).toBe(label);
     },
   );
+
+  it("matches NFD macOS file paths against NFC search queries", async () => {
+    // macOS stores file paths in NFD (decomposed); users type in NFC
+    // (composed). Without canonical normalization the includes() check misses.
+    const nfdPath = "plans/résumé.md".normalize("NFD");
+    const nfcQuery = "résumé".normalize("NFC");
+    expect(nfdPath).not.toBe(nfcQuery.normalize("NFD")); // sanity: forms differ
+    const modal = await renderPreview({
+      query: nfcQuery,
+      previewFiles: [
+        { path: nfdPath, size: "1.0 KB", contents: "Plan file" },
+        { path: "other/file.txt", size: "2.0 KB", contents: "Different file" },
+      ],
+    });
+    const items = [...modal.querySelectorAll<HTMLButtonElement>(".item")];
+    expect(items.length).toBe(1);
+    expect(items[0]?.getAttribute("data-path")).toBe(nfdPath);
+  });
 });

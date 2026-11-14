@@ -67,9 +67,12 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
       );
   const activeItem = () => ordered("item").find((node) => node.classList.contains("is-active"));
   const filteredFiles = createMemo(() => {
-    const query = props.layout === "files" ? props.query.trim().toLowerCase() : "";
+    // Canonical NFC so NFD file paths (macOS) still match NFC queries.
+    const query = props.layout === "files" ? props.query.trim().toLowerCase().normalize("NFC") : "";
     return query
-      ? props.files.filter((file) => `${file.path}\n${file.contents}`.toLowerCase().includes(query))
+      ? props.files.filter((file) =>
+          `${file.path}\n${file.contents}`.toLowerCase().normalize("NFC").includes(query),
+        )
       : props.files;
   });
   const activeFile = createMemo(
