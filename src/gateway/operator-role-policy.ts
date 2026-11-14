@@ -13,6 +13,7 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  OpenClawIdPrincipalChangedError,
   openclawIdTunnelRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
@@ -198,7 +199,7 @@ export function resolveCreatorSandbox(
   const principal = creation?.openclawIdPrincipal;
   if (principal?.kind === "member") {
     if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
-      throw new Error("OpenClaw ID membership authority changed");
+      throw new OpenClawIdPrincipalChangedError();
     }
     return openclawIdTunnelRolePolicy(principal)?.sandbox === "required" ? "required" : undefined;
   }
