@@ -34,7 +34,6 @@ type BootProbe = {
   transcriptMs: number;
   composerMs: number;
   navigationOffsetMs: number;
-  styleReads: number | null;
 };
 type WireFrame = {
   id: string;
@@ -262,17 +261,10 @@ function probe(profileStyles: boolean) {
     transcriptMs: 0,
     composerMs: 0,
     navigationOffsetMs: performance.timeOrigin - origin,
-    styleReads: profileStyles ? 0 : null,
   };
   Reflect.set(window, "__liveBoot", data);
   if (profileStyles) {
     console.timeStamp("control-ui-live-boot:document");
-    // oxlint-disable-next-line typescript/unbound-method -- Forward the original receiver with call below.
-    const read = CSSStyleDeclaration.prototype.getPropertyValue;
-    CSSStyleDeclaration.prototype.getPropertyValue = function (property) {
-      data.styleReads!++;
-      return read.call(this, property);
-    };
   }
   const Original = window.WebSocket;
   window.WebSocket = new Proxy(Original, {
