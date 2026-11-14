@@ -265,6 +265,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         recommended: catalogEntry?.recommended,
         disabled: option.disabled,
         unavailableReason: option.disabled ? option.unavailableReason : undefined,
+        unavailableUntil: catalogEntry?.unavailableUntil,
         provider: catalog.provider(
           option.value,
           isDefault
@@ -303,6 +304,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
           unavailableReason: choice.unavailableReason,
+          unavailableUntil: choice.unavailableUntil,
           recommended: pickerOption.recommended,
         });
       }
@@ -689,12 +691,12 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   });
 }
 
-export function ChatModelControls(props: ChatModelControlsProps) {
+export function ChatModelControls(props: ChatModelControlsProps & { showEffort?: boolean }) {
   const controls = createChatModelControls(props);
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       <ChatModelPicker {...controls().model} />
-      <ChatEffortPicker {...controls().effort} />
+      {props.showEffort !== false ? <ChatEffortPicker {...controls().effort} /> : undefined}
     </div>
   );
 }

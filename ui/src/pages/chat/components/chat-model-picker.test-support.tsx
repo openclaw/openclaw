@@ -46,7 +46,9 @@ export function mountModelPicker(params: Partial<PickerProps>, options?: MountSo
   return { ...view, update };
 }
 export const waitForModelMenu = (container: HTMLElement) =>
-  waitForSolid(() => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull());
+  waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu[aria-label]")).not.toBeNull(),
+  );
 
 export function selectModelProvider(container: ParentNode, provider: string) {
   container

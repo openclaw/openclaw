@@ -382,6 +382,7 @@ final class DashboardManager {
     }
 
     private func replaceWithRouteFailure(_ current: DashboardWindowController) {
+        if self.showRemovalIfNeeded(in: current, present: false) { return }
         guard current.currentURL != Self.failureURL || current.auth.hasCredential else { return }
         let replacement = self.replaceWindowController(
             current,
@@ -655,6 +656,7 @@ final class DashboardManager {
         // Keep observing while the failure page is up so a recovered tunnel
         // swaps the window back to the live dashboard.
         self.observeEndpointChanges()
+        if self.showRemovalIfNeeded(in: controller, present: true) { return }
         controller.showFailure(title: copy.title, message: copy.message, detail: copy.detail)
     }
 

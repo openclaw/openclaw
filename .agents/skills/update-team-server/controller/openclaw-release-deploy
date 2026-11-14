@@ -1634,7 +1634,7 @@ stopped_system_owners() {
 }
 
 stopped_restored_snapshot() {
-	local original_pid="$1" system_snapshot user_snapshot listeners
+	local original_pid="$1" system_snapshot user_snapshot listeners runtime_gid
 	local -a properties=(ActiveState SubState MainPID ControlPID Job UnitFileState ExecMainPID InvocationID ExecMainStartTimestampMonotonic ControlGroup)
 	local -a arguments=()
 	local property
@@ -1645,13 +1645,14 @@ stopped_restored_snapshot() {
 	user_snapshot="$(user_systemctl show openclaw-gateway.service "${arguments[@]}")" || return 1
 	listeners="$("$ss_bin" -H -ltnp "sport = :$gateway_port")" || return 1
 	[[ -z "$listeners" ]] || return 1
+	runtime_gid="$(id -g openclaw)" || return 1
 	SYSTEM_SNAPSHOT="$system_snapshot" USER_SNAPSHOT="$user_snapshot" GATEWAY_RUNTIME_BIN="$gateway_runtime_bin" "$node_bin" -e '
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const [boundary, procRoot, originalPid, servingRoot, runtimeHome, port, rawUid, rawGid] = process.argv.slice(1);
+const [boundary, procRoot, originalPid, servingRoot, runtimeHome, port, rawUid, rawGid, rawRuntimeUid, rawRuntimeGid] = process.argv.slice(1);
 const requireFact = (ok, message) => { if (!ok) throw new Error(message); };
-const uid = Number(rawUid), gid = Number(rawGid);
-requireFact([rawUid, rawGid].every(value => /^[0-9]+$/.test(value)) &&
-  [uid, gid].every(value => Number.isSafeInteger(value) && value >= 0), "invalid cgroup owner identity");
+const uid = Number(rawUid), gid = Number(rawGid), runtimeUid = Number(rawRuntimeUid), runtimeGid = Number(rawRuntimeGid);
+requireFact([rawUid, rawGid, rawRuntimeUid, rawRuntimeGid].every(value => /^[0-9]+$/.test(value)) &&
+  [uid, gid, runtimeUid, runtimeGid].every(value => Number.isSafeInteger(value) && value >= 0), "invalid cgroup owner identity");
 const fields = ["ActiveState", "SubState", "MainPID", "ControlPID", "Job", "UnitFileState",
   "ExecMainPID", "InvocationID", "ExecMainStartTimestampMonotonic", "ControlGroup"];
 function parse(raw, extra = []) {
@@ -1696,23 +1697,24 @@ requireFact(system.User === "openclaw" && system.Group === "openclaw" &&
   "stopped Gateway execution configuration changed");
 const root = path.join(boundary, "sys/fs/cgroup");
 const identity = entry => ({ dev: entry.dev, ino: entry.ino, uid: entry.uid, gid: entry.gid, mode: entry.mode & 0o7777 });
-const owned = entry => entry.uid === uid && entry.gid === gid && !(entry.mode & 0o022);
+const owned = (entry, delegated = false) => !(entry.mode & 0o022) &&
+  (entry.uid === uid && entry.gid === gid || delegated && entry.uid === runtimeUid && entry.gid === runtimeGid);
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
-function directoryIdentity(directory) {
+function directoryIdentity(directory, delegated = false) {
   const entry = fs.lstatSync(directory);
-  requireFact(entry.isDirectory() && !entry.isSymbolicLink() && owned(entry), "cgroup directory is delegated or unsafe");
+  requireFact(entry.isDirectory() && !entry.isSymbolicLink() && owned(entry, delegated), "cgroup directory has an unsafe owner or mode");
   return identity(entry);
 }
 requireFact(path.resolve(boundary) === boundary && fs.realpathSync(root) === root, "cgroup root is not canonical");
 const ancestors = [boundary, path.join(boundary, "sys"), path.join(boundary, "sys/fs")]
   .map(directory => ({ path: directory, identity: directoryIdentity(directory) }));
-function controlFile(file, read = false) {
+function controlFile(file, read = false, delegated = false) {
   const before = fs.lstatSync(file);
-  requireFact(before.isFile() && owned(before), "cgroup control is delegated or unsafe");
+  requireFact(before.isFile() && owned(before, delegated), "cgroup control has an unsafe owner or mode");
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
     const opened = fs.fstatSync(fd);
-    requireFact(opened.isFile() && owned(opened) && equal(identity(before), identity(opened)), "cgroup control changed at open");
+    requireFact(opened.isFile() && owned(opened, delegated) && equal(identity(before), identity(opened)), "cgroup control changed at open");
     let contents;
     if (read) {
       const bytes = Buffer.alloc(257), length = fs.readSync(fd, bytes, 0, bytes.length, 0);
@@ -1727,11 +1729,11 @@ function controlFile(file, read = false) {
 function group(unit, name) {
   requireFact(unit.ControlGroup === "" || unit.ControlGroup === name, "Gateway cgroup is not canonical");
   const hierarchy = [];
-  const inspect = directory => {
-    const entry = directoryIdentity(directory);
+  const inspect = (directory, delegated = false) => {
+    const entry = directoryIdentity(directory, delegated);
     const controls = ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control"]
-      .map(control => ({ name: control, ...controlFile(path.join(directory, control)) }));
-    requireFact(equal(entry, directoryIdentity(directory)), "cgroup directory changed during inspection");
+      .map(control => ({ name: control, ...controlFile(path.join(directory, control), false, delegated) }));
+    requireFact(equal(entry, directoryIdentity(directory, delegated)), "cgroup directory changed during inspection");
     hierarchy.push({ path: directory, directory: entry, controls });
   };
   inspect(root);
@@ -1740,13 +1742,10 @@ function group(unit, name) {
     current = path.join(current, part);
     const entry = fs.lstatSync(current, { throwIfNoEntry: false });
     if (!entry) return { path: name, present: false, hierarchy };
-    inspect(current);
+    inspect(current, current === root + name);
   }
-  const directory = directoryIdentity(current);
-  for (const child of fs.readdirSync(current)) {
-    const entry = fs.lstatSync(path.join(current, child));
-    requireFact(!entry.isDirectory() && !entry.isSymbolicLink(), "stopped Gateway cgroup has an unchecked subgroup or symlink");
-  }
+  const directory = directoryIdentity(current, true);
+  // The kernel population bit covers the whole delegated subtree, including agent-exec.
   const eventFile = controlFile(path.join(current, "cgroup.events"), true), events = eventFile.contents;
   const values = new Map();
   for (const line of events.trim().split("\n")) {
@@ -1755,7 +1754,7 @@ function group(unit, name) {
     values.set(match[1], match[2]);
   }
   requireFact(values.get("populated") === "0", "Gateway cgroup still contains processes");
-  requireFact(equal(directory, directoryIdentity(current)), "Gateway cgroup changed during inspection");
+  requireFact(equal(directory, directoryIdentity(current, true)), "Gateway cgroup changed during inspection");
   return { path: name, present: true, directory, events, eventIdentity: eventFile.identity, hierarchy };
 }
 const groups = [group(system, "/system.slice/openclaw-gateway.service")];
@@ -1765,7 +1764,7 @@ const config = crypto.createHash("sha256").update(JSON.stringify([
   system.ExecStart, system.User, system.Group, system.Environment])).digest("hex");
 for (const name of ["ExecStart", "User", "Group", "Environment"]) delete system[name];
 process.stdout.write(JSON.stringify({ system, user, ancestors, groups, config }));
-' "$ancestor_boundary" "$proc_root" "$original_pid" "$serving_root" "$runtime_home" "$gateway_port" "$root_uid" "$root_gid"
+' "$ancestor_boundary" "$proc_root" "$original_pid" "$serving_root" "$runtime_home" "$gateway_port" "$root_uid" "$root_gid" "$runtime_uid" "$runtime_gid"
 }
 
 install_migration_guard_current() {

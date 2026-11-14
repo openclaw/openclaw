@@ -1060,8 +1060,9 @@ div.new-session-page__project-search {
     order: 2;
   }
 
+  /* No taller floor here: the surface rests at its own one-line minimum, where
+     the touch row's clearance already reads as one empty line under the prompt. */
   .new-session-page__composer .new-session-page__message {
-    min-height: clamp(48px, 9svh, 80px);
     max-height: min(10lh, 34svh);
   }
 
@@ -1551,18 +1552,14 @@ div.new-session-page__project-search {
     flex: 1;
   }
 
+  /* The picker holds the whole track, so nothing moves when the catalog
+     arrives; the chip inside it hugs its label and chevron. */
   .new-session-page .agent-chat__composer-controls .chat-controls__model-trigger {
-    width: 100%;
-    justify-content: flex-start;
+    width: fit-content;
   }
 
   .new-session-page .chat-controls__trigger-provider-icon {
     display: none;
-  }
-
-  .new-session-page .chat-controls__model-trigger .chat-controls__inline-select-label {
-    width: 0;
-    flex: 1;
   }
 
   .new-session-page .chat-controls__model-trigger--loading .chat-controls__inline-select-chevron {
