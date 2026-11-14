@@ -1,0 +1,119 @@
+// Shared state database target for the generic copy-and-swap fallback.
+import type { DatabaseSync } from "node:sqlite";
+import { VERSION } from "../version.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
+import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
+import { TEMPLATE_RECORD_VERSIONS } from "./openclaw-state-db-schema-v36-template-names.js";
+import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
+import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
+import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import {
+  buildSqliteWithFoldIns,
+  type SqliteFoldInStep,
+  type SqliteSwapMap,
+  type SqliteSwapReport,
+  type SqliteSwapTarget,
+} from "./sqlite-copy-swap.js";
+
+const CANONICAL_TABLES = new Set(
+  [...OPENCLAW_STATE_SCHEMA_SQL.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map(
+    (match) => match[1]!,
+  ),
+);
+
+/**
+ * Shipped steps that move rows between tables. The fallback runs them on a
+ * private scratch copy before the name-matched copy; each one that throws is
+ * reported and its rows are set aside instead.
+ */
+const STATE_FOLD_IN_STEPS: readonly SqliteFoldInStep[] = [
+  { id: "v12-singleton-fold-in", run: migrateSingletonStateFoldInV12 },
+  { id: "v13-json-canonical-rows", run: migrateJsonCanonicalWideRowsV13 },
+];
+
+/**
+ * Meaning changes between released shared-state schemas (2026.7.1 to 2026.11.3)
+ * and this build that a name-matched copy cannot express. Found by diffing the
+ * released schemas; everything else copies by name.
+ */
+export const STATE_SWAP_MAP: SqliteSwapMap = {
+  // v36: Claw tables and fields became Templates.
+  tables: {
+    claw_installs: "template_installs",
+    claw_package_refs: "template_package_refs",
+    claw_cron_refs: "template_cron_refs",
+    claw_mcp_server_refs: "template_mcp_server_refs",
+    claw_workspace_files: "template_workspace_files",
+  },
+  columns: {
+    "template_installs.claw_name": "template_name",
+    "template_installs.claw_version": "template_version",
+    "template_package_refs.claw_name": "template_name",
+  },
+  values: {
+    "template_package_refs.origin": { "claw-introduced": "template-introduced" },
+    "template_mcp_server_refs.origin": { "claw-introduced": "template-introduced" },
+    "agent_provenance.created_via": { claw: "template" },
+    ...Object.fromEntries(
+      TEMPLATE_RECORD_VERSIONS.map(([table, versions]) => [
+        `${table}.schema_version`,
+        Object.fromEntries(versions),
+      ]),
+    ),
+  },
+  // Leases belong to processes that are gone once the old file is replaced.
+  ephemeral: new Set(["state_leases", "agent_database_leases"]),
+};
+
+function createStateSchema(db: DatabaseSync, sourceTables: ReadonlySet<string>): void {
+  db.exec(
+    getOpenClawStateRuntimeSchema({
+      includeVersionLazyAdditiveTables: true,
+      includeAgentDeletionJournal: true,
+    }),
+  );
+  for (const table of sourceTables) {
+    // First-use feature tables exist only where the feature already wrote.
+    if (CANONICAL_TABLES.has(table)) {
+      db.exec(getOpenClawStateFeatureSchemaSql(table));
+    }
+  }
+}
+
+function stampStateSchema(db: DatabaseSync): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+     VALUES ('primary', 'global', ?, NULL, ?, ?, ?)
+     ON CONFLICT(meta_key) DO UPDATE SET role = 'global', schema_version = excluded.schema_version,
+       agent_id = NULL, app_version = excluded.app_version, updated_at = excluded.updated_at`,
+  ).run(OPENCLAW_STATE_SCHEMA_VERSION, VERSION, now, now);
+  writeStateSchemaContentVersion(db);
+}
+
+export function createStateSwapTarget(): SqliteSwapTarget {
+  return {
+    label: "state",
+    version: OPENCLAW_STATE_SCHEMA_VERSION,
+    createSchema: createStateSchema,
+    stamp: stampStateSchema,
+    map: STATE_SWAP_MAP,
+  };
+}
+
+/** Generic rebuild of the shared state database. The source file is never written. */
+export function buildStateDatabaseByCopy(
+  sourcePath: string,
+  outPath: string,
+  scratchDir: string,
+): { report: SqliteSwapReport; foldInFailures: string[] } {
+  return buildSqliteWithFoldIns(
+    createStateSwapTarget(),
+    STATE_FOLD_IN_STEPS,
+    sourcePath,
+    outPath,
+    scratchDir,
+  );
+}

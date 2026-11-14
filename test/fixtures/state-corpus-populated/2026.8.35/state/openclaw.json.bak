@@ -1,0 +1,39 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/fixture/workspace",
+      "systemAgent": {
+        "agentId": "main"
+      },
+      "heartbeat": {
+        "agentId": "main"
+      }
+    },
+    "ownership": "explicit",
+    "entries": {
+      "main": {
+        "workspace": "/home/fixture/workspace"
+      },
+      "ops": {
+        "name": "ops",
+        "workspace": "/home/fixture/workspace-ops",
+        "agentDir": "/home/fixture/.openclaw/agents/ops/agent",
+        "identity": {
+          "name": "ops"
+        }
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local"
+  },
+  "meta": {
+    "migrations": {
+      "modelPolicyAllowlist": true
+    },
+    "lastTouchedVersion": "2026.8.35"
+  },
+  "talk": {
+    "agentId": "main"
+  }
+}

@@ -135,6 +135,14 @@ const rawSqliteAllowPathGroups = {
     "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
   ],
+  "startup copy-and-swap upgrade copies, rebuilds and verifies private shadow databases": [
+    "src/state/openclaw-agent-db-swap.ts",
+    "src/state/openclaw-state-db-swap.ts",
+    "src/state/sqlite-copy-swap.ts",
+    "src/state/state-upgrade-tree.ts",
+    "src/state/state-upgrade-validate.ts",
+    "src/state/state-upgrade.ts",
+  ],
   "read-only shared state database access": [
     "src/state/openclaw-agent-db-readonly.ts",
     "src/state/openclaw-state-db-readonly.ts",
