@@ -17,10 +17,21 @@ export async function describeMemberDevices(member: MemberRecord) {
   return Promise.all(
     member.peer_keys.map(async (peer_key) => {
       const device = member.devices?.[peer_key];
+      const deviceFp = device ? await fingerprint(device.device_pub) : null;
+      const label = device?.label.trim() ?? "";
+      const needsIdentity =
+        !label ||
+        member.peer_keys.some(
+          (peer) => peer !== peer_key && member.devices?.[peer]?.label.trim() === label,
+        );
+      // All member-device surfaces share this display label; stored signed labels stay intact.
+      const displayLabel = needsIdentity
+        ? `${label || "Device"} (${(deviceFp ?? (await fingerprint(peer_key))).slice(3, 11)})`
+        : label;
       return {
         peer_key,
-        device_fp: device ? await fingerprint(device.device_pub) : null,
-        label: device?.label ?? "",
+        device_fp: deviceFp,
+        label: displayLabel,
         approved_by: device?.approved_by ?? null,
         last_seen: member.last_seen[peer_key] ?? null,
       };

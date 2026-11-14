@@ -157,7 +157,7 @@ describe("Gateway membership authority and enforcement", () => {
           {
             peerKey: bob,
             deviceFp: null,
-            label: "",
+            label: `Device (${(await fingerprint(bob)).slice(3, 11)})`,
             approvedBy: null,
             lastSeen: expect.any(Number),
             connections: 1,

@@ -83,25 +83,25 @@ suite.define(() => {
           {
             peerKey: peers[0],
             deviceFp: fingerprints[0],
-            label: "Chrome on macOS",
+            label: "Chrome on Linux (11111111)",
             approvedBy: { kind: "invite", invite_id: "team-invite" },
           },
           {
             peerKey: peers[1],
             deviceFp: fingerprints[1],
-            label: "Safari on iPad",
+            label: "Chrome on Linux (22222222)",
             approvedBy: { kind: "member_device", device_fp: fingerprints[0] },
           },
           {
             peerKey: peers[2],
             deviceFp: fingerprints[2],
-            label: "Safari on iPhone",
+            label: "Chrome on Linux (33333333)",
             approvedBy: { kind: "member_device", device_fp: fingerprints[1] },
           },
           {
             peerKey: peers[3],
             deviceFp: fingerprints[3],
-            label: "Firefox on Linux — independent device",
+            label: "Device (44444444)",
             approvedBy: { kind: "owner", by: "root" },
           },
         ].map((device) =>
@@ -135,7 +135,7 @@ suite.define(() => {
         await expect
           .poll(() => row.getByRole("button", { name: "Remove", exact: true }).isEnabled())
           .toBe(true);
-        expect(await row.textContent()).toContain("Approved by Safari on iPad");
+        expect(await row.textContent()).toContain("Approved by Chrome on Linux (22222222)");
         expect(await row.textContent()).toContain("Approved via invite team-invite");
         expect(await row.textContent()).toContain("last seen 5 min ago");
         const first = row.locator(".ocid-access__device").first();
@@ -148,7 +148,7 @@ suite.define(() => {
           writeFileSync(path.join(suite.artifactDir, `after-${width}.png`), frame.png);
           await first.getByRole("button", { name: "Remove device", exact: true }).click();
           const confirm = first.getByRole("button", {
-            name: "Remove Chrome on macOS",
+            name: "Remove Chrome on Linux (11111111)",
             exact: true,
           });
           await confirm.waitFor();
@@ -174,7 +174,9 @@ suite.define(() => {
           removal: { devices: 3, connectionsClosed: 2, runsCancelled: 1 },
         });
         await first.getByRole("button", { name: "Remove device", exact: true }).click();
-        await first.getByRole("button", { name: "Remove Chrome on macOS", exact: true }).click();
+        await first
+          .getByRole("button", { name: "Remove Chrome on Linux (11111111)", exact: true })
+          .click();
         await expect
           .poll(async () => (await gateway.getRequests("openclawId.authority")).length)
           .toBe(1);
@@ -184,7 +186,7 @@ suite.define(() => {
         });
         await expect
           .poll(() => surface.textContent())
-          .toContain("Chrome on macOS removed · 2 connections closed · 1 task stopped");
+          .toContain("Chrome on Linux (11111111) removed · 2 connections closed · 1 task stopped");
         await gateway.setMethodResponse("openclawId.people", {
           link: {
             ...link,
@@ -194,7 +196,9 @@ suite.define(() => {
         });
         await gateway.emitGatewayEvent("openclawId.people.changed");
         await expect.poll(() => row.locator(".ocid-access__device").count()).toBe(1);
-        expect(await row.textContent()).toContain("Firefox on Linux");
+        expect(await row.locator(".ocid-access__device .ocid-access__title").textContent()).toBe(
+          "Device (44444444)",
+        );
         await gateway.setMethodResponse("openclawId.people", {
           link: { ...link, ownerDevices: [] },
         });
@@ -202,7 +206,7 @@ suite.define(() => {
         await expect
           .poll(() => row.getByRole("button", { name: "Remove device", exact: true }).count())
           .toBe(0);
-        expect(await row.textContent()).toContain("Chrome on macOS");
+        expect(await row.textContent()).toContain("Chrome on Linux");
         console.log("Member device screenshots:", suite.artifactDir);
       },
     );

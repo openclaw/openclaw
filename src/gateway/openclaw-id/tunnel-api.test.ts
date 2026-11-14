@@ -109,7 +109,13 @@ describe("OpenClaw ID tunnel API", () => {
         account_id: "acct-viewer",
         role: "viewer",
         devices: [
-          { peer_key: member, device_fp: null, label: "", approved_by: null, this_device: true },
+          {
+            peer_key: member,
+            device_fp: null,
+            label: `Device (${(await fingerprint(member)).slice(3, 11)})`,
+            approved_by: null,
+            this_device: true,
+          },
         ],
       },
     });
@@ -128,6 +134,11 @@ describe("OpenClaw ID tunnel API", () => {
       accountId: "bob",
       email: "bob@example.com",
     });
+    mail.message.payload.redemption = await signStatement(
+      "InviteRedemption",
+      { ...mail.message.payload.redemption.body, label: "  " },
+      mail.signer,
+    );
     expect(
       await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
     ).toMatchObject({ ok: true });
@@ -151,7 +162,7 @@ describe("OpenClaw ID tunnel API", () => {
       account_id: "bob",
       peer_key: peer,
       device_pub: formatEd25519PublicKey(phone.publicKey),
-      label: "Bob phone",
+      label: "Chrome on Linux",
     };
     expect(
       (
@@ -170,7 +181,7 @@ describe("OpenClaw ID tunnel API", () => {
               ...target,
               peer_key: child,
               device_pub: formatEd25519PublicKey(childSigner.publicKey),
-              label: "Bob tablet",
+              label: "Chrome on Linux",
             },
             phone,
           ),
@@ -193,13 +204,13 @@ describe("OpenClaw ID tunnel API", () => {
       devices: [
         {
           peer_key: mail.peerKey,
-          label: "Bob browser",
+          label: `Device (${(await fingerprint(formatEd25519PublicKey(mail.signer.publicKey))).slice(3, 11)})`,
           this_device: false,
           approved_by: { kind: "invite", invite_id: invite.inviteId },
         },
         {
           peer_key: peer,
-          label: "Bob phone",
+          label: `Chrome on Linux (${(await fingerprint(target.device_pub)).slice(3, 11)})`,
           device_fp: await fingerprint(target.device_pub),
           this_device: true,
           approved_by: {
@@ -207,15 +218,24 @@ describe("OpenClaw ID tunnel API", () => {
             device_fp: await fingerprint(formatEd25519PublicKey(mail.signer.publicKey)),
           },
         },
-        { peer_key: child, label: "Bob tablet", this_device: false },
+        {
+          peer_key: child,
+          label: `Chrome on Linux (${(await fingerprint(formatEd25519PublicKey(childSigner.publicKey))).slice(3, 11)})`,
+          this_device: false,
+        },
       ],
     });
     const ownerView = (await call(claw.w1, "GET", "membership")).body;
-    expect(ownerView.members[0].devices).toHaveLength(3);
+    expect(ownerView.members[0].devices.map((device: { label: string }) => device.label)).toEqual(
+      view.devices.map((device: { label: string }) => device.label),
+    );
+    expect((await claw.authority.load())?.authority?.members.bob?.devices?.[peer]?.label).toBe(
+      "Chrome on Linux",
+    );
     const people = await service.linkStatus();
     expect(people.members?.[0]?.devices[1]).toMatchObject({
       peerKey: peer,
-      label: "Bob phone",
+      label: `Chrome on Linux (${(await fingerprint(target.device_pub)).slice(3, 11)})`,
       deviceFp: await fingerprint(target.device_pub),
       lastSeen: expect.any(Number),
       approvedBy: { kind: "member_device" },

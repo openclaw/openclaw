@@ -426,7 +426,7 @@ describe("Access page", () => {
         {
           peerKey: "iroh:bob",
           deviceFp: null,
-          label: "Chrome on macOS",
+          label: "Chrome on Linux (11111111)",
           approvedBy: null,
           lastSeen: null,
           connections: 1,
@@ -484,25 +484,25 @@ describe("Access page", () => {
       {
         peerKey: "iroh:a",
         deviceFp: "fp:a" as const,
-        label: "Chrome on macOS",
+        label: "Chrome on Linux (11111111)",
         approvedBy: { kind: "invite" as const, invite_id: "inv-1" },
       },
       {
         peerKey: "iroh:c",
         deviceFp: "fp:c" as const,
-        label: "Phone",
+        label: "Chrome on Linux (33333333)",
         approvedBy: { kind: "member_device" as const, device_fp: "fp:b" as const },
       },
       {
         peerKey: "iroh:b",
         deviceFp: "fp:b" as const,
-        label: "Tablet",
+        label: "Chrome on Linux (22222222)",
         approvedBy: { kind: "member_device" as const, device_fp: "fp:a" as const },
       },
       {
         peerKey: "iroh:d",
         deviceFp: "fp:d" as const,
-        label: "Independent",
+        label: "Device (44444444)",
         approvedBy: { kind: "owner" as const, by: "root" as const },
       },
     ].map((device) =>
@@ -531,7 +531,9 @@ describe("Access page", () => {
       { removal: { devices: 3, connectionsClosed: 2, runsCancelled: 1 } },
     );
     const { container, request } = harness;
-    await vi.waitFor(() => expect(container.textContent).toContain("Approved by Tablet"));
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Approved by Chrome on Linux (22222222)"),
+    );
     expect(container.textContent).toContain("Approved via invite inv-1");
     expect(container.textContent).toContain("Approved with the recovery key");
     expect(container.textContent).toContain("last seen 5 min ago");
@@ -547,7 +549,7 @@ describe("Access page", () => {
     expect(first.querySelector('[role="note"]')).toBeNull();
     button(first, "Remove device")!.click();
     flush();
-    button(first, "Remove Chrome on macOS")!.click();
+    button(first, "Remove Chrome on Linux (11111111)")!.click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("openclawId.authority", {
         action: "submit",
@@ -556,11 +558,11 @@ describe("Access page", () => {
     );
     await vi.waitFor(() =>
       expect(container.textContent).toContain(
-        "Chrome on macOS removed · 2 connections closed · 1 task stopped",
+        "Chrome on Linux (11111111) removed · 2 connections closed · 1 task stopped",
       ),
     );
     expect(container.querySelectorAll(".ocid-access__device")).toHaveLength(1);
-    expect(container.textContent).toContain("Independent");
+    expect(container.textContent).toContain("Device (44444444)");
     expect(container.textContent).toContain("Mira");
   });
 
