@@ -8,7 +8,6 @@ export const gatewayPluginTestFiles = [
   "test/plugins/codex-native-search.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
   "test/plugins/deep-research-recovery.gateway.test.ts",
-  "test/plugins/deep-research-routing.gateway.test.ts",
   "test/plugins/deep-research-startup.gateway.test.ts",
   "test/plugins/reef-shutdown.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
@@ -153,7 +152,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/node-claude-skill-runtime.test.ts",
   "src/gateway/node-invoke-plugin-policy.private-transport.test.ts",
   "src/gateway/node-invoke-plugin-policy.test.ts",
-  "src/gateway/node-invoke-system-run-approval.test.ts",
   "src/gateway/node-reapproval-coordinator.test.ts",
   "src/gateway/openai-compatible-agent-run.test.ts",
   "src/gateway/openclaw-id/claw-store.persistence.test.ts",
@@ -213,7 +211,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/models-manual-policy.integration.test.ts",
   "src/gateway/server-methods/native-hook-relay.test.ts",
   "src/gateway/server-methods/nodes.test.ts",
-  "src/gateway/server-methods/projects.test.ts",
   "src/gateway/server-methods/requester-cron-authority.integration.test.ts",
   "src/gateway/server-methods/send.qa-reply-ambiguity.integration.test.ts",
   "src/gateway/server-methods/send.scheduled-reads.integration.test.ts",
@@ -588,7 +585,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
   "test/plugins/deep-research-recovery.gateway.test.ts",
-  "test/plugins/deep-research-routing.gateway.test.ts",
 ];
 
 export const gatewayClientTestInclude = [

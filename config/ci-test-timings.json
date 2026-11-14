@@ -4281,7 +4281,6 @@
       "ui/src/e2e/new-session-page.transition-cancel.e2e.test.ts": 3,
       "ui/src/e2e/new-session-page.transition.e2e.test.ts": 68,
       "ui/src/e2e/new-session-page.workspace-memory.e2e.test.ts": 61,
-      "ui/src/e2e/new-session-page.workspace-validation.e2e.test.ts": 102,
       "ui/src/e2e/new-session-pending-sidebar.e2e.test.ts": 18,
       "ui/src/e2e/new-session-permission-default.e2e.test.ts": 17,
       "ui/src/e2e/new-session-session-writer.e2e.test.ts": 5,

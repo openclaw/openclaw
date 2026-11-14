@@ -1487,7 +1487,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/new-session/new-session-page-entry.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/new-session-page.workspace-validation.e2e.test.ts",
     ["chat", "new-session"],
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/new-session/new-session-page-entry.ts"],
   ),
