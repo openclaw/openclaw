@@ -344,8 +344,8 @@ preview or offline Add. Ordinary Add binds its review internally and does not
 require a separate plan token. Trust warnings and plugin capabilities still
 require their separate explicit acknowledgements.
 
-For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
-to use the default unused ID.
+For `add` and `dev`, an explicitly empty `--agent-id` or `--workspace` is invalid.
+Omit the option to use the default unused ID or new workspace path.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
