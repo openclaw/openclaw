@@ -23,7 +23,7 @@ const enTerminal = {
     addFiles: "Add files to terminal",
     dropFiles: "Drop files to add them",
     uploadProgress: "Uploading {current} of {total}",
-    uploadFailed: "Couldn’t upload the file. Try again.",
+    uploadFailed: "Couldn’t add the file.",
     retryUpload: "Retry",
     insertUploadedPaths: "Insert uploaded paths",
     uploadExpired: "Uploaded files may have expired. Cancel this batch and choose the files again.",
@@ -57,7 +57,7 @@ const enTerminal = {
     unavailable: en.terminal.unavailable,
     unusableSession:
       "The Gateway returned an unusable terminal session (missing {field}). The Gateway is likely older than this Control UI — update it, then retry.",
-    uploadTooLarge: "Couldn’t upload {file}. Choose a file smaller than 16 MiB.",
+    uploadTooLarge: "Couldn’t upload {file}. Choose a file no larger than 16 MiB.",
     uploadUnsafeCmdPath:
       "Couldn’t insert the file path into cmd.exe. Rename the file without % or ! and try again.",
     uploadUnsupportedShell: "Couldn’t insert the file path into {shell}. Use a supported shell.",
