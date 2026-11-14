@@ -238,7 +238,7 @@ function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow 
           );
         }}
       </Show>
-      {!props.row || props.row.environment.id === "gateway" ? (
+      {controller().connected() && (!props.row || props.row.environment.id === "gateway") ? (
         <SystemsBackups controller={controller()} />
       ) : null}
     </aside>
@@ -482,11 +482,6 @@ function SystemsWorkspace(props: {
             </Errored>
           )}
         </Show>
-        {!controller().connected() ? (
-          <div class="systems-callout" role="status">
-            {t("systems.offlineGateway")}
-          </div>
-        ) : null}
         {auxiliaryErrors().length ? (
           <details class="systems-callout">
             <summary>{t("systems.errors")}</summary>
@@ -518,7 +513,7 @@ function SystemsWorkspace(props: {
             </Show>
           </div>
         ) : null}
-        {!row() || row()!.environment.id === "gateway" ? (
+        {controller().connected() && (!row() || row()!.environment.id === "gateway") ? (
           <SystemsBackups
             controller={controller()}
             onDetails={() => controller().updatePresentation({ showDetails: true })}
@@ -556,7 +551,7 @@ function SystemsWorkspace(props: {
                 <Icon name="monitor" />
               </span>
               <h2>{emptyTitle()}</h2>
-              <p>{emptyHint()}</p>
+              {controller().connected() ? <p>{emptyHint()}</p> : null}
               {row() ? (
                 <button
                   class="systems-text-button"

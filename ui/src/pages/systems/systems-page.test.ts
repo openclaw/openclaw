@@ -442,7 +442,8 @@ describe("Systems workspace", () => {
     await pending.promise;
     flush();
     expect(controller.state.backups).toBeNull();
-    expect(text(page, ".systems-backups")).not.toContain("old-host");
+    expect(page.querySelector(".systems-backups")).toBeNull();
+    expect(page.textContent).not.toContain("old-host");
   });
 
   it("retires a pending storage probe when the connection leaves", async () => {
@@ -466,7 +467,8 @@ describe("Systems workspace", () => {
     await pending.promise;
     flush();
     expect(controller.storageProbes.size).toBe(0);
-    expect(text(page, ".systems-backups")).not.toContain("1 GB free");
+    expect(page.querySelector(".systems-backups")).toBeNull();
+    expect(page.textContent).not.toContain("1 GB free");
   });
 
   it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {
