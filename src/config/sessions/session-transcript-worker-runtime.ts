@@ -9,6 +9,11 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  assertAgentCreationClaimAliases,
+  captureAgentCreationClaim,
+  reserveAgentCreationClaimAdmission,
+} from "../../state/agent-creation-claim.js";
+import {
   captureAgentDatabaseAdmission,
   runWithAgentDatabaseReadAdmissionTurn,
 } from "../../state/agent-database-admission.js";
@@ -196,6 +201,11 @@ export function retainSessionHistoryWorkerDatabase(
         aborters: owned.aborters,
       };
       const { lane: requestedLane, ...readOptions } = readAdmissionOptions;
+      assertAgentCreationClaimAliases(readOptions);
+      const creationClaim = captureAgentCreationClaim(readOptions);
+      if (creationClaim) {
+        reserveAgentCreationClaimAdmission(database, readOptions, () => owned.retire());
+      }
       const deadline = performance.now() + readRequest.timeoutMs;
       const remainingTime = () => {
         const remaining = deadline - performance.now();
@@ -272,6 +282,8 @@ export function retainSessionHistoryWorkerDatabase(
                 return requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    assertAgentCreationClaimAliases(readOptions);
+                    creationClaim?.assertCurrent();
                     const cleanup = getAgentDeletionDatabaseCleanup(readOptions);
                     if (cleanup) {
                       cleanup.assertCurrentHost();
@@ -318,6 +330,7 @@ export function retainSessionHistoryWorkerDatabase(
                     return {
                       ...input,
                       database,
+                      creationClaim: creationClaim?.witness,
                       validation: validation?.validation,
                       projectionReceipt:
                         projectionReceipt &&
@@ -367,6 +380,7 @@ export function retainSessionHistoryWorkerDatabase(
             );
           });
           await retirement;
+          creationClaim?.assertCurrent();
           const received =
             unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (

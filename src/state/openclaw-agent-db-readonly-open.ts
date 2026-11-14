@@ -17,6 +17,8 @@ import {
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
+import { prepareAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { loadOpenClawAgentCanonicalValidationReceipt } from "./openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
@@ -46,6 +48,7 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 export type OpenClawAgentReadOnlyDatabase = {
   agentId: string;
@@ -157,7 +160,18 @@ export function openOpenClawAgentDatabaseReadOnly(
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
     return { found: false, reason: "database-missing" };
   }
-  if (isDeletedAgentDatabasePath(pathname) || !fs.existsSync(pathname)) {
+  if (isDeletedAgentDatabasePath(pathname)) {
+    const statePath = resolveOpenClawStateSqlitePath(options.env ?? process.env);
+    const creationAgentId = resolveAgentCreationClaimAgentId(agentId, statePath);
+    if (
+      !creationAgentId ||
+      !isDeletedAgentDatabasePath(pathname, creationAgentId) ||
+      prepareAgentDeletionJournalStatus(statePath, agentId)() !== "complete"
+    ) {
+      return { found: false, reason: "database-missing" };
+    }
+  }
+  if (!fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
   }
   // Verified-corrupt generations stay quarantined for reads as well as writes:

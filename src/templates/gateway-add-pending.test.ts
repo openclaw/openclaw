@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -10,12 +11,18 @@ import {
   loadTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
+import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveSessionWorkStartError } from "../config/sessions/session-work-start.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeletionCron } from "../gateway/server-methods/agents-delete.fixture.test-support.js";
+import { deleteGatewayAgent } from "../gateway/server-methods/agents-delete.js";
 import { completeAgentOnboarding } from "../gateway/server-methods/agents-onboarding.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+import { reviveAgentDatabasesAfterConfigCommit } from "../gateway/server-reload-agent-databases.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { withResolvedClawHubSource } from "./clawhub-source.js";
@@ -43,6 +50,7 @@ it.each([
   "revoked",
   "abort-before-commit",
   "admitted-applied",
+  "admitted-recreated",
   "admitted-session-replaced",
   "admitted-source-retry",
   "admitted-runtime-retry",
@@ -144,20 +152,22 @@ it.each([
       };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
-      const review = outcome.startsWith("admitted-")
-        ? projectGatewayTemplateAddPlan(
-            await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} }),
-            source,
-            {
-              riskAcknowledgementRequired: false,
-              trustRecord: {
-                clawhubTrustDisposition: "clean",
-                clawhubTrustCheckedAt: "2026-11-04T00:00:00.000Z",
-              },
+      const reviewPlan = async () =>
+        projectGatewayTemplateAddPlan(
+          await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} }),
+          source,
+          {
+            riskAcknowledgementRequired: false,
+            trustRecord: {
+              clawhubTrustDisposition: "clean",
+              clawhubTrustCheckedAt: "2026-11-04T00:00:00.000Z",
             },
-            config,
-          )
-        : undefined;
+          },
+          config,
+        );
+      const review = outcome.startsWith("admitted-") ? await reviewPlan() : undefined;
+      const outsideCreation = AsyncLocalStorage.snapshot();
+      let recreating = false;
       let admittedSessionId: string | undefined;
       let current = true;
       let publicationReached = false;
@@ -182,6 +192,21 @@ it.each([
           });
           if (prepared.status !== "completed" || !prepared.rollback) {
             throw new Error(prepared.status === "error" ? prepared.error : "Missing rollback");
+          }
+          if (outcome === "admitted-recreated" && recreating) {
+            const database = {
+              agentId,
+              path: resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
+              env: state.env,
+            };
+            const read = () =>
+              withSessionHistoryWorkerDatabase(database, (owner) =>
+                owner.readExactEntries({ env: state.env, sessionKeys: [sessionKey] }),
+              );
+            expect((await read()).entries.map((row) => row.sessionKey)).toContain(sessionKey);
+            await expect(outsideCreation(read)).rejects.toThrow(
+              "Agent database belongs to an active agent creation claim",
+            );
           }
           return prepared.rollback;
         },
@@ -226,6 +251,15 @@ it.each([
         },
         prepareAgentChat,
         waitForAgentRuntime: async () => {
+          if (outcome === "admitted-recreated" && recreating) {
+            const committed = (await readConfigFileSnapshot()).config;
+            expect(committed.agents?.entries).toHaveProperty("fixture-first");
+            expect(await readAgentDeletionJournalAsync("fixture-first")).toBeUndefined();
+            setRuntimeConfigSnapshot(committed);
+            await reviveAgentDatabasesAfterConfigCommit(["fixture-first"], (message) => {
+              throw new Error(message);
+            });
+          }
           const entry = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey });
           expect(entry?.sessionId).toBeTruthy();
           const events = await loadTranscriptEvents({
@@ -257,6 +291,45 @@ it.each([
         onAgentReady,
       };
       let result = await applyTemplateAddForGateway(applyInput);
+      if (outcome === "admitted-recreated") {
+        expect(result).toMatchObject({ status: "complete", sessionKey });
+        const previousSessionId = admittedSessionId;
+        const deletion = createDeletionCron(state);
+        try {
+          await expect(
+            deleteGatewayAgent("fixture-first", true, deletion.context),
+          ).resolves.toMatchObject({
+            ok: true,
+            failed: [],
+          });
+        } finally {
+          await deletion.stop();
+        }
+        expect(await readAgentDeletionJournalAsync("fixture-first")).toMatchObject({
+          cleanupCompleted: true,
+          deleteFiles: true,
+        });
+        config = (await readConfigFileSnapshot()).config;
+        expect(config.agents?.entries).not.toHaveProperty("fixture-first");
+        setRuntimeConfigSnapshot(config);
+        await expect(
+          beginSessionEffect({
+            agentId: "fixture-first",
+            scope: "agent:fixture-first",
+            identities: [sessionKey],
+          }),
+        ).rejects.toThrow("deletion is in progress");
+        sourceEntered = false;
+        publicationReached = false;
+        admittedSessionId = undefined;
+        prepareAgentChat.mockClear();
+        onAgentReady.mockClear();
+        applyInput.planIntegrity = (await reviewPlan()).planIntegrity;
+        recreating = true;
+        result = await applyTemplateAddForGateway(applyInput);
+        expect(admittedSessionId).not.toBe(previousSessionId);
+        expect(await readAgentDeletionJournalAsync("fixture-first")).toBeUndefined();
+      }
       if (
         outcome === "admitted-source-retry" ||
         outcome === "admitted-runtime-retry" ||
@@ -319,7 +392,7 @@ it.each([
         );
         expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })).toBeUndefined();
       } else {
-        expect(publicationReached).toBe(true);
+        expect(publicationReached, JSON.stringify(result)).toBe(true);
         expect(config.agents?.entries).toHaveProperty("fixture-first");
         expect(
           loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId,
@@ -329,6 +402,7 @@ it.each([
           status:
             outcome === "applied" ||
             outcome === "admitted-applied" ||
+            outcome === "admitted-recreated" ||
             outcome === "admitted-source-retry" ||
             outcome === "admitted-runtime-retry" ||
             outcome === "admitted-config-retry"
@@ -339,6 +413,7 @@ it.each([
         if (
           outcome !== "applied" &&
           outcome !== "admitted-applied" &&
+          outcome !== "admitted-recreated" &&
           outcome !== "admitted-source-retry" &&
           outcome !== "admitted-runtime-retry" &&
           outcome !== "admitted-config-retry"
@@ -349,6 +424,7 @@ it.each([
       expect(onAgentReady).toHaveBeenCalledTimes(
         outcome === "applied" ||
           outcome === "admitted-applied" ||
+          outcome === "admitted-recreated" ||
           outcome === "admitted-source-retry" ||
           outcome === "admitted-runtime-retry" ||
           outcome === "admitted-config-retry"
