@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { removeCommandByName } from "./command-tree.js";
-import { registerCommandGroups } from "./register-command-groups.js";
+import { registerCommandGroupByName, registerCommandGroups } from "./register-command-groups.js";
 
 function registerLazy(parent: Command, name: string, register: () => void) {
   const placeholder = { name, description: "Lazy test command" };
@@ -31,6 +31,26 @@ async function expectReparseArgv(parent: Command, action: Command, args: string,
 }
 
 describe("lazy command action reparsing", () => {
+  it.each(["alpha", "a"])("replaces commands by %s without disturbing siblings", async (name) => {
+    const program = new Command();
+    program.command("alpha").alias("a");
+    program.command("beta");
+    const action = vi.fn();
+    const entry = {
+      names: [name, "missing"],
+      placeholders: [{ name: "alpha", description: "Alpha" }],
+      register: () => {
+        program.command("alpha").alias("a").action(action);
+      },
+    };
+    for (let index = 0; index < 2; index += 1) {
+      expect(await registerCommandGroupByName(program, [entry], name)).toBe(true);
+      expect(program.commands.map((command) => command.name())).toEqual(["beta", "alpha"]);
+    }
+    await program.parseAsync(["node", "openclaw", "a"]);
+    expect(action).toHaveBeenCalledOnce();
+  });
+
   it("keeps literal flag-looking values through actual lazy reparse", async () => {
     const program = new Command().name("openclaw").enablePositionalOptions();
     const received: string[] = [];

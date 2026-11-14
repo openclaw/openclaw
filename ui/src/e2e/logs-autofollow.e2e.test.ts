@@ -81,76 +81,12 @@ suite.define(() => {
     });
   });
 
-  it("returns to the newest line when auto-follow is re-enabled", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport,
-      },
-      async ({ page }) => {
-        const pageErrors: string[] = [];
-        page.on("pageerror", (error) => pageErrors.push(String(error)));
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "logs.tail": {
-              sequence: [
-                tail(logLines.length, logLines, true),
-                tail(logLines.length + 1, [logLine(201, "warn")]),
-                tail(logLines.length + 1, []),
-              ],
-            },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}logs`);
-        await expect
-          .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
-          .toBe(String(logLines.length));
-        await expect.poll(() => page.locator(".log-row").count()).toBeLessThan(100);
-        const limits = { limit: 500, maxBytes: 250_000 };
-        expect((await gateway.getRequests("logs.tail"))[0]?.params).toEqual(limits);
-        await expect
-          .poll(async () => (await gateway.getRequests("logs.tail")).length, { timeout: 5000 })
-          .toBeGreaterThanOrEqual(2);
-        expect((await gateway.getRequests("logs.tail"))[1]?.params).toEqual({
-          cursor: logLines.length,
-          ...limits,
-        });
-        await expect
-          .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
-          .toBe(String(logLines.length + 1));
-        await page.locator(".log-row", { hasText: "log line 201" }).waitFor();
-
-        const stream = page.locator(".log-stream");
-        const bottomGap = () =>
-          stream.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
-        const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
-        await expect
-          .poll(() => stream.evaluate((element) => element.scrollHeight - element.clientHeight))
-          .toBeGreaterThan(0);
-        await expect.poll(() => autoFollow.isChecked()).toBe(true);
-        await autoFollow.click();
-        await expect.poll(() => autoFollow.isChecked()).toBe(false);
-        await stream.evaluate((element) => {
-          element.scrollTop = 0;
-          element.dispatchEvent(new Event("scroll"));
-        });
-        await expect.poll(() => stream.evaluate((element) => element.scrollTop)).toBe(0);
-
-        await autoFollow.click();
-        await expect.poll(() => autoFollow.isChecked()).toBe(true);
-
-        await expect.poll(bottomGap).toBeLessThan(2);
-        expect(pageErrors).toEqual([]);
-      },
-    );
-  });
-
   it("turns auto-follow off when the reader scrolls up and back on at the end", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport },
       async ({ page }) => {
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(String(error)));
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "logs.tail": {
@@ -159,7 +95,12 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}logs`);
-        await page.locator(".log-row").first().waitFor();
+        await expect
+          .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
+          .toBe(String(logLines.length));
+        await expect.poll(() => page.locator(".log-row").count()).toBeLessThan(100);
+        const limits = { limit: 500, maxBytes: 250_000 };
+        expect((await gateway.getRequests("logs.tail"))[0]?.params).toEqual(limits);
         const stream = page.locator(".log-stream");
         const bottomGap = () =>
           stream.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
@@ -167,22 +108,27 @@ suite.define(() => {
         await expect.poll(bottomGap).toBeLessThan(2);
         await expect.poll(() => autoFollow.isChecked()).toBe(true);
 
+        const appendLine = async (index: number) => {
+          const after = await gateway.deferNext("logs.tail");
+          const request = await gateway.waitForRequest("logs.tail", { after });
+          expect(request.params).toEqual({ cursor: index - 1, ...limits });
+          await gateway.setMethodResponse("logs.tail", tail(index, []));
+          await gateway.resolveDeferred("logs.tail", tail(index, [logLine(index, "warn")]));
+          await expect
+            .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
+            .toBe(String(index));
+        };
+        await appendLine(201);
+        await page.locator(".log-row", { hasText: "log line 201" }).waitFor();
+        await expect.poll(bottomGap).toBeLessThan(2);
+
         await stream.hover();
         await page.mouse.wheel(0, -400);
         await expect.poll(() => autoFollow.isChecked()).toBe(false);
         await expect.poll(bottomGap).toBeGreaterThan(100);
         const readerTop = await stream.evaluate((element) => element.scrollTop);
 
-        const after = await gateway.deferNext("logs.tail");
-        await gateway.waitForRequest("logs.tail", { after });
-        await gateway.setMethodResponse("logs.tail", tail(logLines.length + 1, []));
-        await gateway.resolveDeferred(
-          "logs.tail",
-          tail(logLines.length + 1, [logLine(201, "warn")]),
-        );
-        await expect
-          .poll(() => page.locator(".log-row").first().getAttribute("aria-setsize"))
-          .toBe(String(logLines.length + 1));
+        await appendLine(202);
         expect(await stream.evaluate((element) => element.scrollTop)).toBe(readerTop);
         expect(await autoFollow.isChecked()).toBe(false);
 
@@ -195,6 +141,7 @@ suite.define(() => {
         await autoFollow.click();
         await expect.poll(() => autoFollow.isChecked()).toBe(true);
         await expect.poll(bottomGap).toBeLessThan(2);
+        expect(pageErrors).toEqual([]);
       },
     );
   });

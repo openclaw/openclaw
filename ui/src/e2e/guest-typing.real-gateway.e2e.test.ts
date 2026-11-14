@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.ts";
+import type { OperatorScope } from "../../../src/gateway/operator-scopes.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -20,14 +21,23 @@ import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 import { readUiBundle } from "./device-gateway.test-support.ts";
-import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
+import {
+  createGatewayProxy,
+  createPermissionGatewayConfig,
+  gatewayProxyRoute,
+} from "./gateway-proxy.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Guest typing real Gateway",
   startServerBeforeBrowser: true,
 });
 const sessionKey = "agent:main:dashboard:guest-typing";
-const people = [
+const people: {
+  email: string;
+  name: string;
+  role: string;
+  scopes: OperatorScope[];
+}[] = [
   {
     email: "typing-guest@example.test",
     name: "Guest Writer",
@@ -90,56 +100,29 @@ suite.define(() => {
           setDisplayName(profile.id, person.name);
           return profile.id;
         });
-        const trustedProxy = {
-          allowLoopback: true,
-          allowUsers: people.map((person) => person.email),
-          deviceAutoApprove: { enabled: true, scopes: people.flatMap((person) => person.scopes) },
-          requiredHeaders: ["x-forwarded-proto"],
-          userHeader: "x-forwarded-user",
-        };
-        await state.writeConfig({
-          agents: {
-            ownership: "explicit",
-            defaults: {
-              workspace: state.workspaceDir,
-              model: "fixture/echo",
-              modelPolicy: { allow: ["fixture/echo"] },
-            },
-            entries: { main: {} },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              fixture: {
-                api: "openai-responses",
-                baseUrl: "http://127.0.0.1:9/v1",
-                apiKey: "synthetic-fixture-key",
-                models: [{ id: "echo", name: "Fixture model" }],
+        const { config, trustedProxy } = createPermissionGatewayConfig({
+          port,
+          workspaceDir: state.workspaceDir,
+          uiBaseUrl: suite.server.baseUrl,
+          users: people.map((person) => person.email),
+          scopes: people.flatMap((person) => person.scopes),
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                agents: ["main"],
+                sessions: { others: "view" },
+                scopes: people[0]!.scopes,
               },
-            },
-          },
-          gateway: {
-            port,
-            auth: { mode: "trusted-proxy", trustedProxy },
-            trustedProxies: ["127.0.0.1", "::1"],
-            controlUi: { enabled: false, allowedOrigins: [new URL(suite.server.baseUrl).origin] },
-            roles: {
-              default: "guest",
-              definitions: {
-                guest: {
-                  agents: ["main"],
-                  sessions: { others: "view" },
-                  scopes: people[0]!.scopes,
-                },
-                staff: {
-                  agents: ["main"],
-                  sessions: { others: "write" },
-                  scopes: people[1]!.scopes,
-                },
+              staff: {
+                agents: ["main"],
+                sessions: { others: "write" },
+                scopes: people[1]!.scopes,
               },
             },
           },
         });
+        await state.writeConfig(config);
         const { startGatewayServer } = await import("../../../src/gateway/server.js");
         gateway = await startGatewayServer(port, {
           auth: { mode: "trusted-proxy", trustedProxy },

@@ -7,156 +7,89 @@ import {
 } from "./replay-shim.js";
 
 describe("isMissingCopilotSessionError", () => {
-  it("treats undefined / null as unrecoverable", () => {
-    expect(isMissingCopilotSessionError(undefined)).toBe(false);
-    expect(isMissingCopilotSessionError(null)).toBe(false);
-  });
-
-  it("treats a non-Error throw value as unrecoverable", () => {
-    expect(isMissingCopilotSessionError("string-error")).toBe(false);
-    expect(isMissingCopilotSessionError(42)).toBe(false);
-  });
-
-  it("classifies statusCode:404 errors as missing/recoverable", () => {
-    const error = Object.assign(new Error("Not Found"), { statusCode: 404 });
-    expect(isMissingCopilotSessionError(error)).toBe(true);
-  });
-
-  it("classifies recognised code strings as missing/recoverable", () => {
-    for (const code of ["SESSION_NOT_FOUND", "session_not_found", "NotFound", "ENOENT"]) {
-      const error = Object.assign(new Error("session gone"), { code });
-      expect(isMissingCopilotSessionError(error)).toBe(true);
-    }
-  });
-
-  it("classifies recognised message patterns as missing/recoverable", () => {
-    const messages = [
+  it.each([
+    ...[undefined, null, "string-error", 42].map((error) => [error, false] as const),
+    [Object.assign(new Error("Not Found"), { statusCode: 404 }), true],
+    [Object.assign(new Error("Internal server error"), { status: 404 }), true],
+    ...["SESSION_NOT_FOUND", "session_not_found", "NotFound", "ENOENT"].map(
+      (code) => [Object.assign(new Error("session gone"), { code }), true] as const,
+    ),
+    ...[
       "session not found",
       "Session sess-1 not found",
       "Unknown session id sess-1",
       "session id sess-1 does not exist",
       "no such session",
-    ];
-    for (const message of messages) {
-      expect(isMissingCopilotSessionError(new Error(message))).toBe(true);
-    }
-  });
-
-  it("does not over-match unrelated errors", () => {
-    expect(isMissingCopilotSessionError(new Error("network ECONNRESET"))).toBe(false);
-    expect(isMissingCopilotSessionError(new Error("Unauthorized"))).toBe(false);
-    expect(isMissingCopilotSessionError(new Error("rate limit exceeded"))).toBe(false);
-  });
-
-  it("reads message from plain objects with a message string", () => {
-    const error = { message: "session not found" };
-    expect(isMissingCopilotSessionError(error)).toBe(true);
-  });
-
-  it("prefers structured signals over message heuristics", () => {
-    // status:404 wins even when message is unrelated
-    const error = Object.assign(new Error("Internal server error"), { status: 404 });
-    expect(isMissingCopilotSessionError(error)).toBe(true);
+    ].map((message) => [new Error(message), true] as const),
+    ...["network ECONNRESET", "Unauthorized", "rate limit exceeded"].map(
+      (message) => [new Error(message), false] as const,
+    ),
+    [{ message: "session not found" }, true],
+  ] as const)("classifies %s as recoverable=%s", (error, expected) => {
+    expect(isMissingCopilotSessionError(error)).toBe(expected);
   });
 });
 
 describe("computeReplayMetadata", () => {
-  it("clean attempt with no prior state → replaySafe true", () => {
-    expect(computeReplayMetadata({})).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: true,
-    });
-  });
-
-  it("timeout flips both flags", () => {
-    expect(computeReplayMetadata({ thisAttemptTimedOut: true })).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
-
-  it("prior side effects propagate forward", () => {
-    expect(computeReplayMetadata({ priorHadPotentialSideEffects: true })).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
-
-  it("current attempt side effects make replay unsafe", () => {
-    expect(computeReplayMetadata({ thisAttemptHadPotentialSideEffects: true })).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
-
-  it("prior replayInvalid invalidates replay even without side effects", () => {
-    expect(computeReplayMetadata({ priorReplayInvalid: true })).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: false,
-    });
-  });
-
-  it("downgradedFromResume invalidates replay even without side effects", () => {
-    expect(computeReplayMetadata({ thisAttemptDowngradedFromResume: true })).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: false,
-    });
-  });
-
-  it("resumeFailureRecovered invalidates replay even without side effects", () => {
-    expect(computeReplayMetadata({ thisAttemptResumeFailureRecovered: true })).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: false,
-    });
-  });
-
-  it("treats explicit false flags as if they were absent", () => {
-    expect(
-      computeReplayMetadata({
+  it.each<
+    [
+      name: string,
+      input: Parameters<typeof computeReplayMetadata>[0],
+      hadPotentialSideEffects: boolean,
+      replaySafe: boolean,
+    ]
+  >([
+    ["clean attempt", {}, false, true],
+    ["timeout", { thisAttemptTimedOut: true }, true, false],
+    ["prior effects", { priorHadPotentialSideEffects: true }, true, false],
+    ["current effects", { thisAttemptHadPotentialSideEffects: true }, true, false],
+    ["prior invalid replay", { priorReplayInvalid: true }, false, false],
+    ["downgraded resume", { thisAttemptDowngradedFromResume: true }, false, false],
+    ["recovered resume", { thisAttemptResumeFailureRecovered: true }, false, false],
+    [
+      "explicit false flags",
+      {
         priorReplayInvalid: false,
         priorHadPotentialSideEffects: false,
         thisAttemptTimedOut: false,
         thisAttemptDowngradedFromResume: false,
         thisAttemptResumeFailureRecovered: false,
-      }),
-    ).toEqual({
-      hadPotentialSideEffects: false,
-      replaySafe: true,
-    });
+      },
+      false,
+      true,
+    ],
+  ])("preserves replay safety for %s", (_name, input, hadPotentialSideEffects, replaySafe) => {
+    expect(computeReplayMetadata(input)).toEqual({ hadPotentialSideEffects, replaySafe });
   });
 });
 
 describe("copilotToolMetasHavePotentialSideEffects", () => {
-  it("detects mutating tool names", () => {
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "write" }])).toBe(true);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "message_send" }])).toBe(true);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "browser" }])).toBe(true);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "file_fetch" }])).toBe(true);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "file_write" }])).toBe(true);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "read_and_delete" }])).toBe(true);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "search_and_replace" }])).toBe(
-      true,
-    );
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "session_status" }])).toBe(true);
-  });
-
-  it("treats read-only tool names as replay-safe", () => {
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "read" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "search" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "status" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "file_read" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "memory_get" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "sessions_history" }])).toBe(
-      false,
-    );
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "sessions_list" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "tool_search" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "web_fetch" }])).toBe(false);
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "web_search" }])).toBe(false);
-  });
-
-  it("treats memory_search recall tracking as a potential side effect", () => {
-    expect(copilotToolMetasHavePotentialSideEffects([{ toolName: "memory_search" }])).toBe(true);
+  it.each([
+    ...[
+      "write",
+      "message_send",
+      "browser",
+      "file_fetch",
+      "file_write",
+      "read_and_delete",
+      "search_and_replace",
+      "session_status",
+      "memory_search",
+    ].map((toolName) => [toolName, true] as const),
+    ...[
+      "read",
+      "search",
+      "status",
+      "file_read",
+      "memory_get",
+      "sessions_history",
+      "sessions_list",
+      "tool_search",
+      "web_fetch",
+      "web_search",
+    ].map((toolName) => [toolName, false] as const),
+  ])("classifies %s side effects as %s", (toolName, expected) => {
+    expect(copilotToolMetasHavePotentialSideEffects([{ toolName }])).toBe(expected);
   });
 
   it("detects async-started tools even without a mutating name", () => {

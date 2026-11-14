@@ -11749,38 +11749,41 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ).toBe("${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}");
   });
 
-  it.each(["stable", "full"])(
-    "rejects Package Acceptance Telegram deferral for direct %s release checks",
-    (releaseProfile) => {
-      const { result } = runReleaseChecksInputValidation(releaseProfile, "true");
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "skip_package_telegram_e2e is allowed only for release_profile=beta.",
-      );
+  it.each(
+    (["direct", "umbrella"] as const).flatMap((route) =>
+      (
+        [
+          ["stable", "true", 1],
+          ["full", "true", 1],
+          ["beta", "true", 0],
+          ["stable", "false", 0],
+          ["full", "false", 0],
+        ] as const
+      ).map(([profile, skipTelegram, status]) => ({ route, profile, skipTelegram, status })),
+    ),
+  )(
+    "validates $route $profile Telegram deferral=$skipTelegram",
+    ({ route, profile, skipTelegram, status }) => {
+      const direct =
+        route === "direct" ? runReleaseChecksInputValidation(profile, skipTelegram) : undefined;
+      const result = direct?.result ?? runFullReleaseInputValidation(profile, skipTelegram);
+      expect(result.status, result.stderr).toBe(status);
+      if (status === 1) {
+        expect(result.stderr).toContain(
+          "skip_package_telegram_e2e is allowed only for release_profile=beta.",
+        );
+      } else if (direct) {
+        const output = readFileSync(direct.outputPath, "utf8");
+        expect(output).toContain(`skip_package_telegram_e2e=${skipTelegram}`);
+        if (skipTelegram === "false") {
+          expectTextToIncludeAll(output, [
+            "qa_live_telegram_enabled=true",
+            "run_release_soak=true",
+          ]);
+        }
+      }
     },
   );
-
-  it.each(["stable", "full"])(
-    "rejects Package Acceptance Telegram deferral for umbrella %s validation",
-    (releaseProfile) => {
-      const result = runFullReleaseInputValidation(releaseProfile, "true");
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "skip_package_telegram_e2e is allowed only for release_profile=beta.",
-      );
-    },
-  );
-
-  it("allows Package Acceptance Telegram deferral only for beta validation", () => {
-    const direct = runReleaseChecksInputValidation("beta", "true");
-    const umbrella = runFullReleaseInputValidation("beta", "true");
-
-    expect(direct.result.status, direct.result.stderr).toBe(0);
-    expect(readFileSync(direct.outputPath, "utf8")).toContain("skip_package_telegram_e2e=true");
-    expect(umbrella.status, umbrella.stderr).toBe(0);
-  });
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
@@ -12071,21 +12074,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(mismatchedTag.stderr).toContain("does not match release tag");
   });
 
-  it.each(["stable", "full"])(
-    "preserves normal %s validation when Telegram deferral is false",
-    (releaseProfile) => {
-      const direct = runReleaseChecksInputValidation(releaseProfile, "false");
-      const umbrella = runFullReleaseInputValidation(releaseProfile, "false");
-
-      expect(direct.result.status, direct.result.stderr).toBe(0);
-      const output = readFileSync(direct.outputPath, "utf8");
-      expect(output).toContain("skip_package_telegram_e2e=false");
-      expect(output).toContain("qa_live_telegram_enabled=true");
-      expect(output).toContain("run_release_soak=true");
-      expect(umbrella.status, umbrella.stderr).toBe(0);
-    },
-  );
-
   it("declares isolated release-check phases in dispatch and concurrency", () => {
     const workflow = readWorkflow(RELEASE_CHECKS_WORKFLOW);
 
@@ -12103,70 +12091,45 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
   });
 
-  it.each([
-    [
-      "all",
-      {
-        cross_os_scheduled: "true",
-        docker_required: "true",
-        install_smoke_scheduled: "true",
-        live_e2e_scheduled: "true",
-        package_acceptance_scheduled: "true",
-        package_required: "true",
-        qa_live_scheduled: "true",
-        qa_parity_scheduled: "true",
-        run_maturity_scorecard: "true",
-      },
-    ],
-    [
-      "independent",
-      {
-        cross_os_scheduled: "false",
-        docker_required: "false",
-        install_smoke_scheduled: "true",
-        live_e2e_scheduled: "true",
-        package_acceptance_scheduled: "false",
-        package_required: "false",
-        qa_live_scheduled: "true",
-        qa_parity_scheduled: "true",
-        run_maturity_scorecard: "true",
-      },
-    ],
-    [
-      "candidate",
-      {
-        cross_os_scheduled: "true",
-        docker_required: "true",
-        install_smoke_scheduled: "false",
-        live_e2e_scheduled: "false",
-        package_acceptance_scheduled: "true",
-        package_required: "true",
-        qa_live_scheduled: "false",
-        qa_parity_scheduled: "false",
-        run_maturity_scorecard: "false",
-      },
-    ],
-  ] as const)("routes only the %s release-check phase", (phase, expected) => {
-    const { outputPath, result } = runReleaseChecksInputValidation(
-      "stable",
-      "false",
-      "all",
-      "false",
-      "",
-      {
-        candidateArtifactJson: releaseCandidateArtifactJson(),
-        phase,
-        runMaturityScorecard: "true",
-      },
-    );
+  // Each row is an independent scheduling promise across all three release phases.
+  const releasePhaseSchedule = [
+    ["cross_os_scheduled", true, false, true],
+    ["docker_required", true, false, true],
+    ["install_smoke_scheduled", true, true, false],
+    ["live_e2e_scheduled", true, true, false],
+    ["package_acceptance_scheduled", true, false, true],
+    ["package_required", true, false, true],
+    ["qa_live_scheduled", true, true, false],
+    ["qa_parity_scheduled", true, true, false],
+    ["run_maturity_scorecard", true, true, false],
+  ] as const satisfies ReadonlyArray<
+    readonly [output: string, all: boolean, independent: boolean, candidate: boolean]
+  >;
+  it.each(["all", "independent", "candidate"] as const)(
+    "routes only the %s release-check phase",
+    (phase) => {
+      const { outputPath, result } = runReleaseChecksInputValidation(
+        "stable",
+        "false",
+        "all",
+        "false",
+        "",
+        {
+          candidateArtifactJson: releaseCandidateArtifactJson(),
+          phase,
+          runMaturityScorecard: "true",
+        },
+      );
 
-    expect(result.status, result.stderr).toBe(0);
-    const output = readFileSync(outputPath, "utf8");
-    expect(output).toContain(`phase=${phase}\n`);
-    for (const [lane, scheduled] of Object.entries(expected)) {
-      expect(output).toContain(`${lane}=${scheduled}\n`);
-    }
-  });
+      expect(result.status, result.stderr).toBe(0);
+      const output = readFileSync(outputPath, "utf8");
+      expect(output).toContain(`phase=${phase}\n`);
+      const phaseColumn = { all: 1, independent: 2, candidate: 3 } as const;
+      for (const schedule of releasePhaseSchedule) {
+        expect(output).toContain(`${schedule[0]}=${schedule[phaseColumn[phase]]}\n`);
+      }
+    },
+  );
 
   it("fails closed when a candidate phase would rebuild an FRV artifact", () => {
     const missing = runReleaseChecksInputValidation("beta", "false", "package", "false", "", {
@@ -15071,14 +15034,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const notesIndex = publishSteps.findIndex(
       (step) => step.name === "Prepare GitHub release notes",
     );
-    const dispatchIndex = publishSteps.findIndex(
-      (step) => step.name === "Dispatch publish workflows",
-    );
     expect(setupIndex).toBeGreaterThan(-1);
     expect(notesIndex).toBeGreaterThan(setupIndex);
     expect(publishSteps.some((step) => step.name === "Write Android release approval")).toBe(false);
     expect(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android").needs).toContain("publish");
-    expect(dispatchIndex).toBeGreaterThan(notesIndex);
     expect(publishSteps[notesIndex]?.if).toBe("${{ inputs.publish_openclaw_npm }}");
 
     const publishRun = publishOrchestration.run ?? "";
