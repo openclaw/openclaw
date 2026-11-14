@@ -47,7 +47,6 @@ export function createUsagePage(context: ApplicationContext) {
     scope: "family",
     creatorKey: null,
     selectedDays: [],
-    selectedHours: [],
     query: "",
     queryDraft: "",
     timeZone: "local",
@@ -321,7 +320,6 @@ export function createUsagePage(context: ApplicationContext) {
       creatorKey: filters.creatorKey ?? undefined,
       query: filters.query,
       selectedDays: filters.selectedDays,
-      selectedHours: filters.selectedHours,
       selectedSessions: usageSelectedSessions,
       offset: usageOffset,
       sort: display.sessionSort,
@@ -344,7 +342,6 @@ export function createUsagePage(context: ApplicationContext) {
       (projection === "filterOptions" || query.query === current.query) &&
       (projection === "calendar" ||
         JSON.stringify(query.selectedDays) === JSON.stringify(current.selectedDays)) &&
-      JSON.stringify(query.selectedHours) === JSON.stringify(current.selectedHours) &&
       (projection === "roster" ||
         JSON.stringify(query.selectedSessions) === JSON.stringify(current.selectedSessions)) &&
       // Chart/filter projections describe the whole selection, not its roster page or order.
@@ -418,7 +415,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function clearSelectionsAndDetails() {
     usageExportRequest.reset();
-    setFilters({ selectedDays: [], selectedHours: [] });
+    setFilters({ selectedDays: [] });
     usageSelectedSessions = [];
     selectedSession = null;
     usageOffset = 0;
@@ -586,18 +583,6 @@ export function createUsagePage(context: ApplicationContext) {
               draft.display.headerPinned = !draft.display.headerPinned;
             });
           },
-          onSelectHour: (hour: number, shiftKey: boolean) => {
-            setFilters({
-              selectedHours: toggleUsageRangeSelection(
-                filters.selectedHours,
-                hour,
-                Array.from({ length: 24 }, (_, index) => index),
-                shiftKey,
-                "append",
-              ),
-            });
-            refreshOverview();
-          },
           onQueryDraftChange: (query: string) => {
             setFilters({ queryDraft: query });
             clearDebounce("queryDebounceTimer");
@@ -626,10 +611,6 @@ export function createUsagePage(context: ApplicationContext) {
           },
           onClearDays: () => {
             setFilters({ selectedDays: [] });
-            refreshOverview();
-          },
-          onClearHours: () => {
-            setFilters({ selectedHours: [] });
             refreshOverview();
           },
           onClearSessions: () => {

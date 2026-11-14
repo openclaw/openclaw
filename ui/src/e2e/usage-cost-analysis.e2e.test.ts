@@ -200,7 +200,6 @@ suite.define(() => {
             .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
             .toMatchObject(match);
           const hours = page.locator(".usage-error-list--hours");
-          const cells = page.locator(".usage-hour-cell");
           const refresh = page
             .locator("openclaw-usage-page")
             .getByRole("button", { name: "Refresh", exact: true });
@@ -210,10 +209,6 @@ suite.define(() => {
             await refresh.click();
             await gateway.waitForRequest("sessions.usage", { after: requests });
             await expect.poll(() => refresh.isEnabled()).toBe(true);
-            await expect.poll(() => cells.count()).toBe(24);
-            await expect
-              .poll(() => cells.nth(2).getAttribute("aria-label"))
-              .toBe("2:00 · 100 tokens");
             await expectTexts(page.locator(".daily-bar-label"), ["Jan 15"]);
             await expect
               .poll(() => page.locator(".daily-bar-wrapper").getAttribute("aria-label"))
@@ -228,17 +223,6 @@ suite.define(() => {
               }))
               .toEqual({ labels: ["2 AM"], rates: ["50.00%"], details: ["5 errors · 10 msgs"] });
           }
-          await cells.nth(2).click();
-          await expect.poll(() => cells.nth(2).getAttribute("aria-pressed")).toBe("true");
-          await expectTexts(page.locator(".session-bar-title"), ["Historical hour"]);
-          await expectText(hours.locator(".usage-list-label")).toBe("2 AM");
-          await cells.nth(2).click();
-          await cells.nth(3).click();
-          await expectTexts(page.locator(".session-bar-title"), []);
-          await expect.poll(() => hours.count()).toBe(0);
-          await page.getByRole("button", { name: "Remove hours filter", exact: true }).click();
-          await expectTexts(page.locator(".session-bar-title"), ["Historical hour"]);
-          await expectText(hours.locator(".usage-list-label")).toBe("2 AM");
         },
       );
     },
