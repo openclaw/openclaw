@@ -1,7 +1,7 @@
 // Test temp directory helper creates and cleans up temporary directories.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveTestTempRoot } from "../../src/test-utils/env.js";
+import { resolveTestTempRoot } from "../../src/test-utils/env.ts";
 
 // Synchronous temporary directory helpers for tests.
 
