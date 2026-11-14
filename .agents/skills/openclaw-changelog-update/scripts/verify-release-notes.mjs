@@ -3154,6 +3154,10 @@ function main() {
     }
   }
   if (errors.length === 0 && options.writeLedger) {
+    // Discovery can take minutes; do not replace notes edited while it was running.
+    if (loadReleaseChangelog({ rootDir, version: options.version }).section !== changelog) {
+      fail("Changelog changed during release-note generation; preserve the edits and rerun.");
+    }
     writeReleaseChangelog({ rootDir, version: options.version, section: candidateChangelog });
   }
 
