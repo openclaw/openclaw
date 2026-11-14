@@ -13,6 +13,7 @@ import {
 import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { verifyBinding } from "./binding-check.js";
 import type { StoredClaw } from "./claw-store.js";
+import { pendingReset } from "./reset-operations.js";
 
 /** The machine keys a binding names. */
 type BoundKeys = { k_srv: IrohEndpointKey; k_gw: Ed25519PublicKey };
@@ -41,6 +42,15 @@ function nextBindingSeq(record: StoredClaw & { binding: NonNullable<StoredClaw["
 function linkedRecord(record: StoredClaw | undefined) {
   if (!record?.authority || !record.binding || !record.hostname) {
     return { ok: false as const, code: "not_linked", detail: "this claw is not linked" };
+  }
+  // Discovery accepts a reset only with its RootReset, which the descriptor drops at the next
+  // binding change: a move before the reset is published would strand the claw at Discovery.
+  if (record.discovery.owner_account_id && pendingReset(record)) {
+    return {
+      ok: false as const,
+      code: "reset_unpublished",
+      detail: "publish the owner reset first (openclaw id publish), then move to new keys",
+    };
   }
   return {
     ok: true as const,
