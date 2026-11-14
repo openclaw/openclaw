@@ -7,7 +7,6 @@ import {
 } from "../../../components/panel-tab-strip-solid.tsx";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
-  LINK_READER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../../components/panel-toggle-contract.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -189,7 +188,6 @@ export function SidebarPanelLauncher(props: {
 
 const HOSTED_TAB_REQUESTS = [
   ["browser", BROWSER_PANEL_TOGGLE_EVENT, { open: true, newTab: true }],
-  ["link-reader", LINK_READER_PANEL_TOGGLE_EVENT, { open: true, newTab: true }],
   ["terminal", TERMINAL_PANEL_TOGGLE_EVENT, { open: true, newSession: true }],
 ] as const;
 

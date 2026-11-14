@@ -127,10 +127,6 @@ export function startLinkReaderRouting(
         url: target.href,
         open: true,
         trigger: anchor,
-        newTab: !path.some(
-          (element) =>
-            element instanceof Element && element.localName === "openclaw-link-reader-panel",
-        ),
       },
     });
     if (!window.dispatchEvent(request)) {

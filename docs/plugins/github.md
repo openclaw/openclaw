@@ -43,10 +43,11 @@ native item previews nor the generic page-preview fallback fetches them.
 A PR or issue URL inside a login redirect query does not make the login link
 previewable.
 
-Each reader tab has its own Back and Forward history. Opening the same URL
-selects its existing tab. Links inside the reader navigate the current tab;
-the **+** button starts another tab. Up to ten tabs stay in memory. Closing the
-page discards the documents and history. The reader follows the session panel’s
+The reader shows one item at a time. Opening another link, from chat or inside
+the reader, replaces the current item and adds it to the reader’s Back and
+Forward history. **Back** from the first item returns to the reader’s start
+page, where you can paste another supported URL. Closing the reader or the page
+discards the documents and history. The reader follows the session panel’s
 responsive layout; on a phone it can sit below chat or expand with the panel.
 
 The reader shows the title and description first, while checks and discussion

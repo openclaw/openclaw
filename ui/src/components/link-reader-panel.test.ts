@@ -353,10 +353,10 @@ describe("Plugin link reader panel", () => {
     expect(localStorage.getItem(storageKey)).toBeNull();
   });
 
-  it("delegates header tabs and last-tab removal to the region without recreating a draft", async () => {
+  it("delegates its single header tab and its removal to the region", async () => {
     const onClose = vi.fn();
     const panel = await mount(
-      vi.fn(async () => item()),
+      vi.fn(async (_method: string, params?: unknown) => requestedItem(params)),
       {
         embedded: true,
         presented: true,
@@ -370,39 +370,18 @@ describe("Plugin link reader panel", () => {
     expect(panel.querySelector(".lr-tab-header")).toBeNull();
     expect(panel.hostedTabs).toMatchObject([{ label: "Item 1", url: itemUrl(1) }]);
     expect(panel.hostedActions).toBeUndefined();
-    const originalTabId = panel.activeHostedTabId;
-    const newTab = button(panel, "New reader tab");
-    expect(newTab.closest(".lr-toolbar")).not.toBeNull();
-    newTab.focus();
-    panel.available = false;
-    await panel.updateComplete;
-    expect(newTab.disabled).toBe(true);
-    panel.available = true;
-    await panel.updateComplete;
-    expect(panel.hostedActions).toBeUndefined();
-    expect(button(panel, "New reader tab")).toBe(newTab);
-    expect(newTab.disabled).toBe(false);
-    newTab.click();
-    await panel.updateComplete;
-    expect(panel.hostedTabs).toHaveLength(2);
-    expect(panel.activeHostedTabId).not.toBe(originalTabId);
-    expect(panel.querySelector(".lr-initial-form")).not.toBeNull();
-    expect(panel.querySelector<HTMLInputElement>(".lr-url")?.value).toBe("");
-    await panel.closeHostedTab(panel.activeHostedTabId!);
-    expect(panel.activeHostedTabId).toBe(originalTabId);
-    await expectTitle(panel, "Item 1");
+    expect(panel.querySelector('button[aria-label="New reader tab"]')).toBeNull();
+    open(panel, itemUrl(2));
+    await expectTitle(panel, "Item 2");
+    expect(panel.hostedTabs).toMatchObject([{ label: "Item 2", url: itemUrl(2) }]);
     panel.tabsInHeader = false;
     await panel.updateComplete;
-    expect(panel.querySelector(".lr-tab-header")).not.toBeNull();
+    expect(panel.querySelectorAll(".lr-tab-header .tabstrip-tab")).toHaveLength(1);
     await panel.closeHostedTab(panel.activeHostedTabId!);
     expect(onClose).toHaveBeenCalledOnce();
     expect(panel.hostedTabs).toEqual([]);
     expect(panel.querySelector(".link-reader-panel")).toBeNull();
     expect(localStorage.getItem(storageKey)).toBeNull();
-    panel.remove();
-    await Promise.resolve();
-    expect(panel.isConnected).toBe(false);
-    expect(newTab.isConnected).toBe(false);
   });
 
   it("carries only the current session into a session-scoped detail reader", async () => {
@@ -477,36 +456,34 @@ describe("Plugin link reader panel", () => {
     await expectTitle(panel, "Item 1");
   });
 
-  it("opens, selects, deduplicates, and closes icon-bearing tabs without reloading cached documents", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) => ({
-      ...requestedItem(params),
-      files: [{ path: "src/example.ts", additions: 1, deletions: 1, patch: "-old\n+new" }],
-    }));
+  it("opens every link in one view and returns from the first document to the start page", async () => {
+    const request = vi.fn(async (_method: string, params: unknown) => requestedItem(params));
     const panel = await mount(request);
-    open(panel, itemUrl(1), undefined, true);
+    open(panel, itemUrl(1));
     await expectTitle(panel, "Item 1");
-    const firstContent = panel.querySelector(".lr-content");
-    const firstFile = firstContent!.querySelector<HTMLDetailsElement>(".lr-file")!;
-    firstFile.open = true;
-    open(panel, itemUrl(2), undefined, true);
+    open(panel, itemUrl(2));
     await expectTitle(panel, "Item 2");
-    expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
-    expect(panel.querySelectorAll(".tabstrip-tab__icon svg")).toHaveLength(2);
-    const hostedTabs = panel.hostedTabs;
-    expect(hostedTabs.every((tab) => tab.icon instanceof SVGSVGElement)).toBe(true);
-    expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
-    open(panel, itemUrl(1), undefined, true);
-    await expectTitle(panel, "Item 1");
-    expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
-    expect(panel.querySelector(".lr-content:not([hidden])")).toBe(firstContent);
-    expect(firstContent!.querySelector(".lr-file")).toBe(firstFile);
-    expect(firstFile.open).toBe(true);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(panel.querySelector<HTMLAnchorElement>(".lr-external")?.href).toBe(itemUrl(1));
-    panel.querySelectorAll<HTMLButtonElement>(".tabstrip-tab__close")[1]?.click();
-    await panel.updateComplete;
-    await expectTitle(panel, "Item 1");
     expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(1);
+    expect(panel.querySelectorAll(".tabstrip-tab__icon svg")).toHaveLength(1);
+    button(panel, "Back").click();
+    await expectTitle(panel, "Item 1");
+    expect(button(panel, "Back").disabled).toBe(false);
+    button(panel, "Back").click();
+    await panel.updateComplete;
+    expect(panel.querySelector(".lr-toolbar")).toBeNull();
+    expect(panel.querySelector(".lr-initial-form")).not.toBeNull();
+    const input = panel.querySelector<HTMLInputElement>(".lr-url")!;
+    expect(input.value).toBe("");
+    await waitForFast(() => expect(document.activeElement).toBe(input));
+    expect(panel.hostedTabs).toMatchObject([{ label: "Link reader" }]);
+    input.value = itemUrl(7);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    panel
+      .querySelector<HTMLFormElement>(".lr-initial-form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await expectTitle(panel, "Item 7");
+    expect(button(panel, "Forward").disabled).toBe(true);
+    expect(request).toHaveBeenCalledTimes(4);
     panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
     await panel.updateComplete;
     expect(panel.querySelector(".link-reader-panel")).toBeNull();
@@ -515,42 +492,12 @@ describe("Plugin link reader panel", () => {
     );
   });
 
-  it("keeps history inside each tab and leaves the selected tab intact at the tab limit", async () => {
-    const request = vi.fn(async (_method: string, params: unknown) => requestedItem(params));
-    const panel = await mount(request);
-    open(panel, itemUrl(1), undefined, true);
-    await expectTitle(panel, "Item 1");
-    open(panel, itemUrl(99));
-    await expectTitle(panel, "Item 99");
-    open(panel, itemUrl(2), undefined, true);
-    await expectTitle(panel, "Item 2");
-    expect(button(panel, "Back").disabled).toBe(true);
-    open(panel, itemUrl(99), undefined, true);
-    await expectTitle(panel, "Item 99");
-    button(panel, "Back").click();
-    await expectTitle(panel, "Item 1");
-    for (let number = 3; number <= 10; number++) {
-      open(panel, itemUrl(number), undefined, true);
-      await expectTitle(panel, "Item " + number);
-    }
-    const calls = request.mock.calls.length;
-    open(panel, itemUrl(11), undefined, true);
-    await panel.updateComplete;
-    expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(10);
-    await expectTitle(panel, "Item 10");
-    expect(button(panel, "New reader tab").disabled).toBe(true);
-    expect(request).toHaveBeenCalledTimes(calls);
-    expect(panel.querySelector<HTMLAnchorElement>('.lr-note[role="alert"] a')?.href).toBe(
-      itemUrl(11),
-    );
-  });
-
-  it("validates the new-tab address bar before requesting a document", async () => {
+  it("validates the start-page address bar before requesting a document", async () => {
     const request = vi.fn(async (_method: string, params: unknown) => requestedItem(params));
     const panel = await mount(request);
     open(panel);
     await expectTitle(panel, "Item 1");
-    button(panel, "New reader tab").click();
+    button(panel, "Back").click();
     panel.mobile = true;
     await panel.updateComplete;
     const input = panel.querySelector<HTMLInputElement>(".lr-url")!;
@@ -632,8 +579,9 @@ describe("Plugin link reader panel", () => {
       button(panel, "Back").click();
       await expectTitle(panel, "Item " + number);
     }
-    expect(button(panel, "Back").disabled).toBe(true);
-    expect(button(panel, "Forward").disabled).toBe(false);
+    button(panel, "Back").click();
+    await panel.updateComplete;
+    expect(panel.querySelector(".lr-initial-form")).not.toBeNull();
   });
 
   it("clears reservations and cancels work on close, restores focus, and stays idle while hidden", async () => {
@@ -783,23 +731,17 @@ describe("Plugin link reader panel", () => {
     replacement.resolve({ ...item(), title: "Replacement identity" });
     await expectTitle(panel, "Replacement identity");
   });
-  it("refreshes retained tabs and their images when selected after reconnect, including interrupted catch-up", async () => {
+  it("refreshes the retained document and its images after reconnect", async () => {
     const imageUrl = "https://images.example/document.png";
     const oldImage = "data:image/png;base64,b2xk";
     const freshImage = "data:image/png;base64,bmV3";
-    const interrupted = createDeferred<ControlUiLinkReaderDocument>();
     let refreshed = false;
-    let delayFirstRefresh = true;
     let generation = 1;
     const request = vi.fn((method: string, params?: unknown) => {
       if (method === "forge.image") {
         return Promise.resolve({ url: imageUrl, dataUrl: refreshed ? freshImage : oldImage });
       }
       const document = requestedItem(params);
-      if (refreshed && document.url === itemUrl(1) && delayFirstRefresh) {
-        delayFirstRefresh = false;
-        return interrupted.promise;
-      }
       return Promise.resolve({
         ...document,
         title: refreshed ? "Fresh " + document.title : document.title,
@@ -814,33 +756,14 @@ describe("Plugin link reader panel", () => {
     await panel.updateComplete;
     open(panel);
     await expectTitle(panel, "Item 1");
-    const firstTab = panel.activeHostedTabId!;
     await waitForFast(() => expect(panel.querySelector("img")?.src).toBe(oldImage));
-    open(panel, itemUrl(2), undefined, true);
-    await expectTitle(panel, "Item 2");
-    const secondTab = panel.activeHostedTabId!;
 
     panel.available = false;
     generation++;
     await panel.updateComplete;
-    expect(panel.querySelector(".lr-content:not([hidden]) h1")?.textContent).toBe("Item 2");
+    expect(panel.querySelector(".lr-content:not([hidden]) h1")?.textContent).toBe("Item 1");
     refreshed = true;
     panel.available = true;
-    await expectTitle(panel, "Fresh Item 2");
-
-    panel.selectHostedTab(firstTab);
-    await waitForFast(() =>
-      expect(request.mock.calls.filter(([method]) => method === "forge.item")).toHaveLength(4),
-    );
-    expect(panel.querySelector(".lr-content:not([hidden]) h1")?.textContent).toBe("Item 1");
-    panel.selectHostedTab(secondTab);
-    await expectTitle(panel, "Fresh Item 2");
-    interrupted.resolve({ ...item(), title: "Obsolete refresh" });
-    await interrupted.promise;
-    await panel.updateComplete;
-    expect(panel.querySelector(".lr-content:not([hidden]) h1")?.textContent).toBe("Fresh Item 2");
-
-    panel.selectHostedTab(firstTab);
     await expectTitle(panel, "Fresh Item 1");
     await waitForFast(() =>
       expect(panel.querySelector<HTMLImageElement>(".lr-content:not([hidden]) img")?.src).toBe(

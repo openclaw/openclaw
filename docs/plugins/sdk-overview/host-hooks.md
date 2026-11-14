@@ -444,7 +444,7 @@ to use its existing settings through an adapter into the same workspace owner.
 ## Docked link readers
 
 A link reader lets an enabled plugin claim supported HTTPS links and render a
-passive document beside chat. Core owns the dock, browser-style tabs, history,
+passive document beside chat. Core owns the dock, the single reader view, history,
 keyboard behavior, and safe Markdown rendering. The plugin owns URL policy,
 service requests, caching, and the document data. This is not a plugin JavaScript
 loader or a framed external website.

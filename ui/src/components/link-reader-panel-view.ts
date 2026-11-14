@@ -133,24 +133,27 @@ export function tabLabel(tab: ReaderTab): string {
   const target = tabTarget(tab);
   return target
     ? target.reader.label + " · " + new URL(target.href).pathname
-    : t("linkReader.newTab");
+    : t("linkReader.title");
 }
 
 export type LinkReaderPanelState = {
   urlDraft: string;
   invalidUrl: boolean;
-  tabLimitUrl: string | null;
-  tabs: ReaderTab[];
-  activeId: string | null;
+  /** The reader's only view; null while the reader is closed. */
+  tab: ReaderTab | null;
 };
 
-export function readerHostedTabs(tabs: ReaderTab[], ownerDocument: Document): PanelHostedTab[] {
-  return tabs.map((tab) => ({
-    id: tab.id,
-    label: tabLabel(tab),
-    url: tabTarget(tab)?.href,
-    title: tabTarget(tab)?.href,
-    icon: readerIcon(tabTarget(tab)?.reader.icon, ownerDocument),
-    className: tab.view.status === "loading" ? "is-connecting" : "",
-  }));
+export function readerHostedTabs(tab: ReaderTab | null, ownerDocument: Document): PanelHostedTab[] {
+  return tab
+    ? [
+        {
+          id: tab.id,
+          label: tabLabel(tab),
+          url: tabTarget(tab)?.href,
+          title: tabTarget(tab)?.href,
+          icon: readerIcon(tabTarget(tab)?.reader.icon, ownerDocument),
+          className: tab.view.status === "loading" ? "is-connecting" : "",
+        },
+      ]
+    : [];
 }

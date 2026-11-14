@@ -116,7 +116,6 @@ it.each([false, true])(
       url: anchor.href,
       open: true,
       trigger: anchor,
-      newTab: true,
     });
     expect(panel).not.toHaveBeenCalled();
     expect(postMessage).toHaveBeenCalledTimes(native ? 1 : 0);

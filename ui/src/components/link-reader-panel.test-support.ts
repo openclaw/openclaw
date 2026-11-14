@@ -70,10 +70,10 @@ export async function mount(
   return panel;
 }
 
-export function open(panel: Panel, url = itemUrl(1), trigger?: HTMLElement, newTab = false) {
+export function open(panel: Panel, url = itemUrl(1), trigger?: HTMLElement) {
   panel.handleToggleRequest(
     new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-      detail: { url, open: true, trigger, newTab },
+      detail: { url, open: true, trigger },
       cancelable: true,
     }),
   );

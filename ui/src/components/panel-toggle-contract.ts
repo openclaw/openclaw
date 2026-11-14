@@ -16,7 +16,6 @@ export const KEYBOARD_SHORTCUTS_REQUEST_EVENT = "openclaw:keyboard-shortcuts-req
 export const LINK_READER_PANEL_TOGGLE_EVENT = "openclaw:link-reader-panel-toggle";
 export type LinkReaderPanelToggleDetail = {
   url?: string;
-  newTab?: boolean;
   open?: boolean;
   trigger?: HTMLElement;
   agentId?: string;

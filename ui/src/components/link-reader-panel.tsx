@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, For, Repeat, onSettled } from "solid-js";
+import { createMemo, createUniqueId, Repeat, onSettled } from "solid-js";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
@@ -6,17 +6,12 @@ import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { nativeListener } from "../lib/solid-native-listener.ts";
 import { createTabFocus } from "../lib/tabs.ts";
 import { showToast } from "../lib/toast.ts";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
 import type { LinkReaderPanelProps as LinkReaderOwnerProps } from "./link-reader-panel-lifecycle.ts";
-import {
-  LINK_READER_TAB_LIMIT,
-  createLinkReaderPanel,
-  type LinkReaderPanelOwner,
-} from "./link-reader-panel-owner.ts";
+import { createLinkReaderPanel, type LinkReaderPanelOwner } from "./link-reader-panel-owner.ts";
 import {
   linkReaderViewStyles,
   tabTarget,
@@ -36,28 +31,6 @@ import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
 const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
-
-function NewReaderTabAction(props: { view: () => LinkReaderPanelOwner; internal?: boolean }) {
-  const label = () => t("linkReader.newTab");
-  return (
-    <button
-      ref={nativeListener("click", () => props.view().createTab())}
-      class={[
-        "oc-icon-button oc-icon-button--28 rail-header__action bp-icon",
-        { "session-panel-rail__button": props.internal },
-      ]}
-      type="button"
-      aria-label={label()}
-      disabled={
-        props.view().state.tabs.length >= LINK_READER_TAB_LIMIT ||
-        !props.view().props.available ||
-        !props.view().props.readers.length
-      }
-    >
-      <Icon name="plus" />
-    </button>
-  );
-}
 
 function ReaderLoading(props: { url: string }) {
   return (
@@ -159,25 +132,16 @@ function PanelView(
 ) {
   const tabFocus = createTabFocus();
   let address: HTMLInputElement | undefined;
-  const content = new Map<string, HTMLElement>();
+  let content: HTMLElement | undefined;
   const { owner, view: projection } = projectCallbackOwner(
-    (notify) =>
-      createLinkReaderPanel(
-        host,
-        onSettled,
-        (activeId) => ({
-          address,
-          content: content.get(activeId ?? ""),
-        }),
-        notify,
-      ),
+    (notify) => createLinkReaderPanel(host, onSettled, () => ({ address, content }), notify),
     (current) => current,
   );
   const view = projection.read;
   owners.set(host, owner);
   Object.defineProperties(host, {
     hostedTabs: { configurable: true, get: () => owner.hostedTabs() },
-    activeHostedTabId: { configurable: true, get: () => owner.state.activeId },
+    activeHostedTabId: { configurable: true, get: () => owner.state.tab?.id ?? null },
   });
   const bridgePrototype = Object.getPrototypeOf(host);
   Object.defineProperty(host, "updateComplete", {
@@ -341,13 +305,12 @@ function PanelView(
                 <PanelTabStrip
                   focusOwner={tabFocus}
                   tabs={tabStripTabs()}
-                  activeId={view().state.activeId}
+                  activeId={view().state.tab?.id ?? null}
                   ariaControls="link-reader-tab-panel"
-                  onSelect={(id) => owner.selectHostedTab(id)}
-                  onClose={(id) => owner.closeTab(id)}
-                  onNew={() => owner.createTab()}
-                  newLabel={t("linkReader.newTab")}
-                  newDisabled={view().state.tabs.length >= 10}
+                  onSelect={() => undefined}
+                  onClose={() => owner.closeReader()}
+                  onNew={() => undefined}
+                  newLabel={t("linkReader.title")}
                   newControl={null}
                 />
               </openclaw-panel-tab-strip>
@@ -364,12 +327,7 @@ function PanelView(
               onSubmit={(event) => owner.commitUrl(event)}
             >
               <span class={["lr-history", { "session-panel-rail__group": !props.mobile }]}>
-                {action(
-                  "chevronLeft",
-                  t("linkReader.back"),
-                  () => owner.goHistory(-1),
-                  tab()!.index <= 0,
-                )}
+                {action("chevronLeft", t("linkReader.back"), () => owner.goHistory(-1))}
                 {action(
                   "chevronRight",
                   t("linkReader.forward"),
@@ -388,7 +346,6 @@ function PanelView(
                 <AddressInput />
               </span>
               <span class={["lr-actions", { "session-panel-rail__group": !props.mobile }]}>
-                {!props.mobile && <NewReaderTabAction view={view} internal />}
                 {editedUrl() && (
                   <button
                     class={[
@@ -485,19 +442,6 @@ function PanelView(
               {t("linkReader.invalidUrl")}
             </p>
           )}
-          {view().state.tabLimitUrl && (
-            <p class="lr-note" role="alert">
-              {t("linkReader.tabLimit")}
-              <a
-                href={view().state.tabLimitUrl!}
-                target="_blank"
-                rel="noopener noreferrer"
-                data-link-reader-external
-              >
-                {t("linkReader.openOriginal")}
-              </a>
-            </p>
-          )}
           <div
             id="link-reader-tab-panel"
             class="lr-panels"
@@ -541,32 +485,29 @@ function PanelView(
                 />
               </div>
             )}
-            <For each={[...view().state.tabs]} keyed={(item) => item.id}>
-              {(item) => {
-                const registerContent = elementRef<HTMLElement>((element) => {
-                  const initialTabId = item().id;
-                  content.set(initialTabId, element);
-                  return () => content.delete(initialTabId);
-                });
-                return (
-                  <div
-                    ref={[registerContent, elementRef(props.onScrollPortRef)]}
-                    class="lr-content"
-                    tabindex={-1}
-                    hidden={item().id !== view().state.activeId || initial()}
-                    aria-busy={item().view.status === "loading" ? "true" : "false"}
-                  >
-                    <PanelContent
-                      tab={(projection.revision(), item())}
-                      available={props.available && Boolean(props.client)}
-                      refresh={() => owner.refresh()}
-                      loadSection={(section) => owner.requestSection(section)}
-                      onScrollPortRef={props.onScrollPortRef}
-                    />
-                  </div>
-                );
-              }}
-            </For>
+            <div
+              ref={[
+                elementRef<HTMLElement>((element) => {
+                  content = element;
+                  return () => {
+                    content = undefined;
+                  };
+                }),
+                elementRef(props.onScrollPortRef),
+              ]}
+              class="lr-content"
+              tabindex={-1}
+              hidden={initial()}
+              aria-busy={tab()!.view.status === "loading" ? "true" : "false"}
+            >
+              <PanelContent
+                tab={(projection.revision(), tab()!)}
+                available={props.available && Boolean(props.client)}
+                refresh={() => owner.refresh()}
+                loadSection={(section) => owner.requestSection(section)}
+                onScrollPortRef={props.onScrollPortRef}
+              />
+            </div>
           </div>
         </section>
       ) : undefined}
@@ -595,9 +536,10 @@ export const LinkReaderPanel = defineSolidBridge<LinkReaderPanelProps, Methods>(
     },
     methods: {
       handleToggleRequest: (host, event) => owners.get(host)?.handleToggleRequest(event),
-      selectHostedTab: (host, id) => owners.get(host)?.selectHostedTab(id),
-      closeHostedTab: async (host, id) => {
-        owners.get(host)?.closeTab(id);
+      // The reader hosts one tab, which is always selected.
+      selectHostedTab: () => undefined,
+      closeHostedTab: async (host) => {
+        owners.get(host)?.closeReader();
         await host.updateComplete;
       },
     },
