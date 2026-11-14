@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { setImmediate as nextTick } from "node:timers/promises";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -228,6 +229,57 @@ describe("navigation authority fence lifecycle", () => {
       });
       expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "public" });
     });
+  });
+
+  it("starts the next invocation's document tracking after the last release is acknowledged", async () => {
+    // A transport that applies the release when it answers it.
+    const disabled = Promise.withResolvers<void>();
+    let releasing = false;
+    let tracking = false;
+    const { send, page, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Network.enable") {
+          tracking = true;
+        }
+        if (method === "Network.disable") {
+          releasing = true;
+          await disabled.promise;
+          tracking = false;
+        }
+      },
+    });
+    let returned = false;
+    const released = dispose().finally(() => {
+      returned = true;
+    });
+    await vi.waitFor(() => expect(releasing).toBe(true));
+    const next = installNavigationAuthorityFence(page as unknown as Page, {}, () => {});
+    await nextTick();
+    const returnedBeforeAcknowledged = returned;
+    disabled.resolve();
+    expect(await released).toBeUndefined();
+    await next;
+    expect({ returnedBeforeAcknowledged, tracking }).toEqual({
+      returnedBeforeAcknowledged: false,
+      tracking: true,
+    });
+    expect(send).not.toHaveBeenCalledWith("Fetch.disable", undefined);
+  });
+
+  it("fails an invocation whose document tracking does not start", async () => {
+    let refused = false;
+    const { page, dispose } = await fence({
+      send: async (method) => {
+        if (refused && method === "Network.enable") {
+          throw new Error("tracking refused");
+        }
+      },
+    });
+    expect(await dispose()).toBeUndefined();
+    refused = true;
+    await expect(
+      installNavigationAuthorityFence(page as unknown as Page, {}, () => {}),
+    ).rejects.toThrow("tracking refused");
   });
 
   it("retains interception until target close when revoked loading cannot be stopped", async () => {

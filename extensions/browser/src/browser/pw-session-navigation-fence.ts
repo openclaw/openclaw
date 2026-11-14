@@ -110,6 +110,7 @@ function createTabFence(page: Page, session: CDPSession) {
   let mainFrameId: string | undefined;
   const states = new Map<NavigationTargetSession, TargetState>();
   const invocations = new Set<Invocation>();
+  let released: Promise<unknown> = Promise.resolve();
   let stateChanged = createDeferred<void>();
   const standing = createStandingNavigationPolicy();
   const notify = () => {
@@ -562,18 +563,31 @@ function createTabFence(page: Page, session: CDPSession) {
     ready,
     notify,
     changed: () => stateChanged.promise,
-    /** Starts or stops what only a claimed tab runs, in call order: the last claim or release wins. */
-    setClaimed: async (claimed: boolean) => {
-      await Promise.allSettled(
-        [...states].flatMap(([target, state]) => {
-          if (claimed) {
-            return [target.send("Network.enable")];
-          }
+    /** Starts what only a claimed tab runs, once the last release is acknowledged. */
+    claim: async () => {
+      await released;
+      await Promise.all(
+        [...states.keys()].map((target) =>
+          target.send("Network.enable").catch((error: unknown) => {
+            // A frame target lost meanwhile has nothing left to track.
+            if (states.has(target)) {
+              throw error;
+            }
+          }),
+        ),
+      );
+    },
+    release: () => {
+      released = Promise.allSettled(
+        [...states.keys()].map((target) => target.send("Network.disable")),
+      ).then(() => {
+        // Nothing tracked before tracking stopped reports its end.
+        for (const state of states.values()) {
           state.documents.clear();
           state.finishedDocuments.clear();
-          return [target.send("Network.disable")];
-        }),
-      );
+        }
+      });
+      return released;
     },
   };
 }
@@ -628,13 +642,6 @@ export async function installNavigationAuthorityFence(
       ...(policy.browserProxyMode ? { browserProxyMode: policy.browserProxyMode } : {}),
     });
   }
-  const release = () => {
-    invocations.delete(invocation);
-    if (invocations.size === 0) {
-      void tab.setClaimed(false);
-    }
-    notify();
-  };
   const dispose = async (options: NavigationAuthorityFenceDisposeOptions = {}) => {
     const deadline = createDeferred<never>();
     const timer = setTimeout(() => {
@@ -707,12 +714,18 @@ export async function installNavigationAuthorityFence(
         await stopLoading();
         await drain();
       }
-      release();
+      invocations.delete(invocation);
+      notify();
+      if (invocations.size === 0) {
+        // The next invocation's document tracking starts after this one's has stopped.
+        await bounded(tab.release());
+      }
       return undefined;
     } catch (error) {
       closing = true;
       if (page.isClosed()) {
-        release();
+        invocations.delete(invocation);
+        notify();
         return undefined;
       }
       fail(error);
@@ -731,7 +744,7 @@ export async function installNavigationAuthorityFence(
   };
   try {
     await tab.ready;
-    await tab.setClaimed(true);
+    await tab.claim();
     while (initialization.size > 0) {
       await Promise.all(initialization);
     }
