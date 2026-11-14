@@ -107,6 +107,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     assert.ok(hooks.PreToolUse[0].hookCallbackIds[0]);
     assert.ok(hooks.UserPromptSubmit[0].hookCallbackIds[0]);
+    assert.ok(hooks.Stop[0].hookCallbackIds[0]);
     send({ type: "control_response", response: {
       subtype: "success", request_id: message.request_id, response: { commands: [], models: [] },
     } });
@@ -343,10 +344,18 @@ for await (const line of createInterface({ input: process.stdin })) {
       result();
       continue;
     }
+    if (scenario === "stop-hook") {
+      hook("stop-" + turn, "Stop", { stop_hook_active: false, last_assistant_message: "I'll pick up the tests next.", cwd: process.cwd() });
+      continue;
+    }
     promptHook("prompt-" + turn, user);
   } else if (message.type === "control_response") {
     assert.equal(message.response.subtype, "success");
     const { request_id: id, response } = message.response;
+    if (id === "stop-" + turn) {
+      result({ stopDecision: response });
+      continue;
+    }
     if (id === "admitted-context") {
       privateContext = response.hookSpecificOutput?.additionalContext;
       if (scenario.startsWith("steer-hook-")) {
