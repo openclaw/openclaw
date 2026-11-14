@@ -41,6 +41,8 @@ export type SessionRecentConversationText = {
 export type SessionRecentConversationTurn = SessionRecentConversationText & {
   messageId?: string;
   isCompletedAnswer?: true;
+  runId?: string;
+  steerTargetRunId?: string;
 };
 
 export type ReadRecentSessionConversationTextOptions = {
@@ -106,7 +108,8 @@ function extractRecentConversationText(
     message.role === "assistant"
       ? extractAssistantPhaseText(message)
       : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
-  if (!text) {
+  // Private attribution must not pair an earlier request across a textless user.
+  if (!text && !(options.includeTurnIdentity && message.role === "user")) {
     return undefined;
   }
   const provenance = asOptionalRecord(message.provenance);
@@ -114,7 +117,7 @@ function extractRecentConversationText(
   const entry: SessionRecentConversationTurn = {
     ...(typeof parsed?.id === "string" && parsed.id ? { id: parsed.id } : {}),
     role: message.role,
-    text,
+    text: text ?? "",
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(typeof provenance?.sourceChannel === "string" && provenance.sourceChannel.trim()
       ? { sourceChannel: provenance.sourceChannel.trim() }
@@ -122,6 +125,16 @@ function extractRecentConversationText(
   };
   if (options.includeTurnIdentity) {
     const metadata = asOptionalRecord(message["__openclaw"]);
+    if (typeof metadata?.runId === "string" && metadata.runId.trim()) {
+      entry.runId = metadata.runId;
+    }
+    if (
+      message.role === "user" &&
+      typeof metadata?.steerTargetRunId === "string" &&
+      metadata.steerTargetRunId.trim()
+    ) {
+      entry.steerTargetRunId = metadata.steerTargetRunId;
+    }
     const messageId =
       message.role === "user" ? asOptionalRecord(metadata?.transport)?.messageId : undefined;
     if (typeof messageId === "string" && messageId) {

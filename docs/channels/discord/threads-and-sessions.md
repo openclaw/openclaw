@@ -63,6 +63,10 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     When the bounded session transcript confirms a completed answer, unchanged
     requests with matching message IDs are not quoted again. Edits, unseen discussion,
     unfinished requests, and attachments remain eligible; reply targets stay separate.
+    Original requests and accepted mid-turn steering are covered together when the
+    transcript identifies their completed run. Without run identity, reconciliation
+    retains the conservative immediately preceding request behavior; conflicting
+    run identity does not count as completion.
 
     Human replies carry the selected parent message independently of `allowBots`.
     Missing or empty nested reply payloads are fetched from Discord. If the parent

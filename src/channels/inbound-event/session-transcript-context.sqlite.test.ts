@@ -279,3 +279,176 @@ it("suppresses already-replayed DM turns while preserving delivery-only context 
   expect(prompt).not.toContain("ordinary user turn");
   expect(prompt).not.toContain("ordinary assistant reply");
 });
+
+it.each(["stop", "error", "aborted", "length", "commentary", "unsettled"])(
+  "reconciles original and accepted steering only with completed run evidence (%s)",
+  async (completion) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "steering",
+      sessionKey: "agent:main:steering",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const user = (id: string, metadata: Record<string, unknown>) => ({
+      role: "user",
+      content: `request ${id}`,
+      __openclaw: { transport: { channel: "discord", messageId: id }, ...metadata },
+    });
+    await persistTurn(scope, {
+      updateMode: "none",
+      messages: [
+        user("unanswered", { runId: "other-run" }),
+        user("original", { runId: "accepted-run" }),
+        { role: "assistant", content: "Working", stopReason: "stop", phase: "commentary" },
+        user("steering", { runId: "accepted-run", steerTargetRunId: "accepted-run" }),
+        user("metadata-light", { steerTargetRunId: "accepted-run" }),
+        {
+          role: "assistant",
+          content: "Combined answer",
+          stopReason: ["commentary", "unsettled"].includes(completion) ? "stop" : completion,
+          ...(completion === "commentary" ? { phase: "commentary" } : {}),
+          __openclaw: {
+            mirrorOrigin: "codex-app-server",
+            runId: "accepted-run",
+            ...(completion !== "unsettled" ? { runTerminal: true } : {}),
+          },
+        },
+      ].map((message) => ({ message })),
+    });
+    const history = ["unanswered", "original", "steering", "metadata-light", "unseen"].map(
+      (messageId) => ({ messageId, sender: "User", body: `request ${messageId}` }),
+    );
+    const ctx: FinalizedMsgContext = {
+      Body: "Next request",
+      SessionKey: scope.sessionKey,
+      AgentId: scope.agentId,
+      Provider: "discord",
+      CommandAuthorized: false,
+      SessionTranscriptContext: { historyLimit: 10, historyKind: "recent" },
+      InboundHistory: history,
+    };
+    await mergeSessionTranscriptContext({ ...scope, ctx });
+    expect(ctx.InboundHistory?.map((entry) => entry.messageId)).toEqual(
+      completion === "stop" ? ["unanswered", "unseen"] : history.map((entry) => entry.messageId),
+    );
+    if (completion === "stop") {
+      ctx.InboundHistory = structuredClone(history);
+      ctx.InboundHistory.find((entry) => entry.messageId === "original")!.body += " edited";
+      await mergeSessionTranscriptContext({ ...scope, ctx });
+      expect(ctx.InboundHistory?.map((entry) => entry.messageId)).toEqual([
+        "unanswered",
+        "original",
+        "unseen",
+      ]);
+      ctx.InboundHistory = structuredClone(history);
+      ctx.InboundHistory.find((entry) => entry.messageId === "original")!.media = [
+        { url: "https://example.com/image.png" },
+      ];
+      await mergeSessionTranscriptContext({ ...scope, ctx });
+      expect(ctx.InboundHistory?.map((entry) => entry.messageId)).toEqual([
+        "unanswered",
+        "original",
+        "unseen",
+      ]);
+    }
+    for (const entry of await readRecent(scope)) {
+      expect(entry).not.toHaveProperty("runId");
+      expect(entry).not.toHaveProperty("steerTargetRunId");
+    }
+  },
+);
+
+it.each([
+  { userRun: "pending", answerRun: "completed", targetRun: undefined, retained: true },
+  { userRun: "completed", answerRun: "completed", targetRun: "pending", retained: true },
+  { userRun: "completed", answerRun: "completed", targetRun: undefined, retained: false },
+  { userRun: undefined, answerRun: "completed", targetRun: undefined, retained: false },
+  { userRun: "pending", answerRun: undefined, targetRun: undefined, retained: false },
+])(
+  "respects explicit run mismatch and legacy missing identity: %j",
+  async ({ userRun, answerRun, targetRun, retained }) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "identity",
+      sessionKey: "agent:main:identity",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await persistTurn(scope, {
+      updateMode: "none",
+      messages: [
+        {
+          role: "user",
+          content: "pending",
+          __openclaw: {
+            transport: { messageId: "pending" },
+            runId: userRun,
+            steerTargetRunId: targetRun,
+          },
+        },
+        {
+          role: "assistant",
+          content: "answer",
+          stopReason: "stop",
+          __openclaw: { runId: answerRun },
+        },
+      ].map((message) => ({ message })),
+    });
+    const ctx: FinalizedMsgContext = {
+      Body: "next",
+      SessionKey: scope.sessionKey,
+      AgentId: scope.agentId,
+      CommandAuthorized: false,
+      SessionTranscriptContext: { historyLimit: 1, historyKind: "recent" },
+      InboundHistory: [{ messageId: "pending", sender: "User", body: "pending" }],
+    };
+    await mergeSessionTranscriptContext({ ...scope, ctx });
+    expect(ctx.InboundHistory?.map((entry) => entry.messageId)).toEqual(
+      retained ? ["pending"] : [],
+    );
+  },
+);
+
+it.each([
+  { content: "" },
+  { content: [{ type: "image", data: "fixture", mimeType: "image/png" }] },
+])("keeps a textless user as an attribution barrier (%j)", async ({ content }) => {
+  const scope = {
+    agentId: "main",
+    sessionId: "textless",
+    sessionKey: "agent:main:textless",
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
+  };
+  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await persistTurn(scope, {
+    updateMode: "none",
+    messages: [
+      {
+        role: "user",
+        content: "unanswered",
+        __openclaw: { transport: { messageId: "unanswered" } },
+      },
+      { role: "user", content },
+      { role: "assistant", content: "image answer", stopReason: "stop" },
+    ].map((message) => ({ message })),
+  });
+  const history = [
+    { messageId: "unanswered", sender: "User", body: "unanswered" },
+    { messageId: "unseen", sender: "User", body: "unseen" },
+  ];
+  const ctx: FinalizedMsgContext = {
+    Body: "next",
+    SessionKey: scope.sessionKey,
+    AgentId: scope.agentId,
+    CommandAuthorized: false,
+    SessionTranscriptContext: { historyLimit: 2, historyKind: "recent" },
+    InboundHistory: history,
+  };
+  await mergeSessionTranscriptContext({ ...scope, ctx });
+  expect(ctx.InboundHistory).toEqual(history);
+  expect((await readRecent(scope)).map((entry) => entry.text)).toEqual([
+    "unanswered",
+    "image answer",
+  ]);
+});
