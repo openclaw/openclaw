@@ -5,6 +5,7 @@ import {
   type WorkboardMetadata,
   type WorkboardVerification,
 } from "@openclaw/workboard-contract";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
 import { MAX_CARD_METADATA_BYTES } from "./store-constants.js";
 import type { WorkboardUpdateCardOptions } from "./store-inputs.js";
@@ -18,13 +19,55 @@ const MAX_VERIFICATIONS = 4;
 const MAX_VERIFICATION_TEXT = 300;
 const MAX_VERIFICATION_URL = 500;
 
+/**
+ * Splits a card's stored verifications from the rest of its metadata, so nothing
+ * before withStoredVerifications counts them. Cards written on main between #197471
+ * and this cutover keep checker verdicts beside worker claims and lifecycle
+ * observations under automation.evidence: the verdicts carry over and the rest is
+ * dropped here, before any trimming sees them.
+ */
+function splitVerifications(card: WorkboardCard): {
+  metadata: WorkboardMetadata | undefined;
+  verifications: WorkboardVerification[];
+} {
+  const automation = card.metadata?.automation;
+  // automation.evidence is no longer part of the contract type.
+  const evidence: unknown = automation ? Reflect.get(automation, "evidence") : undefined;
+  if (!automation || (!automation.verifications && evidence === undefined)) {
+    return { metadata: card.metadata, verifications: [] };
+  }
+  const ordinary = { ...automation };
+  delete ordinary.verifications;
+  Reflect.deleteProperty(ordinary, "evidence");
+  return {
+    metadata: { ...card.metadata, automation: ordinary },
+    verifications: automation.verifications ?? verdictsFromEvidence(evidence),
+  };
+}
+
+function verdictsFromEvidence(evidence: unknown): WorkboardVerification[] {
+  if (!Array.isArray(evidence)) {
+    return [];
+  }
+  return evidence
+    .flatMap((entry: unknown) => {
+      if (!isRecord(entry) || entry.kind !== "verification") {
+        return [];
+      }
+      const verdict = { ...entry };
+      delete verdict.kind;
+      delete verdict.claimId;
+      // Workboard's own buildVerification wrote these with today's verification fields.
+      return [verdict as WorkboardVerification];
+    })
+    .slice(-MAX_VERIFICATIONS);
+}
+
 export function appendVerification(
   card: WorkboardCard,
   verification: WorkboardVerification,
 ): WorkboardVerification[] {
-  return [...(card.metadata?.automation?.verifications ?? []), verification].slice(
-    -MAX_VERIFICATIONS,
-  );
+  return [...splitVerifications(card).verifications, verification].slice(-MAX_VERIFICATIONS);
 }
 
 function fitsCardBudget(metadata: WorkboardMetadata): boolean {
@@ -37,20 +80,15 @@ function attachVerifications(metadata: WorkboardMetadata, verifications: Workboa
 
 /**
  * Normalizes a metadata patch against the card's metadata without its stored
- * verifications, so ordinary normalization, settlement, and trimming never count them
- * or evict card records to keep them.
+ * verifications (or main's evidence list), so ordinary normalization, settlement, and
+ * trimming never count them or evict card records to keep them.
  */
 export function normalizeWithoutVerifications(
   patch: unknown,
   existing: WorkboardCard,
   options: WorkboardUpdateCardOptions,
 ): WorkboardMetadata {
-  const fallback = { ...existing.metadata };
-  if (fallback.automation?.verifications) {
-    fallback.automation = { ...fallback.automation };
-    delete fallback.automation.verifications;
-  }
-  return normalizeMetadata(patch, fallback, {
+  return normalizeMetadata(patch, splitVerifications(existing).metadata, {
     automationLaunch: options.automationLaunch,
     allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
     preserveProofId: options.preserveProofId,
@@ -74,7 +112,7 @@ export function withStoredVerifications(
 ): WorkboardMetadata {
   const trimmed = trimMetadataToBudget(metadata, options);
   const verifications = [
-    ...(options.automationVerifications ?? existing.metadata?.automation?.verifications ?? []),
+    ...(options.automationVerifications ?? splitVerifications(existing).verifications),
   ];
   for (; verifications.length > 0; verifications.shift()) {
     const next = attachVerifications(trimmed, verifications);
@@ -87,7 +125,7 @@ export function withStoredVerifications(
 
 /** Whether one more verification fits beside the card's other records. */
 export function verificationFits(card: WorkboardCard, record: WorkboardVerification): boolean {
-  return fitsCardBudget(attachVerifications(card.metadata ?? {}, [record]));
+  return fitsCardBudget(attachVerifications(splitVerifications(card).metadata ?? {}, [record]));
 }
 
 function cardHasId(entries: readonly { id: string }[] | undefined, id: string | undefined) {

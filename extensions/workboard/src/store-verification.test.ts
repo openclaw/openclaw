@@ -47,3 +47,44 @@ it("keeps verifications store-owned and inside the room other records leave", as
   expect(moved.metadata?.attempts).toMatchObject([{ runId: "run-m", status: "succeeded" }]);
   expect(moved.metadata?.artifacts).toHaveLength(12);
 });
+
+it("carries checker verdicts out of main's evidence list without evicting card records", async () => {
+  // Cards written by main between #197471 and the verifications-only cutover.
+  const verdict = { id: "v1", recordedAt: 3, checkerId: "reviewer", checkedOwnWork: false };
+  const evidence = [
+    { kind: "claim", id: "c1", recordedAt: 1, claimedBy: "worker", statement: "c".repeat(300) },
+    { kind: "observation", id: "o1", recordedAt: 2, observedAt: 2, source: "session-lifecycle" },
+    {
+      kind: "verification",
+      ...verdict,
+      scope: "s".repeat(300),
+      outcome: "confirmed",
+      claimId: "c1",
+    },
+  ];
+  const seeded = new Set<string>();
+  const store = createWorkboardSqliteTestStore({
+    beforeCardWrite: (_key, { card }) => {
+      if (!seeded.has(card.id)) {
+        seeded.add(card.id);
+        // Main's shape, which the current contract type no longer has.
+        const automation = { ...card.metadata?.automation };
+        Reflect.set(automation, "evidence", evidence);
+        card.metadata = { ...card.metadata, automation };
+      }
+    },
+  });
+  const url = (i: number) => `https://example.com/${i}/${"x".repeat(1900)}`;
+  const artifacts = [...Array(12).keys()].map((i) => ({ id: `a${i}`, createdAt: 1, url: url(i) }));
+  const execution = codexExecution("exec", 1, { sessionKey: "agent:w:subagent:l", runId: "run-l" });
+  const running = await store.create({ title: "legacy move", execution, metadata: { artifacts } });
+  const moved = await store.move(running.id, "done", undefined);
+  expect(moved.metadata?.attempts).toMatchObject([{ runId: "run-l", status: "succeeded" }]);
+  expect(moved.metadata?.artifacts).toHaveLength(12);
+  const carried = [{ ...verdict, scope: "s".repeat(300), outcome: "confirmed" }];
+  expect(moved.metadata?.automation).toMatchObject({ verifications: carried });
+  expect(moved.metadata?.automation).not.toHaveProperty("evidence");
+  const patched = await store.create({ title: "legacy patch" });
+  const updated = await store.update(patched.id, { metadata: {} });
+  expect(updated.metadata?.automation).toMatchObject({ verifications: carried });
+});
