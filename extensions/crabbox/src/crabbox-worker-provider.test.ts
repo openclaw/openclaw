@@ -213,6 +213,7 @@ it("projects a large catalog by OS and architecture without inferring resources"
           },
           {
             provider: "aws",
+            aliases: ["ec2"],
             targets: ["windows/normal", "linux", "windows/wsl2", "macos"],
             classCatalog: mappedCatalog([
               classProfile("standard", { vcpu: 64 }, { architecture: "arm64" }),
@@ -251,7 +252,7 @@ it("projects a large catalog by OS and architecture without inferring resources"
     { id: "windows/normal", label: "Windows" },
     { id: "macos", label: "macOS" },
   ]);
-  expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
+  expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "ec2" })).toEqual([
     { os: "linux", id: "memory", label: "Memory", memoryGb: 16 },
     { os: "linux", id: "standard", label: "Standard", cpu: 8, memoryGb: 32, default: true },
     { os: "linux", id: "unknown", label: "Unknown" },
@@ -261,6 +262,33 @@ it("projects a large catalog by OS and architecture without inferring resources"
   ]);
   expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "machine0" })).toEqual([]);
   expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "missing" })).toEqual([]);
+  expect(runCommand).toHaveBeenCalledTimes(1);
+});
+
+it("discovers Boat through Crabbox aliases without inventing unmapped machine sizes", async () => {
+  const runCommand = vi.fn(async () =>
+    commandResult({
+      stdout: JSON.stringify([
+        {
+          provider: "ascii-box",
+          aliases: ["boat", "ascii", "asciibox"],
+          targets: ["linux"],
+          classCatalog: { disposition: "unmapped", profiles: [] },
+        },
+      ]),
+    }),
+  );
+  const provider = providerWithRunner(runCommand);
+  const profiles = ["boat", "ascii-box", "ascii"].map((backend) => ({
+    provider: backend,
+    ttl: "2h",
+    idleTimeout: "30m",
+  }));
+  expect(
+    await Promise.all(profiles.map((profile) => provider.listOperatingSystems!(profile))),
+  ).toEqual(profiles.map(() => [{ id: "linux", label: "Linux", default: true }]));
+  expect(await provider.listMachineOptions!(profiles[0]!)).toEqual([]);
+  expect(await provider.listOperatingSystems!({ ...PROFILE, provider: "missing" })).toEqual([]);
   expect(runCommand).toHaveBeenCalledTimes(1);
 });
 

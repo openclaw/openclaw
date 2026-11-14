@@ -232,8 +232,9 @@ const catalog = {
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
       rejected: "Mention search rejected. Check access or use another session.",
       limit: "You can mention up to 10 people per message.",
-      selectedLabel: "Will notify",
-      selected: "Will notify: {names}",
+      selectedLabel: "Notify or invite",
+      selected: "Notify or invite: {names}",
+      invite: "Guest invitations require the session creator or an admin.",
       remove: "Remove mention",
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",

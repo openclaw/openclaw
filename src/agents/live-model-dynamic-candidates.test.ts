@@ -8,14 +8,12 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   runProviderDynamicModel: vi.fn(),
 }));
 
-const normalizationMocks = vi.hoisted(() => {
-  const normalize = vi.fn((value: unknown) => value);
-  return { normalize, create: vi.fn(() => normalize) };
-});
-
-vi.mock("./model-discovery-normalize.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./model-discovery-normalize.js")>()),
-  createDiscoveredAgentModelNormalizer: normalizationMocks.create,
+// mock-isolation: Candidate construction does not load provider normalization runtimes.
+vi.mock("./model-discovery-normalize.js", () => ({
+  createDiscoveredAgentModelNormalizer: () => (value: Model) => ({
+    ...value,
+    name: `Normalized ${value.name}`,
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => providerRuntimeMocks);
@@ -58,8 +56,6 @@ function candidates(overrides: Partial<CandidateOptions> = {}) {
 
 describe("appendLiveModelCandidates", () => {
   beforeEach(() => {
-    normalizationMocks.create.mockClear();
-    normalizationMocks.normalize.mockClear();
     providerRuntimeMocks.prepareProviderDynamicModel.mockReset().mockResolvedValue(undefined);
     providerRuntimeMocks.runProviderDynamicModel.mockReset().mockReturnValue(undefined);
   });
@@ -105,7 +101,7 @@ describe("appendLiveModelCandidates", () => {
   });
 
   it.each(["prepared", "resolved"])(
-    "materializes a %s model through default hooks",
+    "normalizes a %s model materialized through default hooks",
     async (mode) => {
       const preparedModel = model(DYNAMIC_PROVIDER, "glm-5");
       if (mode === "prepared") {
@@ -120,16 +116,13 @@ describe("appendLiveModelCandidates", () => {
       const options =
         mode === "prepared" ? {} : { config, workspaceDir: "/tmp/openclaw-workspace" };
       const result = await candidates(options);
-      expect(result.added).toEqual([preparedModel]);
+      expect(result.added).toEqual([
+        { ...preparedModel, name: `Normalized ${preparedModel.name}` },
+      ]);
       expect(providerRuntimeMocks.prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
       expect(providerRuntimeMocks.runProviderDynamicModel).toHaveBeenCalledTimes(
         mode === "prepared" ? 0 : 1,
       );
-      expect(normalizationMocks.create).toHaveBeenCalledWith(agentDir, {
-        config: options.config,
-        workspaceDir: options.workspaceDir,
-      });
-      expect(normalizationMocks.normalize).toHaveBeenCalledWith(preparedModel);
     },
   );
 });
