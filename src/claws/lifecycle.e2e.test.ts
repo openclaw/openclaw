@@ -1,6 +1,6 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -312,10 +312,13 @@ describe("claws lifecycle cli e2e", () => {
     });
   });
 
-  it("removes a Claw-created agent while the serving Gateway owns Cron receipt custody", async () => {
+  it("refuses installed Claw operations while the serving Gateway owns state", async () => {
     const instance = await createOpenClawTestInstance({
       name: "claws-lifecycle-remove",
       env: {
+        // Exercise the production ownership lock, not the in-process test exemption.
+        VITEST: undefined,
+        NODE_ENV: undefined,
         OPENCLAW_SKIP_CRON: undefined,
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         OPENCLAW_EXPERIMENTAL_CLAWS: "1",
@@ -368,50 +371,39 @@ describe("claws lifecycle cli e2e", () => {
           "--no-deliver",
           "--json",
         ]);
-        const status = await run(["claws", "status", "workspace-agent", "--json"]);
-        expect(parseJson(status.stdout)).toMatchObject({
-          schemaVersion: "openclaw.clawStatus.v1",
-          summary: { claws: 1, driftedFiles: 0 },
-          records: [{ install: { agentId: "workspace-agent" }, agentState: "present" }],
-        });
-
-        const preview = await run(["claws", "remove", "workspace-agent", "--dry-run", "--json"]);
-        const removePlan = parseJson(preview.stdout) as { planIntegrity: string };
-        expect(removePlan).toMatchObject({
-          schemaVersion: "openclaw.clawRemovePlan.v1",
-          mutationAllowed: false,
-          agentId: "workspace-agent",
-          blockers: [],
-        });
-
-        const removed = await run([
-          "claws",
-          "remove",
-          "workspace-agent",
-          "--yes",
-          "--plan-integrity",
-          removePlan.planIntegrity,
-          "--json",
-        ]);
-        expect(parseJson(removed.stdout)).toMatchObject({
-          schemaVersion: "openclaw.clawRemoveResult.v1",
-          status: "complete",
-          agentId: "workspace-agent",
-          agentRemoved: true,
-        });
+        const configBytes = await readFile(instance.configPath);
+        const config = JSON.parse(configBytes.toString("utf8"));
+        const workspace = config.agents.entries["workspace-agent"].workspace;
+        const managedPaths = ["SOUL.md", "HEARTBEAT.md", "reference/policy.md"];
+        const managedBytes = await Promise.all(
+          managedPaths.map((file) => readFile(join(workspace, file))),
+        );
+        for (const args of [
+          ["claws", "status", "workspace-agent", "--json"],
+          ["claws", "remove", "workspace-agent", "--dry-run", "--json"],
+          ["claws", "remove", "workspace-agent", "--yes", "--json"],
+        ]) {
+          const refused = await instance.cli(args);
+          expect(refused.code).toBe(1);
+          expect(refused.stderr).toMatch(/exclusive offline state ownership/);
+          expect(refused.stderr).toMatch(/No local mutation was attempted/);
+          expect(await readFile(instance.configPath)).toEqual(configBytes);
+          expect(
+            await Promise.all(managedPaths.map((file) => readFile(join(workspace, file)))),
+          ).toEqual(managedBytes);
+        }
         expect(parseJson((await run(["cron", "list", "--all", "--json"])).stdout)).toMatchObject({
           jobs: expect.arrayContaining([
             expect.objectContaining({ name: "retained-sibling", agentId: "main", enabled: false }),
           ]),
         });
-        const config = JSON.parse(await readFile(instance.configPath, "utf8"));
-        const canonicalStateDir = await realpath(instance.stateDir);
-        expect(config.agents).toEqual({
-          defaults: {
-            heartbeat: { agentId: "main" },
-            systemAgent: { agentId: "main" },
-          },
-          entries: { main: { workspace: join(canonicalStateDir, "workspace") } },
+        await instance.stopGateway();
+        // The same CLI becomes available after the real owner releases custody.
+        const status = await run(["claws", "status", "workspace-agent", "--json"]);
+        expect(parseJson(status.stdout)).toMatchObject({
+          schemaVersion: "openclaw.clawStatus.v1",
+          summary: { claws: 1, driftedFiles: 0 },
+          records: [{ install: { agentId: "workspace-agent" }, agentState: "present" }],
         });
       },
       () => instance.cleanup(),
