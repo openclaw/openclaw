@@ -1,4 +1,6 @@
+import { once } from "node:events";
 import fs from "node:fs";
+import { createConnection } from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
@@ -462,7 +464,14 @@ it.for([
           refusal: { agentId, code: "agent-database-inspection-failed", paths: [agentPath] },
         });
         expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
-        await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
+        // A proxy can turn a refused HTTP connection into a 502 response. Check
+        // the local listener directly, without changing the process proxy policy.
+        const socket = createConnection({ host: "127.0.0.1", port });
+        try {
+          await expect(once(socket, "connect")).rejects.toMatchObject({ code: "ECONNREFUSED" });
+        } finally {
+          socket.destroy();
+        }
         return;
       }
       server = await startup;
