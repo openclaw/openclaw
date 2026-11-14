@@ -22,6 +22,9 @@ export function DiscordIdentity() {
     !view.read().selected?.senderIds.length &&
     !view.read().error;
   const linked = () => !view.read().loading && Boolean(view.read().selected?.senderIds.length);
+  // No Discord account on this Gateway means nothing to link; the row would only say so.
+  const noDiscord = () =>
+    !view.read().loading && !view.read().error && view.read().accounts.length === 0;
   onSettled(() => {
     const stop = context.gateway.subscribe((snapshot) => state.sync(snapshot));
     const stopEvents = context.gateway.subscribeEvents((event) => {
@@ -42,7 +45,7 @@ export function DiscordIdentity() {
     };
   });
   return (
-    <>
+    <Show when={!noDiscord()}>
       <SettingsRow
         title={t("profilePage.discord.title")}
         description={
@@ -96,18 +99,21 @@ export function DiscordIdentity() {
                   <Show
                     when={view.read().flow}
                     fallback={
-                      <button
-                        class="btn btn--sm"
-                        disabled={
-                          !view.read().available ||
-                          !view.read().selected?.available ||
-                          view.read().busy
-                        }
-                        aria-label={t("profilePage.discord.connect")}
-                        onClick={() => void state.connect()}
-                      >
-                        {t("profilePage.discord.connectShort")}
-                      </button>
+                      // Linking that isn't set up has no action here; the description says why.
+                      <Show when={!unavailable()}>
+                        <button
+                          class="btn btn--sm"
+                          disabled={
+                            !view.read().available ||
+                            !view.read().selected?.available ||
+                            view.read().busy
+                          }
+                          aria-label={t("profilePage.discord.connect")}
+                          onClick={() => void state.connect()}
+                        >
+                          {t("profilePage.discord.connectShort")}
+                        </button>
+                      </Show>
                     }
                   >
                     {(flow) => (
@@ -181,6 +187,6 @@ export function DiscordIdentity() {
           </div>
         )}
       </Show>
-    </>
+    </Show>
   );
 }
