@@ -832,6 +832,9 @@ describe("worktree Git maintenance", () => {
       return result;
     });
     const progress = new WorktreeGcProgress();
+    // The retirement-budget cases separately cover elapsed-time limits.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     await createWorktreeGitMaintenance(env)({ progress });
     expect(progress.result.gitMaintenance).toMatchObject({
       stage: "completed",
