@@ -1,0 +1,5 @@
+130
+# LOCAL 2026.11.8 row 81; source d3c5114c5b628993afe34404743e70e9f508ac67.
+# Scratch access recognizes only the exact active scheduled job and its effective agent. Trusted-job write exemption is self-run scoped; current claim, ownership, runtime authority, and commit-time checks remain in place. Negative account/other-job/expired-claim cases are retained.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

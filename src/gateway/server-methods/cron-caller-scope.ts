@@ -394,6 +394,18 @@ export function cronTrustedJobOwnedByCaller(
   );
 }
 
+/** Whether the caller holds a live scheduled-run claim for this job. */
+export function cronCallerRunsJob(
+  job: CronJob,
+  callerScope: Pick<CronCallerScope, "agentId" | "currentJobId"> | undefined,
+  defaultAgentId?: string,
+): boolean {
+  return (
+    callerScope?.currentJobId === job.id &&
+    tryResolveCronJobEffectiveAgentId(job, defaultAgentId) === callerScope.agentId
+  );
+}
+
 export function cronJobMatchesCallerScope(params: {
   job: CronJob;
   callerScope: CronCallerScope | undefined;
@@ -416,12 +428,11 @@ export function cronJobMatchesCallerScope(params: {
   const effectiveAgentId = tryResolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
   const policy = params.job.scheduledToolPolicy;
   // A signed scheduled-run claim restores only the cron tool's historical
-  // current-job surface. Callers must opt in per read/self-remove operation;
+  // current-job surface. Callers must opt in per read/self-remove/self-scratch operation;
   // its delivery account need not match the account that created the job.
   if (
     params.allowCurrentJob === true &&
-    params.callerScope.currentJobId === params.job.id &&
-    effectiveAgentId === params.callerScope.agentId
+    cronCallerRunsJob(params.job, params.callerScope, params.defaultAgentId)
   ) {
     return true;
   }
