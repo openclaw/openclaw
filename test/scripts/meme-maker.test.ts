@@ -15,7 +15,7 @@ const skillRoot = path.resolve("skills/meme-maker");
 const scriptPath = path.join(skillRoot, "scripts/meme.mjs");
 const template = templates.find((entry) => entry.id === "two-buttons")!;
 
-function renderFixture(format: "svg" | "png", isolated = false) {
+function renderFixture(format: "svg" | "png", isolated = false, text = "Fish & chips") {
   const root = createTempDir("openclaw-meme-maker-");
   const cache = path.join(root, "cache");
   const imageDir = path.join(cache, "openclaw/meme-maker");
@@ -41,13 +41,31 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   const out = path.join(root, `meme.${format}`);
   const result = execFileAsync(
     testNodeExecPath,
-    ["--import", hook, script, "render", template.id, "--text", "Fish & chips", "--out", out],
+    ["--import", hook, script, "render", template.id, "--text", text, "--out", out],
     { env: { ...process.env, XDG_CACHE_HOME: cache }, timeout: 30_000 },
   );
   return { image, out, result };
 }
 
 describe("meme-maker local rendering", () => {
+  it("keeps a long caption complete without overflowing its text box height", async () => {
+    const text =
+      "First we carefully inspect every important user request before silently dropping the rest of their caption including this critical final punchline";
+    const { out, result } = renderFixture("svg", true, text);
+    await result;
+    const svg = fs.readFileSync(out, "utf8");
+    const lines = Array.from(svg.matchAll(/<tspan[^>]*>(.*?)<\/tspan>/g), (match) => match[1]);
+    expect(lines.join(" ")).toBe(text);
+    const { Resvg } = await import("@resvg/resvg-js");
+    const caption = new Resvg(svg.replace(/<image[^>]*\/>/, "").replace(/ rotate\([^)]+\)/g, ""), {
+      font: {
+        fontFiles: [path.resolve("src/gateway/assets/session-card/Lato-Regular.ttf")],
+        loadSystemFonts: false,
+      },
+    }).innerBBox()!;
+    expect(caption.height).toBeLessThanOrEqual(template.boxes[0]!.h * template.height);
+  });
+
   it("writes a self-contained SVG with escaped, box-centered text without optional rendering dependencies", async () => {
     const { image, out, result } = renderFixture("svg", true);
     const { stdout } = await result;
