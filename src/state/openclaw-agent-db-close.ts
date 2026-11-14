@@ -64,6 +64,8 @@ export function createAgentDatabaseHandleCloser(cache: {
         alreadyClosed,
         pathCurrent,
         state: database.walMaintenance.health?.state,
+        logFrames: database.walMaintenance.health?.logFrames,
+        checkpointedFrames: database.walMaintenance.health?.checkpointedFrames,
       };
       // Healthy peer handles keep runtime proof; restart proof still needs an empty WAL.
       retainRuntimeProof = healthy && (alreadyClosed || pathCurrent);

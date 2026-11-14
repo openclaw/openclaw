@@ -43,6 +43,8 @@ export type OpenClawAgentDatabase = {
       alreadyClosed: boolean;
       pathCurrent: boolean;
       state?: SqliteWalHealth["state"];
+      logFrames?: number | null;
+      checkpointedFrames?: number | null;
       walBytes?: number;
     };
   };

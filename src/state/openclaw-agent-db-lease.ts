@@ -355,6 +355,8 @@ export function releaseOpenClawAgentDatabaseLease(
           path: held?.path,
           leaseId,
           receipt,
+          pid: process.pid,
+          threadId,
           ...(phases ? { close: phases } : {}),
           ...(receipt === "checkpoint-incomplete" && timing?.checkpoint
             ? { checkpoint: timing.checkpoint }
