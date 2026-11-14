@@ -168,6 +168,50 @@ ${formatHelpExamples([
       });
     });
 
+  agents
+    .command("tools <sessionKey>")
+    .description("Explain the effective tool set for one session")
+    .option("--agent <id>", "Agent id that owns the session")
+    .option("--json", "Output JSON instead of text", false)
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (password auth)")
+    .option("--timeout <ms>", "RPC timeout in milliseconds")
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  [
+    'openclaw agents tools "agent:main:main"',
+    "Why each tool is allowed, excluded, or unavailable for a session.",
+  ],
+  [
+    'openclaw agents tools "agent:work:main" --agent work --json',
+    "One session's tool-access diagnostics as JSON.",
+  ],
+])}
+
+${theme.muted(
+  "Backed by the tools.effective gateway RPC; reasons carry the profile, deny, allowlist, session, or runtime rule that decided each tool.",
+)}`,
+    )
+    .action(async (sessionKey: string, opts): Promise<void> => {
+      await runAgentsCommandAction(async () => {
+        const { agentsToolsCommand } = await import("../../commands/agents-tools.js");
+        await agentsToolsCommand({
+          sessionKey,
+          agent: opts.agent as string | undefined, // SAFETY: Commander parses --agent as a string.
+          timeout: opts.timeout as string | undefined, // SAFETY: Commander parses --timeout as a string.
+          url: opts.url as string | undefined, // SAFETY: Commander parses transport options as strings.
+          token: opts.token as string | undefined, // SAFETY: Commander parses transport options as strings.
+          password: opts.password as string | undefined, // SAFETY: Commander parses transport options as strings.
+          json: Boolean(opts.json),
+        });
+      });
+    });
+
   agents.action(async (): Promise<void> => {
     await runAgentsCommandAction(async () => {
       const { agentsListCommand } = await import("../../commands/agents.commands.list.js");
