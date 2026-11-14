@@ -62,6 +62,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { resolveEditorMediaAttachments } from "./session-rewind-editor-media.js";
+import { logSessionMessageCutFailure } from "./session-rewind-failure-log.js";
 import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entries.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
@@ -229,6 +230,7 @@ async function mutatePreparedSessionAtMessage({
     if (error instanceof SessionMutationAuthorizationChangedError) {
       throw error;
     }
+    logSessionMessageCutFailure(action, "upstream presence", error);
     reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
     return;
   }
@@ -590,6 +592,7 @@ async function mutatePreparedSessionAtMessage({
           reject(error.message, ErrorCodes.UNAVAILABLE);
           return;
         }
+        logSessionMessageCutFailure(action, "local mutation", error);
         reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
         return;
       } finally {
