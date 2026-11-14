@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createGatewayUnreachableTransportError } from "../gateway/transport-error.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { expectText } from "../test-utils/text-assertions.js";
 import { formatCliFailureLines } from "./failure-output.js";
@@ -371,6 +372,21 @@ it.each(["text", "json"])("redacts Gateway URLs in %s errors", async (mode) => {
     ["failed to connect to", "gateway.example/ws"],
     ["password", "secret", "api-key", "signed"],
   );
+});
+
+it("prints the Gateway target once when the Gateway is unreachable", async () => {
+  const message = "Gateway target: ws://127.0.0.1:9\nSource: cli --url";
+  const connectionDetails = { url: "ws://127.0.0.1:9", urlSource: "cli --url", message };
+  buildGatewayConnectionDetails.mockReturnValueOnce(connectionDetails);
+  const cause = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+  callGatewayFromCli.mockRejectedValueOnce(
+    createGatewayUnreachableTransportError({ cause, connectionDetails }),
+  );
+
+  const { stderr } = await runFailure(["--plain", "--url", "ws://127.0.0.1:9"]);
+
+  expectText(stderr, ["Gateway not reachable at ws://127.0.0.1:9 (ECONNREFUSED).", "Hint: run"]);
+  expect(stderr.match(/Gateway target:/g)).toHaveLength(1);
 });
 
 it("routes terminal reset to stderr in --follow --json so stdout stays parseable JSON in a PTY", async () => {
