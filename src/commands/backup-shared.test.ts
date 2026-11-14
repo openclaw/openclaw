@@ -5,9 +5,9 @@ import { resolveBackupArchivePath, resolveRequiredBackupPath } from "./backup-sh
 afterEach(() => vi.unstubAllEnvs());
 
 describe.each([
-  ["repository", resolveRequiredBackupPath, false],
-  ["archive", resolveBackupArchivePath, true],
-] as const)("%s paths", (_kind, resolve, literal) => {
+  ["repository", resolveRequiredBackupPath],
+  ["archive", resolveBackupArchivePath],
+] as const)("%s paths", (_kind, resolve) => {
   it.each([undefined, "", " \t "])("rejects blank values: %j", (value) => {
     expect(() => resolve(value, "--target")).toThrow("Missing required --target value.");
   });
@@ -15,15 +15,13 @@ describe.each([
   it.each(["  backups/archive  ", path.resolve("archive output ")])(
     "resolves relative and absolute paths: %j",
     (value) => {
-      expect(resolve(value, "--target")).toBe(path.resolve(literal ? value : value.trim()));
+      expect(resolve(value, "--target")).toBe(path.resolve(value));
     },
   );
 
   it("expands tilde from the effective home", () => {
     const home = path.resolve("effective-home");
     vi.stubEnv("OPENCLAW_HOME", home);
-    expect(resolve("~/backups ", "--target")).toBe(
-      path.join(home, literal ? "backups " : "backups"),
-    );
+    expect(resolve("~/backups ", "--target")).toBe(path.join(home, "backups "));
   });
 });

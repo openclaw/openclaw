@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   assertDirectoryIdentitySync as assertExactDirectoryIdentitySync,
+  ensureAbsoluteDirectory,
   sameFileIdentity,
   type FileIdentityStat,
 } from "@openclaw/fs-safe/advanced";
@@ -21,11 +22,7 @@ import {
   type ExactDirectoryReceipt,
   type PinnedDirectory,
 } from "../infra/directory-durability.js";
-import {
-  canonicalPathFromExistingAncestor,
-  ensureAbsoluteDirectory,
-  isPathInside,
-} from "../infra/fs-safe.js";
+import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import { findGitRoot } from "../infra/git-root.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
@@ -709,6 +706,19 @@ function buildDatabaseManifest(
   return { role: "generic", id: identity.id, basename, userVersion };
 }
 
+async function ensureSnapshotDirectory(directoryPath: string, scopeLabel: string) {
+  // Snapshot paths are filesystem literals; preserve whitespace and existing parent aliases.
+  const canonicalPath = await canonicalPathFromExistingAncestor(directoryPath);
+  const result = await ensureAbsoluteDirectory(canonicalPath, {
+    mode: SNAPSHOT_DIRECTORY_MODE,
+    scopeLabel,
+  });
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.path;
+}
+
 async function ensurePrivateDirectory(directoryPath: string, scopeLabel: string) {
   let expectedExistingIdentity: BigIntStats | undefined;
   if (process.platform !== "win32") {
@@ -734,13 +744,7 @@ async function ensurePrivateDirectory(directoryPath: string, scopeLabel: string)
     expectedExistingIdentity,
     create: async (targetPath) => {
       if (process.platform === "win32") {
-        const parentResult = await ensureAbsoluteDirectory(path.dirname(targetPath), {
-          mode: SNAPSHOT_DIRECTORY_MODE,
-          scopeLabel,
-        });
-        if (!parentResult.ok) {
-          throw parentResult.error;
-        }
+        await ensureSnapshotDirectory(path.dirname(targetPath), scopeLabel);
         try {
           await createPrivateSqliteDirectory(targetPath);
           return;
@@ -750,14 +754,8 @@ async function ensurePrivateDirectory(directoryPath: string, scopeLabel: string)
           }
         }
       }
-      const result = await ensureAbsoluteDirectory(targetPath, {
-        mode: SNAPSHOT_DIRECTORY_MODE,
-        scopeLabel,
-      });
-      if (!result.ok) {
-        throw result.error;
-      }
-      applyPrivateModeSync(result.path, SNAPSHOT_DIRECTORY_MODE);
+      const ensuredPath = await ensureSnapshotDirectory(targetPath, scopeLabel);
+      applyPrivateModeSync(ensuredPath, SNAPSHOT_DIRECTORY_MODE);
     },
   });
   requireDirectorySync(receipt.parentSync, scopeLabel);
@@ -769,13 +767,7 @@ async function ensureRestoreParentDirectory(directoryPath: string) {
     directoryPath,
     label: "SQLite restore target",
     create: async (targetPath) => {
-      const result = await ensureAbsoluteDirectory(targetPath, {
-        mode: SNAPSHOT_DIRECTORY_MODE,
-        scopeLabel: "SQLite restore target",
-      });
-      if (!result.ok) {
-        throw result.error;
-      }
+      await ensureSnapshotDirectory(targetPath, "SQLite restore target");
     },
   });
   requireDirectorySync(receipt.parentSync, "SQLite restore target");

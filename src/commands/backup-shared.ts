@@ -108,11 +108,11 @@ export function resolveRequiredBackupPath(
   value: string | undefined,
   label: "--repository" | "--target" | "<snapshot>" | "--scratch",
 ): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
+  if (!value?.trim()) {
     throw new Error(`Missing required ${label} value.`);
   }
-  return resolveUserPath(trimmed);
+  // Quoted path whitespace names a different repository or restore target.
+  return path.resolve(expandHomePrefix(value));
 }
 
 export function resolveBackupArchivePath(
