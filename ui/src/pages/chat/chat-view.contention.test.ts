@@ -42,8 +42,8 @@ it("keeps a contention check separate from sending and the composer draft", asyn
 });
 
 it.each([
-  ["waiting_for_state", "Temporarily busy—retrying…"],
-  ["preparing_context", "Preparing reply…"],
+  ["waiting_for_state", "Temporarily busy—retrying"],
+  ["preparing_context", "Preparing reply"],
   ["answer", null],
   ["finishing", null],
 ] as const)("keeps Stop available during %s", async (phase, status) => {
@@ -84,7 +84,7 @@ it.each([
 
 it("waits for startup progress rather than claiming preparation before the first status", () => {
   const container = renderChatView({ runActive: true, stream: "" });
-  expect(workingStatus(container)).toContain("Working…");
+  expect(workingStatus(container)).toContain("Working");
   expect(
     container.querySelector(".chat-working-indicator__status > span:first-child")?.className,
   ).toContain("sr-only");
@@ -101,7 +101,7 @@ it.each(["submitting", "sending", "waiting-model"] as const)(
         { id: "pending-send", sessionKey: "main", text: "Continue", createdAt: 1, sendState },
       ],
     });
-    await waitForSolid(() => expect(workingStatus(container)).toContain("Working…"));
+    await waitForSolid(() => expect(workingStatus(container)).toContain("Working"));
     expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
   },
 );

@@ -258,9 +258,9 @@ async function assertCreateRecovery(
   expect(cardBox?.height).toBeGreaterThan(30);
   await expectDecodedThumbnail(submittedPrompt.locator("img.chat-message-image"));
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-    "Starting…",
+    "Starting",
   );
-  await pollLocatorText(announcement).toContain("Starting…");
+  await pollLocatorText(announcement).toContain("Starting");
   expect(new URL(page.url()).pathname).toBe("/new");
   expect(await message.isVisible()).toBe(false);
   expect(await placeSelect.isVisible()).toBe(false);
@@ -619,7 +619,7 @@ suite.define(() => {
       await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
       await pollLocatorText(submittedPrompt).toContain("keep progress moving");
       await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-        "Starting…",
+        "Starting",
       );
       await captureProof(page, "00-create-pending.png");
       await expectPendingNewSessionPresentation(page);

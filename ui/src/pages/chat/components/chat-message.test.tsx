@@ -463,7 +463,7 @@ describe("grouped chat rendering", () => {
     expectCount(".chat-group.assistant", 1);
     expectAbsent(".chat-reading-indicator");
     expectPresent(".chat-working-indicator--continuation");
-    expect(elementText(".chat-working-indicator__status")).toContain("Working…");
+    expect(elementText(".chat-working-indicator__status")).toContain("Working");
     // The footer row is reserved but empty until the turn settles.
     expect(element(".chat-group-footer")?.childElementCount).toBe(0);
 
@@ -498,7 +498,7 @@ describe("grouped chat rendering", () => {
       runOutputTokens: 5_500,
     });
 
-    expect(elementText(".chat-working-indicator__status")).toContain("Waiting for approval…");
+    expect(elementText(".chat-working-indicator__status")).toContain("Waiting for approval");
     expectAbsent(".chat-working-indicator__elapsed");
     expect(elementText(".chat-working-indicator__tokens")).toBe("5.5k output tokens");
   });

@@ -80,7 +80,7 @@ it("retires a held delete before rendering the destination route and ignores its
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await waitForSolid(() => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(1);
-      expect(container.textContent).toContain("Working…");
+      expect(container.textContent).toContain("Working");
     });
 
     await context.navigateAndWait("about");
@@ -90,7 +90,7 @@ it("retires a held delete before rendering the destination route and ignores its
       ).toBe("OpenClaw");
       expect(container.querySelector("openclaw-sessions-page")).toBeNull();
       expect(container.textContent).not.toContain(row.label);
-      expect(container.textContent).not.toContain("Working…");
+      expect(container.textContent).not.toContain("Working");
     });
 
     pending.reject(new Error("Late deleted-session failure"));

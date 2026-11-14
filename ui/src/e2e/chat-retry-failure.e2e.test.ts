@@ -172,7 +172,7 @@ suite.define(() => {
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
       expect(await status.locator(".chat-working-indicator__elapsed").count()).toBe(1);
       await page.clock.runFor(8_000);
-      await expect.poll(() => status.textContent()).toContain("Retrying…");
+      await expect.poll(() => status.textContent()).toContain("Retrying");
       await gateway.emitGatewayEvent("agent", {
         runId,
         sessionKey,
@@ -187,7 +187,7 @@ suite.define(() => {
         },
       });
       await page.clock.runFor(32);
-      await expect.poll(() => status.textContent()).toContain("Trying fallback model…");
+      await expect.poll(() => status.textContent()).toContain("Trying fallback model");
       await gateway.emitGatewayEvent("agent", {
         runId,
         sessionKey,

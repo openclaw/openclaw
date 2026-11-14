@@ -52,7 +52,7 @@ suite.define(() => {
       await dialog.waitFor({ state: "detached" });
       await expect.poll(() => row.textContent()).toContain("Renamed offline");
       const connectionStatus = footer.locator(".gateway-status");
-      await connectionStatus.getByText("Reconnecting… · 1 queued", { exact: true }).waitFor();
+      await connectionStatus.getByText("Reconnecting · 1 queued", { exact: true }).waitFor();
       expect(await connectionStatus.getByRole("button").count()).toBe(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       const queued = await takeControlUiScreenshotFrame(page, footer, [row, connectionStatus], {

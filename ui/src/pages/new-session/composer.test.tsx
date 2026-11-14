@@ -504,7 +504,7 @@ describe("new-session composer start control", () => {
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
     expect(start?.getAttribute("aria-busy")).toBe("true");
-    expect(start?.getAttribute("aria-label")).toBe("Starting…");
+    expect(start?.getAttribute("aria-label")).toBe("Starting");
   });
 
   it.each(["button", "Enter"])("native terminal %s uses the sole primary submission", (action) => {

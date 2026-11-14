@@ -42,7 +42,7 @@ describe("chat gateway state contention", () => {
       phase: "waiting_for_state",
     });
     expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
-      "Temporarily busy—retrying…",
+      "Temporarily busy—retrying",
     );
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatMessage).toBe("Unsent draft");

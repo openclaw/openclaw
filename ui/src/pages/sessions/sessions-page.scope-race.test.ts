@@ -380,9 +380,9 @@ describe("sessions page lifecycle", () => {
       label.value = "After edit";
       label.dispatchEvent(new Event("change", { bubbles: true }));
       await readStarted.promise;
-      await waitForFast(() => expect(page.textContent).toContain("Working…"));
+      await waitForFast(() => expect(page.textContent).toContain("Working"));
       refreshed.resolve(next);
-      await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
+      await waitForFast(() => expect(page.textContent).not.toContain("Working"));
       expect(page.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")?.disabled).toBe(
         false,
       );

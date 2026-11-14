@@ -22,7 +22,7 @@ it("counts down the actual retry deadline, then stops without claiming success",
   view.update({ retryAt: 18_000 });
   expect(element.textContent).toBe("Retrying in 8s");
   await vi.advanceTimersByTimeAsync(8_000);
-  expect(element.textContent).toBe("Retrying…");
+  expect(element.textContent).toBe("Retrying");
   expect(vi.getTimerCount()).toBe(0);
   await vi.advanceTimersByTimeAsync(20_000);
   view.update({ retryAt: Date.now() + 3_000 });
@@ -32,6 +32,6 @@ it("counts down the actual retry deadline, then stops without claiming success",
 });
 it("does not invent a countdown without a deadline", async () => {
   flush();
-  expect(element.textContent).toBe("Retrying…");
+  expect(element.textContent).toBe("Retrying");
   expect(vi.getTimerCount()).toBe(0);
 });
