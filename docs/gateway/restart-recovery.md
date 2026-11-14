@@ -583,7 +583,7 @@ one new input through the normal session-event path:
 
 > The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
 
-If the session had running background exec processes, that same input also says:
+If the session had running ordinary (non-durable) background exec processes, that same input also says:
 
 > Background exec processes were stopped; rerun them if still needed.
 
