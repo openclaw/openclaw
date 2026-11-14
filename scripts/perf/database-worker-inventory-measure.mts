@@ -40,7 +40,9 @@ const hook = registerHooks({
 });
 const { inventory, loadInventorySources } = await import("../database-worker-inventory.mjs");
 const phases: { phase: string; facts: Parameters<NativeTypeScriptObserver>[1] }[] = [];
-const sources = loadInventorySources(root);
+const sources = new Map(
+  [...loadInventorySources(root)].sort(([left], [right]) => left.localeCompare(right)),
+);
 const inputs = createHash("sha256");
 for (const entry of sources) {
   inputs.update(JSON.stringify(entry));
