@@ -4411,8 +4411,10 @@ struct ChatViewModelTests {
             sessionRoutingContract: contract)
         try await loadAndWaitBootstrap(vm: vm)
 
+        #expect(await vm.localSendRevision == 0)
         await sendUserMessage(vm, text: "route safely")
         _ = try await waitForLastSentRunId(transport)
+        #expect(await vm.localSendRevision == 1)
 
         #expect(await transport.sentAgentIDs() == ["reviewer"])
         #expect(await transport.sentRoutingContracts() == [contract])
@@ -5588,7 +5590,9 @@ struct ChatViewModelTests {
             let matches = vm.messages.filter { msg in
                 msg.role == "assistant" && msg.content.first?.text == "canonical first"
             }
-            return matches.count == 1 && matches.first?.timestamp == now + 2
+            return matches.count == 1 && matches.first?.timestamp == now + 2 &&
+                matches.first?.workRunID == runId &&
+                matches.first?.transcriptMessageID == "msg-assistant-first"
         })
 
         await finalRefreshGate.waitUntilBlocked()
@@ -14444,6 +14448,72 @@ struct ChatHistoryObservationTests {
 }
 
 struct ChatStreamPresentationTests {
+    @Test @MainActor func `durable final retires a lagging stream only for its own new answer`() {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        func message(_ text: String, run: String, phase: String = "final_answer") -> OpenClawChatMessage {
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(type: "text", text: text)],
+                timestamp: 1,
+                transcriptRunID: run,
+                phase: phase)
+        }
+        let prior = message("Answer complete", run: "run")
+        let user = OpenClawChatMessage(role: "user", content: [.init(type: "text", text: "Again")], timestamp: 2)
+        vm.replaceMessages([prior, user])
+        vm.adoptRun(runId: "run", bufferedText: "Answer")
+        #expect(vm.liveAssistantTextShape == "Answer")
+        let other = message("Answer complete", run: "other")
+        vm.replaceMessages([prior, user, other])
+        #expect(vm.liveAssistantTextShape == "Answer")
+        let commentary = message("Answer complete", run: "run", phase: "commentary")
+        vm.replaceMessages([prior, user, other, commentary])
+        #expect(vm.liveAssistantTextShape == "Answer")
+        let prepended = message("Answer complete", run: "run")
+        vm.replaceMessages([prepended, prior, user, other, commentary])
+        #expect(vm.liveAssistantTextShape == "Answer")
+        let final = message("Answer complete", run: "run")
+        vm.replaceMessages([prepended, prior, user, other, commentary, final])
+        // The display pacer has not caught up: text equality cannot retire this copy.
+        #expect(vm.streamingAssistantText == "Answer")
+        #expect(vm.liveAssistantTextShape == nil)
+        vm.updateStreamingAssistantText("Different follow-up", runID: "run")
+        if let scheduledID = vm.streamPacing.scheduledID {
+            vm.flushStreamingAssistantDisplay(scheduledID: scheduledID)
+        }
+        #expect(vm.liveAssistantTextShape == "Different follow-up")
+        vm.updateStreamingAssistantText(nil)
+        vm.updateStreamingAssistantText("Answer", runID: "run")
+        #expect(vm.liveAssistantTextShape == "Answer")
+    }
+
+    @Test @MainActor func `revised owned final retires its source once before matching delta`() {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        let user = OpenClawChatMessage(role: "user", content: [.init(type: "text", text: "Go")], timestamp: 1)
+        vm.replaceMessages([user])
+        vm.adoptRun(runId: "run", bufferedText: "Original draft")
+        let final = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Revised answer")],
+            timestamp: 2,
+            transcriptRunID: "run",
+            phase: "final_answer")
+        vm.replaceMessages([user, final])
+        #expect(vm.streamingAssistantText == "Original draft")
+        #expect(vm.liveAssistantTextShape == nil)
+        vm.updateStreamingAssistantText("Revised answer", runID: "run")
+        if let id = vm.streamPacing.scheduledID { vm.flushStreamingAssistantDisplay(scheduledID: id) }
+        #expect(vm.liveAssistantTextShape == nil)
+        vm.updateStreamingAssistantText("Distinct follow-up", runID: "run")
+        if let id = vm.streamPacing.scheduledID { vm.flushStreamingAssistantDisplay(scheduledID: id) }
+        #expect(vm.liveAssistantTextShape == "Distinct follow-up")
+        let tool = OpenClawChatMessage(role: "toolResult", content: [], timestamp: 3)
+        vm.replaceMessages([user, final, tool])
+        #expect(vm.liveAssistantTextShape == "Distinct follow-up")
+    }
+
     @Test @MainActor func `paced words do not invalidate transcript shape or timeline`() throws {
         final class Fired: @unchecked Sendable { var count = 0 }
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))

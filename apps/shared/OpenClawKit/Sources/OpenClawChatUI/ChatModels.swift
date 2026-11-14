@@ -935,6 +935,11 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let activity: [OpenClawChatHistoryActivity]?
     public let kind: String?
     public let deltaCursor: String?
+    /// Page boundaries for reading away from the tip; opaque `history-page:` cursors.
+    public let olderCursor: String?
+    public let newerCursor: String?
+    /// The requested page boundary is unusable (its source changed), not exhausted.
+    public let windowReset: Bool?
 
     public init(
         sessionKey: String,
@@ -946,7 +951,10 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         inputConsumptions: [InputConsumption]? = nil,
         activity: [OpenClawChatHistoryActivity]? = nil,
         kind: String? = nil,
-        deltaCursor: String? = nil)
+        deltaCursor: String? = nil,
+        olderCursor: String? = nil,
+        newerCursor: String? = nil,
+        windowReset: Bool? = nil)
     {
         self.sessionKey = sessionKey
         self.sessionId = sessionId
@@ -958,6 +966,9 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.activity = activity
         self.kind = kind
         self.deltaCursor = deltaCursor
+        self.olderCursor = olderCursor
+        self.newerCursor = newerCursor
+        self.windowReset = windowReset
     }
 
     public init(from decoder: any Decoder) throws {
@@ -976,6 +987,9 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.inputConsumptions = try values.decodeIfPresent([InputConsumption].self, forKey: .inputConsumptions)
         self.activity = try values.decodeIfPresent([OpenClawChatHistoryActivity].self, forKey: .activity)
         self.deltaCursor = try values.decodeIfPresent(String.self, forKey: .deltaCursor)
+        self.olderCursor = try values.decodeIfPresent(String.self, forKey: .olderCursor)
+        self.newerCursor = try values.decodeIfPresent(String.self, forKey: .newerCursor)
+        self.windowReset = try values.decodeIfPresent(Bool.self, forKey: .windowReset)
     }
 }
 

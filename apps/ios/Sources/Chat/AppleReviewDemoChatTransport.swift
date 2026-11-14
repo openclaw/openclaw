@@ -49,6 +49,18 @@ enum ScreenshotFixtureMode {
     }
 
     static let chatSwitchSecondSessionKey = "agent:main:launch-plan"
+
+    /// A 2,000-row synthetic chat read in Gateway-sized pages; the short variant opens on two rows.
+    static var pagedHistoryTipRows: Int? {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--openclaw-short-paged-history-fixture") { return 2 }
+        return arguments.contains("--openclaw-paged-history-fixture") ? 200 : nil
+    }
+
+    /// Holds each page read, like a slow Gateway, so a proof can watch one land.
+    static var slowPagedHistoryEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-slow-paged-history-fixture")
+    }
 }
 
 struct LocalChatFixture {
@@ -271,6 +283,14 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await self.store.history(sessionKey: sessionKey)
+    }
+
+    /// Only the paged-history fixture issues page cursors; no fixture issues delta cursors.
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        if ScreenshotFixtureMode.slowPagedHistoryEnabled {
+            try await Task.sleep(for: .seconds(6))
+        }
+        return try await self.store.historyPage(sessionKey: sessionKey, cursor: cursor)
     }
 
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
@@ -588,7 +608,7 @@ private actor LocalFixtureChatStore {
         {
             startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.externalRunEvents)
         }
-        let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
+        var historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
                                                         ProcessInfo.processInfo.arguments
                                                             .contains("--openclaw-subagent-wait-fixture"),
                                                             normalizedSessionKey == "agent:main:subagent:fixture-helper"
@@ -603,6 +623,11 @@ private actor LocalFixtureChatStore {
                 secondSession: normalizedSessionKey == ScreenshotFixtureMode.chatSwitchSecondSessionKey)
         } else {
             self.messages
+        }
+        var olderCursor: String?
+        if let tipRows = ScreenshotFixtureMode.pagedHistoryTipRows, historyMessages.count > tipRows {
+            olderCursor = "older:\(historyMessages.count - tipRows)"
+            historyMessages = Array(historyMessages.suffix(tipRows))
         }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
@@ -633,7 +658,32 @@ private actor LocalFixtureChatStore {
                   {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
                    "title":"Exec","name":"exec","status":"completed"}
                 ]}]
-                """.utf8)) : nil)
+                """.utf8)) : nil,
+            olderCursor: olderCursor)
+    }
+
+    /// Gateway-shaped page reads for the paged-history fixture: 200-row pages, cursors by row index.
+    func historyPage(sessionKey: String, cursor: String) throws -> OpenClawChatHistoryPayload {
+        let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
+        let parts = cursor.split(separator: ":")
+        guard parts.count == 2, let index = Int(parts[1]), self.messages.indices.contains(index) else {
+            return OpenClawChatHistoryPayload(
+                sessionKey: normalizedSessionKey,
+                sessionId: nil,
+                messages: [],
+                thinkingLevel: self.thinkingLevel,
+                windowReset: true)
+        }
+        let rows = parts[0] == "older"
+            ? max(0, index - Self.pagedHistoryPageRows)..<index
+            : (index + 1)..<min(self.messages.count, index + 1 + Self.pagedHistoryPageRows)
+        return try OpenClawChatHistoryPayload(
+            sessionKey: normalizedSessionKey,
+            sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
+            messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(Array(self.messages[rows]))),
+            thinkingLevel: self.thinkingLevel,
+            olderCursor: rows.lowerBound > 0 ? "older:\(rows.lowerBound)" : nil,
+            newerCursor: rows.upperBound < self.messages.count ? "newer:\(rows.upperBound - 1)" : nil)
     }
 
     func sendMessage(
@@ -1064,8 +1114,21 @@ private actor LocalFixtureChatStore {
         ]
     }
 
+    private static let pagedHistoryRowCount = 2000
+    private static let pagedHistoryPageRows = 200
+
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ScreenshotFixtureMode.pagedHistoryTipRows != nil {
+            return (1...Self.pagedHistoryRowCount).map { index in
+                Self.message(
+                    role: index.isMultiple(of: 2) ? "assistant" : "user",
+                    text: String(format: "PAGED_HISTORY_ROW_%04d", index) + "\n\n" +
+                        String(repeating: "Synthetic history line. ", count: index % 4 + 1),
+                    timestamp: now + Double(index),
+                    transcriptMessageID: "fixture-paged-\(index)")
+            }
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture") {
             return [Self.message(
                 role: "user",

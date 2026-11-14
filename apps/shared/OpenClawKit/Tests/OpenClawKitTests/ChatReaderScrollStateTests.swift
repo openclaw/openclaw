@@ -71,9 +71,11 @@ struct ChatReaderScrollStateTests {
             hasTransientContent: true))
     }
 
-    @Test func `drags and system animated scrolls release the follow target`() {
+    @Test func `reader system navigation releases follow but keyboard animation does not`() {
         #expect(chatReaderScrollReleasesFollow(.interacting))
         #expect(chatReaderScrollReleasesFollow(.animating))
+        #expect(!chatReaderScrollReleasesFollow(.animating, keyboardTransition: true))
+        #expect(chatReaderScrollReleasesFollow(.interacting, keyboardTransition: true))
     }
 
     @Test func `idle, touch-down, and deceleration phases keep the follow target`() {
