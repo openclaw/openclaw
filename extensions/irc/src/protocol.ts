@@ -83,9 +83,8 @@ export function parseIrcPrefix(prefix?: string) {
 
 // Only real CR/LF and control characters can break out of an IRC line. Literal
 // backslash sequences such as "\n" or "C:\temp" are ordinary text and pass through.
-// Line breaks and tabs separate words, so they become spaces instead of vanishing.
 export function sanitizeIrcOutboundText(text: string): string {
-  return stripIrcControlChars(text.replace(/\r\n|[\r\n\t]/g, " ")).trim();
+  return stripIrcControlChars(text.replace(/\r?\n/g, " ")).trim();
 }
 
 export function sanitizeIrcTarget(raw: string): string {

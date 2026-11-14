@@ -218,6 +218,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
   const sendPrivmsg = async (target: string, text: string, replyTo?: string) => {
     const effect = captureEffectAuthority();
     const normalizedTarget = sanitizeIrcTarget(target);
+    text = text.replace(/\r\n|[\r\t]/g, " ");
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
       throw new Error("Message must be non-empty for IRC sends");
