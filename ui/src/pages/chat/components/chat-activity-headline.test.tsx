@@ -131,10 +131,10 @@ function nestedStep(childName: string, parent: AgentActivityItem, child: AgentAc
 }
 
 it.each([
-  ["exec", { title: "Inspect", code: "return null" }, "start", "Running code…"],
+  ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect…"],
   ["web_search", { query: "new plugin APIs" }, "start", 'Web Search for "new plugin APIs"…'],
   ["lookup_record", { query: "release notes" }, "start", "Lookup Record release notes…"],
-  ["exec", { title: "Inspect source", code: "return null" }, "result", "Code execution"],
+  ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
   ["exec", {}, "result", "Code execution"],
   ["session_status", {}, "result", "Session Status"],
 ] as const)("renders accessible %s activity", async (name, args, phase, expected) => {
@@ -150,6 +150,7 @@ it.each([
         : {}),
   });
   await renderActivityFixture([group("current", [activity], "active-run", args)], liveOptions);
+  advanceTimersByTime(200);
   const summary = query("summary")!;
   const icon = summary.querySelector('.chat-activity-group__icon[role="img"]');
   expect(label()).toBe(expected);
@@ -172,7 +173,8 @@ it("names prepared-only activity when the raw call is unavailable", async () => 
     ],
     liveOptions,
   );
-  expect(label()).toBe("Called Session Status");
+  advanceTimersByTime(200);
+  expect(label()).toBe("Calling Session Status");
 });
 
 it("shows a command once when its live activity group is expanded", async () => {
@@ -210,6 +212,7 @@ it("keeps the icon paired with the current action and restores the aggregate ico
     );
   const icon = () => query("icon");
   await draw([exec]);
+  advanceTimersByTime(200);
   expect(icon()?.getAttribute("aria-label")).toBe("exec");
   const execSvg = icon()?.innerHTML;
   advanceTimersByTime(100);
@@ -221,7 +224,7 @@ it("keeps the icon paired with the current action and restores the aggregate ico
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
   expect(icon()?.innerHTML).not.toBe(execSvg);
   await draw([exec, search], false);
-  expect(label()).toBe("Code execution, attempted searches");
+  expect(label()).toBe("Running code, searching");
   expect(icon()?.getAttribute("aria-hidden")).toBe("true");
   expect(icon()?.getAttribute("aria-label")).toBeNull();
 });
@@ -243,6 +246,7 @@ it("keeps accessible disclosure identity while the current action advances", () 
       onToggleToolMessageExpanded: onToggle,
     });
   draw([prepared("first")]);
+  advanceTimersByTime(200);
   const [summary, body, headline] = [query("summary")!, query("body")!, query("label")!];
   expect(summary.getAttribute("aria-expanded")).toBe("false");
   expect(summary.getAttribute("aria-controls")).toBe(body.id);
@@ -254,7 +258,7 @@ it("keeps accessible disclosure identity while the current action advances", () 
   draw([prepared("first", "completed")]);
   expanded = true;
   draw([prepared("first", "completed"), prepared("next")]);
-  expect(label()).toBe("Read files");
+  expect(label()).toBe("Reading files");
   expect(summary.getAttribute("aria-expanded")).toBe("true");
   expect(body.hidden).toBe(false);
 
@@ -276,12 +280,13 @@ it("selects only visible activity from the matching run and newest eligible grou
     group("peer", [prepared("peer")], "peer-run"),
   ];
   activityRoot.render(groups, { ...liveOptions, activityGroupKey: "current" });
+  advanceTimersByTime(200);
   expect(label()).toBe("Reading current.ts…");
   activityRoot.render(groups, { ...liveOptions, activityGroupKey: "newer-group" });
-  expect(label()).toBe("Read files");
+  expect(label()).toBe("Reading files");
   activityRoot.render(groups, { ...liveOptions, activityRunId: "absent-run" });
-  expect(label()).toBe("Read files");
-  expectAfter(3_000, "Read files");
+  expect(label()).toBe("Reading files");
+  expectAfter(3_000, "Reading files");
 });
 
 it("settles an earlier activity headline when narration follows in the same live run", () => {
@@ -297,12 +302,13 @@ it("settles an earlier activity headline when narration follows in the same live
   const props = { runId: "active-run", runActive: true };
   const before = projectTranscriptActivity([activity], props);
   activityRoot.render([activity], { ...liveOptions, ...before });
+  advanceTimersByTime(200);
   expect(before.activityGroupKey).toBe("current");
   const after = projectTranscriptActivity([activity, narration], props);
   expect(after.activityGroupKey).toBeNull();
   activityRoot.render([activity], { ...liveOptions, ...after });
   expect(container.querySelector(".text-shimmer")).toBeNull();
-  expect(label()).toBe("Attempted file reads");
+  expect(label()).toBe("Reading files");
 });
 
 it("uses the newest group's live card label without inheriting an earlier failure", async () => {
@@ -338,6 +344,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
   const opts = { ...liveOptions, showReasoning: true };
 
   await renderActivityFixture(groups, opts);
+  advanceTimersByTime(200);
   const activitySummary = query("summary")!;
   expect(container.querySelector(".chat-activity-group.is-open")).toBeNull();
   expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
@@ -347,7 +354,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
   expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-    "Attempted file reads, attempted file edits",
+    "Attempted file reads, editing files",
   );
 });
 
@@ -355,6 +362,7 @@ it.each(["failed", "blocked"] as const)(
   "preserves a nested child's %s action and urgency",
   async (status) => {
     await renderActivityFixture([group("current", [prepared("first")])], liveOptions);
+    advanceTimersByTime(200);
     const parent = { ...prepared("parent"), name: "exec", title: "Executed code" };
     const nested = nestedStep("write", parent, prepared("child", status));
     await renderActivityFixture([nested], liveOptions);
@@ -368,6 +376,65 @@ it.each(["failed", "blocked"] as const)(
     }
   },
 );
+
+it("gates newly mounted live groups without hiding durable or urgent activity", async () => {
+  const liveGroup = () => container.querySelector<HTMLElement>(".chat-activity-group");
+  const raw = entryGroup(
+    "current",
+    createAssistantMessage(
+      [createToolCall("parent", "exec", { code: "await tools.progress_card({});" })],
+      { runId: "active-run" },
+    ),
+  );
+  await renderActivityFixture([raw], liveOptions);
+  expect(liveGroup()?.hidden).toBe(true);
+  advanceTimersByTime(60);
+  await renderActivityFixture(
+    [
+      nestedStep(
+        "progress_card",
+        { ...prepared("parent", "completed"), name: "exec" },
+        { ...prepared("child", "completed"), hideFromChannelProgress: true },
+      ),
+    ],
+    liveOptions,
+  );
+  expect(query("summary")).toBeNull();
+
+  await renderActivityFixture([group("current", [prepared("durable")])], liveOptions);
+  expect(liveGroup()?.hidden).toBe(true);
+  advanceTimersByTime(199);
+  expect(liveGroup()?.hidden).toBe(true);
+  advanceTimersByTime(1);
+  expect(liveGroup()?.hidden).toBe(false);
+  expect(label()).toBe("Reading durable.ts…");
+  activityRoot.render([group("current", [prepared("durable", "completed")])], liveOptions);
+  expect(label()).toBe("Read durable.ts");
+  expect(container.querySelector(".text-shimmer")).toBeNull();
+
+  for (const status of ["failed", "blocked"] as const) {
+    activityRoot.unmount();
+    activityRoot = createActivityGroupHarness(container);
+    await renderActivityFixture([group("urgent", [prepared("urgent", status)])], liveOptions);
+    expect(liveGroup()?.hidden).toBe(false);
+    expect(query("summary")?.textContent).toContain(status === "failed" ? "failed" : "Blocked");
+  }
+
+  activityRoot.unmount();
+  activityRoot = createActivityGroupHarness(container);
+  const burst = [prepared("first")];
+  activityRoot.render([group("burst", burst)], liveOptions);
+  for (let index = 1; index <= 24; index++) {
+    advanceTimersByTime(40);
+    burst[burst.length - 1] = { ...burst.at(-1)!, status: "completed", phase: "end" };
+    burst.push(prepared(`next-${index}`));
+    activityRoot.render([group("burst", [...burst])], liveOptions);
+    expect(liveGroup()?.hidden).toBe(true);
+  }
+  advanceTimersByTime(40);
+  expect(liveGroup()?.hidden).toBe(false);
+  expect(label()).toBe("Reading next-24.ts…");
+});
 
 it("keeps routine-only execution containers hidden throughout the run", async () => {
   const step = (status: AgentActivityItem["status"]) =>
@@ -389,6 +456,7 @@ it.each([false, true])(
   "refreshes a held operation when completion and the next start coexist (duplicate start: %s)",
   (duplicateStart) => {
     activityRoot.render([group("current", [prepared("first")])], liveOptions);
+    advanceTimersByTime(200); // Initial presentation has settled.
     advanceTimersByTime(200);
     const settled = [
       ...(duplicateStart ? [prepared("first")] : []),
@@ -413,6 +481,7 @@ it("coalesces fast completed calls without replaying a queue or delaying their o
   const items = [prepared("first")];
   const draw = () => activityRoot.render([group("current", items)], liveOptions);
   draw();
+  advanceTimersByTime(200);
   const headline = query("label");
   advanceTimersByTime(20);
   items[0] = prepared("first", "completed");
@@ -488,6 +557,7 @@ it("defers transient replacements and refreshes a held container after its child
     );
   };
   draw();
+  advanceTimersByTime(200);
   advanceTimersByTime(1_500);
   draw(wrapper("running"));
   expect(label()).toBe("Read first.ts");
@@ -501,6 +571,8 @@ it("defers transient replacements and refreshes a held container after its child
   activityRoot.unmount();
   activityRoot = createActivityGroupHarness(container);
   draw(wrapper("running"));
+  expect(container.querySelector<HTMLElement>(".chat-activity-group")?.hidden).toBe(true);
+  advanceTimersByTime(200);
   expect(label()).toBe("Running code…");
   advanceTimersByTime(40);
   draw(wrapper("completed"), prepared("child"));

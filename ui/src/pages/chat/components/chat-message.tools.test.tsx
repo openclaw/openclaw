@@ -151,7 +151,8 @@ describe("grouped chat rendering", () => {
       }),
     ]);
     expect(completed.activity[0]?.items[0]).toMatchObject({ phase: "end", status: "completed" });
-    expect(elementText(".chat-activity-group__label")).toBe("Ran commands");
+    expectAbsent(".chat-activity-group__summary");
+    expect(elementText(".chat-tool-row__cmd")).toBe("check-workspace");
     expect(harness.view.textContent).not.toContain("outcome unknown");
     expect(harness.view.textContent).toContain("Workspace checked.");
     expectCount(".chat-tool-row", 1);
@@ -182,6 +183,18 @@ describe("grouped chat rendering", () => {
     expect(appendedSummary.getAttribute("aria-controls")).toBe(initialBodyId);
     expect(appendedSummary.getAttribute("aria-expanded")).toBe("true");
     expectCount(".chat-activity-group__body > .chat-bubble", 3);
+    renderActivityGroup(
+      [
+        ...groups,
+        createToolGroup("launch", [
+          toolResultEntry("launch", "spawn", "sessions_spawn", "Child accepted"),
+        ]),
+      ],
+      opts,
+    );
+    expect(requireElement(".chat-activity-group__summary", HTMLButtonElement)).toBe(initialSummary);
+    expect(initialSummary.getAttribute("aria-controls")).toBe(initialBodyId);
+    expectCount(".chat-tool-msg-summary", 4);
   });
 
   it("keeps one readable label for standalone tool results with duplicate names", async () => {

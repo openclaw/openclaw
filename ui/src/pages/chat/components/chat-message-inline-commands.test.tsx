@@ -3,6 +3,7 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
@@ -98,12 +99,13 @@ it("keeps a command child under its parent across an intervening inline command"
     operation("unrelated", "exec", { command: "printf unrelated" }),
     operation("child", "exec", { command: "printf nested" }, "parent"),
   ]);
-  view.render(groups, {
+  const options = {
     showReasoning: false,
     inlineCommands: await inlineCommandPresentation(),
     isToolMessageExpanded: () => true,
-    isToolExpanded: (id) => id === "parent:toolcard:0",
-  });
+    isToolExpanded: (id: string) => id === "parent:toolcard:0",
+  };
+  view.render(groups, options);
   await settleToolBridges(container);
   const nested = container.querySelector(".chat-tool-children");
   expect(nested?.textContent).toContain("printf nested");
@@ -116,6 +118,23 @@ it("keeps a command child under its parent across an intervening inline command"
   const inline = container.querySelector(".chat-activity-group--inline");
   expect(inline?.textContent).toContain("printf unrelated");
   expect(inline?.textContent).not.toContain("printf nested");
+  const childRow = nested?.querySelector(".chat-tool-row");
+  view.render(
+    fixture([
+      operation("parent", "tool_search", { query: "Inspect source" }),
+      operation("unrelated", "exec", { command: "printf unrelated" }),
+      operation("child", "exec", { command: "printf nested-latest" }, "parent"),
+      operation("child-two", "exec", { command: "printf nested-second" }, "parent"),
+    ]),
+    options,
+  );
+  await settleToolBridges(container);
+  expect(container.textContent).not.toContain("Couldn’t load");
+  expect(container.querySelector(".chat-tool-children")).toBe(nested);
+  expect(nested?.querySelector(".chat-tool-row")).toBe(childRow);
+  expect(nested?.textContent).toContain("printf nested-latest");
+  expect(nested?.textContent).toContain("printf nested-second");
+  expect(nested?.textContent).not.toContain("printf unrelated");
 });
 
 it.each([false, true])(
@@ -160,8 +179,8 @@ it.each([false, true])(
       ].at(-1)?.textContent;
     view.render(groups, options);
     await settleToolBridges(container);
+    await waitForSolid(() => expect(label()).toContain("Release notes"));
     const purpose = label();
-    expect(purpose).toContain("Release notes");
     view.render(groups, { ...options, inlineCommands: await inlineCommandPresentation() });
     await settleToolBridges(container);
     expect(label()).toBe(purpose);

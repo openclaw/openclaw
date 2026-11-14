@@ -85,8 +85,10 @@ outputs, and outcomes. Narration and events with their own placement separate
 activity groups.
 
 Recorded actions inside Code Mode follow the same presentation rules. Their
-execution title and source remain available in the call details; starting another
-Code Mode execution does not by itself start another visual group. Activity
+execution title and source remain available in the call details. An execution
+without representative child actions keeps its descriptive title in the activity
+row, including when it fails. Starting another Code Mode execution does not by
+itself start another visual group. Activity
 summaries stay dimmed until hover or keyboard focus brightens their text, without
 an icon tooltip; screen readers retain the exact tool identity. The **Worked for**
 header shows elapsed time without adding a tool-call counter when expanded.

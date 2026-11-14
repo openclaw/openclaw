@@ -42,18 +42,19 @@ it.each([
   };
   const options = { messageKey: "purpose", expanded: false, runActive: true };
   const container = await mountCard(card, options);
-  expect(text(container, ".chat-tool-disclosure__content")).not.toContain("Check the workspace");
   if (args.code) {
-    expect(text(container, ".chat-tool-row__title")).toBe("Running code");
+    expect(text(container, ".chat-tool-row__title")).toBe("Check the workspace");
     expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
   } else {
     expect(text(container, ".chat-tool-row__cmd")).toBe("pnpm test");
+    expect(text(container, ".chat-tool-disclosure__content")).toContain("Running");
+    expect(text(container, ".chat-tool-disclosure__content")).not.toContain("Check the workspace");
   }
   expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
   await mountCard({ ...card, completed: true }, { ...options, expanded: true }, container);
   expect(text(container, args.code ? ".chat-tool-row__title" : ".chat-tool-row__cmd")).toBe(
-    args.code ? "Ran code" : "pnpm test",
+    args.code ? "Check the workspace" : "pnpm test",
   );
   expect(text(container, ".chat-tool-msg-body")).toContain("Check the workspace");
   for (const source of Object.values(args)) {
@@ -85,4 +86,36 @@ it("keeps multiline command previews readable and bounded without changing the s
   expect(preview).toContain("printf ' --- recovery --- ' cat recovery.md");
   expect(preview.length).toBeLessThanOrEqual(200);
   expect(text(container, ".chat-tool-msg-body")).toContain(command);
+});
+
+it("uses names already available to chat rows without exposing unresolved routing keys", async () => {
+  const key = "agent:main:subagent:00000000-0000-4000-8000-000000007ef3";
+  for (const name of ["sessions_history", "agents_wait"]) {
+    const card = {
+      id: name,
+      name,
+      completed: true,
+      args: name === "sessions_history" ? { sessionKey: key } : { ids: ["known-run"] },
+    };
+    const container = await mountCard(card, {
+      messageKey: name,
+      subagents: {
+        subagentSessions: [
+          {
+            key,
+            kind: "direct",
+            label: "Research",
+            updatedAt: 1,
+            activeRunIds: ["known-run"],
+          },
+        ],
+      },
+    });
+    const expected = name === "sessions_history" ? "Read chat" : "Waited for";
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(expected + " Research");
+    await mountCard(card, { messageKey: name, subagents: { subagentSessions: [] } }, container);
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(
+      name === "sessions_history" ? expected : "Waited for agents",
+    );
+  }
 });

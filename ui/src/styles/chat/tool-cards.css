@@ -953,6 +953,11 @@
   max-width: var(--chat-message-max-width, min(760px, 100%));
 }
 
+/* Author display rules must preserve the live disclosure's hidden state. */
+.chat-activity-group[hidden] {
+  display: none;
+}
+
 .chat-activity-group__label {
   flex: 0 1 auto;
   min-width: 0;

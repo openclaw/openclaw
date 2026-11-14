@@ -43,7 +43,7 @@ it("pools legacy assistant activity with stable keys and message order", () => {
     );
   });
   const prompt = preparedGroup(chatMessage("user", "Start", 500), "prompt");
-  for (const count of [2, 3]) {
+  for (const count of [1, 2, 3]) {
     const expected = groups.slice(0, count);
     const result = coalesceActivityRuns([prompt, ...expected]);
     expect(result).toHaveLength(2);
@@ -103,7 +103,7 @@ it.each([
   expect(projected).toHaveLength(3);
   expect(requireActivityRun(projected[0]).groups).toEqual([first, second]);
   expect(projected[1]).toBe(boundary);
-  expect(projected[2]).toBe(groups[2]);
+  expect(requireActivityRun(projected[2]).groups).toEqual([groups[2]]);
 });
 
 it("disables projection during search", () => {

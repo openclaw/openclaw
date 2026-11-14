@@ -1,4 +1,5 @@
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
@@ -32,9 +33,13 @@ export function selectActivityHeadline(
   if (callId) {
     for (const [card, recorded] of preparedByCard) {
       const addressed = addressedSession(card, subagentSessions);
+      const toolName = unwrapToolCallForDisplay(card).name.trim().toLowerCase();
       operationLabel =
         recorded === operation
-          ? addressed && !addressed.name
+          ? addressed &&
+            !addressed.name &&
+            toolName !== "sessions_history" &&
+            toolName !== "agents_wait"
             ? operation.title
             : resolveToolOperationLabel(
                 card,

@@ -11,16 +11,20 @@ import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 export type ChatActivityHeadlineProps = {
   bubbleMode?: boolean;
   contentRef?: (element: HTMLSpanElement) => void;
-  scope: string;
   activity: ActivityHeadline | undefined;
-  resolveActivity?: (key: string) => ActivityHeadline | undefined;
   summary: string;
   pluginToolIcons?: PluginToolIcons;
   outcomes?: readonly string[];
 };
 
-/** Coalesce identity changes, never the recorded outcome or action wording. */
-export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
+/** One cadence owner for both the group's arrival and its changing headline. */
+export function createActivityHeadlinePresentation(props: {
+  scope: string;
+  activity: ActivityHeadline | undefined;
+  resolveActivity?: (key: string) => ActivityHeadline | undefined;
+  /** Eligible live disclosure; history and expanded content bypass the hold. */
+  active: boolean;
+}) {
   const presented = useContext(ContentPresentation);
   const [tick, advance] = createSignal(0);
   const resolve = (key: string) =>
@@ -34,6 +38,8 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
     pendingAt: number | undefined;
     nextAt: number | undefined;
     active: boolean;
+    revealed: boolean;
+    pending: boolean;
   }>((previous) => {
     tick();
     const active = presented();
@@ -44,6 +50,14 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
     const candidateAt =
       previous?.scope === scope && previous.candidate === current?.key ? previous.candidateAt : now;
     const pendingAt = previous?.scope === scope ? (previous.pendingAt ?? now) : now;
+    const urgent = current?.status === "failed" || current?.status === "blocked";
+    const initialDeadline = Math.min(candidateAt + 200, pendingAt + 1_000);
+    const pending =
+      active &&
+      props.active &&
+      !urgent &&
+      !(previous?.scope === scope && previous.revealed) &&
+      now < initialDeadline;
     // Give transient replacements time to settle, but keep advancing during a
     // continuous burst. The displayed operation's outcome always refreshes immediately.
     const nextAt = Math.max(
@@ -51,28 +65,31 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
       Math.min(candidateAt + 200, pendingAt + 1_000),
     );
     const keep = Boolean(
+      !pending &&
       active &&
+      props.active &&
       previous?.active &&
       previous.scope === scope &&
       held !== undefined &&
       current !== undefined &&
-      current.status !== "failed" &&
-      current.status !== "blocked" &&
+      !urgent &&
       held.key !== current.key &&
       now < nextAt,
     );
     return {
       scope,
-      key: keep ? previous?.key : current?.key,
+      key: pending ? undefined : keep ? previous?.key : current?.key,
       shownAt:
         keep || (previous?.scope === scope && previous.key === current?.key)
           ? (previous?.shownAt ?? now)
           : now,
       candidate: current?.key,
       candidateAt,
-      pendingAt: keep ? pendingAt : undefined,
-      nextAt: keep ? nextAt : undefined,
+      pendingAt: pending || keep ? pendingAt : undefined,
+      nextAt: pending ? initialDeadline : keep ? nextAt : undefined,
       active,
+      revealed: (previous?.scope === scope && previous.revealed) || (active && !pending),
+      pending,
     };
   });
   createInterval(
@@ -89,6 +106,11 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
     const key = selection().key;
     return key ? resolve(key) : undefined;
   });
+  return { selected: shown, pending: () => selection().pending };
+}
+
+export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
+  const shown = () => props.activity;
   const name = () => shown()?.name;
   return (
     <>

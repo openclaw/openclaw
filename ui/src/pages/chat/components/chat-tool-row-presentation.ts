@@ -7,7 +7,7 @@ import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { getLocale, t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionLaunchPresentation } from "../chat-spawned-subagent.ts";
 
 registerChatToolLabelsEnglish();
@@ -56,11 +56,11 @@ export function commandPreview(command: string): string {
   return truncateUtf16Safe(command.replace(/\s+/gu, " ").trim(), 200);
 }
 
-/** The title describes recorded action and target; authored purpose stays in input details. */
+/** Recorded child actions replace containers; a standalone code operation keeps its purpose. */
 export function resolveToolOperationLabel(
   card: ToolCard,
   outcome: ToolCardOutcome,
-  addressed?: { name?: string },
+  addressed?: { name?: string; names?: string[] },
   detail = card.activity?.meta,
 ): string {
   const launch = resolveSessionLaunchPresentation(card, outcome);
@@ -78,7 +78,16 @@ export function resolveToolOperationLabel(
   if (input.kind === "command") {
     const command = typeof args?.command === "string" ? args.command : undefined;
     if (command?.trim()) {
-      return `$ ${commandPreview(command)}`;
+      return outcome === "running"
+        ? t("chat.toolCards.runningCommand", { command: commandPreview(command) })
+        : `$ ${commandPreview(command)}`;
+    }
+    if (
+      call.name.trim().toLowerCase() === "exec" &&
+      typeof args?.title === "string" &&
+      args.title.trim()
+    ) {
+      return args.title.trim();
     }
     return t(
       `chat.toolCards.${outcome === "running" ? "executingCode" : outcome === "succeeded" ? "executedCode" : "codeExecution"}`,
@@ -96,6 +105,34 @@ export function resolveToolOperationLabel(
   }
   const display = resolveToolDisplayIdentity(call.name);
   const name = call.name.trim().toLowerCase();
+  if (name === "agents_wait") {
+    const action =
+      outcome === "running" ? "waitingFor" : outcome === "succeeded" ? "waitedFor" : "waitFor";
+    return addressed?.names?.length
+      ? t(`chat.toolCards.${action}NamedAgents`, {
+          names: new Intl.ListFormat(getLocale(), { type: "conjunction" }).format(addressed.names),
+        })
+      : t(`chat.toolCards.${action}Agents`);
+  }
+  if (name === "skills_search" || name === "skills_read") {
+    const action =
+      name === "skills_search"
+        ? outcome === "running"
+          ? "searchingSkills"
+          : outcome === "succeeded"
+            ? "searchedSkills"
+            : "skillSearch"
+        : outcome === "running"
+          ? "readingSkill"
+          : "readSkill";
+    const skillTarget = name === "skills_search" ? args?.query : args?.name;
+    return [
+      t(`chat.toolCards.${action}`),
+      typeof skillTarget === "string" ? skillTarget.trim() : undefined,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
   const sessionLabel =
     name === "sessions_history"
       ? outcome === "running"
@@ -112,7 +149,7 @@ export function resolveToolOperationLabel(
         : undefined;
   return [
     sessionLabel ? t(`chat.toolCards.${sessionLabel}`) : display.label,
-    addressed ? addressed.name : detail,
+    name === "sessions_history" ? addressed?.name : addressed ? addressed.name : detail,
   ]
     .filter(Boolean)
     .join(" ");

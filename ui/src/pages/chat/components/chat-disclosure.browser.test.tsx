@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { flush } from "solid-js";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid as mountView } from "../../../test-helpers/mount-solid.ts";
@@ -58,11 +59,26 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
               name: "web_search",
               arguments: { query: "disclosures" },
             },
+            {
+              type: "toolCall",
+              id: "search-keyboard",
+              name: "web_search",
+              arguments: { query: "keyboard" },
+            },
           ],
           activity: [
             {
               itemId: "search",
               toolCallId: "search",
+              kind: "tool",
+              phase: "end",
+              name: "web_search",
+              title: "Search",
+              status: "completed",
+            },
+            {
+              itemId: "search-keyboard",
+              toolCallId: "search-keyboard",
               kind: "tool",
               phase: "end",
               name: "web_search",
@@ -143,6 +159,45 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
     },
   );
 
+  it("hides the entire arriving activity group until its presentation settles", async () => {
+    vi.useFakeTimers();
+    container = document.body.appendChild(document.createElement("div"));
+    const groups = [
+      group("arrival", {
+        role: "assistant",
+        runId: "arrival-run",
+        content: [{ type: "toolCall", id: "arrival-call", name: "exec", arguments: {} }],
+      }),
+    ];
+    const view = mountView(
+      () => (
+        <ContentPresentation value={() => true}>
+          <ActivityGroup
+            groups={groups}
+            options={{ showToolCalls: true, runActive: true, activityRunId: "arrival-run" }}
+            presentation="standalone"
+          />
+        </ContentPresentation>
+      ),
+      { container },
+    );
+    try {
+      await settleToolBridges(container);
+      const activity = container.querySelector<HTMLElement>(".chat-activity-group")!;
+      expect(activity.hidden).toBe(true);
+      expect(getComputedStyle(activity).display).toBe("none");
+      expect(activity.getBoundingClientRect().height).toBe(0);
+      vi.advanceTimersByTime(200);
+      flush();
+      expect(activity.hidden).toBe(false);
+      expect(getComputedStyle(activity).display).not.toBe("none");
+      expect(activity.getBoundingClientRect().height).toBeGreaterThan(0);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("dims live operation text until hover or keyboard focus without a tooltip", async () => {
     container = document.body.appendChild(document.createElement("div"));
     const view = mountView(
@@ -150,7 +205,6 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
         <ContentPresentation value={() => true}>
           <button class="chat-inline-disclosure chat-activity-group__summary">
             <ChatActivityHeadline
-              scope="hover-proof"
               activity={{
                 key: "search",
                 name: "tool_search",

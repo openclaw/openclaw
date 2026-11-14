@@ -52,8 +52,25 @@ export function describeToolGroup(
       !item.hideFromChannelProgress && options.codeExecutions?.has(item.toolCallId ?? item.itemId),
   );
   const codeIds = new Set(code.map((item) => item.toolCallId ?? item.itemId));
-  const ordinary = current.filter((item) => !codeIds.has(item.toolCallId ?? item.itemId));
-  const counts = { code: code.length, ...summarizeAgentActivity(ordinary, options).counts };
+  const skillSearches = current.filter(
+    (item) => !item.hideFromChannelProgress && item.name === "skills_search",
+  );
+  const skillReads = current.filter(
+    (item) => !item.hideFromChannelProgress && item.name === "skills_read",
+  );
+  const skillItems = new Set([...skillSearches, ...skillReads]);
+  const ordinary = current.filter(
+    (item) => !codeIds.has(item.toolCallId ?? item.itemId) && !skillItems.has(item),
+  );
+  const { other, subagents, ...categories } = summarizeAgentActivity(ordinary, options).counts;
+  const counts = {
+    code: code.length,
+    ...categories,
+    skillSearches: skillSearches.length,
+    skillReads: skillReads.length,
+    other,
+    subagents,
+  };
   const completed = summarizeAgentActivity(
     ordinary.filter(
       (item) =>
@@ -63,6 +80,16 @@ export function describeToolGroup(
           options.executedCommands?.has(item.toolCallId ?? item.itemId)),
     ),
     options,
+  );
+  const runningKinds = new Set(
+    Object.entries(
+      summarizeAgentActivity(
+        ordinary.filter((item) => item.status === "running"),
+        options,
+      ).counts,
+    )
+      .filter(([, count]) => count > 0)
+      .map(([kind]) => kind),
   );
   const completedKinds = new Set(
     Object.entries(completed.counts)
@@ -83,7 +110,7 @@ export function describeToolGroup(
   const otherTools = counts.other
     ? [
         ...new Set(
-          current.flatMap((item) =>
+          ordinary.flatMap((item) =>
             item.name &&
             item.name !== "sessions_spawn" &&
             summarizeAgentActivity([item], options).counts.other
@@ -97,15 +124,27 @@ export function describeToolGroup(
     .filter(([, count]) => count > 0)
     .map(([kind], index) => {
       const continuation = index > 0 ? "Continuation" : "";
+      if (kind === "skillSearches" || kind === "skillReads") {
+        const skills = kind === "skillSearches" ? skillSearches : skillReads;
+        const phase = skills.some((item) => item.status === "running")
+          ? "Running"
+          : skills.some((item) => item.status === "completed")
+            ? "Summary"
+            : "Pending";
+        return t(`chat.toolCards.activity.${kind}${phase}${continuation}`);
+      }
       if (kind === "code") {
         return t(
-          `chat.toolCards.${completedKinds.has(kind) ? "executedCode" : "codeExecution"}${continuation}`,
+          `chat.toolCards.${code.some((item) => item.status === "running") ? "executingCode" : completedKinds.has(kind) ? "executedCode" : "codeExecution"}${continuation}`,
         );
       }
       return kind === "other" && otherTools.length
-        ? t(`chat.toolCards.activity.calledTools${continuation}`, { tools: otherTools.join(", ") })
+        ? t(
+            `chat.toolCards.activity.${runningKinds.has(kind) ? "callingTools" : "calledTools"}${continuation}`,
+            { tools: otherTools.join(", ") },
+          )
         : t(
-            `chat.toolCards.activity.${kind}${completedKinds.has(kind) ? "Summary" : "Pending"}${continuation}`,
+            `chat.toolCards.activity.${kind}${runningKinds.has(kind) && kind !== "subagents" ? "Running" : completedKinds.has(kind) ? "Summary" : "Pending"}${continuation}`,
           );
     })
     .join(", ");

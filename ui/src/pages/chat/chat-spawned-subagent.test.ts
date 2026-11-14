@@ -340,6 +340,25 @@ describe("a launched subagent", () => {
     expect(
       address("subagents", { action: "steer", target: addressedChild.key }, "Send to subagent")([]),
     ).toBe("Send to subagent");
+    const read = address(
+      "sessions_history",
+      { sessionKey: addressedChild.key },
+      "Read session history",
+    );
+    expect(read([addressedChild])).toBe("Reading chat " + label);
+    expect(read([])).toBe("Reading chat");
+    expect(address("sessions_history", {}, "Read session history")([])).toBe("Reading chat");
+    const wait = address("agents_wait", { ids: ["known-run"] }, "Wait for Agents");
+    expect(wait([{ ...addressedChild, activeRunIds: ["known-run"] }])).toBe("Waiting for " + label);
+    expect(wait([])).toBe("Waiting for agents");
+    expect(
+      address("agents_wait", { ids: ["known-run"] }, "Wait for Agents", {
+        details: {
+          completed: [{ runId: "known-run", sessionKey: addressedChild.key, label }],
+          pending: [],
+        },
+      })([]),
+    ).toBe("Waiting for " + label);
     // An unlabeled launch is named by the session its result names.
     const unlabeled = address("sessions_spawn", { task: "Write" }, "Start subagent", {
       outputText: accepted(addressedChild.key),

@@ -59,7 +59,15 @@ export function* inlineActivityDisclosureCalls(
   }
 }
 
-export function inlineActivitySegments(
+/** Group disclosures retain the message-scoped identity used by inline expansion custody. */
+export function activityEntryGroupKey(
+  group: MessageGroup,
+  entry: MessageGroup["messages"][number],
+): string {
+  return entry === group.messages[0] ? group.key : `${group.key}:${entry.key}`;
+}
+
+function inlineActivitySegments(
   groups: readonly MessageGroup[],
   roots: Pick<ReadonlySet<ToolCard>, "has"> = new Set(
     groupToolCalls(
@@ -95,7 +103,7 @@ export function inlineActivitySegments(
       } else {
         segmentGroup = {
           ...group,
-          key: entry === group.messages[0] ? group.key : `${group.key}:${entry.key}`,
+          key: activityEntryGroupKey(group, entry),
           messages: [entry],
         };
         segment.groups.push(segmentGroup);

@@ -2,6 +2,8 @@ import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdow
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For } from "solid-js";
+import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import "../../../styles/chat/transcript-feed.css";
 import {
@@ -16,7 +18,7 @@ import {
   isStandaloneToolMessageForDisplay,
   normalizeMessage,
 } from "../../../lib/chat/message-normalizer.ts";
-import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
+import { describeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import { resolveToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   extractToolCardsCached,
@@ -41,7 +43,6 @@ type Entry = { key: string; timestamp: number | null } & (
   | {
       kind: "tools";
       calls: Array<{ key: string; card: ToolCard }>;
-      activity: ReturnType<typeof readPreparedActivity>;
     }
   | {
       kind: "user" | "assistant" | "block";
@@ -90,22 +91,23 @@ function entries(messages: unknown[]): Entry[] {
       const key = `${item.key}:${index}`;
       if (isToolCallContentBlock(block)) {
         const call = cards[callIndex++];
-        if (!call) {
+        if (
+          !call ||
+          call.activity?.hideFromChannelProgress ||
+          call.activity?.suppressChannelProgress ||
+          (Array.isArray(asNullableRecord(item.message)?.activity) && !call.activity)
+        ) {
           continue;
         }
         const previous = result.at(-1);
         if (previous?.kind === "tools") {
           previous.calls.push({ key, card: call });
-          if (call.activity) {
-            previous.activity.push(call.activity);
-          }
         } else {
           result.push({
             kind: "tools",
             key,
             timestamp,
             calls: [{ key, card: call }],
-            activity: call.activity ? [call.activity] : [],
           });
         }
       } else if (
@@ -193,7 +195,7 @@ function ToolLine(props: { call: ToolCard }) {
   const outcome = createMemo(() => resolveToolCardOutcome(call(), false));
   const outcomeLabel = () =>
     t(
-      `chat.toolCards.${outcome() === "succeeded" ? "completed" : outcome() === "unknown" ? "outcomeUnknown" : outcome()}`,
+      `chat.toolCards.${outcome() === "succeeded" ? "completed" : outcome() === "unknown" ? "outcomeUnknown" : outcome() === "unrecorded" ? "noResult" : outcome()}`,
     );
   return (
     <details
@@ -225,23 +227,53 @@ function ToolLine(props: { call: ToolCard }) {
 }
 
 function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
-  const overview = createMemo(() =>
-    describeToolGroup(props.entry.activity, {
-      ownSessionLaunches: ownSessionLaunchCalls(props.entry.calls.map(({ card }) => card)),
-    }),
-  );
+  const overview = createMemo(() => {
+    const launches = ownSessionLaunchCalls(props.entry.calls.map(({ card }) => card));
+    const ownSessionLaunches = new Set<string>();
+    const executedCommands = new Set<string>();
+    const codeExecutions = new Set<string>();
+    const activity = props.entry.calls.map(({ key, card }): AgentActivityItem => {
+      const call = unwrapToolCallForDisplay(card);
+      const args = asNullableRecord(call.args);
+      const outcome = resolveToolCardOutcome(card, false);
+      if (card.callId && launches.has(card.callId)) {
+        ownSessionLaunches.add(key);
+      }
+      if (card.exitCode !== undefined) {
+        executedCommands.add(key);
+      }
+      if (
+        call.name.trim().toLowerCase() === "exec" &&
+        !(typeof args?.command === "string" && args.command.trim()) &&
+        [args?.code, args?.input].some((code) => typeof code === "string" && code.trim())
+      ) {
+        codeExecutions.add(key);
+      }
+      return {
+        ...card.activity,
+        itemId: key,
+        toolCallId: key,
+        name: call.name,
+        title: card.activity?.title ?? call.name,
+        kind: "tool",
+        phase: card.completed ? "end" : "start",
+        status:
+          outcome === "succeeded"
+            ? "completed"
+            : outcome === "unrecorded" || outcome === "unknown"
+              ? undefined
+              : outcome,
+        unpairedCall: outcome === "unrecorded",
+      };
+    });
+    return describeToolGroup(activity, { ownSessionLaunches, executedCommands, codeExecutions });
+  });
   return (
     <details class="chat-task-feed__tool-group">
       <summary>
         <span class="chat-task-feed__overview">
           <span class="chat-task-feed__overview-heading">
-            <strong>
-              {overview().total
-                ? t(`chat.toolCards.activity.title${overview().total === 1 ? "One" : "Many"}`, {
-                    count: String(overview().total),
-                  })
-                : t("chat.toolCards.rawDetails")}
-            </strong>
+            <strong>{overview().label}</strong>
             <For each={overview().outcomes} keyed={(outcome) => outcome.kind}>
               {(outcome) => (
                 <span
@@ -252,7 +284,6 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
               )}
             </For>
           </span>
-          {overview().label && <span class="chat-task-feed__summary">{overview().label}</span>}
         </span>
         <span class="chat-task-feed__chevron" aria-hidden="true">
           <Icon name="chevronRight" />

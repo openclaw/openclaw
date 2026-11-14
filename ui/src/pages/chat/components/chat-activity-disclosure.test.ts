@@ -195,9 +195,18 @@ it.each(["anonymous", "missing-card", "matched"] as const)(
     );
     for (const expanded of [false, true]) {
       const summary = await renderSummary([message], "activity", { expanded });
-      expect(summary?.textContent).toContain("Attempted file reads");
-      expect(summary?.textContent).not.toContain("Some actions failed");
-      expect(summaryContainer.querySelector(".chat-tool-failure") !== null).toBe(expanded);
+      if (pairing === "matched") {
+        expect(summary).toBeNull();
+        expect(summaryContainer.querySelector(".chat-tool-row")?.textContent).toContain(
+          "call-failed.ts",
+        );
+      } else {
+        expect(summary?.textContent).toContain("Attempted file reads");
+        expect(summary?.textContent).not.toContain("Some actions failed");
+      }
+      expect(summaryContainer.querySelector(".chat-tool-failure") !== null).toBe(
+        expanded || pairing === "matched",
+      );
       if (expanded && pairing !== "matched") {
         expect(summaryContainer.querySelector(".chat-activity-group__body")?.textContent).toContain(
           "Permission denied",
@@ -230,9 +239,9 @@ it("uses current prepared outcomes in activity summaries", async () => {
     },
   );
   const summary = await renderSummary([message], "activity");
-  expect(summary?.textContent).toContain("Read files");
-  expect(summary?.textContent).not.toContain("failed");
-  expect(summary?.querySelector(".chat-tool-failure")).toBeNull();
+  expect(summary).toBeNull();
+  expect(summaryContainer.querySelector(".chat-tool-row")?.textContent).toContain("one.ts");
+  expect(summaryContainer.querySelector(".chat-tool-failure")).toBeNull();
 });
 
 function preparedOutcome(
@@ -306,7 +315,7 @@ it.each([
     return;
   }
   // The failed wrapper stays inspectable, with its routine child inside it.
-  expect(container.querySelector(".chat-tool-disclosure__content")?.textContent).toMatch(/code/i);
+  expect(container.querySelector(".chat-tool-disclosure__content")?.textContent).toBe(title);
   expect(container.querySelector(".chat-tool-failure")).not.toBeNull();
   expect(container.querySelector(".chat-tool-children")).toBeNull();
   await draw(true);
@@ -552,4 +561,125 @@ it("preserves prepared-only outcomes and an open group when a permission row arr
   expect(
     permissionCard.compareDocumentPosition(summaries[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
+});
+
+it("keeps expanded historical launches readable when a new launch refreshes activity", async () => {
+  const launch = (id: string, label: string, completed: boolean) =>
+    createAssistantMessage(
+      [
+        createToolCall(id, "sessions_spawn", { label, task: `Review ${label}` }),
+        ...(completed
+          ? [
+              createToolResultBlock(
+                id,
+                "sessions_spawn",
+                JSON.stringify({
+                  status: "accepted",
+                  childSessionKey: `agent:main:subagent:${id}`,
+                }),
+                { isError: false },
+              ),
+            ]
+          : []),
+      ],
+      { runId: id === "later" ? "second-run" : "first-run" },
+    );
+  const earlier = [
+    createAssistantMessage(
+      [
+        read("retained"),
+        createToolResultBlock("retained", "read", "Retained file", { isError: false }),
+      ],
+      { runId: "first-run" },
+    ),
+    launch("alpha", "Alfa", true),
+    launch("beta", "Beta", true),
+    launch("gamma", "Gama", true),
+  ];
+  const draw = async (later?: boolean) => {
+    const groups = prepareHistoryGroups([
+      createToolGroup(
+        "earlier",
+        structuredClone(earlier).map((message, index) =>
+          createMessageEntry(`old-${index}`, message),
+        ),
+      ),
+      ...(later === undefined
+        ? []
+        : [
+            createToolGroup("later", [
+              createMessageEntry("new-launch", launch("later", "Interromper30", later)),
+            ]),
+          ]),
+    ]);
+    activityRoot.render(groups, {
+      ...visibleTools,
+      isToolMessageExpanded: () => true,
+      runActive: later === false,
+      activityRunId: "second-run",
+    });
+    await settleToolBridges(summaryContainer);
+  };
+  await draw();
+  const historicalRow = [...summaryContainer.querySelectorAll(".chat-tool-row")].find((row) =>
+    row.textContent?.includes("Alfa"),
+  );
+  expect(historicalRow).toBeDefined();
+  for (const later of [false, true]) {
+    await draw(later);
+    expect(summaryContainer.textContent).not.toContain("Couldn’t load");
+    expect(
+      [...summaryContainer.querySelectorAll(".chat-tool-row")].find((row) =>
+        row.textContent?.includes("Alfa"),
+      ),
+    ).toBe(historicalRow);
+    for (const label of ["retained.ts", "Alfa", "Beta", "Gama", "Interromper30"]) {
+      expect(summaryContainer.textContent).toContain(label);
+    }
+  }
+});
+
+it("keeps a raw live edit grouped and exposes its completed single-file result", async () => {
+  const call = createAssistantMessage(
+    [
+      createToolCall("single-edit", "edit", {
+        path: "/repo/soma.cjs",
+        oldText: "before",
+        newText: "after",
+      }),
+    ],
+    { runId: "edit-run" },
+  );
+  const draw = async (completed: boolean) => {
+    const messages = completed
+      ? attachHistoryActivity(
+          prepareChatHistoryFixture([
+            call,
+            createToolResultMessage("single-edit", "edit", "Updated", {
+              runId: "edit-run",
+              isError: false,
+            }),
+          ]),
+        ).messages
+      : [call];
+    activityRoot.render(
+      buildChatItems(createProps({ messages })).filter((item) => item.kind === "group"),
+      {
+        ...visibleTools,
+        runActive: !completed,
+        activityRunId: "edit-run",
+      },
+    );
+    await settleToolBridges(summaryContainer);
+  };
+  await draw(false);
+  expect(summaryContainer.querySelector(".chat-activity-group__summary")).not.toBeNull();
+  expect(summaryContainer.querySelector(".chat-tool-row")).toBeNull();
+  await draw(true);
+  expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();
+  const row = summaryContainer.querySelector(".chat-tool-row")!;
+  expect(row.textContent).toContain("Edited");
+  expect(row.textContent).toContain("soma.cjs");
+  expect(row.querySelector(".chat-diffstat__add")?.textContent).toBe("+1");
+  expect(row.querySelector(".chat-diffstat__del")?.textContent).toBe("-1");
 });

@@ -1,5 +1,7 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { sumRunOutputTokens } from "../chat-progress.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { getChatItemsGeneration, type buildCachedChatItems } from "../chat-thread.ts";
@@ -30,35 +32,35 @@ export function projectTranscriptActivity(
         props.runActive && activityRunId
           ? chatItems.findLast((item) => item.kind !== "reading-indicator")
           : undefined;
-      if (
-        group?.kind !== "group" ||
-        !group.messages.some(
-          ({ message }) =>
-            transcriptRunId(message) === activityRunId &&
-            readPreparedActivity(message).some(
-              (activity) => !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
-            ),
-        )
-      ) {
+      if (group?.kind !== "group") {
         return undefined;
       }
+      const messages = group.messages.filter(
+        ({ message }) => transcriptRunId(message) === activityRunId,
+      );
       const calls = new Map(
-        group.messages.flatMap(({ message }) =>
-          transcriptRunId(message) === activityRunId
-            ? readPreparedActivity(message).map(
-                (item) => [item.toolCallId ?? item.itemId, item] as const,
-              )
-            : [],
+        messages.flatMap(({ message }) =>
+          readPreparedActivity(message).map(
+            (item) => [item.toolCallId ?? item.itemId, item] as const,
+          ),
         ),
       );
+      const visible = [...calls.values()].filter(
+        (item) => !item.hideFromChannelProgress && !item.suppressChannelProgress,
+      );
+      // A raw call precedes its prepared activity. Keep its owner eligible while
+      // facts hydrate; an explicit empty projection still means hidden work.
+      const rawCards = messages.flatMap(({ message }) =>
+        Array.isArray(asNullableRecord(message)?.activity) ? [] : extractToolCardsCached(message),
+      );
+      if (visible.length === 0 && rawCards.length === 0) {
+        return undefined;
+      }
       return {
         key: group.key,
-        running: [...calls.values()].some(
-          (item) =>
-            item.status === "running" &&
-            !item.hideFromChannelProgress &&
-            !item.suppressChannelProgress,
-        ),
+        running:
+          visible.some((item) => item.status === "running") ||
+          rawCards.some((card) => resolveToolCardOutcome(card, true) === "running"),
       };
     },
   );

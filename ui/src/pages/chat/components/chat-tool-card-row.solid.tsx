@@ -18,6 +18,7 @@ import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import {
+  addressedSession,
   resolveSessionLaunchPresentation,
   resolveSpawnedSubagent,
   type SpawnedSubagent,
@@ -53,14 +54,19 @@ function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | unde
     : undefined;
 }
 
-function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome): string {
+function resolveToolRowText(
+  card: ToolCard,
+  view: ToolCallView,
+  outcome: ToolCardOutcome,
+  addressed?: { name?: string; names?: string[] },
+): string {
   const verb = resolveToolRowVerb(view, outcome);
   return verb && view.target
     ? `${verb} ${view.target}`
     : resolveToolOperationLabel(
         card,
         outcome,
-        undefined,
+        addressed,
         resolveToolDisplay({ name: card.name, args: card.args, detailMode: "raw" }).detail,
       );
 }
@@ -94,6 +100,7 @@ function ToolRowContent(props: {
   view: ToolCallView;
   outcome: ToolCardOutcome;
   running: boolean;
+  addressed?: { name?: string; names?: string[] };
   workspaceFilePath: string | null;
   onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];
 }) {
@@ -112,13 +119,13 @@ function ToolRowContent(props: {
     <Switch
       fallback={
         <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
-          {resolveToolRowText(props.card, props.view, props.outcome)}
+          {resolveToolRowText(props.card, props.view, props.outcome, props.addressed)}
         </span>
       }
     >
       <Match when={props.view.kind === "command" && props.view.command}>
-        <span class="chat-tool-row__prompt" aria-hidden="true">
-          $
+        <span class="chat-tool-row__prompt">
+          {props.outcome === "running" ? t("chat.toolCards.running") : "$"}
         </span>
         <code class={["chat-tool-row__cmd", { "text-shimmer": props.running }]}>
           <HighlightedCommand command={shellCommandPreview(props.view.command!)} />
@@ -264,6 +271,7 @@ export function ToolCardRow(props: ToolCardProps) {
               view={view()}
               outcome={outcome()}
               running={running()}
+              addressed={addressedSession(card(), props.options.subagents?.subagentSessions)}
               workspaceFilePath={workspaceFilePath()}
               onOpenWorkspaceFile={props.options.onOpenWorkspaceFile}
             />
@@ -278,7 +286,14 @@ export function ToolCardRow(props: ToolCardProps) {
           )}
         </Show>
       </span>
-      <Show when={inline() && outcome() !== "failed" && outcome() !== "skipped"}>
+      <Show
+        when={
+          inline() &&
+          outcome() !== "failed" &&
+          outcome() !== "skipped" &&
+          !(view().command && outcome() === "running")
+        }
+      >
         <span class="chat-command-trail__status" role="status">
           {t(
             outcome() === "running"

@@ -152,7 +152,11 @@ function readAddressedSessionKey(card: LaunchCard): string | undefined {
         ? text(args?.target)
         : undefined;
   // Steer and stop also take labels, run ids and list indexes; those already read as names.
-  return key?.includes(":") ? key : undefined;
+  return tool === "sessions_send" || tool === "sessions_history"
+    ? key
+    : key?.includes(":")
+      ? key
+      : undefined;
 }
 
 /**
@@ -163,12 +167,48 @@ function readAddressedSessionKey(card: LaunchCard): string | undefined {
 export function addressedSession(
   card: LaunchCard,
   rows: readonly GatewaySessionRow[] | undefined,
-): { name?: string } | undefined {
+): { name?: string; names?: string[] } | undefined {
+  const call = unwrapToolCallForDisplay(card);
+  if (call.name.trim().toLowerCase() === "agents_wait") {
+    const args = asRecord(call.args);
+    const ids = Array.isArray(args?.ids)
+      ? args.ids.filter((id): id is string => typeof id === "string")
+      : [];
+    const result = asRecord(card.details) ?? safeParseJsonRecord(card.outputText ?? "");
+    const completed = Array.isArray(result?.completed) ? result.completed.map(asRecord) : [];
+    const names = ids.map((id) => {
+      const receipt = completed.find((item) => item?.runId === id);
+      const row = rows?.find(
+        (candidate) =>
+          candidate.activeRunIds?.includes(id) ||
+          (typeof receipt?.sessionKey === "string" &&
+            areUiSessionKeysEquivalent(candidate.key, receipt.sessionKey)),
+      );
+      return (
+        text(receipt?.label) ??
+        (row && (text(row.label) || text(row.displayName) || text(row.derivedTitle))
+          ? resolveSessionDisplayName(row.key, row)
+          : undefined)
+      );
+    });
+    return { names: names.length && names.every((name) => name !== undefined) ? names : undefined };
+  }
   const key = readAddressedSessionKey(card);
   if (!key) {
     return undefined;
   }
   const row = rows?.find((candidate) => areUiSessionKeysEquivalent(candidate.key, key));
+  if (
+    call.name.trim().toLowerCase() === "sessions_history" &&
+    !(
+      row &&
+      [row.label, row.displayName, row.derivedTitle].some(
+        (value) => text(value) && value !== row.key,
+      )
+    )
+  ) {
+    return { name: text(asRecord(call.args)?.label) };
+  }
   return {
     name: row
       ? resolveSessionDisplayName(row.key, row)

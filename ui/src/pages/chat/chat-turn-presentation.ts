@@ -8,7 +8,6 @@ import {
   normalizeRoleForGrouping,
   resolveMessageRole,
 } from "../../lib/chat/message-normalizer.ts";
-import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
@@ -41,20 +40,13 @@ export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false):
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
+  // Keep one activity owner as the first call gains live facts or more calls.
+  // Its renderer can simplify a settled singleton without replacing the owner.
   return (
     bubbleMode ||
     group.messages.length > 1 ||
-    cards.length > 1 ||
-    // Even a lone retired activity must pass through its visibility projection.
-    // Rendering it as a raw card would resurrect routine work above narration.
-    (cards.length > 0 &&
-      group.messages.some(
-        ({ message }) =>
-          Array.isArray(asRecord(message)?.activity) && !hasVisiblePreparedActivity(message),
-      )) ||
-    (cards.length === 0 &&
-      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
-    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
+    cards.length > 0 ||
+    group.messages.some(({ message }) => hasVisiblePreparedActivity(message))
   );
 }
 
@@ -571,7 +563,7 @@ export function coalesceActivityRuns(
     if (!first) {
       return;
     }
-    result.push(groups.length === 1 ? first : activityRun(groups));
+    result.push(activityRun(groups));
     groups = [];
   };
   for (const item of items) {

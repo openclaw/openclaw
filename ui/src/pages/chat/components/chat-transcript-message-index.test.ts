@@ -475,7 +475,7 @@ describe("completed reply frame ownership", () => {
       key: 'agent-run:["run-1","send:run-1"]',
       ...replyFrameShape(
         completedOutcome(messages.at(-1)),
-        { kind: key === sessionKey ? "work-group" : "group" },
+        { kind: key === sessionKey ? "work-group" : "activity-run" },
         { kind: "group", role: "assistant" },
       ),
     });
@@ -596,12 +596,12 @@ describe("completed reply frame ownership", () => {
         ? [
             replyFrameShape(
               { kind: "active" },
-              { kind: "group", role: "tool" },
+              { kind: "activity-run", groups: [{ role: "tool" }] },
               ...(withAnswer ? [{ kind: "group", role: "assistant" }] : []),
               { kind: "stream-run" },
             ),
           ]
-        : [{ kind: "group", role: "tool" }],
+        : [{ kind: "activity-run", groups: [{ role: "tool" }] }],
     );
     expect(chain.transcriptItems).toHaveLength(1);
     expect(messagesIn(chain.transcriptItems)).toEqual(messages);
@@ -849,7 +849,10 @@ describe("subagent handoff", () => {
       );
     }
     if (state === "wait ended") {
-      expect(frame.parts.at(-1)).toMatchObject({ kind: "group", role: "tool" });
+      expect(frame.parts.at(-1)).toMatchObject({
+        kind: "activity-run",
+        groups: [{ role: "tool" }],
+      });
     }
   });
 
@@ -857,14 +860,14 @@ describe("subagent handoff", () => {
     const logsOf = (messages: unknown[]) =>
       framesOf(projectHistory(messages)).flatMap((frame) => kind(frame.parts, "activity-run"));
     const waitingRow = framesOf(waitingChain())[0]?.parts.find(
-      (part) => part.kind === "group" && part.messages.every((source) => source.message !== prose),
+      (part) => part.kind === "activity-run",
     );
     const resumedRow = readRow("read-2", "announce:resume", 7);
     const resumed = projectHistory([...waiting, resumedRow, answer]);
     const logs = framesOf(resumed).flatMap((frame) => kind(frame.parts, "activity-run"));
     expect(logs).toHaveLength(1);
     // The row the reader may have opened while waiting keeps its identity.
-    expect(logs[0]).toMatchObject({ key: `activity:${waitingRow?.key}` });
+    expect(logs[0]?.key).toBe(waitingRow?.key);
     expect(logs[0]?.groups.map((group) => group.runId)).toEqual(["run-1", "announce:resume"]);
     const index = indexFor(resumed);
     expect(new Set(["read-1", "read-2"].map((id) => index.messageRowKeysById.get(id)))).toEqual(
@@ -874,7 +877,11 @@ describe("subagent handoff", () => {
       timestamp: 45,
       runId: "announce:resume",
     });
-    expect(logsOf([...waiting, spoke, resumedRow, answer])).toEqual([]);
+    expect(
+      logsOf([...waiting, spoke, resumedRow, answer]).map((log) =>
+        log.groups.map((group) => group.runId),
+      ),
+    ).toEqual([["run-1"], ["announce:resume"]]);
   });
 
   it("moves successful late work before the answer but preserves failure and channel ordering", () => {
@@ -887,9 +894,9 @@ describe("subagent handoff", () => {
     });
     for (const [trailing, answerLast, logSizes, key] of [
       [wrapper, true, [3], sessionKey],
-      [{ ...wrapper, isError: true }, false, [2], sessionKey],
+      [{ ...wrapper, isError: true }, false, [2, 1], sessionKey],
       [stopped, false, undefined, sessionKey],
-      [wrapper, false, [2], "agent:main:main"],
+      [wrapper, false, [2, 1], "agent:main:main"],
     ] as const) {
       const { parts } = onlyFrame(
         projectHistory([...waiting, readRow("read-2", "announce:resume", 7), answer, trailing], {

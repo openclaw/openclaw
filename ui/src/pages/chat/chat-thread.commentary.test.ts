@@ -46,7 +46,7 @@ it("hides durable commentary when the display preference is disabled", () => {
   });
   expect(
     coalesceActivityRuns(coalesceStreamRuns(separated)).filter(
-      (item) => item.kind === "group" && item.role === "tool",
+      (item) => item.kind === "activity-run",
     ),
   ).toHaveLength(2);
   resetChatThreadState(paneId);

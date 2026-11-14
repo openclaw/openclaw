@@ -123,7 +123,7 @@ it("groups consecutive calls across result messages and expands every command or
   expect(groups).toHaveLength(2);
   const group = groups[0]!;
   const summary = group.querySelector("summary")!;
-  contains(summary.textContent, "3 operations", "3 other operations");
+  expect(summary.textContent?.trim()).toBe("Ran commands, read files");
   expect(summary.textContent).not.toContain("--fix");
   expect(group.querySelector(part("row-label"))?.textContent).toBe(firstLine.slice(0, 160));
   expect(group.open).toBe(false);
@@ -154,7 +154,7 @@ it.each(["arguments", "args", "input"])(
     const container = mount([{ role: "assistant", content: Object.freeze(content) }]);
     const groups = container.all(part("tool-group"));
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.querySelector("summary")?.textContent?.trim()).toBe("Raw details");
+    expect(groups[0]?.querySelector("summary")?.textContent?.trim()).toBe("Attempted commands");
     expect(container.texts(part("tool-line--full"))).toEqual(expect.arrayContaining(commands));
   },
 );
@@ -220,7 +220,7 @@ it("omits commentary text while retaining a call in the same assistant message",
   expect(container.textContent).not.toContain("Commentary");
   expect(container.textContent).not.toContain("Result body must not appear");
   expect(container.all(part("tool-group"))).toHaveLength(1);
-  expect(container.one(part("tool-group") + " summary")?.textContent).toContain("Raw details");
+  expect(container.one(part("tool-group") + " summary")?.textContent).toContain("Read files");
   expect(container.textContent).toContain("The stylesheet owns the layout.");
   expect(container.all(part("entry"))).toHaveLength(2);
 });
@@ -272,4 +272,20 @@ it("names media without previews and omits private thinking blocks", () => {
   contains(container.textContent, "layout.png", "report.txt", "Attachment review complete.");
   expect(container.textContent).not.toContain("Private reasoning");
   expect(container.one("img, iframe, video")).toBeNull();
+});
+
+it("omits explicitly suppressed calls without recreating raw activity disclosures", () => {
+  const call = toolCall("quiet", "process", { action: "poll", sessionId: "private-process" });
+  const hidden = completed(call);
+  const suppressed = {
+    ...hidden,
+    activity: hidden.activity.map((item) => ({ ...item, hideFromChannelProgress: true })),
+  };
+  for (const message of [suppressed, { ...hidden, activity: [] }]) {
+    const container = mount([message, reply("Finished.")]);
+    expect(container.one(part("tool-group"))).toBeNull();
+    expect(container.one(part("tool-line"))).toBeNull();
+    expect(container.textContent).not.toContain("Raw details");
+    expect(container.textContent).toContain("Finished.");
+  }
 });

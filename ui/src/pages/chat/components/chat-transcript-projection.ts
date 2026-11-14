@@ -572,14 +572,12 @@ export function projectChatTranscript(
       if (!firstGroup) {
         return undefined;
       }
-      return item.groups.length === 1
-        ? { kind: "group", group: firstGroup, options: renderGroupOptions(firstGroup) }
-        : {
-            kind: "activity",
-            groups: item.groups,
-            options: renderGroupOptions(firstGroup),
-            presentation: "standalone",
-          };
+      return {
+        kind: "activity",
+        groups: item.groups,
+        options: renderGroupOptions(firstGroup),
+        presentation: "standalone",
+      };
     }
     if (item.kind === "agent-run-frame") {
       return {

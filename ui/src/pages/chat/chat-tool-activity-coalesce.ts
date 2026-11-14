@@ -301,9 +301,16 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       owners.forEach((source) => unchanged.delete(source));
     }
   }
+  const unchangedKeys = new Map<Source, string>();
   for (const invocation of invocations.values()) {
     const owner = invocation.call ?? invocation.result!;
+    // Hydration adds facts, not a new row. The unmerged source uses the same
+    // scoped invocation key as its eventual merged projection from the outset.
+    const itemKey = `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`;
     if (unchanged.has(owner.source)) {
+      if (!unchangedKeys.has(owner.source)) {
+        unchangedKeys.set(owner.source, itemKey);
+      }
       continue;
     }
     const message = owner.source.message;
@@ -410,7 +417,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     }
     const item: ProjectedItem = {
       ...owner.source.item,
-      key: `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`,
+      key: itemKey,
       message: {
         ...message,
         // Result media stays tool-owned when the invocation moves to its call row.
@@ -450,8 +457,11 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   }
   const result = items.flatMap((item, index) => {
     const source = sources.get(index);
-    if (!source || unchanged.has(source)) {
+    if (!source) {
       return [item];
+    }
+    if (unchanged.has(source)) {
+      return [{ ...item, key: unchangedKeys.get(source)! }];
     }
     const row = rows.get(index) ?? [];
     if (source.remaining.length === 0) {

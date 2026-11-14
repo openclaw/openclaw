@@ -1,6 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
@@ -8,7 +7,10 @@ import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
-import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  normalizeMessage,
+} from "../../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
 import {
   readToolApprovalReviewOutcome,
@@ -22,19 +24,22 @@ import {
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
-import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { isInlineCommandCard } from "../chat-activity-segments.ts";
+import { activityEntryGroupKey, isInlineCommandCard } from "../chat-activity-segments.ts";
 import {
   ownSessionLaunchCalls,
   resolveSessionLaunchPresentation,
 } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
+import {
+  ChatActivityHeadline,
+  createActivityHeadlinePresentation,
+} from "./chat-activity-headline.solid.tsx";
 import {
   ActivityOperation,
+  PreparedActivityRow,
   descendantCards,
   projectActivityOperations,
 } from "./chat-message-activity-operation.tsx";
@@ -43,7 +48,7 @@ import type {
   ActivityOperationProps,
 } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-import { ChatToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
+import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
 function isStandaloneActivity(card: ToolCard): boolean {
@@ -60,6 +65,7 @@ export function prepareActivityGroup(
     rootGroups: ReadonlyMap<ToolCard, ActivityOperationGroup>;
     toolCardOverrides: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
     currentRunActivity: ReadonlySet<ReturnType<typeof readPreparedActivity>[number]>;
+    activeGroup: boolean;
     visibleActivity?: ReadonlySet<ReturnType<typeof readPreparedActivity>[number]>;
     key?: string;
   },
@@ -247,22 +253,35 @@ export function prepareActivityGroup(
   // A step whose only visible activity is its own outcome keeps its direct row.
   const [step] = cardGroups;
   const stepActivity = step ? preparedByCard.get(step.card) : undefined;
+  const stepCall = step && unwrapToolCallForDisplay(step.card);
+  const stepInput =
+    stepCall && resolveToolCallInput(stepCall.name, asNullableRecord(stepCall.args));
+  const activeGroup = source
+    ? source.activeGroup
+    : Boolean(
+        opts.runActive &&
+        (opts.activityGroupKey === undefined ||
+          groups.some((group) => group.key === opts.activityGroupKey)) &&
+        (!opts.activityRunId ||
+          entries.some(({ message }) => transcriptRunId(message) === opts.activityRunId)),
+      );
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const soleStep =
+    !activeGroup &&
     !headline &&
     !reviewOutcome &&
     approvalReviews.length === 0 &&
     cardGroups.length === 1 &&
     step !== undefined &&
     (visibleActivity.length === 0 ||
-      (step.children.length > 0 &&
+      ((step.children.length > 0 || stepInput?.kind !== "edit" || Boolean(stepInput.path)) &&
         visibleCalls.size === 1 &&
         (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
         visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId)));
   for (const card of projection?.hidden ?? []) {
     toolCardOverrides.set(card, null);
   }
-  if (!source && (activityExpanded || soleStep || opts.inlineCommands)) {
+  if (!source) {
     for (const group of cardGroups) {
       for (const card of descendantCards(group)) {
         toolCardOverrides.set(card, null);
@@ -308,6 +327,7 @@ export function prepareActivityGroup(
     activityDisclosureId,
     activityBodyId,
     activityExpanded,
+    activeGroup,
     soleStep,
     toolCardOverrides: source?.toolCardOverrides ?? toolCardOverrides,
     cardGroups,
@@ -325,15 +345,13 @@ export function ActivityGroupBody(props: {
   state: ActivityState;
   groups: readonly MessageGroupData[];
   options: NativeMessageGroupOptions;
-  renderEntries: ActivityEntries;
+  renderEntries: () => JSX.Element;
   inline?: boolean;
   liveBubble?: boolean;
 }) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const state = () => props.state;
-  const overrides = () => props.state.toolCardOverrides;
-  const groups = () => props.groups;
   const soleStep = () => state().soleStep && !props.options.bubbleMode;
   const exposed = () => soleStep() || props.inline;
   const compact = () => Boolean(props.options.bubbleMode);
@@ -341,8 +359,28 @@ export function ActivityGroupBody(props: {
     compact() &&
     (props.liveBubble ??
       props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey));
+  const presentation = createActivityHeadlinePresentation({
+    get scope() {
+      return JSON.stringify([
+        props.options.sessionKey,
+        props.options.connectionEpoch,
+        props.options.activityRunId,
+        state().activityDisclosureId,
+      ]);
+    },
+    get activity() {
+      return state().activityExpanded ? undefined : state().headline;
+    },
+    get resolveActivity() {
+      return state().resolveHeadline;
+    },
+    get active() {
+      return state().activeGroup && !state().activityExpanded && !exposed();
+    },
+  });
   return (
     <div
+      hidden={presentation.pending()}
       class={[
         "chat-activity-group",
         {
@@ -376,14 +414,7 @@ export function ActivityGroupBody(props: {
           <ChatActivityHeadline
             bubbleMode={liveBubble() && !state().activityExpanded}
             contentRef={(element) => (disclosureContent = element)}
-            scope={JSON.stringify([
-              props.options.sessionKey,
-              props.options.connectionEpoch,
-              props.options.activityRunId,
-              state().activityDisclosureId,
-            ])}
-            activity={state().activityExpanded ? undefined : state().headline}
-            resolveActivity={state().resolveHeadline}
+            activity={presentation.selected()}
             summary={state().groupSummaryLabel}
             pluginToolIcons={props.options.pluginToolIcons}
             outcomes={describeToolGroup(state().visibleActivity, {
@@ -406,9 +437,7 @@ export function ActivityGroupBody(props: {
         id={exposed() ? undefined : state().activityBodyId}
         hidden={!exposed() && !state().activityExpanded}
       >
-        <Show when={exposed() || state().activityExpanded}>
-          {(_visible) => props.renderEntries(overrides, groups)}
-        </Show>
+        <Show when={exposed() || state().activityExpanded}>{props.renderEntries()}</Show>
       </div>
     </div>
   );
@@ -421,216 +450,220 @@ export type ActivityGroupContentProps = {
   renderEntries: ActivityEntries;
 };
 
-type ActivityEntry =
-  | { operation: ActivityOperationGroup; activity?: never }
-  | { activity: ReturnType<typeof readPreparedActivity>[number]; operation?: never };
-
-/** A recorded outcome can survive without its raw call in the loaded history page. */
-function PreparedActivityRow(props: {
-  activity: ReturnType<typeof readPreparedActivity>[number];
-  options: NativeMessageGroupOptions;
-}) {
-  const detail = () =>
-    props.activity.error || props.activity.summary || props.activity.progressText;
-  return (
-    <div class="chat-tool-msg-collapse">
-      <div class="chat-tool-msg-summary chat-tool-row">
-        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
-          <ChatToolIcon
-            name={
-              props.activity.commandBearing
-                ? "squareTerminal"
-                : resolveToolDisplayIcon(props.activity.name ?? "")
-            }
-            tool={{
-              toolName: props.activity.name ?? "",
-              pluginToolIcons: props.options.pluginToolIcons,
-            }}
-            style={{ display: "contents" }}
-          />
-        </span>
-        <span class="chat-tool-disclosure__content">
-          <span class="chat-tool-row__title">
-            {props.activity.title || resolveToolDisplayIdentity(props.activity.name ?? "").label}
-          </span>
-        </span>
-        <span
-          class={{
-            "chat-tool-failure": props.activity.status === "failed",
-            "chat-tool-skipped": props.activity.status === "skipped",
-            muted: props.activity.status !== "failed" && props.activity.status !== "skipped",
-          }}
-        >
-          {t(`chat.toolCards.${!props.activity.status ? "outcomeUnknown" : props.activity.status}`)}
-        </span>
-      </div>
-      <Show when={detail()}>{(text) => <div class="chat-tool-msg-body">{text()}</div>}</Show>
-    </div>
-  );
-}
+type ActivityEntry = { key: string } & (
+  | { operation: ActivityOperationProps; activity?: never; message?: never }
+  | {
+      activity: ReturnType<typeof readPreparedActivity>[number];
+      operation?: never;
+      message?: never;
+    }
+  | {
+      message: {
+        group: MessageGroupData;
+        overrides: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
+        operations: ActivityOperationGroup[];
+      };
+      operation?: never;
+      activity?: never;
+    }
+);
 
 function ActivityOperationSegments(props: ActivityGroupContentProps & { state: ActivityState }) {
   const segments = createMemo(() => {
+    // Keyed entries can still render the previous snapshot while their parent updates.
+    // Operations and their object-keyed maps belong to the same projection.
+    const context = { state: props.state, groups: props.groups, options: props.options };
     const result: Array<{
       key: string;
       standalone: boolean;
       inline?: boolean;
       entries: ActivityEntry[];
-      content?: MessageGroupData;
+      context: typeof context;
     }> = [];
+    const append = (item: ActivityEntry, standalone: boolean, inline: boolean, key: string) => {
+      const previous = result.at(-1);
+      if (!standalone && previous && !previous.standalone && previous.inline === inline) {
+        previous.entries.push(item);
+      } else {
+        result.push({ key, context, standalone, inline, entries: [item] });
+      }
+    };
     const byMessage = new Map<string, ActivityOperationGroup[]>();
-    for (const operation of props.state.cardGroups) {
-      const key = props.state.toolContexts.get(operation.card)!.messageKey;
+    for (const operation of context.state.cardGroups) {
+      const key = context.state.toolContexts.get(operation.card)!.messageKey;
       const operations = byMessage.get(key) ?? [];
       operations.push(operation);
       byMessage.set(key, operations);
     }
-    const unmatched = new Set(props.state.unmatchedActivity);
-    for (const group of props.groups) {
+    const unmatched = new Set(context.state.unmatchedActivity);
+    for (const group of context.groups) {
       for (const entry of group.messages) {
-        for (const operation of byMessage.get(entry.key) ?? []) {
-          const standalone = isStandaloneActivity(operation.card);
-          const inline =
-            Boolean(props.options.inlineCommands) && isInlineCommandCard(operation.card);
-          const previous = result.at(-1);
-          if (!standalone && previous && !previous.standalone && previous.inline === inline) {
-            previous.entries.push({ operation });
-          } else {
-            result.push({
-              key: props.state.toolContexts.get(operation.card)!.disclosureId,
+        const operations = byMessage.get(entry.key) ?? [];
+        // A mixed command/edit envelope keeps its native inline presentation.
+        const inline =
+          Boolean(context.options.inlineCommands) &&
+          operations.some((operation) => isInlineCommandCard(operation.card));
+        const nativeMessage =
+          operations.length > 0 && isStandaloneToolMessageForDisplay(entry.message);
+        if (nativeMessage) {
+          const standalone = operations.some((operation) => isStandaloneActivity(operation.card));
+          append(
+            {
+              key: entry.key,
+              message: {
+                group: { ...group, messages: [entry] },
+                overrides: context.state.toolCardOverrides,
+                operations,
+              },
+            },
+            standalone,
+            inline,
+            standalone ? entry.key : activityEntryGroupKey(group, entry),
+          );
+        } else {
+          for (const [index, operation] of operations.entries()) {
+            const standalone = isStandaloneActivity(operation.card);
+            const key = context.state.toolContexts.get(operation.card)!.disclosureId;
+            append(
+              {
+                key,
+                operation: {
+                  group: operation,
+                  options: context.options,
+                  contexts: context.state.toolContexts,
+                },
+              },
               standalone,
               inline,
-              entries: [{ operation }],
-            });
+              standalone || index > 0 ? key : activityEntryGroupKey(group, entry),
+            );
           }
         }
-        const unmatchedActivity = readPreparedActivity(entry.message).filter((activity) =>
-          unmatched.has(activity),
-        );
-        if (unmatchedActivity.length > 0) {
-          const previous = result.at(-1);
-          if (previous && !previous.standalone && !previous.inline) {
-            previous.entries.push(...unmatchedActivity.map((activity) => ({ activity })));
-          } else {
-            result.push({
-              key: `${entry.key}:activity`,
-              standalone: false,
-              entries: unmatchedActivity.map((activity) => ({ activity })),
-            });
-          }
+        for (const activity of readPreparedActivity(entry.message).filter((item) =>
+          unmatched.has(item),
+        )) {
+          append(
+            { key: context.state.activityKeys.get(activity)!, activity },
+            false,
+            false,
+            `${entry.key}:activity`,
+          );
         }
         if (
+          !nativeMessage &&
           resolveMessageVisibleContent(entry.message, normalizeMessage(entry.message)) ===
-          "non-text"
+            "non-text"
         ) {
           result.push({
             key: `${entry.key}:output`,
+            context,
             standalone: true,
-            entries: [],
-            content: { ...group, messages: [entry] },
+            entries: [
+              {
+                key: `${entry.key}:output`,
+                message: {
+                  group: { ...group, messages: [entry] },
+                  overrides: new Map(
+                    [...context.state.toolContexts.keys()].map((card) => [card, null]),
+                  ),
+                  operations: [],
+                },
+              },
+            ],
           });
         }
       }
     }
     // Appending a lifecycle card must not close the activity the reader already opened.
     if (result[0] && !result[0].standalone) {
-      result[0].key = props.state.firstGroup.key;
+      result[0].key = context.state.firstGroup.key;
     }
     return result;
   });
-  const contentOverrides = createMemo(
-    () => new Map([...props.state.toolContexts.keys()].map((card) => [card, null])),
-  );
 
   return (
     <>
       <For each={segments()} keyed={(segment) => segment.key}>
         {(segment) => {
-          const isTail = () => segment() === segments().at(-1);
+          const isTail = () => segment().key === segments().at(-1)?.key;
           const prepared = createMemo(() => {
-            const selected = new Set(
-              segment().entries.flatMap((entry) =>
-                entry.activity
-                  ? [entry.activity]
-                  : [entry.operation.card, ...descendantCards(entry.operation)].flatMap((card) => {
-                      const activity = props.state.preparedByCard.get(card);
-                      return activity ? [activity] : [];
-                    }),
-              ),
+            const { context, entries: segmentEntries } = segment();
+            const operations = segmentEntries.flatMap((entry) =>
+              entry.operation ? [entry.operation.group] : (entry.message?.operations ?? []),
             );
-            return prepareActivityGroup(props.groups, props.options, {
-              rootGroups: new Map(
-                segment().entries.flatMap((entry) =>
-                  entry.operation ? [[entry.operation.card, entry.operation] as const] : [],
-                ),
+            const selected = new Set([
+              ...segmentEntries.flatMap((entry) => (entry.activity ? [entry.activity] : [])),
+              ...operations.flatMap((operation) =>
+                [operation.card, ...descendantCards(operation)].flatMap((card) => {
+                  const activity = context.state.preparedByCard.get(card);
+                  return activity ? [activity] : [];
+                }),
               ),
-              toolCardOverrides: props.state.toolCardOverrides,
-              currentRunActivity: isTail() ? props.state.currentRunActivity : new Set(),
+            ]);
+            return prepareActivityGroup(context.groups, context.options, {
+              rootGroups: new Map(operations.map((operation) => [operation.card, operation])),
+              toolCardOverrides: context.state.toolCardOverrides,
+              currentRunActivity: isTail() ? context.state.currentRunActivity : new Set(),
+              activeGroup: isTail() && context.state.activeGroup,
               visibleActivity: selected,
               key: segment().key,
             });
           });
           const entries = () => (
-            <For
-              each={segment().entries}
-              keyed={(entry) =>
-                entry.operation
-                  ? props.state.toolContexts.get(entry.operation.card)!.disclosureId
-                  : props.state.activityKeys.get(entry.activity)!
-              }
-            >
+            <For each={segment().entries} keyed={(entry) => entry.key}>
               {(entry) => (
                 <Show
                   when={entry().operation}
                   fallback={
-                    <Show when={entry().activity}>
-                      {(activity) => (
-                        <PreparedActivityRow activity={activity()} options={props.options} />
-                      )}
+                    <Show
+                      when={entry().message}
+                      fallback={
+                        <Show when={entry().activity}>
+                          {(activity) => (
+                            <PreparedActivityRow activity={activity()} options={props.options} />
+                          )}
+                        </Show>
+                      }
+                    >
+                      {(message) =>
+                        props.renderEntries(
+                          () => message().overrides,
+                          () => [message().group],
+                        )
+                      }
                     </Show>
                   }
                 >
-                  {(operation) => (
-                    <ActivityOperation
-                      group={operation()}
-                      options={props.options}
-                      contexts={props.state.toolContexts}
-                    />
-                  )}
+                  {(operation) => <ActivityOperation {...operation()} />}
                 </Show>
               )}
             </For>
           );
           return (
             <Show
-              when={segment().content}
+              when={segment().standalone}
               fallback={
-                <Show
-                  when={segment().standalone}
-                  fallback={
-                    <Show when={prepared()}>
-                      {(state) => (
-                        <ActivityGroupBody
-                          {...props}
-                          state={state()}
-                          renderEntries={entries}
-                          inline={segment().inline}
-                          liveBubble={
-                            isTail() &&
-                            props.groups.some(
-                              (group) => group.key === props.options.bubbleActivityGroupKey,
-                            )
-                          }
-                        />
-                      )}
-                    </Show>
-                  }
-                >
-                  {entries()}
+                <Show when={prepared()}>
+                  {(state) => (
+                    <ActivityGroupBody
+                      {...props}
+                      groups={segment().context.groups}
+                      options={segment().context.options}
+                      state={state()}
+                      renderEntries={entries}
+                      inline={segment().inline}
+                      liveBubble={
+                        isTail() &&
+                        segment().context.groups.some(
+                          (group) => group.key === segment().context.options.bubbleActivityGroupKey,
+                        )
+                      }
+                    />
+                  )}
                 </Show>
               }
             >
-              {(content) => props.renderEntries(contentOverrides, () => [content()])}
+              {entries()}
             </Show>
           );
         }}
@@ -641,38 +674,7 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
 
 export function ActivityGroupContent(props: ActivityGroupContentProps) {
   const state = createMemo(() => prepareActivityGroup(props.groups, props.options));
-  const InlineContent = dynamic(() => props.options.inlineCommands?.InlineActivityGroupContent);
-  const body = () => (
-    <Show
-      when={
-        state()!.cardGroups.length > 0 ||
-        state()!.visibleActivity.length > 0 ||
-        state()!.reviewOutcome ||
-        state()!.approvalReviews.length > 0
-      }
-      fallback={props.renderEntries(
-        () => state()!.toolCardOverrides,
-        () => props.groups,
-      )}
-    >
-      <Show
-        when={
-          state()!.unmatchedActivity.length > 0 ||
-          state()!.cardGroups.some((group) => isStandaloneActivity(group.card))
-        }
-        fallback={
-          <Show
-            when={props.options.inlineCommands}
-            fallback={<ActivityGroupBody {...props} state={state()!} />}
-          >
-            <InlineContent {...props} state={state()!} />
-          </Show>
-        }
-      >
-        <ActivityOperationSegments {...props} state={state()!} />
-      </Show>
-    </Show>
-  );
+  const body = () => <ActivityOperationSegments {...props} state={state()!} />;
 
   return (
     <Show when={state()}>
