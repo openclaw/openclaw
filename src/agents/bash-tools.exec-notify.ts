@@ -10,6 +10,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import {
   enqueueSystemEventWithReceipt,
@@ -21,17 +22,11 @@ import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-k
 import {
   processSessionInstanceId,
   recordNotifyOnExitRemoval,
-  tail,
   type ProcessSession,
 } from "./bash-process-registry.js";
-import {
-  appendExecTimeoutRetryGuidance,
-  compactNotifyOutput,
-  renderExecExitLabel,
-} from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecExitLabel } from "./bash-tools.exec-output.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
-const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 function enqueueExecExitNotification(
   text: string,
   target: NonNullable<ProcessSession["notifySessionTarget"]>,
@@ -128,10 +123,9 @@ export async function maybeNotifyOnExit(
   if (session.exitReason === "manual-cancel" && session.finalizationFailed !== true) {
     return;
   }
-  const exitLabel = renderExecExitLabel(session);
-  const output = compactNotifyOutput(
-    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
+  // The retained tail (last 2,000 chars) lets the woken turn act without process log.
+  const tail = session.tail;
+  const output = tail.trim();
   if (
     status === "completed" &&
     session.exitCode === 0 &&
@@ -140,9 +134,14 @@ export async function maybeNotifyOnExit(
   ) {
     return;
   }
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  const header = `Exec ${status} (${session.id.slice(0, 8)}, ${renderExecExitLabel(session)}, ${
+    formatDurationCompact((session.endedAt ?? Date.now()) - session.startedAt) ?? "0s"
+  })`;
+  const summary = !output
+    ? `${header} with no output.`
+    : session.totalOutputChars > tail.length
+      ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (process log has the rest):\n${output}`
+      : `${header}:\n${output}`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventSessionKey =
     session.notifySessionTarget?.sessionKey ??

@@ -17,6 +17,7 @@ import {
 } from "../infra/exec-control-command-guard.js";
 import { captureExecRequestOwners, readExecRequestOwners } from "../infra/exec-request-context.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
@@ -687,10 +688,10 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           otherRunning,
         );
         const deadlineAtMs = run.session.processActivity?.deadlineAtMs;
-        const followUp =
+        const deadline =
           deadlineAtMs === undefined
-            ? backgroundFollowUp
-            : `Automatic stop will be requested at ${new Date(deadlineAtMs).toISOString()}; the process may exit earlier. ${backgroundFollowUp}`;
+            ? ""
+            : `, times out in ${formatDurationCompact(Math.max(1_000, deadlineAtMs - Date.now()))}`;
         return attachExecApprovalReview(
           completed.status === "settled"
             ? buildExecForegroundResult({
@@ -706,7 +707,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${followUp}`,
+                    })${deadline}. ${backgroundFollowUp}`,
                   },
                 ],
                 details: {
@@ -719,7 +720,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   tail: run.session.tail,
                   ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
                   // Structured callers receive details without the visible content.
-                  followUp,
+                  followUp: backgroundFollowUp,
                 },
               },
           approvalReview,
