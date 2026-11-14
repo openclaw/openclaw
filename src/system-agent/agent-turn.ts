@@ -46,6 +46,7 @@ export type SystemAgentTurnDirective =
 
 type SystemAgentTurnReply = {
   text: string;
+  policyBlocked?: true;
   /** Interactive handoff the tool requested; the host chat executes it. */
   directive?: SystemAgentTurnDirective;
 };
@@ -381,7 +382,8 @@ export async function runSystemAgentTurn(
     }
     // Failed runs can retain partial text; it must not publish a reply or a tool directive.
     const terminalError = extractAgentRunTerminalError(result);
-    if (terminalError) {
+    const policyBlocked = result.meta?.error?.kind === "hook_block";
+    if (terminalError && !policyBlocked) {
       failureGuidance = systemAgentTerminalFailureGuidance(result);
       throw new Error(terminalError);
     }
@@ -394,6 +396,9 @@ export async function runSystemAgentTurn(
     const currentRoute = await resolveSystemAgentVerifiedInferenceRoute(binding);
     if (!currentRoute) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
+    }
+    if (terminalError && policyBlocked) {
+      return { text: terminalError, policyBlocked: true };
     }
     failureGuidance = "retry";
     const text = extractAgentRunText(result);
