@@ -3190,16 +3190,6 @@ function resolveParallelsToolingTestTargets(changedPath: string) {
     return null;
   }
   const targets = ["test/scripts/parallels-smoke-model.test.ts"];
-  if (
-    [
-      "scripts/e2e/parallels/guest-transports.ts",
-      "scripts/e2e/parallels/host-command.ts",
-      "scripts/e2e/parallels/npm-update-scripts.ts",
-      "scripts/e2e/parallels/npm-update-smoke.ts",
-    ].includes(changedPath)
-  ) {
-    targets.push("test/scripts/parallels-npm-update-smoke.test.ts");
-  }
   if (changedPath === "scripts/e2e/parallels/update-job-timeout.ts") {
     targets.push("test/scripts/parallels-update-job-timeout.test.ts");
   }

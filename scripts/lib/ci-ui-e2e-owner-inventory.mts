@@ -438,11 +438,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "skills",
   ]),
   pageWatch(
-    "ui/src/e2e/chat-composer-capability-menu.e2e.test.ts",
-    ["chat", "config", "skills"],
-    ["ui/src/components/modal-dialog.tsx"],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-composer-catalog.e2e.test.ts",
     ["chat", "config", "model-providers"],
     ["ui/src/pages/chat/chat-pane.ts"],
@@ -501,7 +496,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/components/chat-detail-panel.ts"],
   ),
-  pageWatch("ui/src/e2e/chat-flow.active-run-follow-ups.e2e.test.ts", ["chat", "config"]),
   pageWatch("ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts", ["chat", "config"]),
   pageWatch(
     "ui/src/e2e/chat-flow.dynamic-catalog.e2e.test.ts",
