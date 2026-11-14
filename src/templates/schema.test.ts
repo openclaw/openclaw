@@ -283,6 +283,26 @@ describe("parseTemplateManifest", () => {
       expect.objectContaining({ path: "$.automations[0].schedule.cron" }),
     );
   });
+
+  it("rejects an oversized heartbeat interval and automation name", () => {
+    const heartbeat = parseTemplateManifest({
+      schemaVersion: 1,
+      agent: { id: "worker", heartbeat: { every: "104000000d" } },
+    });
+    expect(heartbeat.diagnostics).toContainEqual(
+      expect.objectContaining({ path: "$.agent.heartbeat.every" }),
+    );
+
+    const name = (length: number) =>
+      parseTemplateManifest({
+        ...baseManifest,
+        automations: [{ ...baseManifest.automations[0], name: "a".repeat(length) }],
+      });
+    expect(name(200).ok).toBe(true);
+    expect(name(201).diagnostics).toContainEqual(
+      expect.objectContaining({ path: "$.automations[0].name" }),
+    );
+  });
 });
 
 describe("readTemplateManifestFile", () => {

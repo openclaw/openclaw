@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { MAX_DATE_TIMESTAMP_MS } from "../../packages/gateway-protocol/src/schema/cron-shared.js";
 import { PROFILE_OPTIONS } from "../agents/core-tool-facts.js";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
@@ -230,8 +231,7 @@ const agentSettingsSchema = z
         every: nonEmptyString
           .refine((value) => {
             try {
-              parseDurationMs(value, { defaultUnit: "m" });
-              return true;
+              return parseDurationMs(value, { defaultUnit: "m" }) <= MAX_DATE_TIMESTAMP_MS;
             } catch {
               return false;
             }
@@ -419,7 +419,7 @@ export const mcpServerSchema = z.union([stdioMcpServerSchema, remoteMcpServerSch
 export const cronJobSchema = z
   .object({
     id: agentId,
-    name: optionalString,
+    name: nonEmptyString.max(200).optional(),
     enabled: z.boolean().optional(),
     schedule: z.object({ cron: nonEmptyString, timezone: nonEmptyString }).strict(),
     session: z.enum(["main", "isolated"]),
