@@ -1,0 +1,33 @@
+{
+  "base": "5fed4f0df99d1d1c3e7a9ac8b9848aac6526af29",
+  "changed": {
+    "apps/macos/Tests/OpenClawIPCTests/DashboardNativeBrowserTests.swift": "3bc33e60ec050aa8f41129c09ccbc07fc76925fd53928ff8b8453770c3652596"
+  },
+  "patchSha256": "0ba73a1842496a13b10444c615fdfabd38faf74d5cf033627fba00150b9bd58c",
+  "schema": 1,
+  "sources": {
+    ".agents/skills/test-audit/SKILL.md": "1390c61901a1b9ec46778901ebd24f96b201989977d7b8dea2f05b7e593ab025",
+    ".github/actions/setup-node-env/action.yml": "45297a11d801e636441893afbf730c26dbd434f7e8030f5361a57679702b9268",
+    ".github/actions/setup-pnpm-store-cache/action.yml": "e6d411d4dce2ad2ddbbf0b98c45301cfc789544d189f1f0176c7c9f5b5560191",
+    ".github/workflows/ci.yml": "c02578a64896d1e8152dcfed33987173086981aa8bf6ffce03bff55c46ffa825",
+    "AGENTS.md": "b792d44df7fec68b950812e968397082aee113f809651331fd2b31d4ceb9cde9",
+    "apps/macos/AGENTS.md": "876a327052ebcff64a12734ba7811bed4e7ca13d6924f5e7e1b65872445d6b01",
+    "apps/macos/Package.resolved": "998a37f21bb849fe30677da4eb48867fcafc72a112406d35532d4df1830d6272",
+    "apps/macos/Package.swift": "1fb5925a867d5f21b6d60ae7f0d48ffa5f8f3ac2f428dc6782d2031ec7168049",
+    "apps/macos/Sources/OpenClaw/ControlUIDocumentHost+NavigationPolicy.swift": "574369a39af8195ff6aa73aa43879621ff9499fc1c87d1dbef8de6d03175782f",
+    "apps/macos/Sources/OpenClaw/DashboardBrowserTab.swift": "a0e215a941063cacbc342f93f32fcbf604592741b3c3ab7d5cb296b47fc5dca2",
+    "apps/macos/Sources/OpenClaw/DashboardNativeBrowserHost.swift": "05115e486c202dfa046e61ad599e3d8c8c9b124807f399ab09e582c7a7412cd5",
+    "apps/macos/Sources/OpenClaw/DashboardWindowController.swift": "2e1c07c5a39430a86b225afef5ba3e3ef2de24deaf6a6a5b245084d96494d634",
+    "apps/macos/Tests/OpenClawIPCTests/AsyncTestGate.swift": "000f9d2c267e7eed1228cd1266e9d5f73757f3144716db16cd08f93fd83f9d1f",
+    "apps/macos/Tests/OpenClawIPCTests/DashboardHTTPFixture.swift": "5ecf17d89c4ed748c6015e3e47c6a48e447715000654611e833286d4e184404d",
+    "apps/macos/Tests/OpenClawIPCTests/DashboardNativeBrowserTests.swift": "a096c7c1b7457f982f82e0c0681396852662f6a54ef859519adcefa09ddd9dd6",
+    "apps/macos/Tests/OpenClawIPCTests/TestWait.swift": "9a6bca6e6cd6d2462aeb5240e6c4d46e9ab94fb32c4f79624b18ca527ce6158c",
+    "docs/help/testing/writing-tests.md": "b7708c061afb39271afc95db6bc26d2e5ed2eeeea7689e50e966a6dc37e699bc",
+    "docs/platforms/mac/dev-setup.md": "2e5c34a8d1d5b2634d9ceddb5d33cf2c816ec19d33b584c266bbfd2ea86007b5",
+    "package.json": "23dc860beec723ad9bab5a7458600cc2abce29a7441e98915fbdeeecc0e24ecb",
+    "pnpm-lock.yaml": "059a620ed8261d7b8f599a3e13a6c101ec5271b03002dbf48144ce25924e28ba",
+    "scripts/AGENTS.md": "b443ca19881f9e4c2361a3bd79e503185203d6a9d64b51eec164fca603534343",
+    "scripts/lib/swift-toolchain.sh": "965da7c341a2c5778666dcfb65650e215fd01f37aa45ccf3e939ceb8884c790d",
+    "scripts/test-macos-native.mts": "0a61e5f9d8f08dbe01ea8c7f077ef858dfaa2087ddf01b3f6bc5fac3c4fb9661"
+  }
+}
