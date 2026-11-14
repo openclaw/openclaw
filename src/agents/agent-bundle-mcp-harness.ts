@@ -237,7 +237,7 @@ function applyHarnessToolPolicy(
     bundledTools: allowed,
     config: params.policyContext?.config ?? params.cfg,
     conversationCapabilityProfile: profile,
-    warn: params.warn ?? (() => undefined),
+    warn: params.warn,
     onFilter: params.onFilter,
   });
 }

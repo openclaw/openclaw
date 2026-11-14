@@ -94,7 +94,6 @@ export async function prepareMemoryFlushAttempt(params: {
         context.messageProvider,
       ).map((tool) => tool.name),
       toolMeta: () => ({ pluginId: resolution.pluginId }),
-      warn: () => {},
     });
     if (!permitted.some((name) => name !== "read")) {
       log.debug("memory flush skipped: no declared persistence tool survived policy", {

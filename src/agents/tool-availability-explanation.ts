@@ -222,7 +222,6 @@ export function explainToolPolicyAvailability(params: {
     bundledTools: params.toolNames.map((name) => probeTool(name, params.pluginId)),
     config: params.config,
     conversationCapabilityProfile: params.conversationCapabilityProfile,
-    warn: () => {},
     onFilter: (event) => {
       const permits = createToolPolicyMatcher(event.policy);
       const notDenied = createToolPolicyMatcher({ deny: event.policy.deny });

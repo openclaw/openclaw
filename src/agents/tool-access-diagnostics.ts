@@ -135,7 +135,6 @@ export function resolveConfiguredToolAccess(params: {
   applyToolPolicyPipeline({
     tools: toolNames.map((name) => ({ name })),
     toolMeta: () => undefined,
-    warn: () => undefined,
     steps: buildDefaultToolPolicyPipelineSteps({
       ...policy,
       profilePolicy: mergeAlsoAllowPolicy(
