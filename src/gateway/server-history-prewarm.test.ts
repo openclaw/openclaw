@@ -10,6 +10,7 @@ vi.mock("node:fs/promises", () => ({ default: { stat: mocks.stat } }));
 vi.mock("../config/sessions/session-sqlite-target.js", () => ({
   prepareSqliteTargetFromSessionStorePath: mocks.prepare,
 }));
+// mock-isolation: Check Gateway prewarm selection without starting native worker pools.
 vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
   prewarmSessionHistoryWorker: mocks.prewarm,
 }));
