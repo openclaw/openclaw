@@ -1,5 +1,5 @@
 # A scheduler regression in which a provider rate limit on the agent event bus halves the
 # sessions automation may hold, a second pushback from the same sessions does not, a freed
-# slot is not handed on, and the limit steps back up on scheduler ticks while runs wait.
+# slot is not handed on, and the limit steps back up a slot a minute without pushback.
 # Exact net growth for the adaptive automation limit change (#196859).
 81

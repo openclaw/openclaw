@@ -504,7 +504,7 @@ it("runs as many automations as the agent limit leaves free of conversations", a
   }
 });
 
-it("halves automation's sessions on a provider rate limit and adds a slot a minute while runs wait", async () => {
+it("halves automation's sessions on a provider rate limit and adds a slot back each minute", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
   const store = await seedJobs(
@@ -564,7 +564,7 @@ it("halves automation's sessions on a provider rate limit and adds a slot a minu
     await tickAfter(0);
     expect((await jobs()).filter((job) => job.state.runningAtMs)).toHaveLength(29);
 
-    // One more slot a minute while runs wait, but not within a minute of pushback.
+    // One more slot a minute, but not within a minute of pushback.
     await tickAfter(60_000);
     expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(12);
     rateLimited();
@@ -572,7 +572,7 @@ it("halves automation's sessions on a provider rate limit and adds a slot a minu
     expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(12);
     await tickAfter(30_000);
     expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(13);
-    // After an hour without pushback the reduction lapses.
+    // Without further pushback the limit climbs back to whole.
     vi.setSystemTime(Date.now() + 60 * 60_000);
     expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(30);
   } finally {

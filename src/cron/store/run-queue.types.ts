@@ -72,8 +72,6 @@ export type CronRunQueueOperations = {
       launches: CronQueuedRun[];
       preparing: CronQueuedRun[];
       skipped: CronSkippedRequest[];
-      /** A queued run or fired condition is left waiting only because every run slot is taken. */
-      awaitingRunSlot?: boolean;
     };
   };
   "cron.cancelRequests": {

@@ -600,7 +600,6 @@ export function runCronSchedulerInWorker(
       result.launches.push(...requested.launches);
       result.preparing.push(...requested.preparing);
       result.skipped.push(...requested.skipped);
-      result.awaitingRunSlot = requested.awaitingRunSlot;
       result.jobs.push(...requested.accepted.map((entry) => entry.job));
       result.jobs.push(...requested.launches.map((entry) => entry.job));
       result.jobs.push(...requested.skipped.flatMap((entry) => (entry.job ? [entry.job] : [])));
