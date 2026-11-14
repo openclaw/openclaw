@@ -548,6 +548,8 @@ suite.define(() => {
     });
     await streamingBubble.waitFor();
     const steerBubble = page.locator(".chat-group.user", { hasText: steerText }).last();
+    // A taller reply can virtualize the preceding steer; reveal the boundary before measuring it.
+    await steerBubble.scrollIntoViewIfNeeded();
     const steerElement = await steerBubble.elementHandle();
     // Scrolling between separate protocol reads can make adjacent rows appear to overlap.
     const [steerBounds, streamingBounds] = await streamingBubble.evaluate(
