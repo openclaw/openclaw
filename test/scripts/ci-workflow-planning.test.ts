@@ -13214,9 +13214,16 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it.each(["schedule", "pull_request"] as const)(
-    "assigns one separate CLI audit row only for schedules (%s)",
-    (eventName) => {
+  it.each([
+    { eventName: "schedule", runId: "", selected: ["first-cli"] },
+    { eventName: "schedule", runId: "1", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "2", selected: ["first-cli"] },
+    { eventName: "schedule", runId: "9007199254740993", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "invalid", selected: ["first-cli"] },
+    { eventName: "pull_request", runId: "1", selected: [] },
+  ] as const)(
+    "assigns one separate CLI audit row by run identity ($eventName, $runId)",
+    ({ eventName, runId, selected }) => {
       const cli = "test/vitest/vitest.cli-process.config.ts";
       const unit = "test/vitest/vitest.unit-fast.config.ts";
       const rows = [
@@ -13228,6 +13235,7 @@ describe("ci workflow guards", () => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         eventName,
+        scopeEnv: { GITHUB_RUN_ID: runId },
         changedPaths: [],
         nodeTestShards: rows.map(({ name, configs }) => ({
           checkName: name,
@@ -13245,7 +13253,7 @@ describe("ci workflow guards", () => {
       }[] = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
       expect(
         result.filter((row) => row.audit_cli_observations).map((row) => row.check_name),
-      ).toEqual(eventName === "schedule" ? ["first-cli"] : []);
+      ).toEqual(selected);
       expect(
         result.filter((row) => row.adaptive_observations).map((row) => row.check_name),
       ).toEqual(["unit", "mixed"]);
