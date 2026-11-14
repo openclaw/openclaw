@@ -1,0 +1,2 @@
+1625
+# Bounded-retention delivery evidence: settle-path retention bounds plus the reply-dedupe boundary regression for a dropped body.

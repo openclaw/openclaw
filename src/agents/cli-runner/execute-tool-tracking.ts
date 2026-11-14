@@ -31,10 +31,7 @@ import {
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
 } from "../embedded-agent-messaging.js";
-import type {
-  MessagingToolSend,
-  MessagingToolSourceReplyPayload,
-} from "../embedded-agent-messaging.types.js";
+import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
@@ -47,14 +44,16 @@ import {
   projectCliMessagingDeliveryEvidence,
 } from "./delivery-evidence.js";
 import * as Deadline from "./execute-ask-user-deadline.js";
+import { MAX_UNFINISHED_TOOL_CALLS } from "./execute-event-retention.js";
+import { createPendingMessagingCalls } from "./execute-messaging-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
   buildMessagingToolSendEvidenceKey,
-  CLI_MESSAGING_EVIDENCE_MAX_CALLS,
   extractCliMessagingContent,
   extractCliMessagingTarget,
   isPreparedCliInternalSourceReply,
 } from "./execute-messaging.js";
+import { createSettledMessagingEvidence } from "./execute-settled-evidence.js";
 import { createCliTurnInterruptRequest } from "./execute-turn-interrupt.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -93,10 +92,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
-  const pendingMessagingCalls = new Map<
-    string,
-    { toolName: string; args: Record<string, unknown>; target?: MessagingToolSend }
-  >();
+  const pendingMessagingCalls = createPendingMessagingCalls();
   const cliLoopbackCalls: CliLoopbackCall[] = [];
   const activeCliTools = new Map<string, ActiveCliTool>();
   let cliLoopbackCorrelationOverflowed = false;
@@ -104,10 +100,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     activeCliTools,
     () => cliLoopbackCorrelationOverflowed,
   );
-  const messagingToolSentTexts = new Set<string>();
-  const messagingToolSentMediaUrls = new Set<string>();
-  const messagingToolSentTargets = new Map<string, MessagingToolSend>();
-  const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
+  const settledMessagingEvidence = createSettledMessagingEvidence();
   const toolMediaUrls = new Set<string>();
   let toolAudioAsVoice = false;
   let toolTrustedLocalMedia = false;
@@ -301,8 +294,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       sourceReplyDelivered = true;
     }
     if (isMessagingSend) {
-      appendUniqueCliMessagingEvidence(messagingToolSentTexts, content.text ? [content.text] : []);
-      appendUniqueCliMessagingEvidence(messagingToolSentMediaUrls, content.mediaUrls ?? []);
+      settledMessagingEvidence.appendTexts(content.text ? [content.text] : []);
+      settledMessagingEvidence.appendMediaUrls(content.mediaUrls ?? []);
     }
     if (deliveredCurrentSourceReply || (sourceReplyPayload && sourceReplyFinal)) {
       didDeliverSourceReplyViaMessageTool ||= deliveredCurrentSourceReply;
@@ -310,15 +303,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ? sourceReplyPayload
         : extractMessagingToolSourceReplyPayload(params.result);
       if (payload) {
-        if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-          messagingToolSourceReplyPayloads.shift();
-        }
-        // Each internal source-reply send is a distinct delivery, even when
-        // two intentional sends have identical text or media.
-        messagingToolSourceReplyPayloads.push({
-          ...payload,
-          ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
-        });
+        settledMessagingEvidence.pushSourceReplyPayload(payload, sourceReplyFinal);
       }
     }
     if (!confirmedTarget) {
@@ -330,16 +315,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     };
     const evidenceKey = buildMessagingToolSendEvidenceKey(targetWithContent);
-    if (messagingToolSentTargets.has(evidenceKey)) {
+    if (settledMessagingEvidence.hasTarget(evidenceKey)) {
       return;
     }
-    if (messagingToolSentTargets.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      for (const oldest of messagingToolSentTargets.keys()) {
-        messagingToolSentTargets.delete(oldest);
-        break;
-      }
-    }
-    messagingToolSentTargets.set(evidenceKey, targetWithContent);
+    settledMessagingEvidence.admitTarget(evidenceKey, targetWithContent);
   };
   const beginGatewayCapture = (captureKey: string | undefined, assertCurrent: () => void) => {
     if (!captureKey || gatewayCaptureKey === captureKey) {
@@ -488,10 +467,34 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       },
     });
   };
+  // The event consumer decides once, for every holder that would retain the same
+  // decoded arguments, whether they fit the run's retention budget. Releasing
+  // only one of them frees nothing, because they hold the same object.
+  const dropRetainedToolArgs = (toolCallId: string) => {
+    // The delivery-evidence copy is reduced rather than emptied: the settle path
+    // still has to know which action ran and where it was routed, and those are
+    // short scalars. What is released is the payload.
+    pendingMessagingCalls.reduce(toolCallId);
+    const activeTool = activeCliTools.get(toolCallId);
+    if (!activeTool) {
+      return;
+    }
+    activeTool.args = {};
+    // Fail closed: correlation that would have matched on the dropped arguments
+    // must not silently match on `{}` instead.
+    activeTool.loopbackAmbiguous = true;
+  };
   const handleCliToolUseStart = (event: CliToolUseStartDelta) => {
     terminalSourceReplyDelivered = false;
     latestStartedTool = event.toolCallId;
-    if (event.kind !== "server_tool_use") {
+    // Refuse-new past the cap instead of evicting, for the same reason
+    // `activeParsedTools` does: the oldest entry is the longest-running tool,
+    // and dropping it would retire a loopback correlation and an ask-user
+    // deadline that are still live. A tool refused here takes the same
+    // uncorrelated path a `server_tool_use` start already takes.
+    const trackable =
+      activeCliTools.has(event.toolCallId) || activeCliTools.size < MAX_UNFINISHED_TOOL_CALLS;
+    if (event.kind !== "server_tool_use" && trackable) {
       const activeTool: ActiveCliTool = {
         toolName: event.name,
         args: event.args,
@@ -529,20 +532,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     ) {
       return;
     }
-    if (pendingMessagingCalls.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      const oldestToolCallId = pendingMessagingCalls.keys().next().value;
-      if (oldestToolCallId !== undefined) {
-        pendingMessagingCalls.delete(oldestToolCallId);
-        // Once an unresolved send is evicted, its later result cannot be correlated.
-        // Fail closed so a failed turn cannot duplicate it.
-        didSendViaMessagingTool = true;
-      }
-    }
-    pendingMessagingCalls.set(event.toolCallId, {
+    const admitted = pendingMessagingCalls.admit(event.toolCallId, {
       toolName,
       args: event.args,
       target: extractCliMessagingTarget(context, toolName, event.args),
     });
+    if (admitted.evicted) {
+      // Once an unresolved send is evicted, its later result cannot be correlated.
+      // Fail closed so a failed turn cannot duplicate it.
+      didSendViaMessagingTool = true;
+    }
   };
   const handleCliToolResult = (event: CliToolResultDelta) => {
     const activeTool = activeCliTools.get(event.toolCallId);
@@ -564,9 +563,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     }
     activeCliTools.delete(event.toolCallId);
     retireCliLoopbackCorrelation(activeTool);
-    const pending = pendingMessagingCalls.get(event.toolCallId);
+    const pending = pendingMessagingCalls.release(event.toolCallId);
     if (pending) {
-      pendingMessagingCalls.delete(event.toolCallId);
       commitMessagingToolResult({
         ...pending,
         result: event.result,
@@ -594,9 +592,17 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   }) => {
     try {
       if (!gatewayCaptureKey && pendingMessagingCalls.size > 0) {
-        const calls = Array.from(pendingMessagingCalls.values());
+        const calls = pendingMessagingCalls.values();
         const internalStates = await Promise.all(
-          calls.map((call) => isPreparedCliInternalSourceReply(context, call)),
+          calls.map((call) =>
+            // A reduced entry cannot prove it had no explicit route, and the
+            // internal-sink answer is exactly that proof. Fail closed, the same
+            // way an evicted pending send does: count it as a visible send so a
+            // failed turn cannot deliver it a second time.
+            call.argsReduced
+              ? Promise.resolve(false)
+              : isPreparedCliInternalSourceReply(context, call),
+          ),
         );
         if (internalStates.some((internal) => !internal)) {
           didSendViaMessagingTool = true;
@@ -670,10 +676,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool,
     sourceReplyDelivered,
-    messagingToolSentTexts: [...messagingToolSentTexts],
-    messagingToolSentMediaUrls: [...messagingToolSentMediaUrls],
-    messagingToolSentTargets: [...messagingToolSentTargets.values()],
-    messagingToolSourceReplyPayloads,
+    messagingToolSentTexts: settledMessagingEvidence.texts(),
+    messagingToolSentMediaUrls: settledMessagingEvidence.mediaUrls(),
+    messagingToolSentTargets: settledMessagingEvidence.targets(),
+    messagingToolSourceReplyPayloads: settledMessagingEvidence.sourceReplyPayloads(),
     toolMediaUrls: [...toolMediaUrls],
     toolAudioAsVoice,
     toolTrustedLocalMedia,
@@ -692,6 +698,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     setOnActiveLoopbackAskUserDeadlineChange: askUserDeadlines.setOnChange,
     handleCliToolUseStart,
     handleCliToolResult,
+    dropRetainedToolArgs,
     resolveCliLoopbackTerminalOutcome,
     resolveCliLoopbackBrowserTab(toolCallId: string): unknown {
       const activeTool = activeCliTools.get(toolCallId);
@@ -702,7 +709,6 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     finalizeCapture,
     withExecutionEvidence(output: CliOutput): CliOutput {
       const current = evidence();
-      current.messagingToolSourceReplyPayloads = current.messagingToolSourceReplyPayloads.slice();
       return {
         ...output,
         ...(shouldSuppressAssistantOutput()

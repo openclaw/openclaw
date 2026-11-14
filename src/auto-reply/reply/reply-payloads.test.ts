@@ -33,6 +33,7 @@ const emptyEvidence = {
   shouldDedupePayloads: true,
   matchingRoute: false,
   routeSentTexts: [],
+  routeSentTextDigests: [],
   routeSentMediaUrls: [],
   useGlobalSentTextEvidenceFallback: false,
   useGlobalSentMediaUrlEvidenceFallback: false,
