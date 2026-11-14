@@ -797,11 +797,11 @@ describe("FRV continuation preflight", () => {
     };
     fixture.client.getAttemptJobs = async (_runId: string, attempt: number) =>
       attempt === 1 ? [preparation] : [{ ...preparation, id: 999, run_attempt: 2, conclusion }];
-    const plan = { ...fixture.plan, candidate: { producer: { runId: "606" } } };
+    const recoveryPlan = { ...fixture.plan, candidate: { producer: { runId: "606" } } };
     await expect(
       dryRun
-        ? continueFailed(plan, "77", fixture.client, { dryRun: true })
-        : continueFailed(plan, "77", fixture.client),
+        ? continueFailed(recoveryPlan, "77", fixture.client, { dryRun: true })
+        : continueFailed(recoveryPlan, "77", fixture.client),
     ).rejects.toThrow(error);
     if (!dryRun) {
       expect(fixture.client.rerunFailed).not.toHaveBeenCalled();

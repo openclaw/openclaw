@@ -1216,7 +1216,7 @@ describe("gateway concurrency benchmark script", () => {
         "--json",
       ]),
     ).toMatchObject({
-      ...Object.fromEntries(controls.map(([, , key, expected]) => [key, expected])),
+      ...Object.fromEntries(controls.map((control) => [control[2], control[3]])),
       controlPlane: true,
       toolEvents: true,
       diagnosticsTimeline: false,

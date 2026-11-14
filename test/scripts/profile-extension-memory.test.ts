@@ -325,9 +325,13 @@ describe("scripts/profile-extension-memory", () => {
             }
           }
         }
-        if (scenario === "default-report") expect(reports[0]).not.toBe(reports[1]);
+        if (scenario === "default-report") {
+          expect(reports[0]).not.toBe(reports[1]);
+        }
       } finally {
-        for (const report of reports) rmSync(report, { force: true });
+        for (const report of reports) {
+          rmSync(report, { force: true });
+        }
         rmSync(root, { recursive: true, force: true });
       }
     },
