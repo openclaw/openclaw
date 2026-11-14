@@ -1233,7 +1233,7 @@ describe("before_tool_call loop detection behavior", () => {
     },
     {
       mode: "report",
-      reason: "Review before running",
+      reason: "Plugin approval required",
       description: "Review before running",
       toolCallId: "tool-call-report",
     },
@@ -2440,7 +2440,7 @@ describe("before_tool_call requireApproval handling", () => {
     {
       label: "registration has no id",
       response: { status: "error" },
-      reason: "Registration returns no id",
+      reason: "Plugin approval request failed",
     },
     {
       label: "no approval route",
@@ -2461,6 +2461,44 @@ describe("before_tool_call requireApproval handling", () => {
       "plugin.approval.request",
     ]);
   });
+
+  it.each([
+    {
+      label: "registration has no id",
+      approvalMode: "request",
+      reason: "Plugin approval request failed",
+    },
+    {
+      label: "approval is only reported",
+      approvalMode: "report",
+      reason: "Plugin approval required",
+    },
+  ] as const)(
+    "keeps the approval text out of the block reason when $label",
+    async ({ approvalMode, reason }) => {
+      const address = "jane.doe@example.com";
+      setApproval({ title: `Email ${address}`, description: `Send to ${address}` });
+      mockCallGateway.mockResolvedValue({ status: "error" });
+
+      const result = await requestApproval({ approvalMode });
+
+      expect(result.blocked).toBe(true);
+      expect(result).toHaveProperty("reason", reason);
+
+      const tool = wrapToolWithBeforeToolCallHook(
+        { name: "bash", execute: vi.fn() } as unknown as AnyAgentTool,
+        { agentId: "main", sessionKey: "main" },
+        { approvalMode },
+      );
+      const error = await tool
+        .execute("tool-call-address", {}, undefined, undefined)
+        .catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(reason);
+      expect((error as Error).message).not.toContain(address);
+    },
+  );
 
   it.each([new Error("run cancelled"), "sessions_yield"])(
     "cancels approval and notifies the plugin when the run aborts: %s",
