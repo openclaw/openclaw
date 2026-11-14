@@ -1,7 +1,6 @@
 import { cancel } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
@@ -28,11 +27,6 @@ import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-a
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
 import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
-import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
-import {
-  resolvePluginSetupProviderCore,
-  resolvePluginSetupRegistry,
-} from "../../plugins/setup-registry.js";
 import type {
   ProviderAuthMethod,
   ProviderAuthResult,
@@ -56,6 +50,7 @@ import {
 } from "../configure.shared.js";
 import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
+import { resolveModelsAuthContext, type ResolvedModelsAuthContext } from "./auth-context.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
 import {
   looksLikeOpenAIApiKey,
@@ -130,69 +125,8 @@ async function readPastedSecret(params: {
   return normalized;
 }
 
-type ResolvedModelsAuthContext = Awaited<ReturnType<typeof resolveModelsAuthContext>>;
-
 function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlugin[] {
   return providers.filter((provider) => provider.auth.some((method) => method.kind === "token"));
-}
-
-async function resolveModelsAuthContext(params?: {
-  requestedProvider?: string;
-  rawAgentId?: string | null;
-  config?: OpenClawConfig;
-  ownerPluginId?: string;
-}) {
-  const configSnapshot = await loadValidConfigSnapshotOrThrow();
-  const config = params?.config ?? configSnapshot.runtimeConfig;
-  const { agentId, agentDir } = resolveModelsTargetAgent(config, params?.rawAgentId ?? undefined, {
-    kind: "mutation",
-  });
-  const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
-  const requestedProvider = params?.requestedProvider?.trim();
-  const providerRef = requestedProvider
-    ? normalizeManualAuthProvider(requestedProvider)
-    : undefined;
-  // Auth setup also runs inside the Gateway; discovery must not replace its live registry.
-  const providers = resolvePluginProvidersCore({
-    config,
-    workspaceDir,
-    mode: "setup",
-    includeUntrustedWorkspacePlugins: false,
-    ...(params?.ownerPluginId ? { onlyPluginIds: [params.ownerPluginId] } : {}),
-    ...(providerRef ? { providerRefs: [providerRef] } : {}),
-  });
-  const ownerPluginId = params?.ownerPluginId;
-  let authProviders: ProviderPlugin[];
-  if (!ownerPluginId && providerRef) {
-    const setupProvider = resolvePluginSetupProviderCore({
-      provider: providerRef,
-      config,
-      workspaceDir,
-    });
-    authProviders = setupProvider ? [setupProvider] : [...providers];
-  } else {
-    const setupProviders = resolvePluginSetupRegistry({
-      config,
-      workspaceDir,
-      ...(ownerPluginId ? { pluginIds: [ownerPluginId] } : {}),
-    }).providers.map((entry) => entry.provider);
-    const setupById = new Map(
-      setupProviders.map((provider) => [normalizeProviderId(provider.id), provider] as const),
-    );
-    const existing = new Set(providers.map((provider) => normalizeProviderId(provider.id)));
-    authProviders = [
-      ...providers.map((provider) => setupById.get(normalizeProviderId(provider.id)) ?? provider),
-      ...setupProviders.filter((provider) => !existing.has(normalizeProviderId(provider.id))),
-    ];
-  }
-  return {
-    config,
-    configSnapshot,
-    agentId,
-    agentDir,
-    workspaceDir,
-    providers: authProviders,
-  };
 }
 
 export function resolveRequestedLoginProviderOrThrow(
@@ -371,7 +305,7 @@ async function runProviderAuthMethod(
       login.assertCurrent?.();
       await promotePersistedAuthProfile({
         config: login.config,
-        agentDir: login.agentDir,
+        agentDir: login.sharedCredentialOnly ? undefined : login.agentDir,
         provider: profile.credential.provider,
         profileId: profile.profileId,
         assertCurrent: login.assertCurrent,
@@ -446,7 +380,7 @@ async function runProviderAuthMethod(
     throw error;
   }
   const modelAccess =
-    persistedProfiles.length > 0
+    persistedProfiles.length > 0 && !params.sharedCredentialOnly
       ? await allowLoginProviderModels(params, params.agentId, params.provider.id)
       : undefined;
   return { result: connectionResult, profiles: persistedProfiles, authRefresh, modelAccess };
@@ -762,7 +696,14 @@ async function runModelsAuthLoginFlow(
     rawAgentId: opts.agent,
     config: opts.config,
     ownerPluginId: opts.ownerPluginId,
+    sharedLogin: true,
+    env: opts.env,
   });
+  if (context.sharedCredentialOnly && opts.setDefault) {
+    throw new Error(
+      "Shared credential sign-in cannot set a default model. Select a configured agent to change its model.",
+    );
+  }
   const prompter = opts.prompter;
   let authProviders = context.providers.filter((provider) => provider.auth.length > 0);
   let requestedProvider = requestedProviderId
@@ -777,6 +718,8 @@ async function runModelsAuthLoginFlow(
     context = await resolveModelsAuthContext({
       rawAgentId: opts.agent,
       config: context.config,
+      sharedLogin: true,
+      env: opts.env,
     });
     authProviders = context.providers.filter((provider) => provider.auth.length > 0);
   }
@@ -793,8 +736,8 @@ async function runModelsAuthLoginFlow(
   } else if (requestedProviderId && !requestedProvider) {
     requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
   }
-  if (await showScopeNote(context.config)) {
-    await showModelsAuthScopeNote(prompter, context.agentId);
+  if (context.sharedCredentialOnly || (await showScopeNote(context.config))) {
+    await showModelsAuthScopeNote(prompter, context.agentId, context.sharedCredentialOnly);
   }
   const selectedProvider =
     requestedProvider ??
@@ -840,7 +783,11 @@ async function runModelsAuthLoginFlow(
     matchesPersonalAccount: chosenMethod.matchesPersonalAccount,
   });
   const imported =
-    !opts.credentialOnly && !opts.force && !opts.profileId && !opts.setDefault
+    !context.sharedCredentialOnly &&
+    !opts.credentialOnly &&
+    !opts.force &&
+    !opts.profileId &&
+    !opts.setDefault
       ? await tryImportProviderCredential({
           method: chosenMethod,
           providerId: selectedProvider.id,
@@ -917,6 +864,7 @@ async function runModelsAuthLoginFlow(
   const { result, profiles, authRefresh, modelAccess } = await runProviderAuthMethod({
     ...opts,
     ...context,
+    credentialOnly: context.sharedCredentialOnly || opts.credentialOnly,
     provider: selectedProvider,
     method: chosenMethod,
     prompter,

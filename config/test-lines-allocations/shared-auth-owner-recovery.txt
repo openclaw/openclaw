@@ -1,0 +1,4 @@
+# Shared OAuth recovery through administrator RPC, native SQLite credential/order owners,
+# inherited-view publication, live authority revocation, and cross-state-owner refusal.
+# Native RPC/SQLite ownership and publication require production-path proof.
+272
