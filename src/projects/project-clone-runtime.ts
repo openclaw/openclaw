@@ -172,14 +172,14 @@ function projectGitDiagnosticFailure(
     );
   }
   const phrase = {
-    "prepare refresh": "prepare the repository refresh",
-    "read refs": "read the managed repository's branches",
-    "seed refs": "prepare the managed repository's branches for refresh",
-    "update refs": "update the managed repository's branches",
+    "prepare refresh": "prepare the refresh",
+    "read refs": "read repository branches",
+    "seed refs": "prepare branches for refresh",
+    "update refs": "update repository branches",
   }[operation];
   return new ProjectCloneError(
     "clone_failed",
-    `Git could not ${phrase}. Send again to retry; if it fails, give the operator Diagnostic ID: ${diagnosticId}.`,
+    `Git could not ${phrase}. Send again; if it fails, give the operator Diagnostic ID: ${diagnosticId}.`,
   );
 }
 

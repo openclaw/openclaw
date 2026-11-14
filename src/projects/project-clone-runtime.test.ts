@@ -146,16 +146,16 @@ it.each(["inventory", "publication"] as const)(
         throw error;
       }
       expect(error.failure).toBe("clone_failed");
-      expect(error.message).toContain(
-        phase === "inventory"
-          ? "Git could not read the managed repository's branches."
-          : "Git could not update the managed repository's branches.",
-      );
-      expect(error.message).toContain("Send again to retry");
-      expect(error.message).toMatch(/Diagnostic ID: [a-f0-9-]{36}/u);
-      const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
       const summary = resolveSessionRunError({ error: String(error) }, "failed");
-      expect(summary).toContain("Send again to retry");
+      expect(summary).not.toContain(" ... ");
+      expect(summary).toContain(
+        phase === "inventory"
+          ? "Git could not read repository branches."
+          : "Git could not update repository branches.",
+      );
+      expect(summary).toContain("Send again");
+      const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
+      expect(diagnosticId).toBeDefined();
       expect(summary).toContain(`Diagnostic ID: ${diagnosticId}`);
       expect(error.message).not.toContain(target);
       await flushLogger();
