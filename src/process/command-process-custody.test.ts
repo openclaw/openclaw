@@ -34,7 +34,7 @@ it.skipIf(process.platform === "win32")(
   async () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(termination, "killProcessTree").mockReturnValue(undefined);
-    vi.spyOn(groups, "isChildProcessTreeAlive").mockReturnValue(true);
+    vi.spyOn(process, "kill").mockReturnValue(true);
     vi.spyOn(identity, "getProcessInstanceStartTime").mockReturnValue(1);
     const result = settleCommandProcessGroups([{ pid: 4242, startedAt: 1 }]);
     await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);

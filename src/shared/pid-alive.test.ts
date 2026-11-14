@@ -10,6 +10,7 @@ import {
   getProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
+  isPidDefinitelyDeadAsync,
 } from "./pid-alive.js";
 
 const nativeIdentity = vi.hoisted(() => vi.fn());
@@ -50,6 +51,14 @@ afterEach(() => {
 });
 
 function mockProcReads(entries: Record<string, string | (() => string)>) {
+  const originalReadFile = fsSync.promises.readFile;
+  vi.spyOn(fsSync.promises, "readFile").mockImplementation(async (filePath, options) => {
+    if (typeof filePath === "string" && Object.hasOwn(entries, filePath)) {
+      const value = entries[filePath];
+      return (typeof value === "function" ? value() : value) as never;
+    }
+    return await originalReadFile(filePath, options);
+  });
   const originalReadFileSync = fsSync.readFileSync;
   vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
     const key = String(filePath);
@@ -76,9 +85,12 @@ const procStatus = (state: string, threads: string, tgid?: number) =>
 const procStat = (pid: number, start: number, name = "node") =>
   `${pid} (${name}) S ${"0 ".repeat(18)}${start}`;
 
-it("rejects invalid PIDs without probing", () => {
+it("rejects invalid PIDs without probing", async () => {
   const kill = mockKill();
   expect(invalidPids.map(liveness)).toEqual(invalidPids.map(() => [false, true]));
+  expect(await Promise.all(invalidPids.map(isPidDefinitelyDeadAsync))).toEqual(
+    invalidPids.map(() => true),
+  );
   expect(kill).not.toHaveBeenCalled();
 });
 
@@ -89,7 +101,7 @@ it.each([
   ["recycled TID", "success", procStatus("S", "2", 41), false, true],
   ["last exited thread", "success", procStatus("X", "1"), false, true],
   ["live sibling threads", "EPERM", procStatus("X", "2"), true, false],
-] as const)("Linux liveness: %s", (_name, probe, status, alive, dead) => {
+] as const)("Linux liveness: %s", async (_name, probe, status, alive, dead) => {
   mockKill(probe);
   mockProcReads({
     "/proc/42/status":
@@ -98,12 +110,13 @@ it.each([
         throw new Error("no proc status");
       }),
   });
-  withMockedPlatform("linux", () => {
+  await withMockedPlatform("linux", async () => {
     expect(liveness(42)).toEqual([alive, dead]);
+    expect(await isPidDefinitelyDeadAsync(42)).toBe(dead);
   });
 });
 
-it("confirms exit when procfs disappears after the initial existence probe", () => {
+it("confirms exit when procfs disappears after the initial existence probe", async () => {
   let statusRead = false;
   mockProcReads({
     "/proc/42/status": () => {
@@ -117,18 +130,22 @@ it("confirms exit when procfs disappears after the initial existence probe", () 
     }
     throw Object.assign(new Error("process probe failed"), { code: "ESRCH" });
   });
-  withMockedPlatform("linux", () => {
+  await withMockedPlatform("linux", async () => {
     expect(isPidAlive(42)).toBe(false);
+    statusRead = false;
+    expect(await isPidDefinitelyDeadAsync(42)).toBe(true);
   });
 });
 
 it.each(["ESRCH", "EPERM", "success"])(
   "revalidates a zero-thread Linux snapshot (fresh probe=%s)",
-  (result) => {
+  async (result) => {
     mockProcReads({ "/proc/42/status": procStatus("Z", "0") });
-    mockKill(result).mockImplementationOnce(() => true);
-    withMockedPlatform("linux", () => {
+    const kill = mockKill(result).mockImplementationOnce(() => true);
+    await withMockedPlatform("linux", async () => {
       expect(isPidDefinitelyDead(42)).toBe(result === "ESRCH");
+      kill.mockImplementationOnce(() => true);
+      expect(await isPidDefinitelyDeadAsync(42)).toBe(result === "ESRCH");
     });
   },
 );

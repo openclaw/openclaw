@@ -12,7 +12,7 @@ import { mergeProcessEnv } from "../infra/process-env.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
-import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import { isChildProcessTreeAlive, isChildProcessTreeAliveAsync } from "./child-process-tree.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import {
   CommandProcessCleanupError,
@@ -188,13 +188,13 @@ export async function waitForCommandProcessGroupExit(
   isOriginalProcess: () => boolean,
 ): Promise<"exited" | "replaced" | "alive"> {
   const deadline = performance.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
-  while (isChildProcessTreeAlive({ pid })) {
+  while (await isChildProcessTreeAliveAsync({ pid })) {
     if (!isOriginalProcess()) {
       return "replaced";
     }
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
-      return isChildProcessTreeAlive({ pid }) ? "alive" : "exited";
+      return (await isChildProcessTreeAliveAsync({ pid })) ? "alive" : "exited";
     }
     await sleep(Math.min(25, remaining));
   }

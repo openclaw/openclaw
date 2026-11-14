@@ -2,7 +2,10 @@ import type { ChildProcess } from "node:child_process";
 import { hasErrnoCode } from "../infra/errno.js";
 import { signalProcessTree } from "./kill-tree.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
-import { isProcessGroupGoneByCensus } from "./supervisor/service-child-group-ownership.js";
+import {
+  isProcessGroupGoneByCensus,
+  isProcessGroupGoneByCensusAsync,
+} from "./supervisor/service-child-group-ownership.js";
 
 export function shouldDetachChildForProcessTree(): boolean {
   return process.platform !== "win32";
@@ -31,17 +34,37 @@ export function isDeniedProcessGroupProbe(error: unknown, signal: NodeJS.Signals
 }
 
 /** Decides group extinction for `isChildProcessTreeAlive` and spawn-broker cleanup; other probes keep their own EPERM policies. */
-export function isProcessGroupGone(pgid: number): boolean {
+function probeProcessGroup(pgid: number): "gone" | "alive" | "denied" {
   try {
     process.kill(-pgid, 0);
-    return false;
+    return "alive";
   } catch (error) {
     if (hasErrnoCode(error, "ESRCH")) {
-      return true;
+      return "gone";
     }
-    // EPERM is not evidence on its own (it also means a member owned by another UID): the census decides.
-    return isDeniedProcessGroupProbe(error) ? isProcessGroupGoneByCensus(pgid) : false;
+    return isDeniedProcessGroupProbe(error) ? "denied" : "alive";
   }
+}
+
+export function isProcessGroupGone(pgid: number): boolean {
+  const probe = probeProcessGroup(pgid);
+  return probe === "gone" || (probe === "denied" && isProcessGroupGoneByCensus(pgid));
+}
+
+/** Only Linux's bulk procfs census changes transport; kernel probes stay synchronous. */
+export async function isChildProcessTreeAliveAsync(
+  child: Pick<ChildProcess, "pid">,
+): Promise<boolean> {
+  if (process.platform !== "linux") {
+    return isChildProcessTreeAlive(child);
+  }
+  if (typeof child.pid !== "number" || child.pid <= 0) {
+    return false;
+  }
+  const probe = probeProcessGroup(child.pid);
+  return (
+    probe === "alive" || (probe === "denied" && !(await isProcessGroupGoneByCensusAsync(child.pid)))
+  );
 }
 
 export function isChildProcessTreeAlive(child: Pick<ChildProcess, "pid">): boolean {
