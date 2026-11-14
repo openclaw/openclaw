@@ -237,7 +237,8 @@ describe("agent group thread dispatch", () => {
     }
   });
 
-  it.each<[string, Parameters<typeof dispatch>[0], string[], boolean]>([
+  const longName = `${"a".repeat(79)}🥐x`;
+  it.each<[string, Parameters<typeof dispatch>[0], string[], boolean, string?]>([
     ["operator UI", { context: { Provider: "webchat", Surface: "webchat" } }, ["routed"], false],
     ["internal event", { context: { InternalTurnSource: "heartbeat" } }, ["routed"], false],
     ["single mention", { text: "@Bob, review this." }, ["bob"], true],
@@ -249,12 +250,27 @@ describe("agent group thread dispatch", () => {
       true,
     ],
     ["single participant", { cfg: config(["bob"]) }, ["bob"], false],
-  ])("routes and labels %s", async (_name, params, agents, labeled) => {
+    [
+      "truncated participant name",
+      {
+        cfg: {
+          ...config(),
+          agents: { entries: { ...roster.entries, bob: { identity: { name: longName } } } },
+        },
+        text: `@${longName} review this.`,
+      },
+      ["bob"],
+      true,
+      "a".repeat(79),
+    ],
+  ])("routes and labels %s", async (_name, params, agents, labeled, name) => {
     const run = await completed(params);
     expect(run.turns.map(({ ctx }) => ctx.AgentId)).toEqual(agents);
     const expected = agents.map((agentId) => ({
       text: "A useful answer.",
-      participant: labeled ? { agentId, name: agentId === "alice" ? "Alice" : "Bob" } : undefined,
+      participant: labeled
+        ? { agentId, name: name ?? (agentId === "alice" ? "Alice" : "Bob") }
+        : undefined,
     }));
     if (labeled) {
       expect(run.delivered).toMatchObject(expected);
