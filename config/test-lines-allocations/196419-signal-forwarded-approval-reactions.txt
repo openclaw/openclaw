@@ -1,0 +1,5 @@
+# Signal regressions for approvals forwarded to a Signal target: the delivered prompt carries the
+# checked reaction hint and binds 👍 to allow-once, the manual text is unchanged without reaction
+# approvers, and only a current approver can settle the forwarded prompt. Exact net growth for
+# PR #196419.
+79

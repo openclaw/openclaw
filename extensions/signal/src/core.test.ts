@@ -1,5 +1,6 @@
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createNativeApprovalTestFixture } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardStatus,
@@ -9,6 +10,7 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalAccount } from "./accounts.js";
+import { signalApprovalCapability } from "./approval-native.js";
 import { resolveSignalApprovalReactionTargetWithPersistence } from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
@@ -53,6 +55,11 @@ const groupTo = "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=";
 const senderUuid = "123e4567-e89b-12d3-a456-426614174000";
 const reactionHint = "React with:\n\n👍 Allow Once\n👎 Deny";
 const { outbound, messaging, threading } = signalPlugin;
+const forwarded = createNativeApprovalTestFixture({
+  channel: "signal",
+  capability: signalApprovalCapability,
+  buildConfig: () => approvalConfig(),
+});
 const sendText = required(outbound?.sendFormattedText);
 const sendMedia = required(outbound?.sendFormattedMedia);
 const probeAccount = required(signalPlugin.status?.probeAccount);
@@ -560,6 +567,65 @@ describe("signal outbound", () => {
         };
         expect(await renderApproval(cfg, quoted)).toBeNull();
       }
+      reactionStores.clearSignalApprovalReactionStoresForTest();
+    },
+  );
+
+  it.each(["exec", "plugin"] as const)(
+    "binds reactions on %s approvals forwarded to a Signal target",
+    async (kind) => {
+      reactionStores.clearSignalApprovalReactionStoresForTest();
+      const cfg = approvalConfig();
+      cfg.approvals = { ...cfg.approvals, plugin: { ...cfg.approvals?.exec } };
+      // The issue path: a Control UI session forwards its approval to a Signal approver.
+      const origin = {
+        agentId: "main",
+        turnSourceChannel: "webchat",
+        turnSourceTo: "control-ui",
+        sessionKey: "agent:main:main",
+      };
+      const target = { channel: "signal", to: approvalTo, source: "target" } as const;
+      const render = required(signalApprovalCapability.render);
+      const pending = required(
+        kind === "exec"
+          ? render.exec?.buildPendingPayload?.({
+              cfg,
+              request: {
+                ...forwarded.buildExecRequest(),
+                request: { command: "echo hi", ...origin },
+              },
+              target,
+              nowMs: 0,
+            })
+          : render.plugin?.buildPendingPayload?.({
+              cfg,
+              request: {
+                ...forwarded.buildPluginRequest(),
+                request: { title: "Plugin approval", description: "Allow", ...origin },
+              },
+              target,
+              nowMs: 0,
+            }),
+      );
+      const approvalId = kind === "exec" ? "exec-1" : "plugin:approval-1";
+      expect(pending.text).not.toContain("React with:");
+      // Outbound delivery only calls renderPresentation for payloads that carry a presentation.
+      expect(pending.presentation).toBeDefined();
+
+      const rendered = required(await renderApproval(cfg, pending));
+      expect(rendered.text).toContain(`/approve ${approvalId} allow-once`);
+      expect(rendered.text).toContain("React with:");
+      await deliverApproval(cfg, rendered, "default");
+      await expect(reactionTarget("1700000000099")).resolves.toMatchObject({
+        approvalId,
+        decision: "allow-once",
+      });
+
+      // Without reaction approvers the forwarded prompt keeps its manual text unchanged.
+      const manualOnly = { ...cfg, channels: { signal: { account: "+15550009999" } } };
+      await expect(renderApproval(manualOnly, pending)).resolves.toMatchObject({
+        text: pending.text,
+      });
       reactionStores.clearSignalApprovalReactionStoresForTest();
     },
   );
