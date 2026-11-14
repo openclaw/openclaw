@@ -13774,9 +13774,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "${{ steps.plugin_compatibility.outputs.required }}",
     );
     expect(pluginCompatibilityJob.needs).toEqual(["resolve_target"]);
-    expect(pluginCompatibilityJob.if).toBe(
+    expect(pluginCompatibilityJob.if).toBeUndefined();
+    expect(enforcePluginCompatibility.if).toBe(
       "needs.resolve_target.outputs.plugin_compatibility_required == 'true'",
     );
+    const mockExports = workflowStep(pluginCompatibilityJob, "Check target mock exports");
+    expect(mockExports.env).toMatchObject({
+      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
+    });
+    expect(mockExports.run).toContain('pnpm check:test-mock-exports --base "$TARGET_SHA"');
+    expect(mockExports.if).toBeUndefined();
     expect(enforcePluginCompatibility.run).toBe("pnpm plugins:boundary-report:ci");
     for (const jobName of [
       "normal_ci",
@@ -13798,7 +13805,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     for (const [compatibilityResult, admitted] of [
       ["success", true],
-      ["skipped", true],
+      ["skipped", false],
       ["failure", false],
       ["cancelled", false],
     ] as const) {

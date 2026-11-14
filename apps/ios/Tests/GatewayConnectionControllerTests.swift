@@ -208,7 +208,7 @@ private struct ControllableTLSProbe {
         GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in
                 self.started.continuation.yield()
                 for await result in self.results.stream {
@@ -227,7 +227,7 @@ private func makeTLSProbeController(
     GatewayConnectionController(
         appModel: appModel,
         startDiscovery: false,
-        tcpReachabilityProbe: { _, _, _, _ in true },
+        tcpReachabilityProbe: { _, _, _, _ in .reachable },
         tlsFingerprintProbe: { _ in .fingerprint(fingerprint) }, ingress: makeOrdinaryIngress())
 }
 
@@ -1952,7 +1952,7 @@ private func pendingHandoffDiagnostic(
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("exact-owner-fingerprint") },
             serviceEndpointResolver: { _ in (host: "127.0.0.1", port: 1) },
             persistTLSFingerprint: { _, owner in
@@ -1989,7 +1989,7 @@ private func pendingHandoffDiagnostic(
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("unpersisted-fingerprint") },
             persistTLSFingerprint: { _, _ in false }, ingress: makeOrdinaryIngress())
 
@@ -2216,7 +2216,7 @@ private func pendingHandoffDiagnostic(
                 tcpReachabilityProbe: { host, _, _, _ in
                     probes.withLock {
                         $0.append(host)
-                        return reachableRetry && $0.count > 1
+                        return (reachableRetry && $0.count > 1) ? .reachable : .unreachable
                     }
                 },
                 tlsFingerprintProbe: { _ in .fingerprint("replacement-fingerprint") }, ingress: makeOrdinaryIngress())

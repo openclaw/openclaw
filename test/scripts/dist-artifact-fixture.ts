@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import { resolveNativeDeclarationFixtureSources } from "./native-declaration-fixture-sources.js";
 
 function write(root: string, relative: string, content: string) {
   const target = path.join(root, relative);
@@ -32,6 +33,7 @@ export function installDistArtifactScripts(
     "src/infra/directory-walk.ts",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
+    ...(compiler ? resolveNativeDeclarationFixtureSources() : []),
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.cpSync(path.join(sourceRoot, file), path.join(root, file), { recursive: true });
