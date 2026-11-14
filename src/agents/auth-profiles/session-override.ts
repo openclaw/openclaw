@@ -492,16 +492,17 @@ async function resolveSessionAuthProfileOverride(
   // the pinned fallback's latest outcome is a failure that the preferred profile has
   // since outlived with a success (for example a same-turn rotation after the fallback
   // rejected the session model). A fallback whose latest outcome succeeded stays pinned.
-  const currentStats = current ? store.usageStats?.[current] : undefined;
-  const currentFailedAt = currentStats?.lastFailureAt ?? 0;
-  const currentLastOutcomeFailed = currentFailedAt > (currentStats?.lastUsed ?? 0);
-  const isRecoveredPreference = (profileId: string) => {
+  // Successes on profiles inherited from the shared store record lastProbeAt but not
+  // lastUsed, so the later of the two marks the latest success.
+  const lastSuccessAt = (profileId: string) => {
     const stats = store.usageStats?.[profileId];
-    return (
-      stats?.lastRateLimitAt !== undefined ||
-      (currentLastOutcomeFailed && (stats?.lastUsed ?? 0) > currentFailedAt)
-    );
+    return Math.max(stats?.lastUsed ?? 0, stats?.lastProbeAt ?? 0);
   };
+  const currentFailedAt = current ? (store.usageStats?.[current]?.lastFailureAt ?? 0) : 0;
+  const currentLastOutcomeFailed = current ? currentFailedAt > lastSuccessAt(current) : false;
+  const isRecoveredPreference = (profileId: string) =>
+    store.usageStats?.[profileId]?.lastRateLimitAt !== undefined ||
+    (currentLastOutcomeFailed && lastSuccessAt(profileId) > currentFailedAt);
   const retryableHigherPriorityProfile =
     source === "auto" && !currentUnavailable && current
       ? orderResolutions
