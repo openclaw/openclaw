@@ -249,7 +249,14 @@ an in-flight metadata read.
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account
 locator. The `provider-config` view remains shared authored inventory and omits
-account selection. `refreshFailed: true` reports a failed acquisition while
+account selection. `refreshFailures` identifies failed discovery scopes with
+`acquisition: "provider" | "native"` and an optional `provider` identifier. The
+provider is omitted when the acquisition scope is unknown or outside the requested
+catalog view. These diagnostics never include raw errors, endpoints, credentials,
+or account/profile identifiers and do not replace authentication outcomes. Clients
+should retain usable model choices and distinguish a partially available catalog
+from an empty one; older responses may have `refreshFailed` without diagnostics.
+`refreshFailed: true` reports a failed acquisition while
 compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 
