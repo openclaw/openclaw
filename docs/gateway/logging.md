@@ -166,10 +166,11 @@ and store fields.
 
 ### Slow SQLite transcript hydration and appends
 
-Slow transcript and session metadata transactions (`session.transcript.*`,
-`sessions.transcript-*`, and `session.metadata.*`, including hydration, maintenance,
-and appends), `session context snapshot read`, and `session.lifecycle.delete` include
-native statement attribution on the existing slow-hold warning. `statementExecutionMs` sums native execution calls;
+Slow transcript, session metadata, trajectory, audit writer, and knowledge transactions
+(`session.transcript.*`, `sessions.transcript-*`, `session.metadata.*`, `trajectory.*`,
+`audit.writer.*`, and `knowledge.*`), `session context snapshot read`, and
+`session.lifecycle.delete` include native statement attribution on the existing
+slow-hold warning. `statementExecutionMs` sums native execution calls;
 `callbackOtherMs` is the remaining callback wall time, including JavaScript,
 statement preparation, GC, and scheduling. Neither is CPU time. Hydration also
 reports `callbackGcMs` from the current isolate's native GC sampler on Node;

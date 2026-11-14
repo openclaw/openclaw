@@ -109,6 +109,7 @@ it.each([
   "session.transcript.append-turn",
   "session.transcript.prepare-rewrite",
   "session.metadata.append",
+  "trajectory.runtime.append",
   "session context snapshot read",
   "sessions.transcript-maintenance",
   "sessions.transcript-hydration.cron-model",
