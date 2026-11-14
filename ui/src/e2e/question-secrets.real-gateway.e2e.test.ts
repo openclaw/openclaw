@@ -257,7 +257,12 @@ suite.define(() => {
         .waitFor();
       await page.keyboard.press("Escape");
       expect(await details.evaluate((element) => document.activeElement === element)).toBe(true);
-      const input = panel.locator('input[type="password"]');
+      const input = panel.getByLabel("API key", { exact: true });
+      expect(
+        await input.evaluate(
+          (element: HTMLInputElement) => element.labels?.[0]?.getBoundingClientRect().width,
+        ),
+      ).toBe(1);
       await input.fill(syntheticSecret);
       await input.press("Tab");
       expect(

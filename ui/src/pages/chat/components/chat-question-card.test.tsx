@@ -374,6 +374,7 @@ describe("shared question panel", () => {
     expect(secret.autocomplete).toBe("off");
     expect(secret.placeholder).toBe("API key");
     expect(secret.labels?.[0]?.textContent).toContain("API key");
+    expect(secret.labels?.[0]?.classList.contains("sr-only")).toBe(true);
     expect(container.querySelector(".chat-question-panel__options")).toBeNull();
     expect(container.querySelector(".chat-question-panel__option-marker")).toBeNull();
     expect(container.querySelector("kbd")).toBeNull();

@@ -316,8 +316,9 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel--credential {
-  gap: 10px;
-  padding: 14px 16px;
+  --field-bg: var(--chat-composer-surface);
+  gap: 8px;
+  padding: 10px 12px;
   border-color: var(--border);
   border-radius: var(--radius-lg);
   background: var(--card);
@@ -329,11 +330,24 @@ openclaw-chat-question-panel {
   font-size: var(--control-ui-text-md);
   line-height: 24px;
 
+  /* Match command approvals: the identity participates in the sentence baseline. */
+  openclaw-agent-row-chip {
+    vertical-align: baseline;
+  }
+
   .agent-row-chip {
+    align-items: baseline;
     gap: 6px;
     color: var(--text);
     font: inherit;
     font-weight: 500;
+  }
+
+  .agent-row-chip__avatar {
+    align-self: flex-start;
+    flex-basis: 24px;
+    width: 24px;
+    height: 24px;
   }
 }
 
@@ -343,10 +357,27 @@ openclaw-chat-question-panel {
 
 .chat-question-panel__credential-body {
   display: grid;
-  gap: 10px;
-  padding: 10px 12px 12px;
+  gap: 8px;
+  padding: 8px 10px;
   border-radius: var(--radius-md);
-  background: var(--surface-hover);
+  background: var(--bg-muted);
+
+  input {
+    height: var(--settings-control-height);
+    background: var(--field-bg);
+    color: var(--text);
+  }
+
+  input:focus-visible {
+    outline: var(--control-ui-focus-ring);
+    outline-offset: var(--control-ui-focus-ring-offset);
+  }
+}
+
+.chat-question-panel--credential .chat-question-panel__footer .btn {
+  min-height: var(--settings-control-height);
+  padding-block: 4px;
+  line-height: 1.25;
 }
 
 .chat-question-panel__store-reason {
@@ -361,8 +392,7 @@ openclaw-chat-question-panel {
 
 .chat-question-panel__store-hosts {
   display: grid;
-  gap: 5px;
-  margin-top: 2px;
+  gap: 4px;
 }
 
 .chat-question-panel__other {

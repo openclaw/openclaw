@@ -15,7 +15,7 @@ export function CredentialRequestIdentity(props: { agentId?: string }) {
         {(part, index) => (
           <>
             {index() > 0 && <AgentRowChip agentId={props.agentId} />}
-            {part}
+            <span>{part}</span>
           </>
         )}
       </For>

@@ -241,7 +241,10 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
           <>
             {props.question.options.length === 0 ? (
               <div class="field">
-                <label for={inputId}>
+                <label
+                  for={inputId}
+                  class={{ "sr-only": props.question.secretStore?.kind === "secret" }}
+                >
                   <span>{answerLabel()}</span>
                 </label>
                 <FreeTextControl
