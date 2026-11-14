@@ -273,7 +273,8 @@ export async function resolveChannelTarget(params: {
     preferLiveOnMiss: true,
     plugin,
   });
-  const normalizedQuery = query.toLowerCase();
+  // Canonicalize comparisons, not the plugin-owned destination or display text.
+  const normalizedQuery = query.toLowerCase().normalize("NFC");
   const matches = normalizedQuery
     ? entries.filter((entry) => {
         const candidates = [
@@ -281,7 +282,9 @@ export async function resolveChannelTarget(params: {
           entry.name,
           entry.handle,
         ].map((value) =>
-          value ? stripTargetPrefixes(value, params.channel, plugin).toLowerCase() : "",
+          value
+            ? stripTargetPrefixes(value, params.channel, plugin).toLowerCase().normalize("NFC")
+            : "",
         );
         return candidates.some((value) =>
           reservedLiteral ? value === normalizedQuery : value.includes(normalizedQuery),
