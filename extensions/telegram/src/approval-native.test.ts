@@ -190,7 +190,6 @@ describe("telegram native approval adapter", () => {
     expect(defaultTargets).toEqual([]);
   });
 
-
   it.each([undefined, "work"])(
     "reserves terminal UI recovery for plugin approvals on account %s",
     (accountId) => {

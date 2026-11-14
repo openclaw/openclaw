@@ -1,5 +1,9 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { chunkMarkdownTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-chunking";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
