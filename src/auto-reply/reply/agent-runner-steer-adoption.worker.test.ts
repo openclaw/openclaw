@@ -60,6 +60,56 @@ function preparedDelivery(
   };
 }
 
+it.each(["optional-human", "required-human", "optional-room", "optional-internal"] as const)(
+  "preserves the active reply contract for %s steering",
+  async (scenario) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const key = `agent:main:reply-contract-${scenario}`;
+      const run = createQueueTestRun({
+        prompt: "oh wait, use the corrected requirements",
+        messageId: "human-correction",
+        originatingChannel: "discord",
+      });
+      Object.assign(run.run, {
+        agentId: "main",
+        sessionKey: key,
+        senderIsOwner: true,
+        terminalReplyExpectation: scenario === "required-human" ? "required" : "optional",
+      });
+      if (scenario === "optional-room") {
+        run.currentInboundEventKind = "room_event";
+      } else if (scenario === "optional-internal") {
+        run.run.inputProvenance = { kind: "internal_system", sourceTool: "test" };
+      }
+      const { operation, fingerprint } = await prepareOperation(run);
+      const delivered: string[] = [];
+      // Like the released Codex handle, omission means a required reply owner.
+      attachSteerBackend(operation, fingerprint, preparedDelivery(delivered));
+      const state: ReplyOperationRunState = {};
+      try {
+        await expect(
+          runActiveReplySteer(
+            createSteerParams(key, run, operation, {
+              replyOperationRunState: state,
+              runFollowup: vi.fn(async () => {}),
+            }),
+          ),
+        ).resolves.toBe("handled");
+        const human = scenario.endsWith("human");
+        expect(delivered).toEqual(human ? [run.prompt] : []);
+        expect(state.admission).toMatchObject({
+          status: "accepted",
+          mode: human ? "steer" : "followup",
+        });
+        expect(operation.result).toBeNull();
+      } finally {
+        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
+        operation.complete();
+      }
+    });
+  },
+);
+
 it("consumes human steering once after the same logical owner recovers its detached backend", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:recovered-worker-steering";
