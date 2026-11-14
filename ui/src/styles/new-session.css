@@ -154,6 +154,9 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page .agent-chat__welcome-name .agent-select--compact .agent-select__trigger {
+  /* Equal side tracks keep the name centered independently of the chevron. */
+  display: grid;
+  grid-template-columns: var(--chrome-icon-size) minmax(0, 1fr) var(--chrome-icon-size);
   max-width: 100%;
   height: auto;
   min-height: 44px;
@@ -163,6 +166,7 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page .agent-chat__welcome-name .agent-select__label {
+  grid-column: 2;
   max-width: none;
 }
 

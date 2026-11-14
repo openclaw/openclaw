@@ -218,11 +218,13 @@ export function rewriteStandaloneImports({
         continue;
       }
     }
+    const importSpecifier =
+      node.type === "ImportExpression" ? staticString(node.source) : undefined;
     if (
       node.type === "ImportExpression" &&
-      (node.source.type !== "Literal" ||
-        generatedTargets.has(node.source.value) ||
-        String(node.source.value).endsWith(".cjs"))
+      (typeof importSpecifier !== "string" ||
+        generatedTargets.has(importSpecifier) ||
+        importSpecifier.endsWith(".cjs"))
     ) {
       edits.push([
         node.start,
@@ -253,8 +255,8 @@ export function rewriteStandaloneImports({
           `${separator}${hasOptions ? "" : "undefined, "}() => ${witness}`,
         ]);
       }
-      if (generatedTargets.has(node.source.value)) {
-        const entry = path.relative(runtimeRoot, node.source.value).split(path.sep).join("/");
+      if (generatedTargets.has(importSpecifier)) {
+        const entry = path.relative(runtimeRoot, importSpecifier).split(path.sep).join("/");
         const embedded = embeddedPaths[entry];
         if (!embedded) {
           throw new Error(`Missing embedded standalone import: ${entry}`);
@@ -264,7 +266,8 @@ export function rewriteStandaloneImports({
     }
     if (
       node.type === "CallExpression" &&
-      (requireFactories.has(node.callee?.name) ||
+      ((requireFactories.has(node.callee?.name) &&
+        (bindings ??= createStandaloneLexicalBindings(ast)).isModuleBinding(node.callee)) ||
         (node.callee?.type === "MemberExpression" &&
           node.callee.property?.name === "createRequire" &&
           node.callee.object?.type === "CallExpression" &&
