@@ -373,6 +373,13 @@ After the first successful pairing, Android auto-reconnects on launch to the act
 
 Android retries temporary connection losses automatically. For a fresh attempt with the saved endpoint, open **Settings → Gateway** and tap **Reconnect**. **Disconnect** stops the connections and suppresses automatic reconnect for the current app session; it does not forget the pairing. Authentication or pairing errors can pause retries until you address the reported problem.
 
+Each socket admits at most 256 inbound frames (including the active handler),
+25 MiB per frame, and 50 MiB of retained UTF-8 frame data. If a burst exceeds a
+limit, Android closes that socket with code `1013` and reconnects automatically.
+Already accepted replies and issued pairing tokens settle before cleanup;
+requests with an unknown outcome are not replayed. This bounds the retained
+backlog, not how long an individual event handler can block.
+
 Gateway summary rows wrap long labels and values. Tap **Instance ID** in **Settings → Gateway** to copy this phone's full identifier.
 
 Official setup codes connect Android as a node and grant full Gateway operator
