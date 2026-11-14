@@ -15,6 +15,8 @@
 // --search-discovery measures the real sessions_search inventory sweep, excluding transcript FTS.
 // --active-runs 30 holds synthetic runs active; discovery also reports warm page preparation
 // at offsets 0/3600/7200/12800 after the measured sweep (outside CPU/allocation samples).
+// Reports materializations per sweep and post-GC heap outside the measured interval;
+// archive walks stay cold because their working set exceeds the bounded page cache.
 // Use --list-shape all --sessions 3500 --archived-sessions 3000 --updates-per-list 0.
 // --list-shape people --row-updates-per-list 1 --row-update-field inputTokens measures
 // selection invalidation under display-only churn. --count-visits also counts owner projections.
@@ -101,6 +103,7 @@ if (values["source-ref"]) {
       "src/gateway/worker-environments/placement-session-runtime.ts",
       "src/gateway/session-row-model-facts.ts",
       "src/gateway/session-row-projection-materialize.ts",
+      "src/gateway/session-row-projection-refresh.ts",
       "src/gateway/session-utils-list.ts",
       "src/gateway/session-row-selection.ts",
       "src/gateway/session-list-view-cache.ts",
@@ -730,7 +733,9 @@ try {
   for (let index = 0; index < activeRuns; index++) {
     update();
   }
-  let discovery: { pages: number; rows: number; keys: number; digest: string } | undefined;
+  let discovery:
+    | { pages: number; rows: number; keys: number; digest: string; dashboardDigest?: string }
+    | undefined;
   const readList = (opts: SessionsListParams) =>
     lists.listProjectedSessions({
       projection: projection!,
@@ -754,6 +759,7 @@ try {
     let pages = 0;
     let returned = 0;
     const keys: string[] = [];
+    const dashboards = values.mode === "verify" ? createHash("sha256") : undefined;
     const tool = createSessionsSearchTool({
       config: {
         ...cfg,
@@ -764,6 +770,7 @@ try {
       callGateway: async <T>(request: { method: string; params?: unknown }): Promise<T> => {
         if (request.method === "sessions.list") {
           last = await gateway<SessionsListResult>(request);
+          dashboards?.update(canonicalResult(last));
           pages++;
           returned += last.sessions.length;
           return last as T;
@@ -788,6 +795,7 @@ try {
       rows: returned,
       keys: keys.length,
       digest: createHash("sha256").update(JSON.stringify(keys.toSorted())).digest("hex"),
+      dashboardDigest: dashboards?.digest("hex"),
     };
     return last;
   };
@@ -1026,6 +1034,7 @@ try {
   const observer = new PerformanceObserver((list) => collections.push(...list.getEntries()));
   observer.observe({ entryTypes: ["gc"] });
   const beforeSelections = workMetrics.getSessionRowSelectionMetrics();
+  const materializedBefore = projection.materializedCount;
   const before = process.threadCpuUsage();
   await run(iterations, true);
   const measuredOwnerProjections = ownerProjections;
@@ -1043,6 +1052,9 @@ try {
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
       : undefined;
   const cpu = values["cpu-profile"] ? (await inspector.post("Profiler.stop")).profile : undefined;
+  const materializedRows = projection.materializedCount - materializedBefore;
+  global.gc();
+  const retainedHeapBytes = process.memoryUsage().heapUsed;
   // Owner probes allocate full result arrays; keep them out of subsequent list samples.
   if (values["search-workload"]) {
     for (let index = sequence - iterations; index < sequence; index++) {
@@ -1156,6 +1168,9 @@ try {
     plainResult: values["plain-result"],
     gcCount: measuredGc.length,
     gcMs: measuredGc.reduce((sum, entry) => sum + entry.duration, 0),
+    materializedRows,
+    materializedRowsPerList: materializedRows / iterations,
+    retainedHeapBytes,
     allocationLeaves: Array.from(leafBytes)
       .toSorted((a, b) => b[1] - a[1])
       .slice(0, 30),
