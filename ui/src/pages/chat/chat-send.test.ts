@@ -3238,7 +3238,7 @@ describe("handleSendChat", () => {
         expect(host.chatAttachments).toStrictEqual(attachments);
         expect(host.lastError).toBe(
           kind === "cold file"
-            ? "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent."
+            ? "Browser attachment storage is unavailable. Allow browser storage and close older OpenClaw tabs before reconnecting and retrying. No new message was sent."
             : storageError,
         );
       }

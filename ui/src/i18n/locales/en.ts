@@ -356,7 +356,7 @@ type EnglishCatalog = TranslationMap & {
 const startupEnglish = {
   runtimeErrors: {
     socketInsecure:
-      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when OpenClaw is served over HTTPS/Tailscale Serve, or open it on loopback at http://127.0.0.1:18789.",
     socketRefused:
       "Browser refused the Gateway WebSocket for security reasons. Check the Gateway WebSocket URL and browser security policy.",
     socketCreateFailed:
@@ -498,11 +498,11 @@ const startupEnglish = {
     skip: "Skip for now",
   },
   nativeConversation: {
-    openDashboardFailed: "Couldn't open that page in the Dashboard",
+    openDashboardFailed: "Couldn't open that page",
   },
   nativeLinkMenu: {},
   browserLinkPreferences: {
-    openInControlUi: "Open links in Control UI browser",
+    openInControlUi: "Open links in the built-in browser",
   },
   filePreview: {
     bundle: {},
@@ -631,7 +631,7 @@ const startupEnglish = {
       buildFailed: "Couldn’t build the update. Fix the build error and retry.",
       buildDirty:
         "The selected revision's build changed checkout files. Retry with a revision that includes its generated artifacts.",
-      uiBuildFailed: "Couldn’t rebuild the Control UI. Fix the UI build error and retry.",
+      uiBuildFailed: "Couldn’t rebuild the web app. Fix the build error and retry.",
       globalInstallFailed:
         "The global package install did not verify on disk. Retry or reinstall from the CLI.",
       restartDisabled:
@@ -639,7 +639,7 @@ const startupEnglish = {
       restartUnavailable:
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       externalSupervisorUpdateRequired:
-        "This Gateway is managed by an external supervisor. Use your server or deployment's update workflow to update OpenClaw and restart the Gateway. The Control UI and `openclaw update` cannot update this installation. No package changes or Gateway restart were attempted.",
+        "This Gateway is managed by an external supervisor. Use your server or deployment's update workflow to update OpenClaw and restart the Gateway. The OpenClaw app and `openclaw update` cannot update this installation. No package changes or Gateway restart were attempted.",
       restartUnhealthy:
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
       restartRevisionMismatch:
@@ -1177,7 +1177,7 @@ const startupEnglish = {
     workerDesktop: {},
   },
   aboutPage: {
-    artifactDetails: "Control UI build details",
+    artifactDetails: "Web app build details",
     commit: "Commit",
     built: "Built",
     unavailable: "Unavailable",
@@ -1627,7 +1627,7 @@ const startupEnglish = {
     commandResults: {
       emptyExport: "No messages to export yet.",
       exportPathUnsupported:
-        "Control UI exports Markdown through your browser. Run /export without a file path.",
+        "The web app exports Markdown through your browser. Run /export without a file path.",
       help: {},
       compaction: {},
       model: {},

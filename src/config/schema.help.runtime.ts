@@ -226,59 +226,58 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.entries.*.sandbox.browser.cdpSourceRange":
     "Per-agent override for CDP source CIDR allowlist.",
-  "gateway.controlUi.basePath":
-    "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
+  "gateway.controlUi.basePath": "Optional URL prefix where the web app is served (e.g. /openclaw).",
   "gateway.controlUi.root":
-    "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
+    "Optional filesystem root for web app assets (defaults to dist/control-ui).",
   "gateway.controlUi.experimental":
-    "Control UI experiments and retained advanced overrides. Experiments are disabled by default unless their setting documents otherwise.",
+    "Web app experiments and retained advanced overrides. Experiments are disabled by default unless their setting documents otherwise.",
   "gateway.controlUi.experimental.customPlugins":
-    "Allow enabled user-installed plugins to execute native JavaScript in the Control UI (default: true). Retained as an advanced config-only opt-out; existing false values remain off. Bundled plugin views are unaffected. Native UI shares the signed-in operator's Gateway permissions; install only trusted plugins. Changes apply without a Gateway restart. After disabling, reload open Control UI pages to clear previously loaded plugin code.",
+    "Allow enabled user-installed plugins to execute native JavaScript in the web app (default: true). Retained as an advanced config-only opt-out; existing false values remain off. Bundled plugin views are unaffected. Native UI shares the signed-in operator's Gateway permissions; install only trusted plugins. Changes apply without a Gateway restart. After disabling, reload open web app pages to clear previously loaded plugin code.",
   "gateway.controlUi.experimental.templates":
-    "Enable ClawHub discovery and one-way Add through the Control UI and Gateway (default: false). Existing agents keep running while this is off.",
+    "Enable ClawHub discovery and one-way Add through the web app and Gateway (default: false). Existing agents keep running while this is off.",
   "gateway.controlUi.experimental.chatBubbles":
-    "Enable experimental speech bubbles in the Control UI (default: false). Home defaults to bubbles while enabled; browser-local per-session choices take precedence. Changes apply without a Gateway restart.",
+    "Enable experimental speech bubbles in the web app (default: false). Home defaults to bubbles while enabled; browser-local per-session choices take precedence. Changes apply without a Gateway restart.",
   "gateway.controlUi.environment":
-    "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
+    "Optional public environment identity shown in the web app stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":
-    "Environment label displayed in the Control UI and browser tab; surrounding whitespace is trimmed and the label must contain 1 to 24 characters.",
+    "Environment label displayed in the web app and browser tab; surrounding whitespace is trimmed and the label must contain 1 to 24 characters.",
   "gateway.controlUi.environment.color":
     "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
   "gateway.controlUi.communityInvite":
-    "Show a dismissible Community card in the Control UI sidebar (default on), with Discord, Reddit, and X links. Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect. Existing browser-local dismissals remain honored.",
+    "Show a dismissible Community card in the web app sidebar (default on), with Discord, Reddit, and X links. Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect. Existing browser-local dismissals remain honored.",
   "gateway.controlUi.newSessionModelDefaults":
-    'Choose "configured" to start fresh Control UI drafts with the selected agent’s configured model, runtime and reasoning defaults instead of remembered selections. Default: "last-used". Explicit draft and conversation choices remain editable; Fast Mode and placement preferences are unchanged. Applies after browser refresh or reconnect.',
+    'Choose "configured" to start fresh web app drafts with the selected agent’s configured model, runtime and reasoning defaults instead of remembered selections. Default: "last-used". Explicit draft and conversation choices remain editable; Fast Mode and placement preferences are unchanged. Applies after browser refresh or reconnect.',
   "gateway.controlUi.github.host":
     "Host this service credential may access. Omit for github.com; set to gateway.github.host for Enterprise project discovery and account metadata.",
   "gateway.controlUi.github.token":
-    "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Set gateway.controlUi.github.host for Enterprise; an omitted host means github.com. Hover previews prefer the selected agent's configured GitHub identity. GH_TOKEN/GITHUB_TOKEN fallback applies only to github.com. Requests using a mismatched or unavailable credential are rejected.",
+    "SecretRef-backed service credential for web app project discovery and GitHub hover previews without a managed identity. Set gateway.controlUi.github.host for Enterprise; an omitted host means github.com. Hover previews prefer the selected agent's configured GitHub identity. GH_TOKEN/GITHUB_TOKEN fallback applies only to github.com. Requests using a mismatched or unavailable credential are rejected.",
   "gateway.controlUi.sessionObserver":
-    "Produce live session status digests for subscribed Control UI clients with each agent's utility model (default on). Set false to disable observer model calls gateway-wide; setting agents.defaults.utilityModel to an empty string disables utility-model observation for agents that do not override it.",
+    "Produce live session status digests for subscribed web app clients with each agent's utility model (default on). Set false to disable observer model calls gateway-wide; setting agents.defaults.utilityModel to an empty string disables utility-model observation for agents that do not override it.",
   "gateway.controlUi.embedSandbox":
-    'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+    'Iframe sandbox policy for hosted web app embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
   "gateway.controlUi.allowExternalEmbedUrls":
-    "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas documents do not need it.",
+    "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your web app intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas documents do not need it.",
   "gateway.controlUi.automaticallyFetchFavicons":
     "Fetch link favicons and external-link page previews through the Gateway (default on). Page previews load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
   "gateway.controlUi.allowedOrigins":
-    'Allowed browser origins for Control UI/WebChat connections (full origins only, e.g. https://control.example.com). When omitted, defaults to gateway.publicOrigin if configured. An explicit list, including [], overrides that default; existing local/private-origin rules still apply. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
+    'Allowed browser origins for web app/WebChat connections (full origins only, e.g. https://control.example.com). When omitted, defaults to gateway.publicOrigin if configured. An explicit list, including [], overrides that default; existing local/private-origin rules still apply. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
-    "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
+    "DANGEROUS toggle that enables Host-header based origin fallback for web app/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
   "gateway.portals": "Portal publication and private ingress settings.",
   "gateway.portals.ingress":
     "Optional operator-managed private HTTPS wildcard reverse proxy. Forward original Host, paths, and WebSocket upgrades to the dedicated loopback listener. Portal bearer authentication remains required. Requires Gateway restart.",
   "gateway.portals.ingress.domain":
-    "Bare DNS domain for random portal subdomains (for example previews.example.net). Configure wildcard DNS and HTTPS privately; do not share the Gateway or Control UI hostname namespace.",
+    "Bare DNS domain for random portal subdomains (for example previews.example.net). Configure wildcard DNS and HTTPS privately; do not share the Gateway or web app hostname namespace.",
   "gateway.portals.ingress.port":
     "Dedicated loopback HTTP port receiving the private wildcard HTTPS proxy. Must differ from the Gateway port. This is the backend port, not the public HTTPS port.",
   "gateway.publicOrigin":
-    "Externally reachable HTTPS origin of the Gateway. Also the default browser origin when gateway.controlUi.allowedOrigins is omitted. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
+    "Externally reachable HTTPS origin of the Gateway. Also the default browser origin when gateway.controlUi.allowedOrigins is omitted. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the web app and Gateway routes.",
   "mcp.apps":
     "MCP Apps UI support. When enabled, configured MCP servers may provide interactive HTML views for their tool results.",
   "mcp.apps.enabled":
     "Opt-in MCP Apps rendering and app-to-server bridge. Keep disabled unless you trust the configured MCP servers that provide app UI resources.",
   "mcp.apps.sandboxOrigin":
-    "Optional dedicated public HTTP(S) origin for MCP Apps. Use this behind a reverse proxy or TLS terminator and proxy it only to the configured MCP Apps sandbox port. It must differ from the Control UI origin and must not serve authenticated content.",
+    "Optional dedicated public HTTP(S) origin for MCP Apps. Use this behind a reverse proxy or TLS terminator and proxy it only to the configured MCP Apps sandbox port. It must differ from the web app origin and must not serve authenticated content.",
   "mcp.apps.sandboxPort":
     "Dedicated MCP Apps sandbox listener port. Defaults to the Gateway port plus one. Set an unused port when another local service or Gateway profile already owns that port.",
   "gateway.push":
@@ -317,7 +316,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.nodes.pairing.autoApproveLocal":
     "Silently approve trusted local pairing and access upgrades (default: true); set false to trade convenience for explicit approval of every device.",
   "gateway.nodes.pairing.autoApproveCidrs":
-    "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
+    "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, web app, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
   "gateway.nodes.pairing.sshVerify":
     "SSH-verified auto-approval for first-time node-role device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only when the remote `openclaw node identity` output matches the pending device key. Set false to disable SSH verification (independent of autoApproveCidrs, which stays active); for manual-only pairing also unset autoApproveCidrs. Pass an object to override user/identity/timeoutMs/cidrs.",
   ...NODE_CAPABILITY_FIELD_HELP,

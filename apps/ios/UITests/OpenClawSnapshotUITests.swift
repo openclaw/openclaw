@@ -1053,7 +1053,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(signIn.isEnabled)
         signIn.tap()
         XCTAssertTrue(app.staticTexts[
-            "No native sign-in options are available. Open Models in the Dashboard, or update the Gateway.",
+            "No native sign-in options are available. Open Models in the web app, or update the Gateway.",
         ].waitForExistence(timeout: 5))
         app.buttons["Close"].tap()
     }

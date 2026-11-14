@@ -111,7 +111,7 @@ enum AppNavigationActions {
                 guard isCurrent(), !(error is CancellationError) else { return }
                 let alert = NSAlert()
                 alert.messageText = "Could Not Open Chat"
-                alert.informativeText = "Connect to the Gateway, then select this conversation in the Dashboard."
+                alert.informativeText = "Connect to the Gateway, then select this conversation in OpenClaw."
                 AppActivation.shared.presentAlert(alert)
             }
         }

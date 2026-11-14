@@ -301,8 +301,8 @@ function setError(message = "") {
 }
 
 const GATEWAY_STATUS_MESSAGES = new Map([
-  ["pairing-required", "Approve this device in the dashboard (Nodes)"],
-  ["credential-required", "Gateway requires a credential — open the dashboard on the gateway host"],
+  ["pairing-required", "Approve this device in OpenClaw (Nodes)"],
+  ["credential-required", "Gateway requires a credential — open OpenClaw on the gateway host"],
   ["tls-failure", "Gateway TLS trust failed — check the certificate fingerprint"],
 ]);
 
@@ -820,7 +820,7 @@ function applyChatEvent(payload) {
     if (activeReply.textIncomplete) {
       elements.reply.classList.add("has-error");
       elements.replyState.textContent = "Incomplete";
-      elements.replyError.textContent = "Reply text is incomplete. Open the dashboard to recover it.";
+      elements.replyError.textContent = "Reply text is incomplete. Open OpenClaw to recover it.";
     } else {
       elements.replyState.textContent = "";
     }
@@ -1315,7 +1315,7 @@ async function showDashboard() {
   try {
     await invoke("quickchat_show_dashboard");
   } catch (error) {
-    sendError = friendlyError(error, "Could not open the dashboard.");
+    sendError = friendlyError(error, "Could not open OpenClaw.");
     renderStatus();
   }
 }

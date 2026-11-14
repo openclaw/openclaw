@@ -381,7 +381,7 @@ struct SettingsHubTests {
 
     @Test(arguments: [
         (404, "text/plain", "Not Found", false),
-        (503, "text/plain", "Control UI assets are being prepared. Try again shortly.", false),
+        (503, "text/plain", "Web app assets are being prepared. Try again shortly.", false),
         (404, "text/html", "<html><body>Sign in</body></html>", true),
         (200, "text/plain", "ready", true),
     ])

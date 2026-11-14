@@ -194,7 +194,7 @@ export async function prepareProviderChannelLogin(params: {
     return {
       status: "reply",
       reply: {
-        text: "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.",
+        text: "Provider login requires a private chat or the OpenClaw app. Open a private chat with OpenClaw and send `/login` there.",
       },
     };
   }
@@ -473,11 +473,11 @@ export async function runProviderChannelLoginFlow(params: {
 
 function formatProviderLoginControlUiHandoff(choice: ProviderChannelLoginChoice): string {
   if (choice.mode === "setup") {
-    return `${choice.label} needs provider setup. Open Control UI → Models → Configure Models, then choose “${choice.label}”.`;
+    return `${choice.label} needs provider setup. In the OpenClaw app, open Models → Configure Models, then choose “${choice.label}”.`;
   }
   return choice.mode === "secret"
-    ? `${choice.label} needs secure input that chat must not store. Open Control UI → Models → Connect provider, then choose “${choice.label}”.`
-    : `${choice.label} needs provider sign-in. Open Control UI → Models → Connect provider, then choose “${choice.label}”.`;
+    ? `${choice.label} needs secure input that chat must not store. In the OpenClaw app, open Models → Connect provider, then choose “${choice.label}”.`
+    : `${choice.label} needs provider sign-in. In the OpenClaw app, open Models → Connect provider, then choose “${choice.label}”.`;
 }
 
 export function buildProviderLoginChoicesReply(
@@ -506,7 +506,7 @@ export function buildProviderLoginChoicesReply(
       text:
         resolution.status === "providers"
           ? "No OAuth sign-in providers are available. Use /login <provider> for other connection options."
-          : "No provider connections are available. Enable a provider plugin in Control UI → Models.",
+          : "No provider connections are available. Enable a provider plugin under Models in the OpenClaw app.",
     };
   }
   const heading =

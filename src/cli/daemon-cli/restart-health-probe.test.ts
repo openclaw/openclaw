@@ -228,7 +228,7 @@ describe("restart health", () => {
     });
     expect(snapshot.waitOutcome).toBe(scenario.outcome);
     expect(snapshot.protocolMismatch).toBe(
-      "protocol mismatch: Control UI v5, Gateway v4, connection check min v3",
+      "protocol mismatch: Web app v5, Gateway v4, connection check min v3",
     );
     expect(snapshot.authenticationError).toBeUndefined();
     expect(sleep).not.toHaveBeenCalled();

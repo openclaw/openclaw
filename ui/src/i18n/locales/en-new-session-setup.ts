@@ -200,7 +200,7 @@ const enNewSessionSetup = {
     searchProjects: "Search projects",
     githubProjects: "GitHub",
     githubTokenHint:
-      "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",
+      "No GitHub account is configured for the web app or Gateway. Only public GitHub results are shown.",
     cloneProject: "Clone",
     recentFolders: "Recent",
     what: "What",

@@ -217,7 +217,7 @@ describe("pending Gateway credentials", () => {
         ok: false,
         error: {
           code: "UNAVAILABLE",
-          message: "protocol mismatch: Control UI updated; reload this page to continue",
+          message: "protocol mismatch: OpenClaw updated; reload this page to continue",
           details: {
             code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
             gatewayBuildId: "replacement-build",

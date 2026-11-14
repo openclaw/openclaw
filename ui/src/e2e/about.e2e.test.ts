@@ -37,7 +37,7 @@ suite.define(() => {
       const aboutLink = page.getByRole("link", { name: "About", exact: true });
       await expectAttribute(aboutLink, "aria-current").toBe("page");
 
-      const ui = page.locator('dl.about-build__facts[aria-label="Control UI build details"]');
+      const ui = page.locator('dl.about-build__facts[aria-label="Web app build details"]');
       const gatewayFacts = page.locator('dl.about-build__facts[aria-label="Gateway"]');
       const fact = (list: typeof ui, term: string) =>
         list.locator("dt", { hasText: term }).locator("xpath=following-sibling::dd[1]");

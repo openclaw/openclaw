@@ -218,11 +218,11 @@ it.each([
       message: "protocol mismatch",
       details: { ...protocolDetails, code: "\tPROTOCOL_MISMATCH\n" },
     },
-    "protocol mismatch: Control UI v5, Gateway v4",
+    "protocol mismatch: Web app v5, Gateway v4",
   ],
   [
     { message: "protocol mismatch", details: { ...protocolDetails, minimumProbeProtocol: 4 } },
-    "protocol mismatch: Control UI v5, Gateway v4, connection check min v4",
+    "protocol mismatch: Web app v5, Gateway v4, connection check min v4",
   ],
 ])("formats structured and padded connect details %j", (input, message) => {
   expect(formatError(input)).toBe(message);

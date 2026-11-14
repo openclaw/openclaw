@@ -2852,7 +2852,7 @@ describe("codex command", () => {
       await expectCommand(
         admin
           ? "Codex permissions set to full access."
-          : "Full Codex permissions require operator.admin. Choose Admin in the Control UI permission picker, or use an admin-authenticated CLI.",
+          : "Full Codex permissions require operator.admin. Choose Admin in the permission picker in the OpenClaw app, or use an admin-authenticated CLI.",
         "permissions yolo",
         {},
         {

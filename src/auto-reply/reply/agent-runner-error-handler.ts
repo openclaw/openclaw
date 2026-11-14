@@ -206,7 +206,7 @@ export async function handleAgentExecutionError(params: {
     );
     takePendingLifecycleTerminal().emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? "⚠️ Couldn't switch models. Choose another model in the Control UI, then try again."
+      ? "⚠️ Couldn't switch models. Choose another model in the OpenClaw app, then try again."
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
         ? "⚠️ Agent failed before reply: model switch could not be completed. " +
           "The requested model may be temporarily unavailable. Please try again shortly."

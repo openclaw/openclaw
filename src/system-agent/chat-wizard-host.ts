@@ -454,7 +454,7 @@ export class ChatWizardHost {
     }
     const warning = [
       "Before we start: changing the Gateway port, bind address, or auth credential requires a Gateway restart to apply.",
-      "That restart may disconnect this chat, and you may need to sign in to the Control UI again with the new address or credential.",
+      "That restart may disconnect this chat, and you may need to sign in to OpenClaw again with the new address or credential.",
     ].join(" ");
     return { ...result, text: [warning, result.text].filter(Boolean).join("\n\n") };
   }

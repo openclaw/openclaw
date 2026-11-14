@@ -408,7 +408,7 @@ it.each(["document", "published", "listener"] as const)(
       await config.refresh();
       expect(links()).toEqual([]);
       expect(runtime.errors).toContainEqual(
-        diagnostic("Native plugin assets must be served by this Control UI Gateway."),
+        diagnostic("Native plugin assets must be served by this web app’s Gateway."),
       );
       modules = [];
       await config.refresh();
@@ -488,11 +488,11 @@ it.each([
   const loads = scenario === "base path" || scenario === "public HTTP";
   const error =
     scenario === "cross-origin"
-      ? "Native plugin UI requires the Control UI served by the connected Gateway. Open https://remote.example and reconnect there."
+      ? "Native plugin UI requires the web app served by the connected Gateway. Open https://remote.example and reconnect there."
       : scenario === "no grant"
         ? "Native plugin asset grant unavailable: review"
         : scenario === "authenticated HTTP"
-          ? "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback dashboard."
+          ? "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback address."
           : null;
   vi.stubGlobal("isSecureContext", secure);
   const request = vi.fn(async (method: string, _params: unknown) =>

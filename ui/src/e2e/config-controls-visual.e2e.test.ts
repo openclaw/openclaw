@@ -316,7 +316,7 @@ suite.define(() => {
         await expect
           .poll(() =>
             section
-              .getByRole("switch", { name: "Open links in Control UI browser", exact: true })
+              .getByRole("switch", { name: "Open links in the built-in browser", exact: true })
               .count(),
           )
           .toBe(0);
@@ -390,7 +390,7 @@ suite.define(() => {
 
           const section = await openBrowserSettings(page, suite.server.baseUrl);
           const preference = section.getByRole("switch", {
-            name: "Open links in Control UI browser",
+            name: "Open links in the built-in browser",
             exact: true,
           });
           await preference.waitFor();

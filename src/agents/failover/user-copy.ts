@@ -42,13 +42,13 @@ import type { FailoverClassification, FailoverReason } from "./signal.js";
 const RATE_LIMIT_ERROR_USER_MESSAGE =
   "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
-  "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+  "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.";
 export const TLS_CERTIFICATE_ERROR_USER_TEXT =
-  "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+  "Couldn't connect securely to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
 export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
   "Another sign-in is still in progress. Wait a moment, then try again.";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
-  "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
+  "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.";
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
   code === "model_chat_unsupported"
     ? MODEL_CHAT_UNSUPPORTED_TEXT
@@ -387,7 +387,7 @@ export function renderSanitizedUserFacingText(
 }
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+  "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
 
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
@@ -397,7 +397,7 @@ const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
-  "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.";
+  "⚠️ This model was not found. Choose another model in the OpenClaw app or run `openclaw configure`.";
 
 const PROVIDER_REQUEST_COPY = {
   provider_authentication_error: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
@@ -608,11 +608,11 @@ export function renderMissingApiKeyReplyCopy(params?: {
     return null;
   }
   if (provider === "openai" && params?.providerGuidance) {
-    return "⚠️ OpenAI needs a different sign-in for this model. Open Models in the Control UI or run `openclaw configure` to choose how to connect.";
+    return "⚠️ OpenAI needs a different sign-in for this model. Open Models in the OpenClaw app or run `openclaw configure` to choose how to connect.";
   }
   return provider === "openai"
-    ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`."
-    : "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.";
+    ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the OpenClaw app or run `openclaw configure`."
+    : "⚠️ This AI service isn't set up yet. Sign in under Models in the OpenClaw app or run `openclaw configure`.";
 }
 
 const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
@@ -633,10 +633,10 @@ export function renderCodexAppServerFailureCopy(message: string): string | null 
     return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
   }
   if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
+    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the OpenClaw app before trying again.";
   }
   if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
+    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the OpenClaw app before trying again.";
   }
   return null;
 }
@@ -672,7 +672,7 @@ export function renderCliTimeoutReplyCopy(params: {
   const remedy =
     mode === "no-output"
       ? "Check for a sign-in or confirmation prompt in the terminal."
-      : "Try a smaller task, or increase the task time limit in the Control UI settings.";
+      : "Try a smaller task, or increase the task time limit in the OpenClaw app settings.";
   return `⚠️ ${summary}${workStatus} ${remedy}`;
 }
 

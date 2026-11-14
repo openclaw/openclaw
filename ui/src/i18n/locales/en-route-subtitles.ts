@@ -42,7 +42,7 @@ const enRouteSubtitles = {
     infrastructure: "Manage the Gateway, browser, and device service.",
     labs: "Labs contains experimental capabilities that may change, break, or disappear between releases.",
     updates: "Release channel, automatic updates, and current update status.",
-    about: "Control UI and connected Gateway build identity.",
+    about: "Web app and connected Gateway build identity.",
     aiAgents: "Global agent defaults: skills, tools, and session.",
     modelSetup: "Connect a verified AI model",
     modelProviders: "Global model defaults and provider access for your agents.",

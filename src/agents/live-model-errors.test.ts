@@ -12,7 +12,7 @@ it("detects generic model-not-found messages", () => {
     "Model not found: openai/gpt-6",
     "model_not_found",
     "The model gpt-foo does not exist.",
-    "This model was not found. Choose another model in the Control UI.",
+    "This model was not found. Choose another model in the OpenClaw app.",
     '{"code":404,"message":"model not found"}',
     '{"error":{"message":"A stealth model. Find it here: https://example.com/model","code":404}}',
     "model: MiniMax-M2.7-highspeed not found",

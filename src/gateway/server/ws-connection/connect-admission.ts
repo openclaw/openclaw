@@ -303,19 +303,19 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const remoteIngress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
   if (remoteIngress) {
     const denied = !hasCurrentRemoteControlUiIngress(remoteIngress)
-      ? "Remote Control UI ingress is no longer active; reconnect through the current grant."
+      ? "Remote web app ingress is no longer active; reconnect through the current grant."
       : role !== "operator"
-        ? "Remote Control UI ingress only admits the operator role."
+        ? "Remote web app ingress only admits the operator role."
         : !connectParams.device
-          ? "Remote Control UI ingress requires a signed device identity."
+          ? "Remote web app ingress requires a signed device identity."
           : Object.values(connectParams.auth ?? {}).some((credential) => credential !== undefined)
-            ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
+            ? "Remote web app ingress requires a credential-free signed device; reconnect without stored credentials."
             : !roleScopesAllow({
                   role,
                   requestedScopes: scopes,
                   allowedScopes: remoteIngress.operatorScopeCeiling,
                 })
-              ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
+              ? "Remote web app scopes must stay within this grant's operator scope ceiling."
               : undefined;
     if (denied) {
       markHandshakeFailure("remote-control-ui-admission-denied");

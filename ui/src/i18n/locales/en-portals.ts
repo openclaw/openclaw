@@ -25,7 +25,7 @@ const enPortals = {
       "Check the portal URL’s DNS, TLS, and network access. For private Tailscale Serve, allow its HTTPS port in your tailnet policy. For a reverse proxy, check the dedicated portal ingress route, then retry.",
     newTabRequiredTitle: "Open this HTTP portal in a new tab",
     newTabRequiredBody:
-      "This portal uses HTTP with a different hostname or scheme from the Control UI. Open the link in a new tab so its authentication cookies work, or use an HTTPS portal for an embedded preview.",
+      "This portal uses HTTP with a different hostname or scheme from OpenClaw. Open the link in a new tab so its authentication cookies work, or use an HTTPS portal for an embedded preview.",
     ingressRequiredTitle: "Remote portal ingress required",
     ingressRequiredBody:
       "This Gateway returned a loopback URL, which points to your device. Use a browser on the computer running OpenClaw, enable managed private Tailscale Serve, or configure gateway.portals.ingress with a separate private HTTPS wildcard proxy. Forwarding only the Gateway port is not enough.",

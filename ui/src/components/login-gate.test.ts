@@ -155,7 +155,7 @@ describe("login gate failure recovery", () => {
     expect(failure.dataset.kind).toBe("trusted-proxy");
     expectText(failure, "failure-raw").toBe("unauthorized");
     expect(failure.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
-    expect(steps).toContain("Open the dashboard through the sign-in proxy");
+    expect(steps).toContain("Open OpenClaw through the sign-in proxy");
     expect(part(failure, "failure-docs").getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
     );

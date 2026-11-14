@@ -119,7 +119,7 @@ final class ChatModelSignInModel {
                 if self.sessionID == id { self.sessionID = nil }
                 self
                     .message =
-                    String(localized: "Sign-in could not start. Refresh the options or use Models in the Dashboard.")
+                    String(localized: "Sign-in could not start. Refresh the options or use Models in the web app.")
                 throw error
             } catch let error as GatewayNodeSessionRequestError {
                 if self.sessionID == id { self.sessionID = nil }
@@ -351,7 +351,7 @@ struct OpenClawChatModelSignInSheet: View {
                 }.disabled(self.model.busy)
             }
             if self.model.authStatus?.loginOptions.isEmpty == true {
-                Text("No native sign-in options are available. Open Models in the Dashboard, or update the Gateway.")
+                Text("No native sign-in options are available. Open Models in the web app, or update the Gateway.")
                     .font(OpenClawChatTypography.callout)
             }
         }

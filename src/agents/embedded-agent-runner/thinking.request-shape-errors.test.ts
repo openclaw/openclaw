@@ -6,7 +6,7 @@ import { castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import { wrapAnthropicStreamWithRecovery } from "./thinking.js";
 
 const genericizedProviderError =
-  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
+  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the OpenClaw app.";
 const unsupportedThinkingParamMessage =
   '"thinking.type.disabled" is not supported for this model. Use "thinking.type.between_tools" for the lowest thinking setting, or "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.';
 

@@ -87,7 +87,7 @@ pub(crate) fn native_auth_initialization_script(
 ) -> Result<String, String> {
     if request.transport == "direct" && request.tls_fingerprint.is_some() {
         return Err(
-            "The desktop dashboard cannot securely verify a pinned Gateway TLS certificate. \
+            "The desktop app cannot securely verify a pinned Gateway TLS certificate. \
              Connect using Remote over SSH instead."
                 .to_string(),
         );
@@ -449,7 +449,7 @@ impl NavigationState {
         if loaded {
             // A loaded document is not proof of authenticated Gateway health.
             snapshot.phase = "remoteDashboard";
-            snapshot.status = "Remote dashboard".to_string();
+            snapshot.status = "Remote Gateway".to_string();
         }
         self.remote_snapshot = Some(snapshot.clone());
         Some(snapshot)
@@ -557,7 +557,7 @@ impl NavigationState {
             return if previous.generation == self.watch_generation {
                 Ok(())
             } else {
-                Err("Another connection now owns the dashboard.".to_string())
+                Err("Another connection is now using this window.".to_string())
             };
         }
         // Remote page callbacks retain their captured owner generation. Only
@@ -647,7 +647,7 @@ impl NavigationState {
 
     fn prepare_dashboard_url(&mut self, target: &str) -> Result<Url, String> {
         let mut url =
-            Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
+            Url::parse(target).map_err(|_| "The Gateway returned an invalid URL.".to_string())?;
         if self.onboarding_pending {
             // Setup owns inference before chat; preserve Gateway base paths and fragment auth.
             // Saved first-run links may use either marker; new links use explicit.
@@ -661,7 +661,7 @@ impl NavigationState {
                 )
             };
             url.path_segments_mut()
-                .map_err(|_| "Dashboard returned an invalid URL.".to_string())?
+                .map_err(|_| "The Gateway returned an invalid URL.".to_string())?
                 .pop_if_empty()
                 .extend(path);
             let existing_query = url
@@ -998,8 +998,8 @@ impl DesktopState {
             .navigation
             .lock()
             .map_err(|_| {
-                "OpenClaw is installed, but preparing the Gateway dashboard failed: \
-                 Dashboard navigation lock is unavailable."
+                "OpenClaw is installed, but preparing the window failed: \
+                 the navigation lock is unavailable."
                     .to_string()
             })?
             .mark_onboarding_pending();
@@ -1013,7 +1013,7 @@ impl DesktopState {
         })?;
         self.finish_local_connection(app, cli, ready, false)
             .map_err(|error| {
-                format!("OpenClaw is installed, but opening the Gateway dashboard failed: {error}")
+                format!("OpenClaw is installed, but opening it failed: {error}")
             })
     }
 
@@ -1319,7 +1319,7 @@ impl DesktopState {
                         Ok(snapshot)
                     })
                 })
-                .ok_or_else(|| "Another connection now owns the dashboard.".to_string())??;
+                .ok_or_else(|| "Another connection is now using this window.".to_string())??;
             drop(navigation);
             state.update_tray(&snapshot);
             Ok(snapshot)
@@ -1373,7 +1373,7 @@ impl DesktopState {
                         .append_pair("mode", "connectionSettings");
                     let _ = replace_main_webview(app, local, None, None);
                     Err(
-                        "Could not open the remote Gateway dashboard. Try connecting again."
+                        "Could not open the remote Gateway. Try connecting again."
                             .to_string(),
                     )
                 }
@@ -1457,7 +1457,7 @@ impl DesktopState {
                 .remote_presentation_is_current()
                 .then(|| {
                     main_window(app)?.url().map_err(|_| {
-                        "Could not retain the current dashboard. Try again.".to_string()
+                        "Could not keep the current page. Try again.".to_string()
                     })
                 })
                 .transpose()?;
@@ -1468,7 +1468,7 @@ impl DesktopState {
             } else {
                 let window = main_window(app)?;
                 let mut target = window.url().map_err(|_| {
-                    "Could not retain the current dashboard. Try again.".to_string()
+                    "Could not keep the current page. Try again.".to_string()
                 })?;
                 if self.main_window_has_local_content(&window)
                     && (navigation.remote_dashboard
@@ -1503,7 +1503,7 @@ impl DesktopState {
                 }
                 Ok(())
             })
-            .unwrap_or_else(|| Err("Another connection now owns the dashboard.".to_string()))
+            .unwrap_or_else(|| Err("Another connection is now using this window.".to_string()))
     }
 
     pub(crate) fn return_from_connection_settings(&self, app: &AppHandle) -> Result<bool, String> {
@@ -1512,7 +1512,7 @@ impl DesktopState {
             return Ok(false);
         };
         if self.is_quitting() || previous.generation != navigation.watch_generation {
-            return Err("The previous dashboard is no longer available.".to_string());
+            return Err("The previous page is no longer available.".to_string());
         }
         match previous.target.clone() {
             SettingsReturnTarget::SavedGateway => {
@@ -1523,16 +1523,16 @@ impl DesktopState {
                     #[cfg(target_os = "linux")]
                     if !navigation.remote_presentation_is_current() {
                         return Err(
-                            "The previous dashboard is unavailable. Retry or edit the connection."
+                            "The previous page is unavailable. Retry or edit the connection."
                                 .to_string(),
                         );
                     }
                     #[cfg(not(target_os = "linux"))]
-                    return Err("The previous dashboard is unavailable.".to_string());
+                    return Err("The previous page is unavailable.".to_string());
                 }
                 main_window(app)?
                     .navigate(url)
-                    .map_err(|_| "Could not return to the dashboard. Try again.".to_string())?;
+                    .map_err(|_| "Could not return to OpenClaw. Try again.".to_string())?;
             }
         }
         let monitor = navigation.finish_settings_return();
@@ -1561,7 +1561,7 @@ impl DesktopState {
                             previous.generation != navigation.watch_generation
                         })
                     {
-                        return Err("The dashboard is no longer available.".to_string());
+                        return Err("This window is no longer available.".to_string());
                     }
                     let ws_url = ws_url.ok_or("Select a Gateway in the desktop app first.")?;
                     let target = desktop_bridge::session_url(ws_url, session_key, agent_id)?;
@@ -1716,7 +1716,7 @@ impl DesktopState {
                     // replacement gets no further automatic retry until user intent.
                     app.state::<gateway_ws::GatewayClient>().resume_reconnect();
                     let mut snapshot = GatewaySnapshot::remote_opening();
-                    snapshot.status = "Remote dashboard".to_string();
+                    snapshot.status = "Remote Gateway".to_string();
                     state
                         .inner
                         .navigation
@@ -1896,7 +1896,7 @@ impl DesktopState {
             .navigate_document(&view, url.clone())?
         {
             view.navigate(url)
-                .map_err(|error| format!("Could not open dashboard: {error}"))?;
+                .map_err(|error| format!("Could not open OpenClaw: {error}"))?;
         }
         if reveal_window {
             tray::show_window(app);
@@ -1941,7 +1941,7 @@ impl DesktopState {
         replace_document: bool,
     ) -> Result<(), String> {
         let windows = app.state::<gateway_windows::GatewayWindows>();
-        let base = Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.")?;
+        let base = Url::parse(target).map_err(|_| "The Gateway returned an invalid URL.")?;
         if dashboard {
             if !windows
                 .primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)?
@@ -3099,7 +3099,7 @@ pub(crate) fn replace_dashboard_webview(
     let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
     let script = bridge
         .select(app, &url, true)?
-        .ok_or("Could not prepare the dashboard.")?;
+        .ok_or("Could not prepare the window.")?;
     replace_main_webview_for_target(
         app,
         url,
@@ -3137,13 +3137,13 @@ fn replace_main_webview_for_target(
     }
     let size = window
         .inner_size()
-        .map_err(|error| format!("Could not measure the dashboard: {error}"))?;
+        .map_err(|error| format!("Could not measure the window: {error}"))?;
     // Replace only the dashboard document, retaining the native window, tray and geometry.
     if let Some(previous) = previous {
         native_browser_platform::detach_surface(&previous)?;
         previous
             .close()
-            .map_err(|error| format!("Could not replace the dashboard: {error}"))?;
+            .map_err(|error| format!("Could not replace the page: {error}"))?;
     }
     let browser_app = app.clone();
     let document_token = app
@@ -3241,7 +3241,7 @@ fn replace_main_webview_for_target(
             window_chrome::observe_history(&view);
             Ok(view)
         })
-        .map_err(|error| format!("Could not open the dashboard: {error}"))?;
+        .map_err(|error| format!("Could not open OpenClaw: {error}"))?;
     if let Some(registration) = startup_registration {
         registration.start(view.clone(), move |view| {
             dashboard_document_ready(view, readiness_token.as_deref(), remote_generation);
@@ -3341,7 +3341,7 @@ async fn close_connection_settings(
         if state.return_from_connection_settings(&app)? {
             Ok(())
         } else {
-            Err("The previous dashboard is unavailable. Retry or edit the connection.".to_string())
+            Err("The previous page is unavailable. Retry or edit the connection.".to_string())
         }
     })
 }

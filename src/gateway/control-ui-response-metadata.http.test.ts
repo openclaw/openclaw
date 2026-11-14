@@ -61,28 +61,28 @@ const RESPONSE_CASES: ResponseCase[] = [
   {
     path: "/root-invalid",
     root: { kind: "invalid", path: "/missing/界" },
-    body: "Control UI assets not found at /missing/界. Build them with `pnpm ui:build` (auto-installs UI deps), or update gateway.controlUi.root.",
+    body: "Web app assets not found at /missing/界. Build them with `pnpm ui:build` (auto-installs UI deps), or update gateway.controlUi.root.",
   },
   {
     path: "/root-preparing",
     root: { kind: "preparing" },
-    body: "Control UI assets are being prepared. Try again shortly.",
+    body: "Web app assets are being prepared. Try again shortly.",
     headers: { "cache-control": "no-store", "retry-after": "1" },
   },
   {
     path: "/root-failed",
     root: { kind: "failed" },
-    body: "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`.",
+    body: "Web app assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`.",
   },
   {
     path: "/root-missing",
     root: { kind: "missing" },
-    body: "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
+    body: "Web app assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
   },
   {
     path: "/root-disappeared",
     root: { kind: "resolved", path: "/openclaw-test/missing-control-ui-root" },
-    body: "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
+    body: "Web app assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
   },
 ];
 

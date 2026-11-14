@@ -224,7 +224,7 @@ class ChatCompletedWorkLayoutTest {
     showToolResults(listOf(original))
     composeRule.onNodeWithText("Agent browser").assertIsDisplayed()
     capture("browser-unavailable")
-    composeRule.onNodeWithText("Browser view unavailable. Update your Gateway and use its bundled Control UI.").assertIsDisplayed()
+    composeRule.onNodeWithText("Browser view unavailable. Update your Gateway and use its bundled web app.").assertIsDisplayed()
     composeRule.onNodeWithContentDescription("Control browser").assertIsNotEnabled()
     val reader = composeRule.onNode(hasScrollToIndexAction())
     val boundsWithBrowser = reader.getUnclippedBoundsInRoot()

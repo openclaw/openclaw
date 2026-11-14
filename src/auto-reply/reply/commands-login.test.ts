@@ -33,7 +33,7 @@ await import("./commands-core.js");
 await import("./commands-handlers.runtime.js");
 
 const privateChatRequired =
-  "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.";
+  "Provider login requires a private chat or the OpenClaw app. Open a private chat with OpenClaw and send `/login` there.";
 const ownerRequired =
   "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.";
 const refreshedMessage = "Sign-in status refreshed. Send /models to see available models.";
@@ -372,7 +372,7 @@ it.each(["dispatcher-less", "public", "owner-less"] as const)(
     }
     const message = {
       "dispatcher-less":
-        "OpenAI login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send `/login openai/openai-device-code` again.",
+        "OpenAI login needs a live private response path so the code can be shown before it expires. Use the OpenClaw app or a private chat and send `/login openai/openai-device-code` again.",
       public: privateChatRequired,
       "owner-less":
         "No chat owner is configured. Ask the OpenClaw owner to add your chat account to `commands.ownerAllowFrom` in the OpenClaw configuration, then send `/login` again.",

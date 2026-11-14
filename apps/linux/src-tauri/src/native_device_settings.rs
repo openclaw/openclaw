@@ -15,7 +15,7 @@ fn panel_url(base: &tauri::Url, panel: &str) -> Result<Option<tauri::Url>, Strin
     url.set_query(None);
     url.set_fragment(None);
     url.path_segments_mut()
-        .map_err(|_| "The Gateway dashboard URL is invalid.")?
+        .map_err(|_| "The Gateway URL is invalid.")?
         .pop_if_empty()
         .extend(path);
     Ok(Some(url))
@@ -29,7 +29,7 @@ async fn open_panel(app: &AppHandle, panel: &str, token: String) -> Result<Value
         let result = (|| {
             let view = current_app
                 .get_webview("main")
-                .ok_or("Dashboard unavailable.")?;
+                .ok_or("Main window unavailable.")?;
             let document = current_app
                 .state::<NativeBrowserBridgeState>()
                 .authorize(&view, &token)

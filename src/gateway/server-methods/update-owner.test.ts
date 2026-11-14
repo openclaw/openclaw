@@ -429,7 +429,7 @@ it.each([false, true])(
     expect(notice).toHaveBeenLastCalledWith(
       expect.objectContaining({
         message:
-          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
       }),
       expect.any(Object),
     );

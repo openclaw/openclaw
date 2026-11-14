@@ -230,7 +230,7 @@ pub fn build(
         .item(&crate::gateway_windows::menu(app.handle())?)
         .separator()
         .text(QUICKCHAT_ID, "Quick Chat")
-        .text(OPEN_ID, "Open Dashboard")
+        .text(OPEN_ID, "Open OpenClaw")
         .text(CONNECTION_SETTINGS_ID, "Connection Settings")
         .text(CHROME_EXTENSION_ID, "Set Up Chrome Extension…")
         .text(CHECK_UPDATES_ID, "Check for Updates")

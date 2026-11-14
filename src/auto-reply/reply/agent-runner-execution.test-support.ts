@@ -83,7 +83,7 @@ const productionBuilder = vi.hoisted(() => ({
 }));
 
 export const GENERIC_RUN_FAILURE_TEXT =
-  "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+  "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
 export function makeTestModel(id: string, contextTokens: number) {
   return createModelFixture(id, id, {
     contextWindow: contextTokens,

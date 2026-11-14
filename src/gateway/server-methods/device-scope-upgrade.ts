@@ -15,7 +15,7 @@ import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.j
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 const DEVICE_REQUIRED_MESSAGE =
-  "device scope upgrade requires a paired browser identity; reopen the Control UI over HTTPS or localhost, then retry";
+  "device scope upgrade requires a paired browser identity; reopen OpenClaw over HTTPS or localhost, then retry";
 
 function readUpgradeOwner(client: GatewayClient | null): {
   deviceId: string;
@@ -161,7 +161,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
         respondError(
           respond,
           ErrorCodes.INVALID_REQUEST,
-          "Pairing was approved, but this browser's previously narrowed token still lacks the requested access. Run openclaw dashboard --json on the Gateway host for a fresh one-time owner pairing link. Open its browserUrl in this browser using the same Control UI address and Gateway URL to restore administrator access.",
+          "Pairing was approved, but this browser's previously narrowed token still lacks the requested access. Run openclaw dashboard --json on the Gateway host for a fresh one-time owner pairing link. Open its browserUrl in this browser using the same web app address and Gateway URL to restore administrator access.",
         );
         return;
       }

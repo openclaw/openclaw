@@ -632,7 +632,7 @@ suite.define(() => {
         });
         expect(await failure.getAttribute("data-kind")).toBe("trusted-proxy");
         expect(await failure.locator(".login-gate__failure-steps:visible").textContent()).toContain(
-          "Open the dashboard through the sign-in proxy, not the Gateway directly.",
+          "Open OpenClaw through the sign-in proxy, not the Gateway directly.",
         );
         expect(await failure.locator(".login-gate__failure-detail").textContent()).toContain(
           "Ask an admin to check identity headers, required-header forwarding on WebSocket upgrade requests, and your account access.",

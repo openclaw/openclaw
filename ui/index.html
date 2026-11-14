@@ -2126,7 +2126,7 @@
                   </g>
                 </g></svg
             ></span>
-            <h1 id="openclaw-mount-fallback-title">Control UI didn’t start</h1>
+            <h1 id="openclaw-mount-fallback-title">OpenClaw didn’t start</h1>
             <p id="openclaw-mount-fallback-summary">
               The page loaded, but the app didn’t start. Trying again automatically.
             </p>
@@ -2295,8 +2295,8 @@
         function showFallback() {
           if (bootSettled) return;
           title.textContent = documentLoaded
-            ? "Control UI didn’t start"
-            : "Control UI is still loading";
+            ? "OpenClaw didn’t start"
+            : "OpenClaw is still loading";
           fallback.setAttribute("role", documentLoaded ? "alert" : "status");
           setSummary(documentLoaded ? failureSummary : "The app is still downloading.");
           if (documentLoaded) retryCurrentDocument();
@@ -2383,7 +2383,7 @@
     </script>
     <script data-cfasync="false" nomodule>
       document.body.innerHTML =
-        '<main style="padding:24px;color:#f4f4f5"><h1>This browser is not supported</h1><p>Open the Control UI in an up-to-date browser, or update your system WebView.</p></main>';
+        '<main style="padding:24px;color:#f4f4f5"><h1>This browser is not supported</h1><p>Open OpenClaw in an up-to-date browser, or update your system WebView.</p></main>';
     </script>
     <script data-cfasync="false" type="module" src="/src/main.ts"></script>
   </body>

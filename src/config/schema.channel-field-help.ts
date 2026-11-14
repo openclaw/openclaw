@@ -45,7 +45,7 @@ const SHARED_CHANNEL_FIELD_HELP: Record<string, string> = {
   mediaMaxMb: "Per-attachment media limit in MiB. Channel transport limits still apply.",
   mentionPatterns: "Extra patterns that count as mentioning the agent in group chats.",
   model: "Model override for runs started from this channel.",
-  name: "Display name for this account in the Control UI and logs.",
+  name: "Display name for this account in the web app and logs.",
   network: "Outbound network settings for this channel, such as timeouts and retries.",
   proxy: "Proxy used for this channel's outbound connections.",
   reactionAllowlist:

@@ -416,7 +416,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             ErrorCodes.INVALID_REQUEST,
             `unknown session owner "${params.owner.id}". ${
               params.owner.type === "human"
-                ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the Control UI."
+                ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the OpenClaw app."
                 : "Agent owners must name a configured agent."
             }`,
           );

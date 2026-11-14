@@ -355,7 +355,7 @@ describe("renderUpdates", () => {
     const onAutomaticUpdatesChange = vi.fn();
     renderUpdates({ onAutomaticUpdatesChange });
     expect(text("Gateway version")).toContain("2026.8.1");
-    expect(text("Control UI commit")).toContain("0123456789ab");
+    expect(text("Web app commit")).toContain("0123456789ab");
     expect(
       ["Built", "Last commit"].map((title) => row(title).querySelector("time")?.dateTime),
     ).toEqual(["1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00.000Z"]);

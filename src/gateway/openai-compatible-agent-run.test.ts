@@ -570,7 +570,7 @@ describe("OpenAI-compatible agent error envelopes", () => {
       status: 502,
       error: {
         message:
-          "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+          "Couldn't connect securely to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
         type: "api_error",
         code: "CERT_REVOKED",
       },
