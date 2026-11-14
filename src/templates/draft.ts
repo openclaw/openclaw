@@ -205,7 +205,7 @@ export async function prepareTemplateDraft(params: {
       id: `cron:${job.id}`,
       kind: "automation",
       label: job.name ?? job.id,
-      detail: `${job.schedule.cron} · ${job.schedule.timezone} · ${job.enabled === false ? "Paused" : "Enabled"}`,
+      detail: `${job.schedule.cron} · ${job.schedule.timezone} · ${job.enabled === false ? "Disabled" : "Enabled"}`,
       automation: {
         message: job.message,
         schedule: job.schedule,

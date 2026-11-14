@@ -66,7 +66,7 @@ const enTemplates = {
     },
     skillsSection: "Skills",
     automations: "Automations",
-    automationPaused: "Paused",
+    automationDisabled: "Disabled",
     automationEnabled: "Enabled",
     integrations: "Plugins",
     backToTemplate: "Back to template",

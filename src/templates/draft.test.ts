@@ -77,7 +77,7 @@ describe("agent-created Template drafts", () => {
     await using prepared = await prepare();
     expect(prepared.items.find((item) => item.kind === "automation")).toMatchObject({
       label: "weekly",
-      detail: `0 9 * * 1 · UTC · ${enabled === false ? "Paused" : "Enabled"}`,
+      detail: `0 9 * * 1 · UTC · ${enabled === false ? "Disabled" : "Enabled"}`,
       automation: { enabled: enabled !== false },
       included: true,
     });
