@@ -266,14 +266,16 @@ function Provider(props: { view: MemoryImportViewProps; provider: MemoryMigratio
               : "memoryImport.providerFallback",
         )}
         actions={
-          <SettingsStatus
-            kind={props.provider.found ? "ok" : "muted"}
-            label={
-              props.provider.found
-                ? countLabel("fileCount", props.provider.items.length)
-                : t("memoryImport.notFound")
-            }
-          />
+          <Show when={!props.provider.error}>
+            <SettingsStatus
+              kind={props.provider.found ? "ok" : "muted"}
+              label={
+                props.provider.found
+                  ? countLabel("fileCount", props.provider.items.length)
+                  : t("memoryImport.notFound")
+              }
+            />
+          </Show>
         }
       >
         <Show
