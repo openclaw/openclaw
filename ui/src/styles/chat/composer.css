@@ -759,6 +759,20 @@
   background: var(--chat-composer-group-hover);
 }
 
+/* The resting microphone is the narrowest glyph in the row, so its box tucks
+   into the gap on each side to hold the row's ink rhythm. The group wash
+   paints on the actions' 30px tier, level with the send disc beside it. */
+.agent-chat__input .agent-chat__composer-actions > .chat-talk-control {
+  box-sizing: border-box;
+  height: var(--chat-composer-send-size);
+  margin-inline: var(--chat-composer-talk-tuck, 0px);
+  border-block: calc(
+      (var(--chat-composer-send-size) - var(--chat-composer-primary-surface-size)) / 2
+    )
+    solid transparent;
+  background-clip: padding-box;
+}
+
 .chat-talk-control > openclaw-tooltip {
   display: inline-flex;
 }
@@ -2130,11 +2144,20 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .agent-chat__input .chat-controls__inline-select-trigger {
   /* The chip fills the action row's box (see --chat-composer-chip-height) and
-     paints its pill one step inside it, on the same 30px tier as the primary
-     action's painted disc. */
-  border-block: 1px solid transparent;
+     paints its pill inside it, one tier below the primary action's disc. */
+  border-block: var(--chat-composer-chip-surface-inset, 1px) solid transparent;
   border-radius: var(--radius-full);
   background-clip: padding-box;
+}
+
+.agent-chat__input .chat-controls__inline-select-trigger .chat-controls__permission-icon,
+.agent-chat__input .chat-controls__inline-select-trigger .chat-controls__trigger-provider-icon,
+.agent-chat__input .chat-controls__inline-select-trigger .chat-controls__effort-zap {
+  margin-inline-start: var(--chat-composer-chip-glyph-pull, 0px);
+}
+
+.agent-chat__input .chat-controls__inline-select-trigger > .chat-controls__inline-select-chevron {
+  margin-inline-end: var(--chat-composer-chip-glyph-pull, 0px);
 }
 
 .agent-chat__composer-lead .chat-controls__permission-trigger {
@@ -2648,13 +2671,19 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-size: 9px;
 }
 
-/* The trigger's own brand mark hangs 1px below the chip icon box so its filled
-   glyph reads the same optical size as the context ring's stroked circle next
-   to it; the calc keeps the mobile touch-size raise proportional. */
+/* The trigger's own brand mark and the context ring's stroked circle beside it
+   are sized as a pair so the filled glyph and the ring read one optical size.
+   The composer owns both sizes; the fallback hangs the mark 1px below the chip
+   icon box and keeps the mobile touch-size raise proportional. */
 .chat-controls__trigger-provider-icon {
-  width: calc(var(--chat-composer-chip-icon, 16px) - 1px);
-  height: calc(var(--chat-composer-chip-icon, 16px) - 1px);
-  flex: 0 0 calc(var(--chat-composer-chip-icon, 16px) - 1px);
+  --chat-brand-icon-size: var(
+    --chat-composer-brand-icon-size,
+    calc(var(--chat-composer-chip-icon, 16px) - 1px)
+  );
+
+  width: var(--chat-brand-icon-size);
+  height: var(--chat-brand-icon-size);
+  flex: 0 0 var(--chat-brand-icon-size);
 }
 
 /* Chat uses a neutral OpenAI mark in persistent chrome. New-session deliberately
