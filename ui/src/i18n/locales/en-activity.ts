@@ -5,11 +5,6 @@ import { en } from "./en.ts";
 // diagnostic inspector does not tax every Control UI startup.
 const enActivity = {
   activity: {
-    images: {
-      failed: "Couldn’t load images. Try again.",
-      older: "Older images",
-      incomplete: "Images too large to preview here",
-    },
     pulse: {
       title: "Sessions by last activity",
       lastYear: "Last 12 months",

@@ -4002,7 +4002,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/lib/sessions/swarm-activity.integration.test.ts",
   "ui/src/lib/toast.test.ts",
   "ui/src/pages/activity/current-work.test.ts",
-  "ui/src/pages/activity/session-activity-media.test.ts",
   "ui/src/pages/activity/session-activity-view.browser.test.ts",
   "ui/src/pages/activity/tool-activity.test.ts",
   "ui/src/pages/agents-home/agents-home-page-orphans.test.ts",
