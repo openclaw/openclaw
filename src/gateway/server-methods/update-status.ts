@@ -148,6 +148,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           : undefined
         : getUpdateSchedule();
       mark("response");
+      const installOwner = lifecycle.installStatus?.status.installOwner;
       const result: UpdateStatusResult = {
         sentinel,
         ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),
@@ -155,6 +156,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         updateAvailable: getUpdateAvailable(),
         ...(effectiveChannel ? { effectiveChannel } : {}),
         ...(schedule ? { schedule } : {}),
+        ...(installOwner ? { installOwner } : {}),
       };
       respond(true, result);
     } finally {

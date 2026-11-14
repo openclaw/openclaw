@@ -6,7 +6,7 @@ import {
 } from "../../../src/infra/update-run-record.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { UpdateAvailable, UpdateInstallOwner, UpdateScheduleState } from "../api/types.ts";
 import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
@@ -102,6 +102,7 @@ export type UpdateRestartStatusResponse = {
   } | null;
   updateAvailable?: UpdateAvailable | null;
   schedule?: UpdateScheduleState;
+  installOwner?: UpdateInstallOwner;
 };
 
 type UpdateFailureCause = { step: string; detail: string };
@@ -285,6 +286,9 @@ export function projectUpdateStatusResponse(
     recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
       ? { updateAvailable: response.updateAvailable ?? null }
+      : {}),
+    ...(Object.hasOwn(response, "installOwner")
+      ? { installOwner: response.installOwner ?? null }
       : {}),
     ...(updateSchedule !== undefined
       ? {

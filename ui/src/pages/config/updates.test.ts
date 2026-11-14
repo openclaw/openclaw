@@ -3,7 +3,7 @@
 import { createRoot, createSignal, merge } from "solid-js";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { UpdateScheduleState } from "../../api/types.ts";
+import type { UpdateScheduleState, UpdateInstallOwner } from "../../api/types.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { projectUpdateSentinel } from "../../app/update-overlay-helpers.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -349,6 +349,81 @@ describe("renderUpdates", () => {
     expect(container.textContent).not.toContain("Check for updates automatically");
     renderUpdates();
     await waitForSolid(() => expect(container.textContent).not.toContain("This Mac"));
+  });
+
+  it("replaces the Gateway update action with app-managed guidance for a host-owned install", async () => {
+    const installOwner = {
+      schemaVersion: 1,
+      owner: "macos-app",
+      displayName: "OpenClaw.app",
+      updateHint: "Update OpenClaw.app to update this Gateway.",
+    } satisfies UpdateInstallOwner;
+    const onUpdateNow = vi.fn(async () => undefined);
+    renderUpdates({
+      onUpdateNow,
+      update: {
+        updateSchedule: {
+          channel: "stable",
+          autoEnabled: false,
+          install: { kind: "package" },
+          target: { kind: "package", version: "2026.8.2" },
+        },
+        updateAvailable: {
+          currentVersion: "2026.8.1",
+          latestVersion: "2026.8.2",
+          channel: "stable",
+        },
+        installOwner,
+      },
+    });
+
+    const updateRow = row("Update Gateway…");
+    expect(updateRow.querySelector("button")).toBeNull();
+    expect(updateRow.textContent).toContain("Use OpenClaw.app to update and restart this Gateway.");
+    expect(updateRow.textContent).toContain(
+      "This Gateway is managed by OpenClaw.app and updates are handled there. Update OpenClaw.app to update this Gateway.",
+    );
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (candidate) => candidate.textContent?.trim() === "Update Gateway…",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps the Gateway update action when the install is not host-owned", () => {
+    renderUpdates();
+
+    const updateRow = row("Update Gateway…");
+    expect(updateRow.querySelector("button")).not.toBeNull();
+    expect(updateRow.textContent).toContain(
+      "Install the available update and restart the Gateway.",
+    );
+  });
+
+  it("hides the recovery retry action behind app-managed guidance for a host-owned failed install", () => {
+    const installOwner = {
+      schemaVersion: 1,
+      owner: "macos-app",
+      displayName: "OpenClaw.app",
+      updateHint: "Update OpenClaw.app to update this Gateway.",
+    } satisfies UpdateInstallOwner;
+    const run = failedRun();
+    renderUpdates({
+      update: {
+        updateRun: run,
+        updateStatusBanner: { source: "read", tone: "danger", text: "The update failed to build." },
+        installOwner,
+      },
+    });
+
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (candidate) => candidate.textContent?.trim() === "Retry update",
+      ),
+    ).toBeUndefined();
+    expect(container.textContent).toContain(
+      "This Gateway is managed by OpenClaw.app and updates are handled there. Update OpenClaw.app to update this Gateway.",
+    );
   });
 
   it("renders build facts and retains policy controls across a config refresh", () => {

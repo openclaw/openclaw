@@ -48,6 +48,7 @@ export function RecordedAttempt(
   const canRetry = () =>
     !props.confirming &&
     props.canUpdate &&
+    !props.update.installOwner &&
     !props.updateBusy &&
     !props.update.updateStatusRefreshing;
   return (
@@ -114,15 +115,27 @@ export function RecordedAttempt(
                   </button>
                 </Show>
                 <Show when={failed()}>
-                  <button
-                    class="btn btn--sm primary"
-                    type="button"
-                    title={canRetry() ? "" : t("updates.adminRequiredTooltip")}
-                    disabled={!canRetry()}
-                    onClick={() => void props.onUpdateNow()}
+                  <Show
+                    when={!props.update.installOwner}
+                    fallback={
+                      <p class="settings-row__desc">
+                        {t("updates.page.managedByGatewayApp", {
+                          app: props.update.installOwner!.displayName,
+                          hint: props.update.installOwner!.updateHint,
+                        })}
+                      </p>
+                    }
                   >
-                    {t("updates.page.retryUpdate")}
-                  </button>
+                    <button
+                      class="btn btn--sm primary"
+                      type="button"
+                      title={canRetry() ? "" : t("updates.adminRequiredTooltip")}
+                      disabled={!canRetry()}
+                      onClick={() => void props.onUpdateNow()}
+                    >
+                      {t("updates.page.retryUpdate")}
+                    </button>
+                  </Show>
                 </Show>
                 <Show when={failed() && props.update.reportableUpdateFailureId}>
                   <button

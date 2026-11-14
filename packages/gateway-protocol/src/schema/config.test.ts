@@ -6,6 +6,7 @@ import {
   UpdateAvailableSchema,
   UpdateHoldParamsSchema,
   UpdateHoldResultSchema,
+  UpdateInstallOwnerSchema,
   UpdateReportParamsSchema,
   UpdateReportResultSchema,
   UpdateRunParamsSchema,
@@ -279,6 +280,12 @@ describe("update protocol schemas", () => {
             commitsBehind: 3,
           },
         },
+        installOwner: {
+          schemaVersion: 1,
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        },
       }),
     ).toBe(true);
     expect(
@@ -325,6 +332,42 @@ describe("update protocol schemas", () => {
           autoEnabled: false,
           install: { kind: "git", git: { status: "behind", commitsBehind: 0 } },
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("validates the app-managed install owner marker", () => {
+    const owner = {
+      schemaVersion: 1,
+      owner: "macos-app",
+      displayName: "OpenClaw.app",
+      updateHint: "Update OpenClaw.app to update this Gateway.",
+    };
+    expect(Value.Check(UpdateInstallOwnerSchema, owner)).toBe(true);
+    expect(
+      Value.Check(UpdateStatusResultSchema, {
+        sentinel: null,
+        updateAvailable: null,
+        schedule: { channel: "dev", autoEnabled: false },
+        installOwner: owner,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(UpdateInstallOwnerSchema, {
+        ...owner,
+        owner: "unknown-owner",
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(UpdateInstallOwnerSchema, {
+        ...owner,
+        schemaVersion: 2,
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(UpdateInstallOwnerSchema, {
+        ...owner,
+        displayName: "",
       }),
     ).toBe(false);
   });

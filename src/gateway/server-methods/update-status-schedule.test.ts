@@ -352,6 +352,31 @@ it("omits app-owned install and stale package targets from the protocol schedule
 
   expect(result.schedule).toEqual({ channel: "dev", autoEnabled: false });
   expect(result.updateAvailable).toBeNull();
+  expect(result.installOwner).toEqual(createMacosAppInstallOwner());
+});
+
+it("surfaces the app install owner on an unowned package install", async () => {
+  install.mockResolvedValue(installAt("package", "/openclaw"));
+  await lifecycle.initialize();
+
+  const result = await status(makeConfig());
+
+  expect(result.installOwner).toBeUndefined();
+});
+
+it("surfaces the app install owner on an app-owned install", async () => {
+  install.mockResolvedValue(
+    installAt("host", "/opt/OpenClaw.app/openclaw", {
+      installOwner: createMacosAppInstallOwner(),
+    }),
+  );
+  await lifecycle.initialize();
+
+  const result = await status(makeConfig());
+
+  expect(result.installOwner).toEqual(createMacosAppInstallOwner());
+  expect(result.schedule).toEqual({ channel: "dev", autoEnabled: false });
+  expect(result.updateAvailable).toBeNull();
 });
 
 it.for([false, true])(
