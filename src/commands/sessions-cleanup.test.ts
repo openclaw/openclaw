@@ -4,6 +4,7 @@ import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.j
 import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { gatewayTransportError } from "./agents.delete.test-helpers.js";
 import { sessionsCleanupLargeLabelsEntrypoint } from "./sessions-cleanup-runtime.test-support.js";
 import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
@@ -432,5 +433,19 @@ describe("sessionsCleanupCommand", () => {
         },
       ],
     });
+  });
+
+  it("keeps the canonical abort outcome instead of falling back to local cleanup", async () => {
+    const scope = new AsyncWorkScope();
+    const reason = new Error("sessions cleanup interrupted");
+    mocks.callGateway.mockImplementation(async () => {
+      scope.beginClose(reason);
+      throw gatewayTransportError("closed");
+    });
+
+    await expect(scope.run(() => cleanup({}))).rejects.toBe(reason);
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+    await scope.drain();
   });
 });
