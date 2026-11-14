@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -33,6 +33,44 @@ const deployment = read("deployment");
 const pod = mapping(deployment.getIn(["spec", "template", "spec"]));
 const gateway = named(pod.get("containers"), "gateway");
 const env = (name: string) => named(gateway.get("env"), name);
+
+it.skipIf(process.platform === "win32").each([null, "openclaw.json", "AGENTS.md"])(
+  "reports config seeding status with missing source %s",
+  (missing) => {
+    const root = tempDirs.make("openclaw-k8s-seed-");
+    const home = path.join(root, "state");
+    const config = path.join(root, "config");
+    const volume = path.join(root, "volume");
+    for (const dir of [home, config, volume]) {
+      mkdirSync(dir);
+    }
+    for (const name of ["openclaw.json", "AGENTS.md"]) {
+      if (name !== missing) {
+        writeFileSync(path.join(config, name), name);
+      }
+    }
+    const command = named(pod.get("initContainers"), "init-config").get("command");
+    if (!isSeq(command)) {
+      throw new Error("Expected an init command");
+    }
+    const result = spawnSync("sh", [
+      "-c",
+      String(command.items[2])
+        .replaceAll("/home/node/.openclaw", home)
+        .replaceAll("/config", config)
+        .replaceAll("/tmp-volume", volume),
+    ]);
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    if (missing) {
+      expect(result.status).not.toBe(0);
+    } else {
+      expect(result.status).toBe(0);
+      expect(readFileSync(path.join(home, "openclaw.json"), "utf8")).toBe("openclaw.json");
+      expect(readFileSync(path.join(home, "workspace", "AGENTS.md"), "utf8")).toBe("AGENTS.md");
+    }
+  },
+);
 
 it("includes every shipped manifest in kustomization", () => {
   const resources = read("kustomization").get("resources");
