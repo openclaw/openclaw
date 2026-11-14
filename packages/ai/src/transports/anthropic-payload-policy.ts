@@ -124,14 +124,24 @@ export function isDirectAnthropicModel(
   model: { provider?: unknown; baseUrl?: string },
   env: { ANTHROPIC_BASE_URL?: string } = process.env,
 ): boolean {
+  return (
+    normalizeOptionalLowercaseString(model.provider) === "anthropic" &&
+    isDirectAnthropicEndpoint(model, env)
+  );
+}
+
+/** The request goes to api.anthropic.com itself, whatever the configured provider id. */
+export function isDirectAnthropicEndpoint(
+  model: { provider?: unknown; baseUrl?: string },
+  env: { ANTHROPIC_BASE_URL?: string } = process.env,
+): boolean {
   const baseUrl = model.baseUrl?.trim() || env.ANTHROPIC_BASE_URL?.trim();
   const endpointModel = baseUrl === model.baseUrl ? model : { ...model, baseUrl };
   const endpointClass = resolveProviderEndpoint(endpointModel).endpointClass;
   return (
-    normalizeOptionalLowercaseString(model.provider) === "anthropic" &&
-    (endpointClass === "anthropic-public" ||
-      (endpointClass === "default" &&
-        (!baseUrl || URL.parse(baseUrl)?.hostname === "api.anthropic.com")))
+    endpointClass === "anthropic-public" ||
+    (endpointClass === "default" &&
+      (!baseUrl || URL.parse(baseUrl)?.hostname === "api.anthropic.com"))
   );
 }
 
