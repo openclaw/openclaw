@@ -19,6 +19,7 @@ import * as packageRoot from "../infra/openclaw-root.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
+import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
@@ -32,8 +33,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
@@ -137,8 +136,11 @@ async function legacyAgentFixture(postCore: boolean, version = "2026.9.2") {
   fs.mkdirSync(root, { recursive: true });
   writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: VERSION });
   vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
-  const agent = openOpenClawAgentDatabase({ agentId: "main" });
-  const pathname = agent.path;
+  const pathname = createLegacyDatabaseFixture({
+    env: process.env,
+    eventsBySession: {},
+    schemaVersion: 19,
+  });
   const run = createUpdateRun({
     trigger: "cli",
     before: { version },
@@ -154,12 +156,8 @@ async function legacyAgentFixture(postCore: boolean, version = "2026.9.2") {
   await closeOpenClawAgentDatabasesAsync();
   await closeStateDatabaseForTest();
   withDatabase(pathname, false, (db) => {
-    restoreEmptyV21StorageForHistoricalFixture(db);
-    removeCanonicalValidationFromHistoricalAgentFixture(db);
     db.exec(`
       DROP TABLE session_transcript_cold_archives;
-      PRAGMA user_version = 19;
-      UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
       INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at)
         VALUES ('upgrade-proof','retained','{"keep":true}',NULL,7);
     `);
