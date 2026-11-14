@@ -68,6 +68,20 @@ const planningEntriesByProjection = new WeakMap<
   { configs: WeakMap<OpenClawConfig, Map<string, PlanningEntries>> }
 >();
 
+// Keep the projection-lifetime listener outside the request's snapshot closure.
+function planningEntriesOwner(projection: SessionRowProjection) {
+  let owner = planningEntriesByProjection.get(projection);
+  if (!owner) {
+    owner = { configs: new WeakMap() };
+    planningEntriesByProjection.set(projection, owner);
+    const captured = owner;
+    projection.onSelectionChange(() => {
+      captured.configs = new WeakMap();
+    });
+  }
+  return owner;
+}
+
 // Retain neutral displays within the row owner's lifetime; visibility is applied afterward.
 const projectedHosts = new WeakMap<
   SessionRowProjection,
@@ -98,15 +112,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     throw new Error("Prepare current session metadata before capturing catalog entries");
   }
   const deletions = getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath());
-  let planningOwner = planningEntriesByProjection.get(params.projection);
-  if (!planningOwner) {
-    planningOwner = { configs: new WeakMap() };
-    planningEntriesByProjection.set(params.projection, planningOwner);
-    const owner = planningOwner;
-    params.projection.onSelectionChange(() => {
-      owner.configs = new WeakMap();
-    });
-  }
+  const planningOwner = planningEntriesOwner(params.projection);
   const cachedPlanning =
     params.sessionKeys === undefined
       ? planningOwner.configs.get(params.cfg)?.get(params.fallbackAgentId)
