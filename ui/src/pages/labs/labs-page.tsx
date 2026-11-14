@@ -91,7 +91,8 @@ export function LabsPage() {
     return (
       state.connected &&
       !state.configLoading &&
-      !state.lastError &&
+      // A validation refusal leaves the accepted preference unchanged.
+      (!state.lastError || state.configAutoSaveStatus === "rejected") &&
       state.configSnapshot?.valid !== false &&
       currentConfigObject(state) !== null &&
       editableConfig() !== null
