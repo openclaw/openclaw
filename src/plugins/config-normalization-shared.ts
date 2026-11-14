@@ -36,6 +36,8 @@ export type NormalizedPluginsConfig = {
         hasAllowedModelsConfig?: boolean;
         hasAllowedCompletionModelsConfig?: boolean;
       };
+      /** plugins.entries.<id>.memory.sidecar === true. */
+      memorySidecar?: boolean;
       config?: unknown;
     }
   >;
@@ -160,10 +162,25 @@ function normalizePluginEntries(
         normalizePluginModelConfig(entry.subagent, "subagent") ??
         normalized[normalizedKey]?.subagent,
       llm: normalizePluginModelConfig(entry.llm, "llm") ?? normalized[normalizedKey]?.llm,
+      memorySidecar:
+        isRecord(entry.memory) && typeof entry.memory.sidecar === "boolean"
+          ? entry.memory.sidecar
+          : normalized[normalizedKey]?.memorySidecar,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }
   return normalized;
+}
+
+/**
+ * Reads plugins.entries.<id>.memory.sidecar for a manifest id. Entries are keyed by the canonical
+ * policy id, so a mixed-case manifest id must be looked up through that key.
+ */
+export function isMemorySidecarEnabled(
+  config: Pick<NormalizedPluginsConfig, "entries">,
+  pluginId: string,
+): boolean {
+  return config.entries[normalizePluginPolicyId(pluginId)]?.memorySidecar === true;
 }
 
 /** Normalizes plugin config while allowing callers to resolve aliases first. */

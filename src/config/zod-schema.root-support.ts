@@ -184,6 +184,15 @@ export const PluginEntrySchema = z.strictObject({
       allowAgentIdOverride: z.boolean().optional(),
     })
     .optional(),
+  memory: z
+    .strictObject({
+      /**
+       * Load this memory plugin beside the plugin selected by plugins.slots.memory. It keeps its
+       * hooks, tools and supplements; slot-owner fields of its memory capability are dropped.
+       */
+      sidecar: z.boolean().optional(),
+    })
+    .optional(),
   config: z.record(z.string(), z.unknown()).optional(),
 });
 

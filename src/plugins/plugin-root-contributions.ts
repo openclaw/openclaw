@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginActivationStateShared } from "./config-activation-shared.js";
-import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
+import {
+  isMemorySidecarEnabled,
+  normalizePluginsConfigWithResolverCore,
+} from "./config-normalization-shared.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
@@ -47,6 +50,7 @@ export function* iteratePluginRootContributions(params: {
       kind: record.kind,
       slot: memorySlot,
       selectedId: selectedMemoryPluginId,
+      sidecar: isMemorySidecarEnabled(normalizedPlugins, record.id),
     });
     if (!memoryDecision.enabled) {
       continue;

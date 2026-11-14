@@ -1,6 +1,7 @@
 /** Resolves root CLI help from process-stable manifests before plugin code loads. */
 import { collectUniqueCommandDescriptors } from "../cli/program/command-descriptor-utils.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMemorySidecarEnabled } from "./config-normalization-shared.js";
 import { normalizePluginsConfig, resolveMemorySlotDecision } from "./config-state.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import { validatePluginConfig } from "./loader-shared.js";
@@ -65,6 +66,10 @@ export async function getPluginCliCommandDescriptors(
         kind: plugin.kind,
         slot: memorySlot,
         selectedId: selectedMemoryPluginId,
+        // The normalized selector maps "none" to null; a disabled memory slot admits no sidecar.
+        sidecar:
+          normalizedConfig.slots.memory !== null &&
+          isMemorySidecarEnabled(normalizedConfig, plugin.id),
       });
       if (!memoryDecision.enabled) {
         continue;

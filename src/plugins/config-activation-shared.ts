@@ -166,8 +166,19 @@ export function resolveMemorySlotDecisionShared(params: {
   kind?: PluginKindLike;
   slot: string | null | undefined;
   selectedId: string | null;
+  /** plugins.entries.<id>.memory.sidecar: the operator runs this plugin beside the slot owner. */
+  sidecar?: boolean;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
   if (!(Array.isArray(params.kind) ? params.kind.includes("memory") : params.kind === "memory")) {
+    return { enabled: true };
+  }
+  // An operator-approved sidecar loads beside whichever plugin owns the slot and never takes
+  // the slot itself. It is not selected, so the registrar strips its slot-owner fields.
+  if (
+    params.sidecar === true &&
+    params.slot !== null &&
+    normalizePluginPolicyId(params.slot ?? "") !== normalizePluginPolicyId(params.id)
+  ) {
     return { enabled: true };
   }
   // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the

@@ -1,14 +1,28 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMemorySidecarEnabled } from "./config-normalization-shared.js";
 import {
+  normalizePluginsConfig,
   resolveSelectedContextEnginePluginId,
   type ContextEngineOwnerMetadata,
 } from "./config-state.js";
 import { isBundledManifestOwner } from "./manifest-owner-policy.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "./slots.js";
+
+function withoutMemoryKind(kind: PluginKind | PluginKind[] | undefined) {
+  if (kind === "memory") {
+    return undefined;
+  }
+  if (Array.isArray(kind)) {
+    const rest = kind.filter((entry) => entry !== "memory");
+    return rest.length === 0 ? undefined : rest.length === 1 ? rest[0] : rest;
+  }
+  return kind;
+}
 
 export async function applySlotSelectionForPlugin(
   config: OpenClawConfig,
@@ -58,6 +72,10 @@ export async function applySlotSelectionForPlugin(
     );
   }
 
+  // An operator-approved memory sidecar is enabled beside the slot owner; it never takes the slot.
+  if (isMemorySidecarEnabled(normalizePluginsConfig(config.plugins), plugin.id)) {
+    selectedKind = withoutMemoryKind(selectedKind);
+  }
   return applyExclusiveSlotSelection({
     config,
     selectedId: plugin.id,

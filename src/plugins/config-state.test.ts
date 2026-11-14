@@ -6,6 +6,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { isMemorySidecarEnabled } from "./config-normalization-shared.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -419,6 +420,54 @@ describe("resolveMemorySlotDecision", () => {
       selectedId: null,
     });
     expect({ enabled: result.enabled, selected: result.selected }).toMatchObject(expected);
+  });
+
+  it.each([
+    ["memory-core", null, { enabled: true, selected: undefined }],
+    [undefined, "memory-core", { enabled: true, selected: undefined }],
+    [undefined, null, { enabled: true, selected: undefined }],
+    ["memory-plugin", null, { enabled: true, selected: true }],
+    [null, null, { enabled: false, selected: undefined }],
+  ] as const)(
+    "loads an approved sidecar beside slot=%s selected=%s",
+    (slot, selectedId, expected) => {
+      const result = resolveMemorySlotDecision({
+        id: "memory-plugin",
+        kind: "memory",
+        slot,
+        selectedId,
+        sidecar: true,
+      });
+      expect({ enabled: result.enabled, selected: result.selected }).toMatchObject(expected);
+    },
+  );
+
+  it("normalizes plugins.entries.<id>.memory.sidecar", () => {
+    const normalized = normalizePluginsConfig({
+      entries: {
+        "memory-plugin": { memory: { sidecar: true } },
+        other: { memory: {} },
+      },
+    });
+    expect(normalized.entries["memory-plugin"]?.memorySidecar).toBe(true);
+    expect(normalized.entries.other?.memorySidecar).toBeUndefined();
+  });
+
+  it("looks up the sidecar flag of a mixed-case manifest id by its policy id", () => {
+    const normalized = normalizePluginsConfig({
+      entries: { "MiXeD-memory": { memory: { sidecar: true } } },
+    });
+    expect(Object.keys(normalized.entries)).toEqual(["mixed-memory"]);
+    expect(isMemorySidecarEnabled(normalized, "MiXeD-memory")).toBe(true);
+    expect(isMemorySidecarEnabled(normalized, "other-memory")).toBe(false);
+  });
+
+  it("ignores the sidecar flag when the slot names the plugin in another case", () => {
+    const params = { id: "MiXeD-memory", kind: "memory", slot: "mixed-memory", selectedId: null };
+    expect(resolveMemorySlotDecision({ ...params, sidecar: true })).toEqual({
+      enabled: false,
+      reason: 'memory slot set to "mixed-memory"',
+    });
   });
 });
 
