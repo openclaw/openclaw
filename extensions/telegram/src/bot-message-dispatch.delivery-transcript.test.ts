@@ -352,6 +352,31 @@ describeTelegramDispatch("dispatchTelegramMessage transcript delivery", () => {
     }
   });
 
+  it("mirrors a durable final with the confirmed post-hook text", async () => {
+    const { context } = recoveryDraft();
+    mockDefaultSessionEntry();
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["2002"],
+        visibleReplySent: true,
+        content: "Hook-rewritten answer",
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Model answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    await dispatchWithContext({ context, streamMode: "off" });
+    expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
+    expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Hook-rewritten answer",
+        deliveryMirror: expect.objectContaining({ kind: "channel-final" }),
+      }),
+    );
+  });
+
   it.each([
     "longer preview",
     "recovered current-message target",
