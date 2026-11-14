@@ -754,7 +754,6 @@ describe("CI changed Node test plan", () => {
       const pluginConfig = "test/vitest/vitest.plugins.config.ts";
       const targets = [
         "src/plugins/activation-planner.test.ts",
-        "src/plugins/manifest-registry.test.ts",
         "src/infra/retry.test.ts",
       ];
       const selected = createSelectedNodeTestShardBundles(targets, {
@@ -793,7 +792,6 @@ describe("CI changed Node test plan", () => {
   it("routes each selected test once while retaining its canonical plugin coverage", () => {
     const targets = [
       "src/plugins/activation-planner.test.ts",
-      "src/plugins/manifest-registry.test.ts",
       "src/infra/retry.test.ts",
     ];
     const routing = vi.spyOn(testProjects, "buildVitestRunPlans");

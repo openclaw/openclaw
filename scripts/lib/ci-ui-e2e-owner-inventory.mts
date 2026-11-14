@@ -437,7 +437,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "skills",
   ]),
   pageWatch(
-    "ui/src/e2e/chat-composer-capability-menu.e2e.test.ts",
     ["chat", "config", "skills"],
     ["ui/src/components/modal-dialog.tsx"],
   ),
@@ -1096,7 +1095,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch(
-    "ui/src/e2e/desktop-panel.e2e.test.ts",
     ["activity", "chat", "terminal"],
     [
       "ui/src/components/command-palette.tsx",
