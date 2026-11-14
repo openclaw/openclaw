@@ -748,7 +748,7 @@ try {
           "## Decisions\nContinue the synthetic heap investigation.",
           "## Open TODOs\nNone.",
           "## Constraints/Rules\nPreserve the synthetic session and exact identifiers.",
-          `## Pending user asks\nBegin the report with ${marker}.`,
+          "## Pending user asks\nNone; the seeded user request already completed.",
           `## Exact identifiers\n${marker}`,
         ].join("\n"),
         // A slow synthetic summary makes retained host payloads observable.
@@ -774,8 +774,14 @@ try {
       qualityDegraded: result.result?.details?.qualityDegraded,
       ...(await readGatewayMemory(admin.rpc, compactStartedAt)),
     });
-    if (result.ok !== true || result.compacted !== true) {
-      throw new Error(`Synthetic manual compaction did not complete: ${JSON.stringify(result)}`);
+    if (
+      result.ok !== true ||
+      result.compacted !== true ||
+      result.result?.details?.qualityDegraded === true
+    ) {
+      throw new Error(
+        `Synthetic manual compaction did not produce a non-degraded summary: ${JSON.stringify(result)}`,
+      );
     }
   }
   const startedAt = performance.now();
