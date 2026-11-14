@@ -5859,7 +5859,6 @@
 ["src/process/spawn-broker/worker-admission-settlement.test.ts","./worker-sender.js","7ed07f9bdec557705a53b3521189ba758fe827b569bbbfb8094e768a45233704",1]
 ["src/process/supervisor/adapters/child.secret-abort.test.ts","../../kill-tree.js","62c713cf6103e0da00760b9a21f0583dc80ca0a5ea6c1cd5516d8dfc51cca5d3",1]
 ["src/process/supervisor/adapters/child.test.ts","../../../infra/windows-encoding.js","787858b8818103a1dfb3d399878d7640e9ef0f70bfc11948ccdf99a00147889e",1]
-["src/process/supervisor/service-child-group-ownership.test.ts","../../shared/pid-alive.js","225da4abc47c2bce9b876b30d253114333947a03995ef3e0232dd1a9f83551d9",1]
 ["src/process/supervisor/supervisor.one-shot-tools.test.ts","../../agents/shell-snapshot.js","5149e79f0c1fcbfeb8cf314f7baf7e74743e527d596ec70d7779a223c3e131e1",1]
 ["src/process/supervisor/supervisor.one-shot-tools.test.ts","./adapters/child.js","9f94cf57cb39c7a422e0f033b7cd1c470a464c53e76ee8c600491fed6691e576",1]
 ["src/process/supervisor/supervisor.one-shot-tools.test.ts","./adapters/pty.js","00e634b960fa19810b8a0acd3b3268023f1cf6bad5feb2214a849f3fe82f2a49",1]
