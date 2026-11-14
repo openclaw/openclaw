@@ -39,6 +39,18 @@ function modelsText(card: ModelProviderCard): string | null {
   if (card.modelCount === 0) {
     return null;
   }
+  if (card.unknownModelCount === card.modelCount) {
+    return card.modelCount === 1
+      ? t("modelProviders.modelAvailabilityUnknown")
+      : t("modelProviders.modelsAvailabilityUnknown", { count: String(card.modelCount) });
+  }
+  if (card.unknownModelCount > 0) {
+    return t("modelProviders.modelsAvailabilityPartial", {
+      count: String(card.modelCount),
+      available: String(card.availableModelCount),
+      unknown: String(card.unknownModelCount),
+    });
+  }
   if (card.availableModelCount < card.modelCount) {
     return card.modelCount === 1
       ? t("modelProviders.modelsAvailableOne", { available: String(card.availableModelCount) })
