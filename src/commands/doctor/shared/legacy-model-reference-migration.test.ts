@@ -294,6 +294,42 @@ describe("canonical model-reference migration", () => {
     expect(warnings).toEqual([]);
   });
 
+  it("keeps Claude CLI routes for legacy refs selected outside agent scopes", () => {
+    const config: OpenClawConfig = {
+      ...defaults({ model: "openai/gpt-5.5" }),
+      hooks: { mappings: [{ model: "claude-cli/claude-sonnet-4-6" }] },
+      channels: { modelByChannel: { discord: { "123": "claude-cli/claude-opus-4-7" } } },
+    };
+    const result = normalizeRefs(config, [], []);
+
+    expect(result.hooks?.mappings?.[0]?.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.channels?.modelByChannel?.discord?.["123"]).toBe("anthropic/claude-opus-4-7");
+    for (const model of ["claude-sonnet-4-6", "claude-opus-4-7"]) {
+      expect(runtime(result, "anthropic", model, "main")?.id).toBe("claude-cli");
+    }
+    expectIdempotent(result);
+  });
+
+  it.each<[string, OpenClawConfigWithLegacyRoster]>([
+    ["the default model", defaults({ model: "anthropic/claude-opus-4-7" })],
+    ["a defaults utility model", defaults({ utilityModel: "anthropic/claude-opus-4-7" })],
+    [
+      "an agent utility model",
+      { agents: { list: [{ id: "main", utilityModel: "anthropic/claude-opus-4-7" }] } },
+    ],
+  ])("keeps an outside legacy ref when %s selects the same model directly", (_name, selected) => {
+    const config: OpenClawConfigWithLegacyRoster = {
+      ...selected,
+      channels: { modelByChannel: { discord: { "123": "claude-cli/claude-opus-4-7" } } },
+    };
+    const warnings: string[] = [];
+    const result = normalizeRefs(config, [], warnings);
+
+    expect(result.channels?.modelByChannel?.discord?.["123"]).toBe("claude-cli/claude-opus-4-7");
+    expect(runtime(result, "anthropic", "claude-opus-4-7", "main")?.id).not.toBe("claude-cli");
+    expect(warnings).toEqual([expect.stringMatching(/claude-opus-4-7 both directly/)]);
+  });
+
   it("still migrates other legacy CLI providers beside a retained Claude CLI route", () => {
     const config = defaults({
       model: selection("claude-cli/claude-opus-5", "google-gemini-cli/gemini-pro"),
