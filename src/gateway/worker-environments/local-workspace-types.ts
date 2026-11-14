@@ -26,7 +26,7 @@ export type LocalWorkspaceCustody = {
   worktreeId: string;
   projectionPath?: string;
   projectionRevision?: number;
-  prepareArchive?: (snapshot: string) => Promise<void>;
+  prepareArchive?: () => Promise<(snapshot: string) => Promise<void>>;
   canonicalPaths?: () => Promise<Set<string>>;
   synchronizeProjection?: () => Promise<void>;
   assertCurrent: () => void;

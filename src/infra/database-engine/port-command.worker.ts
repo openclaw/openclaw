@@ -28,7 +28,6 @@ import {
   inspectSqlitePortSchema,
   materializeDatabasePort,
   migrateDatabasePortSource,
-  readPostgresPortCapabilities,
   sqlitePortAllocations,
   type PortDescriptor,
   type PortVerification,
@@ -37,6 +36,7 @@ import {
   refreshPostgresPlannerStatistics,
   type PostgresPlannerStatistics,
 } from "./postgres-planner-statistics.js";
+import { readPostgresPortCapabilities } from "./postgres-port-capabilities.js";
 
 type Common = { sourcePath: string; config: OpenClawConfig };
 type Identity = { storeId: string; namespace: string };

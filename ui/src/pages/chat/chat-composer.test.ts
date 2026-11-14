@@ -233,7 +233,9 @@ it("shows actionable connecting guidance in a visible status region", () => {
   expect(button(container, t("chat.composer.stopVoiceInput")).disabled).toBe(false);
 });
 
-it("shows the same microphone guidance while dictation waits for access", async () => {
+it("shows dictation starting at once and microphone guidance only when access is slow", async () => {
+  // Load the lazy dictation phase view first, as a browser that already fetched its chunk.
+  await import("./components/composer-dictation-status.tsx");
   vi.useFakeTimers();
   openMicrophoneMock.mockReturnValue(new Promise(() => {}));
   const dismissRecovery = vi.fn();
@@ -251,10 +253,15 @@ it("shows the same microphone guidance while dictation waits for access", async 
   voiceButton(container).dispatchEvent(dictationPointer("pointerdown", 15));
   expect(dismissRecovery).toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(800);
-  expect(query('.agent-chat__talk-status[role="status"]')?.textContent).toContain(
+  const starting = query('.agent-chat__dictation-status[role="status"]');
+  expect(starting?.textContent).toBe(t("chat.composer.dictationStarting"));
+  expect(
+    starting?.querySelector('.agent-chat__voice-activity[data-status="connecting"]'),
+  ).not.toBeNull();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(query('.agent-chat__dictation-status[role="status"]')?.textContent).toBe(
     microphoneGuidance,
   );
-  expect(query(".agent-chat__dictation-phase")).toBeNull();
 });
 
 it("clears a live whitespace draft when the last rendered draft was already empty", () => {

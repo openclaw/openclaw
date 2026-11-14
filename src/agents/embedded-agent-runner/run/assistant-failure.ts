@@ -521,6 +521,10 @@ export async function handleEmbeddedAssistantFailure(input: {
         {
           reason,
           rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
+          rateLimitResetAt:
+            assistantSignal?.retryAfterMs === undefined
+              ? undefined
+              : Date.now() + assistantSignal.retryAfterMs,
           provider: activeErrorContext.provider,
           model: activeErrorContext.model,
           profileId: runtime.lastProfileId,

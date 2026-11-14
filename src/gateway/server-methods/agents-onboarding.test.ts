@@ -74,6 +74,8 @@ it("verifies primary inference before creation without using its output as the g
   activeConfig();
   vi.mocked(verifySetupInferenceConfig).mockResolvedValue(verified);
   const options = invocation();
+  let authorityCurrent = true;
+  options.hasCurrentClientAuthority = () => authorityCurrent;
   const prepared = await prepareAgentOnboarding(options, "bot-stable", {
     name: "New agent",
     onboarding: true,
@@ -87,6 +89,9 @@ it("verifies primary inference before creation without using its output as the g
   expect(cfg.agents?.entries).not.toHaveProperty("bot-stable");
   options.context.getRuntimeConfig = () => ({ ...cfg });
   expect(prepared.assertCurrent).toThrow("Gateway settings changed");
+  expect(prepared.assertAuthorityCurrent).not.toThrow();
+  authorityCurrent = false;
+  expect(prepared.assertAuthorityCurrent).toThrow("Gateway requester authority changed");
 });
 it("rejects failed inference and settings drift before persistence", async () => {
   activeConfig();

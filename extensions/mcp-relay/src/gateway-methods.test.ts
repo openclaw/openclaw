@@ -482,3 +482,19 @@ describe("MCP relay connect entrypoint", () => {
     );
   });
 });
+
+it("keeps owner consent available with definitions alone", () => {
+  const config: OpenClawConfig = {
+    gateway: {
+      auth: { mode: "token" },
+      roles: {
+        definitions: { guest: { sessions: { others: "none" }, agents: [], scopes: [] } },
+      },
+    },
+  };
+  expect(consentAuthority(relayCaller(caller(["operator.admin"]), config), undefined)).toEqual({
+    principal: { kind: "owner" },
+    principalLabel: "Gateway owner",
+    ceiling: ["operator.read", "operator.write"],
+  });
+});

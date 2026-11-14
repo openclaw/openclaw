@@ -31,6 +31,7 @@ it("detects generic model-not-found messages", () => {
   expectMessages(false, [
     "The endpoint has been deprecated. Transition to v2 API for continued access.",
     "The deployment does not exist or you do not have access.",
+    "The service ID does not exist, or the model does not match the service. Please confirm the service ID in the Online Inference Service list in the console.",
     '{"error":{"message":"Resource missing","code":404}}',
     "This model is not supported for tool calling.",
     "This model is not supported when using tool calling.",

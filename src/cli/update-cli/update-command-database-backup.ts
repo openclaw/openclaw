@@ -179,6 +179,7 @@ export async function captureUpdateDatabases(params: {
         timeoutMs: execution.updateStepTimeoutMs,
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
+        postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
       });
       if (execution.updateInstallKind === "git") {
         // Git runtime transactions have no package journal; retire these snapshots with them.
@@ -211,6 +212,13 @@ export async function captureUpdateDatabases(params: {
     throw outcome.error;
   }
   const backup = outcome.value;
+  transaction.discardDatabaseCaptures = async () => {
+    const { discardPostgresSchemaCaptures } = await import("../../snapshot/database-backup.js");
+    await discardPostgresSchemaCaptures(
+      source.config,
+      backup.databases.flatMap((entry) => (entry.exportDirectory ? [entry.exportDirectory] : [])),
+    );
+  };
   params.assertCurrent();
   const restorable =
     maintenance !== null &&

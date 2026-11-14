@@ -424,7 +424,7 @@ export function reuseLocalWorkspaceProjection(
   );
 }
 
-/** A live probe can prove there is nothing to publish; changed bytes still require quiescence. */
+/** A live probe can prove there is nothing to publish; changes need a consistent capture. */
 async function probeUnchangedLocalWorkspace(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,

@@ -470,6 +470,32 @@ describe("release validation no-push transport", () => {
     ).toBeUndefined();
   });
 
+  it("uploads only public repo E2E timeout diagnostics after failure", () => {
+    const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+    const test = job(repo, "test");
+    const run = step(test, "Run repo E2E suite");
+    const directory =
+      ".artifacts/control-ui-e2e-timeouts/repo-e2e-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}";
+    expect(run.env?.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR).toBe(directory);
+    const upload = step(test, "Upload public repo E2E timeout diagnostics");
+    expect(upload.with).toMatchObject({
+      path: `${directory}/failure-*/failure.public.json`,
+      "include-hidden-files": true,
+      "if-no-files-found": "ignore",
+      "retention-days": 7,
+    });
+    for (const failed of [false, true]) {
+      expect(
+        evaluateWorkflowCondition(upload.if ?? "true", {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed,
+        }),
+      ).toBe(failed);
+    }
+  });
+
   it("builds the sandbox image only for repo E2E consumers that require it", () => {
     const live = readWorkflow(LIVE_E2E);
     const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");

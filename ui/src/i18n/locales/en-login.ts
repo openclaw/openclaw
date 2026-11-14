@@ -52,7 +52,6 @@ const enLogin = {
       getCode: "Get a code",
       starting: "Requesting a pairing code…",
       waiting: "Waiting for approval. Keep this page open.",
-      identity: "Code {code} · Browser ID {id}",
       failure: {
         identityRequired:
           "This Gateway requires a verified identity. Use its normal identity-aware sign-in instead of browser code pairing.",
@@ -70,8 +69,6 @@ const enLogin = {
       noSecret: "no secret",
       change: "Change",
     },
-    showSecret: "Show Gateway secret",
-    hideSecret: "Hide Gateway secret",
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Show details",

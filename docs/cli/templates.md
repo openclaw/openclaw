@@ -24,8 +24,10 @@ Enable **Templates** in **Settings → Labs** before adding one. On a headless i
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
 Authoring and inspecting local Template packages do not require the Labs toggle.
 
-`templates add` accepts a ClawHub package name, a canonical local package directory,
-or `CLAW.md` with YAML frontmatter. Other source-reading commands remain local-only.
+`templates add` accepts a ClawHub Template reference (`@publisher/slug`), a canonical
+local package directory, or `CLAW.md` with YAML frontmatter. The reference uses the
+publisher's ClawHub handle, as skill references do, including for a Template whose
+package name is the unscoped slug. Other source-reading commands remain local-only.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
 path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
@@ -209,11 +211,12 @@ membership after review. File modes follow ordinary Template packaging.
 Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.
 
-Add schedules every declared automation in the new agent's main session, with
-no delivery, so its runs appear in the agent's own conversation. `CLAW.md` still
-requires `session` and accepts `delivery`, but Add does not apply either. To run
-an automation in an isolated session or post its summary to a channel, change
-it in the automation's settings after Add.
+Add preserves each automation's required `session`: `main` runs in the new
+agent's main conversation, while `isolated` runs in a separate session.
+Declared automations start with no channel delivery; Add accepts but does not
+apply `delivery`. To post a summary to a channel, configure delivery in the
+automation's settings after Add. Previously added jobs keep their saved session
+target; change those in the automation's settings if needed.
 
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add

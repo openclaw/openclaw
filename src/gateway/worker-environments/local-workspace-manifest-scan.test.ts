@@ -153,6 +153,7 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
       beginLocalWorkspaceSweepInDatabase(db);
       const pendingEpoch = beginLocalWorkspaceSweepInDatabase(db);
+      assert(pendingEpoch !== null);
       expect(readLocalWorkspaceSweepCandidates(db, pendingEpoch).packs).toEqual([]);
       expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, treeRoot))).toEqual(baseline);
       expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, nextRoot))).toEqual(expected);
@@ -182,6 +183,7 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       beginLocalWorkspaceSweepInDatabase(db);
     }
     const acceptedEpoch = beginLocalWorkspaceSweepInDatabase(db);
+    assert(acceptedEpoch !== null);
     const garbage = readLocalWorkspaceSweepCandidates(db, acceptedEpoch);
     expect(garbage.packs.length).toBeGreaterThan(0);
     deleteLocalWorkspaceSweepBatchInDatabase(db, acceptedEpoch, garbage);

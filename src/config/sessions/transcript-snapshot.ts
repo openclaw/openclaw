@@ -1,4 +1,5 @@
 import { isProxy } from "node:util/types";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { isOwnedTranscriptPayload, retainOwnedTranscriptPayload } from "./transcript-json.js";
@@ -13,7 +14,7 @@ const immutableMapMethods = {
   clear: { value: rejectTranscriptMapMutation },
 };
 
-/** Admit decoded snapshots once; internal readers share payloads and navigation. */
+/** Admit decoded history roots independently of the generic freezer's rotating memo. */
 export function freezeTranscriptSnapshot<T extends SessionTranscriptReadSnapshot>(snapshot: T): T {
   if (isOwnedTranscriptPayload(snapshot)) {
     return snapshot;
@@ -28,6 +29,11 @@ export function freezeTranscriptSnapshot<T extends SessionTranscriptReadSnapshot
       Object.freeze(value);
     } else {
       freezeTrustedJsonSnapshot(value);
+    }
+  }
+  for (const event of snapshot.events) {
+    if (isRecord(event) && event.type === "message" && isRecord(event.message)) {
+      retainOwnedTranscriptPayload(event.message);
     }
   }
   retainOwnedTranscriptPayload(snapshot);

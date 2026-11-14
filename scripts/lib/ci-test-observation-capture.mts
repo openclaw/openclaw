@@ -106,6 +106,7 @@ export function createCiTestObservationCapture(options: {
   if (!directory) {
     return undefined;
   }
+  const auditOnly = env.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY === "1";
   const startedAt = new Date().toISOString();
   const launchInputs = readCiTestLaunchInputs(directory);
   const records: string[] = [];
@@ -118,7 +119,7 @@ export function createCiTestObservationCapture(options: {
         observations: ReturnType<typeof collectTestObservations>;
         graphInputs: ReturnType<typeof graphInputs>;
         launchInputs: ReturnType<typeof readCiTestLaunchInputs>;
-        decision: ReturnType<typeof captureAdaptiveGraphDecision>;
+        decision: ReturnType<typeof captureAdaptiveGraphDecision> | undefined;
       }
     | undefined;
   const warn = () => console.warn("[adaptive-ci] observation export unavailable; tests unchanged");
@@ -185,22 +186,26 @@ export function createCiTestObservationCapture(options: {
             recordedAt,
             observations,
             launchInputs,
-            graphInputs: options.graphConfiguration
-              ? graphInputs(root, options.graphConfiguration, env)
-              : null,
-            decision: captureAdaptiveGraphDecision({
-              repositoryRoot: root,
-              observations,
-              env,
-              recordedAt,
-            }),
+            graphInputs:
+              !auditOnly && options.graphConfiguration
+                ? graphInputs(root, options.graphConfiguration, env)
+                : null,
+            decision: auditOnly
+              ? undefined
+              : captureAdaptiveGraphDecision({
+                  repositoryRoot: root,
+                  observations,
+                  env,
+                  recordedAt,
+                }),
           };
         }
         if (!preExecution) {
           throw new Error("Observation completion without inventory");
         }
         let dependencies: unknown = null;
-        if (kind === "run") {
+        // Audit-only invocations must not inherit a cached native dependency index.
+        if (kind === "run" && !auditOnly) {
           try {
             dependencies = JSON.parse(
               readBounded(path.join(options.cacheDirectory, "dependencies.json")),

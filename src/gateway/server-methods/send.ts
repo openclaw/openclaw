@@ -73,6 +73,7 @@ import {
   resolveGatewayOutboundTarget,
   resolveRequestedChannel,
 } from "./send-channel-resolution.js";
+import { authorizeMessageActionSendAgent } from "./send-role-authorization.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -194,21 +195,11 @@ export const sendHandlers: GatewayRequestHandlers = {
               if (sourceReplyOwner && !sourceReplyOwner.ok) {
                 return { ok: false, error: sourceReplyOwner.error, meta: { channel } };
               }
-              // Default-agent resolution may fail, so role-free sends must not enter this policy path.
-              if (request.action === "send" && cfg.gateway?.roles) {
-                const actionAgent =
-                  agentId ??
-                  sourceReplyOwner?.agentId ??
-                  resolveRequestedSessionAgentId(cfg, "main");
-                if (typeof actionAgent !== "string" && !actionAgent.ok) {
-                  return { ok: false, error: actionAgent.error, meta: { channel } };
-                }
-                const actionAgentId =
-                  typeof actionAgent === "string" ? actionAgent : actionAgent.agentId;
-                const agentAccessError = authorizeGatewaySessionCreation({
+              if (request.action === "send") {
+                const agentAccessError = authorizeMessageActionSendAgent({
                   cfg,
                   client,
-                  agentId: actionAgentId,
+                  agentId: agentId ?? sourceReplyOwner?.agentId,
                 });
                 if (agentAccessError) {
                   return { ok: false, error: agentAccessError, meta: { channel } };

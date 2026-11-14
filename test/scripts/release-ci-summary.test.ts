@@ -2494,57 +2494,52 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it.each(["", "ship"])(
-    "reads published empty retry metadata without granting a waiver (%s)",
-    async (laneWaiver) => {
-      const fixture = trustedMainNpmFixture();
-      const selected = expectDefined(
-        fixture.executionPlan.children.find((child) => child.key === "releaseChecksCandidate"),
-        "release checks child",
-      );
-      const jobs = [
-        {
-          name: "cross_os_release_checks / Windows / packaged upgrade",
-          status: "completed",
-          conclusion: "failure",
-        },
-        {
-          name: "cross_os_release_checks / macOS / packaged fresh",
-          status: "completed",
-          conclusion: "success",
-        },
-        { name: "Verify release checks", status: "completed", conclusion: "success" },
-      ].map((job) => Object.assign({}, fixture.parentJob, job));
-      setChildJobs(fixture, "releaseChecksCandidate", jobs).run.conclusion = "failure";
-      Object.assign(fixture.executionPlan, {
-        knownFlakyJobs: [],
-        ...(laneWaiver ? { laneWaiver } : {}),
-      });
-      fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
-      Object.assign(fixture.manifest.validationInputs, {
-        knownFlakyJobsJson: "[]",
-        ...(laneWaiver ? { laneWaiver } : {}),
-      });
-      const manifest = Object.assign(fixture.manifest, {
-        knownFlakyJobs: [],
-        automaticRetries: [],
-        executionPlanSha256: fixture.executionPlan.sha256,
-        advisoryJobs: jobs.slice(0, 2).map(({ name, status, conclusion }) => ({
-          child: selected.key,
-          job: name,
-          status,
-          conclusion,
-          policy: "advisory",
-        })),
-      });
-      const before = JSON.stringify(manifest);
-      expect(() => validateParentManifest(manifest, { runId: fixture.runId })).toThrow(
-        laneWaiver ? "no longer accepted" : "advisory jobs differ",
-      );
-      await expect(verifyFixture(fixture)).rejects.toThrow();
-      expect(JSON.stringify(manifest)).toBe(before);
-    },
-  );
+  it("reads published empty retry metadata without granting an advisory", async () => {
+    const fixture = trustedMainNpmFixture();
+    const selected = expectDefined(
+      fixture.executionPlan.children.find((child) => child.key === "releaseChecksCandidate"),
+      "release checks child",
+    );
+    const jobs = [
+      {
+        name: "cross_os_release_checks / Windows / packaged upgrade",
+        status: "completed",
+        conclusion: "failure",
+      },
+      {
+        name: "cross_os_release_checks / macOS / packaged fresh",
+        status: "completed",
+        conclusion: "success",
+      },
+      { name: "Verify release checks", status: "completed", conclusion: "success" },
+    ].map((job) => Object.assign({}, fixture.parentJob, job));
+    setChildJobs(fixture, "releaseChecksCandidate", jobs).run.conclusion = "failure";
+    Object.assign(fixture.executionPlan, {
+      knownFlakyJobs: [],
+    });
+    fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
+    Object.assign(fixture.manifest.validationInputs, {
+      knownFlakyJobsJson: "[]",
+    });
+    const manifest = Object.assign(fixture.manifest, {
+      knownFlakyJobs: [],
+      automaticRetries: [],
+      executionPlanSha256: fixture.executionPlan.sha256,
+      advisoryJobs: jobs.slice(0, 2).map(({ name, status, conclusion }) => ({
+        child: selected.key,
+        job: name,
+        status,
+        conclusion,
+        policy: "advisory",
+      })),
+    });
+    const before = JSON.stringify(manifest);
+    expect(() => validateParentManifest(manifest, { runId: fixture.runId })).toThrow(
+      "advisory jobs differ",
+    );
+    await expect(verifyFixture(fixture)).rejects.toThrow();
+    expect(JSON.stringify(manifest)).toBe(before);
+  });
 
   it("rejects a v3 producer dispatched from a tag named main", async () => {
     const fixture = trustedMainPackageFixture({

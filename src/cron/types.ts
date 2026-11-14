@@ -557,6 +557,7 @@ export type CronJobPatch = Partial<
     | "pacing"
     | "activeHours"
     | "idleOnly"
+    | "cyberAccessProgram"
     | "trigger"
   >
 > & {
@@ -564,6 +565,7 @@ export type CronJobPatch = Partial<
   pacing?: CronPacing | null;
   activeHours?: CronActiveHours | null;
   idleOnly?: boolean | null;
+  cyberAccessProgram?: CronJob["cyberAccessProgram"] | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;

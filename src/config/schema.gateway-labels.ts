@@ -66,7 +66,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
     "Trusted Proxy Device Auto-Approval Enabled",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes": "Trusted Proxy Device Auto-Approval Scopes",
   "gateway.roles": "Gateway Operator Roles",
-  "gateway.roles.default": "Default Operator Role",
+  "gateway.roles.default": "Default Operator Role (Enables Enforcement)",
   "gateway.roles.assignments": "Operator Role Assignments",
   "gateway.roles.assignments.byGithubLogin": "Operator Roles by GitHub Login",
   "gateway.roles.assignments.byGithubLogin.*": "GitHub Login Operator Role",

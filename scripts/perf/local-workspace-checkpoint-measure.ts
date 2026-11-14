@@ -12,7 +12,9 @@
  * native Podman/btrfs or model/Gateway latency. Engine pause delays are not simulated.
  * --native-turns --sandbox-backend podman replaces that seam with native Podman,
  * writes through podman exec, and verifies canonical plus subsequent guest reads.
- * --all-mutating writes on all ten commands per turn. Requires an existing local
+ * --tools-per-turn 200 repeats the ten-command mix for a tool-heavy turn;
+ * native runs warm up with ten commands before measuring the requested turn size.
+ * --all-mutating writes on every command. Requires an existing local
  * --guest-image and task-private Podman store supplied by its normal environment.
  * Run on a btrfs fixture for native filesystem proof; pause durations conservatively
  * include pause/unpause CLI latency. Reports command latency plus finalization,
@@ -190,6 +192,7 @@ const { values } = parseArgs({
     "native-turns": { type: "boolean", default: false },
     "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
+    "tools-per-turn": { type: "string", default: "10" },
     "reconcile-target": { type: "string", default: "canonical" },
     "reconcile-changed-files": { type: "string", default: "1" },
     requests: { type: "string", default: "2048" },
@@ -429,6 +432,8 @@ assert(!values.absent || values.mode !== "owner");
 const fileReads = values.mode === "file-read";
 const reconcile = values.mode === "reconcile";
 const turnLoop = values.mode === "turn-loop" || reconcile;
+const toolsPerTurn = Number(values["tools-per-turn"]);
+assert(Number.isSafeInteger(toolsPerTurn) && toolsPerTurn > 0 && toolsPerTurn % 10 === 0);
 const reconcileTarget = values["reconcile-target"];
 assert(reconcileTarget === "canonical" || reconcileTarget === "projection");
 const reconcileChangedFiles = Number(values["reconcile-changed-files"]);
@@ -1422,6 +1427,10 @@ measurement: try {
     if (transcriptMiB) {
       const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
       const database = agent.openOpenClawAgentDatabase({ agentId: "main" });
+      const sharedState = state.openOpenClawStateDatabase();
+      const { retainOpenClawStateDatabaseForIdle } =
+        await import("../../src/state/openclaw-state-db-cache.js");
+      const releaseState = retainOpenClawStateDatabaseForIdle(sharedState);
       const progress = setInterval(() => {
         // Offline fixture writes use the existing owner to bound WAL growth, outside timing.
         database.walMaintenance.checkpoint();
@@ -1430,6 +1439,9 @@ measurement: try {
         );
       }, 30_000);
       try {
+        // The offline writer owns checkpoints; join periodic inspection before bulk loading.
+        await database.walMaintenance.stop();
+        await sharedState.walMaintenance.stop();
         await seedTeamShapeSessions({
           stateDir: process.env.OPENCLAW_STATE_DIR!,
           sessions: 10_000,
@@ -1440,6 +1452,7 @@ measurement: try {
         });
       } finally {
         clearInterval(progress);
+        releaseState();
       }
     }
     const db = agent.openOpenClawAgentDatabase({ agentId: "main" });
@@ -1465,7 +1478,7 @@ measurement: try {
     );
     await agent.closeOpenClawAgentDatabasesAsync();
   }
-  let runTurn: (() => Promise<void>) | undefined;
+  let runTurn: ((tools?: number) => Promise<void>) | undefined;
   if (turnLoop) {
     assert(workspace);
     const { bindLocalSandboxWorkspace } =
@@ -1553,7 +1566,7 @@ measurement: try {
       lastUsedAtMs: 1,
     });
     let edit = 0;
-    runTurn = async () => {
+    runTurn = async (turnTools = toolsPerTurn) => {
       if (reconcile) {
         const commandBegan = performance.now();
         const commandCpu = process.cpuUsage();
@@ -1626,16 +1639,16 @@ measurement: try {
         }
         return;
       }
-      for (let tool = 0; tool < 10; tool++) {
+      for (let tool = 0; tool < turnTools; tool++) {
         const commandBegan = performance.now();
         const commandCpu = process.cpuUsage();
         const commandAllocated = getHeapStatistics().total_allocated_bytes;
         const beforePauses = containerCommands.filter((command) => command === "pause").length;
         const spec = await backend.buildExecSpec({ command: "synthetic", env: {}, usePty: false });
-        const editedFile = Math.floor((files * (tool === 4 ? 1 : 2)) / 3);
+        const editedFile = Math.floor((files * (tool % 10 === 4 ? 1 : 2)) / 3);
         const relative = `file-${editedFile}.txt`;
         const content =
-          values["all-mutating"] || tool === 4 || tool === 9
+          values["all-mutating"] || tool % 10 === 4 || tool % 10 === 9
             ? `synthetic edit ${++edit}\n`
             : undefined;
         if (content) {
@@ -1654,6 +1667,8 @@ measurement: try {
           } else {
             fs.writeFileSync(path.join(workspace!, relative), content);
           }
+        } else if (nativeTurns) {
+          execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/${relative}`]);
         }
         const began = performance.now();
         const beforePauseSamples = pauseDurationsMs.length;
@@ -2623,7 +2638,11 @@ measurement: try {
     );
     break measurement;
   }
-  await runOne(0);
+  if (nativeTurns && runTurn) {
+    await runTurn(10);
+  } else {
+    await runOne(0);
+  }
   if (nativeTurns) {
     await settleCheckpointCleanup();
   }
@@ -2863,6 +2882,7 @@ measurement: try {
     return {
       count: ordered.length,
       median: percentile(0.5),
+      p90: percentile(0.9),
       p95: percentile(0.95),
       max: ordered.at(-1) ?? null,
     };
@@ -2874,12 +2894,16 @@ measurement: try {
     harnessSha256,
     turn: turnLoop
       ? {
-          tools: reconcile ? 1 : 10,
-          changed: reconcile ? 1 : values["all-mutating"] ? 10 : 2,
-          unchanged: reconcile || values["all-mutating"] ? 0 : 8,
+          tools: reconcile ? 1 : toolsPerTurn,
+          changed: reconcile ? 1 : values["all-mutating"] ? toolsPerTurn : toolsPerTurn / 5,
+          unchanged: reconcile || values["all-mutating"] ? 0 : (toolsPerTurn * 4) / 5,
           ...(reconcile ? { reconcileTarget, reconcileChangedFiles } : {}),
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
+          snapshotCaptures: checkpointPhases.filter(
+            (phase) => phase.name === "nativeWorktreeFilesystem:copy",
+          ).length,
+          frozenDurationMs: pauseDurationsMs.reduce((sum, duration) => sum + duration, 0),
           filesystemType: fs.statfsSync(output).type,
           engine: nativeTurns ? "native Podman" : "synthetic execContainer seam; no injected delay",
           pauseDurationsMs: [...pauseDurationsMs],

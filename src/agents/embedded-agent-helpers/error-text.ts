@@ -117,6 +117,8 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),
     code: signal.code,
+    rateLimitResetAt:
+      signal.retryAfterMs === undefined ? undefined : Date.now() + signal.retryAfterMs,
   };
 }
 export function formatAssistantErrorText(
@@ -180,7 +182,13 @@ export function formatAssistantErrorText(
   }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"
-      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
+      ? renderRateLimitOrOverloadedCopy({
+          ...classifiedFacts,
+          reason: failoverReason,
+          raw,
+          locale: opts?.cfg?.ui?.prefs?.locale,
+          timeZone: opts?.cfg?.agents?.defaults?.userTimezone,
+        })
       : undefined;
   if (transientCopy) {
     return transientCopy;

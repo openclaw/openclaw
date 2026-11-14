@@ -332,7 +332,7 @@ suite.define(() => {
     const projectTrigger = page.locator("#new-session-project-trigger");
     await choosePackagesFolder(page);
     await placeTrigger.click();
-    await button(page, "New worktree Isolated copy of the repo", true).click();
+    await button(page, "New worktree", true).click();
     await checkoutBaseRefInput(page).fill("release/next");
     await page.getByLabel("Name", { exact: true }).fill("remembered-task");
     await page.keyboard.press("Escape");
@@ -518,7 +518,7 @@ suite.define(() => {
     await choosePackagesFolder(page);
     const placeTrigger = page.locator("#new-session-checkout-trigger");
     await placeTrigger.click();
-    await button(page, "New worktree Isolated copy of the repo", true).click();
+    await button(page, "New worktree", true).click();
     await page.keyboard.press("Escape");
     const newSession = page.locator("openclaw-new-session-page");
     const modelSelect = newSession.locator('[data-chat-model-select="true"]');

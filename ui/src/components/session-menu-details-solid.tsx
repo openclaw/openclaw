@@ -71,7 +71,7 @@ export function useSessionMenuDetails(
     ) {
       options.push({ ...currentOwner, type: "human", id });
     }
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return options.filter((owner) =>
       terms.every((term) =>
         [
@@ -82,6 +82,7 @@ export function useSessionMenuDetails(
         ]
           .join(" ")
           .toLocaleLowerCase()
+          .normalize("NFC")
           .includes(term),
       ),
     );

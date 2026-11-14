@@ -369,7 +369,7 @@ suite.define(() => {
         await checkoutTrigger.click();
         await page
           .locator(".oc-popover.new-session-page__checkout-popover")
-          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+          .getByRole("button", { name: "New worktree", exact: true })
           .click();
         await pollAttribute(checkoutTrigger, "data-worktree").toBe("true");
         if (missingCheckout) {

@@ -10,6 +10,7 @@ import {
   extractToolCallsFromAssistant,
 } from "../session/tool-result-pairing.js";
 import type { SessionTreeEntry } from "../types.js";
+import type { CompactionEntrySource } from "./compaction-entry-source.js";
 import {
   formatCompactionUserLabel,
   getCompactionContent,
@@ -105,14 +106,34 @@ function isTurnStartEntry(entry: SessionTreeEntry): boolean {
   return message ? isTurnStartMessage(message) : false;
 }
 
+function readCutNavigation(entries: CompactionEntrySource, index: number) {
+  const navigation = entries.metadata(index);
+  return navigation?.type === "message" && navigation.message.role !== "custom"
+    ? navigation
+    : entries.get(index);
+}
+
 /** Find the user-visible message that starts the turn containing an entry. */
 export function findTurnStartIndex(
   entries: SessionTreeEntry[],
   entryIndex: number,
   startIndex: number,
 ): number {
+  return findTurnStartIndexFromSource(
+    { length: entries.length, metadata: (index) => entries[index], get: (index) => entries[index] },
+    entryIndex,
+    startIndex,
+  );
+}
+
+/** Indexed variant for planners that hydrate only the entry being visited. */
+function findTurnStartIndexFromSource(
+  entries: CompactionEntrySource,
+  entryIndex: number,
+  startIndex: number,
+): number {
   for (let i = entryIndex; i >= startIndex; i--) {
-    const entry = entries[i];
+    const entry = readCutNavigation(entries, i);
     if (entry && isTurnStartEntry(entry)) {
       return i;
     }
@@ -191,6 +212,23 @@ export function findCutPoint(
   endIndex: number,
   keepRecentTokens: number,
   constraints?: CompactionRetentionConstraints,
+) {
+  return findCutPointFromSource(
+    { length: entries.length, metadata: (index) => entries[index], get: (index) => entries[index] },
+    startIndex,
+    endIndex,
+    keepRecentTokens,
+    constraints,
+  );
+}
+
+/** Plan a cut without retaining hydrated entries from the indexed source. */
+export function findCutPointFromSource(
+  entries: CompactionEntrySource,
+  startIndex: number,
+  endIndex: number,
+  keepRecentTokens: number,
+  constraints?: CompactionRetentionConstraints,
 ): {
   /** Index of the first entry retained after compaction. */
   firstKeptEntryIndex: number;
@@ -204,10 +242,11 @@ export function findCutPoint(
   // retained tail. Keep that eager validation without storing every cut point.
   let cutIndex: number | undefined;
   let lastAllowedCut = endIndex - 1;
-  const toolMessages: AgentMessage[] = [];
+  const toolPairingFacts: AgentMessage[] = [];
   const toolEntryIndexes: number[] = [];
+  const turnStarts: number[] = [];
   for (let i = startIndex; i < endIndex; i++) {
-    const entry = entries[i];
+    const entry = readCutNavigation(entries, i);
     const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (
       entry &&
@@ -219,18 +258,24 @@ export function findCutPoint(
     if (message && isCutPointMessage(message)) {
       cutIndex = i;
     }
+    if (message && isTurnStartMessage(message)) {
+      turnStarts.push(i);
+    }
+    // Indexed callers already supply payload-free navigation; array callers own their
+    // existing messages. The pairing classifier can use either without another shell.
     if (
-      message?.role === "toolResult" ||
-      (message?.role === "assistant" && extractToolCallsFromAssistant(message).length > 0)
+      message &&
+      (message.role === "toolResult" ||
+        (message.role === "assistant" && extractToolCallsFromAssistant(message).length > 0))
     ) {
-      toolMessages.push(message);
+      toolPairingFacts.push(message);
       toolEntryIndexes.push(i);
     }
   }
   if (cutIndex === undefined) {
     return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
   }
-  const resolveCutPoint = createToolPairCutResolver(toolMessages, toolEntryIndexes);
+  const resolveCutPoint = createToolPairCutResolver(toolPairingFacts, toolEntryIndexes);
   cutIndex = resolveCutPoint(cutIndex);
   lastAllowedCut = resolveCutPoint(lastAllowedCut);
   let accumulatedTokens = 0;
@@ -238,7 +283,7 @@ export function findCutPoint(
   // The latest valid cut also handles an oversized trailing tool result that
   // exhausts the budget before the reverse walk reaches its preceding boundary.
   for (let i = endIndex - 1; i >= startIndex; i--) {
-    const entry = entries[i];
+    const entry = entries.tokens ? readCutNavigation(entries, i) : entries.get(i);
     if (!entry) {
       continue;
     }
@@ -249,7 +294,8 @@ export function findCutPoint(
     if (isCutPointMessage(message)) {
       cutIndex = resolveCutPoint(i);
     }
-    accumulatedTokens += retention?.estimateTokens(message) ?? estimateTokens(message);
+    accumulatedTokens +=
+      entries.tokens?.(i) ?? retention?.estimateTokens(message) ?? estimateTokens(message);
     if (accumulatedTokens >= keepRecentTokens) {
       break;
     }
@@ -260,9 +306,9 @@ export function findCutPoint(
     let fittingCut = endIndex;
     let tailLimit = retention.maxTokens;
     for (let i = endIndex - 1; i >= cutIndex; i--) {
-      const entry = entries[i];
+      const entry = entries.tokens ? readCutNavigation(entries, i) : entries.get(i);
       const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      retainedTokens += message ? retention.estimateTokens(message) : 0;
+      retainedTokens += message ? (entries.tokens?.(i) ?? retention.estimateTokens(message)) : 0;
       if (retainedTokens > tailLimit) {
         break;
       }
@@ -287,13 +333,13 @@ export function findCutPoint(
   }
   // Decide the split from the selected message, before retaining the metadata in front of it:
   // a bootstrap marker before a user message must not make the previous turn a split-turn prefix.
-  const cutEntry = entries[cutIndex];
+  const cutEntry = readCutNavigation(entries, cutIndex);
   if (!cutEntry) {
     throw new Error("compaction cut point does not reference a session entry");
   }
   const startsTurn = isTurnStartEntry(cutEntry);
   while (cutIndex > startIndex) {
-    const prevEntry = entries[cutIndex - 1];
+    const prevEntry = readCutNavigation(entries, cutIndex - 1);
     if (!prevEntry) {
       break;
     }
@@ -306,7 +352,9 @@ export function findCutPoint(
     }
     cutIndex--;
   }
-  const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
+  const turnStartIndex = startsTurn
+    ? -1
+    : (turnStarts.findLast((index) => index <= cutIndex) ?? -1);
 
   return {
     firstKeptEntryIndex: cutIndex,

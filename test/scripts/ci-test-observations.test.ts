@@ -137,9 +137,13 @@ describe("CI observation export", () => {
     }
   });
 
-  it.each([false, true])(
-    "captures native outcomes and dependencies without log contents (failed=%s)",
-    (failed) => {
+  it.each([
+    { failed: false, auditOnly: false },
+    { failed: true, auditOnly: false },
+    { failed: true, auditOnly: true },
+  ])(
+    "captures native outcomes without log contents (failed=$failed, audit=$auditOnly)",
+    ({ failed, auditOnly }) => {
       const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
       try {
         const cacheDirectory = path.join(directory, "vite");
@@ -172,6 +176,7 @@ describe("CI observation export", () => {
             GITHUB_RUN_ATTEMPT: "2",
             OPENCLAW_VITEST_OBSERVATION_DIR: directory,
             OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+            OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY: auditOnly ? "1" : undefined,
           },
         });
         expect(capture).toBeDefined();
@@ -184,10 +189,15 @@ describe("CI observation export", () => {
         ]);
         expect(initial.preExecution.observations).toEqual(initial.observations);
         expect(initial.preExecution.launchInputs).toEqual({ sha256: launchHash });
-        expect(initial.preExecution.graphInputs).toMatchObject({
-          version: 1,
-          profile: "unit-fast",
-        });
+        if (auditOnly) {
+          expect(initial.preExecution.graphInputs).toBeNull();
+          expect(initial.preExecution).not.toHaveProperty("decision");
+        } else {
+          expect(initial.preExecution.graphInputs).toMatchObject({
+            version: 1,
+            profile: "unit-fast",
+          });
+        }
         // Global setup and tests run after inventory; neither may rewrite its input identity.
         writeFileSync(configFile, "export default { changed: true };");
         writeFileSync(includeFile, "src/changed.test.ts");
@@ -216,7 +226,7 @@ describe("CI observation export", () => {
                 files: [
                   {
                     outcome: failed ? "failed" : "passed",
-                    dependencies: ["src/example.test.ts", "src/example.ts"],
+                    dependencies: auditOnly ? null : ["src/example.test.ts", "src/example.ts"],
                   },
                 ],
               },

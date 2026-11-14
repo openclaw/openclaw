@@ -99,6 +99,8 @@ type ProcessOwner = {
   projectionDirectories: StateOwnerDirectoryIdentity[];
   // Retained leases keep custody after this stops new admission.
   accepting: boolean;
+  /** Runs once physical custody ends, after the last retained lease. */
+  onReleased?: () => void;
 };
 
 function hasPhysicalOwnership(owner: ProcessOwner): boolean {
@@ -296,6 +298,7 @@ function leaseForFile(
           void owner.heartbeat?.stop();
           owner.accepting = false;
           owners.delete(owner.key);
+          owner.onReleased?.();
         }
       }
       // A failed directory cleanup remains retryable after physical lock release.
@@ -313,6 +316,10 @@ export function acquireGatewayStateOwner(params: {
   payload?: LockPayload;
   projectionPath?: string;
   getProjection?: () => GatewayStateProjection | undefined;
+  /** Custody held outside this process, such as the PostgreSQL install lock; abort retires it. */
+  custody?: AbortSignal;
+  /** Ends that outside custody once physical custody ends, including retained leases. */
+  onReleased?: () => void;
 }): StateDatabaseSchemaLease {
   const identity = resolveStateOwnerIdentity(params.databasePath);
   const pathname = identity.ownerPath;
@@ -345,6 +352,7 @@ export function acquireGatewayStateOwner(params: {
     projectionDirectories: [],
     lost: new AbortController(),
     accepting: true,
+    onReleased: params.onReleased,
   };
   const lock = acquireGatewayStateOwnerFile(params.databasePath, pathname, payload);
   owner.locks.add(lock);
@@ -355,6 +363,13 @@ export function acquireGatewayStateOwner(params: {
     owner.heartbeat = startGatewayStateOwnerHeartbeat(owner.locks, (error, lockPath) =>
       observeOwnerLoss(owner, error, lockPath),
     );
+    // Admission, workers and the server lifecycle all observe this owner's lost signal.
+    const custody = params.custody;
+    const onCustodyLost = () => {
+      const reason: unknown = custody?.reason;
+      loseOwner(owner, reason instanceof Error ? reason : new Error("State custody was lost"));
+    };
+    custody?.addEventListener("abort", onCustodyLost, { once: true });
     lease.assertCurrent();
   } catch (error) {
     return runWithSqliteCleanup(lease, "state process ownership verification", () => {

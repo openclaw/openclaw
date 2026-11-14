@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
   extractErrorHttpStatus,
@@ -11,9 +12,14 @@ import {
 } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReason } from "./classify.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
-import { resolveProviderRequestFailureCopy } from "./user-copy.js";
+import { resolveRetryAfterMs } from "./retry-evidence.js";
+import { renderRateLimitResetCopy, resolveProviderRequestFailureCopy } from "./user-copy.js";
 
-export function resolveReplyFailoverFacts(error: unknown, message: string) {
+export function resolveReplyFailoverFacts(
+  error: unknown,
+  message: string,
+  config?: OpenClawConfig,
+) {
   const described = describeFailoverError(error);
   const rawError = described.rawError ?? message;
   const status = extractErrorHttpStatus(rawError)?.code ?? described.status;
@@ -27,7 +33,15 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
   const storageCopy = renderAssistantRequestFailureCopy({
     storageFailure: classifyGatewayStorageFailure(error),
   });
+  const retryAfterMs =
+    reason === "rate_limit" && described.rateLimitResetAt === undefined
+      ? resolveRetryAfterMs(rawError, Date.now(), error)
+      : undefined;
+  const rateLimitResetAt =
+    described.rateLimitResetAt ??
+    (retryAfterMs === undefined ? undefined : Date.now() + retryAfterMs);
   return {
+    rateLimitResetAt,
     reason: reason || undefined,
     code: described.code,
     provider: described.provider,
@@ -36,6 +50,14 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     authMode: described.authMode,
     requestFailureText:
       storageCopy ??
+      (reason === "rate_limit"
+        ? renderRateLimitResetCopy({
+            ...described,
+            rateLimitResetAt,
+            locale: config?.ui?.prefs?.locale,
+            timeZone: config?.agents?.defaults?.userTimezone,
+          })
+        : undefined) ??
       (error instanceof AgentHarnessModelRequestPolicyError ? error.message : undefined) ??
       (reason === "format"
         ? renderFormatErrorCopy(rawError)

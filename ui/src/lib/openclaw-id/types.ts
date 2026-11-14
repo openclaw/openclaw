@@ -27,8 +27,15 @@ export type OpenClawIdStatusResult = {
     hostname?: string;
     rootPub?: string;
   };
-  /** How this browser reaches the Gateway: only `local_operator` may link. */
+  /** How this browser reaches the Gateway: direct loopback, the OpenClaw ID tunnel, or neither. */
   channel: "local_operator" | "tunnel" | null;
+  /**
+   * Whether this connection may turn on remote access: the loopback operator, an admin with
+   * a verified personal identity, or neither.
+   */
+  remoteAccessSetup: "local" | "personal_admin" | null;
+  /** The publication at Discovery, for a personal admin who is not an owner. */
+  publication?: OpenClawIdPublication;
   /**
    * How this connection signs in with OpenClaw ID: the loopback popup, the device grant
    * (a verified personal sign-in such as Tailscale), or not at all.
@@ -90,6 +97,8 @@ export type OpenClawIdOwnerDevice = {
   peerKeys: string[];
   /** Who approved it: "root" (the recovery kit) or the approving device's fingerprint. */
   approvedBy: string;
+  /** The node key bound to this device's approval, if it also runs tools for the claw. */
+  nodePeerKey?: string;
   /** When the claw last admitted it (or added it), unix seconds. */
   lastSeen: number;
   /** Its OwnerDeviceCert: public and signed. */

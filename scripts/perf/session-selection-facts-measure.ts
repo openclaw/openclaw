@@ -12,12 +12,20 @@
  * Acceptance: identical result digests and lower CPU/allocation without an adverse
  * metadata-update result. Allocation includes collected objects in a separate pass;
  * GC/timing decisions use only the untraced timing pass.
+ * --sidebar-counts --listeners 1 --sessions 15000 measures the real sidebar count
+ * filter with updates across 15 live rows. --filter-source <saved-session-list-filters.ts>
+ * pins that owner from any path. Compare work counts, selection digest, CPU and allocation
+ * in separate timing/allocation passes; static exclusions must skip disclosure reads
+ * without changing totals, facets or membership of the returned page.
+ * --selection-shapes compares retained paging, Activity people facets and sidebar
+ * owner counts at --sessions 15000/60000, with row churn across 15 live sessions.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import {
@@ -30,8 +38,11 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { buildSubagentSessionListReadIndex } from "../../src/agents/subagents/registry/subagent-registry-read.js";
+import { createSessionIdentityProjection } from "../../src/gateway/session-identity-projection.js";
 import { readSessionListSelectionFacts } from "../../src/gateway/session-list-target.js";
 import type { Row, SelectionChange } from "../../src/gateway/session-row-projection-record.js";
+import { createProfileSessionEntryFilter } from "../../src/gateway/session-sharing-read.js";
+import { selectSessionEntries } from "../../src/gateway/session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "../../src/gateway/session-utils-projection.js";
 import { notifyListeners } from "../../src/shared/listeners.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -44,6 +55,9 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "10800" },
     listeners: { type: "string", default: "20" },
     mode: { type: "string", default: "timing" },
+    "sidebar-counts": { type: "boolean", default: false },
+    "selection-shapes": { type: "boolean", default: false },
+    "filter-source": { type: "string", default: "src/gateway/session-list-filters.ts" },
   },
 });
 assert(global.gc, "run with --expose-gc");
@@ -60,14 +74,49 @@ const { createSessionRowSelection }: typeof import("../../src/gateway/session-ro
 const records: typeof import("../../src/gateway/session-row-projection-record.js") = await import(
   pathToFileURL(recordSource).href
 );
+const filterSource = path.resolve(values["filter-source"]);
+const filterUrl = `${new URL("../../src/gateway/session-list-filters.ts", import.meta.url).href}?measured-filter`;
+const filterHook = registerHooks({
+  load(url, context, nextLoad) {
+    return url === filterUrl
+      ? {
+          format: "module-typescript",
+          source: readFileSync(filterSource, "utf8"),
+          shortCircuit: true,
+        }
+      : nextLoad(url, context);
+  },
+});
+const { filterSessionEntries }: typeof import("../../src/gateway/session-list-filters.js") =
+  await import(filterUrl);
+filterHook.deregister();
+const sharing = createProfileSessionEntryFilter(
+  { profileId: "synthetic", sessionCap: "view" },
+  (actor) => actor?.id === "synthetic",
+);
 const now = Date.UTC(2026, 9, 27);
+const pulseBoundaries = Array.from({ length: 13 }, (_, index) => Date.UTC(2025, 10 + index, 1));
 const cfg = { agents: { entries: { main: {}, ops: {} } } };
 const agents = new Set(["main", "ops"]);
 const storePath = "/synthetic/selection-facts-measure.sqlite";
-const context = buildSessionListRowMetadataContext({
-  now,
-  subagentRuns: buildSubagentSessionListReadIndex(now, [], new Map()),
-});
+const context = {
+  ...buildSessionListRowMetadataContext({
+    now,
+    subagentRuns: buildSubagentSessionListReadIndex(now, [], new Map()),
+    userProfileIdentityById: new Map([
+      [
+        "synthetic",
+        {
+          kind: "resolved",
+          profileId: "synthetic",
+          label: "Synthetic",
+          avatarUrl: "/synthetic/avatar",
+        },
+      ],
+    ]),
+  }),
+  identityProjection: createSessionIdentityProjection(),
+};
 const scope = {
   agentId: undefined,
   path: storePath,
@@ -79,7 +128,12 @@ const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
   node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 const results = [];
-for (const name of ["unchanged", "presentation", "metadata"] as const) {
+const workloads = values["selection-shapes"]
+  ? (["page", "people", "sidebar"] as const)
+  : values["sidebar-counts"]
+    ? (["sidebar"] as const)
+    : (["unchanged", "presentation", "metadata"] as const);
+for (const name of workloads) {
   const owners = Array.from({ length: listenerCount }, () =>
     createSessionRowSelection(cfg, scope, false, () => context),
   );
@@ -122,15 +176,24 @@ for (const name of ["unchanged", "presentation", "metadata"] as const) {
     owner.read();
   }
   let revision = 0;
+  let filterCalls = 0;
+  let filtered:
+    | ReturnType<typeof filterSessionEntries>
+    | ReturnType<typeof selectSessionEntries>
+    | undefined;
+  const queryShape = name === "sidebar" || name === "page" || name === "people";
+  const retained: NonNullable<Parameters<typeof selectSessionEntries>[0]["retained"]> = new Map();
   const run = () => {
-    const index = revision++ % sessions;
+    const index = revision++ % (queryShape ? Math.min(15, sessions) : sessions);
     let row = rows[index]!;
     if (name !== "unchanged") {
       const entry = {
         ...row.entry!,
-        ...(name === "presentation"
-          ? { outputTokens: revision }
-          : { label: `Changed ${revision}` }),
+        ...(queryShape
+          ? { updatedAt: now + revision, lastActivityAt: now + revision }
+          : name === "presentation"
+            ? { outputTokens: revision }
+            : { label: `Changed ${revision}` }),
       };
       row = {
         ...row,
@@ -150,10 +213,57 @@ for (const name of ["unchanged", "presentation", "metadata"] as const) {
     notifyListeners(listeners, change, (error) => {
       throw error;
     });
+    if (queryShape) {
+      const selected = owners[0]!.read(name === "people" ? "activity" : "updatedAt");
+      const params: Parameters<typeof selectSessionEntries>[0] = {
+        cfg,
+        now,
+        opts:
+          name === "page"
+            ? { limit: 200, ownerFirst: true }
+            : name === "people"
+              ? {
+                  limit: 100,
+                  includePeople: true,
+                  activityPulseBoundaries: pulseBoundaries,
+                  excludeSubagents: true,
+                  excludeDock: true,
+                  archived: "all",
+                  sortBy: "activity",
+                }
+              : {
+                  limit: 1,
+                  includeOwnerSessionCounts: true,
+                  excludeSubagents: true,
+                  excludeCron: true,
+                  excludeSystem: true,
+                  excludeDock: true,
+                },
+        entries: selected.entries,
+        entriesSorted: true,
+        ownerFirstActorId: name === "page" ? "synthetic" : undefined,
+        getTarget: selected.get,
+        configuredAgentIds: agents,
+        getRowContext: () => context,
+        userProfileIdentityById: context.userProfileIdentityById,
+        involvementKeys: selected.involvementKeys,
+        partitions: selected.partitions,
+        retained,
+        entryFilter: (key, entry) => {
+          filterCalls++;
+          return sharing(key, entry);
+        },
+      };
+      filtered =
+        name === "sidebar"
+          ? filterSessionEntries(params, { offset: 0, limit: 1, ownerLimit: 0 })
+          : selectSessionEntries(params);
+    }
   };
   for (let index = 0; index < 500; index++) {
     run();
   }
+  filterCalls = 0;
   global.gc();
   await nextTurn();
   const inspector = new Session();
@@ -194,6 +304,17 @@ for (const name of ["unchanged", "presentation", "metadata"] as const) {
     observer.disconnect();
   }
   const expected = digest(rows.map((row) => [row.key, row.entry]));
+  if (queryShape) {
+    assert(filtered);
+    assert(filtered.ownerFacet.some((owner) => owner.id === "synthetic"));
+    if (name === "sidebar") {
+      assert(
+        filtered.ownerSessionCounts?.some(
+          (count) => count.profileId === "synthetic" && count.open > 0,
+        ),
+      );
+    }
+  }
   for (const owner of owners) {
     assert.equal(digest(owner.read().entries("all")), expected, `${name}: stale published entry`);
   }
@@ -210,6 +331,8 @@ for (const name of ["unchanged", "presentation", "metadata"] as const) {
   results.push({
     name,
     iterations,
+    filterCallsPerUpdate: filterCalls / iterations,
+    selectionDigest: filtered && digest(filtered),
     hostLoadBefore,
     hostLoadAfter,
     elapsedMs,
@@ -233,6 +356,7 @@ console.log(
   JSON.stringify({
     node: process.version,
     source,
+    filterSourceSha256: createHash("sha256").update(readFileSync(filterSource)).digest("hex"),
     sourceSha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
     recordSource,
     recordSourceSha256: createHash("sha256").update(readFileSync(recordSource)).digest("hex"),

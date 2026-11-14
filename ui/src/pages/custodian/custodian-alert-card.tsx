@@ -44,7 +44,7 @@ export function CustodianAlertCard(props: {
           <button
             class="btn btn--sm primary custodian__alert-action"
             type="button"
-            title={updateDisabled() ? t("updates.adminRequired") : undefined}
+            title={updateDisabled() ? t("updates.adminRequiredTooltip") : undefined}
             disabled={updateDisabled()}
             onClick={() => {
               const target = action().target;

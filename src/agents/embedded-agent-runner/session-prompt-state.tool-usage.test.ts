@@ -6,7 +6,6 @@ import {
   clearEmbeddedSessionPromptStates,
   getSessionToolUsageRanking,
   persistSessionSystemPrompt,
-  persistSessionToolSurface,
   prepareSessionSystemPrompt,
   prepareSessionToolSurface,
   prepareSessionToolUsageRanking,
@@ -110,41 +109,34 @@ it("freezes usage selection through turns and restart, and refreshes only at rou
   restarted[Symbol.dispose]();
 });
 
-it.each([true, false])(
-  "does not rewrite restored ranking checkpoints (prompt series: %s)",
-  async (series) => {
-    const entries: SessionEntry[] = [];
-    const readRankedIds = vi.fn(async () => ids);
-    const checkpointCounts: number[] = [];
-    for (const catalogIds of [ids, ids, [...ids, "openclaw:new:tool"]]) {
-      const current = lease(`usage-restored-${series}`);
-      try {
-        const input = {
-          state: current.state,
-          routeKey: route,
-          entries,
-          catalogIds,
-          enabled: true,
-          now: 100,
-          readRankedIds,
-        };
-        await prepareSessionToolUsageRanking(input);
-        prepareSessionToolSurface({ ...input, toolPolicy: "same", tools: [] });
-        if (series) {
-          prepareSessionSystemPrompt({ ...input, systemPrompt: "Same frozen prompt." }).commit();
-          await persistSessionSystemPrompt(current.state, writer(entries));
-        } else {
-          await persistSessionToolSurface(current.state, writer(entries));
-        }
-        checkpointCounts.push(entries.length);
-      } finally {
-        current[Symbol.dispose]();
-      }
+it("does not rewrite restored ranking checkpoints", async () => {
+  const entries: SessionEntry[] = [];
+  const readRankedIds = vi.fn(async () => ids);
+  const checkpointCounts: number[] = [];
+  for (const catalogIds of [ids, ids, [...ids, "openclaw:new:tool"]]) {
+    const current = lease("usage-restored");
+    try {
+      const input = {
+        state: current.state,
+        routeKey: route,
+        entries,
+        catalogIds,
+        enabled: true,
+        now: 100,
+        readRankedIds,
+      };
+      await prepareSessionToolUsageRanking(input);
+      prepareSessionToolSurface({ ...input, toolPolicy: "same", tools: [] });
+      prepareSessionSystemPrompt({ ...input, systemPrompt: "Same frozen prompt." }).commit();
+      await persistSessionSystemPrompt(current.state, writer(entries));
+      checkpointCounts.push(entries.length);
+    } finally {
+      current[Symbol.dispose]();
     }
-    expect(checkpointCounts).toEqual([1, 1, 2]);
-    expect(readRankedIds).toHaveBeenCalledOnce();
-  },
-);
+  }
+  expect(checkpointCounts).toEqual([1, 1, 2]);
+  expect(readRankedIds).toHaveBeenCalledOnce();
+});
 
 it("inherits a durable parent snapshot without reading the child's scores, but never inherits authority", async () => {
   const parent = lease("usage-parent");

@@ -17,7 +17,7 @@ import {
   CommandProcessCleanupError,
   readCommandProcessFailure,
 } from "../../process/exec-result.js";
-import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSet } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { startWorktreeWait } from "./allocation.js";
 import { fetchRemoteDefault } from "./base-fetch.js";
@@ -49,6 +49,16 @@ const remoteDefaults = resolveGlobalMap<string, RemoteDefaultPreparation>(
   Symbol.for("openclaw.worktreeRemoteDefaults"),
 );
 const BASE_FRESHNESS_MS = 30_000;
+const baseObservers = resolveGlobalSet<(repoRoot: string, commit: string) => void>(
+  Symbol.for("openclaw.worktreeBaseObservers"),
+  "shared-state",
+);
+
+/** Background work may retire an obsolete base; accepted foreground requests keep theirs. */
+export function observeWorktreeBase(observer: (repoRoot: string, commit: string) => void) {
+  baseObservers.add(observer);
+  return { [Symbol.dispose]: () => baseObservers.delete(observer) };
+}
 
 export class InvalidWorktreeBaseRefError extends Error {
   constructor(options?: ErrorOptions) {
@@ -263,6 +273,9 @@ export async function withWorktreeBasePreparation<T>(
               options.beforeRun();
               if (base.fetchSucceeded) {
                 started.refreshedAt = Date.now();
+              }
+              for (const observer of baseObservers) {
+                observer(repository.repoRoot, base.commit);
               }
               return base;
             }),

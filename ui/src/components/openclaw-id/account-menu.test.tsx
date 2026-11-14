@@ -34,6 +34,10 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
     status: { state: "on" },
     link: { linked: false },
     channel: "local_operator",
+    remoteAccessSetup:
+      (overrides.channel === undefined ? "local_operator" : overrides.channel) === "local_operator"
+        ? "local"
+        : null,
     accountSignIn: "popup",
     owner: true,
     connection: { kind: "local" },
@@ -631,6 +635,57 @@ describe("approved OpenClaw ID account menu", () => {
       action: "account_link_code",
       idToken: "test-token",
     });
+  });
+
+  it("offers Turn on remote access to an admin on a personal sign-in, not to other people", async () => {
+    await signIn(status());
+    const personal = (remoteAccessSetup: OpenClawIdStatusResult["remoteAccessSetup"]) =>
+      status({
+        channel: null,
+        remoteAccessSetup,
+        accountSignIn: "device",
+        owner: false,
+        connection: { kind: "none" },
+      });
+    const admin = menu(personal("personal_admin"));
+    expect(admin.labels).toEqual(["Turn on remote access", "Sign out of OpenClaw ID"]);
+    expect(admin.rows[0]?.disabled).toBeFalsy();
+    const graham = menu(personal(null)).rows[0];
+    expect(graham?.label).toBe("Turn on remote access");
+    expect(graham?.disabled).toBe(true);
+    expect(graham?.attributes?.title).toBe(
+      "Only an admin can turn on remote access for this claw.",
+    );
+    // Linked: the admin may publish new keys (from the status's publication), never move them.
+    const linkedAdmin = menu(
+      status({
+        channel: null,
+        remoteAccessSetup: "personal_admin",
+        accountSignIn: "device",
+        owner: false,
+        connection: { kind: "none" },
+        link: linked,
+        publication: { state: "failed", code: "needs_link_code", message: "x" },
+      }),
+    );
+    expect(linkedAdmin.text).toContain("New keys aren't published yet");
+    expect(linkedAdmin.labels).toContain("Publish new keys");
+    expect(linkedAdmin.labels).not.toContain("Move to new keys");
+    expect(linkedAdmin.labels).not.toContain("Copy claw link");
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+      params.action === "account_link_code" ? { code: "ACCOUNT-CODE" } : { publication: null },
+    );
+    selectOpenClawIdMenuValue("openclaw-id:publish-keys", {
+      status: personal("personal_admin"),
+      client: { request } as unknown as GatewayBrowserClient,
+      basePath: "",
+    });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
+        action: "publish",
+        enrollmentCode: "ACCOUNT-CODE",
+      }),
+    );
   });
 
   it("offers remote sign-out only with the loader's real service worker", () => {

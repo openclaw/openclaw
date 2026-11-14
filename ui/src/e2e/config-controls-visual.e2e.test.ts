@@ -429,6 +429,7 @@ suite.define(() => {
               body: { url: "https://example.com/control-ui-proof" },
               method: "POST",
               path: "/tabs/open",
+              query: { operatorInput: true },
               tabScope: { sessionKey: "agent:main:main" },
             });
           const browserPanel = page.locator("openclaw-browser-panel[embedded]");

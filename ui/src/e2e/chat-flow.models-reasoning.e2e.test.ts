@@ -190,11 +190,12 @@ suite.define(() => {
     const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
     const picker = pane.locator(".chat-controls__model-picker");
     await control(picker, "model-select").click();
-    const toggle = picker.locator("[data-chat-context-window-toggle]");
-    await attribute(toggle, "aria-checked").toBe("true");
+    const toggle = picker.locator(".chat-controls__context-trigger");
+    await attribute(toggle, "aria-label").toBe("Context window: 1M");
     await gateway.deferNext("sessions.patch");
     const patchCount = (await gateway.getRequests("sessions.patch")).length;
     await toggle.click();
+    await picker.getByRole("menuitemradio", { name: "200K", exact: true }).click();
     const patch = await gateway.waitForRequest("sessions.patch", { after: patchCount });
     expect(requireRecord(patch.params)).toMatchObject({
       key: sessionKey,
@@ -205,7 +206,7 @@ suite.define(() => {
       chatSessionListResponse([{ ...session, contextWindow: "200k" }]),
     );
     await gateway.resolveDeferred("sessions.patch");
-    await attribute(toggle, "aria-checked").toBe("false");
+    await attribute(toggle, "aria-label").toBe("Context window: 200K");
     await expect
       .poll(async () =>
         (await picker.locator("[data-chat-model-context-badge]").textContent())?.trim(),

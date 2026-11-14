@@ -286,32 +286,18 @@
   inset-inline-end: calc(anchor(--chat-reaction-edge start, 100%) - 14px);
 }
 
-.chat:not(.chat--bubbles) .chat-group.assistant:not(.chat-group--forwarded) > .chat-group-messages {
-  container-type: inline-size;
+/* A flat reply has no edge to hang from: its reactions lead the row under it and
+   stay put while the hover-only identity, time and actions fade in after them. */
+.chat-group-footer:has(> .chat-message-reactions) {
+  opacity: 1;
+  pointer-events: auto;
 }
 
-/* Flat assistant text has no edge to hang from: its tab shares the row of the
-   hover-only footer under the text, at the end of the text. Under a short reply
-   it starts past the footer's usual contents (sender, time, actions) instead.
-   Accepted edge: a footer wider than this clearance meets the tab on hover. */
-.chat:not(.chat--bubbles)
-  .chat-group.assistant:not(.chat-group--forwarded)
-  .chat-bubble
-  > .chat-message-reactions {
-  top: calc(100% + var(--chat-reaction-row-gap, var(--chat-footer-offset)) + 1px);
-  bottom: auto;
-  inset-inline-start: 0;
-  box-sizing: border-box;
-  justify-content: flex-end;
-  inline-size: 100%;
-  min-inline-size: max-content;
-  padding-inline-start: min(240px, 50cqi);
-  translate: none;
-}
-
-/* An earlier message's own action row sits one message gap under its bubble. */
-.chat-group.assistant .chat-bubble:not(:last-child) > .chat-message-reactions {
-  --chat-reaction-row-gap: var(--chat-message-gap);
+.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer__meta,
+.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer-actions {
+  opacity: var(--chat-footer-disclosure-opacity, 0);
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+  transition: opacity 120ms ease-out;
 }
 
 /* Narrow panes leave little room beside a bubble: pin a fixed overhang at the
@@ -548,8 +534,11 @@
 .chat-group-messages
   > .chat-message--reply:has(> .chat-bubble--actions-revealed)
   + :is(.chat-message-actions-row, .chat-message-footer),
-.chat-message-actions-row:is(:focus-within, :has([data-copy-state="error"])),
-.chat-message-footer:is(:focus-within, :has([data-copy-state="error"])) {
+.chat-message-actions-row:is(
+  :focus-within,
+  :has([data-copy-state="error"], [aria-expanded="true"])
+),
+.chat-message-footer:is(:focus-within, :has([data-copy-state="error"], [aria-expanded="true"])) {
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
   --chat-footer-disclosure-opacity: 1;
@@ -598,7 +587,9 @@
   --chat-footer-disclosure-pointer-events: auto;
 }
 
-.chat-group-footer:is(:focus-within, :has([data-copy-state="error"])),
+/* An open picker keeps its row revealed: hover cannot reach its top-layer
+   surface, and a collapsing row would carry the anchored picker with it. */
+.chat-group-footer:is(:focus-within, :has([data-copy-state="error"], [aria-expanded="true"])),
 .chat-session-activity__message:focus-within {
   --chat-footer-detail-position: static;
   --chat-message-action-opacity: 0.6;
@@ -835,30 +826,25 @@
   justify-content: center;
 }
 
-/* Mid-run context is part of the agent's turn: a compact card flush with its column. */
+/* Mid-run context is part of the agent's turn: a quiet disclosure flush with its
+ * column, read like the activity rollups. Opened, the body hangs off a hairline
+ * under the icon instead of sitting in a card, and reads at prose size. */
 .chat-notice-inline {
-  width: fit-content;
-  max-width: min(var(--chat-message-max-width, min(900px, 68%)), calc(100% - 66px));
-  margin-block: 0 calc(var(--chat-turn-gap, 16px) + 8px);
+  margin-block: 0 12px;
   margin-inline: calc(4px + var(--chat-avatar-gutter, 46px)) 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--secondary);
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.chat-notice-inline[open] {
-  width: auto;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: 1.5;
 }
 
 .chat-notice-inline > summary {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
   list-style: none;
-  border-radius: inherit;
   cursor: var(--cursor-action);
 }
 
@@ -868,6 +854,11 @@
 
 .chat-notice-inline > summary:is(:hover, :focus-visible) {
   color: var(--text);
+}
+
+/* Keep the global ring inside the control so virtual-row paint containment cannot clip it. */
+.chat-notice-inline > summary:focus-visible {
+  outline-offset: -2px;
 }
 
 .chat-notice-inline__icon,
@@ -880,38 +871,48 @@
 .chat-notice-inline__chevron svg {
   width: 14px;
   height: 14px;
+  stroke-width: calc(12px / 7);
 }
 
 .chat-notice-inline__label {
   min-width: 0;
   overflow: hidden;
-  color: var(--muted-strong);
-  font-weight: 600;
+  color: var(--text);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .chat-notice-inline__time {
   flex: none;
+  color: var(--text-tertiary);
 }
 
+/* Like the activity rollups, the chevron appears on hover or focus and stays while open. */
 .chat-notice-inline__chevron {
-  margin-inline-start: auto;
-  transition: transform 150ms ease;
+  opacity: 0;
+  transition:
+    opacity 150ms,
+    transform 150ms;
+}
+
+summary:is(:hover, :focus-visible) > .chat-notice-inline__chevron,
+.chat-notice-inline[open] .chat-notice-inline__chevron {
+  opacity: 1;
 }
 
 .chat-notice-inline[open] .chat-notice-inline__chevron {
   transform: rotate(90deg);
 }
 
+/* The hairline sits under the icon's center and the text starts at the label. */
 .chat-notice-inline .chat-notice__body {
   width: auto;
-  margin: 0;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--border);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.5;
+  margin-block: 6px 0;
+  margin-inline: 6px 0;
+  padding-block: 2px;
+  padding-inline: 12px 0;
+  border-inline-start: 2px solid var(--border-strong);
 }
 
 /* Avatar-less layouts (direct threads, narrow screens) start groups at the column edge. */

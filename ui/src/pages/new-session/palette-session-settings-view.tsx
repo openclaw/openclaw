@@ -433,7 +433,7 @@ export function PaletteSessionSettingsView(properties: {
       id={properties.id + "-settings-popover"}
       label={t("commandPalette.newSessionSettings")}
       class="palette-session-settings"
-      placement="bottom-end"
+      placement="bottom-start"
       open={open()}
       onOpenChange={(value) => (value ? setOpen(true) : close(properties.options.preferences))}
     >

@@ -47,6 +47,7 @@ const attrs = new Set([
   "data-file-path",
   "data-template-package",
   "aria-haspopup",
+  "aria-label",
   "data-session-key",
   "data-session-href",
   "data-github-kind",

@@ -48,6 +48,13 @@ describe("worker deletion request authority", () => {
         destroy,
       }),
     );
+    const deletionQueued = createDeferredCore();
+    const destroyEnvironment = service.destroy;
+    vi.spyOn(service, "destroy").mockImplementation((...args) => {
+      const deletion = destroyEnvironment(...args);
+      deletionQueued.resolve();
+      return deletion;
+    });
     const context = await contextFor(service);
     const creating = service.create("development", "independent-create").catch(() => undefined);
     await beforeSettlement(entered.promise, creating, "Independent create preparation");
@@ -61,6 +68,10 @@ describe("worker deletion request authority", () => {
       () => current,
     );
     try {
+      if (force) {
+        // Finish placement preflight before provisioning can fence its synchronous reads.
+        await beforeSettlement(deletionQueued.promise, deleting, "Forced deletion queue handoff");
+      }
       expect(support.testState.store.get(original.environmentId)).toMatchObject({
         state: "requested",
         destroyRequestedAtMs: null,
@@ -70,7 +81,8 @@ describe("worker deletion request authority", () => {
       release.resolve();
       await creating;
     }
-    expect((await deleting)[0]).toBe(!revoked);
+    const response = await deleting;
+    expect(response[0], JSON.stringify(response[2])).toBe(!revoked);
     expect(support.testState.store.get(original.environmentId)).toMatchObject(
       revoked
         ? { state: "provisioning", destroyRequestedAtMs: null }

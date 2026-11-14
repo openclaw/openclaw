@@ -600,6 +600,11 @@
   tab-size: 2;
 }
 
+.cron-prompt-preview {
+  max-height: 240px;
+  overflow: auto;
+}
+
 .cron-payload-code:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

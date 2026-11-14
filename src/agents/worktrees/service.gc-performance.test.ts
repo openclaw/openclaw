@@ -698,41 +698,95 @@ describe("worktree Git maintenance", () => {
       await foreground;
       commands.mockRestore();
     }
-    await maintain({});
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const remove = fs.rm;
+    const retired: string[] = [];
+    const retirement = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      await remove(target, options);
+      if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
+        retired.push(String(target).slice(0, -4));
+        now += 251;
+      }
+    });
+    // Each settled pass may finish one pack's sidecars, then must yield.
+    for (const [before, after] of [
+      [4, 3],
+      [3, 2],
+    ] as const) {
+      const bounded = new WorktreeGcProgress();
+      await maintain({ checkBacklog: true, progress: bounded });
+      expect(bounded.result.gitMaintenance).toMatchObject({
+        stage: "completed",
+        packsBefore: before,
+        packsAfter: after,
+      });
+      expect(bounded.result.issues).toEqual([]);
+      expect(retired).toHaveLength(4 - after);
+      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+        await expectMissing(`${retired.at(-1)}.${extension}`);
+      }
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    }
+    retirement.mockRestore();
+    for (const name of await packNames(repo)) {
+      await git(repo, "verify-pack", "-v", path.join(packsPath(repo), name));
+    }
+    // Even with no further clock advancement, geometric admission used to strand
+    // the last small input beside the larger union. Recreating the owner must
+    // preserve the retirement continuation as well.
+    const final = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ retryDeferred: true, progress: final });
+    expect(final.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 1 });
+    expect(final.result.issues).toEqual([]);
     expect(await packNames(repo)).toHaveLength(1);
     expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 
-  it("bounds retirement while finishing the current pack's sidecars", async () => {
-    const repo = await initRepo(tempDirs.make("worktree-retirement-budget-"));
-    const { objects } = await packBlobs(repo, ["bounded-a", "bounded-b", "bounded-c"]);
-    await git(repo, "prune-packed");
-    await register(repo, "retirement-budget", { branch: "main" });
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const remove = fs.rm;
-    let retired: string | undefined;
-    const retirement = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      await remove(target, options);
-      if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
-        retired = String(target).slice(0, -4);
-        now += 251;
+  it.each([false, true])(
+    "bounds retirement while finishing the current pack's sidecars (repacked=%s)",
+    async (repacked) => {
+      const repo = await initRepo(tempDirs.make("worktree-retirement-budget-"));
+      const { objects } = await packBlobs(repo, ["bounded-a", "bounded-b", "bounded-c"]);
+      await git(repo, "prune-packed");
+      await register(repo, "retirement-budget", { branch: "main" });
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const remove = fs.rm;
+      let retired: string | undefined;
+      const retirement = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        await remove(target, options);
+        if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
+          retired = String(target).slice(0, -4);
+          now += 251;
+        }
+      });
+      const progress = new WorktreeGcProgress();
+      const maintain = createWorktreeGitMaintenance(env);
+      await maintain({ progress });
+      expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 3 });
+      expect(retired).toBeDefined();
+      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+        await expect(fs.access(`${retired}.${extension}`)).rejects.toHaveProperty("code", "ENOENT");
       }
-    });
-    const progress = new WorktreeGcProgress();
-    const maintain = createWorktreeGitMaintenance(env);
-    await maintain({ progress });
-    expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 3 });
-    expect(retired).toBeDefined();
-    for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
-      await expect(fs.access(`${retired}.${extension}`)).rejects.toHaveProperty("code", "ENOENT");
-    }
-    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
-    retirement.mockRestore();
-    await maintain({ checkBacklog: true });
-    expect((await packNames(repo)).length).toBeLessThan(3);
-    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
-  });
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+      retirement.mockRestore();
+      if (repacked) {
+        for (const [index, object] of objects.entries()) {
+          await git(repo, "update-ref", `refs/tags/blob-${index}`, object);
+        }
+        const beforeRepack = await packNames(repo);
+        await git(repo, "repack", "-a", "-d");
+        expect((await packNames(repo)).some((name) => beforeRepack.includes(name))).toBe(false);
+      }
+      const resumed = new WorktreeGcProgress();
+      await maintain({ checkBacklog: true, progress: resumed });
+      expect(resumed.result.gitMaintenance?.stage).toBe("completed");
+      expect(resumed.result.issues).toEqual([]);
+      expect((await packNames(repo)).length).toBeLessThan(3);
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    },
+  );
 
   it("retains a replacement that is already an input and a pack pinned during publication", async () => {
     const repo = await initRepo(tempDirs.make("worktree-pack-existing-output-"));

@@ -1010,7 +1010,7 @@ src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	7
+src/agents/agent-hooks/compaction-safeguard.ts	4
 src/agents/agent-project-settings-snapshot.ts	3
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-receipt.ts	1
@@ -2068,7 +2068,6 @@ src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
 src/plugins/host-hook-state.ts	6
 src/plugins/install-managed-npm-state.ts	2
-src/plugins/install-npm-metadata.ts	1
 src/plugins/install-persistence.ts	1
 src/plugins/install-record-commit.ts	2
 src/plugins/install-transaction.ts	3
