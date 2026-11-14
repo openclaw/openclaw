@@ -1,11 +1,18 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatTaskProgress } from "./chat-details.test-support.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  captureUiProofEnabled,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
 const suite = createChatFlowE2eSuite({
@@ -26,8 +33,13 @@ const steps = [
   })),
 ];
 
-async function openProgress(page: Page, active = true) {
-  const card = { sessionKey, revision: 1, updatedAt: Date.now(), steps };
+async function openProgress(page: Page, active = true, markdown?: string) {
+  const card = {
+    sessionKey,
+    revision: 1,
+    updatedAt: Date.now(),
+    ...(markdown ? { markdown } : { steps }),
+  };
   const gateway = await installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
     sessionKey,
@@ -53,6 +65,71 @@ async function openProgress(page: Page, active = true) {
 }
 
 suite.define(() => {
+  it.each([1440, 390])("keeps progress-table identifiers readable at %i px", async (width) => {
+    const context = await suite.newBrowserContext({
+      viewport: { width, height: 1000 },
+      colorScheme: "dark",
+    });
+    try {
+      const page = await context.newPage();
+      const markdown = [
+        "| PR | Current action |",
+        "| --- | --- |",
+        "| [openclaw/openclaw#184876](https://github.com/openclaw/openclaw/pull/184876) | Recovering exact-head proof on standard macOS Actions; no paid runner or artifact/cache storage authorized. |",
+        "| [openclaw/openclaw#191535](https://github.com/openclaw/openclaw/pull/191535) | Coordination posted; maintainer retains source-repair ownership. |",
+        "| [openclaw/openclaw#188813](https://github.com/openclaw/openclaw/pull/188813) | Blocked: no authenticated QA launcher. Owner must provision access. |",
+        "",
+        "| Repository | Branch | Commit | Platform | Result |",
+        "| --- | --- | --- | --- | --- |",
+        `| openclaw/openclaw | fix/progress-table | ${"a".repeat(64)} | macOS-standard | Pending verification |`,
+        "",
+        "x".repeat(120),
+      ].join("\n");
+      const { details } = await openProgress(page, false, markdown);
+      const content = details.locator(".session-progress-card__markdown");
+      const tables = content.locator("table");
+      await tables.nth(1).waitFor();
+      if (captureUiProofEnabled) {
+        const frame = await takeControlUiScreenshotFrame(page, details, [tables.first()], {
+          elements: [tables.first()],
+          animations: "disabled",
+        });
+        await writeFile(
+          path.join(suite.artifactDir, `progress-table-${width}.png`),
+          frame.elements[0]!.png,
+        );
+        await writeFile(path.join(suite.artifactDir, `progress-page-${width}.png`), frame.png);
+      }
+      const linkLines = await tables
+        .first()
+        .locator("tbody tr:first-child a")
+        .evaluate((link) => link.getClientRects().length);
+      expect(linkLines).toBeLessThanOrEqual(2);
+      expect(await tables.first().evaluate((table) => table.scrollWidth <= table.clientWidth)).toBe(
+        true,
+      );
+      const wideTable = tables.nth(1);
+      expect(await wideTable.evaluate((table) => table.scrollWidth > table.clientWidth)).toBe(true);
+      expect(await content.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      await wideTable.evaluate((table) => {
+        table.scrollLeft = table.scrollWidth;
+      });
+      expect(await wideTable.evaluate((table) => table.scrollLeft)).toBeGreaterThan(0);
+      expect(
+        await content
+          .locator(":scope > p")
+          .evaluate((element) => element.scrollWidth <= element.clientWidth),
+      ).toBe(true);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each([1440, 390])(
     "keeps paused and pending progress markers at their compact size at %i px",
     async (width) => {

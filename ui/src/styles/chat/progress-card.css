@@ -194,6 +194,11 @@
   overflow-wrap: anywhere;
 }
 
+/* Keep narrow columns readable; wider tables scroll in the shared Markdown table viewport. */
+.session-progress-card__markdown :where(th, td) {
+  min-width: 14ch;
+}
+
 .session-progress-card__markdown > :first-child {
   margin-top: 0;
 }
