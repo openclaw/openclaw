@@ -117,6 +117,35 @@ async function waitForSandboxCdp(params: {
   return false;
 }
 
+type BrowserAllocationAttempt = {
+  /** This attempt ran `docker create`; until publication nothing else knows the container exists. */
+  created: boolean;
+  /** A registry entry holds the container, so prune, list, and remove own it from here on. */
+  published: boolean;
+  /** The CDP startup timeout already ran removal; the attempt owner must not run it again. */
+  cleanupAttempted: boolean;
+};
+
+/**
+ * Removes a browser container that failed to come up. Returns whether removal was confirmed;
+ * a failed removal is logged, never thrown, so the startup error stays the reported one.
+ */
+async function removeFailedBrowserContainer(containerName: string): Promise<boolean> {
+  try {
+    const removed = await execDocker(["rm", "-f", containerName], { allowFailure: true });
+    const detail = removed.stderr.trim() || `docker rm exited with code ${removed.code}`;
+    if (removed.code !== 0 && !/no such (?:container|object)|does not exist/iu.test(detail)) {
+      throw new Error(detail);
+    }
+    return true;
+  } catch (error) {
+    defaultRuntime.error?.(
+      `Sandbox browser cleanup failed to remove ${containerName}: ${String(error)}`,
+    );
+    return false;
+  }
+}
+
 async function ensureSandboxBrowserImage(image: string) {
   const result = await execDocker(
     [
@@ -231,6 +260,29 @@ export async function ensureSandboxBrowser(
 async function ensureSandboxBrowserContainer(
   params: EnsureSandboxBrowserParams,
   containerName: string,
+): Promise<SandboxBrowserContext> {
+  const attempt: BrowserAllocationAttempt = {
+    created: false,
+    published: false,
+    cleanupAttempted: false,
+  };
+  try {
+    return await allocateSandboxBrowserContainer(params, containerName, attempt);
+  } catch (error) {
+    // A container created here but never published has no other owner and no user state
+    // yet, so remove it even after custody closes; otherwise it keeps running where no
+    // cleanup can see it.
+    if (attempt.created && !attempt.published && !attempt.cleanupAttempted) {
+      await removeFailedBrowserContainer(containerName);
+    }
+    throw error;
+  }
+}
+
+async function allocateSandboxBrowserContainer(
+  params: EnsureSandboxBrowserParams,
+  containerName: string,
+  attempt: BrowserAllocationAttempt,
 ): Promise<SandboxBrowserContext> {
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
   const state = await dockerContainerState(containerName);
@@ -356,6 +408,7 @@ async function ensureSandboxBrowserContainer(
     // an already-running writer from reconciliation or lifecycle cleanup.
     params.assertCurrent?.();
     await updateBrowserRegistry({ ...registryEntry, cdpPort: 0 }, params.assertCurrent);
+    attempt.published = true;
     params.assertCurrent?.();
   }
 
@@ -414,6 +467,7 @@ async function ensureSandboxBrowserContainer(
       args.push("--env-file", envFile, browserImage);
       params.assertCurrent?.();
       await execDocker(args, { assertCurrent: params.assertCurrent });
+      attempt.created = true;
     });
   }
   if (!hasContainer || !running) {
@@ -490,9 +544,14 @@ async function ensureSandboxBrowserContainer(
         });
         params.assertCurrent?.();
         if (!ok) {
-          await execDocker(["rm", "-f", containerName], { allowFailure: true });
+          const removed = await removeFailedBrowserContainer(containerName);
+          attempt.cleanupAttempted = true;
           throw new Error(
-            `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
+            `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. ${
+              removed
+                ? "The hung container has been forcefully removed."
+                : `Removing the hung container failed; remove it with \`docker rm -f ${containerName}\`.`
+            }`,
           );
         }
       };
@@ -569,6 +628,7 @@ async function ensureSandboxBrowserContainer(
       },
       params.assertCurrent,
     );
+    attempt.published = true;
     params.assertCurrent?.();
 
     const noVncUrl =
