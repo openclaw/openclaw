@@ -491,33 +491,42 @@ test.for(["completes", "slow", "cancelled", "rollback"] as const)(
   },
 );
 
-test("returns the committed overview while its refresh is still pending", async ({
-  usage: { agentId, files, refresh, hold, request, newScope },
-}) => {
-  const refreshOwner = newScope();
-  const release = hold("refreshed");
-  refresh.mockReturnValue(release.promise);
-  request({ sessionFiles: [files[0]] }, refreshOwner);
-  await tick(0, 1);
-  const settled = vi.fn();
-  const reading = newScope().track(() =>
-    loadOverview({
-      config,
-      agentId,
-      families: [[{ sessionFile: files[0] }]],
-      startMs: Date.UTC(2026, 8, 18),
-      endMs: Date.UTC(2026, 8, 19) - 1,
-    }),
+it("returns the committed overview while its refresh is still pending", async ({ signal }) => {
+  await withRefreshFixture(
+    async ({ agentId, files, refresh, hold, request, newScope }) => {
+      const refreshOwner = newScope();
+      const release = hold("refreshed");
+      const entered = createDeferredCore();
+      const refreshSettled = vi.fn();
+      void release.promise.then(refreshSettled, refreshSettled);
+      refresh.mockImplementation(() => {
+        entered.resolve();
+        return release.promise;
+      });
+      request({ sessionFiles: [files[0]] }, refreshOwner);
+      await withinTest(entered.promise, signal);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      const reading = newScope().track(() =>
+        loadOverview({
+          config,
+          agentId,
+          families: [[{ sessionFile: files[0] }]],
+          startMs: Date.UTC(2026, 8, 18),
+          endMs: Date.UTC(2026, 8, 19) - 1,
+        }),
+      );
+      // Prove refresh independence without imposing a cold-read latency budget.
+      expect(await withinTest(reading, signal)).toMatchObject({
+        computing: [true],
+        summarizing: 1,
+        cacheStatus: { status: "refreshing", pendingFiles: 1 },
+      });
+      expect(refreshSettled).not.toHaveBeenCalled();
+      expect(refreshOwner.hasPendingWork).toBe(true);
+      expect(refreshOwner.signal.aborted).toBe(false);
+    },
+    { fakeTimers: false },
   );
-  void reading.then(settled, settled);
-  // A report must return its explicit partial state without waiting for a transcript scan.
-  await vi.waitFor(() => expect(settled).toHaveBeenCalled(), { timeout: 1_000 });
-  expect(await reading).toMatchObject({
-    computing: [true],
-    summarizing: 1,
-    cacheStatus: { status: "refreshing", pendingFiles: 1 },
-  });
-  expect(refreshOwner.signal.aborted).toBe(false);
 });
 
 test("keeps an exact logical-selector read pending across a deferred rebuild", async ({
