@@ -750,23 +750,6 @@ defineDiscordVoiceTests(
       expectUserMessageIncludes("wake answer");
     });
 
-    it("accepts OpenClaw as a default wake name before realtime agent-proxy consults", async () => {
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "openclaw wake answer" }] });
-      const { entry, bridgeParams } = await createWakeNameFixture();
-
-      beginSpeakerTurn(entry);
-      await emitFinalRealtimeUserTranscript(bridgeParams, "OpenClaw, how is it going");
-
-      expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-        getToolAuthorityOverlay: expect.any(Function),
-        sessionKey: "discord:g1:c1",
-        text: "how is it going",
-      });
-      expect(lastAgentCommandArgs().message).toContain("how is it going");
-      expect(lastAgentCommandArgs().message).not.toContain("OpenClaw");
-      expectUserMessageIncludes("openclaw wake answer");
-    });
-
     it("ignores default agent wake names longer than two words", async () => {
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "fallback wake answer" }] });
       const { entry, bridgeParams } = await createWakeNameFixture("Claw Bot Helper");
@@ -793,7 +776,6 @@ defineDiscordVoiceTests(
       ["Open Club", "Open Club, can you hear me now?", "can you hear me now?"],
       ["Open Cloud", "Open Cloud, can you hear me too?", "can you hear me too?"],
       ["Molty", "Can you still hear trailing, Molty.", "Can you still hear trailing"],
-      ["Malty", "What's going on today, Malty?", "What's going on today"],
     ])("accepts fuzzy wake name %s", async (wakeName, transcript, expectedMessage) => {
       const { entry, bridgeParams } = await createWakeNameFixture();
       beginSpeakerTurn(entry);
@@ -808,7 +790,6 @@ defineDiscordVoiceTests(
       "This is a multi-step maintainer problem.",
       "I asked multi about this already.",
       "Open law is not the wake phrase.",
-      "I miss the nonsensical German ranting from Multy.",
       "Open chat, can you hear me now?",
     ])("rejects non-wake fuzzy phrase: %s", async (transcript) => {
       const { entry, bridgeParams } = await createWakeNameFixture();

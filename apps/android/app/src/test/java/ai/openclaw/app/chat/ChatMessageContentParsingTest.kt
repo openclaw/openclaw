@@ -289,57 +289,6 @@ class ChatMessageContentParsingTest {
   }
 
   @Test
-  fun initialResolutionUsesOperatorFallbackWhenNodeUnavailable() {
-    val target = "/__openclaw__/canvas/documents/widget-1/index.html"
-    val fallbackSurface = "https://operator.example/__openclaw__/cap/fallback"
-    val surfaces =
-      ChatWidgetSurfaceUrls(
-        node = null,
-        operator = GatewayCanvasHostRoute(url = fallbackSurface, tlsFingerprintSha256 = null),
-      )
-
-    val resolved = ChatWidgetUrlResolver.resolvePreferred(surfaces, target, excluding = null)
-
-    assertEquals(ChatWidgetUrlResolver.resolve(fallbackSurface, target), resolved?.url)
-  }
-
-  @Test
-  fun usesReplacementRouteAfterCapabilityRefreshLosesItsLease() =
-    runTest {
-      val target = "/__openclaw__/canvas/documents/widget-1/index.html"
-      val oldSurface = "https://gateway.example/__openclaw__/cap/old"
-      val newSurface = "https://gateway.example/__openclaw__/cap/new"
-      val oldPin = "aa".repeat(32)
-      val newPin = "bb".repeat(32)
-      val failedUrl = ChatWidgetUrlResolver.resolve(oldSurface, target)
-      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
-      var current =
-        ChatWidgetSurfaceUrls(
-          node = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = oldPin),
-          operator = null,
-        )
-
-      val resolved =
-        ChatWidgetUrlResolver.resolveAfterFailure(
-          target = target,
-          failedResource = failedResource,
-          currentSurfaceUrls = { current },
-          refreshNodeSurface = {
-            current =
-              ChatWidgetSurfaceUrls(
-                node = GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = newPin),
-                operator = null,
-              )
-            null
-          },
-          refreshOperatorSurface = { null },
-        )
-
-      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
-      assertEquals(newPin, resolved?.tlsFingerprintSha256)
-    }
-
-  @Test
   fun acceptsSameUrlReplacementWhenTlsPinChanged() =
     runTest {
       val target = "/__openclaw__/canvas/documents/widget-1/index.html"

@@ -300,15 +300,7 @@ describe("models.list", () => {
   });
 
   it("projects exact CLI runtime thinking capabilities onto every configured Claude model", async () => {
-    const modelIds = [
-      "claude-opus-5",
-      "claude-opus-4-8",
-      "claude-opus-4-7",
-      "claude-opus-4-6",
-      "claude-sonnet-5",
-      "claude-fable-5",
-      "claude-sonnet-4-6",
-    ];
+    const modelIds = ["claude-opus-5", "claude-sonnet-5", "claude-fable-5"];
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {

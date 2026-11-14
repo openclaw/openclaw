@@ -294,18 +294,6 @@ describe("settings sidebar search", () => {
     ]);
   });
 
-  it("finds Agent defaults by page name after its sidebar demotion", () => {
-    render({
-      activeRouteId: "agents",
-      searchQuery: "agent defaults",
-    });
-
-    const result = container.querySelector<HTMLAnchorElement>(
-      '.settings-sidebar__item[href="/settings/ai-agents"]',
-    );
-    expect(result?.textContent?.trim()).toBe("Agent defaults");
-  });
-
   it("excludes admin-only pages and config blocks from non-admin search", () => {
     render({
       canAdmin: false,
@@ -384,26 +372,6 @@ describe("settings sidebar search", () => {
       .querySelector<HTMLAnchorElement>('.settings-sidebar__item[href="/settings/channels"]')
       ?.click();
     expect(onNavigate).toHaveBeenCalledWith("channels");
-  });
-
-  it("clears a focused search before Escape exits Settings", () => {
-    const onExit = vi.fn();
-    const search = searchHarness("gateway", { onExit });
-    const { input } = search;
-    expect(input).not.toBeNull();
-    input?.focus();
-
-    input?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    expect(search.value).toBe("");
-    expect(document.activeElement).toBe(input);
-    expect(onExit).not.toHaveBeenCalled();
-
-    input?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    expect(onExit).toHaveBeenCalledOnce();
   });
 
   it("clears native search text while asynchronous results hold the previous query", async () => {

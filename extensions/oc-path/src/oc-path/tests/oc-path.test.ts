@@ -27,6 +27,7 @@ describe("parseOcPath", () => {
 
   it("rejects empty segment", () => {
     expectOcPathError(() => parseOcPath("oc://SOUL.md//deny-rule-1"), "OC_PATH_EMPTY_SEGMENT");
+    expect(() => parseOcPath("oc://config/x..y")).toThrow(/Empty dotted sub-segment/);
   });
 
   it("rejects too-deep nesting", () => {

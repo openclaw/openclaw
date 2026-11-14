@@ -142,35 +142,22 @@ async function postAgentHook(
     logHooks: logHooks as never,
     agentStartAdmissionTimeoutMs: options.admissionTimeoutMs,
   });
-  const req = Object.assign(
-    Readable.from([JSON.stringify({ message: "Dispatch", name: "Recovery", agentId: "hooks" })]),
-    {
-      method: "POST",
-      url: options.mapping ? "/hooks/terminal" : "/hooks/agent",
-      headers: {
-        authorization: "Bearer hook-secret",
-        "content-type": "application/json",
-      },
-      socket: { remoteAddress: "127.0.0.1" },
-    },
-  ) as unknown as IncomingMessage;
-  let responseBody = "";
-  const res = {
-    statusCode: 200,
-    setHeader: vi.fn(),
-    end: vi.fn((chunk: string) => {
-      responseBody = chunk;
-    }),
-  } as unknown as ServerResponse;
-
   if (options.rejectInitialConfig !== false) {
     mocks.getRuntimeConfig.mockImplementationOnce(() => {
       throw new Error("required system config unavailable");
     });
   }
   mocks.getRuntimeConfig.mockReturnValue(config);
-  expect(await handler(req, res)).toBe(true);
-  return { body: JSON.parse(responseBody) as { runId: string }, status: res.statusCode, logHooks };
+  const response = await post(handler, options.mapping ? "/hooks/terminal" : "/hooks/agent", {
+    message: "Dispatch",
+    name: "Recovery",
+    agentId: "hooks",
+  });
+  return {
+    body: JSON.parse(response.body()) as { runId: string },
+    status: response.res.statusCode,
+    logHooks,
+  };
 }
 
 describe("gateway hook early-failure recovery", () => {
@@ -833,82 +820,19 @@ describe("hook background admission", () => {
     );
   });
 
-  it.each([{ deliverySuppressionReason: "empty", replyDisposition: "empty" }] as const)(
-    "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",
-    async ({ deliverySuppressionReason, replyDisposition }) => {
-      mocks.getRuntimeConfig.mockReturnValue(config);
-      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-        async (params: { onExecutionStarted?: () => void }) => {
-          params.onExecutionStarted?.();
-          return {
-            status: "ok" as const,
-            delivered: false,
-            deliveryAttempted: true,
-            deliverySuppressionReason,
-            replyDisposition,
-            outputText: "private output",
-            summary: "private summary",
-            sessionId: "private-session",
-            sessionKey: "private-session-key",
-          };
-        },
-      );
-      const handler = createHandler(100);
-
-      const response = await post(handler, "/hooks/agent", {
-        message: "Direct",
-        name: "Observed",
-        waitForCompletion: true,
-      });
-
-      expect(response.res.statusCode).toBe(200);
-      expect(JSON.parse(response.body())).toEqual({
-        ok: true,
-        runId: expect.any(String),
-        completion: {
-          status: "ok",
-          replyDisposition,
-          delivered: false,
-          deliveryAttempted: true,
-          deliverySuppressionReason,
-        },
-      });
-    },
-  );
-
-  it("returns categorical delivery failure without private run data", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    const secret = "fake-secret-value-that-must-not-leak";
-    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        params.onExecutionStarted?.();
-        return {
-          status: "ok" as const,
-          replyDisposition: "visible" as const,
-          delivered: false,
-          deliveryAttempted: true,
-          deliveryError: `line\nAuthorization: Bearer ${secret}\n${"x".repeat(600)} tail`,
-          outputText: "private output",
-          summary: "private summary",
-          sessionId: "private-session",
-          sessionKey: "private-session-key",
-        };
+  it.each([
+    {
+      outcome: "suppressed",
+      completion: {
+        status: "ok",
+        replyDisposition: "empty",
+        delivered: false,
+        deliveryAttempted: true,
+        deliverySuppressionReason: "empty",
       },
-    );
-    const handler = createHandler(100);
-
-    const response = await post(handler, "/hooks/agent", {
-      message: "Direct",
-      name: "Observed",
-      deliver: false,
-      waitForCompletion: true,
-    });
-
-    const body = JSON.parse(response.body()) as {
-      completion: { deliveryError: string };
-    };
-    expect(response.res.statusCode).toBe(200);
-    expect(body).toMatchObject({
+    },
+    {
+      outcome: "delivery failed",
       completion: {
         status: "ok",
         replyDisposition: "visible",
@@ -916,33 +840,44 @@ describe("hook background admission", () => {
         deliveryAttempted: true,
         deliveryError: "delivery-failed",
       },
-    });
-    expect(JSON.stringify(body)).not.toMatch(
-      /Authorization|fake-secret-value|private output|private summary|private-session|x{20}/,
-    );
-  });
-
-  it("settles an admitted waiter when the isolated runner throws", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        params.onExecutionStarted?.();
-        throw new Error("private execution diagnostic");
-      },
-    );
-    const handler = createHandler(100);
-
-    const response = await post(handler, "/hooks/agent", {
-      message: "Direct",
-      name: "Observed",
-      waitForCompletion: true,
-    });
-
-    expect(response.res.statusCode).toBe(200);
-    expect(JSON.parse(response.body())).toEqual({
-      ok: true,
-      runId: expect.any(String),
-      completion: { status: "error", replyDisposition: "empty" },
-    });
-  });
+    },
+    { outcome: "runner threw", completion: { status: "error", replyDisposition: "empty" } },
+  ] as const)(
+    "settles an explicit waiter when $outcome without private run data",
+    async ({ outcome, completion }) => {
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+        async (params: { onExecutionStarted?: () => void }) => {
+          params.onExecutionStarted?.();
+          if (outcome === "runner threw") {
+            throw new Error("private execution diagnostic");
+          }
+          return {
+            ...completion,
+            ...(outcome === "delivery failed"
+              ? {
+                  deliveryError: `line\nAuthorization: Bearer fake-secret-value-that-must-not-leak\n${"x".repeat(600)} tail`,
+                }
+              : {}),
+            outputText: "private output",
+            summary: "private summary",
+            sessionId: "private-session",
+            sessionKey: "private-session-key",
+          };
+        },
+      );
+      const response = await post(createHandler(100), "/hooks/agent", {
+        message: "Direct",
+        name: "Observed",
+        ...(outcome === "delivery failed" ? { deliver: false } : {}),
+        waitForCompletion: true,
+      });
+      const body = JSON.parse(response.body());
+      expect(response.res.statusCode).toBe(200);
+      expect(body).toEqual({ ok: true, runId: expect.any(String), completion });
+      expect(JSON.stringify(body)).not.toMatch(
+        /Authorization|fake-secret-value|private output|private summary|private-session|private execution diagnostic|x{20}/,
+      );
+    },
+  );
 });

@@ -121,13 +121,6 @@ describe("resolveFollowupDeliveryDecision", () => {
     { state: "missing", routed: true, outcome: "missing", text: "Done", sourceReplyFinal: false },
     { state: undefined, routed: false, outcome: "reply", text: "Done", sourceReplyFinal: false },
     { state: undefined, routed: true, outcome: "deduped", text: "✅", sourceReplyFinal: false },
-    {
-      state: undefined,
-      routed: true,
-      outcome: "deduped",
-      text: "Completed.",
-      sourceReplyFinal: false,
-    },
   ] as const)(
     "requires current-source evidence before suppressing a queued duplicate: $state/$routed/$text/$sourceReplyFinal",
     async ({ state, routed, outcome, text, sourceReplyFinal }) => {

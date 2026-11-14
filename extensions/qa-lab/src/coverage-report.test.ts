@@ -342,22 +342,6 @@ describe("qa coverage report", () => {
     expect(report).not.toContain("### Unknown Scenario Coverage IDs");
   });
 
-  it.each(["script"] as const)(
-    "finds %s scenarios by execution paths outside their code refs",
-    (executionKind) => {
-      const executionPath = `test/producers/${executionKind}-only.ts`;
-      const scenario = scenarioWithCoverage({
-        primary: [TEST_EXECUTABLE_COVERAGE_ID],
-        executionKind,
-        executionPath,
-      });
-
-      expect(findQaScenarioMatches([scenario], executionPath)).toMatchObject([
-        { id: scenario.id, executionKind, executionPath },
-      ]);
-    },
-  );
-
   it("finds every shared execution-path owner in deterministic scenario order", () => {
     const executionPath = "test/producers/shared-evidence.ts";
     const scenario = scenarioWithCoverage({

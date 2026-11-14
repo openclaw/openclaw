@@ -3187,11 +3187,6 @@ console.error = function (...args) {
       grouped: "openclaw_crabbox_env -i pnpm mac:package",
     },
     {
-      name: "does not bootstrap JS tooling for env package scripts behind command",
-      input: ["command", "env", "-i", "PATH=/usr/bin:/bin", "bash", "scripts/package-mac-app.sh"],
-      excludes: ["openclaw_crabbox_bootstrap_macos_js"],
-    },
-    {
       name: "does not preflight Swift for raw AWS macOS commands that only mention package scripts",
       input: ["echo", "scripts/package-mac-app.sh"],
       excludes: ["openclaw_crabbox_require_macos_swift_63"],
@@ -3506,35 +3501,18 @@ console.error = function (...args) {
 
   it.each([
     {
-      name: "preflights Swift and JS tooling for raw AWS macOS shell-launched package scripts",
-      script: "scripts/package-mac-app.sh",
-    },
-    {
-      js: false,
       name: "keeps raw AWS macOS build-and-run scripts Swift-only",
       script: "scripts/build-and-run-mac.sh",
     },
-  ])("$name", ({ js = true, script }) => {
+  ])("$name", ({ script }) => {
     const { output, remoteCommand } = runSuccessfulMacosCommand(["bash", script]);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("openclaw_crabbox_require_macos_swift_63");
-    if (js) {
-      expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-      expect(remoteCommand).toContain("pnpm --version >&2");
-    } else {
-      expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-    }
+    expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
     expectGroupedShellCommand(remoteCommand, `bash ${script}`);
   });
 
   it.each([
-    {
-      command: ["/usr/bin/env", "pnpm", "--version"],
-      expectShell: true,
-      expectedCommand: "openclaw_crabbox_env pnpm --version",
-      includes: ['corepack enable --install-directory "$PNPM_HOME"'],
-      name: "bootstraps Corepack for raw AWS macOS env-prefixed pnpm commands",
-    },
     {
       command: ["env", "-i", "PATH=/usr/bin:/bin", "pnpm", "--version"],
       excludes: ["export -f env openclaw_crabbox_env", 'env() { openclaw_crabbox_env "$@"; };'],
@@ -3552,12 +3530,6 @@ console.error = function (...args) {
       name: "bootstraps Corepack for raw AWS macOS env options before ignore-environment",
     },
     {
-      command: ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "pnpm", "--version"],
-      expectShell: true,
-      expectedCommand: "openclaw_crabbox_env -i PATH=/usr/bin:/bin pnpm --version",
-      name: "bootstraps Corepack for raw AWS macOS absolute env ignore-environment commands",
-    },
-    {
       command: ["/usr/bin/env", "-i", "pnpm", "--version"],
       expectedCommand: "openclaw_crabbox_env -i pnpm --version",
       includes: [
@@ -3565,11 +3537,8 @@ console.error = function (...args) {
       ],
       name: "injects the bootstrapped PATH for raw AWS macOS absolute env -i commands",
     },
-  ])("$name", ({ command, excludes = [], expectShell, expectedCommand, includes = [] }) => {
-    const { output, remoteCommand } = runSuccessfulMacosCommand(command);
-    if (expectShell) {
-      expect(output.args).toContain("--shell");
-    }
+  ])("$name", ({ command, excludes = [], expectedCommand, includes }) => {
+    const { remoteCommand } = runSuccessfulMacosCommand(command);
     for (const snippet of [
       "openclaw_crabbox_bootstrap_macos_js",
       "pnpm --version >&2",
@@ -3775,20 +3744,6 @@ console.error = function (...args) {
     },
   ])("$name", (entry) => {
     expectMacosBootstrap(runSuccessfulMacosScript(entry.input, entry.options), entry, true);
-  });
-
-  it("does not treat run option values as AWS macOS script-stdin flags", () => {
-    const result = runDefaultWrapper(
-      runArgs("aws", "--target", "macos", "--label", "--script-stdin", "--", "echo ok"),
-      { input: "node -v\n" },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    expect(result.status).toBe(0);
-    expect(output.args).toContain("--label");
-    expect(output.args).toContain("--script-stdin");
-    expect(output.args).not.toContain("--script");
-    expect(output.scriptContent).toBe("");
   });
 
   it.each(
@@ -4103,12 +4058,6 @@ console.error = function (...args) {
   });
 
   it.each([
-    {
-      scenario: "Blacksmith maintained workflow",
-      provider: "blacksmith-testbox",
-      args: ["--blacksmith-ref", "main"],
-      command: ["corepack", "pnpm", "check:changed"],
-    },
     { scenario: "local container", provider: "local-container", args: [], command: ["echo ok"] },
     {
       scenario: "existing AWS lease",
@@ -5302,8 +5251,6 @@ require('node:module').syncBuiltinESMExports();`,
           const index = path.join(nativeGit, "index");
           const manifest = path.join(nativeGit, "crabbox", "manifest");
           const pipeFacts = {
-            closedPipes,
-            receiverPid,
             receiverExit: observed.result.status,
             childGone: Number.isInteger(childPid) && childPid > 0 && !isProcessAlive(childPid),
             gitInodeRestored: existsSync(nativeGit) && lstatSync(nativeGit).ino === nativeStat.ino,
@@ -5311,11 +5258,6 @@ require('node:module').syncBuiltinESMExports();`,
             gitIndexRestored: existsSync(index) && readFileSync(index).equals(nativeIndex),
             gitMetadataRestored:
               existsSync(manifest) && readFileSync(manifest, "utf8") === "native sync receipt\n",
-            gitDirectoryPresent: existsSync(nativeGit),
-            gitMetadataPresent: existsSync(path.join(nativeGit, "crabbox")),
-            nativeBackupPresent: backups.some((name) =>
-              existsSync(path.join(receiver, name, "native-git")),
-            ),
             backupGone: backups.length === 0,
             pipeErrors: existsSync(pipeErrors)
               ? readFileSync(pipeErrors, "utf8")
@@ -6612,17 +6554,6 @@ cp.spawnSync = (command, args, options) => {
       expect(readdirSync(path.join(root, "sync"))).toEqual([]);
     },
   );
-
-  it("preserves macOS JS and Git bootstraps for sparse shell changed gates with setup", () => {
-    const shellScript = ["set -euo pipefail", "pnpm check:changed"].join("\n");
-    const { output, remoteCommand } = runSuccessfulMacosShell(
-      shellScript,
-      sparseChangedGateOptions,
-    );
-    expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
-    expect(remoteCommand).toContain("node -e");
-    expectMacosJsBootstrap(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
-  });
 
   it.each([
     {

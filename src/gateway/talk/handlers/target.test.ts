@@ -105,11 +105,15 @@ function setConfig(overrides: Partial<OpenClawConfig>) {
   setRuntimeConfigSnapshot(config);
 }
 
-function setRole(role: Omit<GatewayOperatorRoleDefinition, "scopes">, name = "limited") {
+function setRole(
+  role: Omit<GatewayOperatorRoleDefinition, "scopes">,
+  name = "limited",
+  scopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.read", "operator.write"],
+) {
   config.gateway = {
     roles: {
       default: name,
-      definitions: { [name]: { scopes: ["operator.read", "operator.write"], ...role } },
+      definitions: { [name]: { scopes, ...role } },
     },
   };
 }
@@ -482,15 +486,36 @@ it.each(["sharing", "incognito", "replacement", "owner"] as const)(
   },
 );
 
-it("retains the identified creator when a restricted role creates its first Talk session", async () => {
-  setRole({ agents: ["voice"], sessions: { others: "none" } }, "personal");
-  expectCreated(await createClient());
-  expect(loadSessionEntry(voiceScope)?.createdActor).toEqual({
-    type: "human",
-    source: "profile",
-    id: client.authenticatedUserProfile?.profileId,
-  });
-});
+it.each(
+  realtimeStarts.flatMap((start) =>
+    [false, true].map((sandbox) => Object.assign({}, start, { sandbox })),
+  ),
+)(
+  "$method retains the identified creator and required isolation (sandbox=$sandbox)",
+  async ({ sandbox, ...start }) => {
+    setRole(
+      {
+        agents: ["voice"],
+        sessions: { others: "none" },
+        ...(sandbox ? { sandbox: "required" } : {}),
+      },
+      "personal",
+      sandbox ? ["operator.talk"] : undefined,
+    );
+    if (sandbox) {
+      client.connect.scopes = ["operator.talk"];
+    }
+    const sessionKey = sandbox ? "agent:voice:talk-required" : undefined;
+    expectCreated(await startRealtime(start, sessionKey), expect.any(Object));
+    const entry = loadSessionEntry({ ...voiceScope, ...(sessionKey ? { sessionKey } : {}) });
+    expect(entry?.createdActor).toEqual({
+      type: "human",
+      source: "profile",
+      id: client.authenticatedUserProfile?.profileId,
+    });
+    expect(entry?.sandbox).toBe(sandbox ? "required" : undefined);
+  },
+);
 
 it.each(realtimeStarts)(
   "$method restores an archived backing session in place before provider creation",

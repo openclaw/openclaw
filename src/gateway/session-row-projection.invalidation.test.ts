@@ -254,6 +254,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
     const scope = { agentId: "main", sessionKey: parentKey };
     const parent: SessionEntry = {
       sessionId: "parent",
+      label: "Parent root",
       updatedAt: 1,
       visibility: "shared",
       providerOverride: "unit-test",
@@ -266,17 +267,34 @@ it("reuses descendants after parent progress while keeping inherited models curr
         { agentId: "main", sessionKey },
         {
           sessionId: `child-${index}`,
+          label: `Parent row ${index}`,
           updatedAt: index + 2,
           visibility: "shared",
           ...(sessionKey === children[0] ? { parentSessionKey: parentKey } : {}),
         },
       );
     }
+    const archivedKeys = ["agent:main:archived-0", "agent:main:archived-1"];
+    for (const [index, sessionKey] of archivedKeys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: `archived-${index}`,
+          label: `Parent archive ${index}`,
+          updatedAt: index + 5,
+          archivedAt: 1,
+          visibility: "shared",
+        },
+      );
+    }
     using _ = holdForeground();
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
     const context = bindSessionRowProjection(requestContext(cfg), () => projection);
     const client = identifiedClient("viewer");
-    const list = () => listSessions({ context, client, request: {} });
+    const list = (search?: string) => listSessions({ context, client, request: { search } });
+    const page = (search?: string) =>
+      listSessions({ context, client, request: { limit: 3, archived: "all", search } });
     const sequence = (key: string) =>
       projection.capture({ agentId: "main", key })?.materializedSequence;
     try {
@@ -291,6 +309,15 @@ it("reuses descendants after parent progress while keeping inherited models curr
       expect(initial.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([
         children[0],
       ]);
+      expect(await list("agent:main")).toEqual(initial);
+      const initialPage = await page();
+      expect(initialPage).toMatchObject({ count: 3, totalCount: 6 });
+      expect(initialPage.sessions.map((row) => row.key)).toEqual([
+        archivedKeys[1],
+        archivedKeys[0],
+        siblingKey,
+      ]);
+      expect(await page("Parent")).toEqual(initialPage);
       const reads: string[] = [];
       const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
       vi.spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases").mockImplementation(
@@ -336,13 +363,27 @@ it("reuses descendants after parent progress while keeping inherited models curr
         } else {
           sessionChanges.emit(scope);
         }
-        await list();
+        const current = await list();
+        if (!change) {
+          expect(current).toEqual(initial);
+        }
+        const currentPage = await page();
+        expect(currentPage).toMatchObject({ count: 3, totalCount: 6 });
+        expect(currentPage.sessions.map((row) => row.key)).toEqual(
+          change
+            ? [parentKey, archivedKeys[1], archivedKeys[0]]
+            : initialPage.sessions.map((row) => row.key),
+        );
+        expect(await page("Parent")).toEqual(currentPage);
+        if (!change) {
+          expect(currentPage).toEqual(initialPage);
+        }
         expect(children.map(sequence)).toEqual(original);
         expect(snapshot(siblingKey)).toBe(siblingSnapshot);
         if (change) {
           expect(snapshot(parentKey)).not.toBe(parentSnapshot);
           expect(snapshot(parentKey).label).toBe("Updated parent");
-          expect(parentSnapshot.label).toBeUndefined();
+          expect(parentSnapshot.label).toBe("Parent root");
         }
       }
       const cases: Array<[Partial<SessionEntry>, string, string]> = [

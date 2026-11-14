@@ -10,11 +10,13 @@ import { withEngineStoreAdmission } from "../../infra/database-engine/admission-
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { stateTest } from "../../plugin-state/plugin-state-fixtures.test-support.js";
 import { createCorePluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { MAX_PLUGIN_STATE_VALUE_BYTES } from "../../plugin-state/plugin-state-store.kernel.js";
+import { serializePluginStoreJson } from "../../plugin-state/plugin-store-validation.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateWriter from "../../state/openclaw-state-worker-store.js";
 import { createOpenClawIdAuthority } from "./authority.js";
-import { readStoredClaw, writeStoredClaw } from "./claw-store.js";
+import { clawStoreRows, readStoredClaw, writeStoredClaw } from "./claw-store.js";
 import { fullClaw } from "./claw-store.test-support.js";
 import { stageGatewayKey } from "./gateway-key.js";
 import { linkedClaw, serviceFor } from "./openclaw-id.test-support.js";
@@ -24,10 +26,29 @@ import * as tunnelRuntime from "./tunnel-runtime.js";
 const it = stateTest("openclaw-id-claw-persistence");
 afterEach(() => vi.restoreAllMocks());
 
-it("saves an escaped full-capacity claw and restores every section after reopening", async ({
+it("saves bounded full-capacity partitions and restores every section after reopening", async ({
   state,
 }) => {
   state.applyEnv();
+  const fail = (message: string) => new Error(message);
+  const serialize = (value: unknown) =>
+    serializePluginStoreJson({
+      value,
+      label: "claw row",
+      errors: { invalid: fail, limit: fail },
+      maxBytes: MAX_PLUGIN_STATE_VALUE_BYTES,
+    });
+  for (const text of ["\u0001".repeat(256), "界".repeat(256), "😀".repeat(128)]) {
+    const record = fullClaw(text);
+    const rows = clawStoreRows(record);
+    for (const row of Object.values(rows)) {
+      expect(Buffer.byteLength(serialize(row))).toBeLessThan(MAX_PLUGIN_STATE_VALUE_BYTES);
+    }
+    expect(
+      Object.keys(rows).filter((key) => key === "members" || key.startsWith("members:")),
+    ).toHaveLength(8);
+    expect(() => serialize(record)).toThrow();
+  }
   const record = fullClaw();
   await writeStoredClaw(record);
   await closeOpenClawStateDatabaseAsync();
@@ -66,14 +87,17 @@ it("moves prior rows without losing bindings and refuses an incomplete partition
 }) => {
   state.applyEnv();
   // A small monolithic predecessor fits the old value cap and represents an existing installation.
-  const record = { ...fullClaw(), authority: null, invite_reports: {}, token_bindings: [] };
+  const binding = { device_id: "browser", role: "operator", peer_key: "iroh:a", bound_at: 1 };
+  const record = { ...fullClaw(), authority: null, invite_reports: {}, token_bindings: [binding] };
   const store = createCorePluginStateKeyedStore<unknown>({
     ownerId: "core:openclaw-id",
     namespace: "claw",
     retention: "retained",
   });
   await store.register("current", record);
-  const binding = { device_id: "browser", role: "operator", peer_key: "iroh:a", bound_at: 1 };
+  expect((await readStoredClaw())?.token_bindings).toEqual([binding]);
+  await store.register("token-bindings", { v: 1, bindings: [] });
+  expect((await readStoredClaw())?.token_bindings).toEqual([]);
   await store.register("token-bindings", { v: 1, bindings: [binding] });
   const loaded = await readStoredClaw();
   expect(loaded?.token_bindings).toEqual([binding]);

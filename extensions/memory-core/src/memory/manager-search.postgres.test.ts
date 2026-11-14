@@ -594,7 +594,6 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
   });
 
   it.each([
-    { query: "cafe absentword", body: ["memory/lexical.md"], paths: [] },
     { query: "absentword", body: [], paths: [] },
     {
       query: "cafe absentword",

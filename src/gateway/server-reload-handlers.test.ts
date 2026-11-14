@@ -2070,24 +2070,6 @@ describe("gateway hot reload model state", () => {
     );
   });
 
-  it("rejects an ownerless context cache reload before runtime commit", async () => {
-    const { applyHotReload, setState } = createReloadHandlersForTest({ recovery: false });
-
-    await expect(
-      applyHotReload(
-        createHotTailPlan({
-          changedPaths: ["agents.defaults.workspace"],
-          hotReasons: ["agents.defaults.workspace"],
-        }),
-        { agents: { defaults: { workspace: "/tmp/next-workspace" } } } as OpenClawConfig,
-      ),
-    ).rejects.toThrow(
-      "config reload requires a managed gateway restart owner for irreversible hot reload",
-    );
-
-    expectCalls(0, setState, hoisted.refreshContextWindowCache);
-  });
-
   it.each([
     {
       label: "adds the agents object",
@@ -3232,6 +3214,14 @@ describe("gateway Gmail hot reload handlers", () => {
           },
           surface: "irreversible hot reload",
         },
+        {
+          label: "workspace",
+          config: {
+            ...initialConfig,
+            agents: { defaults: { workspace: "/tmp/next-workspace" } },
+          },
+          surface: "irreversible hot reload",
+        },
       ] satisfies Array<{ label: string; config: OpenClawConfig; surface: string }>;
 
       for (const testCase of rejectedConfigs) {
@@ -3242,6 +3232,7 @@ describe("gateway Gmail hot reload handlers", () => {
         expect(reconcileRuntimePolicy).not.toHaveBeenCalled();
         expect(activateRuntimeSecrets.prepareSnapshot).not.toHaveBeenCalled();
         expect(setState).not.toHaveBeenCalled();
+        expect(hoisted.refreshContextWindowCache).not.toHaveBeenCalled();
         expect(promoteSnapshot).not.toHaveBeenCalled();
         expect(logReload.error).toHaveBeenCalledWith(
           expect.stringContaining(

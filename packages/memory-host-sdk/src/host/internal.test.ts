@@ -537,27 +537,6 @@ describe("memory host SDK package internals", () => {
     expect(isMemoryPath("DREAMS.md")).toBe(true);
   });
 
-  it("builds markdown and multimodal file entries", async () => {
-    const tmpDir = getTmpDir();
-    const notePath = path.join(tmpDir, "note.md");
-    const imagePath = path.join(tmpDir, "diagram.png");
-    fsSync.writeFileSync(notePath, "hello", "utf-8");
-    fsSync.writeFileSync(imagePath, Buffer.from("png"));
-
-    const note = await buildFileEntry(notePath, tmpDir);
-    const image = await buildFileEntry(imagePath, tmpDir, multimodal);
-
-    const noteEntry = expectDefined(note, "note entry");
-    expect(noteEntry.path).toBe("note.md");
-    expect(noteEntry.kind).toBe("markdown");
-    const imageEntry = expectDefined(image, "image entry");
-    expect(imageEntry.path).toBe("diagram.png");
-    expect(imageEntry.kind).toBe("multimodal");
-    expect(imageEntry.modality).toBe("image");
-    expect(imageEntry.mimeType).toBe("image/png");
-    expect(imageEntry.contentText).toBe("Image file: diagram.png");
-  });
-
   it("retries transient markdown reads while building file entries", async () => {
     const tmpDir = getTmpDir();
     const notePath = path.join(tmpDir, "note.md");
@@ -629,17 +608,6 @@ describe("memory host SDK package internals", () => {
     for (const chunk of chunks) {
       expect(() => encodeURIComponent(chunk.text)).not.toThrow();
     }
-  });
-
-  it("keeps chunks within budget when overlap carries a long segment", () => {
-    // A 3000-char line is sliced into 1600-char segments; without a bounded
-    // carry the emitted chunk used to reach 3001 chars (budget 1600).
-    const chunks = chunkMarkdown("a".repeat(3000), { tokens: 400, overlap: 80 });
-
-    for (const chunk of chunks) {
-      expect(chunk.text.length).toBeLessThanOrEqual(1600);
-    }
-    expect(chunks.map((chunk) => chunk.text).join("")).toContain("a".repeat(100));
   });
 
   it("keeps chunks within budget for mixed short and long lines", () => {

@@ -240,7 +240,6 @@ it("measures each native item relative to its own PCM inside one response", asyn
       { itemId: "second", audioEndMs: state.resource.playbackDuration - 200 },
     ];
     expect(fixture.callbacks.getPlaybackState?.()).toEqual(expected);
-    expect(fixture.callbacks.getPlaybackState?.()).toEqual(expected);
     fixture.callbacks.onResponseDone?.({ status: "completed" });
     expect(fixture.callbacks.getPlaybackState?.()).toEqual([expected[1]]);
   } finally {

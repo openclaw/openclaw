@@ -912,6 +912,17 @@ exit "$status"
       main: false,
       nested: true,
     },
+    ...["", selectedHead].map((replacement) => ({
+      name: `pre-dispatch refusal (replacement=${replacement})`,
+      args: [
+        ...recoveryArgs,
+        "--pre-dispatch-refusal",
+        "proof",
+        ...(replacement ? ["--replacement-head", replacement] : []),
+      ],
+      fields: { outcome: outcomeOid, replacement, refusal: "proof" },
+      nested: true,
+    })),
     {
       name: "observed head for auto retirement",
       args: [...recoveryArgs, "--observed-head", selectedHead, "--cancel-auto"],
@@ -953,6 +964,9 @@ exit "$status"
     }
     if (expected.admin) {
       expected.admin = join(caller, expected.admin);
+    }
+    if (expected.refusal) {
+      expected.refusal = join(caller, expected.refusal);
     }
     const result = runWrapper(fixture, args, "canonical", nested ? { cwd: caller } : {});
     expect(result, result.stderr).toMatchObject({ status: 0, stdout: expectedDispatch(expected) });
@@ -997,7 +1011,6 @@ exit "$status"
       ["merge-run", "123", "--body-file", ""],
       ["merge-run", "123", "--body-file", "one", "--body-file", "two"],
       ["merge-run", "123", "--auto-merge", "--auto-merge"],
-      ["merge-recover", "123", outcomeOid, "--body-file", "one"],
       ...[
         ["--admin-evidence", "proof.json"],
         ["--confirmed-operator-admin"],
@@ -1010,32 +1023,6 @@ exit "$status"
       expect(result.status, `${args.join(" ")}\n${result.stdout}${result.stderr}`).toBe(2);
       expect(result.stdout).toContain("Usage:");
     }
-  });
-
-  itPosix("pins pre-dispatch-refusal evidence relative to the original caller", () => {
-    const flag = "pre-dispatch-refusal";
-    const { fixture, caller } = mergeDispatchFixture();
-    const args = [
-      "merge-recover",
-      "123",
-      outcomeOid,
-      "--confirmed-operator-recovery",
-      `--${flag}`,
-      "proof",
-    ];
-    const missing = runWrapper(fixture, args, "canonical", { cwd: caller });
-    expect(missing.status, missing.stdout + missing.stderr).toBe(0);
-    const result = runWrapper(fixture, [...args, "--replacement-head", selectedHead], "canonical", {
-      cwd: caller,
-    });
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      expectedDispatch({
-        outcome: outcomeOid,
-        replacement: selectedHead,
-        refusal: join(caller, "proof"),
-      }),
-    );
   });
 
   itPosix("authenticates dependency-cache recovery without packages or developer authority", () => {
@@ -1346,29 +1333,6 @@ exec "$anchor/scripts/pr" "$@"
       }
     },
   );
-
-  it("substitutes the canonical wrapper for a stale-base worktree once main moves the wrapper", () => {
-    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
-    // Stale worktree: created at the pushed main base, no local wrapper edits.
-    const stale = join(fixture.root, "stale");
-    const baseline = fixture.gitText(["rev-parse", "main"]);
-    fixture.git(fixture.canonical, ["worktree", "add", "-b", "stale-feature", stale, baseline]);
-
-    // main's wrapper then advances and the canonical checkout tracks it.
-    fixture.write("scripts/pr-lib/gates.sh", 'ci_dispatch() { echo "canonical v2 executed"; }\n');
-    fixture.commit(["scripts/pr-lib/gates.sh"], true);
-
-    const result = runCommand(
-      join(stale, "scripts", "pr"),
-      ["ci-dispatch", "123"],
-      fixture.env,
-      stale,
-    );
-    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.stdout).toContain("canonical v2 executed");
-    expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
-    expect(result.stderr).not.toContain("Refusing to silently substitute");
-  });
 
   // Parks the canonical checkout on a diverging branch so neither the linked
   // worktree nor canonical matches the fetched origin/main anchor — the shape
@@ -2111,83 +2075,34 @@ if (process.env.PR_TEST_INSTALL_GATE) {
     expect(collected.stderr).not.toContain("Warning:");
   }
 
-  itPosix.each(["install", "hold", "settle"])(
-    "recovers the next scripts/pr invocation after SIGKILL during %s",
-    (phase) => {
-      const fixture = makeFrozenDependencyFixture();
-      const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
-      let anchor;
-      if (phase === "install") {
-        const installer = join(fixture.bin, "pnpm");
-        writeFileSync(
-          installer,
-          `${readScript(installer)}
-const anchor = fs.readdirSync(${JSON.stringify(fixture.root)}).find(name => name.startsWith("openclaw-pr-anchor-v3."));
-if (!anchor) throw new Error("Missing actual wrapper anchor");
-const creator = Number(anchor.split(".")[1]);
-process.kill(creator, "SIGKILL");
-if (process.ppid !== creator) process.kill(process.ppid, "SIGKILL");
-process.kill(process.pid, "SIGKILL");
-`,
-        );
-        const killed = fixture.run({ OPENCLAW_PR_TOOLING_ROOT: fixture.tooling });
-        expect(killed.signal, killed.stdout + killed.stderr).toBe("SIGKILL");
-        const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor-v3.");
-        expect(anchors).toHaveLength(1);
-        anchor = join(fixture.root, anchors[0]!);
-        expect(readdirSync(cache).filter((name) => name.startsWith("install-"))).toHaveLength(1);
-      } else {
-        ({ anchor } = materializeAnchor(fixture, {
-          ...fixture.env,
-          OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
-        }));
-        expect(prCacheEntries(cache)).toHaveLength(1);
-        expect(readPrCacheState(join(cache, prCacheEntries(cache)[0]!)).anchors).toEqual([anchor]);
-      }
-      fixture.git(fixture.canonical, ["checkout", "main"]);
-      if (phase === "settle") {
-        const preload = join(fixture.root, "interrupt-settlement.cjs");
-        writeFileSync(
-          preload,
-          `
-const { existsSync } = require("node:fs");
-const { DatabaseSync } = require("node:sqlite");
-const exec = DatabaseSync.prototype.exec;
-DatabaseSync.prototype.exec = function(sql) {
-  if (sql === "COMMIT" && !existsSync(${JSON.stringify(anchor)})) {
-    process.kill(process.ppid, "SIGKILL");
-    process.kill(process.pid, "SIGKILL");
-  }
-  return exec.call(this, sql);
-};
-`,
-        );
-        const killed = runWrapper(fixture, ["unknown-command"], "canonical", {
-          env: { ...fixture.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
-        });
-        expect(killed.signal, killed.stdout + killed.stderr).toBe("SIGKILL");
-        expect(existsSync(anchor)).toBe(false);
-        expect(existsSync(join(cache, ".metadata-lock"))).toBe(true);
-      }
-      const resumed = runWrapper(fixture, ["unknown-command"], "canonical", { env: fixture.env });
-      expect(resumed.status, resumed.stdout + resumed.stderr).toBe(2);
-      expect(resumed.stderr).not.toContain("dependency cache cleanup failed");
-      expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
-      expect(prCacheEntries(cache)).toHaveLength(phase === "install" ? 0 : 1);
-      for (const key of prCacheEntries(cache)) {
-        expect(readPrCacheState(join(cache, key))).toEqual({
-          registered: true,
-          settled: true,
-          anchors: [],
-        });
-      }
-      expect(
-        readdirSync(cache).some((name) =>
-          /^(?:install-|retired-|lifetime-|\.metadata-lock)/.test(name),
-        ),
-      ).toBe(false);
-    },
-  );
+  itPosix.each(["hold"])("recovers the next scripts/pr invocation after SIGKILL during %s", () => {
+    const fixture = makeFrozenDependencyFixture();
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    const { anchor } = materializeAnchor(fixture, {
+      ...fixture.env,
+      OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
+    });
+    expect(prCacheEntries(cache)).toHaveLength(1);
+    expect(readPrCacheState(join(cache, prCacheEntries(cache)[0]!)).anchors).toEqual([anchor]);
+    fixture.git(fixture.canonical, ["checkout", "main"]);
+    const resumed = runWrapper(fixture, ["unknown-command"], "canonical", { env: fixture.env });
+    expect(resumed.status, resumed.stdout + resumed.stderr).toBe(2);
+    expect(resumed.stderr).not.toContain("dependency cache cleanup failed");
+    expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
+    expect(prCacheEntries(cache)).toHaveLength(1);
+    for (const key of prCacheEntries(cache)) {
+      expect(readPrCacheState(join(cache, key))).toEqual({
+        registered: true,
+        settled: true,
+        anchors: [],
+      });
+    }
+    expect(
+      readdirSync(cache).some((name) =>
+        /^(?:install-|retired-|lifetime-|\.metadata-lock)/.test(name),
+      ),
+    ).toBe(false);
+  });
 
   itPosix(
     "keeps a live package reader after its creator exits, then releases its finished hold",

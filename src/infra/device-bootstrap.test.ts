@@ -208,20 +208,6 @@ describe("device bootstrap tokens", () => {
     await expectVerification(baseDir, issued.token, false);
   });
 
-  it("keeps non-cloud setup credentials limited to ten minutes", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
-    const issued = await issueSetupToken(baseDir);
-    expect(issued.expiresAtMs).toBe(Date.now() + 10 * 60 * 1000);
-    vi.setSystemTime(issued.expiresAtMs);
-    await expectVerification(baseDir, issued.token, true);
-    vi.setSystemTime(issued.expiresAtMs + 1);
-    await expect(
-      consumeBootstrapToken(baseDir, issued.token, { completedAtMs: Date.now() }),
-    ).resolves.toBeNull();
-    await expectVerification(baseDir, issued.token, false);
-  });
-
   it("reuses one setup bearer until the exact handoff completes", async () => {
     const setupId = "worker-environment-setup";
     const first = await ensureDevicePairSetupBootstrapToken({

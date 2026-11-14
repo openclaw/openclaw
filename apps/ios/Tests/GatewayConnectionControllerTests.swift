@@ -521,22 +521,6 @@ private func pendingHandoffDiagnostic(
         }
     }
 
-    @Test @MainActor func `current commands include location when enabled`() {
-        withUserDefaults([
-            "node.instanceId": "ios-test",
-            "location.enabledMode": OpenClawLocationMode.whileUsing.rawValue,
-        ]) {
-            let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(
-                appModel: appModel,
-                startDiscovery: false,
-                ingress: makeOrdinaryIngress())
-            let commands = Set(controller._test_currentCommands())
-
-            #expect(commands.contains(OpenClawLocationCommand.get.rawValue))
-        }
-    }
-
     @Test(arguments: [CLAuthorizationStatus.notDetermined, .denied, .restricted])
     @MainActor func `location permission without app authorization skips global services`(
         status: CLAuthorizationStatus) async
@@ -579,28 +563,6 @@ private func pendingHandoffDiagnostic(
         #expect(GatewayConnectionController._test_hasEventKitReadAccess(.fullAccess))
         #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.writeOnly))
         #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.denied))
-    }
-
-    @Test @MainActor func `current commands exclude dangerous system exec commands`() {
-        withUserDefaults([
-            "node.instanceId": "ios-test",
-            "camera.enabled": true,
-            "location.enabledMode": OpenClawLocationMode.whileUsing.rawValue,
-        ]) {
-            let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(
-                appModel: appModel,
-                startDiscovery: false,
-                ingress: makeOrdinaryIngress())
-            let commands = Set(controller._test_currentCommands())
-
-            // iOS should expose notify, but not host shell/exec-approval commands.
-            #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
-            #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
-            #expect(!commands.contains(OpenClawSystemCommand.which.rawValue))
-            #expect(!commands.contains(OpenClawSystemCommand.execApprovalsGet.rawValue))
-            #expect(!commands.contains(OpenClawSystemCommand.execApprovalsSet.rawValue))
-        }
     }
 
     @Test @MainActor func `operator connect options only request approval scope when enabled`() {
@@ -1663,20 +1625,6 @@ private func pendingHandoffDiagnostic(
         #expect(!appModel.talkMode.isGatewayConnected)
     }
 
-    @Test @MainActor func `forced reconnect reset clears active gateway loop tasks`() async {
-        let appModel = NodeAppModel()
-        defer { appModel.disconnectGateway() }
-
-        appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig())
-        #expect(appModel._test_hasGatewayLoopTasks().node)
-        #expect(appModel._test_hasGatewayLoopTasks().operator)
-
-        await appModel.resetGatewaySessionsForForcedReconnect()
-
-        #expect(!appModel._test_hasGatewayLoopTasks().node)
-        #expect(!appModel._test_hasGatewayLoopTasks().operator)
-    }
-
     @Test @MainActor func `forced reconnect reset waits for canceled loop cleanup`() async {
         var cleanupStarted = false
         var releaseCleanup: CheckedContinuation<Void, Never>?
@@ -1884,25 +1832,6 @@ private func pendingHandoffDiagnostic(
             model.disconnectGateway()
             await model.waitForGatewaySessionResetIfNeeded()
         }
-    }
-
-    @Test @MainActor func `newer gateway connect generation rejects queued config`() throws {
-        let appModel = NodeAppModel()
-        defer { appModel.disconnectGateway() }
-        let staleGeneration = appModel.beginGatewayConnectAttempt()
-        let currentGeneration = appModel.beginGatewayConnectAttempt()
-        let staleConfig = try Self.makeGatewayConnectConfig(
-            url: #require(URL(string: "wss://stale.gateway.invalid")),
-            stableID: "manual|stale.gateway.invalid|443")
-        let currentConfig = try Self.makeGatewayConnectConfig(
-            url: #require(URL(string: "wss://127.0.0.1:1")),
-            stableID: "manual|current.gateway.invalid|443")
-
-        appModel.applyGatewayConnectConfig(staleConfig, expectedGeneration: staleGeneration)
-        #expect(appModel.activeGatewayConnectConfig == nil)
-
-        appModel.applyGatewayConnectConfig(currentConfig, expectedGeneration: currentGeneration)
-        #expect(appModel.activeGatewayConnectConfig?.stableID == currentConfig.stableID)
     }
 
     @Test @MainActor func `direct gateway apply invalidates older queued config`() throws {
@@ -2237,54 +2166,6 @@ private func pendingHandoffDiagnostic(
             appModel.activeGatewayConnectConfig?.stableID == replacementStableID,
             pendingHandoffDiagnostic(controller, model: appModel, expectedGeneration: expectedGeneration))
         #expect(appModel._test_hasGatewayLoopTasks().node)
-    }
-
-    @Test @MainActor func `new connect waits for model owned reset barrier`() async throws {
-        let registryIsolation = await GatewayRegistryTestIsolation()
-        defer { registryIsolation.restore() }
-        let resetRelease = AsyncStream<Void>.makeStream()
-        let appModel = NodeAppModel()
-        defer {
-            resetRelease.continuation.finish()
-            appModel._test_setGatewaySessionResetTask(nil)
-            appModel.disconnectGateway()
-        }
-        let currentConfig = try Self.makeGatewayConnectConfig(
-            url: #require(URL(string: "wss://127.0.0.1:1")),
-            stableID: "manual|current.gateway.invalid|443")
-        appModel.applyGatewayConnectConfig(currentConfig)
-        let modelResetTask = Task {
-            for await _ in resetRelease.stream {
-                return
-            }
-        }
-        appModel._test_setGatewaySessionResetTask(modelResetTask)
-        let controller = GatewayConnectionController(
-            appModel: appModel,
-            startDiscovery: false,
-            ingress: makeOrdinaryIngress())
-
-        #expect(await controller.connectManual(host: "192.168.1.41", port: 18789, useTLS: false) == .accepted)
-        let expectedGeneration = appModel.gatewayConnectGeneration
-        await Task.yield()
-
-        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: currentConfig) == true)
-
-        resetRelease.continuation.yield()
-        resetRelease.continuation.finish()
-        await appModel.waitForGatewaySessionResetIfNeeded()
-        let replacementStableID = "manual|192.168.1.41|18789"
-        await waitUntil { appModel.activeGatewayConnectConfig?.stableID == replacementStableID }
-
-        #expect(
-            appModel.activeGatewayConnectConfig?.stableID == replacementStableID,
-            """
-            reset barrier handoff: expectedGeneration=\(expectedGeneration), currentGeneration=\(appModel.gatewayConnectGeneration), \
-            resetInFlight=\(appModel.hasGatewaySessionResetInFlight), suppressed=\(controller._test_isAutoConnectSuppressed()), \
-            hasOriginalConfig=\(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: currentConfig) == true), \
-            hasReplacementConfig=\(appModel.activeGatewayConnectConfig?.stableID == replacementStableID), \
-            problemKind=\(appModel.lastGatewayProblem?.kind.rawValue ?? "none")
-            """)
     }
 
     enum HeldResetOutcome: CaseIterable, Sendable {

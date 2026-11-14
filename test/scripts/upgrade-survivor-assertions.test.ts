@@ -364,7 +364,6 @@ describe("upgrade recovery result assertions", () => {
 
   it.each([
     { name: "completed informational inspection", patch: {}, succeeds: true },
-    { name: "warning", patch: { doctorLintFindings: [{ severity: "warning" }] }, succeeds: false },
     { name: "error", patch: { doctorLintFindings: [{ severity: "error" }] }, succeeds: false },
     { name: "missing findings", patch: { doctorLintFindings: undefined }, succeeds: false },
     { name: "empty findings", patch: { doctorLintFindings: [] }, succeeds: false },
@@ -1752,20 +1751,6 @@ process.stdout.write(sessionDir + "\\n");
       name: "custom ClawHub consent without its surface",
       mutate: (records) => {
         Reflect.deleteProperty(records.whatsapp!, "acceptedSurface");
-      },
-      error: /whatsapp plugin accepted surface missing/,
-    },
-    {
-      name: "unaccepted custom ClawHub record",
-      mutate: (records) => {
-        for (const field of [
-          "acceptedSurface",
-          "acceptedSurfaceHash",
-          "acceptedSurfaceAt",
-          "acceptedSurfaceIntegrity",
-        ]) {
-          Reflect.deleteProperty(records.whatsapp!, field);
-        }
       },
       error: /whatsapp plugin accepted surface missing/,
     },

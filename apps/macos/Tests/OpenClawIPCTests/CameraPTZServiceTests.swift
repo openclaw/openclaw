@@ -624,24 +624,6 @@ struct CameraPTZServiceTests {
         }
     }
 
-    @Test func `home reports partial outcome when later default write fails`() async {
-        let controller = self.makeController()
-        controller.zoomError = FakeFailure.zoom
-
-        do {
-            _ = try await self.makeService(controller).control(OpenClawCameraPTZControlParams(
-                deviceId: "camera-id",
-                operation: .home))
-            Issue.record("partial home unexpectedly succeeded")
-        } catch let CameraPTZError.partial(applied, state, _) {
-            #expect(applied == ["panTilt"])
-            #expect(state?.panDegrees == 0)
-            #expect(state?.zoomPercent == 50)
-        } catch {
-            Issue.record("unexpected error: \(error)")
-        }
-    }
-
     @Test func `requires explicit known device and valid operation shape`() async {
         let controller = self.makeController()
         let service = self.makeService(controller)

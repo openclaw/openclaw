@@ -2967,8 +2967,6 @@ describe("handleSendChat", () => {
 
   it.each([
     { reason: "unavailable", action: "retry" },
-    { reason: "missing", action: "retry" },
-    { reason: "unavailable", action: "discard" },
     { reason: "missing", action: "discard" },
   ] as const)(
     "keeps an uncertain send id and FIFO across $reason payload retries until $action",

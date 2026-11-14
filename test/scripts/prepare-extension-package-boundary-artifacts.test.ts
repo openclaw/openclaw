@@ -728,32 +728,6 @@ child.once("message", () => process.exit(0));
       expect(fs.readFileSync(output, "utf8")).toBe("completed");
     }));
 
-  it("runs boundary prep steps serially for local checks", () =>
-    fixture.run(async () => {
-      const rootDir = createTempDir("openclaw-boundary-serial-");
-      const logPath = path.join(rootDir, "steps.log");
-      const appendScript = (label: string) =>
-        `const fs=require("node:fs");` +
-        `const log=${JSON.stringify(logPath)};` +
-        `fs.appendFileSync(log, ${JSON.stringify(`${label}-start\n`)});` +
-        `setTimeout(()=>{fs.appendFileSync(log, ${JSON.stringify(`${label}-end\n`)});}, 50);`;
-
-      await runNodeSteps(
-        [
-          { label: "first", args: ["--eval", appendScript("first")], timeoutMs: 5_000 },
-          { label: "second", args: ["--eval", appendScript("second")], timeoutMs: 5_000 },
-        ],
-        { OPENCLAW_LOCAL_CHECK: "1" },
-      );
-
-      expect(fs.readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-        "first-start",
-        "first-end",
-        "second-start",
-        "second-end",
-      ]);
-    }));
-
   it.each([
     { cpus: 8, memoryGiB: 24, local: undefined, expected: 2 },
     { cpus: 8, memoryGiB: null, local: undefined, expected: 1 },

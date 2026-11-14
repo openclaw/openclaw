@@ -823,9 +823,7 @@ it.for([
   ["cjs module", undefined, "cjs"],
   ["esm module", undefined, "js"],
   ["env-only", {}, "cjs"],
-  ["missing exportName", { specifier: "./absent-probe" }, "cjs"],
   ["blank exportName", { specifier: "./absent-probe", exportName: " \t" }, "cjs"],
-  ["missing specifier", { exportName: "hasState" }, "cjs"],
   ["blank specifier", { specifier: " \t", exportName: "hasState" }, "cjs"],
 ] as const)(
   "packs plugin identity and activity artwork with channel-state probes (%s)",

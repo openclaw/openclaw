@@ -146,9 +146,18 @@ describe("minimax provider hooks", () => {
   it.each([
     [" ", undefined, "https://api.minimaxi.com/anthropic/v1/models"],
     ["https://api.minimax.io/v1", "openai-completions", "https://api.minimax.io/v1/models"],
+    [globalApi, undefined, `${globalApi}/v1/models`, true],
+    [`${globalApi}/v1`, undefined, `${globalApi}/v1/models`, true],
+    [` ${cnApi}/v1/// `, undefined, `${cnApi}/v1/models`, true],
+    [
+      "https://api.minimaxi.com/prefix/anthropic/v1",
+      undefined,
+      "https://api.minimaxi.com/prefix/anthropic/v1/models",
+    ],
   ] as const)(
     "discovers configured endpoint %s/%s ahead of the CN environment",
-    async (baseUrl, api, expectedEndpoint) => {
+    async (baseUrl, api, expectedEndpoint, portal?: boolean) => {
+      const providerId = portal ? "minimax-portal" : "minimax";
       const expectedBaseUrl = baseUrl.trim() || cnApi;
       const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
         input === expectedEndpoint
@@ -156,35 +165,55 @@ describe("minimax provider hooks", () => {
           : new Response(null, { status: 401 }),
       );
       vi.stubGlobal("fetch", fetchMock);
-      const result = await runCatalog(apiProvider, {
+      const result = await runCatalog(portal ? portalProvider : apiProvider, {
         config: {
           models: {
             providers: {
-              ...modelConfig(baseUrl, "minimax", { api }).models.providers,
-              ...modelConfig("https://other-account.example.com/anthropic").models.providers,
+              ...modelConfig(baseUrl, providerId, { api }).models.providers,
+              ...modelConfig(
+                "https://other-account.example.com/anthropic",
+                portal ? "minimax" : "minimax-portal",
+              ).models.providers,
             },
           },
         },
         env: { MINIMAX_API_HOST: "https://api.minimaxi.com" },
-        resolveProviderApiKey: () => ({
-          apiKey: "MINIMAX_API_KEY",
-          discoveryApiKey: "selected-api-key",
-          profileId: "minimax:selected",
+        resolveProviderApiKey: () =>
+          portal
+            ? { apiKey: undefined }
+            : {
+                apiKey: "MINIMAX_API_KEY",
+                discoveryApiKey: "selected-key",
+                profileId: "minimax:selected",
+              },
+        resolveProviderAuth: () => ({
+          apiKey: MINIMAX_OAUTH_MARKER,
+          discoveryApiKey: "selected-oauth",
+          mode: "oauth",
+          source: "profile",
+          profileId: "minimax-portal:selected",
         }),
       });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0]?.[0]).toBe(expectedEndpoint);
-      expectCatalogHeaders(api ? null : "selected-api-key", api ? "Bearer selected-api-key" : null);
+      expectCatalogHeaders(
+        api || portal ? null : "selected-key",
+        portal ? "Bearer selected-oauth" : api ? "Bearer selected-key" : null,
+      );
       expect(result).toMatchObject({
         provider: {
           baseUrl: expectedBaseUrl,
           api: api ?? "anthropic-messages",
-          authHeader: true,
-          apiKey: "MINIMAX_API_KEY",
-          models: [expect.objectContaining({ id: "MiniMax-M3" })],
+          ...(!portal && { authHeader: true, apiKey: "MINIMAX_API_KEY" }),
+          models: [
+            expect.objectContaining({
+              id: "MiniMax-M3",
+              ...(!api && { compat: { codeMode: "preferred", supportsTemperature: false } }),
+            }),
+          ],
         },
-        outcomes: [{ provider: "minimax", profileId: "minimax:selected", status: "ready" }],
+        outcomes: [{ provider: providerId, profileId: `${providerId}:selected`, status: "ready" }],
       });
     },
   );

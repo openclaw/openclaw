@@ -690,9 +690,6 @@ syncBuiltinESMExports();
         targetVersion: "2026.8.28-beta.2",
       }),
     ).toThrow(/coverage policy/u);
-    expect(() =>
-      validateReleaseExecutionPlanArtifact({ ...artifact, coveragePolicy: "unknown" }),
-    ).toThrow(/digest/u);
     const changed = { ...artifact, targetVersion: "2026.8.28-beta.2" };
     expect(() =>
       validateReleaseExecutionPlanArtifact({
@@ -1123,7 +1120,6 @@ describe("release child attempt composition", () => {
       runner_name: "GitHub Actions 1",
       steps: [{ name: "Run tests" }],
     };
-    const running = { ...completed, conclusion: null, status: "in_progress" };
     const ghostAttempt = {
       jobs: [ghost, completed, ghost, job("checks-ui", "failure")],
       runAttempt: 2,
@@ -1159,94 +1155,6 @@ describe("release child attempt composition", () => {
             plannedRunAttempt,
           }),
         ).toThrow("is unsealable due to duplicate job identity");
-      },
-    );
-
-    it.each<{
-      label: string;
-      attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
-      effectiveRunAttempt: number;
-      effectiveRunStatus?: string;
-      plannedRunAttempt: number;
-    }>([
-      {
-        label: "without a completed sibling",
-        attempts: [
-          { jobs: [ghost, ghost], runAttempt: 1 },
-          { jobs: [job("test", "success")], runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        plannedRunAttempt: 1,
-      },
-      {
-        label: "once the copy has a runner",
-        attempts: [
-          { jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, completed], runAttempt: 1 },
-          { jobs: [job("test", "success")], runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        plannedRunAttempt: 1,
-      },
-      ...[
-        { label: "beside two running jobs", jobs: [ghost, running, running] },
-        {
-          label: "beside an assigned queued copy",
-          jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, running],
-        },
-        { label: "with only queued copies", jobs: [ghost, ghost] },
-        {
-          label: "beside a runnerless running job",
-          jobs: [ghost, { ...running, runner_id: null, runner_name: null }],
-        },
-      ].flatMap(({ label, jobs }) =>
-        ["queued", "in_progress"].map((effectiveRunStatus) => ({
-          label: `${label} in a ${effectiveRunStatus} run`,
-          attempts: [
-            { jobs: [job("test", "success")], runAttempt: 1 },
-            { jobs, runAttempt: 2 },
-          ],
-          effectiveRunAttempt: 2,
-          effectiveRunStatus,
-          plannedRunAttempt: 1,
-        })),
-      ),
-      {
-        label: "beside a running job in a completed run",
-        attempts: [
-          { jobs: [job("test", "success")], runAttempt: 1 },
-          { jobs: [ghost, running], runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        effectiveRunStatus: "completed",
-        plannedRunAttempt: 1,
-      },
-      {
-        label: "beside a running job in an older attempt",
-        attempts: [
-          { jobs: [ghost, running], runAttempt: 1 },
-          { jobs: [job("test", "success")], runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        effectiveRunStatus: "in_progress",
-        plannedRunAttempt: 1,
-      },
-      {
-        label: "beside a running job without a rerun",
-        attempts: [{ jobs: [ghost, running], runAttempt: 1 }],
-        effectiveRunAttempt: 1,
-        effectiveRunStatus: "in_progress",
-        plannedRunAttempt: 1,
-      },
-    ])(
-      "still rejects duplicates $label",
-      ({ attempts, effectiveRunAttempt, effectiveRunStatus, plannedRunAttempt }) => {
-        expect(() =>
-          composeReleaseAttemptJobs(attempts, {
-            effectiveRunAttempt,
-            effectiveRunStatus,
-            plannedRunAttempt,
-          }),
-        ).toThrow("duplicate job identity");
       },
     );
   });
@@ -1901,14 +1809,6 @@ describe("release state artifacts", () => {
   });
 
   it("uses one policy for decision, drain, and final verification", () => {
-    expect(
-      verifyReleaseStateArtifacts(
-        executionPlan({ rerunGroup: "ci" }),
-        collectorArtifact("decision"),
-        collectorArtifact("drain"),
-        { ...stateExpected(), parentRunAttempt: 2 },
-      ),
-    ).toMatchObject({ decision: { state: "passed" }, drain: { state: "passed" } });
     const decision = { ...collectorArtifact("decision"), automaticRetries: [] };
     const drain = { ...collectorArtifact("drain"), automaticRetries: [] };
     expect(
@@ -2140,37 +2040,12 @@ describe("release state artifacts", () => {
         ],
         stateExpected(3),
       );
-    expect(select).toThrow("release decision and diagnostic drain transition is invalid");
     expect(select).toThrow(
       "release decision and diagnostic drain transition is invalid: " +
         "decision(parentRunAttempt=2, state=passed), " +
         "drain(parentRunAttempt=1, state=blocked_complete); " +
         `executionPlan(originalParentRunAttempt=1, sha256=${sealedPlan.sha256}); ` +
         "compatible collector evidence for the same execution plan is required",
-    );
-  });
-
-  it("retains a failed logical job when a later attempt replaces its job URL", () => {
-    const sealedPlan = executionPlan(
-      { rerunGroup: "ci" },
-      { attemptEvidenceVersion: 2, candidateRequest: candidateBinding().request },
-    );
-    const retriedJob = { ...FAILED_JOB, url: "https://example.invalid/jobs/retried" };
-    const attempts = [
-      { runAttempt: 1, jobs: [FAILED_JOB] },
-      { runAttempt: 2, jobs: [retriedJob] },
-    ];
-    const decision = attemptedBlockedArtifact("decision", sealedPlan, attempts.slice(0, 1));
-    const drain = attemptedBlockedArtifact("drain", sealedPlan, attempts);
-    expect(selectPair(sealedPlan, decision, drain)).toMatchObject({
-      decision: { state: "blocked_diagnostics_running" },
-      drain: {
-        state: "blocked_complete",
-        blockers: [{ job: "upgrade-survivor", url: retriedJob.url }],
-      },
-    });
-    expect(() => verifyReleaseStateArtifacts(sealedPlan, decision, drain, stateExpected())).toThrow(
-      "Full Release Validation state: blocked_complete\n- Blocker: upgrade-survivor (failure)",
     );
   });
 

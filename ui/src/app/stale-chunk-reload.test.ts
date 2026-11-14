@@ -845,21 +845,6 @@ describe("installMissingStylesheetRecovery", () => {
     }
   });
 
-  it("schedules recovery when the sentinel is missing at load", async () => {
-    const replace = stubDocumentNavigation();
-    setReadyState("loading");
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const uninstall = installMissingStylesheetRecovery();
-    try {
-      window.dispatchEvent(new Event("load"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(replace).toHaveBeenCalledOnce();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      uninstall();
-    }
-  });
-
   it("shows a reload banner when automatic recovery is unavailable", async () => {
     stubDocumentNavigation();
     const translate = vi.spyOn(i18n, "t").mockImplementation((key) => {

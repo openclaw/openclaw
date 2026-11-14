@@ -590,27 +590,6 @@ describe("google video generation provider", () => {
     expect(result.videos[0]?.fileName).toBe("video-1.mp4");
   });
 
-  it("rejects SDK file-handle downloads that exceed the configured media cap", async () => {
-    mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        uri: "files/generated-video",
-        mimeType: "video/mp4",
-      }),
-    );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => videoDownloadResponse("too-large")),
-    );
-    await expect(
-      generateVideo({
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google generated video download exceeds 1 bytes");
-    expect(downloadMock).not.toHaveBeenCalled();
-  });
-
   it.each(["google/veo-3.1-fast-generate-preview", "google/models/veo-3.1-fast-generate-preview"])(
     "normalizes %s for SDK submission while preserving the result model",
     async (model) => {

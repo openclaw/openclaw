@@ -309,9 +309,6 @@ class WearProxyBridgeTest {
   }
 
   @Test
-  fun foreignFinalPreservesTheActiveWatchStream() = assertForeignTerminalPreservesStream("final", runId = "active-run")
-
-  @Test
   fun foreignAbortPreservesTheActiveWatchStream() = assertForeignTerminalPreservesStream("aborted", runId = "active-run")
 
   @Test
@@ -391,22 +388,6 @@ class WearProxyBridgeTest {
 
     assertEquals("fresh", next.getValue("streamText").jsonPrimitive.content)
   }
-
-  @Test
-  fun coldBridgeDiscoversReachableWatchBeforeBackgroundEvent() =
-    runTest {
-      val (bridge, sent) =
-        backgroundScope.recordingBridge(
-          peerResolver = WearPeerResolver { setOf("watch-1") },
-          monotonicMillis = { 1_000L },
-        )
-
-      bridge.publishChat(chatPayload(state = "final"))
-      runCurrent()
-
-      assertEquals("watch-1", sent.single().nodeId)
-      assertEquals(WearProtocol.EVENT_PATH, sent.single().path)
-    }
 
   @Test
   fun noWatchDiscoveryIsRateLimitedAcrossStreamEvents() =

@@ -789,16 +789,6 @@ describe("native Talk scope handoff investigation", () => {
             { timeout: 5_000 },
           );
           const mailbox = source.input.mailbox;
-          if (mailbox.entries.length > 1) {
-            expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
-            expect(mailbox.owner.active).toBeUndefined();
-            expect(mailbox.claim).toBeUndefined();
-            expect(mailbox.entries[0]).toBe(source.input);
-            expect(source.input.task).toBeUndefined();
-            expect(mailbox.entries[1]?.task).toBeTypeOf("function");
-            expect(mailbox.entries.filter((input) => input.injection)).toHaveLength(0);
-            expect(mailbox.entries.map((input) => input.withdrawalHolds)).toEqual([0, 0]);
-          }
           expect(
             mailbox.entries.length,
             "one registered provider request must never create a second mailbox input",

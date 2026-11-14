@@ -781,57 +781,25 @@ it.each([
   }
 });
 
-it("adopts native committed facts after reply loss without replaying the mutation", async () => {
+it.each([
+  {
+    name: "adopts native committed facts after reply loss without replaying the mutation",
+    oversized: false,
+  },
+  {
+    name: "recovers an oversized committed row after reply loss without replaying or trimming bytes",
+    oversized: true,
+  },
+])("$name", async ({ oversized }) => {
   const worktreeId = randomUUID();
   await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
     store.create(localWorkspaceProjectionFixture(worktreeId, root)),
   );
-  let writes = 0;
-  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
-    const result = await scope.execute(command, executeOptions);
-    if (command.type === "localWorkspace.mutate") {
-      writes += 1;
-      throw new Error("Synthetic local workspace reply lost after native commit");
-    }
-    return result;
-  });
-  const pendingRef = "refs/openclaw/results/accepted";
-  const acknowledged = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
-    const row = await store.update(
-      { ...store.get()!, base_commit: "f".repeat(40) },
-      { pending_ref: pendingRef },
-    );
-    expect(store.get()).toEqual(row);
-    return row;
-  });
-  expect(writes).toBe(1);
-  expect(acknowledged).toMatchObject({
-    revision: 1,
-    pending_ref: pendingRef,
-    base_commit: "a".repeat(40),
-  });
-  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
-    expect(store.get()).toEqual(acknowledged);
-    await expect(store.delete(store.get()!)).rejects.toThrow("unsettled edits");
-  });
-  expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(acknowledged);
-  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
-    const cleared = await store.update(store.get()!, { pending_ref: null });
-    await store.delete(cleared);
-    expect(store.get()).toBeUndefined();
-  });
-  lostReply.mockRestore();
-  expect(writes).toBe(3);
-  expect(await readLocalWorkspaceProjection(worktreeId, env)).toBeUndefined();
-});
-
-it("recovers an oversized committed row after reply loss without replaying or trimming bytes", async () => {
-  const worktreeId = randomUUID();
-  await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
-    store.create(localWorkspaceProjectionFixture(worktreeId, root)),
-  );
-  const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
+  const baseline = oversized
+    ? JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) })
+    : null;
   const journalPack = Buffer.alloc(1024, 7);
+  const pendingRef = "refs/openclaw/results/accepted";
   let writes = 0;
   let retainedGuard: (() => void) | undefined;
   const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -846,37 +814,54 @@ it("recovers an oversized committed row after reply loss without replaying or tr
     retainedGuard = store.assertCurrent;
     const row = await store.update(
       { ...store.get()!, base_commit: "f".repeat(40) },
-      {
-        baseline_ref: "sha256:oversized",
-        baseline_json: baseline,
-        journal_json: "{}",
-        journal_pack: journalPack,
-        paused_runtimes_json: undefined,
-      },
+      oversized
+        ? {
+            baseline_ref: "sha256:oversized",
+            baseline_json: baseline,
+            journal_json: "{}",
+            journal_pack: journalPack,
+            paused_runtimes_json: undefined,
+          }
+        : { pending_ref: pendingRef },
     );
     expect(store.get()).toEqual(row);
     return row;
   });
-  lostReply.mockRestore();
   expect(writes).toBe(1);
   assert(retainedGuard);
   expect(retainedGuard).toThrow();
-  const committed = await readLocalWorkspaceProjection(worktreeId, env);
-  expect(acknowledged).toMatchObject({
-    revision: 1,
-    baseline_ref: "sha256:oversized",
-    base_commit: "a".repeat(40),
-    journal_json: "{}",
-    paused_runtimes_json: null,
-  });
-  expect(acknowledged.baseline_json).toBe(baseline);
-  // Keep the worker's plain byte-view shape without another main-thread copy.
-  expect(acknowledged.journal_pack?.constructor).toBe(Uint8Array);
-  expect(acknowledged.journal_pack?.buffer).toBe(journalPack.buffer);
-  expect(acknowledged.journal_pack?.byteOffset).toBe(journalPack.byteOffset);
-  expect(acknowledged.journal_pack?.byteLength).toBe(journalPack.byteLength);
-  expect(committed).toEqual(acknowledged);
-  expect(committed?.baseline_json).toBe(baseline);
+  expect(acknowledged).toMatchObject({ revision: 1, base_commit: "a".repeat(40) });
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(acknowledged);
+  if (oversized) {
+    lostReply.mockRestore();
+    expect(acknowledged).toMatchObject({
+      baseline_ref: "sha256:oversized",
+      journal_json: "{}",
+      paused_runtimes_json: null,
+    });
+    expect(acknowledged.baseline_json).toBe(baseline);
+    // Preserve the worker's plain byte view without copying the backing buffer.
+    expect(acknowledged.journal_pack?.constructor).toBe(Uint8Array);
+    expect(acknowledged.journal_pack?.buffer).toBe(journalPack.buffer);
+    expect(acknowledged.journal_pack?.byteOffset).toBe(journalPack.byteOffset);
+    expect(acknowledged.journal_pack?.byteLength).toBe(journalPack.byteLength);
+    expect((await readLocalWorkspaceProjection(worktreeId, env))?.baseline_json).toBe(baseline);
+  } else {
+    expect(acknowledged.pending_ref).toBe(pendingRef);
+    await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+      expect(store.get()).toEqual(acknowledged);
+      await expect(store.delete(store.get()!)).rejects.toThrow("unsettled edits");
+    });
+    expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(acknowledged);
+    await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+      const cleared = await store.update(store.get()!, { pending_ref: null });
+      await store.delete(cleared);
+      expect(store.get()).toBeUndefined();
+    });
+    lostReply.mockRestore();
+    expect(writes).toBe(3);
+    expect(await readLocalWorkspaceProjection(worktreeId, env)).toBeUndefined();
+  }
 });
 
 it("queues an expanded checkpoint receipt behind another workspace write", async () => {

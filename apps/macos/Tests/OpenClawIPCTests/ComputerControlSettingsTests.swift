@@ -6,13 +6,21 @@ import Testing
 
 struct ComputerControlSettingsTests {
     @MainActor
-    @Test func `Peekaboo refresh preserves the node route while changed options reconnect`() async throws {
+    @Test(arguments: [false, true])
+    func `Peekaboo refresh preserves the node route while changed options reconnect`(includeDeviceIdentity: Bool) async throws {
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        let holdHandshake = LockIsolated(false)
         let count = LockIsolated(0)
         let sockets = GatewayTestWebSocketSession(taskFactory: {
             count.withValue { $0 += 1 }
             return GatewayTestWebSocketTask(receiveHook: { task, receiveIndex in
                 if receiveIndex == 0 {
                     return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                if holdHandshake.value {
+                    entered.open()
+                    await release.wait()
                 }
                 return .data(GatewayWebSocketTestSupport.connectOkData(
                     id: task.snapshotConnectRequestID() ?? "connect"))
@@ -58,7 +66,7 @@ struct ComputerControlSettingsTests {
                     clientMode: "node",
                     clientDisplayName: name,
                     deviceIdentityProfile: .node,
-                    includeDeviceIdentity: false,
+                    includeDeviceIdentity: includeDeviceIdentity,
                     allowStoredDeviceAuth: false),
                 sessionBox: WebSocketSessionBox(session: sockets),
                 workerTransportURL: nil,
@@ -68,17 +76,28 @@ struct ComputerControlSettingsTests {
             let first = attempt("Mac")
             _ = try await coordinator.connectWithTLSRepair(first)
             let originalRoute = try #require(await session.currentRoute())
+            let originalID = coordinator.connectedDeviceId()
+            #expect(!includeDeviceIdentity || originalID != nil)
             let refresh = attempt("Mac")
             #expect(first.options == refresh.options)
             _ = try await coordinator.connectWithTLSRepair(refresh)
             #expect(count.value == 1)
             #expect(await session.currentRoute() == originalRoute)
+            #expect(coordinator.connectedDeviceId() == originalID)
 
-            _ = try await coordinator.connectWithTLSRepair(attempt("Renamed Mac"))
+            holdHandshake.setValue(true)
+            let replacement = Task { try await coordinator.connectWithTLSRepair(attempt("Renamed Mac")) }
+            await entered.wait()
+            #expect(await session.currentRoute() == nil)
+            #expect(coordinator.connectedDeviceId() == nil)
+            release.open()
+            _ = try await replacement.value
             #expect(count.value == 2)
             let replacementRoute = try #require(await session.currentRoute())
             #expect(replacementRoute != originalRoute)
+            #expect(coordinator.connectedDeviceId() == originalID)
         } catch {
+            release.open()
             await coordinator.stopAndWait()
             throw error
         }

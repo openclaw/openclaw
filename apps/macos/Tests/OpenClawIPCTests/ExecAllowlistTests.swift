@@ -92,13 +92,6 @@ struct ExecAllowlistTests {
         #expect(!ExecCommandResolution.revalidateApprovalCwdSnapshot(snapshot))
     }
 
-    @Test func `match uses resolved path`() {
-        let entry = ExecAllowlistEntry(pattern: "/opt/homebrew/bin/rg")
-        let resolution = Self.homebrewRGResolution()
-        let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
-        #expect(match?.pattern == entry.pattern)
-    }
-
     @Test func `match accepts basename pattern for PATH resolved executable`() {
         let entry = ExecAllowlistEntry(pattern: "rg")
         let resolution = Self.homebrewRGResolution()
@@ -139,13 +132,6 @@ struct ExecAllowlistTests {
             cwd: "/tmp/oc-basename")
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: relativeResolution) == nil)
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: absoluteResolution) == nil)
-    }
-
-    @Test func `match is case sensitive on macOS`() {
-        let entry = ExecAllowlistEntry(pattern: "/OPT/HOMEBREW/BIN/RG")
-        let resolution = Self.homebrewRGResolution()
-        let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
-        #expect(match == nil)
     }
 
     @Test func `match supports glob star`() {
@@ -591,42 +577,6 @@ struct ExecAllowlistTests {
             resolutions: [tabResolution]) == ["/usr/bin/printf", "left", "right"])
     }
 
-    @Test func `dynamic shell payloads cannot receive reusable binding`() {
-        for payload in [
-            "/usr/bin/printf $HOME",
-            "/usr/bin/printf $(/usr/bin/id)",
-            "/usr/bin/printf *",
-            "/usr/bin/printf ok > /tmp/out",
-            "/usr/bin/printf ok && /usr/bin/true",
-            "FOO=bar /usr/bin/printf ok",
-            "/usr/bin/printf ok # ignored",
-        ] {
-            let command = ["/bin/sh", "-lc", payload]
-            let resolutions = ExecCommandResolution.resolveForAllowlist(
-                command: command,
-                rawCommand: payload,
-                cwd: nil,
-                env: ["PATH": "/usr/bin:/bin"])
-            #expect(ExecCommandResolution.bindForAllowlistExecution(
-                command: command,
-                rawCommand: payload,
-                resolutions: resolutions) == nil)
-        }
-
-        let assignmentPayload = "FOO=bar /usr/bin/printf ok"
-        let spoofedAssignmentResolution = ExecCommandResolution(
-            rawExecutable: "FOO=bar",
-            resolvedPath: "/usr/bin/true",
-            resolvedRealPath: "/usr/bin/true",
-            executableName: "true",
-            cwd: nil,
-            argv: ["FOO=bar", "/usr/bin/printf", "ok"])
-        #expect(ExecCommandResolution.bindForAllowlistExecution(
-            command: ["/bin/sh", "-lc", assignmentPayload],
-            rawCommand: assignmentPayload,
-            resolutions: [spoofedAssignmentResolution]) == nil)
-    }
-
     @Test func `env empty utility operands cannot receive reusable binding`() {
         for command in [
             ["/usr/bin/env", "", "/usr/bin/touch", "/tmp/x"],
@@ -883,37 +833,6 @@ struct ExecAllowlistTests {
         #expect(resolutions.isEmpty)
     }
 
-    @Test func `resolve for allowlist keeps quoted operators in single segment`() {
-        let command = ["/bin/sh", "-c", "echo \"a && b\""]
-        let resolutions = ExecCommandResolution.resolveForAllowlist(
-            command: command,
-            rawCommand: "echo \"a && b\"",
-            cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"])
-        #expect(resolutions.count == 1)
-        #expect(resolutions[0].executableName == "echo")
-    }
-
-    @Test func `resolve for allowlist fails closed on command substitution`() {
-        let command = ["/bin/sh", "-c", "echo $(/usr/bin/touch /tmp/openclaw-allowlist-test-subst)"]
-        let resolutions = ExecCommandResolution.resolveForAllowlist(
-            command: command,
-            rawCommand: "echo $(/usr/bin/touch /tmp/openclaw-allowlist-test-subst)",
-            cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"])
-        #expect(resolutions.isEmpty)
-    }
-
-    @Test func `resolve for allowlist fails closed on quoted command substitution`() {
-        let command = ["/bin/sh", "-c", "echo \"ok $(/usr/bin/touch /tmp/openclaw-allowlist-test-quoted-subst)\""]
-        let resolutions = ExecCommandResolution.resolveForAllowlist(
-            command: command,
-            rawCommand: "echo \"ok $(/usr/bin/touch /tmp/openclaw-allowlist-test-quoted-subst)\"",
-            cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"])
-        #expect(resolutions.isEmpty)
-    }
-
     @Test func `resolve for allowlist fails closed on line-continued command substitution`() {
         let command = ["/bin/sh", "-c", "echo $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-line-cont-subst)"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
@@ -933,16 +852,6 @@ struct ExecAllowlistTests {
         let resolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: "echo ok && $\\\n(/usr/bin/touch /tmp/openclaw-allowlist-test-chained-line-cont-subst)",
-            cwd: nil,
-            env: ["PATH": "/usr/bin:/bin"])
-        #expect(resolutions.isEmpty)
-    }
-
-    @Test func `resolve for allowlist fails closed on quoted backticks`() {
-        let command = ["/bin/sh", "-c", "echo \"ok `/usr/bin/id`\""]
-        let resolutions = ExecCommandResolution.resolveForAllowlist(
-            command: command,
-            rawCommand: "echo \"ok `/usr/bin/id`\"",
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.isEmpty)

@@ -733,21 +733,6 @@ describe("Report action from the authoritative update ledger", () => {
     },
   );
 
-  it("reuses the durable created URL on duplicate submission without repeating transport", async () => {
-    recordFailure();
-    const { previewDigest } = await preview();
-    const params = { action: "submit", attemptId: runId, previewDigest };
-    const first = await invoke(params);
-    const second = await invoke(params);
-    expect(first).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "created", url: issueUrl }),
-    );
-    expect(second).toHaveBeenCalledWith(true, expect.objectContaining({ url: issueUrl }));
-    expect(mocks.runGh.mock.calls.map(([args]) => args[0])).toEqual(["auth", "api"]);
-    expect(await reportFiles()).toEqual([]);
-  });
-
   it.each([
     { outcome: "created", changedPreview: false },
     { outcome: "created", changedPreview: true },

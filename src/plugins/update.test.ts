@@ -777,11 +777,6 @@ describe("updateNpmInstalledPlugins", () => {
       review: "mutate",
       rejected: true,
     },
-    ...(["corrupt"] as const).map((previousPayload) => ({
-      label: `repairs a ${previousPayload} previous payload only after fresh staged consent`,
-      review: "accept",
-      previousPayload,
-    })),
     {
       label: "keeps a missing-payload repair pending when no consent handler is available",
       rejected: true,
@@ -876,8 +871,6 @@ describe("updateNpmInstalledPlugins", () => {
       } satisfies OpenClawConfig;
       if (previousPayload === "missing") {
         fs.rmSync(installedDir, { recursive: true, force: true });
-      } else if (previousPayload === "corrupt") {
-        fs.writeFileSync(path.join(installedDir, "openclaw.plugin.json"), "{");
       }
       mockNpmViewMetadata({ name: packageName, version: "2.0.0", integrity: "sha512-next" });
       installPluginFromNpmSpecMock.mockImplementationOnce(

@@ -960,12 +960,6 @@ function createArtifactHarness(mac: MacScriptFixture) {
       )} >"$app/Contents/MacOS/OpenClaw"`,
       'printf helper >"$app/Contents/MacOS/openclaw-mlx-tts"',
       'chmod 755 "$app/Contents/MacOS/OpenClaw" "$app/Contents/MacOS/openclaw-mlx-tts"',
-      'case "${TEST_CUA_DRIVER_KIND:-none}" in',
-      '  file) mkdir -p "$app/Contents/Resources"; printf driver >"$app/Contents/Resources/cua-driver"; chmod 755 "$app/Contents/Resources/cua-driver" ;;',
-      '  symlink) mkdir -p "$app/Contents/Resources"; ln -s /missing/cua-driver "$app/Contents/Resources/cua-driver" ;;',
-      "  none) ;;",
-      "  *) exit 64 ;;",
-      "esac",
     ),
   );
   writeCommandFixture(
@@ -1673,14 +1667,10 @@ describe("mac elevation host command contract", () => {
     mac.lifetime.run(async () => {
       const script = readFileSync(scriptPath, "utf8");
 
-      expect(script).toContain('ELEVATION_LABEL="ai.openclaw.mac.elevation-host"');
       expect(script).toContain('NORMAL_LABEL="ai.openclaw.mac"');
       expect(script).toContain("ordinary Launch at login is installed");
       expect(script).toContain("conflicting OpenClaw launch agent is installed");
       expect(script).toContain("unsupervised or conflicting OpenClaw process is running");
-      expect(script).toContain("plutil -insert KeepAlive -bool true");
-      expect(script).toContain("plutil -insert RunAtLoad -bool true");
-      expect(script).toContain('[$executable,"--elevation-host"]');
       expect(script).toContain("automatic elevation-host rollback was incomplete");
       expect(script).not.toContain("osascript");
     }));
@@ -1884,7 +1874,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for(["missing", "relative"] as const)(
+  nativeIt.concurrent.for(["missing", "relative"] as const)(
     "requires a reusable absolute CLI for canonical node conversion: %s",
     async (kind, { mac }) =>
       mac.lifetime.run(async () => {

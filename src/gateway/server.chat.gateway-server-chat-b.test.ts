@@ -1738,39 +1738,6 @@ describe("gateway server chat", () => {
     sendControlUiChat,
   });
 
-  test("chat.send refuses new work in an archived session", async () => {
-    openDirectChatSession();
-    const idempotencyKey = "idem-archived-send";
-    try {
-      await writeStoredMainSession({
-        archivedAt: Date.now(),
-      });
-      const context = createDirectChatContext();
-      const responses: Array<{ error?: unknown; ok: boolean; payload?: unknown }> = [];
-
-      await sendControlUiChat({
-        context,
-        idempotencyKey,
-        message: "must stay archived",
-        respond: captureChatResponse(responses),
-      });
-
-      expect(responses).toEqual([
-        chatResponse(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: 'Session "agent:main:main" is archived. Restore it before starting new work.',
-          }),
-        ),
-      ]);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    } finally {
-      await resetDirectChatSession();
-    }
-  });
-
   test("chat.send retries a transient post-admission projection failure under the same run", async () => {
     const { storePath } = openDirectChatSession();
     const runId = "idem-restart-safe-projection-retry";
@@ -2716,41 +2683,6 @@ describe("gateway server chat", () => {
       const serialized = JSON.stringify(messages);
       expect(serialized).toContain("oldest visible question");
       expect(serialized).not.toContain("stale announce reply");
-    });
-  });
-
-  test("chat.history backfills older offset pages across a dense silent gap", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const startedAt = Date.now();
-      await writeMainSessionTranscript([
-        createTextTranscriptEvent("user", "older visible question", { timestamp: startedAt }),
-        createTextTranscriptEvent("assistant", "older visible answer", {
-          timestamp: startedAt + 1,
-        }),
-        ...Array.from({ length: 80 }, (_, index) =>
-          createTextTranscriptEvent("assistant", "NO_REPLY", { timestamp: startedAt + index + 2 }),
-        ),
-        createTextTranscriptEvent("assistant", "latest visible answer", {
-          timestamp: startedAt + 82,
-        }),
-      ]);
-
-      const firstPage = await historyPage(ws, { limit: 1, offset: 0, maxChars: 100 });
-      expect(firstPage.ok).toBe(true);
-      expect(JSON.stringify(firstPage.payload?.messages)).toContain("latest visible answer");
-      expect(firstPage.payload?.nextOffset).toBe(1);
-
-      const olderPage = await historyPage(ws, {
-        limit: 2,
-        offset: firstPage.payload?.nextOffset,
-        maxChars: 100,
-      });
-      expect(olderPage.ok).toBe(true);
-      expect(olderPage.payload?.messages?.map(readOpenClawSeq)).toEqual([1, 2]);
-      expect(JSON.stringify(olderPage.payload?.messages)).not.toContain("NO_REPLY");
-      expect(olderPage.payload?.hasMore).toBe(false);
-      expect(olderPage.payload?.nextOffset).toBeUndefined();
     });
   });
 

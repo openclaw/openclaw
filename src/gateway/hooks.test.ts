@@ -57,28 +57,6 @@ describe("gateway hooks helpers", () => {
       },
     }) as OpenClawConfig;
 
-  const buildStaticShadowingMappingConfig = (params: {
-    firstMatch?: Partial<{ path: string; source: string }>;
-    firstMessageTemplate?: string;
-    secondMatch?: Partial<{ path: string; source: string }>;
-  }) =>
-    hookConfig({
-      mappings: [
-        {
-          ...(params.firstMatch ? { match: params.firstMatch } : {}),
-          action: "agent",
-          messageTemplate: params.firstMessageTemplate ?? "catch-all",
-          sessionKey: "hook:static",
-        },
-        {
-          match: params.secondMatch ?? { path: "gmail" },
-          action: "agent",
-          messageTemplate: "Subject: {{messages[0].subject}}",
-          sessionKey: "hook:gmail:{{messages[0].id}}",
-        },
-      ],
-    });
-
   beforeEach(() => setActivePluginRegistry(emptyRegistry));
   afterEach(() => setActivePluginRegistry(emptyRegistry));
   test("resolveHooksConfig normalizes paths + requires token", () => {
@@ -422,58 +400,56 @@ describe("gateway hooks helpers", () => {
     expect(isHookAgentAllowed(resolved, "main")).toBe(mainAllowed);
   });
 
-  test("resolveHookSessionKey disables request sessionKey by default", () => {
-    expect(
-      resolveHookSessionKey({
-        hooksConfig: resolveHooksConfigOrThrow(hookConfig()),
-        source: "request",
-        sessionKey: "agent:main:dm:u99999",
-      }).ok,
-    ).toBe(false);
-  });
-
-  test("resolveHookSessionKey enforces allowed prefixes", () => {
-    const resolved = resolveHooksConfigOrThrow(
-      hookConfig({
-        allowRequestSessionKey: true,
-        allowedSessionKeyPrefixes: ["hook:"],
-      }),
-    );
-
-    const blocked = resolveHookSessionKey({
-      hooksConfig: resolved,
+  test.each<{
+    name: string;
+    hooks?: OpenClawConfig["hooks"];
+    source: Parameters<typeof resolveHookSessionKey>[0]["source"];
+    sessionKey?: string;
+    expected: object;
+  }>([
+    {
+      name: "resolveHookSessionKey disables request sessionKey by default",
+      source: "request",
+      sessionKey: "agent:main:dm:u99999",
+      expected: { ok: false },
+    },
+    {
+      name: "resolveHookSessionKey enforces allowed prefixes: blocked request",
+      hooks: { allowRequestSessionKey: true, allowedSessionKeyPrefixes: ["hook:"] },
       source: "request",
       sessionKey: "agent:main:main",
-    });
-    expect(blocked.ok).toBe(false);
-
-    const allowed = resolveHookSessionKey({
-      hooksConfig: resolved,
+      expected: { ok: false },
+    },
+    {
+      name: "resolveHookSessionKey enforces allowed prefixes: allowed static mapping",
+      hooks: { allowRequestSessionKey: true, allowedSessionKeyPrefixes: ["hook:"] },
       source: "mapping-static",
       sessionKey: "hook:gmail:1",
+      expected: { ok: true, value: "hook:gmail:1" },
+    },
+    {
+      name: "resolveHookSessionKey blocks templated mapping sessionKey when request overrides are disabled",
+      hooks: { allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"] },
+      source: "mapping-templated",
+      sessionKey: "hook:gmail:attacker",
+      expected: { ok: false },
+    },
+    {
+      name: "resolveHookSessionKey uses defaultSessionKey when request key is absent",
+      hooks: { defaultSessionKey: "hook:ingress" },
+      source: "request",
+      expected: { ok: true, value: "hook:ingress" },
+    },
+  ])("$name", ({ hooks, source, sessionKey, expected }) => {
+    const result = resolveHookSessionKey({
+      hooksConfig: resolveHooksConfigOrThrow(hookConfig(hooks)),
+      source,
+      sessionKey,
     });
-    expect(allowed).toEqual({ ok: true, value: "hook:gmail:1" });
-  });
-
-  test("resolveHookSessionKey blocks templated mapping sessionKey when request overrides are disabled", () => {
-    expect(
-      resolveHookSessionKey({
-        hooksConfig: resolveHooksConfigOrThrow(
-          hookConfig({ allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"] }),
-        ),
-        source: "mapping-templated",
-        sessionKey: "hook:gmail:attacker",
-      }).ok,
-    ).toBe(false);
-  });
-
-  test("resolveHookSessionKey uses defaultSessionKey when request key is absent", () => {
-    expect(
-      resolveHookSessionKey({
-        hooksConfig: resolveHooksConfigOrThrow(hookConfig({ defaultSessionKey: "hook:ingress" })),
-        source: "request",
-      }),
-    ).toEqual({ ok: true, value: "hook:ingress" });
+    expect(result).toMatchObject(expected);
+    if (result.ok) {
+      expect(result).toEqual(expected);
+    }
   });
 
   test("normalizeHookDispatchSessionKey rebinds non-target agent scoped keys to the target agent", () => {
@@ -485,100 +461,86 @@ describe("gateway hooks helpers", () => {
     ).toBe("agent:hooks:slack:channel:c123");
   });
 
-  test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {
-    expect(() =>
-      resolveHooksConfig(
-        hookConfig({
-          defaultSessionKey: "agent:main:main",
-          allowedSessionKeyPrefixes: ["hook:"],
-        }),
-      ),
-    ).toThrow("hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes");
-
-    expect(() => resolveHooksConfig(hookConfig({ allowedSessionKeyPrefixes: ["agent:"] }))).toThrow(
-      "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
-    );
+  test.each([
+    {
+      name: "resolveHooksConfig validates defaultSessionKey against prefixes",
+      hooks: { defaultSessionKey: "agent:main:main", allowedSessionKeyPrefixes: ["hook:"] },
+      error: "hooks.defaultSessionKey must match hooks.allowedSessionKeyPrefixes",
+    },
+    {
+      name: "resolveHooksConfig validates generated fallback against prefixes",
+      hooks: { allowedSessionKeyPrefixes: ["agent:"] },
+      error:
+        "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
+    },
+    ...(["agent", "wake"] as const).map((action) => ({
+      name:
+        action === "agent"
+          ? "resolveHooksConfig requires prefixes for templated mapping session keys"
+          : "resolveHooksConfig applies templated session-key policy to wake mappings",
+      hooks: {
+        allowRequestSessionKey: action === "agent",
+        mappings: [
+          {
+            match: { path: action },
+            action,
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            textTemplate: "ping",
+            sessionKey: `hook:${action}:{{payload.id}}`,
+          },
+        ],
+      },
+      error:
+        "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
+    })),
+  ])("$name", ({ hooks, error }) => {
+    expect(() => resolveHooksConfig(hookConfig(hooks))).toThrow(error);
   });
 
-  test("resolveHooksConfig requires prefixes for templated mapping session keys", () => {
-    expect(() =>
-      resolveHooksConfig(
-        hookConfig({
-          allowRequestSessionKey: true,
-          mappings: [
-            {
-              match: { path: "gmail" },
-              action: "agent",
-              messageTemplate: "Subject: {{messages[0].subject}}",
-              sessionKey: "hook:gmail:{{messages[0].id}}",
-            },
-          ],
-        }),
-      ),
-    ).toThrow(
-      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
-    );
-  });
-
-  test("resolveHooksConfig allows a static explicit mapping to shadow the templated gmail preset", () => {
-    const resolved = resolveHooksConfigOrThrow(
-      hookConfig({
-        allowRequestSessionKey: false,
+  test.each([
+    {
+      name: "resolveHooksConfig allows a static explicit mapping to shadow the templated gmail preset",
+      hooks: {
         presets: ["gmail"],
         mappings: [
           {
             match: { path: "gmail" },
-            action: "agent",
+            action: "agent" as const,
             messageTemplate: "Subject: {{messages[0].subject}}",
             sessionKey: "hook:gmail:static",
           },
         ],
-      }),
-    );
-
-    expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
-      "hook:gmail:static",
-      "hook:gmail:{{messages[0].id}}",
-    ]);
-    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
-  });
-
-  test("resolveHooksConfig applies templated session-key policy to wake mappings", () => {
-    expect(() =>
-      resolveHooksConfigOrThrow(
-        hookConfig({
-          mappings: [
-            {
-              match: { path: "wake" },
-              action: "wake",
-              textTemplate: "ping",
-              sessionKey: "hook:wake:{{payload.id}}",
-            },
-          ],
-        }),
-      ),
-    ).toThrow("hooks.allowedSessionKeyPrefixes is required");
-  });
-
-  test("resolveHooksConfig treats '/' match.path as a catch-all for shadowing", () => {
-    const resolved = resolveHooksConfigOrThrow(
-      buildStaticShadowingMappingConfig({ firstMatch: { path: "/" } }),
-    );
-
-    expect(resolved.mappings.map((mapping) => mapping.matchPath)).toEqual(["", "gmail"]);
-    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
-  });
-
-  test("resolveHooksConfig treats empty match.source as a wildcard for shadowing", () => {
-    const resolved = resolveHooksConfigOrThrow(
-      buildStaticShadowingMappingConfig({
-        firstMatch: { path: "gmail", source: "" },
-        firstMessageTemplate: "catch-all source",
-        secondMatch: { path: "gmail", source: "gmail" },
-      }),
-    );
-
-    expect(resolved.mappings.map((mapping) => mapping.matchSource)).toEqual(["", "gmail"]);
+      },
+      field: "sessionKey" as const,
+      expected: ["hook:gmail:static", "hook:gmail:{{messages[0].id}}"],
+    },
+    ...(["path", "source"] as const).map((kind) => ({
+      name:
+        kind === "path"
+          ? "resolveHooksConfig treats '/' match.path as a catch-all for shadowing"
+          : "resolveHooksConfig treats empty match.source as a wildcard for shadowing",
+      hooks: {
+        mappings: [
+          {
+            match: kind === "path" ? { path: "/" } : { path: "gmail", source: "" },
+            action: "agent" as const,
+            messageTemplate: "catch-all",
+            sessionKey: "hook:static",
+          },
+          {
+            match: { path: "gmail", ...(kind === "source" ? { source: "gmail" } : {}) },
+            action: "agent" as const,
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{messages[0].id}}",
+          },
+        ],
+      },
+      field: kind === "path" ? ("matchPath" as const) : ("matchSource" as const),
+      expected: ["", "gmail"],
+    })),
+  ])("$name", ({ hooks, field, expected }) => {
+    const resolved = resolveHooksConfigOrThrow(hookConfig(hooks));
+    expect(resolved.mappings.map((mapping) => mapping[field])).toEqual(expected);
     expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 });

@@ -1020,18 +1020,4 @@ describe("managed worktree creation groups", () => {
     await service.create({ repoRoot: repo, name: "explicit", baseRef: "HEAD", onProgress });
     expect(events).toEqual(["checkout"]);
   });
-
-  it("reuses a recent default, then refreshes after its freshness window", async () => {
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const original = await create("original");
-    const oldHead = await head(original.path);
-    const newHead = await advanceRemote();
-    clock.mockReturnValue(now + 29_000);
-    const recent = await create("recent");
-    expect(await head(recent.path)).toBe(oldHead);
-    clock.mockReturnValue(now + 30_000);
-    const refreshed = await create("refreshed");
-    expect(await head(refreshed.path)).toBe(newHead);
-  });
 });

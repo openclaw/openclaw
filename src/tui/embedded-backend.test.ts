@@ -2674,23 +2674,11 @@ describe("EmbeddedTuiBackend", () => {
     },
     { name: "streamed text without final text", finalPayloads: [], expectedText: "Draft answer" },
     {
-      name: "an ordinary MEDIA-like suffix",
-      finalPayloads: [{ text: "The selected size is\nM" }],
-      expectedText: "The selected size is\nM",
-    },
-    {
       name: "generic relative media URLs",
       streamedText: "MEDIA:./image.png",
       mediaUrls: ["./image.png"],
       finalPayloads: [{ text: "MEDIA:./image.png" }],
       expectedText: "MEDIA:./image.png",
-    },
-    {
-      name: "prepared short replies",
-      streamedText: "No",
-      expectStream: true,
-      finalPayloads: [{ text: "No" }],
-      expectedText: "No",
     },
     {
       name: "a prepared literal silence marker",

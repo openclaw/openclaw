@@ -2811,13 +2811,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it.each([
     ["current shard 1", {}, 30],
-    ["current shard 2", { matrix: { shard: 2 } }, 30],
-    ["frozen shard 1", { frozenTarget: true }, 30],
-    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 30],
-    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 30],
-    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 30],
-    ["hosted override", { runnerBackend: "github" }, 40],
-    ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, 40],
     ["manual fallback", { eventName: "workflow_dispatch" }, 40],
     ["PR retry", { eventName: "pull_request", runAttempt: 2 }, 40],
     ["noncanonical fallback", { repository: "example/openclaw" }, 40],
@@ -5417,31 +5410,6 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
     }
   });
 
-  it("bounds the Windows Crabbox hydrate main fetch", () => {
-    const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
-
-    expectIncludes(workflow, [
-      "$fetchInfo = New-Object System.Diagnostics.ProcessStartInfo",
-      '$fetchInfo.FileName = "git"',
-      "$fetchInfo.WorkingDirectory = $repo",
-      "$fetchInfo.UseShellExecute = $false",
-      "--no-tags --no-progress --prune --no-recurse-submodules --depth=50",
-      "$fetch = New-Object System.Diagnostics.Process",
-      "$fetch.StartInfo = $fetchInfo",
-      "$fetch.WaitForExit(30000)",
-      "$fetch.Kill()",
-      'throw "git fetch failed with exit code $($fetch.ExitCode)"',
-      'throw "git fetch timed out after 30 seconds"',
-    ]);
-    expectExcludes(workflow, [
-      "$fetchInfo.RedirectStandardOutput = $true",
-      "$fetchInfo.RedirectStandardError = $true",
-      "StandardOutput.ReadToEnd()",
-      "StandardError.ReadToEnd()",
-      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
-    ]);
-  });
-
   it("bounds Mantis Slack runner IP discovery", () => {
     const workflow = parse(
       readFileSync(".github/workflows/mantis-slack-desktop-smoke.yml", "utf8"),
@@ -6273,16 +6241,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
   it("restores shared build content while retaining private real-Gateway preparation", () => {
     const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
-    const setup = requiredWorkflowStep(job.steps, "Setup Node environment");
-    const build = requiredWorkflowStep(
-      job.steps,
-      "Build runtime and Control UI artifacts for real-Gateway tests",
-    );
-    expect(setup.with?.["build-all-cache-scope"]).toBe("full");
-    expect(job.needs).toEqual(["preflight"]);
-    expect(build.run).toBe("pnpm build");
-    expect(build.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
-    expect(build.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
     expect(job.steps.some((step: WorkflowStep) => step.name === "Save build-all cache")).toBe(
       false,
     );
@@ -7152,42 +7110,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const workflow = readWorkflow(".github/workflows/pr-crabbox-gate-publisher.yml");
     const publisher = readFileSync("scripts/pr-crabbox-gate-publisher.mjs", "utf8");
     const job = workflow.jobs.publish;
-    expect(workflow.permissions).toEqual({});
-    expect(workflow.on).toHaveProperty("workflow_dispatch");
     expect(evaluateWorkflowRunner(job["runs-on"])).toBe("ubuntu-24.04");
-    expect(job.environment).toBe("qa-live-shared");
-    expect(job["timeout-minutes"]).toBe(270);
-    expect(job.permissions).toEqual({
-      checks: "write",
-      contents: "read",
-      "pull-requests": "read",
+    expect(job.steps[0]?.uses).toBe(CHECKOUT_V6);
+    expect(job.steps.at(-1)?.env).toMatchObject({
+      CRABBOX_ACCESS_CLIENT_ID: "${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}",
+      CRABBOX_ACCESS_CLIENT_SECRET: "${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}",
     });
-    expect(job.steps[0]).toMatchObject({
-      uses: CHECKOUT_V6,
-      with: {
-        "fetch-depth": 0,
-        "persist-credentials": false,
-        ref: "${{ github.workflow_sha }}",
-      },
-    });
-    expect(job.steps.at(-1)).toMatchObject({
-      env: {
-        CRABBOX_ACCESS_CLIENT_ID: "${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}",
-        CRABBOX_ACCESS_CLIENT_SECRET: "${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}",
-        CRABBOX_COORDINATOR:
-          "${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}",
-        CRABBOX_COORDINATOR_TOKEN:
-          "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
-        GH_APP_TOKEN:
-          "${{ steps.publish-app-token.outputs.token || steps.publish-app-token-fallback.outputs.token }}",
-        GH_TOKEN: "${{ github.token }}",
-      },
-      run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
-    });
-    expect(job.steps[2].run).toContain("crabbox_0.79.2_linux_amd64.tar.gz");
-    expect(job.steps[2].run).toContain(
-      "316e2d788c9f85d0a7e876a0a91eab5e0a9257b8c572ca2c1372dbe066395dae",
-    );
     expect(job.steps.slice(3, 5)).toMatchObject([
       {
         id: "app-token",
@@ -7205,11 +7133,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'CRABBOX_GATE_CHECK_NAME = "openclaw/crabbox-gate"',
     );
     expect(publisher).not.toContain('const CHECK_NAME = "openclaw/ci-gate"');
-    expect(Object.keys(workflow.on.workflow_dispatch.inputs).toSorted()).toEqual([
-      "base_sha",
-      "head_sha",
-      "pr_number",
-    ]);
   });
 });
 

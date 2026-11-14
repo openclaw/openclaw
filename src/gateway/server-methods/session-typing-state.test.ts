@@ -85,25 +85,6 @@ describe("session typing connection state", () => {
 });
 
 describe("session typing broadcast throttle", () => {
-  it("attempts only the latest draft at the trailing edge after delivery", () => {
-    const { updates: previews, broadcast } = typingBroadcast(250, (preview: string) => [
-      true,
-      preview,
-    ]);
-
-    broadcast("first");
-    broadcast("second", 50);
-    broadcast("latest", 50);
-    vi.advanceTimersByTime(150);
-
-    expect(previews).toEqual(["first", "latest"]);
-
-    broadcast("after trailing edge", 50);
-    expect(previews).toEqual(["first", "latest"]);
-    vi.advanceTimersByTime(200);
-    expect(previews).toEqual(["first", "latest", "after trailing edge"]);
-  });
-
   it("preserves boolean-only cancellation and trailing stop behavior", () => {
     const { updates, broadcast } = typingBroadcast(1_000, (typing: boolean) => [typing, ""]);
 

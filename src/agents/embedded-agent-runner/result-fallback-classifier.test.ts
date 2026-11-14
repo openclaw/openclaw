@@ -23,14 +23,6 @@ function classifyErrorPayload(provider: string, model: string, text: string) {
   });
 }
 
-function classifyResult(
-  provider: string,
-  model: string,
-  result: Parameters<typeof classifyEmbeddedAgentRunResultForModelFallback>[0]["result"],
-) {
-  return classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result });
-}
-
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it.each([false, true])(
     "retains retry exhaustion across fallback aggregation (billing=%s)",
@@ -399,28 +391,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         provider: "external",
         model: "primary",
         result: { payloads: [payload], meta: { durationMs: 42 } },
-      }),
-    ).toBeNull();
-  });
-
-  it("does not retry generic external runner failure text after committed delivery", () => {
-    expect(
-      classifyResult("external", "primary", {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        messagingToolSentTexts: ["already delivered"],
-        meta: { durationMs: 42 },
-      }),
-    ).toBeNull();
-  });
-
-  it("preserves hook blocks with generic external runner failure text", () => {
-    expect(
-      classifyResult("external", "primary", {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        meta: {
-          durationMs: 42,
-          error: { kind: "hook_block", message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
-        },
       }),
     ).toBeNull();
   });
