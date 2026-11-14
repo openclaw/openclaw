@@ -10,7 +10,7 @@ read_when:
 
 # Update generations design
 
-**Design proposal. One slice has merged; nothing else here is built. A maintainer accepted the seven [decisions](#decisions) on November 13, 2026. That sets the direction; each slice still needs its own review.**
+**Design proposal. One slice has merged and the release-directory slice is in review; nothing else here is built. A maintainer accepted the seven [decisions](#decisions) on November 13, 2026. That sets the direction; each slice still needs its own review.**
 Two changes to `openclaw update`: keep each release in its own directory on
 prefixes that OpenClaw owns and switch between them by repointing one link, and
 move update work out of the installed updater into the candidate in stages.
@@ -21,12 +21,12 @@ This is the fourth version. Source reviews at
 [Rejected approaches](#rejected-approaches). Counts under "Why change it" are
 from `6acf398088c430ba93944a5bc07eec1b2299ac00`.
 
-| Slice                                        | Status                                                                 |
-| -------------------------------------------- | ---------------------------------------------------------------------- |
-| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922). |
-| Release directories behind a linked root     | Direction accepted in decisions 1 to 4. Not built.                     |
-| Owed steps after the commit point            | Proposed.                                                              |
-| Stop, publish, and rollback in the candidate | Not designed.                                                          |
+| Slice                                        | Status                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922).    |
+| Release directories behind a linked root     | In review as [#198835](https://github.com/openclaw/openclaw/pull/198835). |
+| Owed steps after the commit point            | Proposed.                                                                 |
+| Stop, publish, and rollback in the candidate | Not designed.                                                             |
 
 ## Why change it
 
@@ -198,14 +198,18 @@ to a release directory. An update installs the new release beside the old one
 and repoints that one link.
 
 ```text
-<owned prefix>/
-  bin/openclaw                          unchanged; names the package path below
-  tools/node-v<version>/lib/node_modules/
-    openclaw -> <owned prefix>/releases/2026.12.1-a01b.../lib/node_modules/openclaw
+<npm prefix>/                           install-cli.sh: <PREFIX>/tools/node-v<version>
+  bin/openclaw                          unchanged; ../lib/node_modules/openclaw/openclaw.mjs
+  lib/node_modules/
+    openclaw -> ../../releases/2026.12.1-.../lib/node_modules/openclaw
   releases/
-    2026.11.4-3f9c.../                  private npm prefix
-    2026.12.1-a01b.../
+    2026.11.4-.../                      private npm prefix
+    2026.12.1-.../
 ```
+
+Releases live under the npm prefix, not under `install-cli.sh`'s `<PREFIX>`,
+because the stable path, the launcher text, and the "same prefix" rule are all
+relative to the npm prefix. The link text is relative so the prefix can move.
 
 **A release is a private npm prefix.** `prepareNodeRuntimeUpdate` in
 `src/node-host/auto-update-install.ts` already builds one: it reads the registry
@@ -350,8 +354,8 @@ only and never recurses. Launcher text is the same in every release.
   that root. On a linked root the updater therefore treats the release
   directory as its prefix, which is why published drivers swap inside it. A
   slot resolver has to come first.
-- **Turning a plain directory into a link** has a moment with no package path,
-  and still needs today's journal or another design.
+- **Turning a plain directory into a link** has a moment with no package path.
+  See [as built](#slice-4-as-built) for the design that was chosen.
 - **Child admission after a switch** compares a resolved root with the lease
   keys (`update-command-executor-children.ts`). After a switch the link
   resolves to the new release. This is expected to refuse post-core children
@@ -391,6 +395,95 @@ package-manager-owned installations and for adoption.
 packaged macOS app already has its own build links and is not updated by
 `openclaw update`. The node host keeps its launcher and gains the shared
 release installer and collection.
+
+#### Slice 4 as built
+
+The implementation follows the sections above with these changes, each forced by
+something the source showed.
+
+- **Releases are under the npm prefix.** See the layout above.
+- **The installation's identity is the link.** `resolveUpdateInstallRoot`
+  returns the link's own path for a release link instead of following it, and
+  maps a path inside the release the link currently selects to the link, which
+  is where a process finds its own root by real path. The executor's install
+  key, child admission, the sentinel, the post-core and native-receiver root
+  checks, and the managed handoff helper's lease key therefore do not change
+  when the link moves. A post-core child at the link runs under the
+  installation's lease; before this, it acquired a separate lease for the new
+  release path. A published updater on a linked root keys its leases by the
+  release's real path instead, so a candidate child checking its executor
+  grant takes the parent's spelling when `updateInstallRootsMatch` says both
+  name one installation (the published-driver cell failed there without it).
+  Gateway-initiated updates map the Gateway's release path to the link at
+  admission. `resolveOpenClawInstallationRootSync` gains the same rule, which
+  covers a start through the `bin` launcher; `resolveUpdateRoot` applies it
+  only when the result is a release link. Plain directories and `npm link`
+  checkouts keep their real path.
+- **A release is staged where it stays.** `runGlobalPackageUpdateSteps` takes
+  a `releaseLayout` flag that only `openclaw update` sets. On a release link,
+  or a plain directory on an owned prefix, the staging prefix is created as
+  `releases/<label>` instead of `.openclaw.update-stage-*`, and the swap
+  delegates to the switch. The node host is not changed: making it a caller
+  would have moved its staging and activation without removing code.
+- **Order.** `origin.packageRelease` is validated before the service stops
+  and written after it (steps 4 and 5 above are swapped), through the run's
+  phase writer, which records the `activating` phase there. It must be written
+  before the transaction captures the databases: a first version wrote it
+  after that capture, and the rollback cell showed database rollback then
+  refusing ("databases changed after update ledger writes"), which also
+  withheld the link rollback. A crash before the record leaves the old link.
+- **Rollback reads the link.** A switch can fail after its rename, for
+  example when the directory sync returns `EIO`. Rollback therefore decides
+  from the link on disk, not from whether the switch returned: the previous
+  release's text means nothing to do, the candidate's text means switch back,
+  and anything else is another writer and is refused.
+- **Crash after the rename, unmanaged.** A managed handoff reads the link and
+  the run record (the table above). A plain CLI update killed between the
+  switch and its post-switch Doctor leaves the candidate selected and the run
+  open, for the existing reconciliation in `openclaw update repair`, which runs
+  from whichever release the link names. No code was added for that case and
+  it was not exercised.
+- **A service bound to a release path.** A published updater run through the
+  link writes the release's real path into the service definition (seen in
+  the linked-root cell: `ExecStart` named `releases/2026.11.3/.../dist/index.js`).
+  After a switch that service would keep starting the old release, and
+  post-switch service revalidation correctly calls it another installation.
+  The switch now refuses before any change when the managed service starts a
+  path inside a release, and names `openclaw gateway install --force` from the
+  package path as the fix. This installation's own service writes keep the
+  package path (the adoption cell checks the unit). Treating such a service as
+  an install-root refresh, as pnpm generation changes are, is the follow-up
+  that would make this automatic.
+- **Launchers.** The refusal before any change stays. A future release that
+  adds or renames a `bin` entry cannot switch on an owned prefix until a rule
+  for launcher changes is designed; the refusal names the way out (`npm
+  install -g` into the prefix, after which the next update adopts again).
+- **Adoption** moves the plain directory into `releases/<label>` and renames
+  a prepared temporary link naming it onto the empty package path, then
+  switches as usual. Between the two renames the package path is missing.
+  Death there leaves `.openclaw.release-link-*` naming the unchanged previous
+  release; renaming it onto the package path restores the installation. That
+  recovery is manual and documented: the journal cannot hold it, because its
+  candidate is a sealed tree, and nothing can run `openclaw` while the
+  package path is missing. A failed second rename moves the directory back.
+  Adoption refuses before any change when `releases/` is on another
+  filesystem.
+- **Local overrides** replay into the candidate release before the link names
+  it, so a selected release is still written once.
+- **Leases.** A Gateway writes `releases/.leases/<release>/<pid>-<start>-<n>`
+  when it starts from a selected release and removes it when it stops; a
+  dead process's lease is ignored. Other processes rely on the minimum age.
+  The age counts from the release directory's modification time, which the
+  switch stamps on the release it deselects, so a release deselected a
+  minute ago is kept for a day whatever its install date.
+- **Collection** runs after a verified forward update, from the updater, and
+  keeps the two releases the current run names. A collected release is first
+  renamed out of the release namespace, so a partial removal is never a
+  release.
+- **Not changed:** `openclaw gateway install --force` replacing the durable
+  copy still swaps a directory over the link, like a manual `npm install -g`;
+  the next update adopts again. The node host's own collection and the
+  `activation.lock` liveness rule named in slice 4 are left for a follow-up.
 
 ### Route 4: package-manager-owned installations
 
@@ -522,17 +615,17 @@ older release, with no download when that release is still retained. See
 
 ## Risks
 
-| Risk                                                     | Severity | Mitigation                                                                                                                                            |
-| -------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Something stores a resolved release path                 | High     | Known holders are plugin links, the agent CLI shim, and executor and journal identity. Test that none survives a flip stale.                          |
-| Collection deletes a release in use                      | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                                                    |
-| A published driver rewrites a release directory in place | High     | Seen in the linked-root cell. Identify a release by its recorded content identity, never by directory name, and adopt again when the content changed. |
-| The Windows flip is two renames                          | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                                           |
-| A process keeps running across a flip                    | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                                                 |
-| npm reports the package as a link on an owned prefix     | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                                               |
-| Several Gateways share one owned prefix                  | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                                            |
-| Disk use                                                 | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                                          |
-| Nothing in the updater holds the link path               | High     | Root discovery resolves to the release directory. Build the slot resolver first, and land target resolution and the switch together.                  |
+| Risk                                                     | Severity | Mitigation                                                                                                                                                                                     |
+| -------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Something stores a resolved release path                 | High     | Known holders are plugin links, the agent CLI shim, executor and journal identity, and a service definition written by a published updater through the link (observed; the switch refuses it). |
+| Collection deletes a release in use                      | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                                                                                             |
+| A published driver rewrites a release directory in place | High     | Seen in the linked-root cell. Identify a release by its recorded content identity, never by directory name, and adopt again when the content changed.                                          |
+| The Windows flip is two renames                          | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                                                                                    |
+| A process keeps running across a flip                    | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                                                                                          |
+| npm reports the package as a link on an owned prefix     | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                                                                                        |
+| Several Gateways share one owned prefix                  | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                                                                                     |
+| Disk use                                                 | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                                                                                   |
+| Nothing in the updater holds the link path               | High     | Root discovery resolves to the release directory. Build the slot resolver first, and land target resolution and the switch together.                                                           |
 
 ## Review slices
 
@@ -615,8 +708,14 @@ existing handoff carries stop, publish, or rollback authority.
 
 ## Evidence limits
 
-- Route 3 itself has not run on an OpenClaw installation. The Node and npm
-  tests used toy packages on macOS.
+- Route 3 has run only in the published-driver Docker cell on linux/arm64, from
+  [#198835](https://github.com/openclaw/openclaw/pull/198835): adoption of an `install-cli.sh`-shaped prefix and a switch,
+  a second switch, rollback after a post-switch Doctor failure, and the
+  refusal of a service bound to a release path after published `2026.10.9`
+  updated a linked root. Not run: the durable service copy, launchd, a
+  Gateway-initiated update, APFS, and a published reader of the new run
+  record (published `2026.11.3` cannot open state this candidate migrated;
+  its `origin` schema is a plain `z.object`, which drops the key).
 - The source trace read code and ran nothing. Not read: the launchd, systemd,
   and Task Scheduler writers, how the plugin loader enforces quarantine, the
   restart sentinel, and every use of the updater's retained runtime.
