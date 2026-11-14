@@ -110,12 +110,29 @@ You triage incidents.
     );
   });
 
-  it("matches the cross-platform golden artifact digest", async () => {
-    const project = join(tempDirs.make("openclaw-template-golden-"), "project");
-    await symlink(goldenProject, project, process.platform === "win32" ? "junction" : "dir");
-    const result = await buildTemplateProject(project, `${project}.tgz`);
-    expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
-  });
+  it.each(["directory alias", "source parent", "output parent"])(
+    "matches the cross-platform golden artifact digest through %s",
+    async (kind) => {
+      const root = tempDirs.make("openclaw-template-golden-");
+      const project = join(root, "project");
+      const target = kind === "source parent" ? join(goldenProject, "references") : goldenProject;
+      await symlink(target, project, process.platform === "win32" ? "junction" : "dir");
+      let output = `${project}.tgz`;
+      let expectedOutput = output;
+      if (kind === "output parent") {
+        const nested = join(root, "physical", "nested");
+        await mkdir(nested, { recursive: true });
+        const alias = join(root, "output");
+        await symlink(nested, alias, process.platform === "win32" ? "junction" : "dir");
+        output = `${alias}${sep}..${sep}golden.tgz`;
+        expectedOutput = join(root, "physical", "golden.tgz");
+      }
+      const input = kind === "source parent" ? `${project}${sep}..` : project;
+      const result = await buildTemplateProject(input, output);
+      expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
+      expect(result.artifact).toBe(await fs.realpath(expectedOutput));
+    },
+  );
 
   it("matches the golden artifact digest under a restrictive umask", () => {
     const output = join(tempDirs.make("openclaw-template-umask-"), "golden.tgz");
@@ -187,23 +204,37 @@ You triage incidents.
     }
   });
 
-  it("creates a minimal project that validates through the canonical reader", async () => {
-    const root = join(tempDirs.make("openclaw-template-create-"), "research-assistant");
+  it.each([false, true])(
+    "creates a valid minimal project (physical parent: %s)",
+    async (physical) => {
+      const directory = tempDirs.make("openclaw-template-create-");
+      const parent = physical ? join(directory, "physical") : directory;
+      let root = join(directory, "research-assistant");
+      if (physical) {
+        const nested = join(parent, "nested");
+        await mkdir(nested, { recursive: true });
+        const alias = join(directory, "selected");
+        await symlink(nested, alias, process.platform === "win32" ? "junction" : "dir");
+        root = `${alias}${sep}..${sep}research-assistant`;
+      }
 
-    const created = await createTemplateProject(root);
-    const validated = await validateTemplateProject(root);
+      const created = await createTemplateProject(root);
+      const validated = await validateTemplateProject(root);
 
-    expect(created.packageJson).toEqual({
-      name: "research-assistant",
-      version: "0.1.0",
-      openclaw: { template: "CLAW.md" },
-    });
-    assert(validated.ok);
-    expect(validated.template.manifest.agent.id).toBe("research-assistant");
-    expect(validated.template.templateMarkdownBody?.toString()).toContain(
-      "purpose-built OpenClaw agent",
-    );
-  });
+      expect(created.packageJson).toEqual({
+        name: "research-assistant",
+        version: "0.1.0",
+        openclaw: { template: "CLAW.md" },
+      });
+      assert(validated.ok);
+      expect(created.root).toBe(await fs.realpath(join(parent, "research-assistant")));
+      expect(validated.root).toBe(created.root);
+      expect(validated.template.manifest.agent.id).toBe("research-assistant");
+      expect(validated.template.templateMarkdownBody?.toString()).toContain(
+        "purpose-built OpenClaw agent",
+      );
+    },
+  );
 
   it("keeps one concurrent creator's completed project", async () => {
     const root = join(tempDirs.make("openclaw-template-create-race-"), "shared");
@@ -460,14 +491,27 @@ describe("Template project packages", () => {
     },
   );
 
-  it("preserves an existing build destination", async () => {
-    await writeFile(output, "keep this artifact\n");
+  it.each(["file", "dangling symlink"])(
+    "preserves an existing build destination %s",
+    async (kind) => {
+      const target = `${output}-target`;
+      if (kind === "file") {
+        await writeFile(output, "keep this artifact\n");
+      } else {
+        await symlink(target, output, "file");
+      }
 
-    await expect(buildTemplateProject(project, output)).rejects.toMatchObject({
-      code: "artifact_exists",
-    } satisfies Partial<TemplateProjectError>);
-    expect(await readFile(output, "utf8")).toBe("keep this artifact\n");
-  });
+      await expect(buildTemplateProject(project, output)).rejects.toMatchObject({
+        code: "artifact_exists",
+      } satisfies Partial<TemplateProjectError>);
+      if (kind === "file") {
+        expect(await readFile(output, "utf8")).toBe("keep this artifact\n");
+      } else {
+        expect((await lstat(output)).isSymbolicLink()).toBe(true);
+        await expect(lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
 
   it("rejects ambiguous nested project discovery", async () => {
     const inner = join(project, "examples", "nested");

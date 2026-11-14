@@ -6,6 +6,7 @@ import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
 import { digestTemplateBytes } from "./digest.js";
+import { resolveTemplateLocalPath } from "./path-containment.js";
 import {
   TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION,
   TemplateProjectError,
@@ -75,19 +76,20 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
     );
   }
 
-  const artifact = resolve(outputPath);
+  let artifact = resolve(outputPath);
   if (!artifact.toLowerCase().endsWith(".tgz")) {
     throw new TemplateProjectError(
       "invalid_artifact_path",
       "Template build output must end in .tgz.",
     );
   }
-  if (await lstat(artifact).catch(() => undefined)) {
+  if (await lstat(outputPath || ".").catch(() => undefined)) {
     throw new TemplateProjectError(
       "artifact_exists",
       `Refusing to overwrite existing artifact ${JSON.stringify(artifact)}.`,
     );
   }
+  artifact = await resolveTemplateLocalPath(outputPath);
   const outputParent = await stat(dirname(artifact)).catch(() => undefined);
   if (!outputParent?.isDirectory()) {
     throw new TemplateProjectError(

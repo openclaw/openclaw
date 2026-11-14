@@ -4,7 +4,7 @@ import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
-import { templateContainedRelativePath } from "./path-containment.js";
+import { resolveTemplateLocalPath, templateContainedRelativePath } from "./path-containment.js";
 import { readTemplateManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName, portableTemplatePathKey } from "./schema-portability.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
@@ -109,12 +109,12 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
 }
 
 async function discoverTemplateProjectRoot(projectPath: string): Promise<string> {
-  const input = resolve(projectPath);
-  const inputStat = await stat(input).catch(() => undefined);
-  if (!inputStat) {
+  const input = await resolveTemplateLocalPath(projectPath).catch(() => undefined);
+  const inputStat = input ? await stat(input).catch(() => undefined) : undefined;
+  if (!input || !inputStat) {
     throw new TemplateProjectError(
       "project_not_found",
-      `Could not resolve Template project path ${JSON.stringify(input)}.`,
+      `Could not resolve Template project path ${JSON.stringify(resolve(projectPath))}.`,
     );
   }
   let current = inputStat.isDirectory() ? input : dirname(input);
@@ -162,8 +162,8 @@ export async function createTemplateProject(
   projectPath: string,
   options: { name?: string; agentId?: string } = {},
 ): Promise<{ root: string; packageJson: TemplateProjectPackageJson; filesWritten: string[] }> {
-  const root = resolve(projectPath);
-  const initialState = await pathState(root);
+  let root = resolve(projectPath);
+  const initialState = await pathState(projectPath || ".");
   if (initialState === "occupied") {
     throw new TemplateProjectError(
       "project_target_not_empty",
@@ -202,11 +202,13 @@ export async function createTemplateProject(
     "",
   ].join("\n");
 
-  const packageJsonPath = resolve(root, "package.json");
-  const templateMarkdownPath = resolve(root, "CLAW.md");
   const createdPaths: string[] = [];
+  root = await resolveTemplateLocalPath(projectPath);
   await mkdir(root, { recursive: true });
   try {
+    root = await realpath(root);
+    const packageJsonPath = resolve(root, "package.json");
+    const templateMarkdownPath = resolve(root, "CLAW.md");
     await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, {
       encoding: "utf8",
       flag: "wx",
