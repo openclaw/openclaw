@@ -3,7 +3,11 @@ import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
-import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+  queryWindowsRegistryValue,
+} from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
@@ -100,8 +104,9 @@ function resolveWindowsSystemEncoding(): string | null {
   if (cachedWindowsSystemEncoding !== undefined) {
     return cachedWindowsSystemEncoding;
   }
+  // A bare name depends on PATH; a failed probe would cache UTF-8 replacement decoding.
   cachedWindowsSystemEncoding = probeWindowsEncoding(
-    () => "powershell.exe",
+    () => getWindowsPowerShellExePath(),
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
   );
   return cachedWindowsSystemEncoding;
