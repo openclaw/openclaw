@@ -3381,6 +3381,7 @@ private fun ChatComposer(
             ) {
               BasicTextField(
                 value = textFieldValue,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 enabled = inputEnabled,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 // A pending IME callback must not edit the draft behind Details.
