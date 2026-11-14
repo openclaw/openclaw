@@ -23,6 +23,8 @@ const SANDBOX_HOST_CSP_QUERY = "csp";
 const SANDBOX_HOST_CSP_MAX_JSON_BYTES = 5 * 1024;
 const SANDBOX_HOST_CSP_MAX_HEADER_BYTES = 6 * 1024;
 const SANDBOX_HOST_CSP_MAX_ENCODED_BYTES = Math.ceil(SANDBOX_HOST_CSP_MAX_JSON_BYTES / 3) * 4 + 4;
+// Hidden or offscreen frames run no animation frames; acknowledge them after this wait.
+const SANDBOX_PRESENTATION_FALLBACK_MS = 1_000;
 // The complete policy keys immutable public URLs; shell code changes retire this process cache.
 const sandboxHostPaths = new LruCache<string>(64);
 
@@ -81,6 +83,18 @@ function buildSandboxShortcutBridgeHtml(): string {
   },true);
 })();</script>`;
 }
+
+// The load event precedes the document's first frames. A third animation frame
+// begins only after the first post-load frame finished raster and activation, so
+// its pixels are already with the compositor when the host retires a placeholder.
+// Stored scripts can post the same witness early, but the proxy still waits for
+// the load event it observes itself.
+const SANDBOX_PRESENTATION_WITNESS_HTML = `<script>(()=>{
+  const post=window.parent.postMessage.bind(window.parent);
+  const frame=window.requestAnimationFrame.bind(window);
+  const witness=()=>post({jsonrpc:"2.0",method:"ui/notifications/sandbox-resource-loaded"},"*");
+  window.addEventListener("load",()=>frame(()=>frame(()=>frame(witness))),{capture:true,once:true});
+})();</script>`;
 
 // Best-effort mitigation of the documented WebRTC residual, not a security
 // boundary. Board widgets remove same-realm constructors and the common APIs
@@ -297,7 +311,8 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
     buildSandboxDocumentGuardHtml(blockDescendantFrames) +
       buildSandboxShortcutBridgeHtml() +
       buildSandboxWidgetScrollBridgeHtml() +
-      WIDGET_SIZE_CONFIRMATION_HTML,
+      WIDGET_SIZE_CONFIRMATION_HTML +
+      SANDBOX_PRESENTATION_WITNESS_HTML,
   ).replaceAll("<", "\\u003c");
   return `<!doctype html>
 <meta charset="utf-8" />
@@ -332,6 +347,7 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
     return frame;
   };
   let inner = createInner();
+  let presentInner = null;
   document.body.appendChild(inner);
   const widgetPortsOffered = new Set();
   const blockDescendantFrames = ${blockDescendantFrames};
@@ -361,14 +377,32 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
           const guardedHtml = guardDocument(params.html);
           // Replace the browsing context so a superseded document cannot race
           // the new wrapper's first private bridge-port offer.
-          const nextInner = createInner(params.allowScripts !== false);
-          nextInner.addEventListener("load", () => {
-            if (inner !== nextInner || typeof params.renderId !== "string") return;
+          const allowScripts = params.allowScripts !== false;
+          const nextInner = createInner(allowScripts);
+          // Acknowledge after load and the document's presentation witness.
+          // Script-free documents cannot run the witness and keep load timing.
+          let loaded = false;
+          let presented = !allowScripts;
+          let fallback = 0;
+          const acknowledge = () => {
+            if (!loaded || !presented || inner !== nextInner || typeof params.renderId !== "string") return;
             window.parent.postMessage({
               jsonrpc: "2.0",
               method: "ui/notifications/sandbox-resource-loaded",
               params: { renderId: params.renderId },
             }, hostOrigin);
+          };
+          const present = () => {
+            if (presented) return;
+            presented = true;
+            clearTimeout(fallback);
+            acknowledge();
+          };
+          presentInner = present;
+          nextInner.addEventListener("load", () => {
+            loaded = true;
+            if (!presented) fallback = setTimeout(present, ${SANDBOX_PRESENTATION_FALLBACK_MS});
+            acknowledge();
           }, { once: true });
           widgetPortsOffered.clear();
           nextInner.srcdoc = guardedHtml;
@@ -403,7 +437,10 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
       return;
     }
     if (event.source === inner.contentWindow) {
-      if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;
+      if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) {
+        if (event.data.method === "ui/notifications/sandbox-resource-loaded") presentInner?.();
+        return;
+      }
       if (event.data?.type === "openclaw:widget-bridge-port-offer" || event.data?.type === "openclaw:widget-prompt-offer") {
         const port = event.ports[0];
         // Each wrapper offers its private channels before untrusted code runs.
