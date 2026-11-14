@@ -324,7 +324,8 @@ function prepareMessageActionReadContext(
     enforcement.kind === "provider-owned" &&
     enforcement.fenced &&
     !ctx.messageActionAuthorization?.scheduled &&
-    ctx.toolContext === undefined &&
+    (ctx.toolContext === undefined ||
+      normalizeMessageChannel(ctx.toolContext.currentChannelProvider) === "webchat") &&
     ctx.requesterAccountId === undefined
       ? ctx.messageActionAuthorization?.assertDashboardReadCurrent
       : undefined;

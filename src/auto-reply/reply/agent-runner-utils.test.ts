@@ -124,6 +124,7 @@ describe("agent-runner-utils", () => {
       try {
         const authority = resolveMessageActionTurnAuthorization(lookup);
         expect(authority?.assertDashboardReadCurrent).toBeTypeOf("function");
+        expect(authority?.toolContext).toMatchObject({ currentChannelProvider: "webchat" });
         expect(resolveCurrentPromptReaction(lookup)).toBeUndefined();
         expect(authority).not.toHaveProperty("currentPromptReaction");
         expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
