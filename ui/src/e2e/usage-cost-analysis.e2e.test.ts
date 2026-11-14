@@ -482,17 +482,9 @@ suite.define(() => {
       await page.getByRole("button", { name: "Cost", exact: true }).click();
       await display.click();
 
-      const windowCards = page.locator(".cost-window");
-      await expect.poll(() => windowCards.count()).toBe(4);
       await expect
-        .poll(async () => ({
-          labels: await windowCards.locator(".cost-window__label").allTextContents(),
-          values: await trimmedTexts(windowCards.locator(".cost-window__value")),
-        }))
-        .toEqual({
-          labels: ["Selected range", "Today", "Last 7 days", "Last 30 days"],
-          values: ["$32.00", "$11.00", "$20.00", "$27.00"],
-        });
+        .poll(async () => (await trimmedTexts(page.locator(".usage-metric-badge strong")))[1])
+        .toBe("$32.00");
       await expectTexts(page.locator(".daily-chart-scale span"), ["$20", "$10", "$0"]);
       await expectText(page.locator(".usage-insight-card", { hasText: "Top providers" })).toContain(
         "OpenAI",
