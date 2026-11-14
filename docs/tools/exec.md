@@ -174,7 +174,7 @@ Notes:
 - Hidden subagent sessions do not receive automatic background-exec wakes; visible spawned sessions do. Their running and `process` results give manual-collection guidance instead of a wake promise. Collect the result with `process poll` before yielding without another completion source.
 - Isolated cron runs also receive manual-collection guidance: completion admission requires the originating run to remain active. If the run needs a background command's result, collect it with `process poll` before ending the turn.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
-- A one-time wait inside the current conversation (CI, a deploy, a short delay) is one background command whose exit wakes the conversation. Saved reminders, recurring work and follow-ups from another session use [automations](/automation/cron-jobs).
+- A one-time wait inside the current conversation (CI, a deploy, a short delay) is one background command. When its running result says the exit wakes the conversation, the agent ends the turn; otherwise it collects the result with `process poll`. Saved reminders, recurring work and follow-ups from another session use [automations](/automation/cron-jobs).
 
 ## Config
 
