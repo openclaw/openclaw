@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "baseline": "c564e14d99791a0c6967b097b589adaafcd903cd",
+  "removedFiles": [],
+  "strategy": "Consolidate repeated setup; preserve every scenario, expected error, and boundary invocation.",
+  "entries": [
+    {
+      "file": "test/scripts/frv.test.ts",
+      "removedCases": ["recognizes a carried npm preparation by its execution fingerprint", "rejects a replacement npm preparation even without a second descriptor"],
+      "keeper": "$name",
+      "rows": ["recognizes a carried npm preparation by its execution fingerprint", "rejects a replacement npm preparation even without a second descriptor"],
+      "invariant": "Recovery distinguishes a carried preparation fingerprint from a replacement that invalidates consumed candidate bytes.",
+      "carriedUniqueAssertions": "Original inputs, expected rejection, and mutation/no-mutation assertions are retained in the named table row."
+    },
+    {
+      "file": "test/scripts/frv.test.ts",
+      "removedCases": ["does not invent rerunnable producers for retained publication artifacts", "does not let evidence reuse hide a failed producer job"],
+      "keeper": "$name",
+      "rows": ["does not invent rerunnable producers for retained publication artifacts", "does not let evidence reuse hide a failed producer job"],
+      "invariant": "Authenticated artifact reuse cannot invent a producer or conceal failed original npm dispatch identity.",
+      "carriedUniqueAssertions": "Original inputs, expected rejection, and mutation/no-mutation assertions are retained in the named table row."
+    },
+    {
+      "file": "test/scripts/release-ci-summary.test.ts",
+      "removedCases": ["rejects a parent recovery that reruns a sealed child dispatch slot", "rejects carried parent jobs whose selected-attempt execution fingerprint changed"],
+      "keeper": "$name",
+      "rows": ["rejects a parent recovery that reruns a sealed child dispatch slot", "rejects carried parent jobs whose selected-attempt execution fingerprint changed"],
+      "invariant": "Sealed child dispatches and carried parent jobs retain their original execution fingerprints.",
+      "carriedUniqueAssertions": "Original inputs, expected rejection, and mutation/no-mutation assertions are retained in the named table row."
+    },
+    {
+      "file": "test/scripts/release-plan-producer.test.ts",
+      "removedCases": ["ignores poisoned direct yaml require cache entries", "ignores poisoned transitive yaml require cache entries"],
+      "keeper": "ignores poisoned %s yaml require cache entries",
+      "rows": ["direct", "transitive"],
+      "invariant": "Verified YAML executes its retained closure rather than ambient direct or transitive require-cache entries.",
+      "carriedUniqueAssertions": "Original inputs, expected rejection, and mutation/no-mutation assertions are retained in the named table row."
+    },
+    {
+      "file": "test/scripts/release-no-push-workflow.test.ts",
+      "removedCases": ["fails a missing required local live image before any registry pull", "fails a missing required local Docker E2E image before pull or build fallback"],
+      "keeper": "$name",
+      "rows": ["fails a missing required local live image before any registry pull", "fails a missing required local Docker E2E image before pull or build fallback"],
+      "invariant": "Required local images fail before registry pulls or build fallback.",
+      "carriedUniqueAssertions": "Exact command, environment, missing-image error, status 1, and one inspect call retained for each image owner."
+    }
+  ],
+  "validation": "Code-only self-review. Tests, typecheck, and dependencies remain with the coordinator."
+}

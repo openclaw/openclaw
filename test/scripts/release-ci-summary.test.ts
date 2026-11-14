@@ -2303,33 +2303,44 @@ describe("release CI summary child correlation", () => {
     await expect(validate()).rejects.toThrow("execution plan child dispatch tuple mismatch");
   });
 
-  it("rejects a parent recovery that reruns a sealed child dispatch slot", () => {
-    const child = expectedChildDispatches("28717729503", 2, "main").find(
-      (entry) => entry.manifestKey === "releaseChecks",
+  it.each([
+    {
+      name: "rejects a parent recovery that reruns a sealed child dispatch slot",
+      key: "releaseChecks",
+      original: ["2026-08-22T00:00:00Z", "2026-08-22T00:01:00Z"],
+      recovered: ["2026-08-22T00:01:00Z", "2026-08-22T00:02:00Z"],
+      requireSkippedCarryForward: true,
+      error: "manifest parent job was redispatched during recovery",
+    },
+    {
+      name: "rejects carried parent jobs whose selected-attempt execution fingerprint changed",
+      key: "pluginPrerelease",
+      original: ["2026-07-04T19:53:02Z", "2026-07-04T20:29:21Z"],
+      recovered: ["2026-07-04T19:53:02Z", "2026-07-04T20:30:21Z"],
+      requireSkippedCarryForward: false,
+      error: "manifest parent job carry-forward fingerprint mismatch",
+    },
+  ])("$name", ({ key, original, recovered, requireSkippedCarryForward, error }) => {
+    const child = expectDefined(
+      expectedChildDispatches("28717729503", 2, "main").find((entry) => entry.manifestKey === key),
+      `${key} child fixture`,
     );
-    if (!child) {
-      throw new Error("missing release checks fixture");
-    }
     const parentManifest = { runAttempt: 2, runId: "28717729503" };
-    const parentJobs = [
+    const parentJobs = [original, recovered].map(([started_at, completed_at], index) =>
       makeJob(child.parentJobName, {
-        id: 900,
-        completed_at: "2026-08-22T00:01:00Z",
-        started_at: "2026-08-22T00:00:00Z",
+        id: 900 + index,
+        ...(index === 1 ? { run_attempt: 2 } : {}),
+        started_at,
+        completed_at,
       }),
-      makeJob(child.parentJobName, {
-        id: 901,
-        run_attempt: 2,
-        completed_at: "2026-08-22T00:02:00Z",
-        started_at: "2026-08-22T00:01:00Z",
-      }),
-    ];
-
+    );
     expect(() =>
-      selectManifestParentJob(parentJobs, child, parentManifest, 1, {
-        requireSkippedCarryForward: true,
-      }),
-    ).toThrow("manifest parent job was redispatched during recovery");
+      requireSkippedCarryForward
+        ? selectManifestParentJob(parentJobs, child, parentManifest, 1, {
+            requireSkippedCarryForward: true,
+          })
+        : selectManifestParentJob(parentJobs, child, parentManifest, 1),
+    ).toThrow(error);
   });
 
   it("blocks selected cross-OS failures through canonical policy", async () => {
@@ -3506,32 +3517,5 @@ describe("release CI summary child correlation", () => {
       );
     expect(() => validate(evidenceSha)).not.toThrow();
     expect(() => validate(targetSha)).toThrow("no longer matches");
-  });
-
-  it("rejects carried parent jobs whose selected-attempt execution fingerprint changed", () => {
-    const child = expectedChildDispatches("28717729503", 2, "main").find(
-      (entry) => entry.manifestKey === "pluginPrerelease",
-    );
-    if (!child) {
-      throw new Error("missing plugin prerelease fixture");
-    }
-    const parentManifest = { runAttempt: 2, runId: "28717729503" };
-    const parentJobs = [
-      makeJob(child.parentJobName, {
-        id: 900,
-        completed_at: "2026-07-04T20:29:21Z",
-        started_at: "2026-07-04T19:53:02Z",
-      }),
-      makeJob(child.parentJobName, {
-        id: 901,
-        run_attempt: 2,
-        completed_at: "2026-07-04T20:30:21Z",
-        started_at: "2026-07-04T19:53:02Z",
-      }),
-    ];
-
-    expect(() => selectManifestParentJob(parentJobs, child, parentManifest, 1)).toThrow(
-      "manifest parent job carry-forward fingerprint mismatch",
-    );
   });
 });

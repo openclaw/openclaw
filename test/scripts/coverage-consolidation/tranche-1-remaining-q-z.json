@@ -1,0 +1,32 @@
+{
+  "baseline": "c564e14d99791a0c6967b097b589adaafcd903cd",
+  "deletedFiles": [],
+  "retiredCases": [],
+  "consolidatedAssertions": [
+    {
+      "file": "test/scripts/test-group-report.test.ts",
+      "case": "preserves bounded empty report output",
+      "retiredAssertions": ["empty report inline snapshot", "empty comparison inline snapshot"],
+      "keeperFile": "test/scripts/test-group-report.test.ts",
+      "keeperCases": ["preserves bounded empty report output", "preserves bounded populated report output", "preserves bounded comparison output"],
+      "invariant": "Empty counters, ordered headings, absent run section and comparison none placeholders remain exact normalized rows; populated report/comparison snapshots retain exact spacing and section separation."
+    },
+    {
+      "file": "test/scripts/test-group-report.test.ts",
+      "case": "preserves bounded populated report output",
+      "retiredAssertions": ["zero-limit report inline snapshot"],
+      "keeperFile": "test/scripts/test-group-report.test.ts",
+      "keeperCases": ["preserves bounded populated report output"],
+      "invariant": "Zero limits retain every counter and heading, suppress rows and retain the slow-test section. The same case preserves its original exact populated snapshot."
+    },
+    {
+      "file": "test/scripts/test-group-report.test.ts",
+      "case": "preserves bounded comparison output",
+      "retiredAssertions": ["zero-limit comparison inline snapshot"],
+      "keeperFile": "test/scripts/test-group-report.test.ts",
+      "keeperCases": ["preserves bounded comparison output"],
+      "invariant": "Zero limits retain all totals, added/removed counts, ordered sections and none placeholders; the run section remains present without a none placeholder. The same case preserves its original exact populated snapshot."
+    }
+  ],
+  "validation": "No tests or dependency-backed checks executed. Static syntax and diff checks only; focused suite and root tooling typecheck remain required."
+}

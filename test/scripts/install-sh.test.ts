@@ -1504,30 +1504,6 @@ EOF
     },
   );
 
-  it("fails a configured upgrade without printing success when doctor fails", () => {
-    const result = runInstallShell(`
-      source "${SCRIPT_PATH}"
-      INSTALL_METHOD=npm; NO_ONBOARD=1; NO_PROMPT=1; OS=linux
-      bootstrap_gum_temp() { :; }; print_installer_banner() { :; }; print_gum_status() { :; }
-      detect_os_or_die() { OS=linux; }; detect_openclaw_checkout() { return 1; }; show_install_plan() { :; }
-      check_existing_openclaw() { return 0; }; load_nvm_for_node_detection() { :; }; check_node() { return 0; }
-      promote_supported_node_binary() { :; }; ensure_default_node_active_shell() { return 0; }
-      check_git() { return 0; }; fix_npm_permissions() { :; }
-      prepare_git_wrapper_backup_for_npm() { :; }
-      install_openclaw() { mkdir -p "$HOME/.local/bin"; printf '#!/bin/sh\nif [ "$1" = doctor ]; then exit 9; fi\nexit 0\n' > "$HOME/.local/bin/openclaw"; chmod +x "$HOME/.local/bin/openclaw"; }
-      resolve_installed_openclaw_bin() { printf '%s\n' "$HOME/.local/bin/openclaw"; }
-      warn_duplicate_openclaw_global_installs() { :; }; npm_global_bin_dir() { :; }; warn_shell_path_missing_dir() { :; }
-      has_openclaw_config() { return 0; }; refresh_gateway_service_if_loaded() { :; }
-      run_doctor() { return 9; }; resolve_openclaw_version() { printf 'test-version\n'; }
-      retire_git_wrapper_after_npm_install() { :; }; show_footer_links() { :; }; npm() { [[ "$1" == view ]] || return 1; printf '>=24.16.0 <25 || >=26.1.0\\n'; }
-      main
-    `);
-
-    expect(result.status).toBe(9);
-    expect(result.stdout).not.toContain("installed successfully");
-    expect(result.stdout).not.toContain("Upgrade complete");
-  });
-
   it.each([
     { name: "flag", args: "--dry-run", dryRunEnv: "0", dryRun: true },
     { name: "environment", args: "", dryRunEnv: "1", dryRun: true },
@@ -1552,6 +1528,14 @@ EOF
   });
 
   it.each([
+    {
+      name: "configured npm upgrade rejects failed Doctor before success",
+      method: "npm",
+      configured: true,
+      upgrade: true,
+      doctorExit: 9,
+      expectedStatus: 9,
+    },
     {
       name: "fresh retained config rejects failed Doctor before success",
       configured: true,
@@ -1597,6 +1581,7 @@ EOF
   ])(
     "required installer lifecycle: $name",
     ({
+      method = "git",
       configured = false,
       upgrade = false,
       verify = false,
@@ -1613,7 +1598,7 @@ EOF
           source "${SCRIPT_PATH}"
           cleanup_tmpfiles() { :; }
 
-          INSTALL_METHOD=git
+          INSTALL_METHOD="$SCENARIO_METHOD"
           GIT_DIR=
           NO_PROMPT=0
           NO_ONBOARD="$SCENARIO_NO_ONBOARD"
@@ -1652,9 +1637,19 @@ EOF
           check_node() { return 0; }
           promote_supported_node_binary() { :; }
           ensure_default_node_active_shell() { return 0; }
-          npm() { return 1; }
-          install_openclaw_from_git() { printf 'event:installed\\n'; }
-          resolve_installed_openclaw_bin() { printf '/nonexistent/mock-openclaw\\n'; }
+          npm() {
+            [[ "$SCENARIO_METHOD" == npm && "$1" == view ]] || return 1
+            printf '>=24.16.0 <25 || >=26.1.0\\n'
+          }
+          ensure_node() { return 0; }
+          check_git() { return 0; }
+          fix_npm_permissions() { :; }
+          prepare_git_wrapper_backup_for_npm() { :; }
+          commit_openclaw_bin_backup() { :; }
+          retire_git_wrapper_after_npm_install() { :; }
+          install_openclaw() { printf 'event:installed\\n'; }
+          install_openclaw_from_git() { install_openclaw; }
+          resolve_installed_openclaw_bin() { printf '%s\\n' "$SCENARIO_OPENCLAW_BIN"; }
           warn_duplicate_openclaw_global_installs() { :; }
           npm_global_bin_dir() { :; }
           warn_shell_path_missing_dir() { :; }
@@ -1694,6 +1689,8 @@ EOF
           OPENCLAW_VERIFY_INSTALL: "0",
           OPENCLAW_NO_ONBOARD: "0",
           OPENCLAW_NO_PROMPT: "0",
+          SCENARIO_METHOD: method,
+          SCENARIO_OPENCLAW_BIN: method === "npm" ? "/bin/true" : "/nonexistent/mock-openclaw",
           SCENARIO_CONFIGURED: configured ? "1" : "0",
           SCENARIO_UPGRADE: upgrade ? "1" : "0",
           SCENARIO_VERIFY: verify ? "1" : "0",
@@ -1706,6 +1703,7 @@ EOF
 
       expect(result.status, result.stderr || result.stdout).toBe(expectedStatus);
       expect(result.stderr).not.toContain("forbidden external command");
+      expect(result.stdout).toContain("event:installed");
 
       const output = result.stdout;
       const successMatches = output.match(/OpenClaw installed successfully/g) ?? [];
@@ -3423,19 +3421,33 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     expect(result.stdout).not.toContain("ensure-called");
   });
 
-  it("reports a stale Homebrew node without PATH advice", () => {
+  it.each([
+    {
+      name: "reports a stale Homebrew node without PATH advice",
+      installed: true,
+      message: "brew update && brew upgrade node",
+    },
+    {
+      name: "does not print PATH advice when Homebrew node is missing at runtime",
+      installed: false,
+      message: "Homebrew node is not installed on disk",
+    },
+  ])("$name", ({ installed, message }) => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
       OS=macos
-      stale_prefix="$(mktemp -d "$HOME/stale-node.XXXXXX")/node"
-      mkdir -p "$stale_prefix/bin"
-      printf '#!/bin/sh\\necho v26.10.0\\n' > "$stale_prefix/bin/node"
-      chmod +x "$stale_prefix/bin/node"
+      node_prefix="$(mktemp -d "$HOME/homebrew-node.XXXXXX")/node"
+      ${
+        installed
+          ? `mkdir -p "$node_prefix/bin"
+      printf '#!/bin/sh\\necho v26.10.0\\n' > "$node_prefix/bin/node"
+      chmod +x "$node_prefix/bin/node"`
+          : ""
+      }
       brew() {
         if [[ "$1" == "--prefix" ]]; then
-          echo "$stale_prefix"
-          return 0
+          echo "$node_prefix"
         fi
         return 0
       }
@@ -3449,36 +3461,13 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("ensure returned failure");
-    expect(result.stdout).toContain("brew update && brew upgrade node");
-    expect(`${result.stdout}${result.stderr}`).toContain("v26.10.0 does not meet");
-  });
-
-  it("does not print PATH advice when Homebrew node is missing at runtime", () => {
-    const result = runInstallShell(`
-      set -euo pipefail
-      source "${SCRIPT_PATH}"
-      OS=macos
-      missing_prefix="$(mktemp -d)/node"
-      brew() {
-        if [[ "$1" == "--prefix" ]]; then
-          echo "$missing_prefix"
-          return 0
-        fi
-        return 0
-      }
-      node_binary_is_supported() { return 1; }
-      if ensure_macos_default_node_active; then
-        echo "ensure returned success"
-      else
-        echo "ensure returned failure"
-      fi
-    `);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Homebrew node is not installed on disk");
-    expect(result.stdout).toContain("ensure returned failure");
-    expect(result.stdout).not.toContain("Node.js v26 was installed");
-    expect(result.stdout).not.toContain("Add this to your shell profile");
+    expect(result.stdout).toContain(message);
+    if (installed) {
+      expect(`${result.stdout}${result.stderr}`).toContain("v26.10.0 does not meet");
+    } else {
+      expect(result.stdout).not.toContain("Node.js v26 was installed");
+      expect(result.stdout).not.toContain("Add this to your shell profile");
+    }
   });
 
   it.each([

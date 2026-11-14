@@ -33,86 +33,12 @@ const DEFAULT_INPUTS = {
   allowUnreleasedChangelog: "false",
 };
 
-interface ParentTuple {
-  artifact: {
-    digest: string;
-    id: string;
-    name: string;
-    runAttempt: number;
-    sizeInBytes: number;
-  };
-  conclusion: string;
-  manifest: Record<string, unknown>;
-  manifestVersion: number;
-  runAttempt: number;
-  runId: string;
-  status: string;
-  targetSha: string;
-  url: string;
-  producerOnTrustedMainLineage: boolean;
-  workflowFullRef: string;
-  workflowPath: string;
-  workflowQualifiedPath: string;
-  workflowRef: string;
-  workflowRefProof: string;
-  workflowRefType: string;
-  workflowRunPath: string;
-  workflowSha: string;
-}
-
-interface ChildTuple {
-  conclusion: string;
-  dispatchNonce: string;
-  displayTitle: string;
-  event: string;
-  headBranch: string;
-  parentJobId: string;
-  path: string;
-  reportPublication?: string;
-  role: string;
-  runAttempt: number;
-  runId: string;
-  sourceParentAttempt: number;
-  sourceParentRunId: string;
-  status: string;
-  url: string;
-  workflowSha: string;
-}
-
-interface NormalizedEvidence {
-  children: ChildTuple[];
-  conclusions: {
-    children: Record<string, string>;
-    current: string;
-    root: string;
-  };
-  controls: Record<string, unknown>;
-  current: ParentTuple;
-  directRoot: boolean;
-  evidenceReuse: Record<string, unknown> | null;
+type NormalizedEvidence = ReturnType<typeof normalizedEvidence> & {
   qualificationAdmission?: {
     request?: { candidateSha: string; qualificationSha: string };
     coverage: { children: { key: string }[] };
   };
-  manifest: Record<string, unknown>;
-  releaseProfile: string;
-  repository: string;
-  rerunGroup: string;
-  root: ParentTuple;
-  runReleaseSoak: boolean;
-  schema: string;
-  producerOnTrustedMainLineage: boolean;
-  trustedWorkflowFullRef: string;
-  trustedWorkflowRef: string;
-  valid: boolean;
-  validationInputs: Record<string, string> | null;
-  verifier: {
-    schemaVersion: number;
-    script: string;
-    scriptSha256: string;
-    sourceSha: string | null;
-  };
-}
+};
 
 interface RunFixture {
   error?: string;
@@ -214,7 +140,7 @@ function normalizedEvidence(options: {
   verifierSha?: string | null;
   workflowRef?: string;
   trustedWorkflowRef?: string;
-}): NormalizedEvidence {
+}) {
   const runId = options.runId ?? "111";
   const producerSha = options.producerSha ?? PRODUCER_SHA;
   const releaseProfile = options.releaseProfile ?? "full";
@@ -268,7 +194,7 @@ function normalizedEvidence(options: {
       },
     },
   };
-  const root: ParentTuple = {
+  const root = {
     artifact: {
       digest: `sha256:${"a".repeat(64)}`,
       id: "9001",
@@ -389,7 +315,7 @@ function normalizedEvidence(options: {
     },
     current: structuredClone(root),
     directRoot: true,
-    evidenceReuse: null,
+    evidenceReuse: null as Record<string, unknown> | null,
     manifest,
     releaseProfile,
     repository: REPOSITORY,
@@ -769,95 +695,60 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     },
   );
 
-  it("reuses strict direct-root evidence produced by a canonical SHA-pinned run", () => {
-    const { priorSha } = getSharedRepo();
-    const producerSha = "d".repeat(40);
-    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha,
-      targetSha: priorSha,
-      workflowRef: producerRef,
-    });
-
-    const result = resolveEvidence(record, {
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
+  it.each([
+    {
+      name: "reuses strict direct-root evidence produced by a canonical SHA-pinned run",
+      producerSha: "d".repeat(40),
+      protectedTag: false,
+      proof: undefined,
       reuse: "true",
-    });
-  });
-
-  it("reuses strict evidence from the protected tooling tag", () => {
-    const { priorSha } = getSharedRepo();
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
+    },
+    {
+      name: "reuses strict evidence from the protected tooling tag",
       producerSha: VERIFIER_SHA,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
-    const result = resolveEvidence(record, {
-      trustedWorkflowRef,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
-  });
-
-  it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
+      protectedTag: true,
+      proof: undefined,
+      reuse: "true",
+    },
+    {
+      name: "reuses strict evidence produced by an ancestor of the protected tooling tag",
+      producerSha: "d".repeat(40),
+      protectedTag: true,
+      proof: "manifest-v3-protected-tag-tooling-lineage",
+      reuse: "true",
+    },
+    {
+      name: "rejects unrecognized protected tooling proof",
+      producerSha: VERIFIER_SHA,
+      protectedTag: true,
+      proof: "manifest-v3-protected-tag-diverged",
+      reuse: "false",
+    },
+  ])("$name", ({ producerSha, protectedTag, proof, reuse }) => {
     const { priorSha } = getSharedRepo();
-    const producerSha = "d".repeat(40);
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
+    const trustedWorkflowRef = protectedTag
+      ? `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`
+      : "main";
     const record = normalizedEvidence({
       producerSha,
       targetSha: priorSha,
       trustedWorkflowRef,
-      workflowRef: producerRef,
+      workflowRef: `release-ci/${producerSha.slice(0, 12)}-122`,
     });
-    record.current.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
-    record.root.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
-
+    if (proof) {
+      record.current.workflowRefProof = proof;
+      record.root.workflowRefProof = proof;
+    }
     const result = resolveEvidence(record, {
       trustedWorkflowRef,
-      verifierOnMain: false,
+      verifierOnMain: !protectedTag,
       workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
     });
-
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
+      ...(reuse === "true" && { evidence_run_id: "111" }),
+      reuse,
     });
-  });
-
-  it("rejects unrecognized protected tooling proof", () => {
-    const workflowRefProof = "manifest-v3-protected-tag-diverged";
-    const { priorSha } = getSharedRepo();
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha: VERIFIER_SHA,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
-    record.current.workflowRefProof = workflowRefProof;
-    record.root.workflowRefProof = workflowRefProof;
-
-    const result = resolveEvidence(record, {
-      trustedWorkflowRef,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
   });
 
   it.each([
@@ -1165,37 +1056,31 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it("rejects cross-SHA reuse when the release delta includes code", () => {
+  it.each([
+    {
+      name: "rejects cross-SHA reuse when the release delta includes code",
+      file: "index.ts",
+      content: "export const value = 2;\n",
+      message: "fix: code",
+      compare: { compareFiles: ["index.ts"] },
+    },
+    {
+      name: "rejects a source-file rename to CHANGELOG.md",
+      file: "CHANGELOG.md",
+      content: "renamed source\n",
+      message: "docs: rename",
+      compare: { compareRenamed: true },
+    },
+  ])("$name", ({ file, content, message, compare }) => {
     const { origin, priorSha } = createRepo();
-    const targetSha = commitFile(origin, "index.ts", "export const value = 2;\n", "fix: code");
-    const clone = cloneHead(origin);
+    const targetSha = commitFile(origin, file, content, message);
     const record = normalizedEvidence({ targetSha: priorSha });
-
     const result = resolveEvidence(record, {
       compareBaseSha: priorSha,
-      compareFiles: ["index.ts"],
-      repoDir: clone,
+      repoDir: cloneHead(origin),
       targetSha,
+      ...compare,
     });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
-  });
-
-  it("rejects a source-file rename to CHANGELOG.md", () => {
-    const { origin, priorSha } = createRepo();
-    const targetSha = commitFile(origin, "CHANGELOG.md", "renamed source\n", "docs: rename");
-    const clone = cloneHead(origin);
-    const record = normalizedEvidence({ targetSha: priorSha });
-
-    const result = resolveEvidence(record, {
-      compareBaseSha: priorSha,
-      compareRenamed: true,
-      repoDir: clone,
-      targetSha,
-    });
-
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
     expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");

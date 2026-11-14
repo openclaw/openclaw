@@ -95,6 +95,40 @@ function readJsonOutput(outputs: Record<string, string>, key: string) {
   return JSON.parse(expectDefined(outputs[key], key));
 }
 
+function expectNodePrerequisite(
+  requirement: string,
+  prefix: string,
+  cases: readonly (readonly [boolean, Record<string, unknown>])[],
+  defaults: Record<string, unknown>,
+  options: Partial<Parameters<typeof runCiManifestFixture>[0]> = {},
+  groupShardName?: string,
+  coerce = true,
+) {
+  const result = runCiManifestFixture({
+    bundledPlanner: true,
+    ...options,
+    nodeTestShards: cases.map(([, selection], index) => ({
+      checkName: `${prefix}-${index}`,
+      ...defaults,
+      ...(groupShardName && "groups" in selection ? { shardName: groupShardName } : {}),
+      ...selection,
+    })),
+  });
+  expect(result.status, result.output).toBe(0);
+  const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+  expect(rows).toHaveLength(cases.length);
+  expect(
+    rows.map((row: Record<string, unknown>) =>
+      coerce ? Boolean(row[requirement]) : row[requirement],
+    ),
+  ).toEqual(cases.map(([expected]) => expected));
+  if (options.bunTestRuntime === false) {
+    for (const row of rows) {
+      expect(row.test_runtime_policy).toBe("node");
+    }
+  }
+}
+
 function installCollectChecks(root: string) {
   mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
   copyFileSync(
@@ -12764,101 +12798,98 @@ describe("ci workflow guards", () => {
     };
     const goTest = "test/scripts/docs-i18n.test.ts";
     const otherTest = "test/scripts/ci-git-owner.test.ts";
-    const selections = [
-      { includePatterns: [goTest] },
-      { includePatterns: [otherTest] },
-      { includePatterns: ["test/scripts/docs-*.test.ts"] },
-      { targets: [goTest] },
-      { targets: [otherTest] },
+    expectNodePrerequisite(
+      "requires_go",
+      "tooling",
+      [
+        [true, { includePatterns: [goTest] }],
+        [false, { includePatterns: [otherTest] }],
+        [true, { includePatterns: ["test/scripts/docs-*.test.ts"] }],
+        [true, { targets: [goTest] }],
+        [false, { targets: [otherTest] }],
+        [true, {}],
+        [false, { groups: [{ ...tooling, includePatterns: [otherTest] }] }],
+        [
+          true,
+          {
+            groups: [
+              { ...tooling, includePatterns: [otherTest] },
+              { ...tooling, includePatterns: [goTest] },
+            ],
+          },
+        ],
+        [true, { groups: [{ ...tooling, configs: ["test/vitest/legacy-tooling.config.ts"] }] }],
+        [
+          false,
+          { groups: [{ ...tooling, configs: ["test/vitest/vitest.tooling-isolated.config.ts"] }] },
+        ],
+        [
+          false,
+          { groups: [{ ...tooling, configs: ["test/vitest/vitest.tooling-docker.config.ts"] }] },
+        ],
+        [
+          false,
+          {
+            groups: [
+              {
+                ...tooling,
+                configs: [
+                  "test/vitest/vitest.tooling-docker.config.ts",
+                  "test/vitest/vitest.tooling-isolated.config.ts",
+                ],
+              },
+            ],
+          },
+        ],
+        [
+          true,
+          {
+            groups: [
+              {
+                ...tooling,
+                configs: [...tooling.configs, "test/vitest/vitest.tooling-isolated.config.ts"],
+              },
+            ],
+          },
+        ],
+        [
+          true,
+          {
+            groups: [
+              {
+                ...tooling,
+                configs: [
+                  "test/vitest/vitest.tooling-isolated.config.ts",
+                  "test/vitest/legacy-tooling.config.ts",
+                ],
+              },
+            ],
+          },
+        ],
+        [true, { groups: [{ ...tooling, configs: undefined }] }],
+        [
+          true,
+          {
+            groups: [
+              {
+                ...tooling,
+                configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+                includePatterns: [goTest],
+              },
+            ],
+          },
+        ],
+      ],
+      {
+        configs: tooling.configs,
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shardName: "core-tooling-1",
+      },
       {},
-      { groups: [{ ...tooling, includePatterns: [otherTest] }] },
-      {
-        groups: [
-          { ...tooling, includePatterns: [otherTest] },
-          { ...tooling, includePatterns: [goTest] },
-        ],
-      },
-      { groups: [{ ...tooling, configs: ["test/vitest/legacy-tooling.config.ts"] }] },
-      { groups: [{ ...tooling, configs: ["test/vitest/vitest.tooling-isolated.config.ts"] }] },
-      { groups: [{ ...tooling, configs: ["test/vitest/vitest.tooling-docker.config.ts"] }] },
-      {
-        groups: [
-          {
-            ...tooling,
-            configs: [
-              "test/vitest/vitest.tooling-docker.config.ts",
-              "test/vitest/vitest.tooling-isolated.config.ts",
-            ],
-          },
-        ],
-      },
-      {
-        groups: [
-          {
-            ...tooling,
-            configs: [...tooling.configs, "test/vitest/vitest.tooling-isolated.config.ts"],
-          },
-        ],
-      },
-      {
-        groups: [
-          {
-            ...tooling,
-            configs: [
-              "test/vitest/vitest.tooling-isolated.config.ts",
-              "test/vitest/legacy-tooling.config.ts",
-            ],
-          },
-        ],
-      },
-      { groups: [{ ...tooling, configs: undefined }] },
-      {
-        groups: [
-          {
-            ...tooling,
-            configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
-            includePatterns: [goTest],
-          },
-        ],
-      },
-    ];
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      nodeTestShards: selections.map((selection, index) =>
-        Object.assign(
-          {
-            checkName: `tooling-${index}`,
-            configs: tooling.configs,
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "groups" in selection ? "compact-small-1" : "core-tooling-1",
-          },
-          selection,
-        ),
-      ),
-    });
-    expect(result.status, result.output).toBe(0);
-    const matrix = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix") as {
-      include: { requires_go: boolean }[];
-    };
-    expect(matrix.include.map((row) => row.requires_go)).toEqual([
-      true,
+      "compact-small-1",
       false,
-      true,
-      true,
-      false,
-      true,
-      false,
-      true,
-      true,
-      false,
-      false,
-      false,
-      true,
-      true,
-      true,
-      true,
-    ]);
+    );
   });
 
   it.each(
@@ -13478,39 +13509,27 @@ describe("ci workflow guards", () => {
     const codegen = "test/scripts/bun-standalone-codegen.test.ts";
     const unrelated = "test/scripts/ci-git-owner.test.ts";
     const tooling = "test/vitest/vitest.tooling.config.ts";
-    const selections = [
-      { targets: [codegen] },
-      { includePatterns: [codegen] },
-      { includePatterns: ["test/scripts/bun-*.test.ts"] },
-      { groups: [{ configs: [tooling], includePatterns: [codegen] }] },
-      { configs: [tooling] },
-      { includePatterns: [unrelated] },
-      { groups: [{ configs: [tooling], includePatterns: [unrelated] }] },
-      { configs: ["test/vitest/vitest.tooling-isolated.config.ts"] },
-    ];
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      bunTestRuntime: false,
-      nodeTestShards: selections.map((selection, index) =>
-        Object.assign(
-          {
-            checkName: `codegen-${index}`,
-            configs: [tooling],
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "core-tooling-1",
-          },
-          selection,
-        ),
-      ),
-    });
-    expect(result.status, result.output).toBe(0);
-    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
-    expect(rows).toHaveLength(selections.length);
-    for (let index = 0; index < selections.length; index += 1) {
-      expect(Boolean(rows[index].requires_bun)).toBe(index < 5);
-      expect(rows[index].test_runtime_policy).toBe("node");
-    }
+    expectNodePrerequisite(
+      "requires_bun",
+      "codegen",
+      [
+        [true, { targets: [codegen] }],
+        [true, { includePatterns: [codegen] }],
+        [true, { includePatterns: ["test/scripts/bun-*.test.ts"] }],
+        [true, { groups: [{ configs: [tooling], includePatterns: [codegen] }] }],
+        [true, { configs: [tooling] }],
+        [false, { includePatterns: [unrelated] }],
+        [false, { groups: [{ configs: [tooling], includePatterns: [unrelated] }] }],
+        [false, { configs: ["test/vitest/vitest.tooling-isolated.config.ts"] }],
+      ],
+      {
+        configs: [tooling],
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shardName: "core-tooling-1",
+      },
+      { bunTestRuntime: false },
+    );
   });
 
   it("provisions ripgrep for filesystem, SQLite ratchet, and native PR wrapper selections", () => {
@@ -13523,93 +13542,62 @@ describe("ci workflow guards", () => {
     const prContinuation = "test/scripts/pr-correction-continuation.test.ts";
     const prPublication = "test/scripts/pr-baseline-publication.test.ts";
     const unrelated = "src/agents/run-wait.test.ts";
-    const selections = [
-      { targets: [contract] },
-      { includePatterns: [contract] },
-      { includePatterns: ["src/agents/filesystem-*.test.ts"] },
-      { targets: [nativeTools] },
-      { targets: [bytePaths] },
-      { includePatterns: [bytePaths] },
-      { groups: [{ shard_name: "agentic-agents-support", targets: [bytePaths] }] },
-      { groups: [{ shard_name: "agentic-agents-support", includePatterns: [bytePaths] }] },
-      { targets: [sqliteRatchet] },
-      { includePatterns: [sqliteRatchet] },
-      { includePatterns: ["test/scripts/check-*-ratchet.test.ts"] },
-      { groups: [{ shard_name: "core-tooling-1", includePatterns: [sqliteRatchet] }] },
-      { targets: [prSuccessor] },
-      { includePatterns: [prSuccessor] },
-      { groups: [{ shard_name: "core-tooling-12", includePatterns: [prSuccessor] }] },
-      { targets: [prSigning] },
-      { includePatterns: [prSigning] },
-      { groups: [{ shard_name: "core-tooling-9", includePatterns: [prSigning] }] },
-      { targets: [prContinuation] },
-      { includePatterns: [prContinuation] },
-      { groups: [{ shard_name: "core-tooling-11", includePatterns: [prContinuation] }] },
-      { targets: [prPublication] },
-      { includePatterns: [prPublication] },
-      { groups: [{ shard_name: "core-tooling-11", includePatterns: [prPublication] }] },
-      { includePatterns: [unrelated] },
-      { shardName: "agentic-agents-core-runtime" },
-      { shardName: "agentic-agents-support" },
-      { shardName: "agentic-agents-core-runtime", includePatterns: [unrelated] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [contract] }] },
-      { groups: [{ shard_name: "agentic-agents-support", includePatterns: [nativeTools] }] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [unrelated] }] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime" }] },
-    ];
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      nodeTestShards: selections.map((selection, index) =>
-        Object.assign(
-          {
-            checkName: `grep-${index}`,
-            configs: ["test/vitest/vitest.agents-core.config.ts"],
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "compact-small-1",
-          },
-          selection,
-        ),
-      ),
-    });
-    expect(result.status, result.output).toBe(0);
-    const matrix = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix") as {
-      include: { requires_ripgrep?: boolean }[];
-    };
-    expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      false,
-      true,
-      true,
-      false,
-      true,
-      true,
-      false,
-      true,
-    ]);
+    expectNodePrerequisite(
+      "requires_ripgrep",
+      "grep",
+      [
+        [true, { targets: [contract] }],
+        [true, { includePatterns: [contract] }],
+        [true, { includePatterns: ["src/agents/filesystem-*.test.ts"] }],
+        [true, { targets: [nativeTools] }],
+        [true, { targets: [bytePaths] }],
+        [true, { includePatterns: [bytePaths] }],
+        [true, { groups: [{ shard_name: "agentic-agents-support", targets: [bytePaths] }] }],
+        [
+          true,
+          { groups: [{ shard_name: "agentic-agents-support", includePatterns: [bytePaths] }] },
+        ],
+        [true, { targets: [sqliteRatchet] }],
+        [true, { includePatterns: [sqliteRatchet] }],
+        [true, { includePatterns: ["test/scripts/check-*-ratchet.test.ts"] }],
+        [true, { groups: [{ shard_name: "core-tooling-1", includePatterns: [sqliteRatchet] }] }],
+        [true, { targets: [prSuccessor] }],
+        [true, { includePatterns: [prSuccessor] }],
+        [true, { groups: [{ shard_name: "core-tooling-12", includePatterns: [prSuccessor] }] }],
+        [true, { targets: [prSigning] }],
+        [true, { includePatterns: [prSigning] }],
+        [true, { groups: [{ shard_name: "core-tooling-9", includePatterns: [prSigning] }] }],
+        [true, { targets: [prContinuation] }],
+        [true, { includePatterns: [prContinuation] }],
+        [true, { groups: [{ shard_name: "core-tooling-11", includePatterns: [prContinuation] }] }],
+        [true, { targets: [prPublication] }],
+        [true, { includePatterns: [prPublication] }],
+        [true, { groups: [{ shard_name: "core-tooling-11", includePatterns: [prPublication] }] }],
+        [false, { includePatterns: [unrelated] }],
+        [true, { shardName: "agentic-agents-core-runtime" }],
+        [true, { shardName: "agentic-agents-support" }],
+        [false, { shardName: "agentic-agents-core-runtime", includePatterns: [unrelated] }],
+        [
+          true,
+          { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [contract] }] },
+        ],
+        [
+          true,
+          { groups: [{ shard_name: "agentic-agents-support", includePatterns: [nativeTools] }] },
+        ],
+        [
+          false,
+          { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [unrelated] }] },
+        ],
+        [true, { groups: [{ shard_name: "agentic-agents-core-runtime" }] }],
+      ],
+      {
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shardName: "compact-small-1",
+      },
+    );
   });
 
   it("prepares the Docker sandbox image only for selected container E2E cases", () => {
@@ -13617,43 +13605,25 @@ describe("ci workflow guards", () => {
     const workspaceIsolation =
       "test/e2e/qa-lab/runtime/openclaw-sandbox-workspace-isolation.e2e.test.ts";
     const unrelated = "src/agents/run-wait.test.ts";
-    const selections = [
-      { targets: [sandboxExec] },
-      { includePatterns: [workspaceIsolation] },
-      { includePatterns: ["test/e2e/qa-lab/runtime/*sandbox*.e2e.test.ts"] },
-      { groups: [{ shard_name: "sandbox", targets: [sandboxExec] }] },
-      { targets: [unrelated] },
-      { includePatterns: [unrelated] },
-      { configs: ["test/vitest/vitest.e2e.config.ts"] },
-    ];
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      nodeTestShards: selections.map((selection, index) =>
-        Object.assign(
-          {
-            checkName: `sandbox-${index}`,
-            configs: ["test/vitest/vitest.agents-core.config.ts"],
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "compact-small-1",
-          },
-          selection,
-        ),
-      ),
-    });
-    expect(result.status, result.output).toBe(0);
-    const matrix = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix") as {
-      include: { requires_sandbox_image?: boolean }[];
-    };
-    expect(matrix.include.map((row) => Boolean(row.requires_sandbox_image))).toEqual([
-      true,
-      true,
-      true,
-      true,
-      false,
-      false,
-      true,
-    ]);
+    expectNodePrerequisite(
+      "requires_sandbox_image",
+      "sandbox",
+      [
+        [true, { targets: [sandboxExec] }],
+        [true, { includePatterns: [workspaceIsolation] }],
+        [true, { includePatterns: ["test/e2e/qa-lab/runtime/*sandbox*.e2e.test.ts"] }],
+        [true, { groups: [{ shard_name: "sandbox", targets: [sandboxExec] }] }],
+        [false, { targets: [unrelated] }],
+        [false, { includePatterns: [unrelated] }],
+        [true, { configs: ["test/vitest/vitest.e2e.config.ts"] }],
+      ],
+      {
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        requiresDist: false,
+        runner: "ubuntu-24.04",
+        shardName: "compact-small-1",
+      },
+    );
 
     const nodeTestJob = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
     const imageStep = requiredWorkflowStep(nodeTestJob.steps, "Prepare Docker sandbox image");
@@ -13666,31 +13636,17 @@ describe("ci workflow guards", () => {
 
   it("provisions native OAuth binaries for selected Gateway proof rows", () => {
     const target = "test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts";
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      nodeTestShards: [
-        { targets: [target] },
-        { groups: [{ shard_name: "native-auth", includePatterns: [target] }] },
-        { targets: ["src/agents/run-wait.test.ts"] },
-      ].map((selection, index) =>
-        Object.assign(
-          {
-            checkName: `native-auth-${index}`,
-            configs: ["test/vitest/vitest.e2e.config.ts"],
-            requiresDist: false,
-            shardName: "changed",
-          },
-          selection,
-        ),
-      ),
-    });
-    expect(result.status, result.output).toBe(0);
-    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
-    expect(
-      rows.map((row: { requires_native_secret_service?: boolean }) =>
-        Boolean(row.requires_native_secret_service),
-      ),
-    ).toEqual([true, true, false]);
+    expectNodePrerequisite(
+      "requires_native_secret_service",
+      "native-auth",
+      [
+        [true, { targets: [target] }],
+        [true, { groups: [{ shard_name: "native-auth", includePatterns: [target] }] }],
+        [false, { targets: ["src/agents/run-wait.test.ts"] }],
+      ],
+      { configs: ["test/vitest/vitest.e2e.config.ts"], requiresDist: false, shardName: "changed" },
+    );
+
     const setup = requiredWorkflowStep(
       readCiWorkflow().jobs["checks-node-core-test-nondist-shard"].steps,
       "Setup Node environment",

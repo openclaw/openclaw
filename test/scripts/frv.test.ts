@@ -773,7 +773,20 @@ describe("FRV continuation preflight", () => {
     ).toThrow("refusing a multi-job rerun");
   });
 
-  it("recognizes a carried npm preparation by its execution fingerprint", async () => {
+  it.each([
+    {
+      name: "recognizes a carried npm preparation by its execution fingerprint",
+      conclusion: "success",
+      dryRun: true,
+      error: "has no exact failed job identity; refusing a risky rerun",
+    },
+    {
+      name: "rejects a replacement npm preparation even without a second descriptor",
+      conclusion: "failure",
+      dryRun: false,
+      error: "already supplied the sealed candidate evidence",
+    },
+  ])("$name", async ({ conclusion, dryRun, error }) => {
     const fixture = artifactFixture("npm");
     fixture.producer.run_attempt = 2;
     fixture.producer.conclusion = "failure";
@@ -783,40 +796,16 @@ describe("FRV continuation preflight", () => {
       run_attempt: 1,
     };
     fixture.client.getAttemptJobs = async (_runId: string, attempt: number) =>
-      attempt === 1 ? [preparation] : [{ ...preparation, id: 999, run_attempt: 2 }];
-
+      attempt === 1 ? [preparation] : [{ ...preparation, id: 999, run_attempt: 2, conclusion }];
+    const recoveryPlan = { ...fixture.plan, candidate: { producer: { runId: "606" } } };
     await expect(
-      continueFailed(
-        { ...fixture.plan, candidate: { producer: { runId: "606" } } },
-        "77",
-        fixture.client,
-        { dryRun: true },
-      ),
-    ).rejects.toThrow("has no exact failed job identity; refusing a risky rerun");
-  });
-
-  it("rejects a replacement npm preparation even without a second descriptor", async () => {
-    const fixture = artifactFixture("npm");
-    fixture.producer.run_attempt = 2;
-    fixture.producer.conclusion = "failure";
-    const preparation = {
-      ...job("Prepare npm artifacts / Prepare publishable npm package"),
-      id: 901,
-      run_attempt: 1,
-    };
-    fixture.client.getAttemptJobs = async (_runId: string, attempt: number) =>
-      attempt === 1
-        ? [preparation]
-        : [{ ...preparation, id: 999, run_attempt: 2, conclusion: "failure" }];
-
-    await expect(
-      continueFailed(
-        { ...fixture.plan, candidate: { producer: { runId: "606" } } },
-        "77",
-        fixture.client,
-      ),
-    ).rejects.toThrow("already supplied the sealed candidate evidence");
-    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      dryRun
+        ? continueFailed(recoveryPlan, "77", fixture.client, { dryRun: true })
+        : continueFailed(recoveryPlan, "77", fixture.client),
+    ).rejects.toThrow(error);
+    if (!dryRun) {
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    }
   });
 
   it("does not claim recovery for a failed candidate producer with undispatched consumers", async () => {
@@ -941,42 +930,37 @@ describe("FRV continuation preflight", () => {
     expect(fixture.client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
   });
 
-  it("does not invent rerunnable producers for retained publication artifacts", async () => {
+  it.each([
+    {
+      name: "does not invent rerunnable producers for retained publication artifacts",
+      parentJob: "Prepare release Docker artifacts",
+      conclusion: "success",
+      log: `TARGET_SHA: ${TARGET_SHA}\nRetained original artifact descriptor`,
+      accepted: true,
+    },
+    {
+      name: "does not let evidence reuse hide a failed producer job",
+      parentJob: "Prepare release npm artifacts",
+      conclusion: "failure",
+      log: "Retained artifact resolution failed",
+      accepted: false,
+    },
+  ])("$name", async ({ parentJob, conclusion, log, accepted }) => {
     const fixture = artifactFixture("npm");
     Reflect.set(fixture.plan, "evidenceReuse", { requested: true });
     const parentJobs = fixture.client.getParentJobs;
     fixture.client.getParentJobs = async () =>
       (await parentJobs()).map((entry) =>
-        entry.name === "Prepare release Docker artifacts"
-          ? Object.assign(entry, { conclusion: "success" })
-          : entry,
+        entry.name === parentJob ? Object.assign(entry, { conclusion }) : entry,
       );
     const getJobLog = fixture.client.getJobLog;
-    fixture.client.getJobLog = async (id: number) =>
-      id === 90
-        ? `TARGET_SHA: ${TARGET_SHA}\nRetained original artifact descriptor`
-        : getJobLog(id);
-    await expect(preflightContinuation(fixture.plan, "77", fixture.client)).resolves.toMatchObject({
-      artifactProducers: [],
-    });
-  });
-
-  it("does not let evidence reuse hide a failed producer job", async () => {
-    const fixture = artifactFixture("npm");
-    Reflect.set(fixture.plan, "evidenceReuse", { requested: true });
-    const parentJobs = fixture.client.getParentJobs;
-    fixture.client.getParentJobs = async () =>
-      (await parentJobs()).map((entry) =>
-        entry.name === "Prepare release npm artifacts"
-          ? Object.assign(entry, { conclusion: "failure" })
-          : entry,
-      );
-    const getJobLog = fixture.client.getJobLog;
-    fixture.client.getJobLog = async (id: number) =>
-      id === 90 ? "Retained artifact resolution failed" : getJobLog(id);
-    await expect(preflightContinuation(fixture.plan, "77", fixture.client)).rejects.toThrow(
-      "Original npm dispatch identity is unavailable or ambiguous",
-    );
+    fixture.client.getJobLog = async (id: number) => (id === 90 ? log : getJobLog(id));
+    const result = expect(preflightContinuation(fixture.plan, "77", fixture.client));
+    if (accepted) {
+      await result.resolves.toMatchObject({ artifactProducers: [] });
+    } else {
+      await result.rejects.toThrow("Original npm dispatch identity is unavailable or ambiguous");
+    }
   });
 
   it("recovers a failed child before the npm dispatch job exposes its completed log", async () => {

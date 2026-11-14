@@ -1,0 +1,126 @@
+{
+  "baseline": "c564e14d99791a0c6967b097b589adaafcd903cd",
+  "lane": "install-update-upgrade",
+  "deletedFiles": [],
+  "coverageConsolidations": [
+    {
+      "file": "test/scripts/install-sh.test.ts",
+      "retiredCases": [
+        "reports a stale Homebrew node without PATH advice",
+        "does not print PATH advice when Homebrew node is missing at runtime"
+      ],
+      "keeper": {
+        "file": "test/scripts/install-sh.test.ts",
+        "case": "$name",
+        "rows": [
+          "reports a stale Homebrew node without PATH advice",
+          "does not print PATH advice when Homebrew node is missing at runtime"
+        ]
+      },
+      "invariant": "Homebrew runtime rejection keeps stale-version and missing-on-disk diagnostics distinct.",
+      "transferredAssertions": [
+        "status 0 from the guarded probe; ensure returned failure",
+        "stale: upgrade guidance and v26.10.0 rejection",
+        "missing: on-disk diagnostic; no installed-success or profile guidance"
+      ]
+    },
+    {
+      "file": "test/scripts/install-sh.test.ts",
+      "retiredCases": [
+        "fails a configured upgrade without printing success when doctor fails"
+      ],
+      "keeper": {
+        "file": "test/scripts/install-sh.test.ts",
+        "case": "required installer lifecycle: $name",
+        "rows": [
+          "configured npm upgrade rejects failed Doctor before success"
+        ]
+      },
+      "invariant": "A configured npm upgrade propagates Doctor failure before success, upgrade-complete, or dashboard output.",
+      "transferredAssertions": [
+        "Doctor exit 9 remains process exit 9",
+        "no installed-success or Upgrade complete output",
+        "installation reached; no external command escaped fixture"
+      ]
+    },
+    {
+      "file": "test/scripts/upgrade-survivor-probe-gateway.test.ts",
+      "retiredCases": [
+        "rejects degraded ready responses by default even when failing components are allowlisted",
+        "does not let degraded ready mode convert generic server errors into success"
+      ],
+      "keeper": {
+        "file": "test/scripts/upgrade-survivor-probe-gateway.test.ts",
+        "case": "$name",
+        "rows": [
+          "rejects degraded ready responses by default even when failing components are allowlisted",
+          "does not let degraded ready mode convert generic server errors into success"
+        ]
+      },
+      "invariant": "Default degraded-readiness rejection and generic HTTP 500 rejection retain independent arguments, environment and transport timing.",
+      "transferredAssertions": [
+        "exit 1; no signal or execution error",
+        "HTTP 503 and HTTP 500 diagnostics, respectively",
+        "no successful probe receipt"
+      ]
+    },
+    {
+      "file": "test/scripts/upgrade-survivor-migration-order.test.ts",
+      "retiredCases": [],
+      "removedUnreachableFixtureBranches": [
+        "missing-export",
+        "exported-applied",
+        "tables-kept",
+        "files-kept",
+        "live-skill-changed",
+        "candidate-table-kept",
+        "candidate-not-retired",
+        "candidate-reexported"
+      ],
+      "keeper": {
+        "file": "test/scripts/upgrade-survivor-migration-order.test.ts",
+        "case": "keeps published refusal, candidate retirement, and repair distinct: %s",
+        "rows": [
+          "intact",
+          "baseline-consumed",
+          "retirement-warning"
+        ]
+      },
+      "invariant": "The declared table never selected removed branches. All three executable rows and their assertions remain.",
+      "transferredAssertions": [
+        "exact pending/quarantined export set",
+        "baseline refusal and explicit repair evidence",
+        "candidate retirement, separate candidate repair, and completed recovery receipts",
+        "original-state consumption and retirement-warning rejections"
+      ]
+    },
+    {
+      "file": "test/scripts/upgrade-survivor-assertions.test.ts",
+      "retiredCases": [],
+      "removedUnreachableFixtureBranches": [
+        "not-started",
+        "wait-timeout",
+        "turn-failed",
+        "wrong-session",
+        "user-only"
+      ],
+      "keeper": {
+        "file": "test/scripts/upgrade-survivor-assertions.test.ts",
+        "case": "requires a completed persisted managed serving reply (%s)",
+        "rows": [
+          "queued",
+          "cli-failed",
+          "wrong-reply"
+        ]
+      },
+      "invariant": "The declared table never selected removed branches. Pending-to-complete success and both active failure rows keep the same protocol responses.",
+      "transferredAssertions": [
+        "exit status and receipt presence",
+        "secret redaction on every outcome",
+        "managed command failure diagnostic",
+        "persisted session id, marker reply, and completed status"
+      ]
+    }
+  ],
+  "validation": "Code-only self-review. Runtime tests and test typecheck are owned by the parent campaign."
+}

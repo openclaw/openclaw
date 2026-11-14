@@ -178,29 +178,45 @@ it("waits for startup completion even when required-agent readiness is already t
     });
   }));
 
-it("rejects degraded ready responses by default even when failing components are allowlisted", ({
-  signal,
-}) =>
+it.for([
+  {
+    name: "rejects degraded ready responses by default even when failing components are allowlisted",
+    status: 503,
+    body: '{ ready: false, failing: ["telegram"] }',
+    timeout: 50,
+    args: ["--attempt-timeout-ms", "25"],
+    env: { OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED: "0" },
+  },
+  {
+    name: "does not let degraded ready mode convert generic server errors into success",
+    status: 500,
+    body: "{ ready: true }",
+    timeout: 300,
+    args: ["--allow-degraded-ready"],
+    env: {},
+  },
+])("$name", ({ status, body, timeout, args, env }, { signal }) =>
   lifetime.run(async () => {
-    const out = outputPath("ready-degraded.json");
-    const nodeArgs = virtualFetch('{ ready: false, failing: ["telegram"] }', "503", 50);
+    const out = outputPath("ready-failure.json");
+    const nodeArgs =
+      status === 503
+        ? virtualFetch(body, String(status), 50)
+        : writeProbeImport(
+            `globalThis.fetch = async () => new Response(JSON.stringify(${body}), { status: ${status}, headers: { "content-type": "application/json" } });`,
+          );
     const result = await runProbe(
       signal,
-      probeArgs(FIXTURE_URL, out, "ready", 50, [
-        "--allow-failing",
-        "telegram",
-        "--attempt-timeout-ms",
-        "25",
-      ]),
+      probeArgs(FIXTURE_URL, out, "ready", timeout, ["--allow-failing", "telegram", ...args]),
       LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-      { OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_DEGRADED: "0" },
+      env,
       nodeArgs,
     );
 
     expect(result).toMatchObject({ status: 1, signal: null, error: undefined });
-    expect(result.stderr).toContain("probe failed with HTTP 503");
+    expect(result.stderr).toContain(`probe failed with HTTP ${status}`);
     expect(fs.existsSync(out)).toBe(false);
-  }));
+  }),
+);
 
 it.for(["ready", "started"] as const)(
   "keeps failed %s probe retries inside the total timeout",
@@ -221,29 +237,6 @@ it.for(["ready", "started"] as const)(
       expect(fs.existsSync(out)).toBe(false);
     }),
 );
-
-it("does not let degraded ready mode convert generic server errors into success", ({ signal }) =>
-  lifetime.run(async () => {
-    const out = outputPath("ready-server-error.json");
-    const nodeArgs = writeProbeImport(
-      'globalThis.fetch = async () => new Response(JSON.stringify({ ready: true }), { status: 500, headers: { "content-type": "application/json" } });',
-    );
-    const result = await runProbe(
-      signal,
-      probeArgs(FIXTURE_URL, out, "ready", 300, [
-        "--allow-failing",
-        "telegram",
-        "--allow-degraded-ready",
-      ]),
-      LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-      {},
-      nodeArgs,
-    );
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("probe failed with HTTP 500");
-    expect(fs.existsSync(out)).toBe(false);
-  }));
 
 it.for(["connection", "body"])("bounds probes stalled at %s", (stage, { signal }) =>
   lifetime.run(async () => {

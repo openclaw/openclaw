@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "baseline": "c564e14d99791a0c6967b097b589adaafcd903cd",
+  "lane": "remaining-j-p",
+  "removedFiles": [],
+  "consolidations": [
+    {
+      "removed": { "file": "test/scripts/plugin-npm-publication-readback.test.ts", "case": "revalidates child identity after a transient GET retry", "fragment": "standalone retry fixture and callback" },
+      "keeper": { "file": "test/scripts/plugin-npm-publication-readback.test.ts", "case": "%s", "row": "revalidates child identity after a transient GET retry" },
+      "invariant": "A transient child-run read cannot bypass validation of the successful retry's identity.",
+      "transferredAssertions": ["--include on child reads", "HTTP 429 Retry-After seven seconds", "one read at 6999 ms, retry at 7000 ms", "changed head_sha rejected with child identity diagnostic", "exactly two reads"]
+    },
+    {
+      "removed": { "file": "test/scripts/plugin-npm-publication-readback.test.ts", "case": "revalidates publisher job identity after a transient inventory retry", "fragment": "standalone retry fixture and callback" },
+      "keeper": { "file": "test/scripts/plugin-npm-publication-readback.test.ts", "case": "%s", "row": "revalidates publisher job identity after a transient inventory retry" },
+      "invariant": "A transient jobs inventory read cannot bypass publisher identity validation after retry.",
+      "transferredAssertions": ["--include on inventory reads", "transient HTTP 503", "1000 ms retry", "publisher head_sha mismatch rejected with publisher job diagnostic", "exactly two reads"]
+    },
+    {
+      "removed": { "file": "test/scripts/plugin-npm-publication-readback.test.ts", "case": "revalidates artifact identity after a transient metadata retry", "fragment": "standalone retry fixture and callback" },
+      "keeper": { "file": "test/scripts/plugin-npm-publication-readback.test.ts", "case": "%s", "row": "revalidates artifact identity after a transient metadata retry" },
+      "invariant": "Verification revalidates immutable artifact metadata after a transient read.",
+      "transferredAssertions": ["parent created before fake timers", "transient HTTP 503", "1000 ms retry during verify", "changed artifact digest rejected with immutable publication tuple diagnostic", "exactly two reads"]
+    },
+    {
+      "removed": { "file": "test/scripts/openclaw-bws-resolver.test.ts", "case": "forwards the self-hosted server URL without inheriting unrelated variables", "fragment": "duplicated executable subprocess fixture and success assertions" },
+      "keeper": { "file": "test/scripts/openclaw-bws-resolver.test.ts", "case": "forwards the self-hosted server URL without inheriting unrelated variables" },
+      "invariant": "The real resolver forwards the token and self-hosted URL but omits unrelated parent variables.",
+      "transferredAssertions": ["fresh executable bws fixture", "explicit isolated child environment", "token, URL and unrelated-variable child probes", "process status 0 and empty stderr", "exact protocol version, resolved value and empty errors"]
+    },
+    {
+      "removed": { "file": "test/scripts/openclaw-bws-resolver.test.ts", "case": "returns bounded error codes for missing and ambiguous keys", "fragment": "duplicated executable subprocess fixture and success assertions" },
+      "keeper": { "file": "test/scripts/openclaw-bws-resolver.test.ts", "case": "returns bounded error codes for missing and ambiguous keys" },
+      "invariant": "The real resolver distinguishes absent and duplicate secrets without returning either ambiguous value.",
+      "transferredAssertions": ["fresh executable bws fixture", "explicit isolated child environment", "process status 0 and empty stderr", "exact empty values map", "NOT_FOUND and AMBIGUOUS_DUPLICATE_KEY for their original requested ids"]
+    }
+  ],
+  "validation": { "testsRun": false, "reason": "Parent owns scoped verification and CI; this lane was instructed not to run tests or install dependencies.", "productionChanges": false, "sharedHelperChanges": false }
+}

@@ -1330,51 +1330,31 @@ produceReleasePlan({
     expect(result.stderr).not.toContain("MODULE_NOT_FOUND");
   });
 
-  it("ignores poisoned direct yaml require cache entries", () => {
-    const { result, sentinelPath } = runYamlPackageSubprocess({
-      beforeProduce: ({ sentinelPath: sentinel }) => `
+  it.each(["direct", "transitive"] as const)(
+    "ignores poisoned %s yaml require cache entries",
+    (scope) => {
+      const { result, sentinelPath } = runYamlPackageSubprocess({
+        beforeProduce: ({ sentinelPath: sentinel }) => `
 const cacheModule = await import("node:module");
 const cacheFs = await import("node:fs");
+${scope === "transitive" ? 'const cachePath = await import("node:path");' : ""}
 const cacheRequire = cacheModule.createRequire(import.meta.url);
 const ambientEntry = cacheRequire.resolve("yaml");
 cacheRequire(ambientEntry);
-cacheRequire.cache[ambientEntry].exports = {
+const poisonedEntry = ${scope === "direct" ? "ambientEntry" : 'cachePath.join(cachePath.dirname(ambientEntry), "public-api.js")'};
+cacheRequire.cache[poisonedEntry].exports = {
   parse() {
-    cacheFs.writeFileSync(${JSON.stringify(sentinel)}, "direct-cache");
+    cacheFs.writeFileSync(${JSON.stringify(sentinel)}, "${scope}-cache");
     return {};
-  }
+  }${scope === "transitive" ? ", parseAllDocuments() {}, parseDocument() {}, stringify() {}" : ""}
 };
+${scope === "transitive" ? "delete cacheRequire.cache[ambientEntry];" : ""}
 `,
-    });
-    expect(result.status).toBe(0);
-    expect(existsSync(sentinelPath)).toBe(false);
-  });
-
-  it("ignores poisoned transitive yaml require cache entries", () => {
-    const { result, sentinelPath } = runYamlPackageSubprocess({
-      beforeProduce: ({ sentinelPath: sentinel }) => `
-const cacheModule = await import("node:module");
-const cacheFs = await import("node:fs");
-const cachePath = await import("node:path");
-const cacheRequire = cacheModule.createRequire(import.meta.url);
-const ambientEntry = cacheRequire.resolve("yaml");
-cacheRequire(ambientEntry);
-const publicApiPath = cachePath.join(cachePath.dirname(ambientEntry), "public-api.js");
-cacheRequire.cache[publicApiPath].exports = {
-  parse() {
-    cacheFs.writeFileSync(${JSON.stringify(sentinel)}, "transitive-cache");
-    return {};
-  },
-  parseAllDocuments() {},
-  parseDocument() {},
-  stringify() {}
-};
-delete cacheRequire.cache[ambientEntry];
-`,
-    });
-    expect(result.status).toBe(0);
-    expect(existsSync(sentinelPath)).toBe(false);
-  });
+      });
+      expect(result.status).toBe(0);
+      expect(existsSync(sentinelPath)).toBe(false);
+    },
+  );
 
   it("ignores parent yaml Module extension hooks", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({

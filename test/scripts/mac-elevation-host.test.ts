@@ -20,6 +20,7 @@ import { expectExit } from "./mac-elevation-artifact.test-support.js";
 import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture.test-support.js";
 
 const it = createMacScriptTest();
+const nativeIt = it.skipIf(process.platform !== "darwin");
 const scriptPath = "scripts/mac-elevation-host.sh";
 const codesignScriptPath = "scripts/codesign-mac-app.sh";
 
@@ -1524,7 +1525,7 @@ function createCodesignMetadataProbe(mac: MacScriptFixture) {
 }
 
 describe("mac elevation host command contract", () => {
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "reads genuine codesign metadata despite filename newlines using real Apple-signed bytes",
     withMac(async (mac) => {
       const probe = createCodesignMetadataProbe(mac);
@@ -1707,9 +1708,7 @@ describe("mac elevation host command contract", () => {
       expect(result.stdout).toContain("Elevation launch agent removed");
     }));
 
-  it
-    .skipIf(process.platform !== "darwin")
-    .concurrent.for(["app-launch-agent", "canonical-node", "running-app"] as const)(
+  nativeIt.concurrent.for(["app-launch-agent", "canonical-node", "running-app"] as const)(
     "plans %s migration without mutating its source",
     async (kind, { mac }) =>
       mac.lifetime.run(async () => {
@@ -1754,7 +1753,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "never deletes a pending install transaction owned by another invocation",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac);
@@ -1766,7 +1765,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "rejects an explicit config path that differs from the source owner's default",
     withMac(async (mac) => {
       const harness = createMigrationPlanHarness(mac);
@@ -1797,7 +1796,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "verifies the portable installer, archive, notarized app identity, and receipt as one set",
     withMac(async (mac) => {
       const harness = createArtifactHarness(mac);
@@ -1865,7 +1864,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "rejects CUA-bearing elevation artifacts before verify or install",
     withMac(async (mac) => {
       const verification = createArtifactHarness(mac);
@@ -1884,7 +1883,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for(["missing", "relative"] as const)(
+  nativeIt.concurrent.for(["missing", "relative"] as const)(
     "requires a reusable absolute CLI for canonical node conversion: %s",
     async (kind, { mac }) =>
       mac.lifetime.run(async () => {
@@ -1911,7 +1910,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "revalidates canonical node environment and wrapper sidecars",
     withMac(async (mac) => {
       const harness = createNodeHarness(mac);
@@ -1944,7 +1943,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "binds canonical node receipt metadata to its authenticated migration plist",
     withMac(async (mac) => {
       const harness = createNodeHarness(mac);
@@ -1982,7 +1981,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "rejects a canonical node override that differs from the selected paired app identity",
     withMac(async (mac) => {
       const harness = createNodeHarness(mac, "different-node");
@@ -1995,7 +1994,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for([
+  nativeIt.concurrent.for([
     ["missing", "", "1", "selected macOS node identity is missing or invalid"],
     [
       "invalid",
@@ -2027,7 +2026,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for([
+  nativeIt.concurrent.for([
     ["relative", "canonical node OPENCLAW_STATE_DIR must be absolute"],
     ["override", "canonical node environment contains a noncanonical statement"],
     ["crlf", "canonical node environment must use LF line endings"],
@@ -2054,7 +2053,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "refuses to adopt the launchd-owned elevation process",
     withMac(async (mac) => {
       const harness = createMigrationPlanHarness(mac, "loaded");
@@ -2079,7 +2078,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "fails closed when launchd ownership cannot be inspected for migration",
     withMac(async (mac) => {
       const harness = createMigrationPlanHarness(mac, "error");
@@ -2089,7 +2088,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "restores the exact app, source LaunchAgent, and loaded state when cutover launchd bootstrap fails",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac);
@@ -2118,7 +2117,7 @@ describe("mac elevation host command contract", () => {
   );
 
   for (const rollbackCuaDriverKind of ["file", "symlink"] as const) {
-    it.skipIf(process.platform !== "darwin").concurrent(
+    nativeIt.concurrent(
       `preserves but never restarts a ${rollbackCuaDriverKind} CUA-bearing elevation rollback`,
       withMac(async (mac) => {
         const harness = createRollbackHarness(mac, {
@@ -2155,7 +2154,7 @@ describe("mac elevation host command contract", () => {
     );
   }
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "removes the discoverable elevation plist when unsafe rollback quarantine fails",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2176,7 +2175,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "quarantines a CUA-bearing elevation app when the recorded rollback destination is blocked",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2201,7 +2200,7 @@ describe("mac elevation host command contract", () => {
   );
 
   for (const evidence of ["job", "plist", "plist-program", "receipt"] as const) {
-    it.skipIf(process.platform !== "darwin").concurrent(
+    nativeIt.concurrent(
       `quarantines a symlinked CUA app from exact ${evidence} ownership evidence`,
       withMac(async (mac) => {
         const harness = createRollbackHarness(mac, {
@@ -2223,7 +2222,7 @@ describe("mac elevation host command contract", () => {
     );
   }
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "keeps a symlink quarantined when its target changes after the move",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2241,7 +2240,7 @@ describe("mac elevation host command contract", () => {
   );
 
   for (const evidence of ["unrelated-plist", "unrelated-program", "unrelated-receipt"] as const) {
-    it.skipIf(process.platform !== "darwin").concurrent(
+    nativeIt.concurrent(
       `preserves an app when only an ${evidence} remains`,
       withMac(async (mac) => {
         const harness = createRollbackHarness(mac, {
@@ -2262,7 +2261,7 @@ describe("mac elevation host command contract", () => {
   }
 
   for (const setupFailure of ["identity", "mktemp"] as const) {
-    it.skipIf(process.platform !== "darwin").concurrent(
+    nativeIt.concurrent(
       `neutralizes launchd before unsafe app quarantine ${setupFailure} setup fails`,
       withMac(async (mac) => {
         const harness = createRollbackHarness(mac, {
@@ -2284,7 +2283,7 @@ describe("mac elevation host command contract", () => {
     );
   }
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "neutralizes unsafe rollback even when its plist evidence becomes corrupt",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2309,7 +2308,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "never restores a CUA-bearing current elevation job after explicit recovery fails",
     withMac(async (mac) => {
       const harness = await installedHarness(mac, {
@@ -2346,7 +2345,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for(["bundle", "non-native"] as const)(
+  nativeIt.concurrent.for(["bundle", "non-native"] as const)(
     "refuses to record an app with an invalid %s signature as rollback state",
     async (architecture, { mac }) =>
       mac.lifetime.run(async () => {
@@ -2372,7 +2371,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "never removes a replacement LaunchAgent created while the source owner exits",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2392,7 +2391,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for([
+  nativeIt.concurrent.for([
     ["signalDuringCustody", "SIGTERM"],
     ["hupDuringCustody", "SIGHUP"],
   ] as const)(
@@ -2412,9 +2411,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it
-    .skipIf(process.platform !== "darwin")
-    .concurrent.for(["destination", "same-content-source"] as const)(
+  nativeIt.concurrent.for(["destination", "same-content-source"] as const)(
     "preserves a raced migration custody %s",
     async (kind, { mac }) =>
       mac.lifetime.run(async () => {
@@ -2445,14 +2442,12 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it
-    .skipIf(process.platform !== "darwin")
-    .concurrent.for(
-      (["killAfterInitialMigrationCustody", "killAfterPendingReceipt"] as const).flatMap(
-        (killPoint) =>
-          (["valid", "arm64", "x86_64"] as const).map((identity) => ({ killPoint, identity })),
-      ),
-    )(
+  nativeIt.concurrent.for(
+    (["killAfterInitialMigrationCustody", "killAfterPendingReceipt"] as const).flatMap(
+      (killPoint) =>
+        (["valid", "arm64", "x86_64"] as const).map((identity) => ({ killPoint, identity })),
+    ),
+  )(
     "binds $killPoint recovery to the recorded prior app ($identity)",
     async ({ killPoint, identity }, { mac }) =>
       mac.lifetime.run(async () => {
@@ -2493,7 +2488,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "rejects a same-content migration source replacement after install process death",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2513,7 +2508,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "recovers a persisted install killed after rollback app custody",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, { killAfterRollbackAppCustody: true });
@@ -2529,7 +2524,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for([
+  nativeIt.concurrent.for([
     [
       "replaceAuthenticatedRenameHelperBeforeUse",
       true,
@@ -2574,7 +2569,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "keeps a same-source prior app canonical when its rollback move never starts",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2592,13 +2587,11 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it
-    .skipIf(process.platform !== "darwin")
-    .concurrent.for([
-      "restartAppDuringBootout",
-      "failLsofInspection",
-      "failPgrepInspection",
-    ] as const)("refuses cutover without proven process quiescence: %s", async (failure, { mac }) =>
+  nativeIt.concurrent.for([
+    "restartAppDuringBootout",
+    "failLsofInspection",
+    "failPgrepInspection",
+  ] as const)("refuses cutover without proven process quiescence: %s", async (failure, { mac }) =>
     mac.lifetime.run(async () => {
       const harness = createRollbackHarness(mac, { [failure]: true });
       const oldBinary = readFileSync(harness.appBinary);
@@ -2619,7 +2612,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "preserves rollback evidence when automatic recovery cannot restore the source owner",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, { recreateSourceOnFailure: true });
@@ -2632,7 +2625,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "reserves generation-unique rollback custody across repeated same-artifact installs",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2660,7 +2653,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "commits the receipt and cutover marker before replaying termination",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -2679,7 +2672,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "rejects managed upgrades that change the recorded config or node profile",
     withMac(async (mac) => {
       const harness = await installedHarness(mac);
@@ -2706,9 +2699,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it
-    .skipIf(process.platform !== "darwin")
-    .concurrent.for(["present", "missing", "damaged"] as const)(
+  nativeIt.concurrent.for(["present", "missing", "damaged"] as const)(
     "recovers the prior app and source job with a %s current app",
     async (kind, { mac }) =>
       mac.lifetime.run(async () => {
@@ -2761,9 +2752,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it
-    .skipIf(process.platform !== "darwin")
-    .concurrent.for(["during-bootstrap", "after-bootstrap", "missing-app"] as const)(
+  nativeIt.concurrent.for(["during-bootstrap", "after-bootstrap", "missing-app"] as const)(
     "resumes recovery after process death: %s",
     async (kind, { mac }) =>
       mac.lifetime.run(async () => {
@@ -2816,7 +2805,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "fails closed when a durable recovery binding cannot be read",
     withMac(async (mac) => {
       const harness = await installedHarness(mac, {
@@ -2839,7 +2828,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "rejects a symlinked current app before recovery mutation",
     withMac(async (mac) => {
       const harness = await installedHarness(mac);
@@ -2856,13 +2845,11 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it
-    .skipIf(process.platform !== "darwin")
-    .concurrent.for([
-      "recreateAppDuringDamagedCustody",
-      "replaceDamagedAppDirectoryBeforeCustody",
-      "symlinkDamagedAppBeforeCustody",
-    ] as const)(
+  nativeIt.concurrent.for([
+    "recreateAppDuringDamagedCustody",
+    "replaceDamagedAppDirectoryBeforeCustody",
+    "symlinkDamagedAppBeforeCustody",
+  ] as const)(
     "preserves concurrent replacement during damaged-app custody: %s",
     async (failure, { mac }) =>
       mac.lifetime.run(async () => {
@@ -2900,7 +2887,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "reverses a failed recovery back to an initially missing current app",
     withMac(async (mac) => {
       const harness = await installedHarness(mac, { migrationRestoreBootstrapFails: true });
@@ -2922,13 +2909,11 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it
-    .skipIf(process.platform !== "darwin")
-    .concurrent.for([
-      "replaceMigrationSourceDuringReversalCustody",
-      "replaceMigrationSourceSameContentBeforeCustody",
-      "symlinkMigrationSourceDuringReversalCustody",
-    ] as const)(
+  nativeIt.concurrent.for([
+    "replaceMigrationSourceDuringReversalCustody",
+    "replaceMigrationSourceSameContentBeforeCustody",
+    "symlinkMigrationSourceDuringReversalCustody",
+  ] as const)(
     "preserves concurrent migration replacement during failed-recovery reversal: %s",
     async (failure, { mac }) =>
       mac.lifetime.run(async () => {
@@ -2963,7 +2948,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "refuses recovery before mutation when process inspection tools are unavailable",
     withMac(async (mac) => {
       const harness = await installedHarness(mac);
@@ -2989,7 +2974,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "preserves recovery custody across uninstall until explicit recovery",
     withMac(async (mac) => {
       const harness = await installedHarness(mac);
@@ -3005,7 +2990,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "recovers across simulated native and Rosetta host selection using both architecture CDHashes",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
@@ -3045,7 +3030,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "defers termination until explicit recovery commits one complete generation",
     withMac(async (mac) => {
       const harness = createRollbackHarness(mac, {
@@ -3065,7 +3050,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "recovers a migrated source owner when no prior app existed",
     withMac(async (mac) => {
       const harness = await installedHarness(mac);
@@ -3088,7 +3073,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for([false, true])(
+  nativeIt.concurrent.for([false, true])(
     "preserves the current generation after failed recovery (receipt copy failure: %s)",
     async (failCurrentReceiptRestoreCopy, { mac }) =>
       mac.lifetime.run(async () => {
@@ -3119,7 +3104,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for([
+  nativeIt.concurrent.for([
     ["missing-app", "receipt app backup is missing, symlinked, or not a bundle directory"],
     [
       "invalid-signature",
@@ -3156,7 +3141,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "preserves an origin-main legacy receipt across upgrade recovery and reinstall",
     withMac(async (mac) => {
       const script = readFileSync(scriptPath, "utf8");
@@ -3231,7 +3216,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "inherits legacy managed-upgrade config from the installed elevation plist",
     withMac(async (mac) => {
       const harness = await installedHarness(mac);
@@ -3276,7 +3261,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent.for(["file", "symlink"] as const)(
+  nativeIt.concurrent.for(["file", "symlink"] as const)(
     "refuses recovery when a %s recreates the source LaunchAgent path",
     async (kind, { mac }) =>
       mac.lifetime.run(async () => {
@@ -3306,7 +3291,7 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "rejects a receipt backup path that lexically escapes the canonical state directory",
     withMac(async (mac) => {
       const harness = await installedHarness(mac);
@@ -3523,7 +3508,7 @@ describe("mac elevation host command contract", () => {
     }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
+  nativeIt.concurrent(
     "renders a persistent background-only launchd job without changing normal login",
     withMac(async (mac) => {
       const tempRoot = mac.createTempDir("openclaw-elevation-plist-");

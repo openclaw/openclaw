@@ -276,73 +276,66 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
-  it("models named Solid lazy consumers without retaining a deleted loader", () => {
-    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  it.each([
+    {
+      name: "named Solid lazy consumers",
+      source: `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
-});`;
-    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
-    const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
-      'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
-    );
-    read.mockReturnValue("const SettingsSidebar = null;");
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
-      "ShellSettingsSidebar",
-    );
-  });
-
-  it("models only Vite runner members consumed by the build", () => {
-    const source = `const { module: routes, dependencies: routeDependencies } = await runnerImport<
+});`,
+      expected:
+        'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
+      removed: "const SettingsSidebar = null;",
+      absent: "ShellSettingsSidebar",
+    },
+    {
+      name: "only Vite runner members consumed by the build",
+      source: `const { module: routes, dependencies: routeDependencies } = await runnerImport<
   typeof import("./src/app-route-paths.ts")
 >(routePath, options);
-const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
-    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
-    expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");
-    const compile = knipConfig.compilers.mjs;
-    const compiled = compile("// config", "config/knip-vite-consumers.mjs");
-    expect(read).toHaveBeenCalledWith(path.resolve("ui/vite.config.ts"), "utf8");
-    expect(compiled).toContain(
-      'import { APP_ROUTE_PATHS as __vite0_0 } from "../ui/src/app-route-paths.ts";',
-    );
-    expect(compiled).not.toContain("APP_ROUTE_OFFLINE_PREFIXES");
-    expect(compile(source, "config/unrelated.mjs")).toBe(source);
-  });
-
-  it("models the locale catalogue members consumed through Vite's runner", () => {
-    const source = `const { module, dependencies } = await runnerImport<
+const offlineShell = { routes: routes.APP_ROUTE_PATHS };`,
+      expected: 'import { APP_ROUTE_PATHS as __vite0_0 } from "../ui/src/app-route-paths.ts";',
+      absent: "APP_ROUTE_OFFLINE_PREFIXES",
+    },
+    {
+      name: "the locale catalogue members consumed through Vite's runner",
+      source: `const { module, dependencies } = await runnerImport<
   typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
 >(sourceCatalogPath, options);
 const startup = module.loadControlUiStartupCatalog();
-const catalog = module.loadControlUiSourceCatalog();`;
-    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
-    expect(scriptRootWorkspace.entry).toContain("config/knip.config.ts!");
-    expect(scriptRootWorkspace.entry).toContain("config/knip-vite-consumers.mjs!");
-    const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
-      'import { loadControlUiStartupCatalog as __vite0_0, loadControlUiSourceCatalog as __vite0_1 } from "../scripts/lib/control-ui-i18n-catalog.ts";',
-    );
-    const withoutStartup = source.replace(
-      "const startup = module.loadControlUiStartupCatalog();",
-      "",
-    );
-    vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
-      "loadControlUiStartupCatalog",
-    );
-  });
-
-  it("models ordinary UI Vite imports into the script workspace", () => {
-    const source = `import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";`;
-    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
-    const compile = knipConfig.compilers.mjs;
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
-      'import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";',
-    );
-    vi.mocked(fs.readFileSync).mockReturnValue("const config = {};");
-    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
-      "isControlUiOptionalAsset",
-    );
-  });
+const catalog = module.loadControlUiSourceCatalog();`,
+      expected:
+        'import { loadControlUiStartupCatalog as __vite0_0, loadControlUiSourceCatalog as __vite0_1 } from "../scripts/lib/control-ui-i18n-catalog.ts";',
+      removed: `const { module } = await runnerImport<typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")>(sourceCatalogPath, options);
+const catalog = module.loadControlUiSourceCatalog();`,
+      absent: "loadControlUiStartupCatalog",
+    },
+    {
+      name: "ordinary UI Vite imports into the script workspace",
+      source:
+        'import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";',
+      expected:
+        'import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";',
+      removed: "const config = {};",
+      absent: "isControlUiOptionalAsset",
+    },
+  ])(
+    "models $name without retaining removed consumers",
+    ({ source, expected, removed, absent }) => {
+      const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+      const compile = knipConfig.compilers.mjs;
+      expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");
+      expectEntries(scriptRootWorkspace.entry, [
+        "config/knip.config.ts!",
+        "config/knip-vite-consumers.mjs!",
+      ]);
+      const compiled = compile("// config", "config/knip-vite-consumers.mjs");
+      expect(compiled).toContain(expected);
+      expect(read).toHaveBeenCalledWith(path.resolve("ui/vite.config.ts"), "utf8");
+      expect(compile(source, "config/unrelated.mjs")).toBe(source);
+      read.mockReturnValue(removed ?? source);
+      expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(absent);
+    },
+  );
 
   it("follows only live computed benchmark child launches", () => {
     const archivePath = path.resolve("scripts/perf/archive-worker-churn-measure.ts");

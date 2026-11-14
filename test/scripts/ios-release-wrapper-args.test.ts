@@ -97,3 +97,74 @@ describe("iOS release shell wrapper arguments", () => {
     expect(result.status).toBe(0);
   });
 });
+
+it("rejects non-canonical signing teams before generating release inputs", () => {
+  const result = runBash(
+    [
+      ...(process.platform === "win32" ? [] : ["--noprofile", "--norc"]),
+      "scripts/ios-release-prepare.sh",
+      ...releaseArgs,
+    ],
+    { IOS_DEVELOPMENT_TEAM: "Y3YUZP442G" },
+  );
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(
+    "iOS App Store release must use official OpenClaw Team ID FWJYW4S8P8",
+  );
+  expect(result.stderr).toContain("got Y3YUZP442G");
+});
+
+const runSigning = (...args: string[]) =>
+  spawnSync(process.execPath, ["scripts/ios-release-signing.mjs", ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+it.each([
+  ["--mode", "--manifest"],
+  ["--mode", "-h"],
+  ["--manifest", "-h"],
+])("rejects missing values for %s before reading signing manifests", (...args) => {
+  const result = runSigning(...args);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
+  expect(result.stderr).not.toContain("ENOENT");
+  expect(result.stdout).toBe("");
+});
+
+it.each([
+  {
+    name: "emits manual App Store profile settings for every signed target",
+    mode: "xcconfig",
+    contains: [
+      "OPENCLAW_CODE_SIGN_STYLE = Manual",
+      "OPENCLAW_CODE_SIGN_IDENTITY = Apple Distribution",
+      "OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.shared",
+      "OPENCLAW_APP_PROFILE = OpenClaw App Store ai.openclawfoundation.app",
+      "OPENCLAW_SHARE_PROFILE = OpenClaw App Store ai.openclawfoundation.app.share",
+      "OPENCLAW_ACTIVITY_WIDGET_PROFILE = OpenClaw App Store ai.openclawfoundation.app.activitywidget",
+      "OPENCLAW_WATCH_APP_PROFILE = OpenClaw App Store ai.openclawfoundation.app.watchkitapp",
+    ],
+    excludes: "OPENCLAW_WATCH_EXTENSION_PROFILE",
+  },
+  {
+    name: "documents the canonical release signing plan",
+    mode: "plan",
+    contains: [
+      "Team ID: FWJYW4S8P8",
+      "Signing repo: git@github.com:openclaw/apps-signing.git",
+      "Signing branch: main",
+      "Signing setup and sync: Fastlane match",
+      "capabilities: PUSH_NOTIFICATIONS, APP_GROUPS, APP_ATTEST, HEALTH_KIT",
+      "app groups: group.ai.openclawfoundation.app.shared",
+    ],
+    excludes: "OpenClawWatchExtension",
+  },
+])("$name", ({ mode, contains, excludes }) => {
+  const result = runSigning("--mode", mode);
+  expect(result.status, result.stderr).toBe(0);
+  for (const text of contains) {
+    expect(result.stdout).toContain(text);
+  }
+  expect(result.stdout).not.toContain(excludes);
+});

@@ -1,18 +1,10 @@
 // Check No Random Messaging Tmp tests cover check no random messaging tmp script behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  findMessagingTmpdirCallLines,
-  main,
-  messagingTmpdirGuardSourceRoots,
-} from "../../scripts/check-no-random-messaging-tmp.mts";
-import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { main } from "../../scripts/check-no-random-messaging-tmp.mts";
 import * as repoRoot from "../../scripts/lib/repo-root.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const parser = createNativeTypeScriptParser();
-afterAll(() => parser.close());
 
 describe("check-no-random-messaging-tmp", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,26 +21,40 @@ describe("check-no-random-messaging-tmp", () => {
     const root = tempDirs.make("openclaw-messaging-tmp-guard-");
     vi.spyOn(repoRoot, "resolveRepoRoot").mockReturnValue(root);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    const writeSource = (relativePath: string) => {
+    const writeSource = (
+      relativePath: string,
+      source = 'import os from "node:os";\nconst dir = os.tmpdir();\n',
+    ) => {
       const filePath = path.join(root, relativePath);
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, 'import os from "node:os";\nconst dir = os.tmpdir();\n');
+      fs.writeFileSync(filePath, source);
     };
 
     writeSource("extensions/browser/src/browser/extension-install.test-support.ts");
+    writeSource("src/channels/local.ts", 'const tmpdir = () => "/tmp";\nconst dir = tmpdir();');
     await main();
     expect(process.exitCode).toBe(previousExitCode);
     expect(errorLog).not.toHaveBeenCalled();
 
     const runtimePaths = [
       "src/channels/runtime.ts",
+      "src/infra/outbound/runtime.ts",
+      "src/line/runtime.ts",
+      "src/media/runtime.ts",
+      "src/media-understanding/runtime.ts",
       "extensions/browser/runtime-api.ts",
       "extensions/browser/src/browser/runtime.ts",
     ];
-    runtimePaths.forEach(writeSource);
+    runtimePaths.forEach((file) => writeSource(file));
+    const namedImport = "src/channels/named.ts";
+    writeSource(namedImport, 'import { tmpdir } from "node:os";\nconst dir = tmpdir();');
+    runtimePaths.push(namedImport);
+    const defaultImport = "src/channels/default.ts";
+    writeSource(defaultImport, 'import os from "os";\nconst dir = os.tmpdir();');
+    runtimePaths.push(defaultImport);
     await main();
     expect(process.exitCode).toBe(1);
-    expect(errorLog).toHaveBeenCalledTimes(5);
+    expect(errorLog).toHaveBeenCalledTimes(runtimePaths.length + 2);
     expect(errorLog).toHaveBeenNthCalledWith(
       1,
       "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",
@@ -59,39 +65,5 @@ describe("check-no-random-messaging-tmp", () => {
     expect(errorLog).toHaveBeenLastCalledWith(
       "Use resolvePreferredOpenClawTmpDir() or plugin-sdk temp helpers instead of host tmp defaults.",
     );
-  });
-
-  it("finds tmpdir named import calls from node:os", () => {
-    const source = `
-      import { tmpdir } from "node:os";
-      const dir = tmpdir();
-    `;
-    expect(
-      findMessagingTmpdirCallLines(source, "file.ts", parser.parseSourceFile("file.ts", source)),
-    ).toEqual([3]);
-  });
-
-  it("finds tmpdir calls imported from os", () => {
-    const source = `
-      import os from "os";
-      const dir = os.tmpdir();
-    `;
-    expect(
-      findMessagingTmpdirCallLines(source, "file.ts", parser.parseSourceFile("file.ts", source)),
-    ).toEqual([3]);
-  });
-
-  it("ignores tmpdir symbols that are not imported from node:os", () => {
-    const source = `
-      const tmpdir = () => "/tmp";
-      const dir = tmpdir();
-    `;
-    expect(
-      findMessagingTmpdirCallLines(source, "file.ts", parser.parseSourceFile("file.ts", source)),
-    ).toStrictEqual([]);
-  });
-
-  it("guards src/media against host tmpdir usage", () => {
-    expect(messagingTmpdirGuardSourceRoots).toContain("src/media");
   });
 });
