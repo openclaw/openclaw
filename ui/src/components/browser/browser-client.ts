@@ -121,8 +121,16 @@ export type BrowserInspectedNode = NonNullable<ReturnType<typeof readBrowserInsp
 type BrowserRequestEnvelope = {
   method: "GET" | "POST" | "DELETE";
   path: string;
+  query?: Record<string, unknown>;
   body?: unknown;
 };
+
+/**
+ * Marks a request as the person deliberately using the page (click, key, text, scroll,
+ * history, navigation). The Gateway shows the agent recent use and keeps a takeover alive
+ * from these only; automatic panel requests (viewport fit, page metrics) stay unmarked.
+ */
+const OPERATOR_INPUT = { operatorInput: true };
 
 function withoutBrowserTarget(value: unknown): Record<string, unknown> {
   const result = { ...asRecord(value) };
@@ -212,8 +220,17 @@ function browserRequest<T>(
     : client.request<T>(BROWSER_REQUEST_METHOD, envelope);
 }
 
-function browserAction(client: BrowserRequestClient, body: Record<string, unknown>) {
-  return browserRequest(client, { method: "POST", path: "/act", body });
+function browserAction(
+  client: BrowserRequestClient,
+  body: Record<string, unknown>,
+  operatorInput = false,
+) {
+  return browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    ...(operatorInput ? { query: OPERATOR_INPUT } : {}),
+    body,
+  });
 }
 
 function stringOrEmpty(value: unknown): string {
@@ -252,6 +269,25 @@ export async function listBrowserTabs(client: BrowserRequestClient) {
   };
 }
 
+export type BrowserOperatorControl = { available: boolean; controlled: boolean; byYou: boolean };
+
+/** Read, take or release operator control; while this connection holds it, other input waits. */
+export async function requestBrowserOperatorControl(
+  client: BrowserRequestClient,
+  action: "read" | "take" | "release",
+): Promise<BrowserOperatorControl> {
+  const method = action === "read" ? "GET" : action === "take" ? "POST" : "DELETE";
+  const result = asRecord(await browserRequest(client, { method, path: "/control" }));
+  if (
+    typeof result?.available !== "boolean" ||
+    typeof result.controlled !== "boolean" ||
+    typeof result.byYou !== "boolean"
+  ) {
+    throw new Error(t("browser.controlInvalidReply"));
+  }
+  return { available: result.available, controlled: result.controlled, byYou: result.byYou };
+}
+
 export async function startBrowser(client: BrowserRequestClient): Promise<void> {
   await browserRequest(client, { method: "POST", path: "/start", body: {} });
 }
@@ -261,7 +297,12 @@ export async function openBrowserTab(
   url: string,
 ): Promise<BrowserPanelTab | null> {
   return normalizeTab(
-    await browserRequest(client, { method: "POST", path: "/tabs/open", body: { url } }),
+    await browserRequest(client, {
+      method: "POST",
+      path: "/tabs/open",
+      query: OPERATOR_INPUT,
+      body: { url },
+    }),
   );
 }
 
@@ -308,7 +349,12 @@ export async function navigateBrowser(
   client: BrowserRequestClient,
   params: { url: string; targetId?: string },
 ): Promise<void> {
-  await browserRequest(client, { method: "POST", path: "/navigate", body: params });
+  await browserRequest(client, {
+    method: "POST",
+    path: "/navigate",
+    query: OPERATOR_INPUT,
+    body: params,
+  });
 }
 
 export async function requestBrowserScreencast(
@@ -359,19 +405,23 @@ export async function clickBrowserCoords(
   client: BrowserRequestClient,
   params: { targetId: string; x: number; y: number },
 ) {
-  await browserAction(client, {
-    kind: "clickCoords",
-    targetId: params.targetId,
-    x: Math.max(0, Math.round(params.x)),
-    y: Math.max(0, Math.round(params.y)),
-  });
+  await browserAction(
+    client,
+    {
+      kind: "clickCoords",
+      targetId: params.targetId,
+      x: Math.max(0, Math.round(params.x)),
+      y: Math.max(0, Math.round(params.y)),
+    },
+    true,
+  );
 }
 
 export async function pressBrowserKey(
   client: BrowserRequestClient,
   params: { targetId: string; key: string },
 ) {
-  await browserAction(client, { kind: "press", targetId: params.targetId, key: params.key });
+  await browserAction(client, { kind: "press", targetId: params.targetId, key: params.key }, true);
 }
 
 export async function insertBrowserText(
@@ -379,7 +429,7 @@ export async function insertBrowserText(
   params: { targetId: string; text: string },
 ) {
   try {
-    await browserAction(client, { kind: "insertText", ...params });
+    await browserAction(client, { kind: "insertText", ...params }, true);
   } catch {
     // Transport errors can echo request bodies containing pasted passwords.
     throw new Error(t("browser.errors.pasteFailed"));
@@ -416,6 +466,7 @@ export async function sendBrowserOperatorInput(
     await browserRequest(client, {
       method: "POST",
       path: "/operator/input",
+      query: OPERATOR_INPUT,
       body: {
         targetId: params.targetId,
         inputs: params.inputs.map((input) =>
@@ -450,9 +501,14 @@ export async function resizeBrowserViewport(
 async function evaluateInBrowser<T>(
   client: BrowserRequestClient,
   params: { targetId: string; fn: string },
+  operatorInput = false,
 ): Promise<T | null> {
   const result = asRecord(
-    await browserAction(client, { kind: "evaluate", targetId: params.targetId, fn: params.fn }),
+    await browserAction(
+      client,
+      { kind: "evaluate", targetId: params.targetId, fn: params.fn },
+      operatorInput,
+    ),
   );
   return (result?.result as T | undefined) ?? null;
 }
@@ -520,20 +576,18 @@ export async function scrollBrowserBy(
   window.scrollBy(${dx}, ${dy});
   return true;
 }`;
-  await evaluateInBrowser(client, {
-    targetId: params.targetId,
-    fn,
-  });
+  await evaluateInBrowser(client, { targetId: params.targetId, fn }, true);
 }
 
 export async function goBrowserHistory(
   client: BrowserRequestClient,
   params: { targetId: string; delta: -1 | 1 },
 ) {
-  await evaluateInBrowser(client, {
-    targetId: params.targetId,
-    fn: `() => { history.go(${params.delta}); return true; }`,
-  });
+  await evaluateInBrowser(
+    client,
+    { targetId: params.targetId, fn: `() => { history.go(${params.delta}); return true; }` },
+    true,
+  );
 }
 
 export async function readBrowserPageMetrics(client: BrowserRequestClient, targetId: string) {

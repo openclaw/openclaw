@@ -27,6 +27,7 @@ import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-sessio
 import { createPublicSessionLocalesPlugin } from "./scripts/lib/public-session-locales.mts";
 import { isRecord } from "./scripts/lib/record-shared.mjs";
 import { resolveRepoRoot } from "./scripts/lib/repo-root.mjs";
+import { exactIdFilter } from "./scripts/lib/rolldown-id-filter.mts";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { createRootRuntimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
@@ -54,6 +55,7 @@ import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mt
 import { rootRuntimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
   createWorkerDeployBuildPlugin,
+  shouldBuildWorkerDeployBundle,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
 import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
@@ -97,6 +99,9 @@ const workerDeployVersion = (
 ).version;
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
+const workerDeployEntries = shouldBuildWorkerDeployBundle()
+  ? Object.entries(runtimeProcessDeployManifest)
+  : [];
 const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
 const TSDOWN_PACKAGE_DECLARATIONS = TSDOWN_DECLARATIONS
   ? { tsconfig: "tsconfig.packages.json" }
@@ -210,34 +215,37 @@ function createBashParserAssetsPlugin(): TsdownPlugin {
   const grammarResolution = 'require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")';
   return {
     name: "openclaw:bash-parser-assets",
-    transform(code, id) {
-      if (path.normalize(id) !== runtimePath) {
-        return undefined;
-      }
-      if (!code.includes(grammarResolution)) {
-        this.error("tree-sitter bootstrap changed; update the packaged grammar transform");
-      }
-      const require = createRequire(import.meta.url);
-      const grammarPath = require.resolve("tree-sitter-bash/tree-sitter-bash.wasm");
-      const licensePath = path.join(path.dirname(grammarPath), "LICENSE");
-      this.addWatchFile(grammarPath);
-      this.addWatchFile(licensePath);
-      const grammar = this.emitFile({
-        type: "asset",
-        fileName: "tree-sitter-bash.wasm",
-        source: fs.readFileSync(grammarPath),
-      });
-      this.emitFile({
-        type: "asset",
-        fileName: "tree-sitter-bash.LICENSE",
-        source: fs.readFileSync(licensePath),
-      });
-      // Let the bundler relocate the asset for root and nested chunks. Source
-      // checkouts still resolve the dev dependency; sealed workers inline it.
-      return {
-        code: code.replace(grammarResolution, `new URL(import.meta.ROLLUP_FILE_URL_${grammar})`),
-        map: null,
-      };
+    transform: {
+      filter: exactIdFilter(runtimePath),
+      handler(code, id) {
+        if (path.normalize(id) !== runtimePath) {
+          return undefined;
+        }
+        if (!code.includes(grammarResolution)) {
+          this.error("tree-sitter bootstrap changed; update the packaged grammar transform");
+        }
+        const require = createRequire(import.meta.url);
+        const grammarPath = require.resolve("tree-sitter-bash/tree-sitter-bash.wasm");
+        const licensePath = path.join(path.dirname(grammarPath), "LICENSE");
+        this.addWatchFile(grammarPath);
+        this.addWatchFile(licensePath);
+        const grammar = this.emitFile({
+          type: "asset",
+          fileName: "tree-sitter-bash.wasm",
+          source: fs.readFileSync(grammarPath),
+        });
+        this.emitFile({
+          type: "asset",
+          fileName: "tree-sitter-bash.LICENSE",
+          source: fs.readFileSync(licensePath),
+        });
+        // Let the bundler relocate the asset for root and nested chunks. Source
+        // checkouts still resolve the dev dependency; sealed workers inline it.
+        return {
+          code: code.replace(grammarResolution, `new URL(import.meta.ROLLUP_FILE_URL_${grammar})`),
+          map: null,
+        };
+      },
     },
   };
 }
@@ -247,35 +255,38 @@ function createHighlightRuntimeChunkPlugin(): TsdownPlugin {
   const load = 'createRequire(import.meta.url)("highlight.js")';
   return {
     name: "openclaw:highlight-runtime-chunk",
-    transform(code, id) {
-      if (path.normalize(id) !== runtimePath) {
-        return undefined;
-      }
-      if (!code.includes(load)) {
-        this.error("highlight.js loader changed; update the packaged highlighter transform");
-      }
-      const require = createRequire(import.meta.url);
-      const entryPath = require.resolve("highlight.js");
-      const licensePath = path.join(
-        path.dirname(require.resolve("highlight.js/package.json")),
-        "LICENSE",
-      );
-      this.addWatchFile(licensePath);
-      // npm would otherwise install the package's 1,580 files, mostly unused ES,
-      // CSS, and SCSS copies. Keep the lazy synchronous load as one bundled chunk.
-      const runtime = this.emitFile({ type: "chunk", id: entryPath, name: "highlight-runtime" });
-      this.emitFile({
-        type: "asset",
-        fileName: "highlight.js.LICENSE",
-        source: fs.readFileSync(licensePath),
-      });
-      return {
-        code: `import { fileURLToPath as highlightRuntimePath } from "node:url";\n${code.replace(
-          load,
-          `createRequire(import.meta.url)(highlightRuntimePath(import.meta.ROLLUP_FILE_URL_${runtime})).default`,
-        )}`,
-        map: null,
-      };
+    transform: {
+      filter: exactIdFilter(runtimePath),
+      handler(code, id) {
+        if (path.normalize(id) !== runtimePath) {
+          return undefined;
+        }
+        if (!code.includes(load)) {
+          this.error("highlight.js loader changed; update the packaged highlighter transform");
+        }
+        const require = createRequire(import.meta.url);
+        const entryPath = require.resolve("highlight.js");
+        const licensePath = path.join(
+          path.dirname(require.resolve("highlight.js/package.json")),
+          "LICENSE",
+        );
+        this.addWatchFile(licensePath);
+        // npm would otherwise install the package's 1,580 files, mostly unused ES,
+        // CSS, and SCSS copies. Keep the lazy synchronous load as one bundled chunk.
+        const runtime = this.emitFile({ type: "chunk", id: entryPath, name: "highlight-runtime" });
+        this.emitFile({
+          type: "asset",
+          fileName: "highlight.js.LICENSE",
+          source: fs.readFileSync(licensePath),
+        });
+        return {
+          code: `import { fileURLToPath as highlightRuntimePath } from "node:url";\n${code.replace(
+            load,
+            `createRequire(import.meta.url)(highlightRuntimePath(import.meta.ROLLUP_FILE_URL_${runtime})).default`,
+          )}`,
+          map: null,
+        };
+      },
     },
   };
 }
@@ -1067,7 +1078,7 @@ const configs: UserConfig[] = [
     },
     false,
   ),
-  ...Object.entries(runtimeProcessDeployManifest).map(([name, entry]) =>
+  ...workerDeployEntries.map(([name, entry]) =>
     workerDeployBuildConfig(
       {
         ["worker/" + name]: entry.source,

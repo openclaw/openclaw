@@ -161,8 +161,8 @@ async function startGatewayServerWithSdkHost(
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: (optsLocal) => {
       if (!closePromise) {
-        closePromise = sdkResourceHost
-          .run(async () => {
+        closePromise = gatewayKernel
+          .runClose(async () => {
             const preparedClose = prepareClose(optsLocal);
             releasePostReadyWork();
             await runGatewayCloseSteps({

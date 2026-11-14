@@ -34,6 +34,12 @@ type PendingDeviceSignIn = {
   expiresAt: number;
 };
 
+/**
+ * A device sign-in's ID token, held by its hash: the Gateway received it from the issuer itself,
+ * for this profile. A browser presenting the same token again proves it still holds that sign-in.
+ */
+type HeldSignIn = { owner: string; issuer: string; clientId: string; exp: number };
+
 /** The user code and where to enter it, for the browser to show while the Gateway polls. */
 export type OpenClawIdDeviceSignIn = {
   state: string;
@@ -68,6 +74,7 @@ const SIGN_IN_CALLBACK_PATH = "/openclaw-id/callback";
 
 const PENDING_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 16;
+const MAX_HELD = 64;
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 // RFC 8628 section 3.2 defaults and the slow_down increment (section 3.5).
 const DEFAULT_DEVICE_INTERVAL_S = 5;
@@ -193,6 +200,10 @@ function acceptedClaims(
   );
 }
 
+function tokenHash(idToken: string): string {
+  return createHash("sha256").update(idToken).digest("base64url");
+}
+
 function accountFrom(claims: IdTokenClaims & { sub: string; exp: number }): OpenClawIdAccount {
   return {
     sub: claims.sub,
@@ -223,6 +234,7 @@ export function createOpenClawIdSignIn(
   const now = deps.now ?? Date.now;
   const pending = new Map<string, PendingSignIn>();
   const pendingDevices = new Map<string, PendingDeviceSignIn>();
+  const held = new Map<string, HeldSignIn>();
 
   // Drops expired sign-ins, then the oldest ones past the cap (Map keeps insertion order).
   const prune = () => {
@@ -234,6 +246,11 @@ export function createOpenClawIdSignIn(
     for (const [state, entry] of pendingDevices) {
       if (now() >= entry.expiresAt || pendingDevices.size >= MAX_PENDING) {
         pendingDevices.delete(state);
+      }
+    }
+    for (const [hash, entry] of held) {
+      if (entry.exp * 1000 <= now() || held.size >= MAX_HELD) {
+        held.delete(hash);
       }
     }
   };
@@ -538,7 +555,50 @@ export function createOpenClawIdSignIn(
       if (!acceptedClaims(claims, expected)) {
         return refusal("id_token_invalid", "the issuer returned an unusable ID token");
       }
+      prune();
+      held.set(tokenHash(idToken), {
+        owner: entry.owner,
+        issuer: entry.issuer,
+        clientId: entry.clientId,
+        exp: claims.exp,
+      });
       return { idToken, account: accountFrom(claims) };
+    },
+
+    /**
+     * Accepts an ID token a browser presents again only when this Gateway redeemed it from
+     * `issuerUrl` for `clientId` in a device sign-in started by `owner`, and its claims still
+     * pass. A token the Gateway did not receive from the issuer carries no proof (it is not
+     * signature-checked), so it is refused like an expired one; the caller then signs in again.
+     */
+    verifyHeld(params: {
+      idToken: unknown;
+      owner: string;
+      issuerUrl: string;
+      clientId: string;
+    }): { account: OpenClawIdAccount } | OpenClawIdSignInRefusal {
+      const idToken = typeof params.idToken === "string" ? params.idToken : "";
+      const entry = idToken ? held.get(tokenHash(idToken)) : undefined;
+      if (
+        !entry ||
+        entry.owner !== params.owner ||
+        trimSlash(entry.issuer) !== trimSlash(params.issuerUrl) ||
+        entry.clientId !== params.clientId
+      ) {
+        return refusal("sign_in_not_held", "this sign-in is not one this claw can reuse");
+      }
+      const claims = decodeClaims(idToken);
+      const expected = {
+        issuer: entry.issuer,
+        clientId: entry.clientId,
+        nonce: null,
+        nowMs: now(),
+      };
+      if (!acceptedClaims(claims, expected)) {
+        held.delete(tokenHash(idToken));
+        return refusal("sign_in_not_held", "this sign-in expired; sign in again");
+      }
+      return { account: accountFrom(claims) };
     },
 
     /** Asks Discovery for a one-time link code for the signed-in account. */

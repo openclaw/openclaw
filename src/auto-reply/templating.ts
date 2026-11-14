@@ -56,6 +56,8 @@ export type ChannelStructuredContextEntry = {
 
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
+  /** Restore only transcript-only delivery mirrors excluded from normal replay. */
+  deliveryOnly?: boolean;
   historyLimit: number;
   /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
   historyKind?: "pending" | "recent";

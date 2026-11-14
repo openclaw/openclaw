@@ -6,7 +6,7 @@ read_when:
 title: "Background exec and process tool"
 ---
 
-OpenClaw runs shell commands through the `exec` tool. Ordinary long-running tasks stay in memory; opt-in [durable processes](/gateway/background-process#durable-processes) on a Linux Gateway retain ownership across Gateway restarts. The `process` tool manages background sessions from gateway, sandbox, and worker-local execution. Remote `host=node` calls use synchronous `system.run` and never create a process session, even when `process` is enabled.
+OpenClaw runs shell commands through the `exec` tool. Ordinary long-running tasks stay in memory; opt-in [durable processes](/gateway/background-process#durable-processes) on a Linux or macOS Gateway retain ownership across Gateway restarts. The `process` tool manages background sessions from gateway, sandbox, and worker-local execution. Remote `host=node` calls use synchronous `system.run` and never create a process session, even when `process` is enabled.
 
 ## exec tool
 
@@ -19,7 +19,7 @@ Parameters:
 | `env`            | Extra environment variables for the command.                                                                                                                      |
 | `yieldMs`        | Milliseconds before returning a handle for an ordinary command (default 10000).                                                                                   |
 | `background`     | Start a deliberately independent service immediately.                                                                                                             |
-| `durable`        | Survive Gateway restarts using a Linux systemd user service; requires explicit `background: true` or `yieldMs`.                                                   |
+| `durable`        | Survive Gateway restarts as a systemd user service (Linux) or launchd job (macOS); requires explicit `background: true` or `yieldMs`.                             |
 | `timeoutSeconds` | Timeout in seconds (default `tools.exec.timeoutSeconds`); kills the process on expiry. Set `timeoutSeconds: 0` to disable the exec process timeout for that call. |
 | `pty`            | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                       |
 | `elevated`       | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                                     |
@@ -52,7 +52,7 @@ Behavior:
 - Before a Gateway restart, when a channel owner started the command, its completion turn keeps that owner's owner-only tools, such as `openclaw` and `gateway`, so the agent can finish the task without a new message. OpenClaw rechecks owner status against the current config each time; if the sender is no longer an owner, the tools stay unavailable. Commands started by other senders do not inherit those owner-only tools. After restart, durable outcomes use the owning session principal's current authority as described below.
 - Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
-- Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. Use `durable: true` on a supported Linux Gateway when the physical process must survive. Check saved output and side effects before repeating work whose outcome is unknown.
+- Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. Use `durable: true` on a supported Linux or macOS Gateway when the physical process must survive. Check saved output and side effects before repeating work whose outcome is unknown.
 - Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
@@ -119,25 +119,44 @@ Gateway-hosted work alive across Gateway restarts:
 { "tool": "exec", "command": "npm run build", "background": true, "durable": true }
 ```
 
-This requires Linux, systemd 250 or newer, and a reachable user manager for the Gateway's user,
-with `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS` available. The `process` tool
-must be enabled. Sandbox, remote `host=node`, worker, macOS, and Windows execution
+This requires either Linux, systemd 250 or newer, and a reachable user manager for the
+Gateway's user, with `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS` available; or macOS
+with the Gateway running in a logged-in user's GUI session (`launchctl managername`
+reports `Aqua`; an SSH-only session does not qualify). The `process` tool
+must be enabled. Sandbox, remote `host=node`, worker, and Windows execution
 are unsupported. An unavailable requirement produces an error; durable execution
 never silently falls back to ordinary background execution. OpenClaw does not
-enable linger or keep the user manager alive after logout. A host reboot or user
+enable linger or keep the user manager alive after logout; on macOS, logging out
+ends the GUI session and its durable jobs. A host reboot or user
 manager shutdown still ends transient services; this is not a saved automation or
 an automatic command-restart policy.
 
-The existing background-process registry remains the owner. It launches a transient
+The existing background-process registry remains the owner. On Linux it launches a transient
 `openclaw-proc-<opaque id>` user service outside the Gateway's cgroup. The unit uses
 `ExitType=cgroup`: descendants keep the service running after its initial shell
 exits, and completion waits until the cgroup is empty. `KillMode=control-group`
 lets `process kill` stop the entire tree through `systemctl --user stop`.
+On macOS, each durable command is a transient `ai.openclaw.durable-proc.<opaque id>` launchd job
+in the user's `gui/<uid>` domain, loaded from a plist under `$OPENCLAW_STATE_DIR/processes/`
+rather than `~/Library/LaunchAgents`, so it is never reloaded at login. launchd starts a
+small OpenClaw wrapper that runs the command in its own process group, records that
+group, waits until the group is empty, enforces `timeoutSeconds`, and records the exit
+status in a status file the returning Gateway reads. The registry reads job state from
+`launchctl list`; a failed or unreadable listing is retried, never treated as a finished
+or missing job. `process kill` signals the wrapper, which stops the group (SIGTERM, then
+SIGKILL after 10 seconds). macOS has no cgroups: a descendant that leaves the process
+group (for example `setsid`, `tmux new -d`, or a self-daemonizing program) is neither
+waited for nor stopped. If the wrapper itself is killed, the registry checks the recorded
+group and reports the outcome as unknown once it is empty; `process kill` can no longer
+stop that group and reports the stop as unconfirmed. The job runs as its own
+process for macOS privacy permissions, so access the Gateway or app was granted (for
+example Full Disk Access) may not apply to a durable command.
+
 Durable commands have no interactive input: `pty: true`
 and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
 and `paste`. Exec security policy, approvals, managed environment preparation, cwd
-restrictions, and process timeouts remain in effect. `timeoutSeconds` maps to
-`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. Durable work shares the automatic
+restrictions, and process timeouts remain in effect. On Linux, `timeoutSeconds` maps to
+`RuntimeMaxSec`; on macOS the wrapper enforces it. `timeoutSeconds: 0` disables that lifetime bound. On Linux, durable work shares the automatic
 [host-exec memory budget](/tools/exec#host-memory-protection) with ordinary commands.
 The shared sampler accounts their cgroup usage, including descendants after the
 initial shell exits. Each new unit also has hard RAM and swap bounds equal to the
@@ -255,15 +274,19 @@ entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.
 When the broker is ready, exec commands, shell-snapshot capture and validation,
 and helpers using the shared command runner spawn from it, so Linux does not copy
-the Gateway's page tables for each command. Sandbox housekeeping retains that
-broker when it leaves the requesting turn's context, including recurring prune
-passes. The existing process supervisors and
+the Gateway's page tables for each command. The broker belongs to the Gateway's
+lifetime, so detached work also uses it after leaving a request's async context.
+Explicit native-only scopes still keep their local transport. The existing process supervisors and
 service relays still own cancellation, output, and cleanup. After the broker first
 becomes ready, broker loss fails affected commands rather than rerunning them; later commands use the restarted
 broker. One-shot CLI commands, native file-descriptor inputs, and independently
 launched applications keep their local process transport, as do Bun, macOS, and Windows.
 The broker has its own process group, which the Gateway terminates on broker loss;
 service relays also retain their own parent-loss cleanup.
+When the host denies group signals, the broker's own process group and the worker's retained
+detached groups are signaled member by member, and their extinction is confirmed from the process
+table. A detached child lost with the broker before its group identity was recorded can only be
+confirmed, not signaled.
 Broker cleanup grace periods use elapsed time and are unaffected by system-clock corrections.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.
@@ -352,9 +375,9 @@ Actions:
 Notes:
 
 - Only backgrounded sessions are listed. Ordinary records stay in memory and are lost on process restart; durable records are adopted from SQLite. New handles include an opaque boot suffix so old handles cannot select a different process after restart. A durable process keeps its original handle when adopted. Looking up a lost ordinary handle advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
-- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. Restart interruption signals active requests' ordinary commands after saving restart markers, so their cleanup grace overlaps request draining. Accepted finalizers still finish before database sealing. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
+- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable processes keep running under the systemd user manager (Linux) or launchd (macOS). Restart interruption signals active requests' ordinary commands after saving restart markers, so their cleanup grace overlaps request draining. Accepted finalizers still finish before database sealing. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
 - Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
-- A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable units do not block either operation.
+- A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable processes do not block either operation.
 - `process remove` can hide a running session immediately after requesting termination; ordinary processes keep suspension and restart blocked until exit confirmation.
 - Process output enters chat history only when a `process poll`/`log` result is recorded. Durable commands also retain their local log artifact until the process record is retired.
 - `process` sees its own session’s processes and processes started by ancestor sessions belonging to the same agent. It cannot access sibling sessions, unrelated session trees, or another agent’s processes. Visibility follows the recorded session tree; handles do not need to be copied.

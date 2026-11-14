@@ -116,7 +116,7 @@ export async function prepareCliSessionHistoryReader(
   }
   const native = {
     cliSessionId: binding.sessionId,
-    homeDir: params.cliHistoryHomeDir,
+    projectsDir: params.cliHistoryProjectsDir,
     localSessionId: params.sessionId,
     reseedReceipt: binding.reseedReceipt,
   };

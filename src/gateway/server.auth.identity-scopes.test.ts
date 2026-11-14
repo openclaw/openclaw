@@ -532,9 +532,15 @@ test("denies missing person access, retires grant or alias authority, and preser
       expect(guest.connected.ok).toBe(true);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
       policyUnavailable = true;
+      // An evaluation outage refuses this handshake without revoking the admitted grant.
       expect((await connect("visitor@example.com")).connected).toMatchObject({
         ok: false,
-        error: { details: { accessCause: "policy-check-failed" }, retryable: false },
+        error: {
+          code: "UNAVAILABLE",
+          message: "Gateway access policy is unavailable; retry the operation.",
+          details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
+          retryable: true,
+        },
       });
       expect(grant.signal.aborted).toBe(false);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
@@ -989,5 +995,22 @@ test.each<[string, GatewayAuthConfig, ConnectOptions, string[]]>([
   await withIdentityServer(async ({ connect }) => {
     const { connected } = await connect(options);
     expectScopes(connected, scopes);
+  });
+});
+
+test("keeps Tailscale identity scopes without a named-role cap when only definitions exist", async () => {
+  testTailscaleWhois.value = { login: "peter", name: "Peter" };
+  await configureTailscale(
+    { identityScopes: { peter: ["operator.write"] } },
+    {
+      definitions: { guest: role([], "none", []) },
+    },
+  );
+  await withIdentityServer(async ({ tailscale }) => {
+    const { connected } = await tailscale("peter", { scopes: ["operator.read"] });
+    expect(connected.ok, JSON.stringify(connected)).toBe(true);
+    expect(responseAuth(connected)?.scopes).toEqual(expect.arrayContaining(READ_WRITE));
+    expect(responseAuth(connected)?.sessionCap).toBeUndefined();
+    expect(responseAuth(connected)?.deviceToken).toBeTruthy();
   });
 });

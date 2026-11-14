@@ -267,8 +267,8 @@ export default {
     unknownStatus: "Unknown",
     showArchived: "Show archived",
     dispatch: "Start agents",
-    dispatchHelp: "Ask agents to execute this board's Ready cards, up to 3 at a time.",
-    dispatchHelpAll: "Ask agents to execute Ready cards across all boards, up to 3 at a time.",
+    dispatchHelp: "Run Ready cards, up to 3 at once.",
+    dispatchHelpAll: "Run Ready cards across all boards, up to 3 at once.",
     moveTo: "Move to",
     dispatchSummary:
       "Started {started}. Prepared {promoted}, blocked {blocked}, released {reclaimed}, organized {orchestrated}. Failed to start: {failures}.",

@@ -338,13 +338,10 @@ async function restoreGatewayOperatorSnapshot(params: {
     assertPolicy = () => {
       try {
         const { profile, cfg } = assertFacts();
-        const access = resumeGatewayOperatorAccessGrant(
-          profile,
-          cfg,
-          snapshot.grant,
-          accessAuthority,
-          principal,
-        );
+        const access = resumeGatewayOperatorAccessGrant(profile, cfg, snapshot.grant, {
+          retained: accessAuthority,
+          openclawIdPrincipal: principal,
+        });
         if (access && !accessAuthority) {
           accessAuthority = access;
           const onAbort = () => revoke(access.signal.reason);
