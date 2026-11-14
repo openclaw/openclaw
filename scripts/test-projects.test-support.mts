@@ -3262,7 +3262,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "pr-crabbox-gate-plan",
       "pr-main-refresh",
       "pr-merge-hosted",
-      "pr-metadata",
       "pr-prepare-gates",
       "pr-prepare-preflight",
       "pr-prepare-testbox",
@@ -3285,12 +3284,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   [
     ".github/workflows/plugin-npm-release.yml",
-    [
-      packageAcceptance,
-      "plugin-npm-extended-stable-workflow",
-      "plugin-release-git-lifecycle",
-      workflowGuards,
-    ],
+    [packageAcceptance, "plugin-release-git-lifecycle", workflowGuards],
   ],
   [".github/workflows/qa-live-transports-convex.yml", [packageAcceptance, workflowGuards]],
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
@@ -3527,7 +3521,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "check-workflows",
       "plugin-contract-test-plan",
       pluginPrerelease,
-      "verify-pr-hosted-gates",
     ],
   ],
   [
@@ -3547,7 +3540,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "full-release-validation-state",
       "full-release-validation-at-sha",
       "full-release-candidate-reuse",
-      "find-reusable-release-validation",
       "openclaw-npm-extended-stable-full-validation-workflow",
       "release-no-push-workflow",
       "release-ci-summary",
@@ -4216,10 +4208,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^scripts\/e2e\/lib\/codex-media-path\/jsonl-request-tail\.mts$/u,
     ["codex-media-path-client", "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts"],
   ],
-  [
-    /^scripts\/e2e\/lib\/codex-npm-plugin-live\/assertions\.mjs$/u,
-    ["codex-install-assertions", dockerBuild],
-  ],
+  [/^scripts\/e2e\/lib\/codex-npm-plugin-live\/assertions\.mjs$/u, [dockerBuild]],
   [
     /^scripts\/e2e\/(?:lib\/openai-chat-tools\/scenario\.sh|openai-chat-tools-docker\.sh)$/u,
     [openaiChatToolsE2e],
