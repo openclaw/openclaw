@@ -107,7 +107,7 @@ export async function prepareSessionMutationFacts(
   let beforeDiscovery = params.storageReady !== undefined;
   let waitingForStorage = false;
   let invalidated = false;
-  let acquisitionBoundToAgent = false;
+  let pendingTopologyChanges: SessionRowChange[] | undefined;
   let facts: PreparedSessionSourceFacts | undefined;
   let assertRegistryPublication: (() => void) | undefined;
   let followRegistration: ((change: AgentDatabaseRegistryChange) => void) | undefined;
@@ -153,12 +153,17 @@ export async function prepareSessionMutationFacts(
         }
         if (
           beforeDiscovery ||
-          (typeof change.scope === "object" &&
+          (facts?.target &&
+            typeof change.scope === "object" &&
             change.scope.agentId &&
             change.scope.agentId !== agentId &&
-            ((!facts && acquisitionBoundToAgent) ||
-              (facts?.target && change.scope.agentId !== facts.sourceAgentId)))
+            change.scope.agentId !== facts.sourceAgentId)
         ) {
+          return;
+        }
+        // Bind the physical owner before deciding which startup publications affect this read.
+        if (!facts) {
+          (pendingTopologyChanges ??= []).push(change);
           return;
         }
         if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {
@@ -402,18 +407,6 @@ export async function prepareSessionMutationFacts(
         throw new SessionMutationFactsUnavailableError();
       }
     }
-    acquisitionBoundToAgent =
-      !discoveryInventory.registryDiscovery &&
-      candidateIdentities.length > 0 &&
-      candidateIdentities.every(
-        ({ candidate, identity }) =>
-          !candidate.scope &&
-          identity.key.startsWith("file:") &&
-          identity.birthtime !== undefined &&
-          resolveUnsuffixedSqliteTargetFromSessionStorePath(candidate.path).agentId === agentId &&
-          resolveUnsuffixedSqliteTargetFromSessionStorePath(candidate.physicalPath).agentId ===
-            agentId,
-      );
     const missingCandidates = candidateIdentities.filter(
       ({ identity }) => identity.birthtime === undefined,
     );
@@ -559,7 +552,6 @@ export async function prepareSessionMutationFacts(
       assertDiscoveryCurrent();
       return target;
     });
-    assertActive();
     const storageTarget: SessionFactsRead<PreparedSessionMutationFacts>["storageTarget"] =
       Object.freeze({
         agentId: selected.agentId,
@@ -676,6 +668,9 @@ export async function prepareSessionMutationFacts(
         return facts!;
       };
     }
+    pendingTopologyChanges?.forEach(changed);
+    pendingTopologyChanges = undefined;
+    assertActive();
     assertSource = inventoryRead.assertRegistryCurrent;
     const readCurrent = (cfg: OpenClawConfig) => {
       try {

@@ -343,18 +343,28 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   expect(forged).toBe(true);
 });
 
-it.for(["per-agent", "shared"] as const)(
-  "qualifies unrelated readiness during a pending %s sharing acquisition",
-  async (kind, { state, signal }) => {
+it.for([
+  ["per-agent", "main"],
+  ["per-agent", "other"],
+  ["shared", "main"],
+  ["shared", "ops"],
+  ["shared", "other"],
+] as const)(
+  "qualifies %s acquisition when %s becomes ready",
+  async ([kind, readyAgentId], { state, signal }) => {
     const storePath =
       kind === "per-agent"
         ? resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
         : state.statePath("shared-acquisition.sqlite");
+    const agentId = kind === "shared" ? "ops" : "main";
+    if (kind === "shared") {
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath, env: state.env });
+    }
     const cfg = {
-      agents: { entries: { main: {}, other: {} } },
+      agents: { entries: { main: {}, ops: {}, other: {} } },
       ...(kind === "shared" ? { session: { store: storePath } } : {}),
     };
-    const harness = sharingHarness(cfg, "agent:main:acquiring", storePath);
+    const harness = sharingHarness(cfg, `agent:${agentId}:acquiring`, storePath, agentId);
     harness.write(restrictedEntry("acquiring", "first"));
     const entered = createDeferred();
     const release = createDeferred();
@@ -373,11 +383,14 @@ it.for(["per-agent", "shared"] as const)(
     void pending.catch(() => {});
     try {
       await withinTest(entered.promise, signal);
-      sessionChanges.emit({ all: true, scope: { agentId: "other", topology: true } });
+      sessionChanges.emit({ all: true, scope: { agentId: readyAgentId, topology: true } });
       release.resolve();
-      if (kind === "per-agent") {
+      if (readyAgentId === "other") {
         using prepared = releasing(await pending);
-        expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("acquiring");
+        const facts = prepared.readCurrent(cfg);
+        expect(facts.target.entry.sessionId).toBe("acquiring");
+        expect(facts.target.agentId).toBe(agentId);
+        expect(facts.sourceAgentId).toBe("main");
       } else {
         await expect(pending).rejects.toThrow(unavailableMessage);
       }
