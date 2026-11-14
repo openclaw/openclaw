@@ -348,8 +348,8 @@ There are eight run slots by default. With
 [`cron.dynamicConcurrency`](/gateway/config-automation) on, run slots come from the agent
 concurrency limit ([`agents.defaults.maxConcurrent`](/gateway/config-agents/models)), which
 automation then shares with conversations: it uses the slots that conversation turns leave
-free and always keeps at least eight. After a provider rate limit or critical memory
-pressure it runs fewer jobs at once and steps back up while runs wait. See
+free and always keeps at least eight. After a provider rate limit it runs fewer jobs at once
+and adds one back each minute without pushback. See
 [how automation works](/automation/cron-jobs/how-it-works).
 
 Cold runtime preparation can continue after an evaluation times out, so a later
