@@ -66,6 +66,9 @@ const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> =
     "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
 };
 
+const ITEM_CONFLICT_USER_TEXT =
+  "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
+
 const ASSISTANT_REQUEST_FAILURE_COPY = {
   auth: "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
   auth_permanent:
@@ -103,6 +106,9 @@ export function renderAssistantRequestFailureCopy(
 ): string | undefined {
   if (facts.storageFailure) {
     return `⚠️ ${STORAGE_FAILURE_COPY[facts.storageFailure]} ${ERROR_DETAILS_HINT}`;
+  }
+  if (facts.code === "item_conflict") {
+    return ITEM_CONFLICT_USER_TEXT;
   }
   if (facts.code === "incomplete_tool_call") {
     return "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.";
@@ -195,9 +201,17 @@ export function renderFormatErrorCopy(raw: string): string {
 
 /** Share bounded request-limit facts between live failures and persisted chat history. */
 export function renderAssistantFormatFailureCopy(
-  message: { errorMessage?: unknown; errorBody?: unknown; errorType?: unknown },
+  message: {
+    errorMessage?: unknown;
+    errorBody?: unknown;
+    errorType?: unknown;
+    errorCode?: unknown;
+  },
   reason?: FailoverReason | null,
 ): string | undefined {
+  if (message.errorCode === "item_conflict" || message.errorMessage === ITEM_CONFLICT_USER_TEXT) {
+    return ITEM_CONFLICT_USER_TEXT;
+  }
   for (const [isBody, raw] of [
     [true, message.errorBody],
     [false, message.errorMessage],
@@ -206,6 +220,14 @@ export function renderAssistantFormatFailureCopy(
       continue;
     }
     const info = parseApiErrorInfo(raw);
+    if (
+      info?.code === "item_conflict" ||
+      /^(?:LLM request rejected: )?An input item conflicts with an existing record\.$/u.test(
+        info?.message ?? raw.trim(),
+      )
+    ) {
+      return ITEM_CONFLICT_USER_TEXT;
+    }
     if (isBody && !info?.message) {
       continue;
     }
