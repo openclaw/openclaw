@@ -1433,6 +1433,8 @@ const enSettings = {
       updateNowDescription: "Install the available update and restart the Gateway.",
       noKnownUpdateDescription:
         "Run the Gateway updater and restart. The current version may be reinstalled.",
+      managedByGatewayApp: "This Gateway is managed by {app} and updates are handled there. {hint}",
+      managedByGatewayAppDescription: "Use {app} to update and restart this Gateway.",
       latestAttempt: "Latest update attempt",
       attemptedAt: "Attempted",
       beforeUpdate: "Before update",

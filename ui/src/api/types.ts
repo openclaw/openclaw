@@ -44,6 +44,7 @@ export type {
   CronScratchSetResult,
   UpdateAvailable,
   UpdateHoldResult,
+  UpdateInstallOwner,
   UpdateReportResult,
   UpdateScheduleState,
   ChannelsPairingAccount,

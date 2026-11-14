@@ -236,6 +236,14 @@ export const UpdateScheduleStateSchema = closedObject({
   ),
 });
 
+/** Packaging marker that designates a host (app) as the authoritative update owner. */
+export const UpdateInstallOwnerSchema = closedObject({
+  schemaVersion: Type.Literal(1),
+  owner: stringLiteralUnion(["macos-app", "desktop-app", "immutable-deployer"]),
+  displayName: NonEmptyString,
+  updateHint: NonEmptyString,
+});
+
 /** Validated response payload for update.status. */
 export const UpdateStatusResultSchema = closedObject({
   sentinel: Type.Unknown(),
@@ -244,6 +252,7 @@ export const UpdateStatusResultSchema = closedObject({
   lastRun: Type.Optional(UpdateRunRecordSchema),
   effectiveChannel: Type.Optional(stringLiteralUnion(["stable", "extended-stable", "beta", "dev"])),
   schedule: Type.Optional(UpdateScheduleStateSchema),
+  installOwner: Type.Optional(UpdateInstallOwnerSchema),
 });
 
 /** Empty request payload for deferring the active update campaign. */
@@ -403,6 +412,7 @@ export type ConfigSchemaLookupResult = Static<typeof ConfigSchemaLookupResultSch
 export type UpdateStatusParams = Static<typeof UpdateStatusParamsSchema>;
 export type UpdateAvailable = Static<typeof UpdateAvailableSchema>;
 export type UpdateImmutableInstall = Static<typeof UpdateImmutableInstallSchema>;
+export type UpdateInstallOwner = Static<typeof UpdateInstallOwnerSchema>;
 export type UpdateScheduleState = Static<typeof UpdateScheduleStateSchema>;
 export type UpdateStatusResult = Static<typeof UpdateStatusResultSchema>;
 export type UpdateHoldParams = Static<typeof UpdateHoldParamsSchema>;

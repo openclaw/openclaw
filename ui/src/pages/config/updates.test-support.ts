@@ -71,6 +71,7 @@ export function createUpdatesViewProps(overrides: UpdatesViewOverrides = {}): Up
       updateReconciliationPending: false,
       updateRunAcknowledged: false,
       controlUiRefreshRequired: false,
+      installOwner: null,
       ...overrides.update,
     },
   };

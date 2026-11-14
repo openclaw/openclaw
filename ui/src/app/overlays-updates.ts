@@ -59,6 +59,7 @@ export function createApplicationUpdateOverlays(
   let snapshot: ApplicationUpdateOverlaySnapshot = {
     updateAvailable: null,
     updateSchedule: null,
+    installOwner: null,
     heldUpdateCampaignId: null,
     updateRunning: false,
     updateStatusRefreshing: false,
@@ -462,6 +463,7 @@ export function createApplicationUpdateOverlays(
         ...snapshot,
         updateAvailable: null,
         updateSchedule: null,
+        installOwner: null,
         updateStatusRefreshing: false,
         updateCampaignStatusHydrated: true,
       };
