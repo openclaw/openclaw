@@ -91,6 +91,7 @@ struct ExecHostRequest: Codable {
     var approvalDecision: ExecApprovalDecision?
     var approvalSource: String?
     var policySnapshot: OpenClawSystemRunApprovalPolicySnapshot?
+    var mutableFileOperand: ExecApprovalScriptOperand?
 }
 
 struct ExecHostRunResult: Codable {
