@@ -9,8 +9,10 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     /\brouter not found\b/i.test(msg) ||
     /unknown model/i.test(msg) ||
     /\bmodel\b[^\r\n]{0,120}?\b(?:was|is|has been) retired\b/i.test(msg) ||
-    // Ollama's retirement response names the model id without the word "model".
-    /\b[a-z0-9][a-z0-9._:/-]* was retired at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} [a-z]+ \(ref:/i.test(
+    // Ollama's retirement response names the model id without the word "model". Find the
+    // fixed suffix first, then look back over the id, so a long id-like run is not rescanned
+    // from each of its positions.
+    /(?= was retired at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} [a-z]+ \(ref:)(?<=\b[a-z0-9][a-z0-9._:/-]*)/i.test(
       msg,
     ) ||
     // "Not available" alone also describes outages; require missing-model evidence.

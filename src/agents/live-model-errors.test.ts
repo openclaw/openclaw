@@ -55,3 +55,11 @@ it("treats a hard model deprecation as model-unavailable, not deprecation warnin
     "Warning: model gpt-4o-2024-05-13 is deprecated and will be removed on 2026-12-01.",
   ]);
 });
+
+it("reads a retirement notice behind a long id-like run in linear time", () => {
+  const run = "-a".repeat(32_000);
+  const started = performance.now();
+  expectMessages(false, [run, "a:".repeat(32_000)]);
+  expectMessages(true, [`${run} was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic)`]);
+  expect(performance.now() - started).toBeLessThan(500);
+});

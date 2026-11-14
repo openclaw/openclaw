@@ -175,9 +175,13 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       (params.failoverReason === "tls_certificate" ||
         params.failoverReason === "route_unavailable" ||
         (params.failoverReason === "model_not_found" &&
-          /\b(?:unknown model|invalid model|model[_\-\s]?not[_\-\s]?found|is not a valid model id|models?[/\s:].{0,120}?(?:not found|does not exist|retired|deprecated|no longer available)|[\w./:@-]+ was retired at \d{4}-\d{2}-\d{2}|no endpoints found for)\b/i.test(
+          (/\b(?:unknown model|invalid model|model[_\-\s]?not[_\-\s]?found|is not a valid model id|models?[/\s:].{0,120}?(?:not found|does not exist|retired|deprecated|no longer available)|no endpoints found for)\b/i.test(
             params.errorMessage ?? "",
-          ) &&
+          ) ||
+            // Suffix first, then the id behind it: a long id-like run is scanned once.
+            /(?= was retired at \d{4}-\d{2}-\d{2}\b)(?<=\b[\w./:@-]+)/i.test(
+              params.errorMessage ?? "",
+            )) &&
           !/\b(?:access|permissions?|accounts?|plans?|tiers?|subscriptions?|memberships?|entitlements?|unauthorized|forbidden)\b/i.test(
             params.errorMessage ?? "",
           )))
