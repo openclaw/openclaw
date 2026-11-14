@@ -280,6 +280,23 @@ describe("Template Add CLI state ownership", () => {
     },
   );
 
+  it("names the rerun that continues a kept agent whose setup did not finish", async () => {
+    result = {
+      agentId: "demo",
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+      readiness: { ready: false, requirements: [] },
+      error: { code: "template_initialization_failed", message: "Download failed." },
+    };
+    await fixture.startOwner();
+    await runTemplatesAddCommand("@acme/demo", {});
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Rerun with --agent-id demo"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it.each(["none", "capabilities-only", "risk-only", "both", "declined-sibling"])(
     "requires separate exact plugin and skill trust consent: %s",
     async (kind) => {

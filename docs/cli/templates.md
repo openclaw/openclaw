@@ -339,7 +339,8 @@ is no final setup receipt or second model recap. Declared package bootstrap stil
 follows shared setup; MCP configuration alone does not prove a working connection.
 
 `--dry-run --json` remains available for automation or local-source inspection.
-`--agent-id` selects an unused ID. `--workspace` selects a new path for local
+`--agent-id` selects an unused ID, or names an agent that a failed Gateway Add
+kept so Add continues its setup. `--workspace` selects a new path for local
 preview or offline Add. Ordinary Add binds its review internally and does not
 require a separate plan token. Trust warnings and plugin capabilities still
 require their separate explicit acknowledgements.
@@ -363,7 +364,10 @@ assigns the declared automations. An existing agent or workspace is never
 overwritten. If Add fails before exposing the agent, newly created resources are
 cleaned up where safe; preexisting resources remain untouched. If the result says
 the agent was retained, continue in that agent and inspect the specific error
-instead of adding another copy.
+instead of adding another copy. When Gateway Add kept the agent before its setup
+finished, rerun `openclaw templates add <source> --agent-id <id>` once the error
+is resolved. The rerun continues in the same agent and conversation, and only
+for the Template version the first Add resolved.
 
 ## Remove the agent
 

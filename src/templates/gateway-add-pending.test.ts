@@ -20,7 +20,11 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { withResolvedClawHubSource } from "./clawhub-source.js";
 import { applyTemplateAddForGateway } from "./gateway-add-apply.js";
-import { buildGatewayTemplateAddPlan, projectGatewayTemplateAddPlan } from "./gateway-add-plan.js";
+import {
+  buildGatewayTemplateAddPlan,
+  planTemplateAddForGateway,
+  projectGatewayTemplateAddPlan,
+} from "./gateway-add-plan.js";
 import { readTemplateManifestFile } from "./reader.js";
 
 const { resolveSource } = vi.hoisted(() => ({ resolveSource: vi.fn() }));
@@ -276,6 +280,18 @@ it.each([
           await expect(fs.stat(profile)).rejects.toMatchObject({ code: "ENOENT" });
         }
         const before = outcome === "admitted-runtime-retry" ? await fs.stat(profile) : undefined;
+        // A rerun from a new client has only the kept agent's ID and the catalog coordinate.
+        const rerun = { agentId: "fixture-first", config, sourceMcpServers: {} };
+        expect(
+          await planTemplateAddForGateway({ ...rerun, source: applyInput.source }),
+        ).toMatchObject({ blockers: [], planIntegrity: review!.planIntegrity });
+        const newerVersion = await planTemplateAddForGateway({
+          ...rerun,
+          source: { ...applyInput.source, version: "1.0.1" },
+        });
+        expect(newerVersion.blockers).toContainEqual(
+          expect.objectContaining({ code: "agent_id_collision" }),
+        );
         result = await applyTemplateAddForGateway(applyInput);
         if (before) {
           const after = await fs.stat(profile);
