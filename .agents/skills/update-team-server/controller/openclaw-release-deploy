@@ -1260,23 +1260,24 @@ process.stdout.write(processInfo.processInstanceId);
 	if [[ -n "$retained_context" ]]; then
 		retained_acceptance_binding "$retained_context" "$release" "$verified_pid" "$verified_generation" "$verified_instance" >/dev/null || return 1
 	fi
-	verification_step convergence.healthz read_probe healthz || return 1
-	health_json="$probe_body"
-	health_status="$probe_status"
-	verification_step convergence.startupz read_probe startupz || return 1
-	startup_json="$probe_body"
-	startup_status="$probe_status"
 	timeout_ms=$(((verification_deadline - SECONDS) * 1000))
 	verification_step convergence.status-budget test "$timeout_ms" -gt 0 || return 1
 	gateway_json="$(verification_step convergence.gateway-status run_gateway "$release" gateway status --json --timeout "$timeout_ms")" || return 1
 	verification_step convergence.gateway-status-check proof_json gateway-status "$gateway_json" "$expected_build" >/dev/null || return 1
-	verification_step convergence.readyz read_probe readyz || return 1
-	ready_json="$probe_body"
-	ready_status="$probe_status"
 	timeout_ms=$(((verification_deadline - SECONDS) * 1000))
 	verification_step convergence.channels-budget test "$timeout_ms" -gt 0 || return 1
 	channels="$(verification_step convergence.channels run_gateway "$release" gateway call channels.status \
 		--params "{\"probe\":true,\"timeoutMs\":$timeout_ms}" --json --timeout "$timeout_ms")" || return 1
+	# Sample HTTP facts after the slow RPCs; startup must not predate readyz.
+	verification_step convergence.healthz read_probe healthz || return 1
+	health_json="$probe_body"
+	health_status="$probe_status"
+	verification_step convergence.readyz read_probe readyz || return 1
+	ready_json="$probe_body"
+	ready_status="$probe_status"
+	verification_step convergence.startupz read_probe startupz || return 1
+	startup_json="$probe_body"
+	startup_status="$probe_status"
 	# Full argv keeps the strict path safe under nounset without an empty optional array.
 	probe_args=(probes "$health_json" "$health_status" "$startup_json" "$startup_status" "$ready_json" "$ready_status" @stdin)
 	channel_args=(channels @stdin)
