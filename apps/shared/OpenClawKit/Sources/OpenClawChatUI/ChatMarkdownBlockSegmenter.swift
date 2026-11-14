@@ -270,10 +270,11 @@ enum ChatMarkdownBlockSegmenter {
             }
 
             if child is Markdown.OrderedList || child is Markdown.UnorderedList {
-                // Streaming reveal tracks one prose block. Keep lists on that
-                // path until completion so extracting item subdocuments cannot
-                // make still-fading words appear instantly.
+                // iOS renders streamed list items with the same geometry as final
+                // items; each item owns its word reveal instead of flattening the list.
+                #if !os(iOS)
                 guard isComplete else { continue }
+                #endif
                 var itemCount = 0
                 guard source.text(in: lineRange).utf8.count <= self.maxListBytes,
                       let list = self.list(
