@@ -3537,7 +3537,7 @@ console.error = function (...args) {
       ],
       name: "injects the bootstrapped PATH for raw AWS macOS absolute env -i commands",
     },
-  ])("$name", ({ command, excludes = [], expectedCommand, includes = [] }) => {
+  ])("$name", ({ command, excludes = [], expectedCommand, includes }) => {
     const { remoteCommand } = runSuccessfulMacosCommand(command);
     for (const snippet of [
       "openclaw_crabbox_bootstrap_macos_js",

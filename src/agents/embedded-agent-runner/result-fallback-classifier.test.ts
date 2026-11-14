@@ -23,14 +23,6 @@ function classifyErrorPayload(provider: string, model: string, text: string) {
   });
 }
 
-function classifyResult(
-  provider: string,
-  model: string,
-  result: Parameters<typeof classifyEmbeddedAgentRunResultForModelFallback>[0]["result"],
-) {
-  return classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result });
-}
-
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it.each([false, true])(
     "retains retry exhaustion across fallback aggregation (billing=%s)",
