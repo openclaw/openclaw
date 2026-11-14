@@ -83,6 +83,9 @@ describe("registered message action source completion", () => {
     target?: string;
     delivery?: Record<string, unknown>;
     media?: boolean;
+    ambientAccount?: string;
+    sourceThread?: string;
+    replyMode?: "off";
     collision?: "before" | "during" | "replacement" | "unbound";
     expected?: true;
   }> = [
@@ -98,6 +101,24 @@ describe("registered message action source completion", () => {
       ] as const
     ).map((action) => ({ action, mode: "implicit target", expected: true as const })),
     { action: "send", mode: "explicit target", target: "channel:C123", expected: true },
+    {
+      action: "send",
+      mode: "admitted account differs from ambient account",
+      ambientAccount: "ambient-account",
+      expected: true,
+    },
+    {
+      action: "send",
+      mode: "admitted thread retains implicit reply mode",
+      sourceThread: "source-thread",
+      expected: true,
+    },
+    {
+      action: "send",
+      mode: "admitted thread preserves explicit reply opt-out",
+      sourceThread: "source-thread",
+      replyMode: "off",
+    },
     {
       action: "upload-file",
       mode: "different delivered recipient",
@@ -186,7 +207,18 @@ describe("registered message action source completion", () => {
 
   it.each(cases)(
     "records only eligible source completion for $action ($mode)",
-    async ({ action, mode, target, delivery, media, collision, expected }) => {
+    async ({
+      action,
+      mode,
+      target,
+      delivery,
+      media,
+      ambientAccount,
+      sourceThread,
+      replyMode,
+      collision,
+      expected,
+    }) => {
       const sessionId = "source-completion-session";
       let competingOperation: ReturnType<typeof createReplyOperation> | undefined;
       const handleAction = vi.fn(async ({ params }: ChannelMessageActionContext) => {
@@ -200,7 +232,9 @@ describe("registered message action source completion", () => {
           ok: mode !== "failure",
           messageId: "native-message-1",
           ...(delivery ?? { toJid: params.to }),
-          ...(action === "thread-reply" ? { receipt: { replyToId: "inbound-message" } } : {}),
+          ...(action === "thread-reply" || (sourceThread && !replyMode)
+            ? { receipt: { replyToId: "inbound-message" } }
+            : {}),
           ...(mode === "partial" ? { sentBeforeError: true } : {}),
         });
       });
@@ -221,6 +255,8 @@ describe("registered message action source completion", () => {
         currentChannelId: "C123",
         currentMessagingTarget: "C123",
         currentMessageId: "inbound-message",
+        currentThreadTs: sourceThread,
+        replyToMode: replyMode,
       };
       const capability = mintMessageActionTurnCapability({
         ...identity,
@@ -272,7 +308,7 @@ describe("registered message action source completion", () => {
             runId: identity.runId,
             sessionId: operation.sessionId,
             agentSessionKey: identity.sessionKey,
-            agentAccountId: "default",
+            agentAccountId: ambientAccount ?? "default",
             messageActionTurnCapability: capability,
             sourceReplyDeliveryMode: "automatic",
           });
@@ -313,6 +349,11 @@ describe("registered message action source completion", () => {
             accountId: "default",
             params: { to: target === "C999" ? "C999" : "C123" },
           });
+          if (sourceThread) {
+            expect(handleAction.mock.calls[0]?.[0].params.replyTo).toBe(
+              replyMode === "off" ? undefined : "inbound-message",
+            );
+          }
         }
         if (result) {
           const deliveryFact = readEmbeddedMessageDeliveryFact(

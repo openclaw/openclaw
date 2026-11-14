@@ -132,7 +132,6 @@ function* createMessageToolSteps(
     (options?.agentThreadId != null
       ? stringifyRouteThreadId(options.agentThreadId)
       : inferredCurrentChannel.currentThreadTs);
-  const replyToMode = options?.replyToMode ?? (currentThreadTs ? "all" : undefined);
   const agentAccountId =
     resolveAgentAccountId(options?.agentAccountId) ?? inferredCurrentChannel.accountId;
   const sourceReplySinkDeliveryMode = resolveSourceReplySinkDeliveryMode(
@@ -181,15 +180,14 @@ function* createMessageToolSteps(
     : undefined;
   // Model-supplied channel text is untrusted until routing resolves it. Early
   // denials retain only the host-prepared source provider.
-  const decisionChannel = resolveTrustedDecisionChannel(
-    inferredCurrentChannel.currentChannelProvider,
-    preparedMessageToolCatalog,
-  );
   const explicitTargetGuard = options?.requireExplicitTarget
     ? createMessageToolExplicitTargetGuard({
         currentChannelProvider: inferredCurrentChannel.currentChannelProvider,
         preparedMessageToolCatalog,
-        decisionChannel,
+        decisionChannel: resolveTrustedDecisionChannel(
+          inferredCurrentChannel.currentChannelProvider,
+          preparedMessageToolCatalog,
+        ),
       })
     : undefined;
   // Schema and prompt must use the same snapshot; repeated discovery can drift
@@ -247,20 +245,34 @@ function* createMessageToolSteps(
       } = turnAuthority.beginInvocation(action);
       const messageActionAuthorization: MessageActionAuthorization = trustedTurnContext ?? {};
       const requestedAccountId = readToolStringParam(params, "accountId");
-      const effectiveCurrentChannel = await resolveEffectiveCurrentChannelContextForRequest(
-        options,
-        {
+      // An admitted source owns this invocation; the session route is only an ambient fallback.
+      const currentSource = trustedTurnContext?.toolContext?.currentChannelProvider
+        ? trustedTurnContext.toolContext
+        : undefined;
+      const effectiveCurrentChannel =
+        currentSource ??
+        (await resolveEffectiveCurrentChannelContextForRequest(options, {
           config: rawConfig,
           action,
           params,
           accountId: requestedAccountId ?? agentAccountId,
           preparedMessageToolCatalog,
-        },
+        }));
+      const currentAccountId = currentSource
+        ? trustedTurnContext?.requesterAccountId
+        : agentAccountId;
+      const toolContext = buildMessageToolThreadingContext(
+        effectiveCurrentChannel,
+        currentSource ?? { currentThreadTs, replyToMode: options?.replyToMode },
+        currentSource ? { ...options, ...currentSource } : options,
       );
       const decisions = createMessageToolDecisionRecorder({
         actionId: toolCallId,
         action,
-        channel: decisionChannel,
+        channel: resolveTrustedDecisionChannel(
+          effectiveCurrentChannel.currentChannelProvider,
+          preparedMessageToolCatalog,
+        ),
       });
       const executionIdentityToken =
         !options?.runId || decisions.executionIdentityToken?.runId === options.runId
@@ -300,9 +312,9 @@ function* createMessageToolSteps(
             currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
             currentChannelId: effectiveCurrentChannel.currentChannelId,
             currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
-            currentThreadTs,
-            currentMessageId: options.currentMessageId,
-            currentAccountId: agentAccountId,
+            currentThreadTs: toolContext?.currentThreadTs,
+            currentMessageId: toolContext?.currentMessageId,
+            currentAccountId,
             trustedTurnContext,
           }),
         );
@@ -433,7 +445,7 @@ function* createMessageToolSteps(
         targets: params.targets,
         fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
         accountId: requestedAccountId,
-        fallbackAccountId: scheduledAccountId ?? agentAccountId,
+        fallbackAccountId: scheduledAccountId ?? currentAccountId,
       });
       // Broadcast execution only narrows on an explicit non-all channel. Target
       // prefixes cannot authorize fewer providers than the runner will execute.
@@ -488,7 +500,7 @@ function* createMessageToolSteps(
       ).resolvedConfig;
       assertActionCurrent();
 
-      const accountId = explicitAccountId ?? scheduledAccountId ?? agentAccountId;
+      const accountId = explicitAccountId ?? scheduledAccountId ?? currentAccountId;
       const pollVoteEchoRoute = resolvePollVoteEchoRoute({
         action,
         args: params,
@@ -507,16 +519,11 @@ function* createMessageToolSteps(
         });
       }
 
-      const toolContext = buildMessageToolThreadingContext(
-        effectiveCurrentChannel,
-        { currentThreadTs, replyToMode },
-        options,
-      );
       const groupThread = prepareMessageToolGroupThread(params, {
         action,
         channel: scope.channel,
         accountId,
-        currentAccountId: agentAccountId,
+        currentAccountId,
         toolContext,
         catalog: preparedMessageToolCatalog,
       });
@@ -589,7 +596,10 @@ function* createMessageToolSteps(
                   workspaceMediaAccess: sandboxWorkspaceMediaAccess,
                   sandboxRoot: options?.sandboxRoot,
                   sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
-                  sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+                  sourceReplyDeliveryMode: resolveSourceReplySinkDeliveryMode(
+                    effectiveCurrentChannel.currentChannelProvider,
+                    options?.sourceReplyDeliveryMode,
+                  ),
                   sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
                   // Only an admitted channel source can arm terminal restart reconciliation.
                   // Preserve progress even without a source turn: recovery must not
@@ -659,7 +669,7 @@ function* createMessageToolSteps(
             channel: result.channel,
             actionParams: "to" in result ? { ...actionParams, target: result.to } : actionParams,
             accountId,
-            currentAccountId: agentAccountId,
+            currentAccountId,
             sessionKey: options?.agentSessionKey,
             toolContext,
             deliveredPayload: result.payload,

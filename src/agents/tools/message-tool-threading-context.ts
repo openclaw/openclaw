@@ -34,7 +34,7 @@ export function buildMessageToolThreadingContext(
     currentChannelProvider: current.currentChannelProvider,
     currentThreadTs: thread.currentThreadTs,
     currentMessageId: options?.currentMessageId,
-    replyToMode: thread.replyToMode,
+    replyToMode: thread.replyToMode ?? (thread.currentThreadTs ? "all" : undefined),
     hasRepliedRef: options?.hasRepliedRef,
     sameChannelThreadRequired: options?.sameChannelThreadRequired,
     // Direct tool invocations should not add cross-context decoration.

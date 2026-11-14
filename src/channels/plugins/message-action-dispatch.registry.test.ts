@@ -176,40 +176,44 @@ describe("official plugin read-only authority", () => {
     await fixture.deny({ action });
   });
 
-  it("admits a dashboard read without promoting its origin or replacing native context", async () => {
-    const fixture = registerOfficial();
-    const assertDashboardReadCurrent = vi.fn();
-    const context = {
-      ...fixture.context,
-      ...noCurrentContext,
-      assertDirectAdapterHandoff: vi.fn(),
-    };
-    await expect(fixture.prepare(context)).rejects.toThrow(
-      "requires current provider and account context",
-    );
-    const authorized = {
-      ...context,
-      messageActionAuthorization: { assertDashboardReadCurrent },
-    };
-    expect((await fixture.prepare(authorized)).params).toBe(context.params);
-    await expect(fixture.dispatch(authorized)).resolves.toBe(receipt);
-    expect(assertDashboardReadCurrent).toHaveBeenCalled();
-    const delivered = fixture.handleAction.mock.calls[0]?.[0];
-    expect(delivered).toMatchObject({ conversationReadOrigin: "delegated" });
-    expect(delivered).not.toHaveProperty("messageActionAuthorization");
-    await expect(
-      fixture.dispatch({
-        ...authorized,
-        requesterAccountId: "another-account",
-        toolContext: fixture.context.toolContext,
-      }),
-    ).rejects.toThrow("requires current provider and account context");
-    assertDashboardReadCurrent.mockImplementation(() => {
-      throw new Error("dashboard admission closed");
-    });
-    await expect(fixture.dispatch(authorized)).rejects.toThrow("dashboard admission closed");
-    expect(fixture.handleAction).toHaveBeenCalledOnce();
-  });
+  it.each([undefined, { currentChannelProvider: "webchat" }])(
+    "admits a dashboard read without promoting its origin or replacing native context (%j)",
+    async (toolContext) => {
+      const fixture = registerOfficial();
+      const assertDashboardReadCurrent = vi.fn();
+      const context = {
+        ...fixture.context,
+        ...noCurrentContext,
+        toolContext,
+        assertDirectAdapterHandoff: vi.fn(),
+      };
+      await expect(fixture.prepare(context)).rejects.toThrow(
+        "requires current provider and account context",
+      );
+      const authorized = {
+        ...context,
+        messageActionAuthorization: { assertDashboardReadCurrent },
+      };
+      expect((await fixture.prepare(authorized)).params).toBe(context.params);
+      await expect(fixture.dispatch(authorized)).resolves.toBe(receipt);
+      expect(assertDashboardReadCurrent).toHaveBeenCalled();
+      const delivered = fixture.handleAction.mock.calls[0]?.[0];
+      expect(delivered).toMatchObject({ conversationReadOrigin: "delegated" });
+      expect(delivered).not.toHaveProperty("messageActionAuthorization");
+      await expect(
+        fixture.dispatch({
+          ...authorized,
+          requesterAccountId: "another-account",
+          toolContext: fixture.context.toolContext,
+        }),
+      ).rejects.toThrow("requires current provider and account context");
+      assertDashboardReadCurrent.mockImplementation(() => {
+        throw new Error("dashboard admission closed");
+      });
+      await expect(fixture.dispatch(authorized)).rejects.toThrow("dashboard admission closed");
+      expect(fixture.handleAction).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     { trusted: false },
