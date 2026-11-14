@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CodexAppInventoryCache,
   buildCodexAppInventoryCacheKey,
+  resolveCodexPluginThreadAppCacheKey,
   serializeCodexAppInventoryError,
 } from "./app-inventory-cache.js";
 import { appMetadata as app } from "./app-inventory.test-helpers.js";
@@ -14,6 +15,28 @@ type AppMetadata = CodexAppServerRequestResult<"app/read">["apps"][number];
 const CACHE_TTL_MS = 60 * 60 * 1_000;
 
 describe("Codex app inventory cache", () => {
+  it("keeps sibling thread snapshots fresh when invalidating an encoded thread key", async () => {
+    const cache = new CodexAppInventoryCache();
+    const appCacheKey = buildCodexAppInventoryCacheKey({ accountId: "account-a" }, "test", "test");
+    const key = resolveCodexPluginThreadAppCacheKey({ appCacheKey, threadId: "thread" });
+    const siblingKey = resolveCodexPluginThreadAppCacheKey({
+      appCacheKey,
+      threadId: "thread:thread:sibling/%",
+    });
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, [app("app-a")], params),
+    );
+    for (const currentKey of [key, siblingKey]) {
+      await cache.refreshNow({ key: currentKey, request, nowMs: 0, forceRefetch: true });
+    }
+
+    cache.invalidate(key);
+
+    expect(cache.read({ key, request, nowMs: 1, suppressRefresh: true }).state).toBe("stale");
+    expect(cache.read({ key: siblingKey, request, nowMs: 1 }).state).toBe("fresh");
+    await cache.refreshNow({ key, request, nowMs: 1 });
+  });
+
   it("scopes readiness refresh reuse without delaying manual refresh or invalidation", async () => {
     const cache = new CodexAppInventoryCache();
     const apps = [app("app-a"), app("app-b")];

@@ -5,6 +5,7 @@ import {
 /** Enforces one bounded startup budget across Codex plugin config discovery. */
 import {
   defaultCodexAppInventoryCache,
+  resolveCodexPluginThreadAppCacheKey,
   type CodexAppInventoryCache,
 } from "./app-inventory-cache.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -23,7 +24,6 @@ import {
   defaultCodexPluginMetadataCache,
   type CodexPluginMetadataCache,
 } from "./plugin-metadata-cache.js";
-import { resolveCodexPluginThreadAppCacheKey } from "./plugin-thread-app-admission.js";
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigTimeoutFallback,

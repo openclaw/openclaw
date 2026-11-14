@@ -483,6 +483,9 @@ unavailable connector does not force hosted discovery on every message or stay
 excluded indefinitely. Initial cold-runtime repair, installation, explicit cache
 invalidation, and `/codex plugins refresh` still refresh immediately. Native app
 policy checks continue on enabled-policy turns; reusing inventory grants no access.
+Runtime refresh invalidates cached thread readiness for that account/runtime too,
+so the next message can reconsider a newly connected app without waiting for the
+minute to elapse. Other accounts and runtimes retain their own cached readiness.
 
 Missing inventory methods, authentication errors, transport failures, and
 connector refresh failures do not admit app tools. Ordinary turns, including

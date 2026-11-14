@@ -1,6 +1,10 @@
 // Codex tests cover plugin thread config plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CodexAppInventoryCache, defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import {
+  CodexAppInventoryCache,
+  defaultCodexAppInventoryCache,
+  resolveCodexPluginThreadAppCacheKey,
+} from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -24,7 +28,6 @@ import {
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { resolveCodexPluginThreadAppCacheKey } from "./plugin-thread-app-admission.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,

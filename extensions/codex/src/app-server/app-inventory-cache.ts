@@ -16,6 +16,7 @@ import type {
 
 const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
 const CODEX_APP_READINESS_RETRY_INTERVAL_MS = 60_000;
+const CODEX_APP_THREAD_CACHE_KEY_SEPARATOR = ":thread:";
 // Codex app/read rejects metadata requests containing more than 100 app IDs.
 const CODEX_APP_READ_BATCH_LIMIT = 100;
 const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
@@ -97,12 +98,14 @@ export class CodexAppInventoryCache {
     };
   }
 
-  /** Marks a key stale until its next successful refresh. */
+  /** Marks a runtime and its derived thread entries stale until refreshed. */
   invalidate(key: string): void {
-    const entry = this.entries.get(key);
-    if (entry) {
-      entry.invalidated = true;
-      entry.lastForcedRefresh = undefined;
+    const threadPrefix = `${key}${CODEX_APP_THREAD_CACHE_KEY_SEPARATOR}`;
+    for (const [entryKey, entry] of this.entries) {
+      if (entryKey === key || entryKey.startsWith(threadPrefix)) {
+        entry.invalidated = true;
+        entry.lastForcedRefresh = undefined;
+      }
     }
   }
 
@@ -318,6 +321,17 @@ export function serializeCodexAppInventoryError(error: unknown): Record<string, 
 }
 
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
+
+export function resolveCodexPluginThreadAppCacheKey(params: {
+  appCacheKey: string;
+  threadId?: string;
+}): string {
+  // Runtime keys are complete JSON objects; encoding thread IDs keeps a scoped
+  // invalidation from matching another runtime or a sibling thread suffix.
+  return params.threadId
+    ? `${params.appCacheKey}${CODEX_APP_THREAD_CACHE_KEY_SEPARATOR}${encodeURIComponent(params.threadId)}`
+    : params.appCacheKey;
+}
 
 export function buildCodexAppInventoryCacheKey(
   input: CodexAppInventoryCacheKeyInput,

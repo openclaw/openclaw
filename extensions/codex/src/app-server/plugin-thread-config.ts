@@ -1,5 +1,9 @@
 import { codexAppIdentityKey } from "./app-identity.js";
-import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
+import {
+  defaultCodexAppInventoryCache,
+  CodexAppInventoryCache,
+  resolveCodexPluginThreadAppCacheKey,
+} from "./app-inventory-cache.js";
 import { readCodexAppRuntimeTools } from "./app-runtime-tools.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
@@ -26,7 +30,6 @@ import {
   readCodexConfigForAppAdmission,
   readCodexThreadAdmissibleAccountApps,
   refreshCodexPluginAppInventory,
-  resolveCodexPluginThreadAppCacheKey,
   resolveCodexExplicitAppEnablement,
   isCodexPluginAppThreadAdmissible,
   shouldForceRefreshCodexNotReadyPluginApps,
