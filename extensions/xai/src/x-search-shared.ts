@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
@@ -8,6 +9,7 @@ import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-searc
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
 const XAI_X_SEARCH_MAX_CONTENT_CHARS = 20_000;
+const log = createSubsystemLogger("xai/x-search");
 
 export type XaiXSearchOptions = {
   query: string;
@@ -83,12 +85,18 @@ export async function requestXaiXSearch(params: {
       reasoningEffort: resolveXaiToolDefaultReasoningEffort(params.model, "none"),
       errorLabel: "xAI X search failed",
     },
-    (data) =>
-      requireXaiResponseTextCitationsAndInline(
+    (data) => {
+      if (typeof data.model === "string" && data.model && data.model !== params.model) {
+        log.warn(
+          `x_search requested model "${params.model}" but xAI returned "${data.model}". Check plugins.entries.xai.config.xSearch.model or leave it unset to use the default.`,
+        );
+      }
+      return requireXaiResponseTextCitationsAndInline(
         data,
         "xAI X search failed",
         params.inlineCitations,
         XAI_X_SEARCH_MAX_CONTENT_CHARS,
-      ),
+      );
+    },
   );
 }

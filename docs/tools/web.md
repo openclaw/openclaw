@@ -680,6 +680,10 @@ every provider. xAI credentials are always required.
 it falls back to `plugins.entries.xai.config.webSearch.baseUrl`, then the
 public xAI endpoint (`https://api.x.ai/v1`).
 
+If the response reports a different model from the one requested, OpenClaw logs
+a warning and returns the search result. Check `xSearch.model` or leave it unset
+to use the default model. Responses without a model field do not trigger a warning.
+
 `plugins.entries.xai.config.xSearch.cacheTtlMinutes` controls OpenClaw's local
 `x_search` result cache. Set it to `0` to bypass reads and writes. A shorter TTL
 limits reuse of existing entries; a longer TTL does not extend their original
