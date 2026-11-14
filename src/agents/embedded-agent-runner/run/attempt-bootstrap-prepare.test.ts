@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -145,7 +146,26 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       expect(result).toMatchObject({
         ...noInjection,
         bootstrapMode: "limited",
+        retainsPersonalUser: false,
       });
+
+      // The completed turn pinned Alice's personal USER.md; the continuation still carries it.
+      const alice = ensureProfileForEmail("alice@example.test");
+      // Personal files load only once the Gateway has more than one person.
+      ensureProfileForEmail("bob@example.test");
+      await fs.mkdir(path.join(workspace, "users", alice.id), { recursive: true });
+      await fs.writeFile(path.join(workspace, "users", alice.id, "USER.md"), "Alice notes");
+      const continuation = await prepare(workspace, workspace, {
+        contextInjection: "continuation-skip",
+        attempt: {
+          sessionId: sessionTarget.sessionId,
+          sessionKey: sessionTarget.sessionKey,
+          sessionTarget,
+          isCanonicalWorkspace: false,
+          sessionUserProfileId: alice.id,
+        },
+      });
+      expect(continuation).toMatchObject({ ...noInjection, retainsPersonalUser: true });
     });
   });
 

@@ -415,10 +415,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       : [];
   // The pinned prompt carries the session's personal USER.md for every turn; the sender gate
   // travels with the turn so a sender change never rebuilds the cached prefix.
-  if (
-    !attempt.bootstrapUserProfileId &&
-    params.bootstrap.contextFiles.some((file) => file.personalUser)
-  ) {
+  if (!attempt.bootstrapUserProfileId && params.bootstrap.retainsPersonalUser) {
     turnInstructions.push({ kind: "runtime-instruction", text: UNVERIFIED_SENDER_INSTRUCTION });
   }
   const extraSystemPrompt = joinPresentTextSegments([

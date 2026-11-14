@@ -152,6 +152,14 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     sourceWorkspaceDir: bootstrapWorkspaceDir,
     targetWorkspaceDir: bootstrapPromptWorkspaceDir,
   });
+  // A continuation turn injects nothing, but the session's pinned prompt still carries the
+  // personal USER.md that its completed bootstrap turn loaded for the same selected human.
+  const retainsPersonalUser = isContinuationTurn
+    ? Boolean(attempt.sessionUserProfileId) &&
+      (preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles())).some(
+        (file) => file.personalUser === true,
+      )
+    : contextFiles.some((file) => file.personalUser === true);
   // Stats retain input order. Reports include suppressed BOOTSTRAP rows; budgets do not.
   const bootstrapBudgetFiles = bootstrapRouting.includeBootstrapInSystemContext
     ? bootstrapInjectionStats
@@ -176,6 +184,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     ...bootstrapBudget,
     bootstrapMode,
     contextFiles,
+    retainsPersonalUser,
     bootstrapInjectionStats,
     shouldRecordCompletedBootstrapTurn,
     workspaceNotes,
