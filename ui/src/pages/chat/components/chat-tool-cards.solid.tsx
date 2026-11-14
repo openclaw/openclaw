@@ -21,7 +21,6 @@ import { createParkedProjection } from "../../../lib/reactive/parked-projection.
 import { projectSource } from "../../../lib/reactive/projection.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import "./browser-tab-card.css";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import { ChatPermissionCard } from "./chat-message-deferred.tsx";

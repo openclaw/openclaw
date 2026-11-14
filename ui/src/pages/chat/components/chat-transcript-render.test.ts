@@ -5,7 +5,6 @@ import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/s
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
-import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { sessionListResult } from "../../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
@@ -389,7 +388,7 @@ describe("chat transcript rendering", () => {
     expect(container.querySelector(".chat-compaction--active")).toBeNull();
   });
 
-  it("keeps exact-run usage visible through final event batching and later corrections", async () => {
+  it("shows output tokens only while working, not after completion or late usage updates", async () => {
     const runId = "watched-run";
     const sessionKey = "global";
     const host = createHost({ sessionKey, chatRunId: runId });
@@ -420,8 +419,10 @@ describe("chat transcript rendering", () => {
       props.runUsageById = host.chatRunUsageById;
       fixture.rerender();
     };
-    const expectRecap = (text: string) =>
-      expect(requireElement(container, ".chat-turn-recap").textContent).toContain(text);
+    const expectNoRecap = () => {
+      expect(container.querySelector(".chat-turn-recap")).toBeNull();
+      expect(container.textContent).not.toContain("output tokens");
+    };
     handleAgentEvent(
       host,
       agentEvent("sibling-run", 1, "usage", { outputTokens: 900 }, sessionKey),
@@ -436,7 +437,7 @@ describe("chat transcript rendering", () => {
     expect(requireElement(container, ".chat-working-indicator__tokens").textContent).toBe(
       "6.9k output tokens",
     );
-    // Final usage and lifecycle can share one browser render; neither may discard the count.
+    // Batched final usage and lifecycle must not leave a token count below the reply.
     handleAgentEvent(host, agentEvent(runId, 2, "usage", { outputTokens: 6_950 }, sessionKey));
     handleAgentEvent(host, agentEvent(runId, 3, "lifecycle", { phase: "end" }, sessionKey));
     rerender({
@@ -449,16 +450,16 @@ describe("chat transcript rendering", () => {
         runtimeMs: 14_000,
       },
     });
-    expectRecap("7k output tokens");
+    expectNoRecap();
     handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 7_094 }, sessionKey));
     rerender();
-    expectRecap("7.1k output tokens");
+    expectNoRecap();
     handleAgentEvent(
       host,
       agentEvent("sibling-run", 2, "usage", { outputTokens: 1_000 }, sessionKey),
     );
     rerender();
-    expectRecap("7.1k output tokens");
+    expectNoRecap();
     for (const replaceOwner of [
       () => {
         props.currentAgentId = "second";
@@ -472,7 +473,7 @@ describe("chat transcript rendering", () => {
       expect(container.querySelector(".chat-turn-recap")).toBeNull();
       rerender({ currentAgentId: "first", runId, runWorking: true });
       rerender({ runId: null, runWorking: false });
-      expectRecap("7.1k output tokens");
+      expectNoRecap();
     }
     props.messages = [
       ...props.messages,
@@ -482,7 +483,7 @@ describe("chat transcript rendering", () => {
     expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
-  it("keeps browser cards visible with capture limited to the active pane", async () => {
+  it("keeps completed browser output without cards or captures when expanded", async () => {
     const messages = [
       message("user", "Open the example", 1_000),
       message("toolResult", "Opened", 2_000, {
@@ -501,7 +502,6 @@ describe("chat transcript rendering", () => {
       message("assistant", "Done.", 3_000),
     ];
     const props = threadProps("pane-browser-work", "agent:main:dashboard:browser", messages, {
-      latestBrowserTabs: latestBrowserTabCards(messages, []),
       showToolCalls: true,
     });
     const capture = vi.fn(async () => {
@@ -514,19 +514,19 @@ describe("chat transcript rendering", () => {
     props.applicationContext = context;
     const { container } = await mountThread(props);
     expect(container.querySelector(".chat-work-group")).not.toBeNull();
+    expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    expect(capture).not.toHaveBeenCalled();
+    requireElement(container, ".chat-work-group button").click();
     await waitForSolid(() =>
-      expect(container.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")).toHaveLength(1),
+      expect(requireElement(container, ".chat-tool-msg-summary").matches(":disabled")).toBe(false),
     );
-    await vi.waitFor(() =>
-      expect(capture).toHaveBeenCalledExactlyOnceWith(
-        "browser.request",
-        expect.objectContaining({
-          method: "POST",
-          path: "/screenshot",
-          body: { targetId: "tab-1", type: "png" },
-        }),
-      ),
+    expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    requireElement(container, ".chat-tool-msg-summary").click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain("Opened"),
     );
+    expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    expect(capture).not.toHaveBeenCalled();
   });
 
   it("renders cached archive attribution in place and replaces it with differing live facts", async () => {

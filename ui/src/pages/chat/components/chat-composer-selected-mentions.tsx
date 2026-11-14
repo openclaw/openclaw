@@ -172,6 +172,7 @@ export function SelectedHumanMentions(props: {
           class="chat-reply-preview__dismiss composer-context-strip__dismiss"
           icon="x"
           label={t("chat.mentions.remove")}
+          tooltip={false}
           onClick={() => props.onRemove()}
         />
       </div>

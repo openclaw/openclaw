@@ -64,7 +64,13 @@ export async function applyRevocation(
   );
   const owners = withoutOwnerDevices(state, [...devices]);
   const browsers = covered.flatMap((match) => (match.kind === "member_browser" ? [match] : []));
-  const nodes = covered.flatMap((match) => (match.kind === "node" ? [match.key] : []));
+  // Nodes named directly, and the nodes bound to every removed owner device.
+  const nodes = [
+    ...new Set([
+      ...covered.flatMap((match) => (match.kind === "node" ? [match.key] : [])),
+      ...owners.nodes,
+    ]),
+  ];
   const next = withoutMemberBrowsers(owners.state, (account, key) =>
     browsers.some((browser) => browser.account === account && browser.key === key),
   );

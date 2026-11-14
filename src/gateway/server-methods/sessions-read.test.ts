@@ -200,6 +200,7 @@ function avatarRosterConfig(agents: string[]): OpenClawConfig {
     },
     gateway: {
       roles: {
+        default: "reader",
         definitions: {
           reader: { agents, scopes: ["operator.read"], sessions: { others: "none" } },
         },

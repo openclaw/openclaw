@@ -30,6 +30,7 @@ import {
   isWorkboardClaimReclaimable,
   MAX_CARD_ARTIFACTS,
   secondsToDurationMs,
+  workboardBoardOwnerSlotLimit,
 } from "./store-constants.js";
 import type {
   WorkboardBlockInput,
@@ -148,6 +149,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         throw new WorkboardClaimRefusedError(`card already claimed by ${activeClaim.ownerId}.`);
       }
       const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
+      const board = await this.boardStore.lookup(cardBoardId(guarded));
       const card = await this.updateCard(
         guarded,
         {
@@ -165,7 +167,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         },
         {
           expectedUpdatedAt: guarded.updatedAt,
-          ownerSlot: { ownerId, now },
+          ownerSlot: { ownerId, now, limit: workboardBoardOwnerSlotLimit(board?.board) },
         },
       );
       return { card, token };

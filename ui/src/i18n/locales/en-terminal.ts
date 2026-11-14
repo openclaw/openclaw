@@ -16,6 +16,7 @@ const enTerminal = {
     toggle: en.terminal.toggle,
     open: en.terminal.open,
     openWindow: "Open terminal in new window",
+    openWindowTooltip: "Open in new window",
     hide: "Hide terminal",
     resize: "Resize terminal panel",
     newSession: "New terminal session",

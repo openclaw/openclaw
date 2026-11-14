@@ -1,12 +1,17 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { createRuntimeImportGraph } from "../../scripts/lib/runtime-import-closure.mts";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const graph = createRuntimeImportGraph(
   repoRoot,
   [
     "src/gateway/method-scopes.ts",
+    "src/gateway/server-cron.ts",
+    "src/gateway/worker-environments/worker-exec-approval.ts",
     "src/gateway/server-close.runtime.ts",
     "src/gateway/server-methods/sessions-create.ts",
     "src/gateway/server-methods/chat-send-external-entry.ts",
@@ -42,6 +47,56 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("skips unused sandbox prewarming without loading worktree execution", async () => {
+    await withOpenClawTestState(
+      { label: "prewarm-cold-import", applyEnv: false },
+      async (state) => {
+        const entry = new URL("./worker-environments/local-workspace-prewarm.ts", import.meta.url)
+          .href;
+        const result = await runNodeScript(
+          [
+            "--import",
+            fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+            "--input-type=module",
+            "--eval",
+            `
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  const resolved = nextResolve(specifier, context);
+  if ([".ts", ".js"].some((extension) => resolved.url.endsWith("/worktrees/service" + extension))) {
+    throw new Error("Unused prewarm loaded worktree execution");
+  }
+  return resolved;
+}});
+const { prewarmLocalWorkspaceTemplates } = await import(${JSON.stringify(entry)});
+const config = { gateway: { controlUi: { enabled: false } }, agents: { defaults: { sandbox: { mode: "off" } } } };
+await prewarmLocalWorkspaceTemplates({
+  getConfig: () => config,
+  signal: new AbortController().signal,
+});
+console.log("prewarm-cold-selection-ok");`,
+          ],
+          { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
+          30_000,
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("prewarm-cold-selection-ok");
+      },
+    );
+  });
+
+  it("prepares worker exec approvals without loading model completion", () => {
+    expect(
+      collectStaticValueImports("src/gateway/worker-environments/worker-exec-approval.ts"),
+    ).not.toContain(path.normalize("src/agents/simple-completion-runtime.ts"));
+  });
+
+  it("starts cron without loading agent turn execution", () => {
+    const modules = collectStaticValueImports("src/gateway/server-cron.ts");
+    expect(modules).not.toContain(path.normalize("src/cron/isolated-agent/run.ts"));
+    expect(modules).not.toContain(path.normalize("src/agents/embedded-agent-runner/run.ts"));
+  });
+
   it("prepares Gateway turns without local command or broad session runtimes", () => {
     const modules = collectStaticValueImports("src/gateway/agent-turn/agent-turn-service.ts");
     expect(modules).not.toContain(path.normalize("src/agents/agent-command-local.ts"));

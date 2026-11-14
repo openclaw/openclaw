@@ -157,7 +157,6 @@ it.each(["history", "live", "live-before-run-adoption"])(
                 frame={frame}
                 options={{
                   streamOptions: {},
-                  workPreviews: new Map(),
                   partDependencies: (part) => [part],
                   renderGroupOptions: () => ({ agentId: "travel-copilot", showReasoning: false }),
                   isWorkExpanded: () => false,
