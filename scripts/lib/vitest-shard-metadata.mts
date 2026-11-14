@@ -169,7 +169,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/server-methods/question.own-run.test.ts", 12],
   ["src/gateway/server-methods/chat-send-compaction-handoff.test.ts", 11],
   ["src/gateway/server-methods/chat.abort-errors.test.ts", 11],
-  ["src/gateway/server-methods/approval-shared.test.ts", 11],
   ["src/gateway/server-methods/board.plugin-capabilities.test.ts", 11],
   ["src/gateway/server-methods/plugin-approval.test.ts", 11],
   // Healthy two-worker Gateway proof: native-fork case spans were 24.8-29.9s
@@ -347,7 +346,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
   // spans; canonical push plans omit this tooling workload.
   ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 136],
-  ["test/scripts/ci-linux-git.test.ts", 204],
   // Historical single-file wall from PR run 33576929814; this file has since grown.
   ["test/scripts/pr-merge-outcome.test.ts", 206],
   // Relative serial case costs from PR runs 33571672257/33576929814.

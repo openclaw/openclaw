@@ -34,7 +34,7 @@ it.each(["aggressive", "full"] as const)(
       "ci-swift-cache-lifetime",
     ].map((name) => `test/scripts/${name}.test.ts`);
     const direct = Array.from({ length: 30 }, (_, i) => `test/scripts/other-${i}.test.ts`);
-    const native = "test/scripts/macos-native-test-launch.test.ts";
+    const native = "test/scripts/mac-runtime.test.ts";
     const cwd = fixture({
       [helper]: "export {};",
       [bridge]: 'import "./ci-workflow.test-support.js";',

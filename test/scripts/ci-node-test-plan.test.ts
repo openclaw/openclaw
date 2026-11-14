@@ -3716,7 +3716,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
       "src/agents/sandbox.context.github-identity.test.ts",
       "src/auto-reply/reply/session-reset-prompt.test.ts",
-      "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
       "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
       "src/plugin-sdk/session-transcript-runtime.test.ts",
       "src/agents/sessions/sdk.auth-migration.test.ts",

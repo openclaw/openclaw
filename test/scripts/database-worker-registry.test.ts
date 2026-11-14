@@ -11,7 +11,6 @@ describe("database-worker test routing registry", () => {
 
   it.each([
     "src/state/agent-database-admission.test.ts",
-    "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
     "src/wizard/setup.inference-recovery.integration.test.ts",
     "src/auto-reply/reply/commands-acp.owner.test.ts",
     "src/auto-reply/reply/commands-config.owner.test.ts",
