@@ -16,6 +16,7 @@ afterEach(async () => {
 
 async function startFixtureServer(signal: AbortSignal) {
   const root = tempDirs.make("clawhub-search-e2e-");
+  const unavailableFamilies: Array<string | null> = [];
   const reservation = await reserveTestPortListener({
     offsets: [0],
     signal,
@@ -33,9 +34,13 @@ async function startFixtureServer(signal: AbortSignal) {
           response.writeHead(404).end();
           return;
         }
+        if (query === "unavailable") {
+          unavailableFamilies.push(family);
+        }
         response.writeHead(query === "unavailable" ? 503 : 200, {
           "content-type": "application/json",
-          ...(query === "unavailable" ? { "retry-after": "0" } : {}),
+          // Exercise terminal error output without waiting through retry backoff.
+          ...(query === "unavailable" ? { "retry-after": "61" } : {}),
         });
         const results =
           query === "empty"
@@ -62,7 +67,7 @@ async function startFixtureServer(signal: AbortSignal) {
     await reservation.releaseListener();
     await reservation.claim.release();
   });
-  return { baseUrl: `http://127.0.0.1:${reservation.claim.port}`, root };
+  return { baseUrl: `http://127.0.0.1:${reservation.claim.port}`, root, unavailableFamilies };
 }
 
 async function search(query: string, json = false) {
@@ -82,7 +87,7 @@ function output(runtime: Awaited<ReturnType<typeof search>>, stream: "log" | "er
 it("keeps plugin discovery separate from skills and surfaces empty and failed lookups", async ({
   signal,
 }) => {
-  const { baseUrl, root } = await startFixtureServer(signal);
+  const { baseUrl, root, unavailableFamilies } = await startFixtureServer(signal);
   vi.stubEnv("OPENCLAW_CLAWHUB_URL", baseUrl);
   vi.stubEnv("CLAWHUB_CONFIG_PATH", path.join(root, "missing-config.json"));
   vi.stubEnv("CLAWHUB_TOKEN", undefined);
@@ -116,4 +121,6 @@ it("keeps plugin discovery separate from skills and surfaces empty and failed lo
   const unavailable = await search("unavailable");
   expect(unavailable.exit).toHaveBeenLastCalledWith(1);
   expect(output(unavailable, "error")).toContain("catalog unavailable");
+  expect(unavailableFamilies).toHaveLength(2);
+  expect(unavailableFamilies).toEqual(expect.arrayContaining(["bundle-plugin", "code-plugin"]));
 }, 30_000);

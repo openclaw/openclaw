@@ -1,0 +1,2 @@
+# Preserve terminal HTTP 503 coverage with one request per plugin family.
+7
