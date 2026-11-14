@@ -29,10 +29,7 @@ import {
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveMaxActiveTranscriptBytes,
-  refreshTranscriptByteCompactionLatch,
-} from "../../context-engine/transcript-byte-limit.js";
+import { refreshTranscriptByteCompactionLatch } from "../../context-engine/transcript-byte-limit.js";
 import { logVerbose } from "../../globals.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
@@ -45,6 +42,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.state.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ReplyPayload } from "../types.js";
+import { resolvePreflightTranscriptByteLimit } from "./agent-runner-memory-byte-limit.js";
 import {
   defersTokenCompactionToChatGPTBoundary,
   followupOwnsNativeCompaction,
@@ -207,7 +205,8 @@ export async function runSessionCompactionIfNeeded(params: {
     reserveTokensFloor,
     minimumThresholdTokens: responsesServerCompactionThreshold,
   });
-  const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
+  const { maxBytes: maxActiveTranscriptBytes, configured: transcriptByteLimitConfigured } =
+    resolvePreflightTranscriptByteLimit(params.cfg, contextWindowTokens);
   const shouldCheckActiveTranscriptBytes = maxActiveTranscriptBytes !== undefined;
   const transcriptUsageTokens =
     freshPersistedTokens !== undefined
@@ -260,7 +259,8 @@ export async function runSessionCompactionIfNeeded(params: {
   }
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
-  if (transcriptByteCompactionLatched) {
+  // Only a configured limit announces every bounded turn; the default cap is a cache boundary.
+  if (transcriptByteCompactionLatched && transcriptByteLimitConfigured) {
     await notifyCompaction("context_bounded");
     assertActive();
   }

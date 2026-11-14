@@ -1,11 +1,12 @@
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
   type InternalSessionEntry,
 } from "../../config/sessions/types.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
-import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 
 const { compact, account } = vi.hoisted(() => ({ compact: vi.fn(), account: vi.fn() }));
 
@@ -90,3 +91,62 @@ it.each([
     expect(notice.mock.calls.map(([phase]) => phase)).toContain("context_bounded");
   },
 );
+
+it("compacts at the history byte cap without a configured limit, announcing nothing per bounded turn", async () => {
+  compact
+    .mockReset()
+    .mockResolvedValue({ ok: false, compacted: false, reason: "fixture declines" });
+  account
+    .mockReset()
+    .mockImplementation(
+      async (
+        params: Parameters<typeof import("./session-updates.js").incrementCompactionCount>[0],
+      ) => {
+        const entry = params.expectedSession!;
+        const updated: InternalSessionEntry = {
+          ...entry,
+          ...projectCompactionAccountingPatch({ ...entry, updatedAt: 1 }, params),
+        };
+        params.sessionStore![params.sessionKey!] = updated;
+        return params.amount ?? 1;
+      },
+    );
+  const followupRun = createTestFollowupRun({ provider: "openai", model: "gpt-5.5" });
+  const notice = vi.fn();
+  // The hydration cap is 8 bytes per context token: 12,800 tokens -> 102,400 bytes, the fixture size.
+  const cfg = withTestModelContextTokens({
+    cfg: {},
+    followupRun,
+    defaultModel: "gpt-5.5",
+    contextTokens: 12_800,
+  });
+  setRuntimeConfigSnapshot(cfg);
+  const params: Parameters<typeof runSessionCompactionIfNeeded>[0] = {
+    cfg,
+    followupRun,
+    defaultModel: "gpt-5.5",
+    sessionKey: "main",
+    sessionEntry: {
+      sessionId: "session",
+      updatedAt: 1,
+      totalTokens: 100,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    },
+    agentHarnessId: "openclaw",
+    onCompactionNotice: notice,
+  };
+  const entry = await runSessionCompactionIfNeeded(params);
+  expect(compact).toHaveBeenCalledOnce();
+  expect(entry).toMatchObject({
+    transcriptByteCompactionLatch: { activeBytes: 102_400, maxBytes: 102_400 },
+  });
+  // A failed attempt reports once; the latched turns that follow stay silent.
+  notice.mockClear();
+  await runSessionCompactionIfNeeded({
+    ...params,
+    sessionEntry: { ...params.sessionEntry!, ...entry },
+  });
+  expect(compact).toHaveBeenCalledOnce();
+  expect(notice).not.toHaveBeenCalled();
+});

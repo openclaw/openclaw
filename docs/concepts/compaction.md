@@ -341,10 +341,12 @@ When a quality audit finds missing identifiers, corrective feedback names only c
 
 ### Active transcript byte guard
 
-When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, the built-in
-runtime triggers local compaction before a run if transcript history reaches
-that size. Set a positive byte count or size string such as `"20mb"` to opt
-in; `0` or an unset value disables the guard. It does not split raw bytes; it
+The built-in runtime triggers local compaction before a run if the active
+transcript history reaches `agents.defaults.compaction.maxActiveTranscriptBytes`.
+Set a positive byte count or size string such as `"20mb"`; `0` disables the
+guard. When it is unset, the guard uses the history hydration byte limit below,
+so history is summarized before that limit would step the model's history window
+forward and rewrite the start of a request the provider already cached. It does not split raw bytes; it
 asks the normal compaction pipeline to create a semantic summary. If compaction
 is declined or leaves history over the limit, the turn continues with a bounded
 view of recent history. OpenClaw omits the oldest whole turns, keeps tool calls
@@ -380,8 +382,7 @@ checkpoint artifacts are not the active compaction target.
 
 ### History hydration byte limit
 
-The embedded runtime also bounds the history it loads for model replay, independently
-of token-based compaction and `maxActiveTranscriptBytes`. Its byte cap is eight times
+The embedded runtime also bounds the history it loads for model replay. Its byte cap is eight times
 the effective context token budget, with a 1 KiB minimum and 64 MiB maximum. This is
 a resource bound on serialized model-context events, not a token count. Private
 transcript metadata and tool-result details are excluded, but event envelopes and
@@ -397,12 +398,12 @@ unusually dense histories.
 If the previous turn exceeds the cap, the loader keeps its newest affordable
 atomic frames rather than starting the next turn with only the new prompt.
 
-This selection does not delete saved history, create a summary, run a memory
-flush, or trigger compaction notifications. Older context can therefore remain
-outside the model's view while the token budget has room. Chunking trades some
-immediate history for prefix-cache reuse; it does not solve that byte/token
-mismatch. Use `/compact` when you want semantic summarization. The normal
-compaction triggers and the opt-in active-transcript byte guard are unchanged.
+With `maxActiveTranscriptBytes` unset, the active transcript byte guard compacts
+when history reaches this limit, so these steps normally do not happen: the
+summary replaces the oldest history, and the next request starts a new cached
+prompt as at any compaction. A step still happens when compaction is declined or
+leaves history over the limit. The step itself does not delete saved history,
+create a summary, run a memory flush, or send a notice for each bounded turn.
 
 ### Compaction notices
 

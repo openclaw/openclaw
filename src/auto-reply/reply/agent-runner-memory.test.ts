@@ -1244,7 +1244,8 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const scope = sessionScope("agent:main:telegram:default:direct:12345", "sessions.json");
     const { sessionKey, storePath } = scope;
-    const output = "x".repeat(8_192);
+    const output = "x".repeat(7_000);
+    // Stay under the history byte cap (8 bytes per budget token): only token pressure is under test.
     await writeTranscript(
       [
         usageEvent("Codex usage anchor", {
