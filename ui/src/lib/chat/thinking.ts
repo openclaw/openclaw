@@ -1,5 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
+import {
+  ALL_THINKING_LEVELS,
+  normalizeThinkLevel,
+} from "../../../../src/auto-reply/thinking.shared.js";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveModelRuntimeEntry } from "../model-runtime-choice.ts";
@@ -245,6 +248,23 @@ function formatInheritedThinkingLabel(effectiveLevel: string | null | undefined)
   }
   const normalized = normalizeThinkingOptionValue(effectiveLevel);
   return `Inherited: ${formatThinkingLevelDisplayLabel(normalized)}`;
+}
+
+const STANDARD_THINKING_LEVELS = new Set<string>(ALL_THINKING_LEVELS);
+
+/**
+ * Standard levels use the translated names; provider-specific levels keep their own label.
+ * Callers pass their reactive translator so labels follow locale changes.
+ */
+export function thinkingLevelLabel(
+  translate: (key: string) => string,
+  value: string,
+  label?: string,
+): string {
+  const level = normalizeThinkingOptionValue(value);
+  return STANDARD_THINKING_LEVELS.has(level)
+    ? translate(`quickSettings.model.thinkingLevels.${level}`)
+    : formatThinkingOverrideLabel(value, label);
 }
 
 export function formatThinkingOverrideLabel(value: string, label?: string | null): string {

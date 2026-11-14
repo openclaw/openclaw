@@ -17,7 +17,7 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
-import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import { thinkingLevelLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   canonicalModelAuthProviderId,
@@ -85,8 +85,6 @@ const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
 const DECISION_MODEL_HELP_ID = "model-providers-decision-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
-const TRANSLATED_THINKING_LEVELS = new Set(["off", "low", "medium", "high"]);
-
 function modelOption(
   model: ModelPickerEntry,
   authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
@@ -187,12 +185,6 @@ function BehaviorSetting<Value extends string>(props: {
       control={control}
     />
   );
-}
-
-function thinkingLevelLabel(value: string, label?: string): string {
-  return TRANSLATED_THINKING_LEVELS.has(value)
-    ? t(`quickSettings.model.thinkingLevels.${value}`)
-    : formatThinkingOverrideLabel(value, label);
 }
 
 function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
@@ -359,14 +351,14 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       (level) => level.id,
     ).map((level) => ({
       value: level.id,
-      label: thinkingLevelLabel(level.id, level.label),
+      label: thinkingLevelLabel(t, level.id, level.label),
     }));
     // Catalog refreshes and model switches must not rewrite a saved global preference.
     const selected = thinkingLevel();
     if (selected && !options.some((option) => option.value === selected)) {
       options.push({
         value: selected,
-        label: thinkingLevelLabel(selected),
+        label: thinkingLevelLabel(t, selected),
         disabled: true,
       });
     }
