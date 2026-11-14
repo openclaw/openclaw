@@ -443,13 +443,15 @@ export function buildEmbeddedRunPayloads(params: {
           storedDelivery?.sourceMessageId,
         );
         addReplyPayloadMediaFailures(replyPayload, mediaFailures);
-        const assistantTranscriptSource =
-          mediaUrls?.length || mediaFailures?.length
-            ? readAgentAssistantSource(assistantForPayload)
-            : undefined;
+        const assistantTranscriptSource = readAgentAssistantSource(assistantForPayload);
         setReplyPayloadMetadata(replyPayload, {
           ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}),
-          ...(assistantTranscriptSource ? { assistantTranscriptSource } : {}),
+          ...(assistantTranscriptSource
+            ? {
+                assistantTranscriptSource,
+                ...(shouldUseCanonicalFinalAnswer ? { assistantTranscriptAggregate: true } : {}),
+              }
+            : {}),
         });
         replyItems.push(
           ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,

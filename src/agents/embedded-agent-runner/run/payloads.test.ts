@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { bindAgentAssistantSource } from "../../../infra/agent-events.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import { observeReplyDelivery } from "../../reply-completion.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -165,6 +167,11 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     const messages = answers.map((text) =>
       makeAgentAssistantMessage({ content: [{ type: "text", text }] }),
     );
+    const sources = messages.map((message, index) => {
+      const source = { committedMessageId: `row-${index + 1}` };
+      bindAgentAssistantSource(message, source);
+      return source;
+    });
     const payloads = buildPayloads({
       assistantTexts: answers.flatMap((text) => ["Checking first.", text]),
       answerSegments: messages.slice(0, 2).map((lastAssistant, index) => ({
@@ -184,7 +191,46 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(
       payloads.map((payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer),
     ).toEqual([true, undefined]);
+    expect(
+      payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptSource),
+    ).toEqual([sources[0], sources[2]]);
+    expect(
+      payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantTranscriptAggregate),
+    ).toEqual([true, true]);
   });
+
+  it.each([true, false])(
+    "does not lend the terminal source to a kept answer (source=%s)",
+    (hasSource) => {
+      const terminal = makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] });
+      const kept = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Earlier answer.\nMEDIA:/tmp/kept.png" }],
+      });
+      const keptSource = { committedMessageId: "kept-row" };
+      bindAgentAssistantSource(terminal, { committedMessageId: "silent-row" });
+      if (hasSource) {
+        bindAgentAssistantSource(kept, keptSource);
+      }
+      const payloads = buildPayloads({
+        assistantTexts: ["Earlier answer."],
+        lastAssistant: terminal,
+        assistantMessageIndex: 2,
+        keptAnswer: {
+          assistant: kept,
+          messageIndex: 1,
+        },
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(["Earlier answer."]);
+      assert(payloads[0]);
+      expect(payloads[0]?.mediaUrl).toBe("/tmp/kept.png");
+      expect(getReplyPayloadMetadata(payloads[0])?.assistantTranscriptSource).toEqual(
+        hasSource ? keptSource : undefined,
+      );
+      expect(getReplyPayloadMetadata(payloads[0])?.assistantTranscriptAggregate).toBe(
+        hasSource ? true : undefined,
+      );
+    },
+  );
 
   it.each([
     ...["text", "input_text", "output_text"].map(
@@ -239,8 +285,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
     } satisfies InteractiveReply;
 
+    const privateAssistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "ordinary final should stay private" }],
+    });
+    bindAgentAssistantSource(privateAssistant, { committedMessageId: "private-row" });
     const payloads = buildPayloads({
       assistantTexts: ["ordinary final should stay private"],
+      lastAssistant: privateAssistant,
       didSendViaMessagingTool: true,
       messagingToolSourceReplyPayloads: [{ presentation }, { interactive }],
       sourceReplyDeliveryMode: "message_tool_only",
@@ -254,6 +305,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       { interactive, text: undefined },
     ]);
     payloads.forEach((payload, index) => {
+      expect(getReplyPayloadMetadata(payload)?.assistantTranscriptSource).toBeUndefined();
       expect(getReplyPayloadMetadata(payload)).toMatchObject({
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
