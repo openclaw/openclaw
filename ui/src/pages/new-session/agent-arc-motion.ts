@@ -354,9 +354,17 @@ export function createAgentArcMotion(options: AgentArcMotionOptions): AgentArcMo
         return;
       }
       n.el.style.zIndex = String(was === 0 ? 5 : 3 - Math.abs(was));
+      const delay = Math.abs(was - k) * 28;
+      if (was * dir > 0 && (was - shift) * dir <= 0) {
+        // Between the centre and the picked face: crossing would pass behind the centre, so it
+        // only leans toward the turn and fades out where it is.
+        const at = pose(was, true);
+        retarget(n, { x: at.x - dir * 30 * unit, y: at.y, s: at.s * 0.92, o: 0 }, "exit", delay);
+        return;
+      }
       // Each face moves k seats along the arc, in the direction of the turn.
       const to = pose(was - shift || -dir, true);
-      retarget(n, { x: to.x, y: to.y, s: to.s * 0.92, o: 0 }, "exit", Math.abs(was - k) * 28);
+      retarget(n, { x: to.x, y: to.y, s: to.s * 0.92, o: 0 }, "exit", delay);
     });
     // Once they are out of sight, park them folded behind the new agent, ready for the next hover.
     later(() => {
