@@ -48,6 +48,18 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/plugins/official-runtime-plugins.ts"],
   },
   {
+    // Catalog artwork is read from every bundled manifest's package directory.
+    testFile: "src/plugins/bundled-plugin-icons.test.ts",
+    watchGlobs: [
+      "extensions/*/openclaw.plugin.json",
+      "extensions/*/assets/{icon.png,activity.svg}",
+    ],
+  },
+  {
+    testFile: "src/plugins/bundled-plugin-categories.test.ts",
+    watchGlobs: ["extensions/*/openclaw.plugin.json"],
+  },
+  {
     // YAML code/docs references are not import edges. A removed path can be
     // either side of a rename; one catalog scan checks every remaining reference.
     testFile: "extensions/qa-lab/src/scenario-catalog.test.ts",
