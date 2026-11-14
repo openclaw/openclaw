@@ -86,7 +86,7 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1006, "Original Gateway unavailable");
       await gateway.waitForRequest("connect", { after: connectsBeforeRetry });
-      expect(await button(connection, "Reconnecting").isDisabled()).toBe(true);
+      expect(await button(connection, "Reconnecting…").isDisabled()).toBe(true);
 
       // Leave the original handshake unanswered while connecting to the replacement target.
       const socketCount = await gateway.getSocketCount();
