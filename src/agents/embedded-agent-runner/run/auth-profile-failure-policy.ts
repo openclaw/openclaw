@@ -5,6 +5,7 @@ import {
 } from "../../auth-profiles.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles/types.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
+import { classifyFailoverReason } from "../../failover/classify.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 
@@ -83,4 +84,22 @@ export function resolveEmbeddedAuthCooldownProbePolicy(params: {
     }
   }
   return { probeProfileIds, unavailableReason };
+}
+
+/** Names why a run's auth profiles failed: every candidate cooling down, or the error class. */
+export function resolveAuthProfileFailoverReason(
+  run: {
+    profileCandidates: readonly (string | undefined)[];
+    authStore: AuthProfileStore;
+    provider: string;
+  },
+  failure: { allInCooldown: boolean; message: string },
+): FailoverReason {
+  if (failure.allInCooldown) {
+    const profileIds = run.profileCandidates.filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    );
+    return resolveProfilesUnavailableReason({ store: run.authStore, profileIds }) ?? "unknown";
+  }
+  return classifyFailoverReason(failure.message, { provider: run.provider }) ?? "auth";
 }
