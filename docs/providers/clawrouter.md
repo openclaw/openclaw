@@ -546,6 +546,61 @@ truncated responses fail without replay. Successful transport does not invent
 a character tariff or prove full-text delivery. Direct ElevenLabs behavior is
 unchanged.
 
+## Google speech
+
+ClawRouter Google speech requires a current, eligible `audio.speech` offer from
+your selected proxy key. Configure an explicit `google/` model and one voice;
+the bridge never inherits OpenAI's `alloy` default or looks up a Google vendor
+key. A voice name is a request selection, not proof that your account can use it.
+
+```json5
+{
+  tts: {
+    provider: "clawrouter",
+    providers: {
+      clawrouter: {
+        upstreamProvider: "google",
+        model: "google/gemini-3.8-flash-tts",
+        voice: "Kore",
+      },
+    },
+  },
+}
+```
+
+The qualified routes are:
+
+| Models                                                                                       | Catalog endpoint and route                                                   |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `gemini-3.1-flash-tts-preview`, `gemini-2.5-flash-preview-tts`, `gemini-2.5-pro-preview-tts` | Native `speech_generate_content`, before November 17, 2026 at 00:00 UTC only |
+| `gemini-3.8-flash-tts`, `gemini-3.8-flash-lite-tts`                                          | Manifest `speech_interactions`                                               |
+
+Preview admission stops at the exact cutoff, including after delayed discovery.
+The model list does not activate a deployment or grant access. Service support
+depends on the [Google speech declaration](https://github.com/openclaw/clawrouter/pull/750)
+being present in your ClawRouter deployment.
+
+This bridge sends one user text and one voice. Interactions requests are
+stateless (`store: false`) and explicitly request raw PCM. It reads all native
+REST `steps[].content[]` audio blocks, rather than the Google SDK's last-block
+convenience property. See Google's [audio output formats](https://aistudio.google.com/docs/speech-generation#audio-output-formats).
+Every block must contain canonical base64 and nonempty, even-length 24 kHz mono
+PCM16LE. Incoming WAV containers, streaming, multiple speakers, raw request
+overrides, speed and extra generation options are not supported.
+
+Output is one checked WAV file, with its 44-byte header included in the lower of
+the configured audio limit and 8 MiB. The bridge validates the entire bounded
+JSON response before returning audio. It does not label WAV as a voice note or
+telephony PCM. One operation budget and the caller's signal cover authentication,
+discovery and synthesis; once a paid POST may have started, a failure does not
+buy an alternate provider request.
+
+TTS tool and direct synthesis cancellation are separate from macOS Talk's local
+playback stop: stopping playback is not a remote-cancellation acknowledgment.
+The local tests do not establish live vendor availability, Worker/SQLite
+settlement, upstream billing, or physical cleanup of every captured transport
+alias. Unknown usage is not free audio or an invented token count.
+
 ## Native Gradium speech
 
 ClawRouter speech can consume a qualified, model-less Gradium offer for
