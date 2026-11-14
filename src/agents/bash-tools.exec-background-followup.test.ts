@@ -416,6 +416,40 @@ test.for([
   },
 );
 
+test("completions pending behind a completion turn share the next turn", async ({ signal }) => {
+  const sessionKey = "agent:main:dashboard:batched-completions";
+  await seedOrigin(sessionKey);
+  const gate = createDeferredCore();
+  const firstTurn = createDeferredCore();
+  const prompts: string[] = [];
+  model.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+    await admitModelTurn(params);
+    prompts.push(params.prompt);
+    if (prompts.length === 1) {
+      firstTurn.resolve();
+      await gate.promise;
+    }
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+  });
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  for (const job of [1, 2, 3]) {
+    runningSession((await exec(`batch-${job}`, `process.stdout.write("BATCH_${job}")`)).details);
+  }
+  await withinTest(waitForExecScope(sessionKey), signal);
+  await withinTest(firstTurn.promise, signal);
+  // The later exits wait for the running completion turn instead of queueing their own.
+  expect(receipts).toHaveLength(1);
+  gate.resolve();
+  await vi.waitFor(() => expect(receipts).toHaveLength(2), { timeout: 30_000 });
+  await completion(signal);
+  // One turn for the first exit; the two exits that arrived during it share the next.
+  expect(model).toHaveBeenCalledTimes(2);
+  const jobs = (prompt: string) => prompt.match(/BATCH_\d/g) ?? [];
+  expect(jobs(prompts[0] ?? "")).toHaveLength(1);
+  expect(jobs(prompts[1] ?? "")).toHaveLength(2);
+  expect(prompts.flatMap(jobs).toSorted()).toEqual(["BATCH_1", "BATCH_2", "BATCH_3"]);
+});
+
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
   signal,
 }) => {
