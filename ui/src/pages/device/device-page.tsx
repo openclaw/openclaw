@@ -38,6 +38,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import { LaunchAtLoginSetting } from "./launch-at-login-setting.tsx";
+import { createNativeEditFeedback } from "./native-edit-feedback.tsx";
 import "./device.css";
 
 registerEnglishCatalog(registerAppsEnglish);
@@ -170,14 +171,15 @@ export function DevicePage() {
     description?: string;
     disabled?: boolean;
   }) {
+    const feedback = createNativeEditFeedback(capability);
     return (
       <Show when={props.checked !== undefined}>
         <SettingsToggleRow
           title={t(`configPage.deviceSettings.${props.label}`)}
-          description={props.description}
+          description={feedback.describe(props.description)}
           checked={props.checked ?? false}
           disabled={props.disabled}
-          onChange={(value) => void capability?.set(props.setting, value)}
+          onChange={(value) => feedback.set(props.setting, value)}
         />
       </Show>
     );
@@ -189,12 +191,13 @@ export function DevicePage() {
     description?: string;
     disabled?: boolean;
   }) {
+    const feedback = createNativeEditFeedback(capability);
     const title = () =>
       t(`configPage.deviceSettings.${props.setting.slice(props.setting.indexOf(".") + 1)}`);
     return (
       <SettingsRow
         title={title()}
-        description={props.description}
+        description={feedback.describe(props.description)}
         control={
           <SettingsSelect
             aria-label={title()}
@@ -206,7 +209,7 @@ export function DevicePage() {
               disabled: option.disabled,
             }))}
             disabled={props.disabled}
-            onChange={(event) => void capability?.set(props.setting, event.currentTarget.value)}
+            onChange={(event) => feedback.set(props.setting, event.currentTarget.value)}
           />
         }
       />
