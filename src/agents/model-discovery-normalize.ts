@@ -11,15 +11,6 @@ type NormalizeDiscoveredModelOptions = {
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 };
 
-/** Applies plugin model normalization and transport hooks to discovered agent models. */
-export function normalizeDiscoveredAgentModel(
-  model: Model,
-  agentDir: string,
-  options?: NormalizeDiscoveredModelOptions,
-): Model {
-  return createDiscoveredAgentModelNormalizer(agentDir, options)(model);
-}
-
 /** The caller owns one synchronous catalog pass; no provider selection survives it. */
 export function createDiscoveredAgentModelNormalizer(
   agentDir: string,

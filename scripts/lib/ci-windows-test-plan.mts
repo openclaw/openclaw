@@ -49,7 +49,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/cli/mcp-cli.path-case.windows.test.ts": 6.8,
   "src/cli/runtime-cleanup-scope.windows.process.test.ts": 4,
   "src/commands/agents.commands.list.test.ts": 5.6,
-  "src/commands/backup-verify.test.ts": 9.6,
   "src/commands/doctor-gateway-auth-token.windows.test.ts": 0.1,
   "src/commands/doctor-lint.state-isolation.test.ts": 42.8,
   "src/config/io.write-effects.windows.test.ts": 5.8,
@@ -140,7 +139,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "test/scripts/vitest-process-group.test.ts": 2.1,
   "test/scripts/vitest-worker-artifacts.test.ts": 170.3,
   "test/scripts/vitest-worker-artifacts.transforms.test.ts": 8.8,
-  "test/scripts/worker-deploy-build-plugin.test.ts": 49.5,
   "test/scripts/write-plugin-sdk-entry-dts.test.ts": 74.3,
   "test/scripts/write-unified-entry-dts.test.ts": 66.8,
 };

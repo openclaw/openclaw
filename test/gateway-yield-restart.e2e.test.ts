@@ -1,20 +1,24 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
+import type { OperatorScope } from "../src/gateway/operator-scopes.js";
 import { findSubagentSpawnReceipt } from "../src/gateway/server.subagent-stop-settlement.product.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
   connectRestartClient,
+  connectProxiedRestartOperator,
   readRestartSession,
   restartEnv,
   restartProviderServer,
   restartToolNames,
   writeRestartJsonText,
   writeRestartToolCall,
+  writeRestartPlugin,
 } from "./gateway-restart.test-support.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
@@ -30,6 +34,7 @@ it
     "other-agent",
     "retired-message",
     "completed-before",
+    "policy-unavailable",
   ] as const)(
   "preserves yielded work through an actual Gateway restart (%s)",
   { timeout: 180_000 },
@@ -53,6 +58,9 @@ it
     let yieldRoot: (() => void) | undefined;
     let continueChild: (() => void) | undefined;
     let finishRequester: (() => void) | undefined;
+    let finishChild: (() => void) | undefined;
+    let yieldRequester: (() => void) | undefined;
+    let yieldedAfterOutage = false;
     const reservation = await reserveTestPortListener({
       offsets: [0],
       signal,
@@ -88,7 +96,11 @@ it
           if (text.includes(childPrompt) && !text.includes(rootPrompt)) {
             childCalls++;
             if (action === "completed-before" || text.includes("CONTINUE_PARKED_CHILD")) {
-              reply("PARKED_CHILD_COMPLETED");
+              if (action === "policy-unavailable") {
+                finishChild = () => reply("PARKED_CHILD_COMPLETED");
+              } else {
+                reply("PARKED_CHILD_COMPLETED");
+              }
               return;
             }
             if (action === "root-source-stopped") {
@@ -142,6 +154,13 @@ it
               return;
             }
             if (sentContinuation) {
+              if (action === "policy-unavailable" && !yieldedAfterOutage) {
+                yieldRequester = () => {
+                  yieldedAfterOutage = true;
+                  call("sessions_yield", {});
+                };
+                return;
+              }
               if (text.includes("already_pending") || text.includes("nothing_pending")) {
                 reply("WAITING_FOR_CHILD_COMPLETION");
               } else {
@@ -167,6 +186,27 @@ it
     });
     const model = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${reservation.claim.port}/v1`);
     const base = restartResumeConfig(model);
+    const origin = "https://control.restart.example.test";
+    const user = "person@restart.example.test";
+    const scopes: OperatorScope[] = ["operator.admin", "operator.read", "operator.write"];
+    if (action === "policy-unavailable") {
+      base.gateway = {
+        ...base.gateway,
+        trustedProxies: ["127.0.0.1", "::1"],
+        auth: {
+          mode: "trusted-proxy",
+          token: undefined,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+            deviceAutoApprove: { enabled: true, scopes },
+          },
+          identityScopes: { [user]: scopes },
+        },
+        controlUi: { enabled: false, allowedOrigins: [origin] },
+      };
+    }
     const instance = await createOpenClawTestInstance({
       name: "gateway-yield-restart",
       signal,
@@ -183,7 +223,62 @@ it
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
-    let client: GatewayClient | undefined;
+    if (action === "policy-unavailable") {
+      const pluginDir = instance.state.path("recovery-access");
+      await writeRestartPlugin(
+        pluginDir,
+        {
+          id: "recovery-access",
+          activation: { onStartup: true },
+          configSchema: { type: "object", properties: {} },
+        },
+        `import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+        export default { id: "recovery-access", register(api) {
+          const marker = ${JSON.stringify(instance.state.path("policy-unavailable"))};
+          const grant = (recovered) => ({ grantId: "recovery-proof-grant", signal: new AbortController().signal,
+            assertCurrent() {
+              if (recovered && existsSync(marker + ".ready")) {
+                unlinkSync(marker + ".ready");
+                api.logger.info("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
+                throw new Error("synthetic transient policy outage");
+              }
+            }
+          });
+          api.registerGatewayAccessPolicy({ authorize: () => grant(false), resume: () => grant(true) });
+          api.on("subagent_delivery_target", () => {
+            if (existsSync(marker)) {
+              unlinkSync(marker);
+              writeFileSync(marker + ".ready", "one unavailable evaluation");
+            }
+          });
+        } };`,
+      );
+      await instance.state.writeConfig({
+        ...JSON.parse(await readFile(instance.configPath, "utf8")),
+        plugins: {
+          enabled: true,
+          load: { paths: [pluginDir] },
+          allow: ["recovery-access", "openai"],
+          slots: { memory: "none" },
+          entries: {
+            "recovery-access": { enabled: true, hooks: { allowConversationAccess: true } },
+          },
+        },
+      });
+    }
+    const connect = async () => {
+      if (action !== "policy-unavailable") {
+        return connectRestartClient(instance, {}, signal);
+      }
+      const connection = await connectProxiedRestartOperator(instance, {
+        user,
+        origin,
+        scopes,
+        signal,
+      });
+      return { request: connection.call, stopAndWait: connection.close };
+    };
+    let client: Pick<GatewayClient, "request" | "stopAndWait"> | undefined;
     let phase = "startup";
     onTestFailed(() => {
       process.stderr.write(`yield restart phase=${phase}\n${instance.logs()}\n`);
@@ -191,7 +286,7 @@ it
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
-        client = await connectRestartClient(instance, {}, signal);
+        client = await connect();
         if (parkedRoot) {
           await client.request("sessions.create", { key: rootKey, agentId: "main" });
         }
@@ -268,7 +363,7 @@ it
           );
         }
         await instance.startGateway();
-        client = await connectRestartClient(instance, {}, signal);
+        client = await connect();
         await vi.waitFor(
           () =>
             action === "root-source-stopped"
@@ -361,6 +456,33 @@ it
         } else {
           assert(continueChild);
           continueChild();
+          if (action === "policy-unavailable") {
+            await vi.waitFor(
+              () => {
+                expect(finishChild).toBeDefined();
+                expect(yieldRequester).toBeDefined();
+              },
+              { timeout: 15_000 },
+            );
+            await writeFile(instance.state.path("policy-unavailable"), "one transient outage");
+            finishChild!();
+            await vi.waitFor(
+              () => {
+                expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
+                expect(instance.logs()).toContain(
+                  "Subagent announce failed: GatewayOperatorAccessUnavailableError",
+                );
+              },
+              { timeout: 15_000 },
+            );
+            const active = await client.request<{ sessionInfo: { hasActiveRun?: boolean } }>(
+              "chat.history",
+              { sessionKey: rootKey },
+            );
+            expect(active.sessionInfo.hasActiveRun).toBe(true);
+            assert(yieldRequester);
+            yieldRequester();
+          }
         }
         await vi.waitFor(
           async () => {
@@ -375,6 +497,10 @@ it
         );
         if (action === "completed-before") {
           expect(childCalls).toBe(callsBeforeRestart);
+        }
+        if (action === "policy-unavailable") {
+          expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
+          expect(instance.logs()).not.toContain("Restart recovery operator authority changed");
         }
       },
       async () => {

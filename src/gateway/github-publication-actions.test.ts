@@ -18,6 +18,8 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
+import { withPublicationGuestRole } from "./github-publication-requester.test-support.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -242,6 +244,33 @@ describe("session PR actions through the agent tool and registered Gateway metho
         }
       });
       await expect(f.action(actor, action, args)).rejects.toThrow("Your operator role changed");
+      expect(f.writes).toEqual([]);
+    },
+  );
+
+  it.each(["policy", "lifecycle"] as const)(
+    "refuses an edit when %s changes during the awaited PR read",
+    async (change) => {
+      const f = await fixture();
+      f.onRead(async () => {
+        if (change === "policy") {
+          setRuntimeConfigSnapshot(
+            withPublicationGuestRole(currentGitHubPublicationConfig(), { scopes: [] }),
+          );
+        } else {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: SESSION_KEY },
+            {
+              lifecycleRevision: randomUUID(),
+            },
+          );
+        }
+      });
+      await expect(
+        f.action("guest", "edit", { title: "Unauthorized edit", expectedTitle: f.state.title }),
+      ).rejects.toThrow(
+        change === "policy" ? /role changed|permission|authority/iu : /changed|lifecycle/iu,
+      );
       expect(f.writes).toEqual([]);
     },
   );
