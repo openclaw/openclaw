@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -49,7 +48,7 @@ it("registers avatar generation without loading its parser", async () => {
   const result = await runNodeScript(
     [
       "--import",
-      fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+      new URL("../../../scripts/tsx.mjs", import.meta.url).href,
       "--input-type=module",
       "--eval",
       `import assert from "node:assert/strict";
