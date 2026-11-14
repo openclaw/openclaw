@@ -4,7 +4,14 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
-import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import {
+  accumulatedStreamText,
+  trimAccumulatedStreamPrefix,
+  type ChatStreamSegment,
+  type ChatItem,
+  type ChatQueueItem,
+} from "../../lib/chat/chat-types.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
@@ -27,6 +34,7 @@ import {
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { resolveAssistantTextTail } from "./stream-causal-boundary.ts";
 import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -561,4 +569,31 @@ export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProje
 
     items.splice(insertionIndex === -1 ? maximum : insertionIndex, 0, item);
   }
+}
+
+export function unsavedCliAssistantText(
+  historyItems: ReadonlyArray<{ message: unknown }>,
+  currentRunId: string | null | undefined,
+  stream: string | null | undefined,
+  segments: ChatStreamSegment[],
+): string {
+  const liveText = trimAccumulatedStreamPrefix(
+    sanitizeStreamText(stream ?? ""),
+    accumulatedStreamText(segments, sanitizeStreamText),
+  );
+  // A Claude CLI run streams one cumulative item, cli-assistant:<run>, and its in-flight
+  // snapshot repeats it. Saved segment rows of that item are its ordered prefix by
+  // identity, so the live tail after an accepted steer shows only their unsaved remainder.
+  const cliSegmentPrefix = currentRunId ? `cli-assistant:${currentRunId}:seg:` : null;
+  const savedCliSegments = cliSegmentPrefix
+    ? historyItems.flatMap(({ message }) =>
+        readChatThreadMessageIdentity(message)?.idempotencyKey?.startsWith(cliSegmentPrefix)
+          ? [extractTextCached(message)?.trim() ?? null]
+          : [],
+      )
+    : [];
+  const unsavedText = savedCliSegments.length
+    ? resolveAssistantTextTail(savedCliSegments, liveText)
+    : liveText;
+  return unsavedText === liveText ? liveText : (unsavedText ?? "").replace(/^\s+/u, "");
 }

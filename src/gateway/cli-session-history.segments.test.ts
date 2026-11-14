@@ -9,7 +9,7 @@ import {
 import { requireGatewayRecord } from "./test-helpers.assertions.js";
 
 it("keeps canonical CLI commentary once while bound and after its native binding is replaced", async () => {
-  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+  await withClaudeProjectsDir(async ({ projectsDir, sessionId, filePath }) => {
     const at = Date.parse("2026-03-26T16:30:00.000Z");
     const preTool = "The answer is here.";
     const final = "Final answer.";
@@ -45,7 +45,7 @@ it("keeps canonical CLI commentary once while bound and after its native binding
         localMessages,
         importedMessages: await readClaudeCliSessionMessagesAsync({
           cliSessionId: nativeSessionId,
-          homeDir,
+          projectsDir,
           localSessionId: entry.sessionId,
         }),
       });
@@ -68,7 +68,7 @@ it.each([
 ])(
   "pairs canonical commentary with its native record by identity when texts differ: $name",
   async ({ native, canonical }) => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+    await withClaudeProjectsDir(async ({ projectsDir, sessionId, filePath }) => {
       const at = Date.parse("2026-03-26T16:30:00.000Z");
       await fs.appendFile(
         filePath,
@@ -102,7 +102,7 @@ it.each([
           localMessages,
           importedMessages: await readClaudeCliSessionMessagesAsync({
             cliSessionId: nativeSessionId,
-            homeDir,
+            projectsDir,
             localSessionId: entry.sessionId,
           }),
         });

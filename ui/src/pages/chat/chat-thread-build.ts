@@ -8,7 +8,6 @@ import {
   type ChatGuardianNotice,
   type ChatItem,
   type MessageGroup,
-  accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   trimAccumulatedStreamPrefix,
@@ -71,6 +70,7 @@ import {
   rawMessageTimestamp,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
+  unsavedCliAssistantText,
   timestampAfterVisibleItems,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
@@ -85,7 +85,6 @@ import {
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { resolveAssistantTextTail } from "./stream-causal-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps &
@@ -597,26 +596,7 @@ export function buildChatItems(
     });
   }
 
-  const liveText = trimAccumulatedStreamPrefix(
-    sanitizeStreamText(props.stream ?? ""),
-    accumulatedStreamText(segments, sanitizeStreamText),
-  );
-  // A Claude CLI run streams one cumulative item, cli-assistant:<run>, and its in-flight
-  // snapshot repeats it. Saved segment rows of that item are its ordered prefix by
-  // identity, so the live tail after an accepted steer shows only their unsaved remainder.
-  const cliSegmentPrefix = currentRunId ? `cli-assistant:${currentRunId}:seg:` : null;
-  const savedCliSegments = cliSegmentPrefix
-    ? historyItems.flatMap(({ message }) =>
-        readChatThreadMessageIdentity(message)?.idempotencyKey?.startsWith(cliSegmentPrefix)
-          ? [extractTextCached(message)?.trim() ?? null]
-          : [],
-      )
-    : [];
-  const unsavedText = savedCliSegments.length
-    ? resolveAssistantTextTail(savedCliSegments, liveText)
-    : liveText;
-  const visibleText =
-    unsavedText === liveText ? liveText : (unsavedText ?? "").replace(/^\s+/u, "");
+  const visibleText = unsavedCliAssistantText(historyItems, currentRunId, props.stream, segments);
   if (props.reasoning) {
     const { runId } = props.reasoning;
     for (const reasoning of props.reasoning.items) {

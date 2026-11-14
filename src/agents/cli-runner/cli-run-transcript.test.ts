@@ -7,9 +7,8 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import { settlePreparedAssistantTranscriptMetadataAtAnchor } from "../../config/sessions/session-message-rewrite.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AssistantMessage } from "../../llm/types.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
@@ -182,7 +181,7 @@ it.each([false, true])("persists CLI usage with separate turn total=%s", async (
   expect(messages).toHaveLength(1);
   // One-hour cache writes bill at twice the input rate.
   const turnCost = (4418 * rates.input + 534 * rates.output + 36955 * rates.input * 2) / 1e6;
-  expect((messages[0] as AssistantMessage).usage).toEqual(
+  expect(messages[0]?.usage).toEqual(
     turnTotal
       ? expect.objectContaining({
           output: 534,
@@ -373,6 +372,32 @@ it.each(
         0,
       ),
     ).toBe(18);
+  },
+);
+
+it.each([false, true])(
+  "preserves hook display=%s when snapshots settle or strand",
+  async (display) => {
+    const { target, runParams } = await transcriptFixture(`hook-display-${display}`);
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "snapshot-display",
+      hookName: "before_message_write",
+      source: "test",
+      handler: ({ message }: PluginHookBeforeMessageWriteEvent) => ({
+        message: { ...message, display },
+      }),
+    });
+    initializeGlobalHookRunner(registry);
+    const base = buildPreparedContext({ provider: "claude-cli", model: "claude-sonnet-4-6" });
+    const queue = createCliAssistantSegmentQueue(
+      { ...base, params: { ...base.params, ...runParams } },
+      () => {},
+    );
+    queue.push({ text: "Hook snapshot", key: "hook:snapshot" });
+    await queue.drain();
+    await queue.strand();
+    expect(await transcriptMessages(target)).toMatchObject([{ display, stopReason: "aborted" }]);
   },
 );
 

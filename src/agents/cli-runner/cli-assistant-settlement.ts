@@ -129,16 +129,12 @@ export async function settleCliAssistantSegments(params: {
         if (Reflect.get(value, "idempotencyKey") !== segment.anchor.idempotencyKey) {
           return undefined;
         }
-        // The run outcome decides visibility; the mid-run hold is never kept.
-        const { display: _heldUntilSettled, ...settled } = value as typeof value & {
-          display?: boolean;
-        };
         return projectAgentHarnessTranscriptMessageForDisplay({
           runId: params.runParams.runId,
           hidden: params.runParams.privateCompletion === true,
           inputProvenance: params.runParams.inputProvenance,
           message: {
-            ...settled,
+            ...value,
             ...(params.sourceReplyWasDelivered ? { display: false } : {}),
             stopReason,
             ...cliAssistantProgressMetadata({
