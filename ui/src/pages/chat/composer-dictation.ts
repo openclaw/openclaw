@@ -278,15 +278,24 @@ export class ComposerDictationOwner extends EventTarget {
 
   private readonly handleVisibilityChange = (): void => {
     if (document.visibilityState === "hidden") {
-      this.handleWindowBlur();
+      this.leaveWindow();
+    }
+  };
+
+  // The browser's microphone permission prompt (Safari, Chrome) takes focus from
+  // the page while the microphone is still opening. Keep waiting so Allow starts
+  // listening and a denial reports its error; once listening, blur ends dictation.
+  private readonly handleWindowBlur = (): void => {
+    if (this.phase !== "connecting") {
+      this.leaveWindow();
     }
   };
 
   // Losing the window interrupts capture but keeps dictated text in the draft.
-  private readonly handleWindowBlur = (): void => {
+  private leaveWindow(): void {
     this.clearClickSuppression();
     void this.finishActive();
-  };
+  }
 
   private canHold(): boolean {
     return (

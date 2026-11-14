@@ -554,6 +554,40 @@ describe("ComposerDictationOwner", () => {
     }
   });
 
+  it.each(["allow", "deny"])(
+    "waits through a permission prompt that takes window focus (%s)",
+    async (answer) => {
+      const permission = createDeferred<ReturnType<typeof microphone>>();
+      getUserMedia.mockReturnValueOnce(permission.promise);
+      const { controller, onError } = createHarness();
+      expect(controller.startDirect()).toBe(true);
+      await waitForFast(() => expect(getUserMedia).toHaveBeenCalledOnce());
+
+      // The permission prompt blurs the page while the microphone is still opening.
+      window.dispatchEvent(new Event("blur"));
+      expect(controller.connecting).toBe(true);
+
+      if (answer === "allow") {
+        permission.resolve(microphone());
+        await waitForFast(() =>
+          expect(controller).toMatchObject({ active: true, connecting: false }),
+        );
+        expect(onError).not.toHaveBeenCalled();
+        window.dispatchEvent(new Event("blur"));
+        expect(controller.active).toBe(false);
+      } else {
+        permission.reject(new DOMException("denied", "NotAllowedError"));
+        await waitForFast(() =>
+          expect(onError).toHaveBeenCalledWith(
+            "Microphone access is blocked. Allow it in browser site settings to list inputs.",
+            { kind: "start", preservesText: false },
+          ),
+        );
+        expect(controller.active).toBe(false);
+      }
+    },
+  );
+
   it("does not swallow the next click after a hold is cancelled by blur", async () => {
     const { controller, onTap, target } = createHarness();
 
