@@ -148,7 +148,7 @@ it.each([
     [],
   ],
   ["agents-core", "src/agents", [validatorFile], codeModeFiles.slice(1)],
-  ["infra", "src/agents", [], [...codeModeFiles.slice(0, 1)]],
+  ["infra", "src/agents", [], codeModeFiles.slice(0, 1)],
   ["unit-support", "packages", [websocketFile], []],
 ] as const)(
   "preserves Node contracts for the %s inventory",
@@ -211,7 +211,7 @@ it.each(["node", "bun-all", "dual-all"] as const)(
         [processConfig, infraConfig, agentsConfig],
         [nodeFile],
         [bunFile, "src/agents/code-mode-node.lifecycle.test.ts"],
-        [...codeModeFiles],
+        codeModeFiles,
       ],
     ] as const) {
       const includePatterns = [...nodeOnly, ...bunOnly, ...bothHosts];
