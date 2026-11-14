@@ -47,6 +47,8 @@ Codes are not case-sensitive and the hyphen is optional. They expire after ten m
 - `--json`: print the result as JSON. Requires `--yes`.
 - `--url <url>`, `--port <port>`, `--token <token>`, `--password <password>`, `--timeout <ms>`: choose the Gateway connection.
 
+Ctrl-C or SIGTERM cancels a pending pairing-code read without printing the request details or approving anything; the CLI exits with status 130 or 143. A decision already sent to the Gateway still waits for its receipt during cleanup.
+
 ## Running it over SSH
 
 A plain `ssh host openclaw pair ABCD-EFGH` has no terminal to answer the question, so nothing is approved. Use `ssh -t host openclaw pair ABCD-EFGH`.

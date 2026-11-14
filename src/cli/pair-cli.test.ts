@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 
 const mocks = vi.hoisted(() => ({
   call: vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>(),
@@ -78,6 +79,18 @@ describe("openclaw pair", () => {
       requestId: "request-1",
       decision: "approve",
     });
+  });
+
+  it("prints nothing and approves nothing when the pairing read settles after Ctrl+C", async () => {
+    setTty(true);
+    const work = new AsyncWorkScope();
+    mocks.call.mockImplementation(async () => {
+      work.beginClose(); // the read settles after Ctrl+C
+      return request;
+    });
+    await work.run(() => run("ABCD-EFGH", "--yes", "--json"));
+    expect(mocks.log).not.toHaveBeenCalled();
+    expect(decisions()).toEqual([undefined]);
   });
 
   it("rejects the request when the operator answers no", async () => {
