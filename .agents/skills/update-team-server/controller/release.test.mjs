@@ -7,7 +7,7 @@ import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { describe } from "node:test";
 import { fileURLToPath } from "node:url";
-import { events, makeReleaseFixture, runOwner } from "./worker-config-owner-fixture.mjs";
+import { events, makeReleaseFixture, runLibrary, runOwner } from "./worker-config-owner-fixture.mjs";
 import { names, descriptor, call as adoptController, ok as adoptionOK } from "./retained-controller-adoption-test-support.mjs";
 import { nativeFixture } from "./retained-repair-lifecycle-test-support.mjs";
 
@@ -240,9 +240,7 @@ function writeProcess(root, pid, startTicks) {
 const verifiedTarget = "c".repeat(40);
 
 function releaseProofResult(fixture, args, input) {
-  return spawnSync("bash", ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"', "fixture-proof", process.execPath, "--no-warnings", fixture.library, ...args], {
-    encoding: "utf8", env: fixture.env, input, timeout: 30000,
-  });
+  return runLibrary(fixture, args, { input });
 }
 
 function releaseProof(fixture, ...args) {
@@ -301,7 +299,7 @@ function failedReleaseFixture(t, live = false, scenario = "success", schemaVersi
   return f;
 }
 
-function adoptNativeRecovery(f, record, backupDirectory, refusals) {
+function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = false) {
   // First complete a same-schema adoption for an earlier incident, as on the host.
   const stage = join(f.root, "approved-controller"); mkdirSync(stage, { mode: 0o755 });
   for (const [index, name] of names.entries()) {
@@ -334,6 +332,9 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals) {
   const nativeEnv = { ...f.env };
   f.request = { operation: randomUUID() }; f.b = join(f.serving, "releases", after);
   nativeFixture(f);
+  const cgroupPath = join(f.env.OPENCLAW_TEAM_PROC_ROOT, String(f.pid), "cgroup");
+  const cgroup = "/system.slice/openclaw-gateway.service" + (delegated ? "/gateway" : "");
+  writeFileSync(cgroupPath, `0::${cgroup}\n`);
   const boot = join(f.env.OPENCLAW_TEAM_PROC_ROOT, "sys/kernel/random");
   mkdirSync(boot, { recursive: true });
   writeFileSync(join(boot, "boot_id"), "11111111-1111-4111-8111-111111111111\n");
@@ -368,6 +369,15 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals) {
     writeFileSync(path, bytes);
     for (const kept of unchanged) assert.deepEqual(descriptor(kept.path), kept);
   }
+  if (refusals) for (const rejected of ["/system.slice/openclaw-gateway.service/other",
+    "/system.slice/openclaw-gateway.service/.control",
+    "/system.slice/openclaw-gateway.service/gateway/sandbox-x", "/system.slice/other.service/gateway"]) {
+    writeFileSync(cgroupPath, `0::${rejected}\n`);
+    const result = adoptController(f, "historical-successor", next);
+    assert.notEqual(result.status, 0, rejected); assert.match(result.stderr, /cgroup/, rejected);
+    for (const kept of unchanged) assert.deepEqual(descriptor(kept.path), kept, rejected);
+  }
+  writeFileSync(cgroupPath, `0::${cgroup}\n`);
   const binding = adoptionOK(adoptController(f, "historical-successor", next));
   // Binding survives the prepare/apply gap only while the exact backup remains.
   if (refusals) {
@@ -1378,7 +1388,7 @@ exec '${process.execPath}' "$@"`);
   for (const phase of ["D_VERIFYING", "ROLLBACK_FAILED"]) {
     for (const state of ["live", "stopped", "unverifiable"]) {
       for (const held of phase === "ROLLBACK_FAILED" && state === "live"
-        ? ["none", "in-place", "archived", "archive-only", "new-witness", "reconstructed", "replaced-archive", "live-mismatch", "adopt-archived", "adopt-refusals"]
+        ? ["none", "in-place", "archived", "archive-only", "new-witness", "reconstructed", "replaced-archive", "live-mismatch", "adopt-archived", "adopt-delegated", "adopt-refusals"]
         : ["none"])
       for (const native of ["in-place", "archived"].includes(held) ? [true, false]
         : [!["replaced-archive", "live-mismatch"].includes(held)])
@@ -1450,7 +1460,7 @@ exec '${process.execPath}' "$@"`);
           if (!["new-witness", "reconstructed", "archive-only", "live-mismatch"].includes(held)) hold();
           const db = new DatabaseSync(heldPath);
           db.exec(`PRAGMA user_version=${adopting ? 41 : 0}; UPDATE schema_meta SET schema_version=${adopting ? 41 : 0}`); db.close();
-          if (["archived", "archive-only", "replaced-archive", "adopt-archived", "adopt-refusals"].includes(held)) {
+          if (["archived", "archive-only", "replaced-archive", "adopt-archived", "adopt-delegated", "adopt-refusals"].includes(held)) {
             const archive = join(stateRoot, "held-agent-archive", "retained-held-schema0-fixture");
             mkdirSync(dirname(archive), { recursive: true }); renameSync(heldDir, archive);
             heldPath = join(archive, "agent", "openclaw-agent.sqlite");
@@ -1476,7 +1486,7 @@ exec '${process.execPath}' "$@"`);
           databaseIdentities: Object.fromEntries(databases.map(path => [path, fileIdentity(path)])) });
         writeFileSync(`${backupRoot}.receipt.json`, receipt, { mode: 0o600 });
         writeFileSync(f.journal, JSON.stringify(record), { mode: 0o600 });
-        const adopted = adopting ? adoptNativeRecovery(f, record, backupDirectory, held === "adopt-refusals") : undefined;
+        const adopted = adopting ? adoptNativeRecovery(f, record, backupDirectory, held === "adopt-refusals", held === "adopt-delegated") : undefined;
         const result = runOwner(f, ["--recover"]);
         assert.ifError(result.error);
         assert.equal(readFileSync(backup, "utf8"), "original pre-migration state");

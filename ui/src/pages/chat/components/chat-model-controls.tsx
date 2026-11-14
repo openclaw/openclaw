@@ -691,12 +691,12 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   });
 }
 
-export function ChatModelControls(props: ChatModelControlsProps) {
+export function ChatModelControls(props: ChatModelControlsProps & { showEffort?: boolean }) {
   const controls = createChatModelControls(props);
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       <ChatModelPicker {...controls().model} />
-      <ChatEffortPicker {...controls().effort} />
+      {props.showEffort !== false ? <ChatEffortPicker {...controls().effort} /> : undefined}
     </div>
   );
 }
