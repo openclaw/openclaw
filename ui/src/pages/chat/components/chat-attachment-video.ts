@@ -1,10 +1,18 @@
 import { listen } from "../../../lib/reactive/listener.ts";
 
-export type VideoCompressionRequest = { file: File; maxBytes: number };
-export type VideoCompressionError = "unsupported" | "too-large" | "failed";
+export type VideoCompatibleCopy = { omitApacTrackId: number };
+export type VideoCompressionRequest = {
+  file: File;
+  maxBytes: number;
+  omission?: VideoCompatibleCopy;
+};
+export type VideoCompressionError = "unsupported" | "too-large" | "failed" | "fidelity";
+export type VideoCompressionResult =
+  | { type: "ready"; file: File }
+  | { type: "compatible-copy"; omission: VideoCompatibleCopy };
 export type VideoCompressionResponse =
   | { type: "progress"; progress: number }
-  | { type: "ready"; file: File }
+  | VideoCompressionResult
   | { type: "error"; reason: VideoCompressionError };
 
 // Serialize encoders, not the composer. Each job owns a worker; termination also
@@ -16,10 +24,11 @@ export function compressChatAttachmentVideo(
   maxBytes: number,
   signal: AbortSignal,
   onProgress: (fraction: number) => void,
-): Promise<File> {
+  omission?: VideoCompatibleCopy,
+): Promise<VideoCompressionResult> {
   const result = queue.then(() => {
     signal.throwIfAborted();
-    return new Promise<File>((resolve, reject) => {
+    return new Promise<VideoCompressionResult>((resolve, reject) => {
       const worker = new Worker(new URL("./chat-attachment-video.worker.ts", import.meta.url), {
         type: "module",
       });
@@ -27,7 +36,10 @@ export function compressChatAttachmentVideo(
       const listenerOptions = { signal: listeners.signal };
       let timer: ReturnType<typeof setTimeout>;
       let settled = false;
-      const finish = (prepared?: File, reason: VideoCompressionError = "failed") => {
+      const finish = (
+        prepared?: VideoCompressionResult,
+        reason: VideoCompressionError = "failed",
+      ) => {
         if (settled) {
           return;
         }
@@ -59,8 +71,8 @@ export function compressChatAttachmentVideo(
           if (data.type === "progress") {
             armWatchdog();
             onProgress(data.progress);
-          } else if (data.type === "ready") {
-            finish(data.file);
+          } else if (data.type === "ready" || data.type === "compatible-copy") {
+            finish(data);
           } else {
             finish(undefined, data.reason);
           }
@@ -79,7 +91,7 @@ export function compressChatAttachmentVideo(
       listen(worker, "messageerror", () => finish(), listenerOptions);
       armWatchdog();
       try {
-        worker.postMessage({ file, maxBytes } satisfies VideoCompressionRequest, []);
+        worker.postMessage({ file, maxBytes, omission } satisfies VideoCompressionRequest, []);
       } catch {
         finish();
       }
