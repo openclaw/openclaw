@@ -20,6 +20,8 @@ export async function transcribeOpenAiCompatibleAudio(
     defaultBaseUrl: string;
     defaultModel: string;
     provider?: string;
+    /** Preserve native AAC filenames for qualified multipart providers. */
+    preserveAacFileName?: boolean;
   },
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
@@ -43,6 +45,7 @@ export async function transcribeOpenAiCompatibleAudio(
     buffer: params.buffer,
     fileName: params.fileName,
     mime: params.mime,
+    preserveAacFileName: params.preserveAacFileName,
     fields: {
       model,
       language: params.language,

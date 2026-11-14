@@ -1,10 +1,12 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
+import type { ServerResponse } from "node:http";
 import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
-import { describe, expect, it } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
 import {
   respondPricingRequired,
   withClawRouterAudioFixture as fixture,
@@ -12,7 +14,7 @@ import {
 
 describe("ClawRouter registered file transcription", () => {
   it("uses the native default, scoped router auth and byte-exact multipart through the media runner", async () => {
-    await fixture(async ({ cfg, filePath, requests, audio }) => {
+    await fixture(async ({ cfg, filePath, requests, audio, catalogRequests }) => {
       const result = await transcribeAudioFile({
         cfg,
         filePath,
@@ -27,6 +29,7 @@ describe("ClawRouter registered file transcription", () => {
         decision: { outcome: "success" },
       });
       expect(requests).toHaveLength(1);
+      expect(catalogRequests).toEqual(["Bearer fixture-router"]);
       expect(requests[0]).toMatchObject({
         url: "/v1/native/openai/v1/audio/transcriptions",
         authorization: "Bearer fixture-router",
@@ -56,7 +59,7 @@ describe("ClawRouter registered file transcription", () => {
       cfg.models!.providers!.clawrouter!.apiKey = "fixture-router";
       cfg.tools!.media!.models![0]!.model = "whisper-1";
       await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(
-        /only gpt-4o-transcribe/,
+        /qualified OpenAI or SenseAudio model/,
       );
       expect(requests).toHaveLength(0);
     });
@@ -121,7 +124,7 @@ describe("ClawRouter registered file transcription", () => {
     );
   });
   it("locks stored ClawRouter profiles without borrowing missing or foreign credentials", async () => {
-    await fixture(async ({ cfg, filePath, requests, home }) => {
+    await fixture(async ({ cfg, filePath, requests, home, catalogRequests }) => {
       const agentDir = home + "/.openclaw/agents/main/agent";
       await upsertAuthProfileAsync({
         agentDir,
@@ -138,6 +141,7 @@ describe("ClawRouter registered file transcription", () => {
       expect(requests.map((request) => request.authorization)).toEqual([
         "Bearer fixture-stored-router",
       ]);
+      expect(catalogRequests).toEqual(["Bearer fixture-stored-router"]);
       for (const profile of ["clawrouter:missing", "openai:stt"]) {
         cfg.tools!.media!.models![0]!.profile = profile;
         await expect(transcribeAudioFile({ cfg, filePath, agentDir })).rejects.toThrow(
@@ -204,6 +208,9 @@ describe("ClawRouter registered file transcription", () => {
         proxy.listen(0, "127.0.0.1", resolve);
       });
       const address = proxy.address() as AddressInfo;
+      // Strict proxy DNS pinning requires HTTPS; the proxy rejects before target TLS.
+      cfg.models!.providers!.clawrouter!.baseUrl =
+        cfg.models!.providers!.clawrouter!.baseUrl!.replace("http:", "https:");
       cfg.models!.providers!.clawrouter!.request = {
         allowPrivateNetwork: true,
         proxy: { mode: "explicit-proxy", url: `http://127.0.0.1:${address.port}` },
@@ -250,19 +257,176 @@ describe("ClawRouter registered file transcription", () => {
       },
     );
   });
-  it("honors the configured deadline through response EOF and releases the socket", async () => {
-    const closed = createDeferred();
+  it("expires registered transcription under its normalized preparation-or-body deadline", async () => {
+    let responseStarted = false;
     await fixture(
-      async ({ cfg, filePath, requests }) => {
+      async ({ cfg, filePath, requests, arrivals }) => {
+        // The registered media resolver normalizes 0.1 seconds to its 1000ms minimum.
         cfg.tools!.media!.models![0]!.timeoutSeconds = 0.1;
         await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/abort|timed out/i);
-        await closed.promise;
-        expect(requests).toHaveLength(1);
+        expect(arrivals.length).toBeLessThanOrEqual(1);
+        expect(requests.length).toBeLessThanOrEqual(arrivals.length);
+        // No observed arrival is not proof of zero egress or body retirement.
+        console.info("[transcription-expiry]", {
+          phase: responseStarted
+            ? "response-started"
+            : arrivals.length
+              ? "request-arrived"
+              : "no-arrival-observed",
+          arrivals: arrivals.length,
+          consumedRequests: requests.length,
+        });
       },
       (res) => {
+        responseStarted = true;
         res.setHeader("content-type", "application/json");
         res.write('{"text":"');
-        res.once("close", () => closed.resolve());
+      },
+    );
+  });
+  it("retires the real transcription body and socket after provider caller abort at a pending read", async ({
+    signal,
+  }) => {
+    const { sanitizeConfiguredModelProviderRequest } =
+      await import("openclaw/plugin-sdk/provider-http");
+    const { fetchWithRuntimeDispatcher } = await import("openclaw/plugin-sdk/runtime-fetch");
+    const { clawrouterMediaUnderstandingProvider: provider } =
+      await import("./audio-transcription.js");
+    const pendingRead = createDeferred();
+    const responseClosed = createDeferred();
+    const socketClosed = createDeferred();
+    const controller = new AbortController();
+    const reason = new DOMException("fixture caller aborted", "AbortError");
+    const restore: Array<() => void> = [];
+    const observed: {
+      body?: ReadableStream<Uint8Array>;
+      socket?: NonNullable<ServerResponse["socket"]>;
+      postSignal?: AbortSignal | null;
+    } = {};
+    let firstByte: Uint8Array | undefined;
+    let reads = 0;
+    let secondReadSettled = false;
+    let matchedPosts = 0;
+    await fixture(
+      async ({ cfg, audio, requests, arrivals, catalogRequests }) => {
+        const outcome = provider.transcribeAudioWithContext!({
+          cfg,
+          buffer: audio,
+          fileName: "fixture.wav",
+          mime: "audio/wav",
+          request: sanitizeConfiguredModelProviderRequest(
+            cfg.models?.providers?.clawrouter?.request,
+          ),
+          // Ordinary audio-operation default; this case proves abort retirement, not expiry.
+          timeoutMs: 60_000,
+          signal: controller.signal,
+          fetchFn: async (input, init) => {
+            expect(init?.method).toBe("POST");
+            matchedPosts += 1;
+            observed.postSignal = init?.signal;
+            const response = await fetchWithRuntimeDispatcher(input, init);
+            const body = response.body;
+            if (!body) {
+              throw new Error("expected real transcription response body");
+            }
+            observed.body = body;
+            const getReader = body.getReader.bind(body);
+            const readerSpy = vi.spyOn(body, "getReader").mockImplementation(() => {
+              const reader = getReader();
+              const read = reader.read.bind(reader);
+              const readSpy = vi.spyOn(reader, "read").mockImplementation(() => {
+                const pending = read();
+                const ordinal = ++reads;
+                void pending.then(
+                  (chunk) => {
+                    if (ordinal === 1 && !chunk.done) {
+                      firstByte = chunk.value;
+                    }
+                    if (ordinal === 2) {
+                      secondReadSettled = true;
+                    }
+                  },
+                  () => {
+                    if (ordinal === 2) {
+                      secondReadSettled = true;
+                    }
+                  },
+                );
+                if (ordinal === 2) {
+                  queueMicrotask(() => {
+                    if (!secondReadSettled) {
+                      pendingRead.resolve();
+                    }
+                  });
+                }
+                return pending;
+              });
+              restore.push(() => readSpy.mockRestore());
+              return reader;
+            });
+            restore.push(() => readerSpy.mockRestore());
+            return response;
+          },
+        }).then(
+          (value) => ({ status: "fulfilled" as const, value }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              pendingRead.promise,
+              outcome.then((result) => {
+                if (result.status === "rejected") {
+                  throw result.error;
+                }
+                if (!result.value.ok) {
+                  throw result.value.error;
+                }
+              }),
+              "transcription settled before pending body read",
+            ),
+            signal,
+          );
+          expect(Buffer.from(firstByte ?? [])).toEqual(Buffer.from('{"text":"'));
+          expect(reads).toBe(2);
+          expect(secondReadSettled).toBe(false);
+          expect(observed.postSignal?.aborted).toBe(false);
+          controller.abort(reason);
+          expect(await withinTest(outcome, signal)).toMatchObject({
+            status: "rejected",
+            error: { name: "AbortError" },
+          });
+          expect(observed.postSignal?.aborted).toBe(true);
+          expect(secondReadSettled).toBe(true);
+          expect(observed.body?.locked).toBe(false);
+          expect(matchedPosts).toBe(1);
+          expect(arrivals).toEqual(["POST /v1/native/openai/v1/audio/transcriptions"]);
+          expect(requests).toHaveLength(1);
+          expect(requests[0]?.authorization).toBe("Bearer fixture-router");
+          expect(catalogRequests).toEqual(["Bearer fixture-router"]);
+          await withinTest(Promise.all([responseClosed.promise, socketClosed.promise]), signal);
+          expect(observed.socket?.destroyed).toBe(true);
+        } finally {
+          controller.abort(reason);
+          try {
+            await withinTest(outcome, signal);
+          } finally {
+            for (const undo of restore.toReversed()) {
+              undo();
+            }
+          }
+        }
+      },
+      (res) => {
+        const socket = res.socket;
+        if (!socket) {
+          throw new Error("expected real transcription response socket");
+        }
+        observed.socket = socket;
+        res.once("close", () => responseClosed.resolve());
+        socket.once("close", () => socketClosed.resolve());
+        res.setHeader("content-type", "application/json");
+        res.write('{"text":"');
       },
     );
   });
