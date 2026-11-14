@@ -1,0 +1,133 @@
+title: Background completions keep their requester's current sender tool policy
+
+scenario:
+  id: exec-completion-requester-sender-policy
+  surface: runtime-tools
+  coverage:
+    primary:
+      - tools.tool-policy
+    secondary:
+      - tools.process-lifecycle
+  gatewayConfigPatch:
+    tools:
+      toolsBySender:
+        "id:qa-requester-allowed": {}
+        "id:qa-requester-revoked": {}
+        "*":
+          deny:
+            - exec
+            - process
+            - nodes
+            - gateway
+  regressionRefs:
+    - openclaw/openclaw#177510
+  objective: Verify a background command's completion turn can run exec again only under its requester's current toolsBySender entry, when the wildcard entry denies exec.
+  successCriteria:
+    - A requester allowed only by their own toolsBySender entry starts a background command, and its completion turn runs exec without another message.
+    - A sender that matches only the wildcard deny cannot start the command.
+    - Revoking the requester's entry after launch, hot-applied to the same Gateway process, stops the completion's exec before it runs.
+  docsRefs:
+    - docs/gateway/background-process.md
+    - docs/gateway/config-tools.md
+  codeRefs:
+    - src/agents/bash-tools.exec-notify.ts
+    - src/auto-reply/reply/session-event-target.ts
+    - src/auto-reply/reply/session-event-context.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-owner-completion.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Configures sender tool policy, revokes it while a background command runs, and writes marker files.
+    channel: qa-channel
+    retryCount: 0
+    summary: Start a background command from three DM senders, then check which completion turns can run exec under their current sender policy.
+    config:
+      requiredProviderMode: mock-openai
+
+flow:
+  steps:
+    - name: prepares the requester completion check
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: requester completion proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        # Each leg is one DM: the launch turn starts a background command that writes a launch
+        # marker, and its completion turn runs exec again to write a completion marker.
+        - set: runLeg
+          value:
+            expr: |-
+              async (leg) => {
+                const job = `${leg.name}-${randomUUID().slice(0, 8)}`;
+                const marker = (kind) => path.join(env.gateway.workspaceDir, `qa-requester-${kind}-${job}.txt`);
+                const exists = (file) => fs.stat(file).then(() => true, () => false);
+                const outboundStart = state.getSnapshot().messages.length;
+                const replied = (text) => state.getSnapshot().messages.slice(outboundStart).some((message) => message.direction === 'outbound' && message.conversation.id === leg.senderId && String(message.text ?? '').includes(text));
+                const until = async (check, timeoutMs, label) => {
+                  const deadline = Date.now() + timeoutMs;
+                  while (Date.now() < deadline) {
+                    if (await check()) return;
+                    await new Promise((resolve) => setTimeout(resolve, 250));
+                  }
+                  throw new Error(`${leg.name}: ${label} timed out`);
+                };
+                const cursor = (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor;
+                await transport.sendInbound({ conversation: { id: leg.senderId, kind: 'direct' }, senderId: leg.senderId, senderName: `Requester ${leg.name}`, text: `Requester completion QA check: job=${job}` });
+                await until(() => replied('QA-REQUESTER-COMPLETION-STARTED'), 60000, 'start reply');
+                const pidBefore = (await env.gateway.call('system.info', {})).pid;
+                if (leg.revoke) {
+                  await patchConfig({ env, patch: leg.revoke });
+                }
+                const pidAfter = (await env.gateway.call('system.info', {})).pid;
+                // The completion turn must not have reached the model before the revocation applied.
+                const revokedBeforeCompletion = !(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${cursor}`)).some((request) => String(request.prompt ?? '').includes(`QA-REQUESTER-COMPLETION-OUTPUT-${job}`));
+                const launched = await exists(marker('launch'));
+                if (launched) {
+                  await until(() => replied('QA-REQUESTER-COMPLETION-DONE'), 90000, 'completion reply');
+                }
+                const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${cursor}`);
+                const toolName = (request) => request.plannedToolName === 'dispatch_action' ? request.plannedToolArgs?.id : request.plannedToolName;
+                const outputOf = (kind) => {
+                  const index = requests.findIndex((request) => toolName(request) === 'exec' && JSON.stringify(request.plannedToolArgs ?? {}).includes(`qa-requester-${kind}-${job}`));
+                  return index < 0 ? null : String(requests[index + 1]?.toolOutput ?? '').slice(0, 240);
+                };
+                return { job, launched, ran: await exists(marker('completion')), samePid: pidBefore === pidAfter, revokedBeforeCompletion, launchOutput: outputOf('launch'), completionOutput: outputOf('completion') };
+              }
+    - name: an allowed requester's completion runs exec
+      actions:
+        - set: allowed
+          value:
+            expr: "await runLeg({ name: 'allowed', senderId: 'qa-requester-allowed' })"
+        - assert:
+            expr: "allowed.launched && allowed.ran && allowed.completionOutput !== null"
+            message:
+              expr: "`allowed requester's completion did not run exec: ${JSON.stringify(allowed)}`"
+      detailsExpr: "JSON.stringify(allowed)"
+    - name: a guest cannot start the command
+      actions:
+        - set: guest
+          value:
+            expr: "await runLeg({ name: 'guest', senderId: 'qa-requester-guest' })"
+        - assert:
+            expr: "!guest.launched && !guest.ran && guest.launchOutput !== null"
+            message:
+              expr: "`guest started a command or its completion ran: ${JSON.stringify(guest)}`"
+      detailsExpr: "JSON.stringify(guest)"
+    - name: revoking the requester's entry after launch stops the completion's exec
+      actions:
+        - set: revoked
+          value:
+            expr: "await runLeg({ name: 'revoked', senderId: 'qa-requester-revoked', revoke: { tools: { toolsBySender: { 'id:qa-requester-revoked': { deny: ['exec', 'process'] } } } } })"
+        - assert:
+            expr: "revoked.launched && revoked.revokedBeforeCompletion && revoked.samePid && revoked.completionOutput !== null && !revoked.ran"
+            message:
+              expr: "`sender revocation did not stop the completion's exec: ${JSON.stringify(revoked)}`"
+      detailsExpr: "JSON.stringify(revoked)"

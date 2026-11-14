@@ -19,6 +19,7 @@ import {
   getGatewayToolCallerIdentity,
   prepareGatewayToolCallerAssertion,
 } from "../../agents/tools/gateway-caller-context.js";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -60,6 +61,8 @@ const targetScopes = resolveGlobalSingleton(
         };
         /** A scheduled job's recorded requester; see `requesterOwner` on capture. */
         requesterOwner?: SessionEventRequesterOwner;
+        /** The requester and conversation a completion continues; see `retainRequesterOwner`. */
+        retainedRequester?: RetainedSessionEventRequester;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -108,7 +111,8 @@ export async function captureSessionEventTargetForHost(
     /** The producing turn held command-owner authority under `operatorAuthority`. */
     ownerContinuation?: true;
     /**
-     * Continue the producing turn's requester as command owner while they remain one.
+     * Continue the producing turn's requester: their identity and conversation for current
+     * sender and conversation policy, and command-owner authority while they remain an owner.
      * The identity comes from the host-owned caller, never from the producer.
      */
     retainRequesterOwner?: true;
@@ -252,6 +256,22 @@ export async function captureSessionEventTargetForHost(
         : {}),
       ...(options.requesterOwner ? { requesterOwner: options.requesterOwner } : {}),
       ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
+      ...(requester?.messageProvider && requester.senderId
+        ? {
+            retainedRequester: Object.freeze({
+              channel: requester.messageProvider,
+              accountId: requester.accountId ?? undefined,
+              senderId: requester.senderId,
+              senderE164: requester.senderE164 ?? undefined,
+              senderName: requester.senderName ?? undefined,
+              senderUsername: requester.senderUsername ?? undefined,
+              groupSpace: requester.groupSpace ?? undefined,
+              groupChannel: requester.groupChannel ?? undefined,
+              chatType: normalizeChatType(requester.chatType),
+              conversationId: requester.conversationId ?? undefined,
+            }),
+          }
+        : {}),
       ...(requester?.messageProvider &&
       requester.senderId &&
       commandOwner?.source &&
@@ -456,6 +476,22 @@ export type CommandOwnerRequester = Readonly<{
   senderE164?: string;
 }>;
 
+/**
+ * The host-captured requester of a completion and the conversation they spoke in. Keep every
+ * fact that sender and conversation policy match on: the mutable name and username keys, and
+ * the group space and channel name a channel's group policy selects its entry by (a Discord
+ * guild and channel). The group id itself comes from the completion's own route.
+ */
+export type RetainedSessionEventRequester = CommandOwnerRequester &
+  Readonly<{
+    senderName?: string;
+    senderUsername?: string;
+    groupSpace?: string;
+    groupChannel?: string;
+    chatType?: ChatType;
+    conversationId?: string;
+  }>;
+
 /** The retained owner authority and the host-captured requester it belongs to. */
 export function readSessionEventTargetCommandOwner(
   target: SessionEventTarget,
@@ -463,14 +499,25 @@ export function readSessionEventTargetCommandOwner(
   return targetScopes.get(target)?.commandOwner;
 }
 
-function commandOwnerRequesterKey(target: SessionEventTarget): string | undefined {
-  const requester = targetScopes.get(target)?.commandOwner?.requester;
+export function readSessionEventTargetRetainedRequester(
+  target: SessionEventTarget,
+): RetainedSessionEventRequester | undefined {
+  return targetScopes.get(target)?.retainedRequester;
+}
+
+function requesterKey(requester: RetainedSessionEventRequester | undefined): string | undefined {
   return requester
     ? JSON.stringify([
         requester.channel,
         requester.accountId ?? null,
         requester.senderId,
         requester.senderE164 ?? null,
+        requester.senderName ?? null,
+        requester.senderUsername ?? null,
+        requester.groupSpace ?? null,
+        requester.groupChannel ?? null,
+        requester.chatType ?? null,
+        requester.conversationId ?? null,
       ])
     : undefined;
 }
@@ -498,7 +545,11 @@ export function combineSessionEventTargetsForHost(
       readSessionEventTargetOwnerContinuation(target) !==
         readSessionEventTargetOwnerContinuation(first) ||
       hasSessionEventOriginatingCaller(target) !== hasSessionEventOriginatingCaller(first) ||
-      commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
+      requesterKey(readSessionEventTargetCommandOwner(target)?.requester) !==
+        requesterKey(readSessionEventTargetCommandOwner(first)?.requester) ||
+      // The combined turn restores the first target's requester for every target.
+      requesterKey(readSessionEventTargetRetainedRequester(target)) !==
+        requesterKey(readSessionEventTargetRetainedRequester(first)) ||
       readSessionEventTargetRequesterOwner(target) !==
         readSessionEventTargetRequesterOwner(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
