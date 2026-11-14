@@ -464,9 +464,10 @@ describe("resolveMemorySlotDecision", () => {
 
   it("ignores the sidecar flag when the slot names the plugin in another case", () => {
     const params = { id: "MiXeD-memory", kind: "memory", slot: "mixed-memory", selectedId: null };
-    expect(resolveMemorySlotDecision({ ...params, sidecar: true })).toEqual(
-      resolveMemorySlotDecision(params),
-    );
+    expect(resolveMemorySlotDecision({ ...params, sidecar: true })).toEqual({
+      enabled: false,
+      reason: 'memory slot set to "mixed-memory"',
+    });
   });
 });
 
