@@ -172,7 +172,7 @@ export const PluginsControlUiReloadParamsSchema = closedObject({
 });
 export const PluginsControlUiCatalogSchema = closedObject({
   revision: NonEmptyString,
-  plugins: Type.Array(PluginControlUiModuleSchema, { maxItems: 64 }),
+  plugins: Type.Array(PluginControlUiModuleSchema),
   inlineViews: Type.Optional(
     Type.Array(
       closedObject({
@@ -183,7 +183,7 @@ export const PluginsControlUiCatalogSchema = closedObject({
       }),
     ),
   ),
-  diagnostics: Type.Array(PluginControlUiDiagnosticSchema, { maxItems: 64 }),
+  diagnostics: Type.Array(PluginControlUiDiagnosticSchema),
 });
 export const PluginsControlUiChangedEventSchema = closedObject({ revision: NonEmptyString });
 const PluginControlUiActivationSchema = closedObject({
@@ -193,7 +193,7 @@ const PluginControlUiActivationSchema = closedObject({
   error: Type.Optional(Type.String({ maxLength: 512 })),
 });
 export const PluginsControlUiReportParamsSchema = closedObject({
-  reports: Type.Array(PluginControlUiActivationSchema, { minItems: 1, maxItems: 64 }),
+  reports: Type.Array(PluginControlUiActivationSchema, { minItems: 1 }),
 });
 export const PluginsControlUiStatusParamsSchema = closedObject({
   pluginId: Type.Optional(NonEmptyString),
@@ -202,7 +202,7 @@ export const PluginsControlUiStatusResultSchema = closedObject({
   clients: Type.Array(
     closedObject({
       connId: NonEmptyString,
-      activations: Type.Array(PluginControlUiActivationSchema, { maxItems: 64 }),
+      activations: Type.Array(PluginControlUiActivationSchema),
     }),
     { maxItems: 128 },
   ),

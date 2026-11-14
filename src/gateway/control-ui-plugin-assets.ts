@@ -47,7 +47,6 @@ import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-genera
 
 const log = createSubsystemLogger("gateway/control-ui");
 
-const MAX_CONTROL_UI_PLUGINS = 64;
 const MAX_CONTROL_UI_CATALOG_BYTES = 64 * 1024 * 1024;
 const MAX_CONTROL_UI_CATALOG_REVISIONS = 256;
 
@@ -187,9 +186,6 @@ async function refreshBrowserCatalog(
   reloadManifest = false,
 ): Promise<void> {
   const owners = browserOwners(registry);
-  if (owners.length > MAX_CONTROL_UI_PLUGINS) {
-    throw new Error(`Native Control UI supports at most ${MAX_CONTROL_UI_PLUGINS} active plugins`);
-  }
   if (pluginId && !owners.some((record) => record.id === pluginId)) {
     throw new Error("No active Control UI entrypoint for this plugin");
   }
