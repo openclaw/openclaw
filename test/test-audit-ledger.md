@@ -858,8 +858,24 @@ redaction assertion follow-up; no existing production leak is claimed.
 
 At `08ae8c62b83ede02db3a8d2bc3ce36206008d253`, the external-proxy child-process
 case checks four response statuses but only one shared response-body substring.
-Qualification is pending for complete per-response payload assertions in the
-existing case. Both external-proxy declarations and their routing contracts remain.
+Each response now has a complete status/body assertion. Both declarations and
+expanded cases remain, including WebSocket bypass, exact CONNECT targets and
+the separate target-TLS-hostname proof. Test code changes by +6/-5 lines;
+production and shared support are unchanged.
+
+The baseline passes both cases even when the loopback server returns a corrupted
+body for one request pathname at a time: Undici fetch, global fetch, Node HTTP
+and the explicit HTTP agent. The repair rejects all four controls at the
+corresponding payload assertion while the TLS case passes. The restored candidate
+passes both cases. All temporary fixture mutations were restored byte for byte;
+production was never mutated. The cold baseline command took 474.76 seconds
+including builds; the warm candidate took 73.55 seconds, with 31.04 seconds
+reported by Vitest, mostly transformation. These are not speed-comparison data.
+
+Independent source review retains the realtime provider's two admission/refusal
+rows and the bare-WebSocket mock that exposes its Bun transport regression.
+Its sequential cleanup can skip remaining closers after an earlier failure;
+that is a separate source-only follow-up, not a measured leak or applied repair.
 
 ## Pending qualification and proof repairs
 
