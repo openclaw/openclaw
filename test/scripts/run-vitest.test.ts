@@ -527,7 +527,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
   it("defers missing-file preflight to Vitest with explicit path owners", () => {
     for (const argv of [
-      ["--config", gatewayConfig, "server/health-state.test.ts"],
+      ["--config", gatewayConfig, "server/health-missing.test.ts"],
       ["--root", "packages/example", "src/example.test.ts"],
       ["--dir=src", "example.test.ts"],
     ]) {

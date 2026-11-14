@@ -296,16 +296,16 @@ describe("PostgreSQL conformance selection", () => {
     [["test/scripts/generate-postgres-schema.test.ts"], true],
     [["extensions/logbook/src/postgres-store.test.ts"], true],
     [["extensions/team-reports/src/postgres-store.test.ts"], true],
-    [["src/gateway/server.hooks.test.ts"], false],
+    [["src/gateway/hooks.test.ts"], false],
     [["src/config/sessions/artifacts.test.ts"], false],
     [["extensions/memory-core/src/config.test.ts"], false],
     [["extensions/team-reports/src/store-read-budget.test.ts"], false],
     [["src/agents/harness/context-engine-turn-outbox.test.ts"], false],
     [["src/state/openclaw-agent-db-disposal.test.ts"], false],
     [["src/gateway/server-test-support.ts"], true],
-    [["src/gateway/server.hooks.test.ts", "src/gateway/server.ts"], true],
+    [["src/gateway/hooks.test.ts", "src/gateway/server.ts"], true],
     [
-      ["src/gateway/server.hooks.test.ts"],
+      ["src/gateway/hooks.test.ts"],
       false,
       { eventName: "workflow_dispatch", releaseGate: true },
     ],
@@ -376,7 +376,7 @@ describe("PostgreSQL conformance selection", () => {
         bundledPlanner: true,
         runNode: false,
         eventName: "pull_request",
-        changedPaths: ["src/gateway/server.hooks.test.ts"],
+        changedPaths: ["src/gateway/hooks.test.ts"],
         targetFiles: ["scripts/test-database-conformance.mjs"],
         changedPlannerSource: `
         import { writeFileSync } from "node:fs";

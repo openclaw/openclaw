@@ -352,10 +352,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.gateway-methods.config.ts"],
-      files: [
-        "src/gateway/server-methods/session-catalog-privacy.test.ts",
-        "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
-      ],
+      files: ["src/gateway/server-methods/sessions-lifecycle-dormant.test.ts"],
       preset: "runtime",
     },
     {

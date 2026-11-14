@@ -1102,7 +1102,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/gateway/worker-environments/placement-move-abandon.test.ts",
     "src/gateway/worker-environments/prepared-pool-build.test.ts",
     "src/gateway/worker-environments/provider-destroy-timeout.test.ts",
-    "src/gateway/worker-environments/provider-provisioning.test.ts",
     "src/gateway/worker-environments/repository-project-access.test.ts",
     "src/gateway/worker-environments/store-retention.test.ts",
     "src/gateway/worker-environments/worker-turn-launcher.claim-recovery.test.ts",

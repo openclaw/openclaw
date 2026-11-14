@@ -879,7 +879,7 @@ test("write-scoped operators manage chat organization but not admin session sett
       providerOverride: "openai",
     });
     // Sticky configured-default persistence is handler policy and is covered by
-    // sessions-mutations.sticky-model.test.ts; this dispatch proof asserts session state only.
+    // sessions-patch.test.ts; this dispatch proof asserts session state only.
   } finally {
     ws.close();
   }
