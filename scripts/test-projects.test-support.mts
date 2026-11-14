@@ -3646,11 +3646,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
-    [
-      "ci-git-owner",
-      "ci-platform-checkout",
-      "src/scripts/ci-changed-scope.git-owner.test.ts",
-    ],
+    ["ci-git-owner", "ci-platform-checkout", "src/scripts/ci-changed-scope.git-owner.test.ts"],
   ],
   [/^\.github\/actions\/publish-generated-pr\//u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
