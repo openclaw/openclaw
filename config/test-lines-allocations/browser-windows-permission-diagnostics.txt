@@ -1,0 +1,2 @@
+203
+# Registered CLI regression for fail-closed Windows permission classification and redacted errors.

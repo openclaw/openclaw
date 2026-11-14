@@ -34,6 +34,17 @@ export type DiscoveredChromeStoreExtension = Omit<DiscoveredChromeExtension, "ex
   enabled: boolean;
   awaitingApproval: boolean;
 };
+export class ExtensionPathPermissionsError extends Error {
+  constructor(reason: "unverified" | "unsafe") {
+    super(
+      reason === "unverified"
+        ? "Cannot verify Windows owner or ACL: permission inspection is unavailable or incomplete. Chrome extension setup remains blocked. Collect the OpenClaw version and this diagnostic for the installation maintainer. Do not loosen permissions to bypass verification."
+        : "Refusing unsafe Windows owner or ACL: the permission check reported an untrusted owner or group/world write access. Ask the installation maintainer to review ownership and write permissions before retrying.",
+    );
+    this.name = "ExtensionPathPermissionsError";
+  }
+}
+
 export async function approvedInstallRealpaths(
   installed: string,
   bundled: string,
@@ -150,14 +161,18 @@ export async function assertOwnedPath(
   }
   if (process.platform === "win32") {
     const permissions = await inspectPathPermissions(target);
+    if (!permissions.ok || permissions.source !== "windows-acl") {
+      throw new ExtensionPathPermissionsError("unverified");
+    }
     if (
-      !permissions.ok ||
-      permissions.source !== "windows-acl" ||
-      permissions.ownerTrusted !== true ||
+      permissions.ownerTrusted === false ||
       permissions.groupWritable ||
       permissions.worldWritable
     ) {
-      throw new Error(`Refusing unsafe Windows owner or ACL at ${target}`);
+      throw new ExtensionPathPermissionsError("unsafe");
+    }
+    if (permissions.ownerTrusted !== true) {
+      throw new ExtensionPathPermissionsError("unverified");
     }
   } else {
     const uid = process.getuid?.();
