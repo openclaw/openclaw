@@ -292,6 +292,7 @@ function PaletteSearch(props: {
     Boolean(current().searchQuery.trim()) &&
     !sessionSearchPending() &&
     !catalogSearchPending() &&
+    !isPending(props.modelRead) &&
     !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
