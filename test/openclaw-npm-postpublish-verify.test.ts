@@ -524,12 +524,12 @@ function makeLegacyFixture(source = legacyCompanionSource, fileName?: string) {
   };
 }
 
-it.each(["//#region", "//"])(
+it.each(["//#region", "//", "//!"])(
   "uses generated source ownership only when the compatibility gate is enabled (%s)",
   (label) => {
     const source = legacyCompanionSource
-      .replace("//#region", label)
-      .replace("//#endregion", label === "//" ? "" : "//#endregion");
+      .replace("//#region ", label === "//!" ? label : `${label} `)
+      .replace("//#endregion", label === "//#region" ? "//#endregion" : "");
     const { packageRoot, legacyErrors } = makeLegacyFixture(source);
     expectDependencyErrors(packageRoot, "@discordjs/voice");
     expect(legacyErrors()).toStrictEqual([]);

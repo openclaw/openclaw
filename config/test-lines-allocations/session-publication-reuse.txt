@@ -1,2 +1,0 @@
-# Detect repeated delta hashing after transcript writes and repeated active-run projection within a publication, while retaining refresh and viewer correctness.
-84

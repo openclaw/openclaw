@@ -1,9 +1,13 @@
-import { Show } from "solid-js";
+import { lazy, Loading, Show } from "solid-js";
 import { isQuestionThumbnail } from "../../../packages/gateway-protocol/src/question-media.js";
 import type { McpAppIcon as AppIcon } from "../../../src/shared/mcp-app-extensions.js";
 import { Icon } from "./solid/icon.tsx";
 
-export function McpAppIcon(props: { icons: readonly AppIcon[] }) {
+const PluginIcon = lazy(() => import("./mcp-app-plugin-icon.tsx"));
+
+type IconProps = { icons: readonly AppIcon[]; class?: string; pluginId?: string };
+
+function AdvertisedIcon(props: IconProps) {
   const icon = () =>
     props.icons.find(
       (candidate) =>
@@ -11,9 +15,26 @@ export function McpAppIcon(props: { icons: readonly AppIcon[] }) {
         isQuestionThumbnail(candidate.src),
     );
   return (
-    <Show when={icon()} fallback={<Icon name="puzzle" />}>
+    <Show when={icon()} fallback={<Icon name="puzzle" class={props.class} />}>
       {(image) => (
-        <img class="mcp-app-icon" src={image().src} alt="" referrerpolicy="no-referrer" />
+        <img
+          class={props.class ?? "mcp-app-icon"}
+          src={image().src}
+          alt=""
+          referrerpolicy="no-referrer"
+        />
+      )}
+    </Show>
+  );
+}
+
+export function McpAppIcon(props: IconProps) {
+  return (
+    <Show when={props.pluginId} fallback={<AdvertisedIcon {...props} />}>
+      {(id) => (
+        <Loading fallback={<AdvertisedIcon {...props} />}>
+          <PluginIcon pluginId={id()} icons={props.icons} class={props.class} />
+        </Loading>
       )}
     </Show>
   );

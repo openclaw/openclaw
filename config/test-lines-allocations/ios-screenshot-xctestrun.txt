@@ -1,2 +1,0 @@
-# Fresh screenshot test specification prerequisite and capture handoff in the existing Fastlane fixture.
-14

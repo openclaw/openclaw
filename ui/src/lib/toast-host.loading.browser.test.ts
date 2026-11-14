@@ -19,6 +19,7 @@ it("keeps the offline failure message and recovery controls visible", async () =
   const dismissed = vi.fn();
   showToast({ severity: "info", message: "Saved", onDismiss: dismissed, durationMs: 60_000 });
 
+  await import("./toast-view.tsx");
   await waitForSolid(() => expect(host.querySelector('[role="alert"]')).not.toBeNull());
   const card = host.querySelector<HTMLElement>('[role="alert"]')!;
   const content = card.querySelector<HTMLElement>(".app-toast__content")!;

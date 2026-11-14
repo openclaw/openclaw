@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { openChatModelPicker, revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { openChatModelPicker } from "../test-helpers/select-picker-e2e.ts";
 import { modelPicker, runtimeModel } from "./chat-runtime-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -24,13 +24,19 @@ suite.define(() => {
       const { picker, runtime } = modelPicker(page);
       await openChatModelPicker(picker);
       for (const [id, name, context] of [
-        ["codex", "GPT-5.6 Sol codex", "200k · Codex"],
-        ["openclaw", "GPT-5.6 Sol", "1M · OpenClaw"],
+        ["codex", "GPT-5.6 Sol codex", "200k"],
+        ["openclaw", "GPT-5.6 Sol", "1M"],
       ] as const) {
         const option = runtime(id);
-        await revealChatModelOption(picker, "openai/gpt-5.6-sol", { runtime: id });
+        await picker
+          .locator(`.chat-controls__runtime-option[data-chat-model-runtime="${id}"]`)
+          .click();
+        await option.waitFor({ state: "visible" });
         expect(await option.locator(".chat-controls__model-option-name").textContent()).toBe(name);
         expect(await option.textContent()).toContain(context);
+        expect(await option.getAttribute("aria-label")).toContain(
+          id === "codex" ? "Codex" : "OpenClaw",
+        );
       }
     });
   });

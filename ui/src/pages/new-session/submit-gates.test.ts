@@ -375,6 +375,8 @@ describe("DraftSubmissionFlow submit gates", () => {
     if (!(SILENT_SUBMIT_GATES as readonly string[]).includes(block?.gate ?? "")) {
       expect(block?.reason).toBeTruthy();
       expect(flow.submitDisabledReason()).toBe(block?.reason);
+      flow.noteBlockedSubmitAttempt();
+      expect(flow.blockedSubmitNotice({ includePageRendered: true })).toBe(block?.reason);
     }
   });
 

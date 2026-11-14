@@ -11,6 +11,7 @@ import type {
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
 import * as execDefaults from "../exec-defaults.js";
+import { resolveReplyFailoverFacts } from "../failover/request-error-facts.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
@@ -488,7 +489,11 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(execute).not.toHaveBeenCalled();
     expect(busy.close).not.toHaveBeenCalled();
     expect(
-      resolveReplyFailureSummary({ error, message: String(error), reason: "rate_limit" })?.text,
+      resolveReplyFailureSummary({
+        error,
+        message: String(error),
+        facts: resolveReplyFailoverFacts(error, String(error)),
+      })?.text,
     ).toBe(
       "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish.",
     );

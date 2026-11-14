@@ -1123,11 +1123,17 @@ private enum RootTabsPreviewGatewayState {
         case .offline:
             break
         case .connecting:
-            appModel.gatewayStatusText = "Connecting..."
+            appModel.setGatewayConnectionProgress(.connecting)
         case .connected:
             appModel.enterAppleReviewDemoMode()
         case .error:
-            appModel.gatewayStatusText = "Gateway error: connection refused"
+            guard let problem = GatewayConnectionProblemMapper.map(error: URLError(.cannotConnectToHost))
+            else { return }
+            appModel.failGatewayPreconnectVerification(
+                problem,
+                stableID: "preview",
+                host: nil,
+                expectedGeneration: appModel.gatewayConnectGeneration)
         }
     }
 }

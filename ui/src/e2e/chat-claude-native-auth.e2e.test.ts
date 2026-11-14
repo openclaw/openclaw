@@ -9,7 +9,7 @@ const suite = createControlUiE2eSuite({ name: "Claude native login model badge" 
 
 suite.define(() => {
   it.each([false, true])(
-    "labels Claude CLI native login separately from the direct API sibling (API configured: %s)",
+    "keeps Claude native login and direct API account metadata distinct (API configured: %s)",
     async (apiConfigured) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const models = [
@@ -62,18 +62,14 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         const { picker, trigger } = modelPicker(page);
         await trigger.click();
-        const native = picker.locator('[data-chat-model-provider-group="claude-cli"]');
+        const native = picker.locator('[data-chat-model-provider-group="anthropic"]');
         const api = picker.locator('[data-chat-model-provider-group="anthropic"]');
         await native.waitFor({ state: "visible" });
-        await api.waitFor({ state: "visible" });
         const menu = picker.locator("[data-anchored-overlay]");
         const frame = await takeControlUiScreenshotFrame(
           page,
           menu,
-          [
-            native.locator(".chat-controls__provider-heading"),
-            api.locator(".chat-controls__provider-heading"),
-          ],
+          [native.locator(".chat-controls__provider-heading")],
           {
             animations: "disabled",
             elements: [menu],
@@ -94,8 +90,12 @@ suite.define(() => {
         expect(await native.locator("[data-auth-kind]").getAttribute("data-auth-kind")).toBe(
           "subscription",
         );
+        await picker.locator('[data-chat-model-option="anthropic/claude-haiku-4-5"]').click();
+        await trigger.click();
         if (apiConfigured) {
-          expect(await api.locator(".chat-controls__auth-meta-label").textContent()).toBe("API");
+          expect(await api.locator(".chat-controls__auth-meta-label").textContent()).toBe(
+            "API key",
+          );
         } else {
           expect(await api.locator(".chat-controls__auth-meta-label").count()).toBe(0);
         }

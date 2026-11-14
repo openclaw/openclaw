@@ -1,4 +1,5 @@
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
@@ -238,4 +239,33 @@ it("keeps the full model ids in title for truncated controls", async () => {
     ).toContain(primary),
   );
   expect(container.querySelector(".multi-select__chip")?.getAttribute("title")).toBe(fallback);
+});
+
+it.each([
+  [
+    "its own utility model and fallbacks",
+    { utilityModel: { primary: existingFallback, fallbacks: [nextFallback] } },
+    "Claude Sonnet 4.6",
+    `This agent's utility fallbacks: ${nextFallback}`,
+  ],
+  ["an unavailable own utility model", { utilityModel: "retired/small" }, "retired/small", null],
+  ["the inherited utility model", {}, `Inherit default (${inheritedAgentModel})`, null],
+] as const)("shows %s and edits the agent's override", async (_, beta, shown, fallbackNote) => {
+  const onUtilityModelChange = vi.fn();
+  const container = renderAgents({
+    configForm: agentConfig({ utilityModel: inheritedAgentModel }, beta),
+    overview: { modelCatalog: catalog, onUtilityModelChange },
+  });
+  await updatePickers(container);
+  const picker = container.querySelector<HTMLButtonElement>("#agent-utility-model")!;
+  expect(picker.textContent).toContain(shown);
+  const row = picker.closest(".settings-row")!;
+  expect(row.textContent?.includes("utility fallbacks")).toBe(fallbackNote !== null);
+  if (fallbackNote) {
+    expect(row.textContent).toContain(fallbackNote);
+  }
+  await choosePickerValue(picker, "");
+  expect(onUtilityModelChange).toHaveBeenLastCalledWith("beta", "");
+  await choosePickerValue(picker, nextFallback);
+  expect(onUtilityModelChange).toHaveBeenLastCalledWith("beta", nextFallback);
 });

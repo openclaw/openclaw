@@ -1,2 +1,0 @@
-# Extend metadata projection regression to maintenance reads and fresh lifecycle revisions.
-18

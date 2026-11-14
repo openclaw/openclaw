@@ -56,12 +56,8 @@ function mentionScenario() {
 }
 async function anchors(palette: Locator) {
   return palette.evaluate((element) =>
-    [
-      ".cmd-palette",
-      ".cmd-palette__input",
-      ".cmd-palette__create",
-      'button[aria-label="New session settings"]',
-    ].map((selector) => {
+    // The people row sits between the text and the docked footer, as in the composer.
+    [".cmd-palette", ".cmd-palette__input"].map((selector) => {
       const rect = element.querySelector(selector)!.getBoundingClientRect();
       return { x: rect.x, y: rect.y };
     }),
@@ -95,6 +91,7 @@ suite.define(() => {
         await page.keyboard.press("ControlOrMeta+K");
         const cold = page.locator(".cmd-palette[aria-busy=true] textarea");
         await cold.waitFor({ state: "visible" });
+        await cold.press("Tab");
         await cold.pressSequentially("@Al");
         heldModule.release();
         const palette = page.locator("openclaw-command-palette");
@@ -122,6 +119,7 @@ suite.define(() => {
         page,
         suite.server.baseUrl,
       );
+      await input.press("Tab");
       await page.evaluate(() => document.fonts.ready);
       const widths = [1280, 390];
       const before = new Map<number, Awaited<ReturnType<typeof anchors>>>();

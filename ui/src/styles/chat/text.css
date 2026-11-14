@@ -1,11 +1,32 @@
+/* Reasoning reads like a tool row (tool-cards.css shares its type and color):
+   one line that opens into the full thought. The collapsed preview overlays
+   the toggle's middle column. */
+.chat-reasoning {
+  display: grid;
+  grid-template-columns: 18px minmax(0, auto) 14px;
+}
+
+.chat-reasoning > button {
+  display: grid;
+  grid-area: 1 / 1 / 2 / -1;
+  grid-template-columns: subgrid;
+  padding: 0;
+}
+
+/* Activity text keeps the row's color and font smoothing, like the tool rows. */
 .chat-thinking {
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent);
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
+  grid-column: 2 / -1;
+}
+
+/* The inert collapsed thought clamps to its first line. The negative margin
+   cancels the first block's default 1em top margin inside the clamp. */
+.chat-thinking--preview {
+  display: -webkit-box;
+  grid-area: 1 / 2;
+  margin-top: -1em;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
 
 .chat-message-disclosure {
@@ -15,12 +36,12 @@
 .chat-message-disclosure:not(.is-expanded) .chat-message-disclosure__content {
   /* Legacy line clamp compresses hidden blocks that browser descendant reveal can
      expose as overlapping text. Clip the natural Markdown layout instead. */
-  max-height: var(--chat-disclosure-clamp, calc(var(--chat-text-size) * 1.5 * 5));
+  max-height: var(--chat-disclosure-clamp, calc(var(--chat-text-size) * 1.6 * 5));
   overflow: hidden;
 }
 
 .chat-message-disclosure--forwarded:not(.is-expanded) > .chat-message-disclosure__content {
-  max-height: calc(var(--chat-text-size) * 1.5 * 2.5);
+  max-height: calc(var(--chat-text-size) * 1.6 * 2.5);
 }
 
 .chat-message-disclosure--forwarded:has(> .chat-message-disclosure__toggle[hidden])
@@ -32,12 +53,12 @@
   > .chat-message-disclosure__content {
   mask-image: linear-gradient(
     to bottom,
-    black calc(100% - var(--chat-disclosure-fade-size, var(--chat-text-size) * 1.5 * 0.5)),
+    black calc(100% - var(--chat-disclosure-fade-size, var(--chat-text-size) * 1.6 * 0.5)),
     rgb(0 0 0 / 35%)
   );
 
   /* Expand a human message before scrolling code outside its readable preview. */
-  .chat-group.user & :where(pre) {
+  .chat-group.user & :where(pre, .code-block-viewport) {
     overflow: clip;
   }
 }
@@ -135,7 +156,7 @@
   height: 0.85em;
   margin-inline-end: 0.3em;
   vertical-align: -0.05em;
-  border: 1px solid var(--muted);
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
   border-radius: 3px;
   background: repeating-conic-gradient(var(--bg-elevated) 0% 25%, var(--border) 0% 50%) 50% / 8px
     8px;
@@ -334,9 +355,9 @@
   background: color-mix(in srgb, var(--accent) 7%, var(--bg-elevated));
 }
 
+/* Markdown has no row headers, so the first column keeps the body weight. */
 .chat-text :where(tbody td:first-child) {
   color: var(--text-strong);
-  font-weight: 500;
 }
 
 /* Auto layout gives prose more space than short values, then wraps it. */
@@ -373,7 +394,7 @@
 
   :where(th),
   :where(td) {
-    padding-block: 12px;
+    padding-block: 9px;
     border-right: 0;
     border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
     min-width: 0;
@@ -390,9 +411,12 @@
     padding-inline-start: 0;
   }
 
+  /* Column labels step back from the data; the strong rule still separates them. */
   :where(th) {
     border-bottom-color: var(--border-strong);
     background: transparent;
+    color: color-mix(in srgb, currentColor 78%, transparent);
+    font-weight: 500;
   }
 
   :where(tbody tr) {
@@ -415,8 +439,14 @@
   box-shadow: 0 1px var(--border-strong);
 }
 
-/* The transcript, excluding reserved Details space, owns spare width.
-   Only top-level assistant tables borrow it; prose and nested tables stay put. */
+/* Resolve transcript-relative lengths before inheriting into message containers. */
+@property --chat-table-outset {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+/* Only top-level assistant tables borrow spare width; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
   .chat-group.assistant:has(> :is(.chat-avatar, .chat-avatar-slot)) {
     --chat-leading-table-clearance: var(--chat-avatar-column);
@@ -440,19 +470,22 @@
   }
 
   .chat-virtual-row {
-    --chat-table-outset: max(
+    --chat-table-outset: clamp(
       0px,
-      min(
-        12rem,
-        calc(
-          (
-              100cqw - var(--chat-table-reserved-space, 0px) -
-                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
-            ) /
-            2
-        )
-      )
+      calc(
+        (
+            100cqw - var(--chat-table-reserved-space, 0px) -
+              var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
+          ) /
+          2
+      ),
+      12rem
     );
+  }
+
+  /* Bubble surfaces own their width; wide tables scroll inside that surface. */
+  .chat--bubbles .chat-virtual-row {
+    --chat-table-outset: 0px;
   }
 
   .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
@@ -461,9 +494,9 @@
   }
 
   .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
-    width: calc(100% + 2 * var(--chat-table-outset, 0px));
+    width: calc(100% + 2 * var(--chat-table-outset));
     max-width: none;
-    margin-inline: calc(-1 * var(--chat-table-outset, 0px));
+    margin-inline: calc(-1 * var(--chat-table-outset));
   }
 
   /* Keep the existing phone-landscape layout, including its touch controls. */
@@ -471,7 +504,7 @@
     .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
       width: max-content;
       min-width: 100%;
-      max-width: calc(100% + 2 * var(--chat-table-outset, 0px));
+      max-width: calc(100% + 2 * var(--chat-table-outset));
       margin-inline: 0;
       margin-bottom: 24px;
       left: 50%;
@@ -519,6 +552,13 @@
 .chat-thinking {
   --chat-markdown-indent: var(--space-6);
   --chat-markdown-marker-gap: var(--space-2);
+  /* Code blocks keep a half-strength outline; a full-strength box competes with
+     the prose around it. */
+  --chat-outline: color-mix(
+    in srgb,
+    var(--inline-code-border, var(--border-strong)) 50%,
+    transparent
+  );
 }
 
 :is(.chat-text, .chat-thinking) :where(ul),
@@ -758,10 +798,10 @@
   padding: 0.08em 0.45em;
   padding-inline-start: 1.7em;
   border-radius: var(--radius-sm);
-  background: var(--github-item-bg);
+  background: color-mix(in srgb, var(--github-item-bg) 60%, var(--bg));
   /* Unknown, unavailable and draft states remain neutral, not disabled. */
   color: color-mix(in srgb, var(--github-item-tone) 65%, var(--text-strong));
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.25;
   text-decoration: none;
   vertical-align: baseline;
@@ -890,6 +930,25 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Session and template references share the GitHub chip's opaque neutral
+   surface and regular weight: every reference chip in a message reads the same,
+   and its ink keeps its contrast on any bubble color. */
+.chat-text a.markdown-session-link,
+.chat-text a.markdown-template-link {
+  background: color-mix(in srgb, var(--github-item-bg) 60%, var(--bg));
+  font-weight: 400;
+}
+
+.chat-text a.markdown-template-link {
+  padding: 0.08em 0.45em;
+  border-radius: var(--radius-sm);
+  line-height: 1.25;
+}
+
+.chat-text a.markdown-template-link:hover {
+  background: var(--github-item-hover-bg);
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-session-link > code {
@@ -1073,6 +1132,8 @@
 .chat-text :where(code) {
   font-family: var(--mono);
   font-size: 0.9em;
+  /* Show the characters that were written: => stays two glyphs. */
+  font-variant-ligatures: none;
 }
 
 .chat-text :where(.markdown-inline-image-button) {
@@ -1148,7 +1209,11 @@
   background: var(--inline-code-bg, var(--bg-muted));
   padding: 0.1em 0.2em;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--inline-code-border, var(--border-strong));
+  /* The fill alone marks the chip: a reply can carry a dozen, and a box around
+     each one competes with the prose. A wrapped span keeps its padding and
+     corners on every line. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -1168,7 +1233,7 @@
 
 .chat-text :where(pre) {
   background: var(--inline-code-bg, var(--bg-muted));
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--chat-outline);
   border-radius: var(--radius-md);
   margin-top: 0.75em;
   padding: 10px 12px;
@@ -1182,6 +1247,44 @@
 .chat-text :where(.code-block-wrapper pre) {
   border: 0;
   background: transparent;
+}
+
+/* Human fences keep the passive block's box; their one control sits in the
+   corner of the first row instead of taking a toolbar row. */
+.code-block-wrapper.code-block-wrapper--wrap-only {
+  border-color: var(--border-strong);
+  background: var(--user-code-bg);
+}
+
+.chat-text .code-block-wrapper {
+  border-color: var(--chat-outline);
+}
+
+.chat-group.user .code-block-wrapper--wrap-only pre {
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.code-block-wrapper--wrap-only > .code-block-wrap {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+}
+
+.code-block-wrapper--wrap-only .code-block-wrap__icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Keep the first wrapped row clear of the control. */
+.code-block-wrapper--wrap-only.is-wrapped code::before {
+  float: right;
+  width: 26px;
+  height: 1lh;
+  content: "";
 }
 
 .chat-group.assistant .chat-bubble:has(.code-block-wrapper),
@@ -1299,6 +1402,39 @@
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
 
+/* Human fences wrap by default, so the toggle appears only while it changes the
+   layout, and unwrapping must outrank the human-fence wrap rule above. */
+.code-block-wrapper--wrap-only:not(.has-horizontal-overflow) .code-block-wrap {
+  visibility: hidden;
+}
+
+.code-block-wrapper--wrap-only:not(.is-wrapped) .code-block-viewport :where(pre code) {
+  width: max-content;
+  min-width: 100%;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+/* Include the end padding in the scrollable width so every line can clear the fade. */
+.chat-group.user .code-block-wrapper--wrap-only:not(.is-wrapped) pre {
+  width: max-content;
+  min-width: 100%;
+  padding-right: 48px;
+}
+
+.code-block-wrapper--wrap-only.has-horizontal-overflow:not(.is-wrapped) .code-block-viewport {
+  --code-block-first-row: calc(10px + var(--code-block-line-height));
+
+  mask-image:
+    linear-gradient(to right, black calc(100% - 48px), transparent calc(100% - 34px)),
+    linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-position: top, bottom;
+  mask-size:
+    100% var(--code-block-first-row),
+    100% calc(100% - var(--code-block-first-row));
+  mask-repeat: no-repeat;
+}
+
 .code-block-wrap:hover {
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--text);
@@ -1348,17 +1484,18 @@
   position: relative;
   border-inline-start: 0;
   margin-left: 0;
-  color: var(--muted);
+  /* Follows the ink of the surface it sits on, including tinted bubbles. */
+  color: color-mix(in srgb, currentColor 78%, transparent);
   background: transparent;
-  padding: 8px 12px;
+  padding: 2px 12px;
 }
 
 .chat-text :where(blockquote)::before {
   position: absolute;
   content: "";
-  inset-block: 4px;
+  inset-block: 2px;
   inset-inline-start: 0;
-  width: 3px;
+  width: 2px;
   border-radius: var(--radius-full);
   background: var(--border-strong);
 }
@@ -1394,7 +1531,7 @@
 
   /* Left padding stays 12px so the quote border inset matches desktop. */
   .chat-text :where(blockquote) {
-    padding: 6px 10px 6px 12px;
+    padding: 2px 10px 2px 12px;
   }
 }
 
@@ -1413,7 +1550,7 @@
   > .chat-assistant-attachments,
   > .chat-assistant-attachment-card,
   > .chat-pairing-qr-notices,
-  > .chat-thinking,
+  > .chat-reasoning,
   > .chat-tool-card__widget-host,
   > .chat-text,
   > .chat-message-disclosure,
@@ -1425,7 +1562,7 @@
     + .chat-assistant-attachments,
     + .chat-assistant-attachment-card,
     + .chat-pairing-qr-notices,
-    + .chat-thinking,
+    + .chat-reasoning,
     + .chat-tool-card__widget-host,
     + .chat-text,
     + .chat-message-disclosure,
@@ -1454,8 +1591,36 @@
   margin-block-start: var(--chat-block-gap);
 }
 
-.chat-text > :where(h1, h2, h3, h4):where(:not(:first-child)) {
+.chat-text > :where(h1, h2, h3, h4, h5, h6):where(:not(:first-child)) {
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
+}
+
+/* A heading sits close to what it introduces, including a sub-heading. */
+.chat-text > :where(h1, h2, h3, h4, h5, h6) + * {
+  margin-block-start: calc(var(--chat-block-gap) * 0.4);
+}
+
+.chat-text :where(h1, h2, h3, h4, h5, h6) {
+  font-weight: 650;
+  line-height: 1.3;
+  text-wrap: pretty;
+}
+
+.chat-text :where(h1) {
+  font-size: 1.6em;
+}
+
+.chat-text :where(h2) {
+  font-size: 1.3em;
+}
+
+.chat-text :where(h3) {
+  font-size: 1.125em;
+}
+
+/* h4 is already body size; h5 and h6 would otherwise render smaller than prose. */
+.chat-text :where(h5, h6) {
+  font-size: 1em;
 }
 
 /* Contain the preview's reserved toolbar space within its message block. */

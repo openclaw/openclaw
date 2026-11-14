@@ -48,6 +48,62 @@ describe("assistant failure recovery", () => {
     vi.useRealTimers();
   });
 
+  it.each(
+    [undefined, 30_000, 3 * 86_400_000].flatMap((retryAfterMs) =>
+      [false, true].map((fallback) => ({ retryAfterMs, fallback })),
+    ),
+  )(
+    "renders provider retryAfterMs=$retryAfterMs with fallback=$fallback",
+    async ({ retryAfterMs, fallback }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-13T14:00:00Z"));
+      const input = makeInput(
+        { errorMessage: "429 Too Many Requests", retryAfterMs },
+        { fallbackConfigured: fallback },
+      );
+      const config = {
+        agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+        ui: { prefs: { locale: "en-US" } },
+      };
+      input.runInput.runParams.config = config;
+      let failure: FailoverError | undefined;
+      const outcome = runWithModelFallback({
+        cfg: config,
+        provider: "anthropic",
+        model: "test-model",
+        manifestPlugins: [],
+        skipAuthProfileRuntime: true,
+        fallbacksOverride: fallback ? ["openai/fixture-next"] : [],
+        run: async (provider) => {
+          if (provider === "openai") {
+            return "Fallback answered.";
+          }
+          failure = await expectFailure(input);
+          throw failure;
+        },
+      });
+      if (fallback) {
+        expect(await outcome).toMatchObject({ provider: "openai", result: "Fallback answered." });
+      } else {
+        await expect(outcome).rejects.toBeInstanceOf(FailoverError);
+      }
+      const expected =
+        retryAfterMs === 3 * 86_400_000
+          ? "⚠️ anthropic/test-model is rate-limited. The provider says to retry in 3 days (Nov 16, 2026 at 6:00 AM PST). Choose another model in the model picker, or configure Model fallbacks in Settings (`agents.defaults.model.fallbacks`)."
+          : "⚠️ The AI service needs a short break. Please try again in a few minutes.";
+      // Node and Bun's ICU versions differ in the date/time separator.
+      expect([expected, expected.replace("2026 at", "2026,")]).toContain(failure?.message);
+      expect(
+        buildKnownAgentRunFailureReplyPayload({
+          err: failure,
+          sessionCtx: {},
+          resolvedVerboseLevel: "off",
+          config,
+        })?.text,
+      ).toBe(failure?.message);
+    },
+  );
+
   it("explains retry exhaustion without replacing the raw provider failure", async () => {
     const providerError = "429 rate limit exceeded. Please try again in 221ms.";
     const input = makeInput({ errorMessage: providerError });

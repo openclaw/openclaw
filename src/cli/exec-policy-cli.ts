@@ -26,6 +26,7 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   buildExecPolicyToolAccess,
@@ -127,6 +128,7 @@ function sanitizeExecPolicyMessage(value: unknown): string {
 
 async function buildLocalExecPolicyShowPayload(
   options?: ExecPolicyShowOptions,
+  signal?: AbortSignal,
 ): Promise<ExecPolicyShowPayload> {
   const configSnapshot = await readConfigFileSnapshot();
   const approvalsSnapshot = await readExecApprovalsSnapshotAsync();
@@ -163,7 +165,7 @@ async function buildLocalExecPolicyShowPayload(
     return payload;
   }
   try {
-    payload.toolAccess = await buildExecPolicyToolAccess(config, options);
+    payload.toolAccess = await buildExecPolicyToolAccess(config, options, signal);
   } catch (error) {
     if (hasExplicitTarget || !(error instanceof AgentSelectionRequiredError)) {
       throw error;
@@ -383,9 +385,14 @@ export function registerExecPolicyCli(program: Command) {
       .option("--json", "Output as JSON", false),
   ).action(async (opts: ExecPolicyShowOptions, command: Command) => {
     await runExecPolicyAction(opts, async () => {
+      const signal = getAsyncWorkSignal();
       const payload = await buildLocalExecPolicyShowPayload(
         resolveGatewayRpcOptionsWithLocalPort(opts, command),
+        signal,
       );
+      if (signal?.aborted) {
+        return;
+      }
       if (opts.json) {
         defaultRuntime.writeJson(payload, 0);
         return;

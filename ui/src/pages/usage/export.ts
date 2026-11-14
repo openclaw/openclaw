@@ -27,7 +27,7 @@ export function createUsageExportRequest(
       const selectedQuery = query();
       const result = await requestSessionUsage(
         connection.client,
-        { ...selectedQuery, offset: undefined, recentKeys: undefined },
+        { ...selectedQuery, offset: undefined },
         {
           includeContextWeight: format === "json",
           ...(format === "daily-csv"

@@ -198,13 +198,29 @@ export class ConnectionSessionRows {
       let result: SessionRowWire | undefined;
       let encoding: string | undefined;
       if (retain && previous && sameGeneration) {
-        const patch = { ...header, base: previous.version, ...diff(previous.fields, fields, row) };
-        const patchJSON = JSON.stringify(patch);
-        const patchBytes = Buffer.byteLength(patchJSON);
+        const delta = diff(previous.fields, fields, row);
+        const patchHeader = { ...header, base: previous.version };
+        const prefix = JSON.stringify(patchHeader).slice(0, -1);
+        const prefixBytes = Buffer.byteLength(prefix);
+        let serialized = delta.encoding;
+        if (!serialized) {
+          const json = JSON.stringify({ ...patchHeader, ...delta.patch });
+          // Keep a view of the first encoding, not a second large body string.
+          delta.encoding = serialized = {
+            suffix: json.slice(prefix.length),
+            utf8Bytes: Buffer.byteLength(json) - prefixBytes,
+            headers: new Map([[prefix, json]]),
+          };
+        }
+        const patchBytes = prefixBytes + serialized.utf8Bytes;
         // Each serialized member needs at least `"":0,` (five bytes), plus the outer braces.
         if (patchBytes < 5 * fields.fieldCount + 1 || patchBytes < fullRowByteLength(row, header)) {
-          result = patch;
-          encoding = patchJSON;
+          result = { ...patchHeader, ...delta.patch };
+          encoding = serialized.headers.get(prefix);
+          if (encoding === undefined) {
+            encoding = `${prefix}${serialized.suffix}`;
+            serialized.headers.set(prefix, encoding);
+          }
         }
       }
       encoded.push(encoding);

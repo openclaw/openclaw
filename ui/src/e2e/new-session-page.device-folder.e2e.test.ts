@@ -120,10 +120,26 @@ suite.define(() => {
       await selectModel("worker");
       expect(await input.inputValue()).toBe(deviceFolder.path);
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await page.setViewportSize({ width: 390, height: 844 });
-      await expect
-        .poll(() => folder.evaluate((element) => element.scrollWidth <= element.clientWidth))
-        .toBe(true);
+      for (const viewport of [
+        { width: 1440, height: 900 },
+        { width: 844, height: 390 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await expect
+          .poll(() =>
+            folder.evaluate((element) => {
+              const field = element.getBoundingClientRect();
+              const row = element.parentElement!.getBoundingClientRect();
+              return (
+                field.top >= row.top &&
+                field.bottom <= row.bottom &&
+                element.scrollWidth <= element.clientWidth
+              );
+            }),
+          )
+          .toBe(true);
+      }
       await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ agentId: "main", message: "", deviceFolder });

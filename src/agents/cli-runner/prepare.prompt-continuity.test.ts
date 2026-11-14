@@ -54,7 +54,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await fixture.settle();
+  await fixture.cleanup();
   clearRuntimeConfigSnapshot();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
@@ -83,6 +83,10 @@ function prepareAuthorized(params: Parameters<typeof fixture.prepare>[0] = {}) {
   });
   return fixture
     .prepare({ ...params, toolAuthorityFingerprint: "turn-authority", preparedRunAdmission })
+    .then(async (context) => {
+      await context.preparedBackend.cleanup?.();
+      return context;
+    })
     .finally(preparedRunAdmission.close);
 }
 

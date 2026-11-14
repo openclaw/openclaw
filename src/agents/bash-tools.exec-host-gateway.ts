@@ -45,7 +45,7 @@ import {
   prepareSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
-import { captureApprovedCwdSnapshotSync } from "../infra/system-run-cwd-binding.js";
+import { captureApprovedCwdSnapshot } from "../infra/system-run-cwd-binding.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkAdmission,
@@ -130,7 +130,7 @@ export async function processGatewayAllowlist(
   });
   const cwdAuthorizationBound = hostSecurity === "allowlist" || hostAsk !== "off";
   const capturedCwd = cwdAuthorizationBound
-    ? captureApprovedCwdSnapshotSync(params.workdir)
+    ? await captureApprovedCwdSnapshot(params.workdir)
     : undefined;
   if (capturedCwd && !capturedCwd.ok) {
     return deny(capturedCwd.message);
@@ -219,7 +219,7 @@ export async function processGatewayAllowlist(
   }
   const inlineEvalHit =
     params.strictInlineEval === true ? detectInlineEvalInSegments(allowlistEval.segments) : null;
-  const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
+  const allowAlwaysPersistence = await resolveAllowAlwaysPersistenceDecision({
     segments: allowlistEval.segments,
     cwd: params.workdir,
     env: params.env,
@@ -615,7 +615,7 @@ export async function processGatewayAllowlist(
         ? authorizationCandidates[0]?.sourceSegment
         : undefined;
     const autoReviewResolvedPath = autoReviewSingleSegment
-      ? resolveExecutionTargetTrustPath(autoReviewSingleSegment.resolution, params.workdir)
+      ? await resolveExecutionTargetTrustPath(autoReviewSingleSegment.resolution, params.workdir)
       : undefined;
     if (params.autoReview === true && autoReviewBlockedByShellStartup) {
       params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
@@ -793,7 +793,7 @@ export async function processGatewayAllowlist(
         approvalReviewerDeviceIds: params.approvalReviewerDeviceId
           ? [params.approvalReviewerDeviceId]
           : undefined,
-        resolvedPath: resolveApprovalAuditTrustPath(
+        resolvedPath: await resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
         ),
@@ -865,7 +865,7 @@ export async function processGatewayAllowlist(
       });
       await commitExecutionAuthorization({
         source: "ask-fallback",
-        resolvedPath: resolveApprovalAuditTrustPath(
+        resolvedPath: await resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
         ),
@@ -879,7 +879,7 @@ export async function processGatewayAllowlist(
         ...(revalidateBeforeExecution ? { revalidateBeforeExecution } : {}),
       };
     }
-    const resolvedPath = resolveApprovalAuditTrustPath(
+    const resolvedPath = await resolveApprovalAuditTrustPath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     );
@@ -1225,7 +1225,7 @@ export async function processGatewayAllowlist(
 
   await commitExecutionAuthorization({
     source: "current-policy",
-    resolvedPath: resolveApprovalAuditTrustPath(
+    resolvedPath: await resolveApprovalAuditTrustPath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     ),

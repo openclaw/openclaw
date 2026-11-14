@@ -59,7 +59,9 @@ test.each(["initial", "follow-up"] as const)(
       getReplyFromConfig(ctx, opts, withFullRuntimeReplyConfig(cfg ?? getRuntimeConfig())),
     );
     dispatchInboundMessageMock.mockReset();
-    const run = vi.spyOn(replyRun, "runPreparedReply").mockResolvedValue(undefined);
+    const run = vi
+      .spyOn(replyRun, "runPreparedReply")
+      .mockResolvedValue({ text: "Orders received." });
     let key: string | undefined;
     try {
       const created = await successfulSessionRequest<{ key: string }>(

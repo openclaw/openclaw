@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { shortenHomeInString } from "../utils.js";
+import { formatSubagentProgressReference } from "./agent-activity-presentation.js";
 import { unwrapToolCallForDisplay } from "./tool-display-call.js";
 import {
   defaultTitle,
@@ -25,6 +26,7 @@ type ToolDisplay = {
   title: string;
   label: string;
   detail?: string;
+  progress?: { label: string; detail?: string };
 };
 
 const FALLBACK = TOOL_DISPLAY_CONFIG.fallback;
@@ -61,6 +63,9 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
+  const args = asOptionalObjectRecord(call.args);
+  const action = normalizeOptionalString(args?.action);
+  const progressSpec = (action ? spec?.actions?.[action]?.progress : undefined) ?? spec?.progress;
   const detail = resolveToolDetailForArgs({
     toolKey: key,
     args: call.args,
@@ -71,12 +76,39 @@ export function resolveToolDisplay(params: {
     toolDetailMode: params.detailMode,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
+  const progressDetail = progressSpec
+    ? resolveToolDetailForArgs({
+        toolKey: key,
+        args: call.args,
+        spec: progressSpec,
+        detailMode: "summary",
+        detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
+      })
+    : undefined;
+  const referenceValue = normalizeOptionalString(
+    progressSpec?.referenceKey && args?.[progressSpec.referenceKey],
+  );
+  const reference = formatSubagentProgressReference(referenceValue);
   return {
     name,
     icon: spec?.icon ?? FALLBACK.icon,
     title,
     label,
     detail: detail ? shortenHomeInString(detail) : detail,
+    ...(progressSpec
+      ? {
+          progress: {
+            label: progressSpec.label,
+            detail:
+              [
+                reference && progressDetail === referenceValue ? undefined : progressDetail,
+                reference,
+              ]
+                .filter(Boolean)
+                .join(" ") || undefined,
+          },
+        }
+      : {}),
   };
 }
 

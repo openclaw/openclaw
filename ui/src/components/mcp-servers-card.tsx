@@ -93,21 +93,19 @@ function McpServersHelp() {
   let popover!: PopoverHandle;
   return (
     <span class="settings-section__docs">
-      <openclaw-tooltip prop:content={t("mcpPage.serversHelp")}>
-        <button
-          ref={setTrigger}
-          type="button"
-          class="settings-section__help-button"
-          aria-label={t("mcpPage.serversHelp")}
-          aria-controls="mcp-servers-help"
-          aria-haspopup="dialog"
-          onClick={() => popover.overlay.request(!popover.overlay.open)}
-        >
-          <span aria-hidden="true">
-            <Icon name="circleQuestionMark" />
-          </span>
-        </button>
-      </openclaw-tooltip>
+      <button
+        ref={setTrigger}
+        type="button"
+        class="settings-section__help-button"
+        aria-label={t("mcpPage.serversHelp")}
+        aria-controls="mcp-servers-help"
+        aria-haspopup="dialog"
+        onClick={() => popover.overlay.request(!popover.overlay.open)}
+      >
+        <span aria-hidden="true">
+          <Icon name="circleQuestionMark" />
+        </span>
+      </button>
       <Show when={trigger()}>
         {(anchor) => (
           <Popover

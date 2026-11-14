@@ -1,4 +1,0 @@
-27
-# Exact regression-fixture growth for PR #196095 timer repair.
-# Keeps retry/deadline time deterministic and proves collector exhaustion
-# through the real subprocess without extending its timeout.

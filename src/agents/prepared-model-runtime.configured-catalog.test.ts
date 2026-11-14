@@ -14,6 +14,7 @@ import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
+import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
@@ -740,4 +741,58 @@ it.each([
   if (custom) {
     expect(rows[0]!.inference).not.toHaveProperty("decision");
   }
+});
+
+it("keeps typed-only manifest rows after live chat discovery acquires their provider", () => {
+  const typed = {
+    id: "typed",
+    name: "Typed",
+    inference: {
+      chat: false as const,
+      decision: { protocol: "fixture", input: ["text" as const] },
+    },
+  };
+  const metadata = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "fixture",
+        providers: ["fixture"],
+        modelCatalog: { providers: { fixture: { models: [typed] } } },
+      },
+    ],
+  });
+  const config: OpenClawConfig = { agents: { defaults: { decisionModel: "fixture/typed" } } };
+  const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:typed-acquired", {
+    config,
+    includePluginCatalogs: false,
+    pluginMetadataSnapshot: metadata,
+  });
+  const captured = captureRegistry(registry, config, metadata);
+  const project = createPreparedModelCatalogProjection({
+    agentFacts: {
+      input: { config },
+      configuredModelRefs: [],
+      configuredRuntimeModels: [],
+      runtimeCapabilityModels: [],
+      credentials: {},
+    } as unknown as Parameters<typeof createPreparedModelCatalogProjection>[0]["agentFacts"],
+    normalizeProvider: (provider) => provider,
+    catalogFacts: captured,
+    pluginGeneration: {
+      pluginMetadataSnapshot: metadata,
+    } as Parameters<typeof createPreparedModelCatalogProjection>[0]["pluginGeneration"],
+  });
+  // Live discovery succeeded and lists only conversational rows for this provider.
+  const chat = { provider: "fixture", id: "chat", name: "Chat" };
+  const projected = project({
+    catalog: {
+      entries: [chat],
+      routeVariants: [chat],
+      providerOutcomes: [{ provider: "fixture", status: "ready" }],
+    },
+    providers: new Map([["fixture", {}]]) as never,
+  });
+  const rows = projected.entries.filter((entry) => entry.id === "typed");
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.inference).toMatchObject({ chat: false });
 });

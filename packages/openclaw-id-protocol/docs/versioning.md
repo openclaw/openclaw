@@ -8,6 +8,12 @@ this unshipped v1-draft. They do not bump a version. Every consumer updates its 
 and regenerates/re-signs snapshots together; there is no compatibility parser for older draft
 shapes. The rules below apply **after release**, not to revising this draft.
 
+Opaque member role names and exact-role invitations also revise this unshipped v1-draft in
+place: no version bump or compatibility parser. Discovery and the loader must update their
+protocol copies, preserve valid role names and display unknown names without inventing a
+built-in role. Role names are not an enumerated field; new valid names do not change the
+protocol version.
+
 This document says how the protocol changes after release: what carries a version, what a
 reader does with a version it does not implement, which changes need a new version, and how
 long an old version stays supported.

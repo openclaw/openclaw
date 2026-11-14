@@ -2,6 +2,9 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { InternalGetReplyOptions as ReplyOptions } from "./get-reply.types.js";
 import {
   generateNarrationWithUtilityModel as generateNarration,
@@ -154,6 +157,30 @@ afterEach(() => {
   modelMocks.generate.mockReset();
 });
 
+it("stops a pending retry when its plugin visibility scope has closed", async () => {
+  const instance = new PluginInstance("narrator-test");
+  const scope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
+  const visible = vi.fn(() => false);
+  const isProgressDraftVisible = scope.wrap(instance.wrap(visible));
+  try {
+    const { narrator, generate, onUpdate } = narratorHarness({ isProgressDraftVisible });
+    await narrator.start("exec");
+    expect(vi.getTimerCount()).toBe(1);
+    scope.release();
+    expect(() => isProgressDraftVisible()).toThrow("Plugin invocation scope is closed");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await narrator.start("exec");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(visible).toHaveBeenCalledOnce();
+    expect(generate).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+  } finally {
+    scope.release();
+    await instance.dispose();
+  }
+});
+
 it.each([false, true])("retries hidden drafts with in-flight=%s", async (inFlight) => {
   let visible = true;
   const { narrator, generate, onUpdate, generation } = narratorHarness({
@@ -178,6 +205,31 @@ it.each([false, true])("retries hidden drafts with in-flight=%s", async (inFligh
   expect(generate).toHaveBeenCalledTimes(2);
   expect(onUpdate).toHaveBeenLastCalledWith({ text: "The command failed." });
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it("stops narration when a retried visibility check throws after its scope closed", async () => {
+  let visible = false;
+  let scopeClosed = false;
+  const { narrator, generate } = narratorHarness({
+    isProgressDraftVisible: () => {
+      if (scopeClosed) {
+        throw new Error("Plugin invocation scope is closed");
+      }
+      return visible;
+    },
+  });
+
+  narrator.tool("exec");
+  expect(vi.getTimerCount()).toBe(1);
+
+  scopeClosed = true;
+  await expect(vi.advanceTimersByTimeAsync(1_000)).resolves.not.toThrow();
+
+  expect(vi.getTimerCount()).toBe(0);
+  visible = true;
+  scopeClosed = false;
+  await narrator.start("read");
+  expect(generate).not.toHaveBeenCalled();
 });
 
 it("cancels retries at final and resets preamble freshness for a queued turn", async () => {

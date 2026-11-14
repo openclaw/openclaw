@@ -113,7 +113,11 @@ export function formatDispatchSelection(
   request: Pick<DispatchRequest, "targetSha" | "workflowSha" | "inputs" | "effectiveSoak">,
 ): string {
   const { inputs } = request;
-  return `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
+  const selection = `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
+  if (request.targetSha === request.workflowSha) {
+    return selection;
+  }
+  return `${selection}\nWARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts. Release verification may fail even when workloads succeed. Use matching candidate and tooling SHAs (Q=C) for candidate qualification.`;
 }
 
 function validateDispatchRecord(value: unknown): asserts value is DispatchRecord {

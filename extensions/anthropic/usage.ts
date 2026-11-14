@@ -6,6 +6,7 @@ import type {
 import {
   addProviderUsageModel,
   asProviderUsageObject,
+  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   buildProviderUsageHistorySnapshot,
   cleanProviderUsageCredential,
@@ -13,19 +14,24 @@ import {
   decodeProviderUsageAdminToken,
   encodeProviderUsageAdminToken,
   fetchProviderUsagePages,
-  fetchClaudeUsage,
   parseProviderUsageNonNegativeInteger,
   parseProviderUsageNumber,
   resolveProviderUsageDailyPeriod,
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
+import {
+  fetchClaudeUsage,
+  fetchClaudeWebUsage,
+  resolveClaudeWebSessionKey,
+} from "./claude-usage.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =
   "https://api.anthropic.com/v1/organizations/usage_report/messages";
 const ANTHROPIC_ADMIN_TOKEN_PREFIX = "openclaw:anthropic-admin:v1:";
+const CLAUDE_WEB_SESSION_TOKEN_PREFIX = "openclaw:anthropic-web-session:v1:";
 const ANTHROPIC_USAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 const ANTHROPIC_USAGE_HISTORY_DAYS = 30;
 
@@ -54,7 +60,14 @@ export async function fetchAnthropicUsage(
 ): Promise<ProviderUsageSnapshot> {
   const adminKey = decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, ctx.token);
   if (!adminKey) {
-    const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+    const webSessionKey = decodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, ctx.token);
+    const snapshot = webSessionKey
+      ? ((await fetchClaudeWebUsage(webSessionKey, ctx.timeoutMs, ctx.fetchFn)) ??
+        buildUsageErrorSnapshot(
+          "anthropic",
+          "Claude web usage unavailable. Renew the claude.ai session in CLAUDE_AI_SESSION_KEY, CLAUDE_WEB_SESSION_KEY or CLAUDE_WEB_COOKIE, then retry.",
+        ))
+      : await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
     if (snapshot.error) {
       return snapshot;
     }
@@ -229,10 +242,23 @@ export async function resolveAnthropicUsageAuth(
   const oauthToken = await ctx.resolveOAuthToken({
     excludeProfileIds: [CLAUDE_CLI_PROFILE_ID],
   });
+  // Stored setup-token profiles resolve here too, but setup tokens lack the user:profile
+  // scope the OAuth usage endpoint requires. Use a configured claude.ai session instead.
+  if (oauthToken && (await isStoredSetupToken(ctx.agentDir, oauthToken.authProfileId))) {
+    const sessionKey = resolveClaudeWebSessionKey(ctx.env);
+    return sessionKey
+      ? {
+          ...oauthToken,
+          token: encodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, sessionKey),
+        }
+      : { handled: true };
+  }
   if (oauthToken) {
     return oauthToken;
   }
 
+  // Configured bearers carry no credential type, and the setup-token shape check
+  // also matches scoped OAuth access tokens, so they keep the OAuth usage path.
   const apiKey = storedCandidates[0];
   if (apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
@@ -244,6 +270,18 @@ export async function resolveAnthropicUsageAuth(
   // Claude owns its native refresh-token family. Do not resolve a copied
   // claude-cli profile here: generic OAuth refresh invalidates Claude's login.
   return { handled: true };
+}
+
+async function isStoredSetupToken(
+  agentDir: string | undefined,
+  profileId: string | undefined,
+): Promise<boolean> {
+  if (!profileId) {
+    return false;
+  }
+  const { findPersistedAuthProfileCredentialAsync } =
+    await import("openclaw/plugin-sdk/agent-runtime");
+  return (await findPersistedAuthProfileCredentialAsync({ agentDir, profileId }))?.type === "token";
 }
 
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */

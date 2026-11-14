@@ -470,3 +470,52 @@ it("offers folder filters only for project files inside that path boundary", () 
   expect(workspaceCatalogFilters(catalog, "ui-other")).toEqual(["all", "read"]);
   expect(workspaceCatalogFilters(catalog, "empty")).toEqual(["all"]);
 });
+
+it("keeps flat catalog request identities, metadata and artifact search scope", () => {
+  const listing = catalogListing(
+    [
+      workspaceFile("nested/report.md", "modified", {
+        workspacePath: "docs/report.md",
+        size: 2048,
+        missing: true,
+      }),
+      workspaceFile("read.md", "read"),
+    ],
+    {
+      artifacts: [
+        { ...artifact("opaque-id", "Portrait"), mimeType: "image/jpeg", sizeBytes: 4096 },
+      ],
+      browser: {
+        path: "docs",
+        entries: [{ path: "docs/report.md", name: "report.md", kind: "file", size: 8192 }],
+      },
+    },
+  );
+  const flat = projectWorkspaceCatalog(listing, {}, "session");
+  expect(flat.session[0]).toMatchObject({
+    key: "file:nested/report.md",
+    path: "nested/report.md",
+    workspacePath: "docs/report.md",
+    origin: "session",
+    size: 2048,
+    missing: true,
+  });
+  expect(flat.session[2]).toMatchObject({ artifactId: "opaque-id", size: 4096 });
+  expect([...flat.project.keys()]).toEqual(["docs/report.md"]);
+  expect(workspaceCatalogChildren(flat, "all", "docs").get("docs")).toMatchObject([
+    { path: "docs/report.md", origin: "workspace", size: 8192 },
+  ]);
+  expect(workspaceCatalogSearch(listing, "report", "session").map((entry) => entry.origin)).toEqual(
+    ["session", "workspace"],
+  );
+  for (const query of ["opaque-id", "IMAGE/JPEG"]) {
+    expect(workspaceCatalogSearch(listing, query, "session")).toMatchObject([
+      { artifactId: "opaque-id" },
+    ]);
+    expect(workspaceCatalogSearch(listing, query)).toEqual([]);
+  }
+  listing.browser!.search = "old-query";
+  expect(workspaceCatalogSearch(listing, "report", "session").map((entry) => entry.origin)).toEqual(
+    ["session"],
+  );
+});

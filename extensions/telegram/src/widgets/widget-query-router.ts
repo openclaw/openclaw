@@ -18,6 +18,7 @@ import {
 import { resolveTelegramMessageThreadSpec } from "../bot/helpers.js";
 import { readTelegramWidgetQuery, type TelegramWidgetQuery } from "./widget-bot-api.js";
 import { TELEGRAM_WIDGET_REQUEST_PREFIX } from "./widget-guidance.js";
+import { getPreparedTelegramWidgetQuery } from "./widget-query-context.js";
 import { lookupTelegramSentWidget, recordTelegramWidgetTap } from "./widget-store.js";
 
 // Same budget as Control UI widget prompts: 10 per minute per widget.
@@ -126,12 +127,18 @@ export function createTelegramWidgetQueryRouter({
       chatId: String(chatId),
       messageId: query.message_id,
     });
+    // Queries omit the topic. Use the origin that already chose this update's lane, so the
+    // turn runs in the session whose lane it waited in.
+    const messageThreadId = getPreparedTelegramWidgetQuery(ctx.update)?.messageThreadId;
     const widgetMessage: Message = {
       message_id: query.message_id,
       date: resolveTelegramUpdateReceivedAtSeconds(ctx.update),
       chat: query.chat,
       from: ctx.me,
       ...(sent ? { caption: sent.title } : {}),
+      ...(messageThreadId !== undefined
+        ? { message_thread_id: messageThreadId, is_topic_message: true }
+        : {}),
     };
     const threadSpec = resolveTelegramMessageThreadSpec(widgetMessage, false);
     const senderId = String(query.from.id);

@@ -613,7 +613,6 @@ function BoardWidgetCellContent(
                 <span
                   class="board-widget__drag-handle"
                   aria-hidden="true"
-                  title={t("board.widget.moveHandle", { title: label() })}
                   onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
                 >
                   <span aria-hidden="true">⠿</span>
@@ -671,7 +670,6 @@ function BoardWidgetCellContent(
           <span
             class="board-widget__resize-handle"
             aria-hidden="true"
-            title={t("board.widget.resizeHandle", { title: label() })}
             onPointerDown={(event) => props.callbacks!.resizePointerDown(props.widget!, event)}
           />
         </Show>

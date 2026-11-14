@@ -121,6 +121,8 @@ export function withModelRequestBodyBytes(
       state.onBytes?.(Buffer.byteLength(init.body, "utf8"));
     } else if (init?.body instanceof Blob) {
       state.onBytes?.(init.body.size);
+    } else if (init?.body instanceof Uint8Array) {
+      state.onBytes?.(init.body.byteLength);
     }
     return fetch(input, init);
   };

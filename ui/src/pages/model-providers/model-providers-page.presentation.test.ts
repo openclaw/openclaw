@@ -215,9 +215,7 @@ it.each(["settle", "retire"] as const)(
       mountPage(page);
       await waitForSolid(() => {
         expect(page.querySelector('[data-provider-id="openai"]')).not.toBeNull();
-        expect(
-          page.querySelector('.model-providers__catalog-progress[role="status"]'),
-        ).not.toBeNull();
+        expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
       });
       expect(page.querySelector("[data-model-readiness]")).toBeNull();
       const input = page.querySelector<HTMLInputElement>(".model-providers__search input")!;

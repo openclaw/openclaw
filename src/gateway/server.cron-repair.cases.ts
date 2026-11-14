@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi, type Mock } from "vitest";
+import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
@@ -100,6 +101,7 @@ export function registerCronRepairCases(
       }
       return "NO_REPLY";
     });
+    let stopObserving: (() => void) | undefined;
     try {
       const forged = await request("agent", {
         sessionKey: ownerSessionKey,
@@ -122,6 +124,12 @@ export function registerCronRepairCases(
         failureAlert: { after: 2, mode: "announce" },
       });
       const jobId = expectCronJobIdFromResponse(await request("cron.add", repairJob));
+      const repairSettled = createDeferred();
+      stopObserving = observeCronJobCommits(jobId, (state) => {
+        if (state.failureAlertIncident?.repair?.settledAtMs !== undefined) {
+          repairSettled.resolve();
+        }
+      });
       await run(jobId);
       await run(jobId);
       expect(await withinTest(repairOutcome.promise, signal)).toMatchObject({
@@ -131,15 +139,15 @@ export function registerCronRepairCases(
         SessionKey: ownerSessionKey,
         InputProvenance: { kind: "internal_system", sourceTool: "cron_failure_repair" },
       });
-      await vi.waitFor(async () => {
-        const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
-        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
-          ?.repair;
-        expect(repair).toMatchObject({ settledAtMs: expect.any(Number) });
-      });
+      await withinTest(repairSettled.promise, signal);
+      const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
+      const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
+        ?.repair;
+      expect(repair).toMatchObject({ settledAtMs: expect.any(Number) });
       expect(cliOutput).toHaveBeenCalledTimes(2);
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
     } finally {
+      stopObserving?.();
       cliOutput.mockRestore();
     }
   });

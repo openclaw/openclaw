@@ -267,7 +267,9 @@ export async function prepareReplyAgentTurn<TConfigured>(
     const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
     // An edit before enqueue can miss the queue refresh; admission owns the saved preference.
     if (kind === "queued_followup" && admission.sessionEntry) {
-      run.cyberAccessProgram = admittedSelectionEntry?.cyberAccessProgram;
+      run.cyberAccessProgram =
+        run.scheduledAutomation?.job.cyberAccessProgram ??
+        admittedSelectionEntry?.cyberAccessProgram;
     }
     let queuedFollowupAdmitted = false;
     let admissionFailed = false;

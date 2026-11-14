@@ -159,10 +159,7 @@ export function createAgentsPageState(
     getReport: () => state.agentSkillsReport,
     onPrimaryChanged: () => effectiveTools.ensure(true),
   });
-  const githubIdentity = createGitHubIdentityView({
-    runExternalMutation: (task, options) =>
-      context.runtimeConfig.runExternalMutation(task, options),
-  });
+  const githubIdentity = createGitHubIdentityView();
   let readAccessKey = "";
   const gateway = new GatewayPageBinding(() => publish(), {
     getGateway: () => context.gateway,
@@ -443,12 +440,9 @@ export function createAgentsPageState(
           }
         : null,
       statusReadable: hasScope("tools.github.status", "operator.read"),
-      configurable: hasScope("tools.github.configure", "operator.admin"),
-      authorizable: [
-        "tools.github.authorize.start",
-        "tools.github.authorize.poll",
-        "tools.github.authorize.cancel",
-      ].every((method) => hasScope(method, "operator.admin")),
+      // This panel only reads the account; Profile → GitHub accounts changes it.
+      configurable: false,
+      authorizable: false,
       clientRevision: state.requestGeneration,
     });
   }

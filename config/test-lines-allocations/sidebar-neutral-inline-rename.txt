@@ -1,0 +1,2 @@
+3
+# Retain fixed row geometry during the existing rename interaction.

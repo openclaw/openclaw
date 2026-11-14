@@ -1,2 +1,0 @@
-# Keep project-recents boundary assertions deterministic with a scoped GitHub visibility fixture.
-8

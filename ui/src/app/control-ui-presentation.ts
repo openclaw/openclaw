@@ -316,7 +316,8 @@ export function applyControlUiAccent(userAccent?: string): void {
 
 export function applyControlUiOperatorSeamColor(seamColor?: string): void {
   const root = document.documentElement;
-  if (operatorSeamRoot === root && operatorSeamColor === seamColor) {
+  // An absent initial seam has nothing to project; the theme owner applies its own accent.
+  if (operatorSeamColor === seamColor && (seamColor === undefined || operatorSeamRoot === root)) {
     return;
   }
   operatorSeamRoot = root;

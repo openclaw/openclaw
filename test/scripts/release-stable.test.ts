@@ -325,23 +325,6 @@ describe("release:stable CLI", () => {
     },
   );
 
-  it.each(["stableSoakWaiver", "laneWaiver"])("preserves rejected %s state", (field) => {
-    const state = phaseState("validate");
-    const release = fixture(state);
-    const invalid = JSON.stringify({
-      ...state,
-      capabilities: legacyCapabilities(true),
-      validate: { ...state.validate, continues: 2, [field]: "retained legacy value" },
-    });
-    writeFileSync(release.stateFile, invalid);
-    const result = release.run([]);
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("Invalid state file");
-    expect(result.stderr).toContain("Move the file aside before retrying.");
-    expect(result.stderr).toContain(`pnpm release:stable ${RELEASE}`);
-    expect(readFileSync(release.stateFile, "utf8")).toBe(invalid);
-  });
-
   it("refuses a live process lock before touching state and replaces a stale lock", () => {
     const release = fixture(phaseState("cut"));
     const before = readFileSync(release.stateFile, "utf8");
@@ -530,7 +513,6 @@ describe("release:stable CLI", () => {
     const dispatches = resumed.calls.filter((call) => call.args[0] === "workflow");
     expect(dispatches).toHaveLength(1);
     const helper = resumed.calls.find((call) => call.bin === "pnpm");
-    expect(helper?.args).not.toContain("--stable-soak-waiver");
     expect(helper?.args).toContain("--skip-dispatch");
     expect(resumed.calls.filter((call) => call.args.includes("POST"))).toEqual([
       { bin: "gh", args: gateApproval(301, 71).match },

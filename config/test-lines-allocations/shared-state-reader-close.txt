@@ -1,2 +1,0 @@
-# Real pinned-reader retirement regression: prompt close, retained snapshot/WAL, persisted writes.
-30

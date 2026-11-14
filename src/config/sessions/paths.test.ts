@@ -117,15 +117,26 @@ describe("resolveStorePath", () => {
     );
   });
 
-  it("uses the default agent store when session.store is absent or blank", () => {
-    const stateDir = path.join(path.parse(process.cwd()).root, "openclaw-test-state");
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const expected = path.join(stateDir, "agents", "work", "sessions", "sessions.json");
+  it.each(["work", " WORK ", "work/team"])(
+    "joins the default store path for %s only once",
+    (agentId) => {
+      const stateDir = path.join(path.parse(process.cwd()).root, "openclaw-test-state");
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      const expected = path.join(
+        stateDir,
+        "agents",
+        agentId.includes("/") ? "work-team" : "work",
+        "sessions",
+        "sessions.json",
+      );
+      const join = vi.spyOn(path, "join");
 
-    expect(resolveSessionStorePathCore(undefined, { agentId: "work", env })).toBe(expected);
-    expect(resolveSessionStorePathCore("", { agentId: "work", env })).toBe(expected);
-  });
+      expect(resolveSessionStorePathCore(undefined, { agentId, env })).toBe(expected);
+      expect(resolveSessionStorePathCore("", { agentId, env })).toBe(expected);
+      expect(join).toHaveBeenCalledTimes(2);
+    },
+  );
 });

@@ -396,6 +396,45 @@ export function jsonFirstStringValue(
   >`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN CASE WHEN json_typeof(${token}) = 'string' THEN ${token} #>> '{}' END END`;
 }
 
+/** Last-member string lookup matching JSON.parse; exceptional input remains caller-owned. */
+export function jsonLastStringValue(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<string>,
+  keys: readonly string[],
+): RawBuilder<string | null> {
+  let selected: RawBuilder<unknown>;
+  if (isPostgresSqlConnection(db)) {
+    const token = sql`(${value}::jsonb #> ARRAY[${sql.join(keys.map((key) => sql.lit(key)))}]::text[])`;
+    selected = sql`CASE WHEN jsonb_typeof(${token}) = 'string' THEN ${token} #>> '{}' END`;
+  } else {
+    const dbQuery = getNodeSqliteKysely(db);
+    let object: Expression<unknown> = value;
+    for (const [index, key] of keys.entries()) {
+      const last = index === keys.length - 1;
+      // JSON1 enumerates duplicates; descending IDs select JSON.parse's final member.
+      const entries = dbQuery.fn<JsonFieldRow & { id: number }>("json_each", [object]).as("member");
+      object = dbQuery
+        .selectFrom(entries)
+        .select((eb) =>
+          eb
+            .case()
+            .when("member.type", "=", last ? "text" : "object")
+            .then(eb.ref("member.value"))
+            .else(last ? null : "{}")
+            .end()
+            .as("value"),
+        )
+        .where("member.key", "=", key)
+        .orderBy("member.id", "desc")
+        .limit(1);
+    }
+    selected = sql`${object}`;
+  }
+  return /* kysely-allow-raw: Fence native field access; callers hydrate exceptional input. */ sql<
+    string | null
+  >`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN ${selected} END`;
+}
+
 /** Enumerate every string-valued object member, including duplicate keys. */
 export function jsonObjectStringEntries(
   db: DatabaseSync | PostgresSqlConnection,

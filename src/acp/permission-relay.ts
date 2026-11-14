@@ -9,6 +9,8 @@ export type GatewayExecApprovalDecision = "allow-once" | "allow-always" | "deny"
 
 export type GatewayExecApprovalEvent = {
   approvalId: string;
+  /** Gateway run that requested the approval; MCP tool call IDs differ from streamed ones. */
+  runId?: string;
   command?: string;
   host?: string;
   title?: string;
@@ -85,6 +87,7 @@ export function parseGatewayExecApprovalRequestEventPayload(
       readNonEmptyString(requestRecord.command) ?? readNonEmptyString(requestRecord.commandPreview),
     host: readNonEmptyString(requestRecord.host),
     toolCallId: readNonEmptyString(requestRecord.toolCallId),
+    runId: readNonEmptyString(requestRecord.runId),
   };
 }
 

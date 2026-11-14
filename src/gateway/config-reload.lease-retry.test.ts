@@ -334,14 +334,17 @@ it("cancels a pending admission retry on shutdown without applying or leaking ti
   const acquire = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
     .mockRejectedValueOnce(unavailableError());
-  const harness = await admittedWrite("shutdown");
-  await flushReload(harness.reloader);
-  expect(vi.getTimerCount()).toBe(1);
+  const { clock, scheduler } = createConfigReloadTestClock();
+  const harness = await readyHarness("shutdown", { scheduler });
+  const application = harness.admit();
+  // Join the reload's scheduler wake and observe its timer independently of background workers.
+  await clock.advanceBy(0);
+  expect(clock.armedAtMs).toBe(scheduler.now() + 250);
 
   await harness.reloader.stop();
-  await expect(harness.application.result).resolves.toBe("stopped");
-  expect(vi.getTimerCount()).toBe(0);
-  await vi.advanceTimersByTimeAsync(10_000);
+  await expect(application.result).resolves.toBe("stopped");
+  expect(clock.armedAtMs).toBeNull();
+  await clock.advanceBy(10_000);
   expect(acquire).toHaveBeenCalledTimes(1);
   expect(harness.onHotReload).not.toHaveBeenCalled();
   expect(harness.onConfigApplied).not.toHaveBeenCalled();

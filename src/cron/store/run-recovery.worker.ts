@@ -7,6 +7,7 @@ import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import { receiptFromRow, type CronRunReceiptDatabase } from "./run-receipt-read.js";
 import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
+import type { CronRunReceipt } from "./run-receipt.types.js";
 import { recoverCronJobInDatabase } from "./run-recovery.kernel.js";
 import type { CronRunRecoveryInput, CronRunRecoveryOutcome } from "./run-recovery.types.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
@@ -21,16 +22,23 @@ export function recoverCronRunsInWorker(
       ensureCronRunReceiptSchema(db);
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const jobs = loadedCronStoreFromRows(loadCronRows(db, input.storeKey)).store.jobs;
-      const receipts = new Map(
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<CronRunReceiptDatabase>(db)
-            .selectFrom("cron_run_receipts")
-            .selectAll()
-            .where("store_key", "=", input.storeKey)
-            .where("status", "=", "running"),
-        ).rows.map((row) => [row.job_id, receiptFromRow(row)]),
-      );
+      const liveReceiptIds = new Set(input.liveReceiptIds);
+      const liveJobIds = new Set<string>();
+      const receipts = new Map<string, CronRunReceipt>();
+      for (const row of executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<CronRunReceiptDatabase>(db)
+          .selectFrom("cron_run_receipts")
+          .selectAll()
+          .where("store_key", "=", input.storeKey)
+          .where("status", "=", "running"),
+      ).rows) {
+        if (liveReceiptIds.has(row.receipt_id)) {
+          liveJobIds.add(row.job_id);
+        } else {
+          receipts.set(row.job_id, receiptFromRow(row));
+        }
+      }
       const outcome: CronRunRecoveryOutcome = {
         jobs: [],
         removedJobIds: [],
@@ -49,6 +57,11 @@ export function recoverCronRunsInWorker(
         },
       };
       for (const job of jobs) {
+        // Its owner in this process settles the receipt, as when a cron reload's replacement starts.
+        if (liveJobIds.has(job.id)) {
+          outcome.jobs.push(job);
+          continue;
+        }
         const result = recoverCronJobInDatabase({
           database,
           receiptSchema,

@@ -20,6 +20,9 @@ import {
 } from "../config/runtime-snapshot.js";
 import {
   createGitHubReadIdentity,
+  clearNativeGitHubTokenCache,
+  readNativeGitHubConfiguration,
+  refreshNativeGitHubConfiguration,
   readCachedNativeGitHubToken,
   readNativeGitHubToken,
 } from "./github-read-identity.js";
@@ -36,6 +39,7 @@ const account = (id = 101, login = "native-user") => Response.json({ id, login, 
 
 beforeEach(() => {
   run.mockReset();
+  clearNativeGitHubTokenCache();
   vi.stubEnv("GH_TOKEN", undefined);
   vi.stubEnv("GITHUB_TOKEN", undefined);
 });
@@ -95,6 +99,28 @@ const assertActive =
       throw new Error(reason);
     }
   };
+
+it("publishes only authoritative process-native configuration and retires an invalidated sample", async () => {
+  run
+    .mockResolvedValueOnce(commandResult("", 1))
+    .mockResolvedValueOnce(commandResult('{"hosts":{}}'));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unconfigured");
+  expect(readNativeGitHubConfiguration("other.example.com")).toBe("unknown");
+  run.mockResolvedValue(commandResult("", 1));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unknown");
+  run.mockResolvedValue(commandResult("synthetic-native-token"));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("configured");
+  const gate = createDeferredCore<ReturnType<typeof commandResult>>();
+  run.mockReturnValueOnce(gate.promise);
+  const sampling = refreshNativeGitHubConfiguration();
+  clearNativeGitHubTokenCache();
+  gate.resolve(commandResult("synthetic-native-token"));
+  await sampling;
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unknown");
+});
 
 describe("native GitHub identity absence", () => {
   const launchFailure = (code = "ENOENT") => ({

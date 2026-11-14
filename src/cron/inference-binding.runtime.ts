@@ -21,7 +21,7 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
-import { type CronInferenceBinding, describeCronInferenceBinding } from "./inference-binding.js";
+import type { CronInferenceBinding } from "./inference-binding.js";
 import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import {
   resolveCronModelSelection,
@@ -288,7 +288,13 @@ export async function acquireCronInferenceAuthorization(params: {
   binding: CronInferenceBinding;
   cfg: OpenClawConfig;
   agentDir: string;
+  /** Names the automation and its real id in the recovery command. */
+  job?: { id: string; name?: string };
 }) {
+  const label = params.job
+    ? `Automation ${params.job.name?.trim() ? `"${params.job.name.trim()}" (${params.job.id})` : params.job.id}`
+    : "This automation";
+  const jobId = params.job?.id ?? "<jobId>";
   let authority: AuthProfileAuthorization | undefined;
   try {
     authority = await captureAuthProfileAuthorization({
@@ -299,7 +305,7 @@ export async function acquireCronInferenceAuthorization(params: {
     });
     if (authority.authorizationId !== params.binding.authorizationId) {
       throw new Error(
-        `Automation inference ${describeCronInferenceBinding(params.binding)} was replaced. Explicitly select an authorized account again.`,
+        `${label} runs on account ${params.binding.profileId}, which was signed in again or replaced since the job recorded it. To keep using it: openclaw automations edit ${jobId} --model <provider/model>@${params.binding.profileId}.`,
       );
     }
     authority.assertCurrent();
@@ -313,7 +319,7 @@ export async function acquireCronInferenceAuthorization(params: {
       error.code === "MCP_AUTHORIZATION_RETIRED"
     ) {
       throw new Error(
-        `Automation inference ${describeCronInferenceBinding(params.binding)} was removed or signed out. Explicitly select an authorized account again.`,
+        `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw models auth list).`,
         { cause: error },
       );
     }

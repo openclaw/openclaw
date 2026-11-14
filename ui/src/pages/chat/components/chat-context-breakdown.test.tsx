@@ -339,7 +339,7 @@ it.each([20, 21])(
       skills: {
         promptChars: 8000,
         entries: Array.from({ length: count }, (_, index) => ({
-          name: `skill-${index + 1}`,
+          name: index === 20 ? "skill-21-Jose\u0301" : `skill-${index + 1}`,
           blockChars: 100,
         })),
       },
@@ -366,7 +366,7 @@ it.each([20, 21])(
       const input = section().querySelector<HTMLInputElement>("input")!;
       expect(document.activeElement).toBe(input);
       expect(section().querySelectorAll(".chat-context__entry")).toHaveLength(count);
-      input.value = "skill-21";
+      input.value = "Skill-21-Jos\u00e9";
       input.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
       expect(section().querySelectorAll(".chat-context__entry")).toHaveLength(1);
@@ -379,7 +379,7 @@ it.each([20, 21])(
       const refreshed = refresh(view.gateway);
       expect(skills.getAttribute("aria-expanded")).toBe("true");
       expect(section().querySelector("input")).toBe(input);
-      expect(section().textContent).toContain("skill-21");
+      expect(section().textContent).toContain("skill-21-Jose\u0301");
       expect(view.container.querySelector(".chat-context-page--loading")).toBeNull();
       update.resolve(
         usage("first", "first", {
@@ -387,7 +387,7 @@ it.each([20, 21])(
           generatedAt: 2,
           skills: {
             ...value.skills,
-            entries: [...value.skills.entries, { name: "skill-21-new", blockChars: 200 }],
+            entries: [...value.skills.entries, { name: "skill-21-Jos\u00e9-new", blockChars: 200 }],
           },
         }),
       );
@@ -395,7 +395,7 @@ it.each([20, 21])(
       flush();
       expect(section().querySelectorAll(".chat-context__entry")).toHaveLength(2);
       expect(section().querySelector("input")).toBe(input);
-      expect(input.value).toBe("skill-21");
+      expect(input.value).toBe("Skill-21-Jos\u00e9");
       input.focus();
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       flush();

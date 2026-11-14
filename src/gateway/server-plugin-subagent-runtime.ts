@@ -481,12 +481,14 @@ export function createGatewaySubagentRuntime(
                 },
               }),
             );
-            runSignal.throwIfAborted();
-            assertCurrent();
             const result = fallbackResult.result;
-            assertOperatorModelAllowed(execution.operatorAuthority, result);
-            finalizePluginLlmCompletion({
+            await finalizePluginLlmCompletion({
               cfg,
+              assertCurrent: () => {
+                runSignal.throwIfAborted();
+                assertCurrent();
+                assertOperatorModelAllowed(execution.operatorAuthority, result);
+              },
               hostPluginId: pluginId,
               rawUsage: result.usage,
               result: {

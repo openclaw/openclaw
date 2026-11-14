@@ -1,2 +1,0 @@
-542
-# Node enrollment signing, pin/membership and re-enrollment refusal, cancellation, CLI routing, service success gate, supervised foreground join, and Gateway refusal of unlisted or removed nodes.

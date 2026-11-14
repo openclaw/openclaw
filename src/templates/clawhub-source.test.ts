@@ -801,6 +801,35 @@ describe("verified ClawHub Template source", () => {
     await expectMissing(stateDir);
   });
 
+  it("resolves a publisher-qualified reference to a Template stored under an unscoped name", async () => {
+    await prepareResolverFixture();
+    await selectPackage({ ...communityPackage(), name: "research-briefing" });
+    const resolveRef = (ref: string) =>
+      withResolvedClawHubSource({
+        coordinate: { packageName: ref },
+        mode: "preview",
+        run: async (source) => source.source.name,
+      });
+
+    await expect(resolveRef(personalPackageName)).resolves.toMatchObject({
+      value: "research-briefing",
+    });
+    expect(mocks.detail).toHaveBeenCalledWith(
+      expect.objectContaining({ name: personalPackageName }),
+    );
+    // Exact-release identity, trust and archive bytes bind to the stored name.
+    for (const read of [mocks.artifact, mocks.download]) {
+      expect(read).toHaveBeenCalledWith(expect.objectContaining({ name: "research-briefing" }));
+    }
+    expect(mocks.trust).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: { kind: "template", packageName: "research-briefing" } }),
+    );
+
+    mocks.download.mockClear();
+    await expectCode(resolveRef("@mallory/research-briefing"), "clawhub_identity_mismatch");
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
   it("requires personal-release risk acknowledgement and never persists denied content", async () => {
     const { stateDir } = await prepareResolverFixture();
     await selectPackage(communityPackage());

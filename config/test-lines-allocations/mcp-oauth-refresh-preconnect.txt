@@ -1,2 +1,0 @@
-17
-# Regression proof that DNS/connect failures before an MCP OAuth refresh restore the grant.

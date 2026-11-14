@@ -591,3 +591,82 @@ describe("createOpenClawTools Gateway caller identity", () => {
     ]);
   });
 });
+
+it("retains plugin-delivered images in source history after reopen", async () => {
+  const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+  const { replaceSessionEntry, loadTranscriptEvents } =
+    await import("../config/sessions/session-accessor.js");
+  const { readTranscriptEventMessage } =
+    await import("../config/sessions/session-accessor.sqlite-read.js");
+  const { closeOpenClawAgentDatabasesAsync } = await import("../state/openclaw-agent-db.js");
+  const { projectChatDisplayMessages } = await import("../gateway/chat-display-projection.js");
+  const { resolveManagedOutgoingMediaArtifactDownload } =
+    await import("../gateway/managed-image-attachments.js");
+  const { createSolidPngBuffer } = await import("../../test/helpers/image-fixtures.js");
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionKey = SESSION_KEY;
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const mediaUrl = path.join(state.workspaceDir, "investigation.png");
+    await fs.writeFile(mediaUrl, createSolidPngBuffer(320, 180, { r: 24, g: 128, b: 192 }));
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace: state.workspaceDir } },
+      session: { store: storePath },
+      channels: { telegram: { enabled: true } },
+      plugins: { allow: ["telegram"] },
+      tools: { fs: { workspaceOnly: true } },
+    };
+    setRuntimeConfigSnapshot(config);
+    const scope = { sessionKey, sessionId: identity.sessionId, storePath };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sendMedia = vi.fn(async (params: ChannelOutboundContext) => {
+      await params.onPlatformSendDispatch?.();
+      return {
+        channel: "telegram" as const,
+        messageId: "synthetic-confirmed-image",
+        chatId: "123",
+      };
+    });
+    const plugin = telegramPlugin({ sendMedia });
+    plugin.messaging = {
+      normalizeTarget: (raw) => raw,
+      targetResolver: { looksLikeId: () => true, hint: "<chat-id>" },
+    };
+    installChannel(plugin, ["work"]);
+    buildDeliveryTools({
+      config,
+      workspaceDir: state.workspaceDir,
+      messageActionTurnCapability: mintTurn({
+        sourceReplySessionKey: sessionKey,
+        requesterAccountId: "work",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "123",
+          currentMessagingTarget: "123",
+          currentChatType: "group",
+        },
+      }),
+    });
+    await expectDefined(
+      firstResolvePluginToolsParams().context.delivery,
+      "plugin delivery bound",
+    ).send({ text: "Plugin image", mediaUrl });
+    await closeOpenClawAgentDatabasesAsync();
+    const messages = (await loadTranscriptEvents(scope))
+      .map(readTranscriptEventMessage)
+      .filter(Boolean);
+    const displayImages = projectChatDisplayMessages(messages)
+      .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+      .filter(
+        (block: Record<string, unknown>) => block.type === "image" || block.type === "attachment",
+      );
+    expect(displayImages).toHaveLength(1);
+    const artifactId = displayImages[0]?.artifactId;
+    if (typeof artifactId !== "string") {
+      throw new Error("Missing managed artifact identity");
+    }
+    expect(
+      await resolveManagedOutgoingMediaArtifactDownload({ sessionKey, artifactId }),
+    ).toMatchObject({ type: "image", mimeType: "image/png" });
+    expect(sendMedia).toHaveBeenCalledOnce();
+  });
+});

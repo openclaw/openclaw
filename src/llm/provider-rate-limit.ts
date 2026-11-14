@@ -1,6 +1,7 @@
 import { randomInt } from "node:crypto";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { FailoverError } from "../agents/failover/error.js";
+import { isRateLimitErrorMessage } from "../agents/failover/message-patterns.js";
 import {
   hasOrganizationTpmRateLimitEvidence,
   resolveRetryAfterMs,
@@ -15,6 +16,8 @@ type Waiter = {
   order: number;
   priority: "interactive" | "background";
   maxRetryDelayMs: number;
+  provider: string;
+  model: string;
   retryDeadline?: number;
   gate: Gate;
   signal?: AbortSignal;
@@ -58,13 +61,16 @@ export function withProviderRateLimitRetryDeadline<T>(
   );
 }
 
-function retryDeadlineError() {
+function retryDeadlineError(waiter: Waiter) {
   return new FailoverError(
     "429 Shared organization token rate limit exceeded the same-model retry wait budget.",
     {
       reason: "rate_limit",
       status: 429,
       code: "rate_limit_exceeded",
+      provider: waiter.provider,
+      model: waiter.model,
+      rateLimitResetAt: Date.now() + waiter.gate.retryAt - monotonicNow(),
     },
   );
 }
@@ -86,7 +92,7 @@ function notify(waiter: Waiter) {
     Math.max(now, waiter.gate.retryAt, waiter.gate.nextAt) >= waiter.retryDeadline
   ) {
     waiter.gate.queue.splice(waiter.gate.queue.indexOf(waiter), 1);
-    finish(waiter, retryDeadlineError());
+    finish(waiter, retryDeadlineError(waiter));
     return;
   }
   const floorMs = waiter.gate.retryAt - now;
@@ -95,8 +101,15 @@ function notify(waiter: Waiter) {
     finish(
       waiter,
       new FailoverError(
-        `429 Shared organization token rate limit. Retry-After: ${floorMs / 1000} seconds exceeds maxRetryDelayMs=${waiter.maxRetryDelayMs}.`,
-        { reason: "rate_limit", status: 429, code: "rate_limit_exceeded" },
+        `429 Shared model rate limit. Retry-After: ${floorMs / 1000} seconds exceeds maxRetryDelayMs=${waiter.maxRetryDelayMs}.`,
+        {
+          reason: "rate_limit",
+          status: 429,
+          code: "rate_limit_exceeded",
+          provider: waiter.provider,
+          model: waiter.model,
+          rateLimitResetAt: Date.now() + floorMs,
+        },
       ),
     );
     return;
@@ -138,7 +151,7 @@ function schedule(gate: Gate) {
         for (const waiter of gate.queue.slice()) {
           if (waiter.retryDeadline !== undefined && monotonicNow() >= waiter.retryDeadline) {
             gate.queue.splice(gate.queue.indexOf(waiter), 1);
-            finish(waiter, retryDeadlineError());
+            finish(waiter, retryDeadlineError(waiter));
           }
         }
         if (monotonicNow() >= gate.expiresAt) {
@@ -203,7 +216,7 @@ function requestIdentity(
   return { scope, key };
 }
 
-/** Recent shared TPM exhaustion remains saturated through the gate's recovery window. */
+/** Known rate limits remain saturated through the gate's recovery window. */
 export function getProviderRateLimitState(
   model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
   options?: Pick<SimpleStreamOptions, "apiKey" | "headers">,
@@ -224,7 +237,7 @@ export function getProviderRateLimitState(
   };
 }
 
-/** Coordinates known shared TPM exhaustion; the caller remains the sole retry owner. */
+/** Coordinates known shared rate limits; the caller remains the sole retry owner. */
 export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
   model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
   options: T & { [admittedAccount]?: string },
@@ -255,6 +268,8 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
           order: state.waiterOrder++,
           priority,
           maxRetryDelayMs: options.maxRetryDelayMs ?? 60_000,
+          provider: model.provider,
+          model: model.id,
           retryDeadline: retryDeadline?.pendingUntil,
           gate,
           signal,
@@ -272,7 +287,9 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
         gate.queue.push(waiter);
         signal?.addEventListener("abort", waiter.abort, { once: true });
         notify(waiter);
-        schedule(gate);
+        if (!waiter.done) {
+          schedule(gate);
+        }
       });
       if (retryDeadline) {
         retryDeadline.pendingUntil = undefined;
@@ -284,18 +301,18 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
 }
 
 function observeProviderRateLimit(scope: string, key: string, message: AssistantMessage): void {
-  if (
-    message.stopReason !== "error" ||
-    !hasOrganizationTpmRateLimitEvidence(message.errorMessage) ||
-    message.retryAfterMs === null
-  ) {
+  if (message.stopReason !== "error" || message.retryAfterMs === null) {
+    return;
+  }
+  const sharedTpm = hasOrganizationTpmRateLimitEvidence(message.errorMessage);
+  if (!sharedTpm && !isRateLimitErrorMessage(message.errorMessage ?? "")) {
     return;
   }
   const delay =
     message.retryAfterMs ??
     resolveRetryAfterMs(message.errorMessage, Date.now(), message.errorBody) ??
     1_000;
-  if (!Number.isFinite(delay)) {
+  if (!Number.isFinite(delay) || (!sharedTpm && delay <= 60_000)) {
     return;
   }
   const org = message.errorMessage?.match(/\bin organization\s+(\S+)\s+on tokens per min/i)?.[1];

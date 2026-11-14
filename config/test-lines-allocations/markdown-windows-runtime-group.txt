@@ -1,2 +1,0 @@
-# Keep the Windows-path parser extension in the shared Markdown chunk, outside Chat's route.
-1

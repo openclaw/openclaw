@@ -3,7 +3,7 @@ import { isKeyFingerprint, type KeyFingerprint } from "../keys.js";
 import type { SignedStatement, UnixSeconds } from "../statements/types.js";
 
 /** Who reads a message: the claw's Gateway, every owner device, or one device by key fingerprint. */
-export type MailboxRecipient = "gateway" | "owners" | KeyFingerprint;
+export type MailboxRecipient = "gateway" | "owners" | "self" | KeyFingerprint;
 
 /** SAS enrollment steps carried through the mailbox (owner-key spec section 6.1). */
 export const ENROLLMENT_STEPS = ["start", "accept", "key", "sealed", "abort"] as const;
@@ -22,6 +22,7 @@ export const MAILBOX_NOTICE_EVENTS = [
   "redemption_resolved",
   "seq_conflict",
   "rebind",
+  "member_device_added",
 ] as const;
 /** One of {@link MAILBOX_NOTICE_EVENTS}. */
 export type MailboxNoticeEvent = (typeof MAILBOX_NOTICE_EVENTS)[number];
@@ -50,7 +51,7 @@ export type MailboxPayload =
  * or one device.
  */
 export function noticeRecipientAllowed(event: MailboxNoticeEvent, to: MailboxRecipient): boolean {
-  if (to === "gateway") {
+  if (to === "gateway" || to === "self") {
     return false;
   }
   if (event === "rebind") {

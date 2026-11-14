@@ -275,6 +275,20 @@ describe("provider model route adapter", () => {
       env: { OPENAI_BASE_URL: "https://env-two.example.test/v1" },
     });
     expect(resolveModelRoutes.mock.calls[0]?.[0].env).toBe(env);
+    resolveRoutes({
+      modelId: "demo",
+      requestTransportOverrides: "present",
+      routeIntent: { runtimeId: "codex", source: "explicit" },
+    });
+    resolveRoutes({ modelId: "demo" });
+    expect(
+      resolveModelRoutes.mock.calls.map(([context]) => context.requestTransportOverrides),
+    ).toEqual(["none", "present", "none"]);
+    expect(resolveModelRoutes.mock.calls[1]?.[0].routeIntent).toEqual({
+      runtimeId: "codex",
+      source: "explicit",
+    });
+    expect(resolveModelRoutes.mock.calls[2]?.[0].routeIntent).toBeUndefined();
   });
 
   it("captures separate override facts for canonical duplicate rows", () => {

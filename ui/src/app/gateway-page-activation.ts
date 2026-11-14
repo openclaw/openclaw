@@ -25,6 +25,7 @@ export function startGatewayPageActivation(
   let disposed = false;
   let queued = false;
   let forceRecovery = false;
+  let refreshWorker = false;
   let wasHidden = documentTarget.visibilityState === "hidden";
   let probeTimer: ReturnType<typeof setTimeout> | undefined;
   let probe: AbortController | null = null;
@@ -109,11 +110,12 @@ export function startGatewayPageActivation(
     syncProbe(Math.max(0, probeDelay() - (Date.now() - checkedAtMs)));
   };
 
-  const schedule = (force: boolean) => {
+  const schedule = (force: boolean, refreshesWorker = true) => {
     if (documentTarget.visibilityState === "hidden") {
       return;
     }
     forceRecovery ||= force;
+    refreshWorker ||= refreshesWorker;
     if (queued) {
       return;
     }
@@ -122,6 +124,8 @@ export function startGatewayPageActivation(
       queued = false;
       const forceQueuedRecovery = forceRecovery;
       forceRecovery = false;
+      const refreshQueuedWorker = refreshWorker;
+      refreshWorker = false;
       if (disposed || documentTarget.visibilityState === "hidden") {
         return;
       }
@@ -135,6 +139,9 @@ export function startGatewayPageActivation(
         gateway.connect();
       }
       syncProbe(0);
+      if (!refreshQueuedWorker) {
+        return;
+      }
       void refreshControlUiServiceWorker().catch((error: unknown) => {
         console.warn("OpenClaw service worker refresh failed after page activation.", error);
       });
@@ -157,11 +164,15 @@ export function startGatewayPageActivation(
     }
   };
   const onOnline = () => schedule(false);
+  // Returning from another app leaves the window "visible", so focus is the
+  // only return signal. Skip the service-worker update fetch on app switches.
+  const onFocus = () => schedule(false, false);
 
   const stops = [
     listen(documentTarget, "visibilitychange", onVisibilityChange),
     listen(windowTarget, "pageshow", onPageShow),
     listen(windowTarget, "online", onOnline),
+    listen(windowTarget, "focus", onFocus),
     gateway.subscribe(() => syncProbe()),
   ];
   syncProbe();

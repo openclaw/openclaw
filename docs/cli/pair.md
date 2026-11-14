@@ -12,13 +12,17 @@ Approve a browser that is showing a pairing code. Choose **Pair this browser** i
 
 ```bash
 openclaw pair ABCD-EFGH
+openclaw pair work:ABCD-EFGH
 ```
+
+A Gateway running under a named profile shows its code with that profile in front, such as `work:ABCD-EFGH`. The command then uses the `work` profile, as if you had run `openclaw --profile work pair ABCD-EFGH`, and prints the profile it reached before asking. The prefix only chooses where the command connects; the eight characters after it are the code. A code naming a different profile than `--profile` is refused. With `--container`, the code goes unchanged to the CLI inside the container, which selects the profile there.
 
 The command prints what the Gateway knows about the requesting browser, then asks before approving:
 
 ```text
 A browser is asking to pair with administrator access to this Gateway.
 
+  Gateway profile     work
   Code                ABCD-EFGH
   Browser (reported)  Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ...
   Address             203.0.113.7
@@ -27,7 +31,7 @@ A browser is asking to pair with administrator access to this Gateway.
   Requested           just now
 ```
 
-**Address** is the peer the Gateway saw. Rows marked `(reported)` come from the requester, so treat them as hints. Compare **Browser ID** with the one on the page in front of you.
+**Address** is the peer the Gateway saw. Rows marked `(reported)` come from the requester, so treat them as hints. Compare **Code** with the command on the page in front of you.
 
 Approve only a code you requested yourself. Anyone can display a code, and approving one someone sent you gives their browser administrator control of your Gateway. Answering no tells the browser it was declined.
 
@@ -51,4 +55,4 @@ A plain `ssh host openclaw pair ABCD-EFGH` has no terminal to answer the questio
 
 The Gateway must be running, and the CLI connection needs `operator.admin`. Code pairing does not establish a signed-in user identity, so Gateways with `gateway.roles` configured refuse it; use the Gateway's identity-aware sign-in method instead.
 
-If the command says no browser is waiting, check that it reaches the same Gateway the browser opened, including any `--profile` or `OPENCLAW_STATE_DIR` setting. A browser that confirmed **Cancel** has withdrawn its request, so its old code can no longer be approved. Cancellation does not revoke a device whose approval already completed; use Devices or `openclaw devices remove` for that.
+If the command says no browser is waiting, check that it reaches the same Gateway the browser opened: copy the code with its profile prefix, and run it with the same `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` if that Gateway uses its own. A browser that confirmed **Cancel** has withdrawn its request, so its old code can no longer be approved. Cancellation does not revoke a device whose approval already completed; use Devices or `openclaw devices remove` for that.

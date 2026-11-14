@@ -1,4 +1,5 @@
 import { hash } from "node:crypto";
+import * as util from "node:util";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
@@ -21,6 +22,8 @@ import {
   normalizeOpenAIResponsesFunctionCallId as normalizeCallId,
   splitOpenAIFunctionCallPairing,
 } from "./openai-responses-tool-call-id-shape.js";
+
+vi.mock("node:util", { spy: true });
 
 type Input = NonNullable<ResponsesContinuationRequest["input"]>;
 type Output = ResponsesContinuationState["lastResponseItems"];
@@ -417,7 +420,7 @@ describe("OpenAI Responses continuation", () => {
     });
   });
 
-  it("compares mutable continuation history without materializing property-entry arrays", () => {
+  it("compares mutable continuation history without generic comparison bookkeeping", () => {
     const previousMessage = userInput("message 0");
     const currentMessage = structuredClone(previousMessage);
     const input = [
@@ -431,9 +434,13 @@ describe("OpenAI Responses continuation", () => {
     };
     const current = [currentMessage, ...structuredClone(input.slice(1))];
     const request = { input: [...current, secondUser] };
+    const genericComparison = vi.mocked(util.isDeepStrictEqual).mockClear();
     const fromEntries = vi.spyOn(Object, "fromEntries");
     try {
-      expect(resolve(state, request)).toMatchObject({
+      const continued = resolve(state, request);
+      const comparisons = genericComparison.mock.calls.length;
+      expect(comparisons).toBe(0);
+      expect(continued).toMatchObject({
         continuationStatus: "continued",
         request: { previous_response_id: "resp_previous", input: [secondUser] },
       });

@@ -7,6 +7,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 import { makeChatHost } from "../chat-host.test-support.ts";
+import { chatRunPresentation } from "../chat-run-presentation.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { handleChatScrollTakeover, saveChatSessionScrollPosition } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
@@ -19,6 +20,8 @@ import {
   stubMcpAppLifecycle,
   TranscriptTestHost,
 } from "../test-helpers/chat-transcript-native.tsx";
+import { buildToolStreamIdentity } from "../tool-stream-identity.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
@@ -33,6 +36,7 @@ import {
   transcriptDomState,
   transcriptRows,
   transcriptSize,
+  transcriptMessage as msg,
 } from "./chat-transcript.test-support.ts";
 
 customElements.define("scroll-restore-test-host", TranscriptTestHost);
@@ -912,4 +916,67 @@ it("keeps late reactions when geometry replays an older projection", async () =>
 
   expect(requireElement(container, ".chat-message-reactions").textContent).toContain("👍");
   expect(requireElement(container, ".chat-bubble")).toBe(bubble);
+});
+
+it("rebinds a retained tool row when its invocation source changes", async () => {
+  const message = (text: string) =>
+    msg(
+      "assistant",
+      [
+        { type: "toolcall", name: "exec", arguments: { command: "printf source" } },
+        { type: "toolresult", text },
+      ],
+      2_000,
+      { runId: "source-run", toolCallId: "source-call", __openclawToolStreamLive: true },
+    );
+  const initial = message("Initial source output.");
+  const source = chatRunPresentation({ chatToolMessages: [initial] });
+  const subscribe = source.subscribeToolMessage.bind(source);
+  const subscriptions = vi
+    .spyOn(source, "subscribeToolMessage")
+    .mockImplementation((...args) => vi.fn(subscribe(...args)));
+  const props = threadProps("pane-tool-source", "agent:main:tool-source", [], {
+    runId: "source-run",
+    runActive: true,
+    runWorking: true,
+    showToolCalls: true,
+    autoExpandToolCalls: true,
+    toolMessages: [initial],
+    toolMessageSource: source,
+  });
+  const { transcript, container, draw } = threadFixture(props);
+  const rerender = () => {
+    draw();
+    transcript.update();
+  };
+  rerender();
+  transcript.start();
+  await settleToolBridges(container);
+  const row = requireElement(container, ".chat-tool-row");
+  const output = () => container.querySelector(".chat-tool-term__out code")?.textContent;
+  expect(output()).toBe("Initial source output.");
+  const subscriptionsBefore = subscriptions.mock.calls.length;
+  const releaseSource = subscriptions.mock.results.at(-1)!.value;
+  rerender();
+  expect(subscriptions).toHaveBeenCalledTimes(subscriptionsBefore);
+  expect(releaseSource).not.toHaveBeenCalled();
+
+  const replacement = chatRunPresentation({
+    chatToolMessages: [message("Replacement source output.")],
+  });
+  props.toolMessageSource = replacement;
+  rerender();
+  await waitForSolid(() => expect(output()).toBe("Replacement source output."));
+  expect(container.querySelector(".chat-tool-row")).toBe(row);
+  expect(releaseSource).toHaveBeenCalledOnce();
+  source.publishToolMessages([message("Retired source output.")], false, [
+    buildToolStreamIdentity("source-run", "source-call"),
+  ]);
+  flush();
+  expect(output()).toBe("Replacement source output.");
+  replacement.publishToolMessages([message("Replacement advanced output.")], false, [
+    buildToolStreamIdentity("source-run", "source-call"),
+  ]);
+  await waitForSolid(() => expect(output()).toBe("Replacement advanced output."));
+  expect(container.querySelector(".chat-tool-row")).toBe(row);
 });

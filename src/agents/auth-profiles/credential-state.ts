@@ -1,6 +1,6 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { parseSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
-import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
+import { isFailedOAuthRefreshFence, isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 export type AuthCredentialReasonCode =
@@ -9,6 +9,8 @@ export type AuthCredentialReasonCode =
   | "missing_credential"
   | "invalid_expires"
   | "expired"
+  /** The refresh owner settled its claim as failed; only a fresh sign-in recovers. */
+  | "refresh_failed"
   | "unresolved_ref"
   | "malformed_api_key";
 
@@ -105,6 +107,10 @@ export function evaluateStoredCredentialEligibility(params: {
     return { eligible: true, reasonCode: "ok" };
   }
 
+  if (isFailedOAuthRefreshFence(credential)) {
+    return { eligible: false, reasonCode: "refresh_failed" };
+  }
+  // A pending fence may still settle: its owner restores or replaces the grant.
   if (isOAuthRefreshFence(credential)) {
     return { eligible: false, reasonCode: "expired" };
   }

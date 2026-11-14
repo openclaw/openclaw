@@ -18,7 +18,7 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 
 // Registered in gatewayDatabaseWorkerTestFiles: only that project's forked pool gives this Gateway a
 // host SQLite broker. One Gateway for the file, no handler or transport mocks.
-it("continuation-skip stops re-sending workspace instructions on the next turn", async () => {
+it("continuation-skip keeps the pinned workspace prompt without re-injecting it on the next turn", async () => {
   const state = await createOpenClawTestState({
     label: "continuation-skip-bootstrap",
     env: createPluginEnabledGatewayTestEnv(),
@@ -93,16 +93,24 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
     try {
       await server.startupSettled;
       const sessionKey = `agent:main:continuation-${randomUUID()}`;
-      const turn = async (message: string): Promise<string> => {
+      const turn = async (message: string): Promise<{ input: unknown[] }> => {
         const requestStart = requests.length;
         await sendChatAndWait(client, sessionKey, message);
         const sent = requests.slice(requestStart);
         expect(sent).toHaveLength(1);
-        return sent[0]!;
+        return JSON.parse(sent[0]!) as { input: unknown[] };
       };
 
-      expect(await turn("Name the workspace sentinel.")).toContain(sentinel);
-      expect(await turn("And now the sentinel again?")).not.toContain(sentinel);
+      const first = await turn("Name the workspace sentinel.");
+      expect(JSON.stringify(first.input[0])).toContain(sentinel);
+
+      const continuation = await turn("And now the sentinel again?");
+      const [initialSystemPrompt, ...appendedContext] = continuation.input;
+      expect(initialSystemPrompt).toMatchObject({ role: "system" });
+      // The initial prompt stays pinned; continuation-skip only withholds fresh injection.
+      expect(JSON.stringify(initialSystemPrompt)).toContain(sentinel);
+      expect(initialSystemPrompt).toEqual(first.input[0]);
+      expect(JSON.stringify(appendedContext)).not.toContain(sentinel);
     } finally {
       try {
         await disconnectGatewayClient(client);

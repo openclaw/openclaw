@@ -1,2 +1,0 @@
-# Message cleanup clock-step regressions share the existing CLI plugin fixture.
-17

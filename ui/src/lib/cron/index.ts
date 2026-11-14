@@ -451,13 +451,13 @@ export async function toggleCronJob(
   return updated;
 }
 
-export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {
+export async function runCronJob(state: CronState, jobId: string) {
   const job =
     state.cronEditingJob?.id === jobId
       ? state.cronEditingJob
       : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
   return withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
-    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
+    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode: "force" });
     if (!isCurrent()) {
       return;
     }

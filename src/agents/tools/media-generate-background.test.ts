@@ -6,6 +6,7 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
   return { ...observeMediaActivity(actual, taskExecutorMocks) };
 });
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -14,6 +15,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -23,6 +25,7 @@ import {
   expectFallbackMediaAnnouncement,
   resetMediaBackgroundMocks,
 } from "./media-generate-background.test-support.js";
+import { buildSavedMediaAttachment } from "./media-generate-result-shared.js";
 const taskExecutorMocks = vi.hoisted(() => ({
   createOperation: vi.fn(),
   recordProgress: vi.fn(),
@@ -36,6 +39,7 @@ const sessionMocks = vi.hoisted((): { entry: SessionEntry } => ({
   entry: { sessionId: "media-requester", updatedAt: 1 },
 }));
 const announce = announceDeliveryMocks.deliverSubagentAnnouncement;
+const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
 // mock-isolation: Keep the session database outside this routing fixture.
@@ -134,7 +138,6 @@ it.each([
       options: { inputProvenance },
       acquire: async () => undefined,
       resolveProviders: () => [],
-      findDuplicate: async () => undefined,
       prepare: async ({ prompt }) => ({
         kind: "task",
         params: {
@@ -219,6 +222,34 @@ it("wakes the original conversation with generated attachments and visible-reply
   });
   expect(announce).toHaveBeenCalledOnce();
 });
+it("admits the exact successful image outputs, not paths from completion text or media URLs", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", mediaTempDirs.make("openclaw-image-completion-input-"));
+  try {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const saved = await saveMediaBuffer(png, "image/png", "tool-image-generation");
+    const unrelatedPath = "/tmp/unrelated-completion-image.png";
+    await imageGenerationTaskLifecycle.wakeTaskCompletion({
+      ...completion("image", `Generated an image. Inspect ${unrelatedPath}`, [unrelatedPath]),
+      attachments: [buildSavedMediaAttachment("image", saved)],
+    });
+    expect(announce.mock.lastCall?.[0]).toMatchObject({
+      inputAttachments: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          content: png.toString("base64"),
+        },
+      ],
+    });
+    expect(announce.mock.lastCall?.[0].inputAttachments).toHaveLength(1);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 it("keeps the detached video tool run context registered until terminal status", async () => {
   const handle = await videoGenerationTaskLifecycle.createTaskRun({
     sessionKey: "agent:main:discord:channel:123",

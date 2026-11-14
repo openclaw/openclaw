@@ -17,7 +17,6 @@ import {
   runInstallSourceScan,
   sourceFamilyForInstallPolicyKind,
   sourceFamilyForInstallPolicySource,
-  validateOpenClawPackageInstallCompatibility,
   type PluginInstallRuntime,
 } from "./install-shared.js";
 import {
@@ -29,6 +28,7 @@ import {
   type PluginInstallLogger,
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
+import { validateOpenClawPackageInstallCompatibility } from "./package-compat.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies, resolveOpenClawHostDependency } from "./plugin-peer-link.js";
 
@@ -115,7 +115,7 @@ export async function validatePackagePluginInstallSource(params: {
 
   const packageMetadata = params.runtime.getPackageManifestMetadata(manifest);
   const compatibilityError = validateOpenClawPackageInstallCompatibility({
-    runtime: params.runtime,
+    currentHostVersion: params.runtime.resolveCompatibilityHostVersion(),
     pluginId,
     packageMetadata,
   });

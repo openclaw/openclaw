@@ -59,6 +59,16 @@ describe.skipIf(process.platform === "win32")("abandoned SQLite snapshot reclama
   }
   const sweep = () => reclaimAbandonedSqliteSnapshots(new AbortController().signal);
 
+  it("reclaims abandoned inspection trees containing the schema discovery ownership record", async () => {
+    const { own } = installation();
+    const { directory } = strand(own, hours(1));
+    fs.writeFileSync(path.join(directory, "schema-discovery-ownership.json"), "{}");
+    age(directory, hours(1));
+
+    expect(await sweep()).toMatchObject({ removed: 1, skipped: 0 });
+    expect(fs.existsSync(directory)).toBe(false);
+  });
+
   it("reclaims day-old copies stranded beside this installation's namespace", async () => {
     const { own, parent, foreign } = installation();
     const stranded = [strand(foreign, hours(25)), strand(parent, hours(25))];

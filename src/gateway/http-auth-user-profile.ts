@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHostAccountName } from "../infra/host-account-name.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
@@ -38,10 +39,12 @@ import {
   resolveGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
+import { syncTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
@@ -66,8 +69,9 @@ function failedHttpProfileAuthentication(error?: unknown): HttpUserProfileAuthRe
     ok: false,
     authResult: {
       ok: false,
-      reason:
-        error instanceof GatewayOperatorAccessDeniedError
+      reason: isOperatorAuthorityUnavailable(error)
+        ? "operator_access_unavailable"
+        : error instanceof GatewayOperatorAccessDeniedError
           ? "operator_access_denied"
           : "user_profile_unavailable",
     },
@@ -110,7 +114,10 @@ export function checkHttpCookieUserProfile(
   cfg: OpenClawConfig,
   profileId: string | undefined,
 ): HttpUserProfileAuthResult {
-  if (!profileId && (cfg.gateway?.roles || hasGatewayOperatorAccessPolicies(cfg))) {
+  if (
+    !profileId &&
+    (isNamedOperatorRoleEnforcementEnabled(cfg) || hasGatewayOperatorAccessPolicies(cfg))
+  ) {
     return failedHttpProfileAuthentication();
   }
   // A signed viewer still narrows session sharing when named roles are disabled.
@@ -205,8 +212,12 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   assertCurrent();
   const options = { assertCurrent };
   const authenticatedUserId = normalizeOptionalString(params.authResult.user);
-  const rolesConfigured = Boolean(params.cfg.gateway?.roles);
-  const accessPoliciesConfigured = hasGatewayOperatorAccessPolicies(params.cfg);
+  const rolesConfigured = isNamedOperatorRoleEnforcementEnabled(params.cfg);
+  const openclawIdPrincipal =
+    params.authResult.method === "trusted-proxy" ? params.authResult.openclawId : undefined;
+  const accessPoliciesConfigured = hasGatewayOperatorAccessPolicies(params.cfg, {
+    openclawIdPrincipal,
+  });
   if (!authenticatedUserId) {
     if (
       shouldUseGatewayOwnerProfile({
@@ -262,11 +273,19 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
               )
             : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
+    await syncTrustedProxyGitCoauthor({
+      authConfig: params.cfg.gateway?.auth,
+      authResult: params.authResult,
+      headers: params.req.headers,
+      profileId,
+      assertCurrent,
+    });
     const prepared = await prepareHttpProfile(
       profileId,
       profile.updatedAt,
       assertCurrent,
       usesSharedSecretGatewayMethod(params.authResult.method) ? undefined : params.cfg,
+      openclawIdPrincipal,
     );
     const delegation = params.authResult.delegation;
     if (delegation) {
@@ -295,9 +314,10 @@ async function prepareHttpProfile(
   updatedAt: number,
   assertCurrent: () => void,
   cfg?: OpenClawConfig,
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal,
 ) {
   assertCurrent();
-  if (cfg && hasGatewayOperatorAccessPolicies(cfg)) {
+  if (cfg && hasGatewayOperatorAccessPolicies(cfg, { openclawIdPrincipal })) {
     (await prepareUserProfileCatalog()).release();
     assertCurrent();
   }
@@ -316,7 +336,7 @@ async function prepareHttpProfile(
       )
     : undefined;
   const operatorAccessAuthority = cfg
-    ? resolveGatewayOperatorAccessAuthority(profileId, cfg)
+    ? resolveGatewayOperatorAccessAuthority(profileId, cfg, { openclawIdPrincipal })
     : undefined;
   assertCurrent();
   if (!authority.isCurrent()) {

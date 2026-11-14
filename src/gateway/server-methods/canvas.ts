@@ -15,6 +15,7 @@ import { isGatewaySubordinateWorkAdmissionClosed } from "../../process/gateway-w
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
 import { resolveControlUiBootstrapPresentation } from "../control-ui-bootstrap-presentation.js";
+import { resolveSandboxView } from "../sandbox-view.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { CANVAS_WIDGET_FORBIDDEN, retainCanvasWidgetRead } from "./canvas-widget-read.js";
 import { respondError } from "./response.js";
@@ -78,13 +79,10 @@ async function respondWithCanvasHtml(
     if (sandboxPort === undefined) {
       throw new Error(unavailableMessage);
     }
-    const ingress = client?.remoteControlUiIngress;
-    const configuredOrigin = ingress?.sandboxOrigin ?? config.mcp?.apps?.sandboxOrigin;
     const result: CanvasDocumentViewResult = {
       html,
-      sandboxUrl: ingress ? new URL(sandboxUrl, ingress.sandboxOrigin).href : sandboxUrl,
+      ...resolveSandboxView(sandboxUrl, client, config.mcp?.apps?.sandboxOrigin),
       sandboxPort,
-      ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
       embedSandbox: resolveControlUiBootstrapPresentation(config).embedSandbox,
     };
     respond(true, result);

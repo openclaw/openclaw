@@ -166,17 +166,15 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             <h2 class="oc-dialog__title">{t("devices.pairing.title")}</h2>
             <div class="oc-dialog__header-actions">
               {/* Help is wanted at any step, so it sits beside close instead of under the title. */}
-              <openclaw-tooltip prop:content={t("devices.pairing.help")}>
-                <a
-                  class="oc-icon-button oc-icon-button--28 oc-dialog__icon-button device-pair-setup__help"
-                  href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
-                  target={EXTERNAL_LINK_TARGET}
-                  rel={buildExternalLinkRel()}
-                  aria-label={t("devices.pairing.helpNewTab")}
-                >
-                  <Icon name="circleQuestionMark" />
-                </a>
-              </openclaw-tooltip>
+              <a
+                class="oc-icon-button oc-icon-button--28 oc-dialog__icon-button device-pair-setup__help"
+                href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
+                target={EXTERNAL_LINK_TARGET}
+                rel={buildExternalLinkRel()}
+                aria-label={t("devices.pairing.helpNewTab")}
+              >
+                <Icon name="circleQuestionMark" />
+              </a>
               <IconButton
                 size={28}
                 class="oc-dialog__close device-pair-setup__close"

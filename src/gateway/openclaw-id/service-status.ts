@@ -14,3 +14,10 @@ export type OpenClawIdStatus =
    */
   | { state: "keys_refused"; key: "endpoint" | "gateway"; reason: BoundKeyRefusal }
   | { state: "failed"; reason: string };
+
+/** A refused endpoint key reports why; otherwise the tunnel is on. */
+export function openClawIdTunnelStatus(tunnel: TunnelSupervisorStatus): OpenClawIdStatus {
+  return tunnel.state === "key_refused"
+    ? { state: "keys_refused", key: "endpoint", reason: tunnel.reason }
+    : { state: "on", tunnel };
+}

@@ -31,7 +31,7 @@ vi.mock("../worker-task-pool.js", async (importOriginal) => {
         return {
           run(input: unknown, options: { signal?: AbortSignal }) {
             const handle = worker.handle;
-            if (!handle) {
+            if (typeof handle !== "function") {
               throw new Error("Port command worker handler was not registered");
             }
             const sections = native.createWorkerNativeSectionState();

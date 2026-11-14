@@ -493,13 +493,13 @@ export async function analyzeNodeApprovalRequirement(params: {
               }
               const coverage =
                 params.prepared.allowAlwaysCoverage ??
-                resolveAllowAlwaysPatternCoverage({
+                (await resolveAllowAlwaysPatternCoverage({
                   segments: [...entry.allowlistEval.segments],
                   cwd: entry.cwd,
                   env: analysisEnv,
                   platform: params.target.platform,
                   strictInlineEval: params.request.strictInlineEval,
-                });
+                }));
               const expectedPatterns = coverage.patterns.map(
                 (pattern) => `${pattern.pattern}\x00${pattern.argPattern ?? ""}`,
               );
@@ -582,7 +582,7 @@ export async function analyzeNodeApprovalRequirement(params: {
       params.request.autoReview === true &&
       (autoReviewBlockedByShellStartup || !autoReviewEligibility.eligible)
         ? { kind: "one-shot", reasons: ["no-reusable-pattern"] }
-        : resolveAllowAlwaysPersistenceDecision({
+        : await resolveAllowAlwaysPersistenceDecision({
             segments: baseAllowlistEval.segments,
             commandText: approvalCommand,
             cwd: approvalCwd,

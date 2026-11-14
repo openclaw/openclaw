@@ -39,7 +39,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { authorizePreparedSessionMutation } from "./session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
+import { captureSessionMutationRouting } from "./session-sharing-routing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import * as routing from "./session-store-key.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -64,6 +66,25 @@ const it = baseIt.extend<{ state: OpenClawTestState; harness: ReturnType<typeof 
 function releasing<T extends { release(): void }>(facts: T) {
   return Object.assign(facts, { [Symbol.dispose]: () => facts.release() });
 }
+
+it("reuses a published routing revision and rejects a same-object route change after yielding", async ({
+  harness,
+}) => {
+  const { cfg, sessionKey } = harness;
+  const reads = vi.spyOn(routing, "readSessionRoutingFacts");
+  const assertCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId: "main" },
+  ]);
+  const initialReads = reads.mock.calls.length;
+  for (let i = 0; i < 10; i++) {
+    assertCurrent(cfg);
+  }
+  expect(reads).toHaveBeenCalledTimes(initialReads);
+  await Promise.resolve();
+  cfg.session!.store = `${cfg.session!.store}.replacement`;
+  setRuntimeConfigSnapshot(cfg);
+  expect(() => assertCurrent(cfg)).toThrow(unavailableMessage);
+});
 
 function sharingHarness(
   cfg: OpenClawConfig,
@@ -187,6 +208,7 @@ it("retains selected committed sharing facts across a broad sessions notificatio
   using prepared = releasing(await harness.prepare());
   sessionChanges.emit({ all: true, scope: "sessions" });
   const current = prepared.readCurrent(cfg);
+  expect(prepared.readCurrent(cfg)).toBe(current);
   expect(current.target.entry.sessionId).toBe("broad-survivor");
   expect(current.membership.has("requester")).toBe(true);
   expect(harness.authorize(current)).toBeNull();
@@ -320,6 +342,34 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   ).rejects.toThrow(unavailableMessage);
   expect(forged).toBe(true);
 });
+
+it.for(["main", "other"])(
+  "keeps an acquiring session's facts scoped to its physical owner when %s becomes ready",
+  async (agentId, { harness }) => {
+    const { cfg, sessionKey } = harness;
+    harness.write(restrictedEntry("acquiring-topology", "original"));
+    const read = entryReads.readSessionEntriesFromStoreInWorker;
+    let published = false;
+    vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
+      async (...args) => {
+        const result = await read(...args);
+        if (!published && result.entries.some((row) => row.sessionKey === sessionKey)) {
+          published = true;
+          sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        }
+        return result;
+      },
+    );
+    const pending = harness.prepare();
+    if (agentId === "main") {
+      await expect(pending).rejects.toThrow(unavailableMessage);
+    } else {
+      using prepared = releasing(await pending);
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("acquiring-topology");
+    }
+    expect(published).toBe(true);
+  },
+);
 
 it.for(["unknown", "rollback", "other", "ops", "main"] as const)(
   "applies %s topology publications to retained sharing facts",

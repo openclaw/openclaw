@@ -177,9 +177,19 @@ export function createSessionsPageMenu(host: {
             void host.rename(row);
             break;
           case "set-color":
-            return mutations.patchSession(row.key, { color: action.color });
           case "set-icon":
-            return mutations.patchSession(row.key, { icon: action.icon });
+          case "reset-appearance":
+            return mutations.patchSession(
+              row.key,
+              action.kind === "set-color"
+                ? { color: action.color }
+                : action.kind === "set-icon"
+                  ? { icon: action.icon }
+                  : { icon: null, color: null },
+              undefined,
+              row.sessionId,
+              { sessionScope: true },
+            );
           case "set-communication":
             return mutations.patchSession(
               row.key,
@@ -187,8 +197,6 @@ export function createSessionsPageMenu(host: {
               undefined,
               row.sessionId,
             );
-          case "reset-appearance":
-            return mutations.patchSession(row.key, { icon: null, color: null });
           case "move-session": {
             const scope = host.captureScope();
             if (!scope) {

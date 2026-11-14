@@ -86,7 +86,9 @@ function guestPresenceView(row: Omit<SystemPresence, "watchedSessions">) {
 }
 
 describe("gateway presence audience", () => {
-  test("shares people only with readers and filters their session references across hello, RPC, and activity events", async () => {
+  test("shares people only with readers and filters their session references across hello, RPC, and activity events", async ({
+    onTestFailed,
+  }) => {
     await configureGatewayAuth(
       {
         mode: "trusted-proxy",
@@ -509,6 +511,8 @@ describe("gateway presence audience", () => {
         sockets.push(unauthenticated);
         const unauthenticatedEvents = observePresence(unauthenticated);
         const readers = recipients.filter(({ canRead }) => canRead);
+        let activityPhase = "late-reader-connect";
+        onTestFailed(() => console.error("[presence-activity-phase]", activityPhase));
         // The viewer declaration already published activity. Typing within its
         // 30-second window updates the store without another full roster event.
         const readNow = Date.now;
@@ -533,15 +537,20 @@ describe("gateway presence audience", () => {
           Promise.all(eventPromises),
           // A late connection publishes an older snapshot before the typing activity.
           openRecipient("late-reader", ["operator.read"])
-            .then(() =>
-              rpcReq(watcher.ws, "session.typing", {
+            .then(() => {
+              activityPhase = "typing-rpc";
+              return rpcReq(watcher.ws, "session.typing", {
                 sessionKey: sharedKey,
                 sessionId: sharedSessionId,
                 typing: true,
-              }),
-            )
-            .then((response) => expect(response).toMatchObject({ ok: true })),
+              });
+            })
+            .then((response) => {
+              expect(response).toMatchObject({ ok: true });
+              activityPhase = "presence-event";
+            }),
         ]).finally(() => activityClock.mockRestore());
+        activityPhase = "activity-complete";
         const activeWatcher = listSystemPresence().find(
           (entry) => entry.instanceId === watcherInstanceId,
         )!;

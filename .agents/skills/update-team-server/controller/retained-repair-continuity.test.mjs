@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync, unlinkSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test, fixture, call, success, untouched, replace } from "./retained-repair-test-support.mjs";
 
@@ -48,10 +49,10 @@ for (const [label, sql] of [
 function deleteAgent(f, { missing = true, change = "" } = {}) {
   const db = new DatabaseSync(f.databasePath);
   db.exec(`CREATE TABLE agent_deletion_journal (agent_id TEXT PRIMARY KEY, operation_id TEXT,
-    phase TEXT, database_paths_json TEXT, created_at INTEGER, cleanup_completed INTEGER, delete_files INTEGER)`);
-  db.prepare("INSERT INTO agent_deletion_journal VALUES (?,?,?,?,?,1,?)")
+    phase TEXT, database_paths_json TEXT, created_at INTEGER, cleanup_completed INTEGER, delete_files INTEGER, agent_dir TEXT)`);
+  db.prepare("INSERT INTO agent_deletion_journal VALUES (?,?,?,?,?,1,?,?)")
     .run("controller-test-agent", "native-delete-operation", "retiring", JSON.stringify([f.agentDatabasePath]),
-      Date.parse(f.record.createdAt) + 1, missing ? 1 : 0);
+      Date.parse(f.record.createdAt) + 1, missing ? 1 : 0, dirname(f.agentDatabasePath));
   if (change) db.exec(change);
   db.close();
   if (missing) unlinkSync(f.agentDatabasePath);

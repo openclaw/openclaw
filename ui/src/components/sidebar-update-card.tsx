@@ -586,7 +586,7 @@ export function SidebarUpdateCard(
               <Show
                 when={canUpdate()}
                 fallback={
-                  <openclaw-tooltip open-on-click prop:content={t("updates.adminRequired")}>
+                  <openclaw-tooltip open-on-click prop:content={t("updates.adminRequiredTooltip")}>
                     <UpdateAction />
                   </openclaw-tooltip>
                 }

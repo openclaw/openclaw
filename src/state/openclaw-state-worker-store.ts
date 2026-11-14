@@ -51,14 +51,16 @@ export async function executeOpenClawStateWorker<Key extends keyof OpenClawState
 export function createOpenClawStateWorkerLease(
   context: OpenClawStateWorkerContext,
   finalize?: (scope: DomainScope) => Promise<void>,
+  onNativeLost?: () => void,
 ): OpenClawStateWorkerLease {
   return retainOpenClawStateWorkerLease(
     context,
     {
       open: (captured) => owner().open(captured),
-      retainOperation: (store, onNativeLost) => owner().retainOperation(store, onNativeLost),
+      retainOperation: (store, listener) => owner().retainOperation(store, listener),
     },
     finalize,
+    onNativeLost,
   );
 }
 

@@ -240,7 +240,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             sessionError: self.sessions.errorText,
             mainSessionKey: self.activityStore.mainSessionKey,
             approvals: self.approvals.requests,
-            gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries))
+            gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries),
+            removal: MacOpenClawIDDeviceStore.shared.lastRemoval(),
+            openClawIDAvailable: MacOpenClawIDConfiguration.current() != nil)
         if self.updater.isAvailable {
             self.renderer?.onInstallUpdate = { [weak self] in
                 guard let self, self.updater.isAvailable else { return }
@@ -327,7 +329,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         button.appearsDisabled = false
         button.toolTip = self.state.voiceWakeMeterActive
             ? String(localized: "OpenClaw - Voice Wake live meter active")
-            : String(localized: "OpenClaw")
+            : nil
     }
 
     private func scheduleDebugMenuOpen() {

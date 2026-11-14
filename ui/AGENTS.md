@@ -11,6 +11,10 @@ The outlet mounts that renderer once and supplies live `data`, `loaderPending`, 
 `presented` props; loader updates must preserve page-local state. Keep page
 imports inside their route's `component` loader.
 
+## Labs
+
+- Moving a feature out of Labs (on or still off by default): follow the [Labs graduation skill](../.agents/skills/labs-graduation/SKILL.md).
+
 ## State Ownership And Async Results
 
 - Gateway owns shared state; renderer copies = caches; views own presentation state. Reuse owning store/controller + Gateway contract for session, config, authorization decisions.

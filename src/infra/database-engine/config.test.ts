@@ -96,6 +96,41 @@ describe("host database engine selection", () => {
     ).resolves.toEqual({ connection, schemaPrefix: "fixture" });
   });
 
+  it.each([undefined, "portable", "server"] as const)(
+    "keeps rollback captures portable unless server captures are chosen: %s",
+    async (recoveryCaptures) => {
+      const selection = await select({
+        engine: "postgres",
+        postgres: { connection, ...(recoveryCaptures ? { recoveryCaptures } : {}) },
+      });
+      expect(selection.postgres?.serverRecoveryCaptures).toBe(
+        recoveryCaptures === "server" ? true : undefined,
+      );
+    },
+  );
+
+  it.each([undefined, "state-directory", "installation"] as const)(
+    "keeps server captures independent of ownership: %s",
+    async (ownership) => {
+      const database = {
+        engine: "postgres" as const,
+        postgres: {
+          connection,
+          recoveryCaptures: "server" as const,
+          ...(ownership ? { ownership } : {}),
+        },
+      };
+      const expected = {
+        connection,
+        schemaPrefix: "openclaw",
+        serverRecoveryCaptures: true,
+        ...(ownership === "installation" ? { ownership } : {}),
+      };
+      expect((await select(database)).postgres).toEqual(expected);
+      await expect(input(database)).resolves.toEqual(expected);
+    },
+  );
+
   it.each([
     undefined,
     unavailable,

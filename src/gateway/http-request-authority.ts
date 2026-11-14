@@ -12,6 +12,7 @@ import {
   runHttpConnectionRequest,
   waitForHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
@@ -28,6 +29,7 @@ import {
   GatewayOperatorAccessDeniedError,
   hasCurrentGatewayOperatorAccess,
 } from "./operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
 import { sourceRolePolicies } from "./operator-role-source-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -55,56 +57,59 @@ export function runGatewayHttpRequest(
     const ingress = getRemoteControlUiIngressContext(req);
     assertRemoteControlUiIngressCurrent(ingress);
     const work = new AsyncWorkScope();
-    const requestContext = work.run(() => AsyncLocalStorage.snapshot());
-    const client = createHttpRequestAbortSignal(req, res);
-    const shutdown = context?.requestEntryLifetime?.signal;
-    const signal = AbortSignal.any([
-      client.signal,
-      ...(shutdown ? [shutdown] : []),
-      ...(ingress ? [ingress.signal] : []),
-    ]);
-    let cancelledBy: "client" | "shutdown" | undefined;
-    const cancel = () =>
-      requestContext(() => {
-        cancelledBy = client.signal.aborted ? "client" : "shutdown";
-        work.beginClose(signal.reason);
-        // A streaming handler can return before its response finishes; wake the transport join too.
-        if (cancelledBy === "shutdown" && !res.writableFinished && !res.destroyed) {
-          res.destroy();
-        }
-      });
-    signal.addEventListener("abort", cancel, { once: true });
-    if (signal.aborted) {
-      cancel();
-    }
-    let failed = false;
-    try {
-      await work.track(() =>
-        runHttpConnectionRequest(
-          req,
-          async () => {
-            failed = (await handle()) === "failed";
-          },
-          res,
-        ),
-      );
-    } catch (error) {
-      failed = true;
-      throw error;
-    } finally {
-      signal.removeEventListener("abort", cancel);
-      client.cleanup();
-      // Rejections can finish their framed body by half-closing without res.end().
-      if (
-        cancelledBy &&
-        !failed &&
-        res.statusCode < 500 &&
-        !(cancelledBy === "client" && waitForHttpRequestRejection(req))
-      ) {
-        emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: cancelledBy });
+    // Setup and dispatch share one entry; cancellation retains this exact request frame.
+    return work.run(async () => {
+      const requestContext = AsyncLocalStorage.snapshot();
+      const client = createHttpRequestAbortSignal(req, res);
+      const shutdown = context?.requestEntryLifetime?.signal;
+      const signal = AbortSignal.any([
+        client.signal,
+        ...(shutdown ? [shutdown] : []),
+        ...(ingress ? [ingress.signal] : []),
+      ]);
+      let cancelledBy: "client" | "shutdown" | undefined;
+      const cancel = () =>
+        requestContext(() => {
+          cancelledBy = client.signal.aborted ? "client" : "shutdown";
+          work.beginClose(signal.reason);
+          // A streaming handler can return before its response finishes; wake the transport join too.
+          if (cancelledBy === "shutdown" && !res.writableFinished && !res.destroyed) {
+            res.destroy();
+          }
+        });
+      signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) {
+        cancel();
       }
-      await requestContext(() => work.drain());
-    }
+      let failed = false;
+      try {
+        await work.track(() =>
+          runHttpConnectionRequest(
+            req,
+            async () => {
+              failed = (await handle()) === "failed";
+            },
+            res,
+          ),
+        );
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally {
+        signal.removeEventListener("abort", cancel);
+        client.cleanup();
+        // Rejections can finish their framed body by half-closing without res.end().
+        if (
+          cancelledBy &&
+          !failed &&
+          res.statusCode < 500 &&
+          !(cancelledBy === "client" && waitForHttpRequestRejection(req))
+        ) {
+          emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: cancelledBy });
+        }
+        await requestContext(() => work.drain());
+      }
+    });
   };
   return context ? context.trackExecution(run) : run();
 }
@@ -124,6 +129,15 @@ export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unkn
   }
   if (error instanceof GatewayOperatorAccessDeniedError) {
     sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
+    return true;
+  }
+  if (isOperatorAuthorityUnavailable(error)) {
+    // A handler may already have written before revalidating its response authority.
+    sendGatewayHttpAuthFailure(
+      res,
+      { ok: false, reason: "operator_access_unavailable" },
+      { retryable: false },
+    );
     return true;
   }
   return error instanceof GatewayHttpRequestAuthorityError;
@@ -168,7 +182,9 @@ export function captureHttpRequestAuthority(
   );
   const roles = cfg.gateway?.roles;
   const rolePolicy = sourceRolePolicies(roles);
-  const roleRevision = roles ? readOperatorRolePolicyRevision() : undefined;
+  const roleRevision = isNamedOperatorRoleEnforcementEnabled(cfg)
+    ? readOperatorRolePolicyRevision()
+    : undefined;
   const aliasRevision = readUserProfileAliasRevision();
   const ingress = getRemoteControlUiIngressContext(params.req);
   return () => {

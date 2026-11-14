@@ -354,8 +354,8 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   }
 
   protected handleTranscriptHistoryIntent(event: Event): void {
-    const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    const upward = this.historyInput.isUpward(event);
+    const root = this.transcript.scrollElement;
+    const upward = this.historyInput.isUpward(event, root);
     if (
       !root ||
       !this.presented ||

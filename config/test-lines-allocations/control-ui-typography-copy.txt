@@ -1,2 +1,0 @@
-# Preserve existing behavior assertions while wrapping longer copy in the C10 typography pass.
-18

@@ -172,6 +172,69 @@ describe("parseStatement", () => {
     });
   });
 
+  it("accepts opaque role names in invites, adds, role changes and snapshots", () => {
+    for (const role of ["guest", "a", "support_team-2", "a".repeat(64)]) {
+      for (const statement of roleStatements(role)) {
+        expect(parseStatement(statement)).toMatchObject({ ok: true });
+      }
+    }
+  });
+
+  it("rejects malformed role names at every signed role field", () => {
+    for (const role of [
+      "",
+      "a".repeat(65),
+      "Guest",
+      "2guest",
+      "-guest",
+      "_guest",
+      "guest.user",
+      "guest user",
+      " guest",
+      "guest\n",
+      "güest",
+      null,
+      1,
+    ]) {
+      for (const statement of roleStatements(role)) {
+        expect(parseStatement(statement)).toMatchObject({
+          ok: false,
+          code: "malformed",
+          detail: expect.stringContaining("role"),
+        });
+      }
+    }
+  });
+
+  function roleStatements(role: unknown) {
+    const invite = vectors.valid.find((entry) => entry.statement.type === "InviteCap")!.statement;
+    const change = vectors.valid.find((entry) => entry.statement.type === "MembershipChange")!
+      .statement as SignedStatement<"MembershipChange">;
+    const snapshot = vectors.valid.find((entry) => entry.statement.type === "MembershipSnapshot")!
+      .statement as SignedStatement<"MembershipSnapshot">;
+    return [
+      { ...invite, body: { ...invite.body, role } },
+      {
+        ...change,
+        body: {
+          ...change.body,
+          target: {
+            op: "add",
+            account_id: "acct_bob",
+            role,
+            peer_keys: [vectors.keys.invitee!.iroh],
+            invite_id: null,
+          },
+        },
+      },
+      {
+        ...change,
+        body: { ...change.body, target: { op: "set_role", account_id: "acct_bob", role } },
+      },
+      { ...snapshot, body: { ...snapshot.body, members: [{ ...snapshot.body.members[0], role }] } },
+    ];
+  }
+
   it("accepts lowercase iroh endpoint keys only", () => {
     const key = vectors.keys.server!.iroh;
     expect(isIrohEndpointKey(key)).toBe(true);

@@ -15,6 +15,7 @@ import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/t
 import { consumeMcpCodeModeGuestResult } from "../../agents/mcp-content.js";
 import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.js";
 import { readToolExecutionRefusal } from "../../agents/tool-effect-receipt.js";
+import { buildRunGrantedToolDirectory } from "../../agents/tool-search.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -178,6 +179,10 @@ export function createWorkerGatewayToolRuntime(params: {
               parameters,
             })),
             toolSchemaDirectoryPrompt: projected.toolSchemaDirectoryPrompt,
+            // Render before cleanup disposes the catalog.
+            runGrantedToolDirectory: projected.toolSchemaDirectoryPrompt
+              ? buildRunGrantedToolDirectory(runtime.toolSearchCatalogRef)
+              : undefined,
           };
         } finally {
           runtime.cleanup();

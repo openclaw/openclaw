@@ -70,16 +70,6 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
       trigger={sessionIcon("moreHorizontal", 12, ROW_GLYPH_STROKE)}
       placement="bottom-end"
       items={[
-        ...(props.job.schedule.kind === "event"
-          ? []
-          : [
-              {
-                id: "run-if-due",
-                label: t("cron.actions.runIfDue"),
-                class: "cron-job-menu__item",
-                disabled: props.busy || !props.connected || !props.canManage,
-              },
-            ]),
         {
           id: "clone",
           label: t("cron.actions.clone"),
@@ -99,9 +89,6 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
           return;
         }
         switch (item.id) {
-          case "run-if-due":
-            props.onRun(props.job, "due");
-            break;
           case "clone":
             if (!(props.canCreate ?? props.canManage)) {
               return;

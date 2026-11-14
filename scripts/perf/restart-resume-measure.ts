@@ -21,6 +21,9 @@
  * model dispatch with immediate completion. Supply --handoff-baseline and optionally
  * --handoff-candidate; --workspace-ready measures already-ready sessions separately.
  * This is owner proof, not model cancellation or a complete Gateway shutdown.
+ * --yield-read-baseline compares retired child completion sources (requires --resume --markers
+ * --baseline-resumes 1). Four roots include message waits, a nested wait, a completed child,
+ * and a child on another agent. Baseline parks three; candidate must resume all four.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -32,6 +35,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
@@ -59,6 +63,7 @@ const { values } = parseArgs({
     "workspace-ready": { type: "boolean" },
     "handoff-baseline": { type: "string" },
     "handoff-candidate": { type: "string" },
+    "yield-read-baseline": { type: "string" },
   },
 });
 assert(values.root && values.baseline && values.output && global.gc);
@@ -68,6 +73,7 @@ assert(!values.workspace || (values.resume && values.markers && values["handoff-
 assert(!values.mark || !values.resume, "--mark and --resume are separate workloads");
 assert(!values["shutdown-baseline"] || values.mark, "--shutdown-baseline requires --mark");
 assert(!values["cancel-dependent"] || values["shutdown-baseline"]);
+assert(!values["yield-read-baseline"] || (values.resume && values.markers && !values.workspace));
 const shutdownBudgetMs = parseStrictIntegerOption({
   raw: values["shutdown-budget-ms"],
   label: "--shutdown-budget-ms",
@@ -147,6 +153,22 @@ if (values.control) {
   sources[1] = sources[0]!;
 }
 const urls = sources.map((_, arm) => `${canonical}?restart-measure=${arm}`);
+const yieldReadCanonical = new URL(
+  "../../src/agents/subagents/registry/subagent-registry-read.ts",
+  import.meta.url,
+).href;
+const yieldReadSources = values["yield-read-baseline"]
+  ? [
+      readFileSync(values["yield-read-baseline"], "utf8"),
+      readFileSync(new URL(yieldReadCanonical), "utf8"),
+    ]
+  : [];
+if (values.control && yieldReadSources.length) {
+  yieldReadSources[1] = yieldReadSources[0]!;
+}
+const yieldReadUrls = yieldReadSources.map(
+  (_, arm) => `${yieldReadCanonical}?restart-measure=${arm}`,
+);
 const shutdownCanonical = new URL("../../src/gateway/server-run-shutdown.ts", import.meta.url).href;
 const shutdownSources = values["shutdown-baseline"]
   ? [
@@ -178,6 +200,13 @@ const measuredDispatch = new URL(
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (
+      yieldReadUrls.length &&
+      urls.includes(context.parentURL ?? "") &&
+      specifier.endsWith("subagent-registry-read.js")
+    ) {
+      return { url: yieldReadUrls[urls.indexOf(context.parentURL!)]!, shortCircuit: true };
+    }
+    if (
       values.resume &&
       urls.includes(context.parentURL ?? "") &&
       specifier.endsWith("session-event-handoff.js")
@@ -193,6 +222,14 @@ registerHooks({
     return nextResolve(specifier, context);
   },
   load(url, context, nextLoad) {
+    const yieldReadArm = yieldReadUrls.indexOf(url);
+    if (yieldReadArm >= 0) {
+      return {
+        format: "module",
+        source: stripTypeScriptTypes(yieldReadSources[yieldReadArm]!),
+        shortCircuit: true,
+      };
+    }
     if (url === measuredDispatch) {
       return {
         format: "module",
@@ -333,7 +370,7 @@ const input = {
   assertCurrent() {},
   log: {
     warn(message: string) {
-      if (values.workspace) {
+      if (values.workspace || yieldReadSources.length) {
         warnings.push(message);
       } else {
         throw new Error(message);
@@ -354,6 +391,61 @@ const seededRows = agent
     entry: JSON.parse(String(row.entry_json)),
   }));
 const predecessor = { startedAt: Date.now() - 60_000, endedAt: Date.now() };
+const { subagentRuns } =
+  await import("../../src/agents/subagents/registry/subagent-registry-memory.js");
+if (yieldReadSources.length) {
+  for (const [index, { sessionKey, entry }] of seededRows.slice(0, 4).entries()) {
+    const childId = `synthetic-child-${index}`;
+    const childAgentId = index === 3 ? "other" : "main";
+    const child = {
+      runId: childId,
+      childSessionKey: `agent:${childAgentId}:subagent:${childId}`,
+      childAgentId,
+      childSessionIdentity: { sessionId: childId, lifecycleRevision: childId },
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: sessionKey,
+      completionRequesterSessionId: entry.sessionId,
+      completionRequesterLifecycleRevision: `synthetic-yield-${index}`,
+      task: "Synthetic retained child",
+      cleanup: "keep",
+      createdAt: predecessor.startedAt,
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt: predecessor.endedAt - 1 },
+      pauseReason: index === 2 ? undefined : "sessions_yield",
+      waitForMessage: index === 1 || index === 2 ? undefined : true,
+      completion: { required: true },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        requesterRunId: `synthetic-interrupted-${index}`,
+        batchRunIds: [childId],
+      },
+    } satisfies SubagentRunRecord;
+    subagentRuns.set(childId, child);
+    if (index === 1) {
+      const grandchild: SubagentRunRecord = {
+        ...child,
+        runId: "synthetic-grandchild",
+        childSessionKey: "agent:main:subagent:grandchild",
+        requesterSessionKey: child.childSessionKey,
+        completionRequesterSessionId: childId,
+        completionRequesterLifecycleRevision: childId,
+        waitForMessage: true,
+        requesterSettleWake: {
+          ...child.requesterSettleWake,
+          requesterRunId: childId,
+          batchRunIds: ["synthetic-grandchild"],
+        },
+      };
+      subagentRuns.set(grandchild.runId, grandchild);
+      subagentRuns.retireCompletionAuthority(grandchild);
+    } else {
+      subagentRuns.retireCompletionAuthority(child);
+    }
+  }
+}
 const registry = await import("../../src/infra/agent-run-registry.js");
 const claims = values.mark
   ? seededRows.map(({ sessionKey, entry }, index) => {
@@ -409,7 +501,10 @@ const seedResume = () => {
             : {}),
           status: undefined,
           abortedLastRun: false,
-          endedAt: undefined,
+          endedAt: yieldReadSources.length && index < 4 ? predecessor.endedAt - 1 : undefined,
+          ...(yieldReadSources.length && index < 4
+            ? { lifecycleRevision: `synthetic-yield-${index}` }
+            : {}),
           lastRunId: undefined,
           lifecycleRunId: `synthetic-interrupted-${index}`,
           activeWriterRunId: `synthetic-interrupted-${index}`,
@@ -628,7 +723,10 @@ try {
       if (values.resume) {
         const expectedResumes = arm === 0 || values.control ? baselineResumes : 4;
         assert.equal(resumedPerCall, expectedResumes);
-        assert.equal(settledStaleRuns, values.workspace ? 8 : 12 - expectedResumes);
+        assert.equal(
+          settledStaleRuns,
+          values.workspace || yieldReadSources.length ? 8 : 12 - expectedResumes,
+        );
         if (values.workspace) {
           assert.deepEqual(
             admissionOrder.slice(orderBefore).slice(-expectedResumes),
@@ -669,7 +767,10 @@ try {
         handoffSourceHashes: handoffSources.map((source) =>
           createHash("sha256").update(source).digest("hex"),
         ),
-        warnings: values.workspace ? warnings : undefined,
+        warnings: values.workspace || yieldReadSources.length ? warnings : undefined,
+        yieldReadSourceHashes: yieldReadSources.map((source) =>
+          createHash("sha256").update(source).digest("hex"),
+        ),
         markers: values.markers ?? false,
         node: process.version,
         mode: values.allocation ? "allocation" : "timing",

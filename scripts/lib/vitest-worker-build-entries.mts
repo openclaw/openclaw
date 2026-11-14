@@ -228,6 +228,7 @@ export const preservedModuleBuildSources = [
   "src/cli/one-shot-exit.ts",
   "src/cli/cron-cli.ts",
   "src/cli/runtime-cleanup-scope.ts",
+  "src/cli/run-main-service-installation.ts",
   "src/cli/runtime-cleanup.ts",
   "src/state/openclaw-state-db-cache.ts",
   "src/infra/worker-native-lifecycle.ts",
@@ -418,6 +419,14 @@ export const vitestWorkerBuildEntries = {
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",
   // Real provider preparation uses packaged JavaScript, avoiding per-child source transforms.
   "extensions/anthropic/index": "extensions/anthropic/index.ts",
+  // CLI preflight must share its native host graph with the real Teams Doctor/setup contracts.
+  "extensions/msteams/index": "extensions/msteams/index.ts",
+  "extensions/msteams/config-doctor-api": "extensions/msteams/config-doctor-api.ts",
+  "extensions/msteams/doctor-contract-api": "extensions/msteams/doctor-contract-api.ts",
+  "extensions/msteams/setup-entry": "extensions/msteams/setup-entry.ts",
+  "extensions/msteams/setup-plugin-api": "extensions/msteams/setup-plugin-api.ts",
+  "extensions/msteams/secret-contract-api": "extensions/msteams/secret-contract-api.ts",
+  "extensions/msteams/configured-state": "extensions/msteams/configured-state.ts",
   "test-support/anthropic-preparation": "test/scripts/anthropic-preparation-probe.ts",
   "test-support/provider-hook-scope": "test/scripts/provider-hook-scope.test-support.ts",
   // Exercise native writes through the existing plugin facade in the private graph.

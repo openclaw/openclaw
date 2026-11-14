@@ -1,5 +1,0 @@
-# Exercise the deep-status launchd scan failure path on every CI platform.
-# The capped status.gather.test.ts cannot grow, so its launchd cases live in a
-# sibling test-support module; both the failure and success cases run on Linux.
-# Exact net test-line growth against the PR base.
-53

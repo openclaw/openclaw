@@ -22,4 +22,5 @@ export type Entry = {
   nativeLostListeners: Set<() => void>;
   activeOperations: number;
   idleTimer?: IdleTimer;
+  idleSince?: number;
 };

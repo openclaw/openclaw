@@ -32,6 +32,7 @@ import {
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 import { bindRepositoryDiskForTest } from "./worker-environments/repository-disk-authority.test-support.js";
+import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 const readReceipt = (requestId: string) =>
   readRepositoryGitHubPublicationInDatabase(openOpenClawStateDatabase().db, requestId);
@@ -252,15 +253,26 @@ it("cannot record publication unavailability after its accepted checkpoint chang
 it.each(["topic", "refs/tags/release", { kind: "commit" }] as const)(
   "publishes unchanged pinned %j when its merge-base has a different tree",
   async (ref) => {
-    const f = await repositoryFixture(ref);
+    const f = await repositoryFixture(
+      ref,
+      undefined,
+      { "base.txt": "base\n" },
+      true,
+      (base, tree, git) => {
+        git(["read-tree", tree]);
+        const blob = git(["hash-object", "-w", "--stdin"], "source change\n");
+        git(["update-index", "--add", "--cacheinfo", `100644,${blob},topic.txt`]);
+        return git(["commit-tree", git(["write-tree"]), "-p", base], "topic source\n");
+      },
+    );
     await f.capture(null, "unchanged-pinned-source");
-    f.runtime.baseHead = "d".repeat(40);
-    f.runtime.baseHeadTree = "c".repeat(40);
-    f.runtime.mergeBase = "e".repeat(40);
-    f.runtime.mergeBaseTree = "c".repeat(40);
+    f.runtime.baseHead = f.git(["rev-parse", `${f.baseCommit}^`]);
+    f.runtime.baseHeadTree = f.git(["rev-parse", `${f.runtime.baseHead}^{tree}`]);
+    f.runtime.mergeBase = f.runtime.baseHead;
+    f.runtime.mergeBaseTree = f.runtime.baseHeadTree;
     const result = await f.publish("related-ref");
     expect(result.status).toBe("published");
-    expect(f.runtime.pr?.baseRef).toBe(ref === "topic" ? "topic" : "main");
+    expect(f.runtime.pr?.baseRef).toBe("main");
     expect(f.runtime.uploaded.size).toBe(0);
     expect(readReceipt(result.requestId)?.workspace_tree).toBe(f.baseTree);
     expect(f.casRequests[0]).toMatchObject({ beforeOid: "0".repeat(40), force: false });
@@ -383,6 +395,150 @@ it("settles unreadable repository publication without replaying its dispatched p
   await coordinator.resumeSessionRequests();
   expect(mocks.runCommand).toHaveBeenCalledTimes(calls);
   expect(f.runtime.effects).toEqual(["push"]);
+});
+
+it.each([
+  { failure: "unattached disk", old: false },
+  { failure: "capture tunnel", old: true },
+])("bounds $failure recovery for a receipt with old=$old", async ({ failure, old }) => {
+  const f = await repositoryFixture(undefined, undefined, {}, false);
+  const first = await f.publish("capture-failure");
+  expect(first.status).toBe("requested");
+  const original = readReceipt(first.requestId)!;
+  await f.capture("initialized disk contents\n", "disk-base");
+  const workspace = (await getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId))!;
+  const repository = await bindRepositoryDiskForTest(workspace, SESSION_ID);
+  const placement = (await f.placements.getAsync(SESSION_ID))!;
+  if (failure === "unattached disk") {
+    const source = {
+      generation: placement.generation,
+      environmentId: placement.environmentId!,
+      ownerEpoch: placement.activeOwnerEpoch!,
+    };
+    const { placement: draining } = await f.placements.beginPlacementMove({
+      sessionId: SESSION_ID,
+      source,
+      target: { kind: "gateway" },
+    });
+    const reconciling = await f.placements.startReconcile({
+      sessionId: SESSION_ID,
+      ...source,
+      expectedGeneration: draining.generation,
+    });
+    await f.placements.transition({
+      sessionId: SESSION_ID,
+      from: "reconciling",
+      to: "reclaimed",
+      expectedGeneration: reconciling.generation,
+    });
+  } else {
+    seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+      sessionId: SESSION_ID,
+      environmentId: placement.environmentId!,
+      ownerEpoch: placement.activeOwnerEpoch!,
+      nodeDeviceId: "capture-node",
+    });
+  }
+  const environments = await createWorkerEnvironmentStore({
+    database: openOpenClawStateDatabase(),
+  });
+  const startTunnel = vi.fn(async () => {
+    throw new Error("Synthetic capture tunnel failure");
+  });
+  const backoff = createGitHubPublicationRecoveryBackoff();
+  const age = vi.spyOn(Date, "now");
+  onTestFinished(() => age.mockRestore());
+  const coordinator = createTestGitHubPublicationCoordinator({
+    placements: f.placements,
+    environments: {
+      get: (id) => {
+        const environment = environments.get(id);
+        return (
+          environment && {
+            ...environment,
+            desktopAvailable: false,
+            desktopApps: [],
+            tunnelStatus: "connected",
+          }
+        );
+      },
+      startTunnel,
+      ensureRetainedRunning: async () => {},
+    },
+    recovery: {
+      shared: createGitHubPublicationRecoveryBackoff(),
+      repository: {
+        ...backoff,
+        run: (row, operation, settle) =>
+          backoff.run(
+            row,
+            async () => {
+              try {
+                return await operation();
+              } catch (error) {
+                // Advance only after real lease cleanup; worker clocks are not injected.
+                if (old) {
+                  age.mockReturnValue(original.created_at_ms + 3_600_000);
+                }
+                throw error;
+              }
+            },
+            async (result) => {
+              age.mockRestore();
+              return await settle(result);
+            },
+          ),
+      },
+    },
+  });
+  // Fractional uptime exposes rounding above the configured recovery delay.
+  let now = 50_000.1;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  onTestFinished(() => clock.mockRestore());
+  const error = failure === "unattached disk" ? "must be attached" : "capture tunnel failure";
+  if (!old) {
+    await expect(coordinator.resumeSessionRequests()).rejects.toThrow(error);
+    expect(await coordinator.readAsync(first.requestId)).toMatchObject({
+      status: "requested",
+      message: expect.stringContaining("next attempt in 60 seconds"),
+    });
+    // A cooldown tick must neither retry capture nor consume another attempt.
+    await expect(coordinator.resumeSessionRequests()).resolves.toBeUndefined();
+    now += 60_000;
+    await expect(coordinator.resumeSessionRequests()).rejects.toThrow(error);
+    expect(readReceipt(first.requestId)?.status).toBe("requested");
+    now += 120_000;
+    // Contention must preserve the two failed attempts, not reset their budget.
+    await f.placements.withWorkspaceExclusion(SESSION_ID, async () => {
+      await coordinator.resumeSessionRequests();
+      expect(readReceipt(first.requestId)?.status).toBe("requested");
+    });
+  }
+  await expect(coordinator.resumeSessionRequests()).resolves.toBeUndefined();
+  expect(readReceipt(first.requestId)).toMatchObject({
+    request_id: original.request_id,
+    request_digest: original.request_digest,
+    requester_authority_json: original.requester_authority_json,
+    workspace_id: repository.workspaceId,
+    branch: original.branch,
+    repository: original.repository,
+    status: "failed",
+    error_code: "unavailable",
+    next_action: expect.stringContaining("Inspect the original target"),
+    checkpoint_ref: null,
+    last_effect: null,
+  });
+  await expectUnreported(coordinator, first.requestId);
+  expect(await getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toEqual(
+    repository,
+  );
+  expect(startTunnel).toHaveBeenCalledTimes(old ? 1 : 0);
+  expect(checkpoint).not.toHaveBeenCalled();
+  expect(mocks.prepareRepositoryIntegration).not.toHaveBeenCalled();
+  expect(f.runtime.effects).toEqual([]);
+  now += 3_600_000;
+  await coordinator.resumeSessionRequests();
+  expect(startTunnel).toHaveBeenCalledTimes(old ? 1 : 0);
 });
 
 it("keeps waiting for the first accepted checkpoint without exhausting recovery", async () => {
@@ -547,7 +703,7 @@ it.each(["archive", "reset"] as const)(
   },
 );
 
-it.each(["pending result", "reservation", "identity mismatch"] as const)(
+it.each(["pending result", "reservation", "active claim", "identity mismatch"] as const)(
   "continues later publications when the first session has a %s and reports hard failures",
   async (blocker) => {
     const blocked = await repositoryFixture(undefined, REQUEST);
@@ -567,6 +723,8 @@ it.each(["pending result", "reservation", "identity mismatch"] as const)(
         expect(await blocked.placements.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
         expect(blocked.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
         expect(await blocked.placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+      } else if (blocker === "active claim") {
+        await claimWorker(blocked, "active-publication-worker");
       } else if (blocker === "reservation") {
         const entered = createDeferredCore();
         held = blocked.placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
@@ -589,11 +747,25 @@ it.each(["pending result", "reservation", "identity mismatch"] as const)(
         first.requestId,
         second.requestId,
       ]);
-      const recovery = valid.coordinator.resumeSessionRequests();
+      const coordinator = createTestGitHubPublicationCoordinator({
+        placements: valid.placements,
+        recovery: {
+          shared: createGitHubPublicationRecoveryBackoff(),
+          repository: createGitHubPublicationRecoveryBackoff(),
+        },
+      });
+      let now = performance.now();
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      onTestFinished(() => clock.mockRestore());
       if (blocker === "identity mismatch") {
-        await expect(recovery).rejects.toThrow("placement identity changed");
+        await expect(coordinator.resumeSessionRequests()).rejects.toThrow(
+          "placement identity changed",
+        );
       } else {
-        await recovery;
+        for (const waitMs of [0, 60_000, 120_000, 3_600_000]) {
+          now += waitMs;
+          await coordinator.resumeSessionRequests();
+        }
       }
       expect(readReceipt(first.requestId)?.status).toBe("requested");
       expect(readReceipt(second.requestId)?.status).toBe("published");

@@ -66,8 +66,6 @@ it("honors a per-call passive refresh opt-out without disabling another observer
   const unobserved = await read(original.snapshot);
   expect(unobserved.snapshot).toBe(original.snapshot);
 
-  await read(undefined, true);
-  await read();
   const published = new Promise<void>((resolve) => {
     const unregister = registerSkillsChangeListener((event) => {
       if (event.workspaceDir === workspaceDir && event.reason === "watch") {
@@ -76,6 +74,8 @@ it("honors a per-call passive refresh opt-out without disabling another observer
       }
     });
   });
+  await read(undefined, true);
+  await read();
   await completePassiveScan();
   await published;
   const observed = await read(original.snapshot);

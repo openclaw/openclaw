@@ -19,6 +19,7 @@ export {
 } from "../shared/oauth-refresh-outcome.js";
 
 export { CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/profile-ids.js";
+export { isFailedOAuthRefreshFence } from "../agents/auth-profiles/oauth-refresh-marker.js";
 export {
   decodeOpenAICodexJwtPayload,
   resolveOpenAICodexAuthIdentity,

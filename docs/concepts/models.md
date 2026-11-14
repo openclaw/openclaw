@@ -517,6 +517,11 @@ catalog refresh; correct authored `models.json` pricing directly. Other schema
 errors and invalid model API or token limits still reject the affected catalog,
 even on a model with malformed pricing.
 
+Usage reports capture local pricing before rendering and keep those prices for
+the operation. Gateway catalog publication updates the retained local source,
+including an absent file. After editing `models.json` externally, restart the
+Gateway to publish the new prices.
+
 ### Hosted catalog updates
 
 OpenClaw can refresh the model metadata shipped by installed provider plugins
@@ -524,6 +529,10 @@ without waiting for a new OpenClaw release. The Gateway makes one background
 JSON `GET` at startup and then checks at most every six hours. The request sends
 no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
+
+On memory-constrained hosts, automatic checks wait while available memory is at
+or below 20% of the process limit and retry after one minute. The current catalog
+stays available; manual `openclaw models refresh` remains immediate.
 
 The downloaded bundle is stored in the shared SQLite state database. The Gateway
 prepares a new catalog generation in the background, including each agent's

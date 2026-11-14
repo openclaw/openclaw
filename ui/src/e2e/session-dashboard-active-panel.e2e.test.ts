@@ -164,10 +164,10 @@ suite.define(() => {
         ).toBe(true);
         await waitForLayoutSettled(page, ".sidebar-region__primary");
         expect((await conversation.boundingBox())!.width).toBeCloseTo(width, 0);
-        expect(await captureTopVisibleVirtualRow(thread)).toMatchObject({
-          key: anchor.key,
-          viewportTop: anchor.viewportTop,
-        });
+        const restoredAnchor = await captureTopVisibleVirtualRow(thread);
+        expect(restoredAnchor?.key).toBe(anchor.key);
+        // Fractional line heights may round the restored offset within one CSS pixel.
+        expect(Math.abs(restoredAnchor!.viewportTop - anchor.viewportTop)).toBeLessThanOrEqual(1);
         await selectChatLayoutAction(page, "Focus");
         await conversation.waitFor({ state: "hidden" });
         await panels.click();

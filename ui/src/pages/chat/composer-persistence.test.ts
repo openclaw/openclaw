@@ -24,6 +24,8 @@ import {
   loadChatComposerState as load,
   persistChatComposerState as persist,
 } from "./composer-draft-storage.ts";
+import { captureChatComposerDraftSnapshot } from "./composer-persistence-snapshot.ts";
+import { resolveChatComposerDurableScope } from "./composer-persistence-state.ts";
 import {
   legacyStorageKeyForGateway as legacyKey,
   createState,
@@ -91,6 +93,39 @@ function quotaFailure() {
 
 const expectPersisted = (persistence: ChatComposerPersistence) =>
   expect(persistence.persistForRouteSwitchResult()).toEqual({ status: "persisted" });
+
+it("captures edits without reading unrelated pane state and retains the original account", () => {
+  const client = { recoveryScope: "original-account", recoveryScopeReady: true };
+  const state = createState({ client, chatMessage: "first draft" });
+  const original = captureChatComposerDraftSnapshot(
+    state,
+    resolveChatComposerDurableScope(state),
+    1,
+    0,
+  );
+  const unrelated = vi.fn(() => "unrelated presentation");
+  Object.defineProperty(state, "unrelatedPresentation", { enumerable: true, get: unrelated });
+  state.chatMessage = "edited draft";
+  const edited = captureChatComposerDraftSnapshot(
+    state,
+    resolveChatComposerDurableScope(state),
+    2,
+    1,
+    original,
+  );
+  client.recoveryScope = "replacement-account";
+  const retired = captureChatComposerDraftSnapshot(
+    state,
+    resolveChatComposerDurableScope(state),
+    3,
+    2,
+    edited,
+  );
+  expect(unrelated).not.toHaveBeenCalled();
+  expect(edited.chatMessage).toBe("edited draft");
+  expect(retired.owner.recoveryScope).toBe("original-account");
+  expect(retired.durable?.scope.recoveryScope).toBe("original-account");
+});
 
 function edit(state: ComposerState, persistence: ChatComposerPersistence, text: string) {
   state.chatMessage = text;

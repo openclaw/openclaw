@@ -53,12 +53,38 @@ function accountSection(onSelect = vi.fn(), open = false) {
   };
 }
 
+it.each(
+  [3, 9, 10].flatMap((count) => [false, true].map((recommended) => ({ count, recommended }))),
+)(
+  "shows short provider lists without disclosure (count=$count, recommended=$recommended)",
+  async ({ count, recommended }) => {
+    const { container } = mountPicker({
+      open: true,
+      selectedModelValue: "fixture/model-0",
+      modelOptions: [
+        ...Array.from({ length: count }, (_, index) =>
+          option("fixture", "model-" + index, { recommended: recommended && index === 0 }),
+        ),
+        ...Array.from({ length: 20 }, (_, index) => option("other", "model-" + index)),
+      ],
+    });
+    await waitForMenu(container);
+    expect(Boolean(control(container, "more-toggle"))).toBe(count >= 10);
+    if (count < 10) {
+      expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(count);
+    }
+  },
+);
+
 it("forgets disclosure for removed providers", async () => {
   const params = pickerProps({
     open: true,
     modelOptions: [
       option("selected", "current"),
       option("other", "lead", { recommended: true }),
+      ...Array.from({ length: 8 }, (_, index) =>
+        option("other", "recommended-" + index, { recommended: true }),
+      ),
       option("other", "rest"),
     ],
     selectedModelValue: "selected/current",
@@ -67,7 +93,7 @@ it("forgets disclosure for removed providers", async () => {
   await waitForMenu(container);
   const group = () =>
     container.querySelector<HTMLElement>('[data-chat-model-provider-group="other"]')!;
-  const toggle = () => control(group(), "provider-toggle")!;
+  const toggle = () => control(container, "provider-toggle", "other")!;
   const rest = () => control(group(), "option", "other/rest")!;
   toggle().click();
   flush();
@@ -81,7 +107,7 @@ it("forgets disclosure for removed providers", async () => {
   });
   expect(group()).toBeNull();
   update(params);
-  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(toggle().getAttribute("aria-selected")).toBe("false");
   toggle().click();
   flush();
   expect(rest()).toBeNull();
@@ -139,7 +165,11 @@ it.each([false, true])(
     const { container } = mountPicker({
       modelOptions: [
         option("fixture", "lead", { recommended: true }),
+        ...Array.from({ length: 8 }, (_, index) =>
+          option("fixture", "recommended-" + index, { recommended: true }),
+        ),
         option("fixture", "rest", { disabled: restDisabled }),
+        option("other", "model"),
       ],
       selectedModelValue: "fixture/lead",
       triggerModelLabel: "lead",
@@ -160,7 +190,7 @@ it.each([false, true])(
     // Keyboard focus lands on the first selectable revealed model, else back on search.
     expect(document.activeElement).toBe(restDisabled ? control(container, "search") : rest());
 
-    group.click();
+    control(container, "provider-toggle", "other")!.click();
     flush();
     group.click();
     flush();
@@ -169,7 +199,7 @@ it.each([false, true])(
   },
 );
 
-it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
+it("keeps Anthropic runtime choices under one provider tab", async () => {
   const { container } = mountPicker({
     open: true,
     modelOptions: [
@@ -180,30 +210,26 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
     providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["claude-cli", { kind: "subscription", label: "Claude Max" }],
+      ["claude-cli", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
       ["anthropic", { kind: "api", label: "API" }],
     ]),
   });
   await waitForMenu(container);
-  container
-    .querySelector<HTMLButtonElement>(
-      '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
-    )!
-    .click();
-  flush();
   const provider = (value: string) =>
     control(container, "option", value)?.closest("section")?.dataset.chatModelProviderGroup;
-  expect([
-    provider("anthropic/claude-opus-4-8"),
-    provider("claude-cli/claude-haiku-5-5"),
-    provider("anthropic/claude-sonnet-5-5"),
-  ]).toEqual(["claude-cli", "claude-cli", "anthropic"]);
-  // Runtime grouping preserves the native account rather than borrowing the API sibling.
+  expect([provider("anthropic/claude-opus-4-8"), provider("claude-cli/claude-haiku-5-5")]).toEqual([
+    "anthropic",
+    "anthropic",
+  ]);
+  // The shared provider tab keeps the selected runtime's account identity.
   expect(
     container.querySelector(
-      '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
+      '[data-chat-model-provider-group="anthropic"] .chat-controls__auth-meta-label',
     )?.textContent,
-  ).toBe("Claude Max");
+  ).toBe("Claude Max · you@example.com");
+  expect(container.querySelectorAll("[data-chat-model-provider-toggle]")).toHaveLength(0);
+  flush();
+  expect(provider("anthropic/claude-sonnet-5-5")).toBe("anthropic");
 });
 
 it("keeps search live while targets load, then ranks model, target, and account choices", async () => {
@@ -233,11 +259,15 @@ it("keeps search live while targets load, then ranks model, target, and account 
   const { container, update } = mountPicker(params);
   await waitForMenu(container);
   const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  container.querySelector<HTMLButtonElement>('[data-tab-value="target:target"]')!.click();
+  flush();
+  container.querySelector<HTMLButtonElement>('[data-tab-value="target:cli"]')?.click();
+  flush();
   expect(
     container.querySelector(
       '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
     ),
-  ).not.toBeNull();
+  ).toBeNull();
   search.focus();
   searchFor(search, "needle");
   const model = control(container, "option", "fixture/model")!;
@@ -274,11 +304,8 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(findMenuShortcut(details, "4")).toBeUndefined();
   expect(model.hasAttribute("data-chat-model-highlighted")).toBe(true);
   expect(search.getAttribute("aria-activedescendant")).toBe(model.id);
-  expect(
-    model
-      .querySelector("[data-chat-model-shortcut]")
-      ?.getAttribute("data-chat-model-shortcut-number"),
-  ).toBe("1");
+  expect(model.getAttribute("aria-keyshortcuts")).toBe("1");
+  expect(model.querySelector("kbd")).toBeNull();
   keydown(search, "ArrowDown");
   const target = ranked()[2]!;
   expect(search.getAttribute("aria-activedescendant")).toBe(target.id);
@@ -292,11 +319,137 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
-it("keeps unconfigured unknown provider trigger icons unchanged", () => {
+it("keeps account recovery searchable with an empty catalog", async () => {
+  const selectAccount = vi.fn();
   const { container } = mountPicker({
-    modelOptions: [option("workstation", "local")],
-    selectedModelValue: "workstation/local",
-    triggerModelLabel: "Local",
+    open: true,
+    modelOptions: [],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    accountSection: accountSection(selectAccount),
   });
-  expect(container.querySelector(".chat-controls__trigger-provider-icon")).toBeNull();
+  await waitForMenu(container);
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"));
+  expect(search).not.toBeNull();
+  searchFor(search!, "needle");
+  keydown(search!, "Enter");
+  expect(selectAccount).toHaveBeenCalledWith("current", expect.any(MouseEvent));
+});
+
+it("retains setup recovery when every model has an unsupported runtime", async () => {
+  const onModelSetup = vi.fn();
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [
+      option("fixture", "unavailable", {
+        disabled: true,
+        unavailableReason: "unsupported-runtime",
+      }),
+    ],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    onModelSetup,
+  });
+  await waitForMenu(container);
+  const setup = control(container, "setup");
+  expect(setup).not.toBeNull();
+  setup!.click();
+  expect(onModelSetup).toHaveBeenCalledOnce();
+});
+
+it("persists keyboard rail order without moving the selected provider", async () => {
+  localStorage.clear();
+  const params = pickerProps({
+    open: true,
+    modelOptions: [option("first", "a"), option("second", "b")],
+    selectedModelValue: "second/b",
+  });
+  const view = mountPicker(params);
+  await waitForMenu(view.container);
+  const rail = () => [
+    ...view.container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider-toggle]"),
+  ];
+  expect(rail().map((tab) => tab.dataset.chatModelProviderToggle)).toEqual(["first", "second"]);
+  expect(rail()[1]!.ariaSelected).toBe("true");
+  rail()[1]!.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true }),
+  );
+  flush();
+  expect(rail().map((tab) => tab.dataset.chatModelProviderToggle)).toEqual(["second", "first"]);
+  view.unmount();
+  const reopened = mountPicker(params);
+  await waitForMenu(reopened.container);
+  expect(
+    reopened.container.querySelector<HTMLButtonElement>("[data-chat-model-provider-toggle]")!
+      .dataset.chatModelProviderToggle,
+  ).toBe("second");
+  localStorage.clear();
+});
+
+it.each(["missing-auth", "auth-failed"] as const)(
+  "keeps %s rows inert with one provider recovery action",
+  async (unavailableReason) => {
+    const onModelSetup = vi.fn();
+    const onModelSelect = vi.fn(async () => {});
+    const { container } = mountPicker({
+      open: true,
+      modelOptions: [
+        option("openai", "one", { disabled: true, unavailableReason }),
+        option("openai", "two", { disabled: true, unavailableReason }),
+      ],
+      selectedModelValue: "openai/one",
+      providerAuth: new Map([["openai", { kind: "missing", label: "Sign-in needed" }]]),
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
+      onModelSetup,
+      onModelSelect,
+    });
+    await waitForMenu(container);
+    const rows = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
+    expect(
+      container.querySelector(".chat-controls__provider-heading .chat-controls__auth-meta"),
+    ).toBeNull();
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.getAttribute("aria-disabled") === "true")).toBe(true);
+    expect(rows[0]!.classList.contains("chat-controls__inline-select-option--selected")).toBe(
+      false,
+    );
+    expect(rows[0]!.hasAttribute("data-chat-model-highlighted")).toBe(false);
+    expect(rows[0]!.querySelector(".chat-controls__inline-select-check")).toBeNull();
+    rows[0]!.click();
+    expect(onModelSetup).not.toHaveBeenCalled();
+    expect(onModelSelect).not.toHaveBeenCalled();
+    expect(container.querySelectorAll("[data-chat-model-auth-state] button")).toHaveLength(1);
+    container.querySelector<HTMLButtonElement>("[data-chat-model-auth-state] button")!.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+  },
+);
+
+it("renders the Claude login command as code and omits the redundant empty restriction note", async () => {
+  const view = mountPicker({
+    open: true,
+    modelOptions: [
+      option("anthropic", "claude", {
+        agentRuntime: "claude-cli",
+        disabled: true,
+        unavailableReason: "missing-auth",
+      }),
+    ],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+  });
+  await waitForMenu(view.container);
+  expect(view.container.querySelector("[data-chat-model-auth-state] code")?.textContent).toBe(
+    "claude auth login",
+  );
+  view.update(
+    pickerProps({
+      open: true,
+      modelOptions: [],
+      modelCatalogState: {
+        hasSnapshot: true,
+        status: "ready",
+        modelSelectionPolicy: { restricted: true, defaultModel: null },
+      },
+    }),
+  );
+  expect(view.container.textContent).toContain("No models are permitted by your admin.");
+  expect(view.container.querySelector("[data-chat-model-policy]")).toBeNull();
 });

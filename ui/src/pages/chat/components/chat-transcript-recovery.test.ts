@@ -195,13 +195,15 @@ describe("chat transcript full-message recovery", () => {
         displayFacts,
         loadFullAssistantMessage: () => pending.promise,
       });
+      // Exercise the cold transcript's task yield without depending on machine load.
+      let renderTime = performance.now();
+      const renderClock = vi.spyOn(performance, "now").mockImplementation(() => (renderTime += 20));
       document.body.append(pane);
       await pane.settleUpdates();
-      expect(bubble(pane)?.textContent).toContain("Preview");
+      renderClock.mockRestore();
+      await waitForSolid(() => expect(bubble(pane)?.textContent).toContain("Preview"));
       pending.resolve(fullMessage(markdown));
-      await pending.promise;
-      await pane.settleUpdates();
-      expect(bubble(pane)?.textContent).toContain("COMPLETE_REPLY");
+      await waitForSolid(() => expect(bubble(pane)?.textContent).toContain("COMPLETE_REPLY"));
       expect(
         displayFacts.forRow("assistant-full-1")?.read()?.facts?.recoveredMessage,
       ).toBeUndefined();

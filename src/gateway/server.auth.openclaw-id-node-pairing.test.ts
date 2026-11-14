@@ -126,6 +126,7 @@ async function connect(
   commands = ["system.run"],
   caps = ["approved"],
   ws?: Awaited<ReturnType<typeof openWs>>,
+  permissions?: Record<string, boolean>,
 ) {
   const socket = ws ?? (await openWs(started.port, { [header]: peerKey }));
   try {
@@ -137,6 +138,7 @@ async function connect(
       deviceIdentityPath: path,
       commands,
       caps,
+      permissions,
     });
   } finally {
     if (!ws) {
@@ -194,6 +196,37 @@ test("approves the reviewed subset, prompts for additions, and never re-pairs af
   expect(await getPairedDevice(deviceId)).toBeNull();
   expect(await getPairedDevice(secondId)).toBeNull();
   expect(ssh).not.toHaveBeenCalled();
+});
+
+test("records first-connect OS permissions so the same or a narrower reconnect needs no approval", async () => {
+  const peer = nodePeer();
+  const path = identityPath("ocid-node-permissions");
+  const deviceId = loadOrCreateDeviceIdentity({ path }).deviceId;
+  const pendingFor = async () =>
+    (await listNodePairing()).pending.filter((node) => node.nodeId === deviceId);
+  const granted = { notifications: true, screenRecording: false };
+  try {
+    expect((await connect(peer, path, undefined, undefined, undefined, granted)).ok).toBe(true);
+    expect((await getPairedDevice(deviceId))?.nodeSurface?.permissions).toEqual(granted);
+    expect(await pendingFor()).toEqual([]);
+    // Dropping a command or revoking a permission only narrows the live surface.
+    expect((await connect(peer, path, [], [], undefined, { notifications: false })).ok).toBe(true);
+    expect(await pendingFor()).toEqual([]);
+    // A permission that was not granted at approval still needs operator approval.
+    expect(
+      (
+        await connect(peer, path, undefined, undefined, undefined, {
+          notifications: true,
+          screenRecording: true,
+        })
+      ).ok,
+    ).toBe(true);
+    expect(await pendingFor()).toMatchObject([
+      { permissions: { notifications: true, screenRecording: true } },
+    ]);
+  } finally {
+    await removeNodePairings([peer]);
+  }
 });
 
 test("keeps removal manual when the first tunnel connection used an existing pairing", async () => {

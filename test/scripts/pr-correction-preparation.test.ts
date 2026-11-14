@@ -260,6 +260,8 @@ describePosix("native correction preparation", () => {
     ({ fork, authorization }) => {
       const f = fixture("approved");
       const result = f.shell(
+        // This fixture selects AWS; do not inherit the runner's hosted gate selector.
+        "unset OPENCLAW_TESTBOX",
         "resolve_pr_gates_remote_mode() { echo crabbox-aws; }",
         "mark_pr_operation_side_effects_if_available() { :; }",
         `require_active_org_admin_for_crabbox_gate() {

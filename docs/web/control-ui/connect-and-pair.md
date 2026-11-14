@@ -91,6 +91,8 @@ Code pairing is for a direct connection to the Gateway serving the page, not an 
     openclaw pair ABCD-EFGH
     ```
 
+    Copy the command from the page: it targets the Gateway that issued the code. A Gateway running under a named profile puts that profile in the code, for example `openclaw pair work:ABCD-EFGH`, and the command selects the `work` profile by itself. A Gateway started with its own `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` needs the command run with the same setting.
+
     The command prints the browser's user agent, address, page, **Browser ID**, and when it asked, then waits for your answer.
 
   </Step>
@@ -99,7 +101,7 @@ Code pairing is for a direct connection to the Gateway serving the page, not an 
   </Step>
 </Steps>
 
-Approval pairs that browser as an operator device with the Control UI's administrator scopes, the same result as approving it with `openclaw devices approve`. It then appears in `openclaw devices list` and the Devices page, where you can remove it. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the Browser ID in the terminal matches the page in front of you.
+Approval pairs that browser as an operator device with the Control UI's administrator scopes, the same result as approving it with `openclaw devices approve`. It then appears in `openclaw devices list` and the Devices page, where you can remove it. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the code in the terminal matches the page in front of you.
 
 Connection interruptions keep the same request and code while the page shows that it is retrying. Approval can still complete during an interruption; the page checks the recorded result when connectivity returns.
 

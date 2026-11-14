@@ -26,9 +26,13 @@ import {
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
+const cliRuntimeImports = vi.hoisted(() => ({ count: 0 }));
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 // mock-isolation: Observe CLI admission without launching an external process.
-vi.mock("../cli-runner.js", () => ({ runCliAgent: runCliAgentMock }));
+vi.mock("../cli-runner.js", () => {
+  cliRuntimeImports.count++;
+  return { runCliAgent: runCliAgentMock };
+});
 // mock-isolation: Capture forwarded harness parameters without starting model execution.
 vi.mock("../embedded-agent.js", () => ({ runEmbeddedAgent: runEmbeddedAgentMock }));
 
@@ -100,6 +104,26 @@ describe("embedded attempt harness pinning", () => {
       ...overrides,
     });
   }
+
+  it("loads the CLI runtime only when a CLI attempt needs it", async () => {
+    expect(cliRuntimeImports.count).toBe(0);
+    await runHarnessAttempt({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      sessionEntry: makeSessionEntry("embedded-import"),
+    });
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(cliRuntimeImports.count).toBe(0);
+
+    runCliAgentMock.mockResolvedValueOnce({ meta: { durationMs: 1 } });
+    await runHarnessAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      sessionEntry: makeSessionEntry("cli-import"),
+    });
+    expect(cliRuntimeImports.count).toBe(1);
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+  });
 
   it("renders the user turn's configured owners on a subagent completion turn", async () => {
     const cfg: OpenClawConfig = {

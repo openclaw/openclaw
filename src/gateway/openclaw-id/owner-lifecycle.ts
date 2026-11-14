@@ -25,8 +25,8 @@ function inactivityWindows(
 
 /**
  * Drops keys unused past the inactivity windows and finds owner devices whose
- * certificates expired. Returns the events that cut them off (dropped keys also lose
- * their device tokens), or undefined when nothing changed.
+ * certificates expired, including their bound nodes. Returns the events that cut
+ * them off and retire their node pairings, or undefined when nothing changed.
  */
 export async function ownerLifecycleEvents(
   owner: OpenClawIdAuthority,
@@ -44,14 +44,11 @@ export async function ownerLifecycleEvents(
   if (expired.length > 0) {
     log.info(`openclaw-id: closing sessions of ${expired.length} expired owner device key(s)`);
   }
+  const peers = [...new Set([...dropped, ...expired])];
   return [
-    { type: "disconnect", peer_keys: [...new Set([...dropped, ...expired])] },
-    ...(dropped.length > 0
-      ? [
-          { type: "invalidate_tokens" as const, peer_keys: dropped },
-          { type: "remove_node_pairings" as const, peer_keys: dropped },
-        ]
-      : []),
+    { type: "disconnect", peer_keys: peers },
+    ...(dropped.length > 0 ? [{ type: "invalidate_tokens" as const, peer_keys: dropped }] : []),
+    { type: "remove_node_pairings", peer_keys: peers },
     { type: "publish_snapshot" },
   ];
 }

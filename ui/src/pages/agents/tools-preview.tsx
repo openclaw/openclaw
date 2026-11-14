@@ -161,12 +161,7 @@ export function ToolRuntime(props: {
                   }}
                 </For>
                 {hiddenEffectiveToolCount() > 0 ? (
-                  <span
-                    class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
-                    title={t("agentTools.morePreviewTitle", {
-                      count: String(hiddenEffectiveToolCount()),
-                    })}
-                  >
+                  <span class="agent-tools-runtime-chip agent-tools-runtime-chip--more">
                     {t("agentTools.morePreview", {
                       count: String(hiddenEffectiveToolCount()),
                     })}

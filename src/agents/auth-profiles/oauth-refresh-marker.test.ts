@@ -35,7 +35,7 @@ describe("OAuth refresh marker isolation", () => {
       expect(hasUsableOAuthCredential(fence)).toBe(false);
       expect(evaluateStoredCredentialEligibility({ credential: fence })).toEqual({
         eligible: false,
-        reasonCode: "expired",
+        reasonCode: state === "failed" ? "refresh_failed" : "expired",
       });
       expect(resolveAgentCredentialMapFromStore(store)).toEqual({});
       expect(resolveUsableAgentCredentialModes({ openai: fence })).toEqual({});

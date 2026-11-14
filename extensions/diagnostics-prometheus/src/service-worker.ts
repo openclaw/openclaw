@@ -8,6 +8,9 @@ const TOTALS_ONLY_BUCKETS: number[] = [];
 const WORKER_REQUEST_PHASES = [
   ["dispatch", "dispatched", "posted"],
   ["delivery", "posted", "received"],
+  ["backend-load", "backendLoadStarted", "backendLoadFinished"],
+  ["open-grant", "openGrantStarted", "openGrantFinished"],
+  ["factory", "factoryStarted", "factoryFinished"],
   ["input", "received", "inputReady"],
   ["prepare", "inputReady", "executeStarted"],
   ["execute", "executeStarted", "executeFinished"],

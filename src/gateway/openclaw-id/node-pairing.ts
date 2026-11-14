@@ -15,7 +15,7 @@ import {
   type OpenClawIdTunnelPrincipal,
 } from "./tunnel-principal.js";
 
-/** Approve only a first node-mode device and the declared subset the owner reviewed. */
+/** Approve only a first node-mode device, the reviewed declared subset, and its OS permission states. */
 export async function approveOpenClawIdNodePairing(params: {
   requestId: string;
   principal: OpenClawIdTunnelPrincipal;
@@ -23,6 +23,7 @@ export async function approveOpenClawIdNodePairing(params: {
   publicKey: string;
   commands: readonly string[];
   caps: readonly string[];
+  permissions?: Record<string, boolean>;
   accessMetadata?: DevicePairingAccessMetadata;
   isCurrent: () => boolean;
 }) {
@@ -56,6 +57,9 @@ export async function approveOpenClawIdNodePairing(params: {
         caps: normalizeNodeApprovalSurfaceList([...params.caps]).filter((cap) =>
           description.caps.includes(cap),
         ),
+        // The description carries no OS permissions. Record this connect's states, like other
+        // first-surface approvals, so only a later grant reads as an upgrade on reconnect.
+        permissions: params.permissions,
         accessMetadata: params.accessMetadata,
         nowMs: Date.now(),
       },

@@ -12,6 +12,8 @@ import {
  * only while the new page cannot change them (see chat-thread-prepend.ts).
  */
 export type ChatItemsFacts = ReplyAttributionFacts & {
+  /** Content before live progress decides whether history loading can hide the indicator. */
+  hasContentBeforeProgress?: boolean;
   /** Prepared beside the working indicator, before first text changes row membership. */
   streamOnset?: Extract<ChatItem, { kind: "stream" }>;
   /** Display history after heartbeat/commentary filtering and composition. */

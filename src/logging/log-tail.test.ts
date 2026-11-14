@@ -72,7 +72,7 @@ describe("readConfiguredLogTail", () => {
     const result = await readConfiguredLogTail();
 
     expect(result.lines).toEqual([expect.stringContaining("rolling log record")]);
-    for (const file of [result.file, getResolvedLoggerSettings().file]) {
+    for (const file of [result.file, (await getResolvedLoggerSettings()).file]) {
       expect(path.dirname(file)).toBe(tempDir);
       expect(path.basename(file)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/);
     }

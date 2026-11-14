@@ -27,7 +27,6 @@ export type {
   AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
-  BashExecutionMessage,
   CompactionPreparation,
   CompactionResult,
   CompactionSummaryPrompt,

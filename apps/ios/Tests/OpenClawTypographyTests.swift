@@ -5,6 +5,14 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawTypographyTests {
+    @Test func `group header controls use branded typography`() throws {
+        let source = try String(contentsOf: Self.sourceURL("Design/CommandSessionGroupHeader.swift"), encoding: .utf8)
+        #expect(source.contains(".font(OpenClawType.caption2Bold)"))
+        #expect(source.contains(".font(OpenClawType.subhead)"))
+        #expect(source.contains(".font(OpenClawType.body)"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `bundled fonts load from app bundle`() {
         for name in OpenClawType.registeredPostScriptNames {
             #expect(UIFont(name: name, size: 12) != nil, "Missing bundled font: \(name)")

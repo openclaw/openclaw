@@ -1,11 +1,6 @@
-import assert from "node:assert/strict";
-import { afterEach, expect, it, vi } from "vitest";
-import { evaluate } from "./client.js";
+import { expect, it } from "vitest";
 import { parseInput, parseResult } from "./schema.js";
 
-afterEach(() => vi.unstubAllGlobals());
-
-const config = { apiKey: "synthetic-key", timeoutMs: 1000 };
 const usage = { input_tokens: 1, output_tokens: 1 };
 const example = {
   state: {
@@ -55,7 +50,7 @@ const example = {
   },
 };
 
-it("preserves structured instructions, all criteria types, legends, and selected model through HTTP", async () => {
+it("preserves structured instructions, all criteria types, legends, and selected model", async () => {
   const input = { ...example, model: "jev-pinned" };
   const answer = {
     model: "jev-pinned",
@@ -80,14 +75,8 @@ it("preserves structured instructions, all criteria types, legends, and selected
     },
     usage,
   };
-  const fetch = vi.fn(
-    async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(answer)),
-  );
-  vi.stubGlobal("fetch", fetch);
-  expect(await evaluate(input, config)).toEqual({ evaluation: answer });
-  const body = fetch.mock.calls[0]?.[1]?.body;
-  assert(typeof body === "string");
-  expect(JSON.parse(body)).toEqual(input);
+  expect(parseInput(input)).toEqual(input);
+  expect(parseResult(answer, parseInput(input))).toEqual(answer);
   const bad = structuredClone(answer);
   bad.answers.urgency.legend[0].examples = ["Different rubric"];
   expect(() => parseResult(bad, parseInput(input))).toThrow("invalid evaluation response");

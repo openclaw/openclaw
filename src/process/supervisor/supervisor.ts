@@ -22,26 +22,17 @@ import { GRACEFUL_CANCEL_TIMEOUT_MS, isTimeoutReason } from "./cancellation-poli
 import { waitForExecRootCompletion } from "./supervisor-completion.js";
 import type {
   ManagedRun,
+  OwnedRun,
   ProcessExtinctionResult,
   ProcessSupervisor,
   ProcessScopeCleanupPolicy,
   RunExit,
+  ScopeCleanupOwner,
   SpawnInput,
   SpawnProcessAdapter,
+  StartingScope,
   TerminationReason,
 } from "./types.js";
-
-type OwnedRun = {
-  runId: string;
-  scopeKey?: string;
-  terminationReason?: TerminationReason;
-  cancel: (reason: TerminationReason) => void;
-  pending?: Promise<ManagedRun>;
-  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
-  cleanupOwners: ScopeCleanupOwner[];
-};
-
-type ScopeCleanupOwner = { processTree: ProcessScopeCleanupPolicy; failure?: { error: unknown } };
 
 function requiresProcessTree(scope: ScopeCleanupOwner, external: boolean): boolean {
   return scope.processTree === "required-all" || (scope.processTree === "owned-only" && !external);
@@ -54,11 +45,6 @@ function recordScopeCleanupFailure(cleanupOwners: ScopeCleanupOwner[], error: un
     cleanupOwner.failure ??= { error };
   }
 }
-
-type StartingScope = {
-  runs: Set<Promise<ManagedRun>>;
-  replacement?: Promise<ManagedRun>;
-};
 
 const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 
@@ -495,13 +481,19 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               new Error("process cleanup cannot confirm owned execution-tree settlement"),
             );
           }
-          ownedRuns.delete(owner);
+          delete owner.waitForExtinction;
+          if (!owner.pending) {
+            ownedRuns.delete(owner);
+          }
           cleanup.resolve(outcome);
         },
         (error: unknown) => {
           recordScopeCleanupFailure(owner.cleanupOwners, error);
           cleanupFailure ??= { error };
-          ownedRuns.delete(owner);
+          delete owner.waitForExtinction;
+          if (!owner.pending) {
+            ownedRuns.delete(owner);
+          }
           cleanup.reject(error);
         },
       );
@@ -678,7 +670,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       return managedRun;
     } catch (err) {
       settleResult();
-      const runtimeWarning = formatChildRuntimeSpawnWarning(err);
+      const runtimeWarning = await formatChildRuntimeSpawnWarning(err);
       if (runtimeWarning && err instanceof Error) {
         // Preserve errno/path for callers while returning the operator's recovery action.
         err.message = runtimeWarning;

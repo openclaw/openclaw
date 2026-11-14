@@ -99,6 +99,14 @@ it("runs the registered native ONNX worker and joins cancellation before replace
   };
   // Observe native processes without supplying a worker or replacing its IPC results.
   const spawned = vi.spyOn(childProcess, "spawn");
+  // Registry preparation also spawns a directory-watch helper; count only native inference.
+  const spawnedWorkers = () =>
+    spawned.mock.results.flatMap((result) =>
+      result.type === "return" &&
+      result.value.spawnargs.some((arg) => arg.includes("inference.worker"))
+        ? [result.value]
+        : [],
+    );
   syncBuiltinESMExports();
   const env = harness.decisionEnv(root, { OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION });
   await withEnvAsync(env, async () => {
@@ -146,11 +154,9 @@ it("runs the registered native ONNX worker and joins cancellation before replace
     expect(reversed.result.answers.route).toMatchObject({ type: "choice", choice: "second" });
     expect(reversed.result.usage).toEqual({ inputTokens: 6 });
     expect(usage).toHaveLength(2);
-    expect(spawned).toHaveBeenCalledOnce();
-    const spawnedResult = spawned.mock.results[0];
-    assert(spawnedResult?.type === "return");
-    const child = spawnedResult.value;
-    expect(child.spawnargs.some((arg) => arg.includes("inference.worker"))).toBe(true);
+    expect(spawnedWorkers()).toHaveLength(1);
+    const child = spawnedWorkers()[0];
+    assert(child);
     let closed = false;
     child.once("close", () => {
       closed = true;
@@ -191,7 +197,7 @@ it("runs the registered native ONNX worker and joins cancellation before replace
       status: "ok",
       result: { answers: { route: { choice: "first" } }, usage: { inputTokens: 6 } },
     });
-    expect(spawned).toHaveBeenCalledTimes(2);
+    expect(spawnedWorkers()).toHaveLength(2);
     expect(usage).toHaveLength(3);
     expect(registry.decisionProviders[0]?.host.inspect(cfg).activeRequests).toBe(0);
   });

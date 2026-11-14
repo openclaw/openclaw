@@ -1,2 +1,0 @@
-# Result-first terminal and nonterminal events are suppressed; timeouts retain late notices and custody.
-78

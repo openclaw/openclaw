@@ -155,7 +155,7 @@ describe("google thinking policy", () => {
     ["off", "LOW"],
     ["minimal", "LOW"],
     ["low", "LOW"],
-    ["medium", "HIGH"],
+    ["medium", "MEDIUM"],
     ["adaptive", undefined],
     ["high", "HIGH"],
     ["xhigh", "HIGH"],
@@ -169,8 +169,10 @@ describe("google thinking policy", () => {
   });
 
   it.each([
+    [0, "LOW"],
     [2048, "LOW"],
-    [2049, "HIGH"],
+    [2049, "MEDIUM"],
+    [8193, "HIGH"],
   ] as const)("maps Gemini 3 Pro budget %s to %s", (thinkingBudget, expected) => {
     expect(
       resolveGoogleGemini3ThinkingLevel({

@@ -480,6 +480,7 @@ export class ToolSearchRuntime {
       try {
         const result = await executeTool({
           tool: executionTool,
+          toolId: entry.id,
           toolName: entry.name,
           source: entry.source,
           sourceName: entry.sourceName,

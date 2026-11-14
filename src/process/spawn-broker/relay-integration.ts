@@ -184,11 +184,11 @@ export function spawnServiceChildRelay(params: {
   params.onSpawnCleanup?.(cleanup.promise);
   let transportReady: Promise<void> | undefined;
   if (child instanceof BrokerChild) {
-    transportReady = child.ready().catch((error: unknown) => {
-      if (error instanceof Error) {
-        error.message = formatChildRuntimeSpawnWarning(error) ?? error.message;
-      }
+    transportReady = child.ready().catch(async (error: unknown) => {
       cleanup.completion.reject(error);
+      if (error instanceof Error) {
+        error.message = (await formatChildRuntimeSpawnWarning(error)) ?? error.message;
+      }
       throw error;
     });
   } else if (child.pid === undefined) {
@@ -202,7 +202,7 @@ export function spawnServiceChildRelay(params: {
     }).then(async (error) => {
       await closed;
       cleanup.completion.resolve();
-      error.message = formatChildRuntimeSpawnWarning(error) ?? error.message;
+      error.message = (await formatChildRuntimeSpawnWarning(error)) ?? error.message;
       throw error;
     });
   }

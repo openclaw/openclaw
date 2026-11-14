@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createProviderRateLimitRequest } from "../llm/provider-rate-limit.js";
+import {
+  createProviderRateLimitRequest,
+  withProviderRateLimitRetryDeadline,
+} from "../llm/provider-rate-limit.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as staticCatalog from "./embedded-agent-runner/model.static-catalog.js";
 import { FailoverError } from "./failover-error.js";
@@ -199,4 +202,35 @@ it("reads saturation for the pinned starting account before possible recovery ac
     userLockedAuthProfileId: "pinned",
   });
   expect(routed.candidates[0]?.model).toBe("backup");
+});
+
+it.each(["header", "body"])("blocks later turns on a generic timed 429 (%s)", async (source) => {
+  const model = { id: "long-limit", provider, baseUrl };
+  const initialRequest = createProviderRateLimitRequest(model, { apiKey });
+  const resetAt = Date.now() + 3 * 86_400_000;
+  initialRequest.observe?.(
+    buildEmbeddedRunnerAssistant({
+      stopReason: "error",
+      errorMessage: "429 Too Many Requests",
+      ...(source === "header"
+        ? { errorBody: JSON.stringify({ headers: { "retry-after": "259200" } }) }
+        : { errorMessage: "429 Too Many Requests; Retry-After: 259200 seconds" }),
+    }),
+  );
+  await expect(createProviderRateLimitRequest(model, { apiKey }).wait()).rejects.toMatchObject({
+    reason: "rate_limit",
+    provider,
+    model: "long-limit",
+    rateLimitResetAt: resetAt,
+  });
+  await expect(
+    withProviderRateLimitRetryDeadline(performance.now() + 15_000, () =>
+      createProviderRateLimitRequest(model, { apiKey }).wait(),
+    ),
+  ).rejects.toMatchObject({ provider, model: "long-limit", rateLimitResetAt: resetAt });
+  await expect(
+    createProviderRateLimitRequest(model, { apiKey: "synthetic-other" }).wait(),
+  ).resolves.toBeUndefined();
+  await vi.advanceTimersByTimeAsync(3 * 86_400_000 + 60_001);
+  await expect(createProviderRateLimitRequest(model, { apiKey }).wait()).resolves.toBeUndefined();
 });

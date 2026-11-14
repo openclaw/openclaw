@@ -201,8 +201,6 @@ function Controls() {
               ariaLabel="Secret"
               value={secret()}
               visible={visible()}
-              showLabel="Show secret"
-              hideLabel="Hide secret"
               toggleLabel="Toggle secret"
               onInput={setSecret}
               onToggle={() => setVisible(!visible())}

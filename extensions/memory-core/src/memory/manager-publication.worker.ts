@@ -44,6 +44,10 @@ import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
+  retirePublishedMemoryEmbeddingCacheRows,
+  type MemoryEmbeddingCacheRetireCursor,
+} from "./manager-embedding-cache-retire.js";
+import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
@@ -56,11 +60,16 @@ import {
 } from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
 import { bindPostgresMemoryPublication } from "./manager-publication-postgres.js";
+import {
+  readPublicationRows,
+  readStagedRows,
+  stagePublicationRows,
+  type StagedPublication,
+} from "./manager-publication-rows.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
   MemoryPublicationConnection,
-  MemoryPublicationFragment,
   MemoryPublicationOperations,
   MemoryPublicationResult,
 } from "./manager-publication-task.js";
@@ -224,12 +233,11 @@ function createPublicationBackend(
   // Each agent run binds its own backend; shadow runs use the private writer queue.
   // Large sources stay in worker memory without per-fragment SQLite I/O.
   let staged:
-    | ({
-        fragments: MemoryPublicationFragment[];
-      } & (
-        | { kind: "source"; header: MemorySourceIndexHeader }
-        | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
-      ))
+    | (StagedPublication &
+        (
+          | { kind: "source"; header: MemorySourceIndexHeader }
+          | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
+        ))
     | undefined;
   const loadExtension = (extensionPath: string | undefined) => {
     if (extensionPath && extensionPath !== loadedExtensions.get(db)) {
@@ -481,8 +489,8 @@ function createPublicationBackend(
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
         staged =
           command.type === "stage.start"
-            ? { ...command.input, kind: "source", fragments: [] }
-            : { ...command.input, kind: "cache", fragments: [] };
+            ? { ...command.input, kind: "source", rows: [], tail: [] }
+            : { ...command.input, kind: "cache", rows: [], tail: [] };
         return undefined;
       }
       if (command.type === "stage.discard") {
@@ -493,7 +501,7 @@ function createPublicationBackend(
         if (!staged) {
           throw new Error("Memory publication input was not started");
         }
-        staged.fragments.push(...command.input.fragments);
+        stagePublicationRows(staged, command.input.fragments);
         return undefined;
       }
       if (command.type === "cache.prune") {
@@ -510,6 +518,15 @@ function createPublicationBackend(
           recount ? maxEntries : undefined,
         );
         return result.ok ? { ...result, value: exceedsCap } : result;
+      }
+      if (command.type === "cache.retire") {
+        let next: MemoryEmbeddingCacheRetireCursor | null = null;
+        const result = writeCache((size) => {
+          const page = retirePublishedMemoryEmbeddingCacheRows(db, command.input);
+          next = page.next ?? null;
+          return { ...size, size: size.size - page.removed };
+        });
+        return result.ok ? { ...result, value: next } : result;
       }
       if (command.type === "cache.clear") {
         return writeCache((size) => ({
@@ -529,8 +546,8 @@ function createPublicationBackend(
             throw new Error("Memory cache input was not started");
           }
           header = staged.header;
-          const fragments = staged.fragments;
-          readEntries = () => readPublicationRows<MemoryEmbeddingCacheEntry>(fragments);
+          const stage = staged;
+          readEntries = () => readStagedRows<MemoryEmbeddingCacheEntry>(stage);
         }
         const outcome = writeCache((size) => {
           const eligible = new Map<string, boolean>();
@@ -666,7 +683,7 @@ function createPublicationBackend(
           throw new Error("Memory publication input was not started");
         }
         header = staged.header;
-        rows = readPublicationRows<MemorySourceIndexRow>(staged.fragments);
+        rows = readStagedRows<MemorySourceIndexRow>(staged);
       }
       let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;
       const outcome = write(() => {
@@ -683,22 +700,4 @@ function createPublicationBackend(
       discard();
     },
   });
-}
-
-function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(
-  fragments: Iterable<MemoryPublicationFragment>,
-): Generator<Row> {
-  // SAFETY: Only the paired source/cache producer writes these sealed records.
-  const parse = (parts: string[]) => JSON.parse(parts.join("")) as Row;
-  let parts: string[] = [];
-  for (const fragment of fragments) {
-    parts.push(fragment.json);
-    if (fragment.last) {
-      yield parse(parts);
-      parts = [];
-    }
-  }
-  if (parts.length) {
-    yield parse(parts);
-  }
 }

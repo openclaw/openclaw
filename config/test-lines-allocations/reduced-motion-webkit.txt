@@ -1,2 +1,0 @@
-# Preserve reduced-motion CSS contracts and bounded first-change timing diagnostics.
-175

@@ -1,11 +1,11 @@
 import type { ExecCommandAnalysis } from "./exec-command-analysis-types.js";
 import { resolveCommandResolutionFromArgv } from "./exec-command-resolution.js";
 
-export function analyzeArgvCommand(params: {
+export async function analyzeArgvCommand(params: {
   argv: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-}): ExecCommandAnalysis {
+}): Promise<ExecCommandAnalysis> {
   const argv = params.argv.filter((entry) => entry.trim().length > 0);
   if (argv.length === 0) {
     return { ok: false, reason: "empty argv", segments: [] };
@@ -17,7 +17,7 @@ export function analyzeArgvCommand(params: {
         raw: argv.join(" "),
         argv,
         sourceArgv: [...params.argv],
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        resolution: await resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
       },
     ],
   };

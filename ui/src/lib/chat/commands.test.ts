@@ -190,6 +190,7 @@ describe("parseSlashCommand", () => {
     const expected = [{ name: "release_notes", skillDisplayName: "Mu\u0308nchen Notes" }];
     expect(getSkillCommandCompletions("M\u00dcNCHEN")).toMatchObject(expected);
     expect(getSkillCommandCompletions("release_n")).toMatchObject(expected);
+    expect(getSlashCommandCompletions("M\u00dcNCHEN")).toMatchObject(expected);
   });
 
   it.each([false, undefined])(

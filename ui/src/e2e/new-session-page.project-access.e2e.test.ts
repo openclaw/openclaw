@@ -78,9 +78,6 @@ suite.define(() => {
 
       await trigger.click();
       const search = page.getByPlaceholder("Search projects or paste a Git URL");
-      if ((await search.count()) === 0) {
-        await page.locator(".header-search__toggle").click();
-      }
       await search.fill("https://github.com/openclaw/openclaworg.git");
       const clone = page.getByText("https://github.com/openclaw/openclaworg.git", { exact: true });
       await expect.poll(() => clone.count()).toBe(role === "guest" ? 0 : 1);

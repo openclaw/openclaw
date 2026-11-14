@@ -32,7 +32,6 @@ import { resolveOperatorSessionCreation } from "../session-creation-provenance.j
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
-import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -179,10 +178,7 @@ export function prepareChatSendUserTurn(params: {
   const persistedMediaForTranscriptPromise = (async (): ReturnType<
     typeof persistInboundImagesForTranscript
   > => {
-    if (
-      (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) ||
-      isAcpBridgeClient(client)
-    ) {
+    if (attachments.parsedImages.length === 0 && attachments.offloadedRefs.length === 0) {
       return { entries: [], omission: "none" };
     }
     return await persistInboundImagesForTranscript({

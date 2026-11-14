@@ -13,7 +13,7 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const newComposer = page.locator(".new-session-page__composer");
+      const newComposer = page.locator(".new-session-page__composer > .agent-chat__input");
       await expect
         .poll(() => newComposer.evaluate((element) => element.getBoundingClientRect().height))
         .toBe(112);

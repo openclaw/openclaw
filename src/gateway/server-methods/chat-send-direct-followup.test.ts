@@ -27,6 +27,9 @@ import { listSessionPendingInputs } from "../../config/sessions/session-pending-
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as runAuthority from "../../infra/agent-run-registry.js";
 import * as timeline from "../../infra/diagnostics-timeline.js";
+import { bindPluginGatewayAccessPolicy } from "../../plugins/gateway-access-policy-registration.js";
+import { createOwnedInstance } from "../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
@@ -35,8 +38,10 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { resolvePreparedGatewayOperatorAccessAuthority } from "../operator-access-policy.js";
 import { broadcastFor, createBroadcastPeer } from "../server-broadcast.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { handleChatHistoryRequest } from "./chat-history-handler.js";
 import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
@@ -58,6 +63,110 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 type DispatchParams = Parameters<typeof dispatchInboundMessage>[0];
 type Gate = ReturnType<typeof createDeferred<void>>;
+
+it("delivers a queued followup after its turn's plugin invocation scope closes", async ({
+  signal,
+}) => {
+  const fixture = await createFixture({
+    active: true,
+    sessionKey: "agent:main:dashboard:closed-scope-followup",
+    preserveContent: true,
+  });
+  fixture.params.idempotencyKey = "closed-scope-followup";
+  fixture.params.message = "/followup Answer this visitor.";
+  const person = ensureProfileForEmail("closed-scope@example.test");
+  setClientProfile(fixture.client, person);
+  const { instance, record } = createOwnedInstance("visitor-access");
+  const registry = getTestPluginRegistry();
+  const grant = new AbortController();
+  let closedChecks = 0;
+  let closed = false;
+  registry.plugins.push(record);
+  const sourceAuthority = {
+    grantId: "synthetic-visitor-grant",
+    signal: grant.signal,
+    assertCurrent() {
+      grant.signal.throwIfAborted();
+      if (closed) {
+        closedChecks++;
+      }
+    },
+  };
+  registry.gatewayAccessPolicies.push({
+    pluginId: record.id,
+    source: "fixture",
+    policy: bindPluginGatewayAccessPolicy(
+      {
+        authorize: () => sourceAuthority,
+        resume: () => sourceAuthority,
+      },
+      instance,
+    ),
+  });
+  const turnScope = new PluginInvocationScope(registry, [instance]);
+  const dispatchActual = await loadRealChatDispatch();
+  const config = steeringConfig(fixture);
+  fixture.client.internal = {
+    operatorRoleActor: { kind: "operator", profileId: person.id },
+    operatorAccessAuthority: resolvePreparedGatewayOperatorAccessAuthority(
+      {
+        profileId: person.id,
+        emails: ["closed-scope@example.test"],
+        role: null,
+        isCurrent: () => true,
+      },
+      config,
+    ),
+  };
+  expect(fixture.client.internal.operatorAccessAuthority).not.toBeNull();
+  const dispatched = createDeferred();
+  const queued = createDeferred();
+  const settled = createDeferred();
+  const executed = createDeferred();
+  const text = "Queued visitor request answered.";
+  dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
+    const params = raw as DispatchParams;
+    observeAdmission(params, queued, settled);
+    return turnScope
+      .run(() => {
+        turnScope.release();
+        closed = true;
+        return dispatchActual({ ...params, cfg: config });
+      })
+      .finally(() => dispatched.resolve());
+  });
+  runtime.execute.mockReset().mockImplementation(async (params) => {
+    expect(params.followupRun.operatorAuthority).toBeDefined();
+    const runId = await recordInput(params);
+    executed.resolve();
+    return successfulChatTurn(runId, text);
+  });
+  try {
+    const response = await fixture.send();
+    expect(response.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+
+    await withinTest(Promise.race([queued.promise, dispatched.promise]), signal);
+    expect(isRpcSourceQueued(rpcSourceTesting.get(fixture.params.idempotencyKey))).toBe(true);
+    fixture.activeRun!.complete();
+    await withinTest(
+      awaitGateBeforeSettlement(executed.promise, settled.promise, "did not execute"),
+      signal,
+    );
+    await withinTest(settled.promise, signal);
+    await withinTest(dispatched.promise, signal);
+    await fixture.finishDispatch();
+    expect(closedChecks).toBeGreaterThan(0);
+    expect(JSON.stringify(vi.mocked(fixture.context.broadcast).mock.calls)).toContain(text);
+    expect(JSON.stringify(vi.mocked(fixture.context.broadcast).mock.calls)).not.toContain(
+      "policy is unavailable",
+    );
+  } finally {
+    turnScope.release();
+    fixture.activeRun?.complete();
+    await fixture.cleanup();
+    await instance.dispose();
+  }
+});
 
 it.for(["completed", "failed", "cancelled"] as const)(
   "shows a reply-initialization queue until the active turn is %s",

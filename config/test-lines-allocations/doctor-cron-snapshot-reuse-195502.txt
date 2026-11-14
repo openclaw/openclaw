@@ -1,2 +1,0 @@
-# Issue #195502: scoped lint copy counts, configured agent directories, aliases, source identity and cleanup.
-162

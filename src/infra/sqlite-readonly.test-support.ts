@@ -12,7 +12,13 @@ export function mockChildProcesses(
     promisify.custom,
     Object.getOwnPropertyDescriptor(actual.execFile, promisify.custom)!,
   );
-  return { ...actual, execFile, spawn: vi.fn(actual.spawn), spawnSync: vi.fn(actual.spawnSync) };
+  const mocked = {
+    ...actual,
+    execFile,
+    spawn: vi.fn(actual.spawn),
+    spawnSync: vi.fn(actual.spawnSync),
+  };
+  return { ...mocked, default: mocked };
 }
 
 export function createReadBarrier() {

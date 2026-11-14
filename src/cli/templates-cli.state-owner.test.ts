@@ -49,7 +49,7 @@ describe("Template Add CLI state ownership", () => {
   let source: string;
   let plan: TemplateLifecyclePlanResult;
   let applied: Record<string, unknown>[];
-  let entries: Array<{ packageName: string; latestVersion: string }>;
+  let entries: Array<{ packageName: string; ownerHandle?: string; latestVersion: string }>;
   let result: GatewayTemplateAddApplyResult;
 
   beforeEach(async () => {
@@ -138,6 +138,24 @@ describe("Template Add CLI state ownership", () => {
       },
     ]);
     expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("adds an unscoped ClawHub Template by its publisher-qualified reference", async () => {
+    entries = [
+      { packageName: "demo", ownerHandle: "mallory", latestVersion: "9.9.9" },
+      { packageName: "@acme/demo", latestVersion: "1.2.3" },
+    ];
+    await fixture.startOwner();
+    // The exact scoped name wins over another publisher's unscoped package.
+    await runTemplatesAddCommand("@acme/demo", { json: true });
+
+    entries = [{ packageName: "demo", ownerHandle: "acme", latestVersion: "1.2.3" }];
+    fixture.handlers["templates.add.plan"] = async ({ params, respond }) => {
+      expect(params).toEqual({ source: { packageName: "demo", version: "1.2.3" } });
+      respond(true, plan);
+    };
+    await runTemplatesAddCommand("@acme/demo", { json: true });
+    expect(applied).toHaveLength(2);
   });
 
   it("rejects an online workspace override without touching state or dispatching", async () => {

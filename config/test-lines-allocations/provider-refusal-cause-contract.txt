@@ -1,2 +1,0 @@
-# Assert the persisted provider cause in the existing refusal receipt proof.
-4

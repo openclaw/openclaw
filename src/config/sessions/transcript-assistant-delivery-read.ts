@@ -22,6 +22,9 @@ function readAssistantDeliveryFacts(value: unknown): AssistantDeliveryFacts | un
   } else if (value.replyToCurrent === true) {
     facts.replyToCurrent = true;
   }
+  if (typeof value.sourceMessageId === "string" && /^[1-9]\d{0,19}$/.test(value.sourceMessageId)) {
+    facts.sourceMessageId = value.sourceMessageId;
+  }
   if (Array.isArray(value.mediaUrls)) {
     const mediaUrls = value.mediaUrls.filter(
       (url): url is string => typeof url === "string" && url.trim().length > 0,

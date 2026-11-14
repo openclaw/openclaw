@@ -6,6 +6,7 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { captureModelsJsonSource } from "./models-config-state.js";
 import {
   ensureOpenClawModelsJsonWithInput,
   planOpenClawModelsJsonSourceWithInput,
@@ -142,9 +143,8 @@ export async function prepareAgentCatalogSource(
         return { ...publishedSource, providerOutcomes: resultOutcomes() };
       }
     }
-    const { captureModelsJsonContents } = await import("./prepared-model-runtime.facts.js");
     return {
-      modelsJsonContents: captureModelsJsonContents(input.agentDir),
+      modelsJsonContents: (await captureModelsJsonSource(input.agentDir)).contents,
       pluginCatalogs: await loadPersistedPluginModelCatalogs(input.agentDir, undefined, env),
       providerOutcomes: resultOutcomes(),
     };

@@ -69,6 +69,7 @@ function compactParams(overrides: Record<string, unknown> = {}) {
     trigger: "manual",
     cliSessionBinding: { sessionId: "native-session", authProfileId: "anthropic:subscription" },
     sessionEntry: { execHost: "node", execNode: "paired-node" },
+    skillsSnapshot: { prompt: "stored skills prompt", skills: [] }, // stored copy: no catalogs
     customInstructions: "keep decisions",
     ...overrides,
   } as never;
@@ -109,16 +110,13 @@ it("resumes the bound backend session with the backend-owned command", async () 
     cliSessionBinding: { sessionId: "native-session", authProfileId: "anthropic:subscription" },
     authProfileId: "anthropic:subscription",
     sessionEntry: { execHost: "node", execNode: "paired-node" },
+    skillsSnapshot: { resolvedSkills: expect.any(Array) },
     controlOperation: "compact",
     disableCliLiveSession: true,
     cleanupCliLiveSessionOnRunEnd: true,
     allowEmptyAssistantReplyAsSilent: true,
   });
-  const preparedRunAdmission = call?.preparedRunAdmission;
-  if (!preparedRunAdmission) {
-    throw new Error("native compaction did not prepare run admission");
-  }
-  await expect(preparedRunAdmission.admit("embedded")).rejects.toThrow(
+  await expect(call?.preparedRunAdmission?.admit("embedded")).rejects.toThrow(
     "prepared execution context is already closed",
   );
 });

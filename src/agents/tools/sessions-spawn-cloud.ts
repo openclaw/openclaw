@@ -8,9 +8,8 @@ export async function startVisibleCloudSession(params: {
   cfg: OpenClawConfig;
   key: string;
   sessionId: string;
-  profileId: string;
-  os?: string;
-  machineClass?: string;
+  /** Exact `sessions.dispatch` selector; the Gateway validates it and never falls back. */
+  target: { profileId: string; os?: string; machineClass?: string } | { deviceId: string };
   task: string;
   runTimeoutSeconds: number;
   callGateway: InProcessGatewayCaller;
@@ -35,12 +34,7 @@ export async function startVisibleCloudSession(params: {
         params.assertActive();
         const dispatched = await params.callGateway<SessionsDispatchResult>(
           "sessions.dispatch",
-          {
-            key: params.key,
-            profileId: params.profileId,
-            ...(params.os ? { os: params.os } : {}),
-            ...(params.machineClass ? { machineClass: params.machineClass } : {}),
-          },
+          { key: params.key, ...params.target },
           {
             signal: params.signal,
             timeoutMs: null,

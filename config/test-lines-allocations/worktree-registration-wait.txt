@@ -1,2 +1,0 @@
-# Proves bounded registration admission and absence of late branch/checkout creation.
-38

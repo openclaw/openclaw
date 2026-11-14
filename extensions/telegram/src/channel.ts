@@ -94,7 +94,7 @@ import { createTelegramOutboundAdapter, resolveTelegramSend } from "./outbound-a
 import { parseTelegramThreadId } from "./outbound-params.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
-import { isTelegramTextOnlyChannelData } from "./prompt-context-projection.js";
+import { telegramDurableFinalPolicy } from "./prompt-context-projection.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
@@ -205,7 +205,7 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
 });
 telegramMessageAdapter.durableFinal = {
   ...telegramMessageAdapter.durableFinal,
-  isTextOnlyChannelData: isTelegramTextOnlyChannelData,
+  ...telegramDurableFinalPolicy,
 };
 
 function normalizeTelegramAcpConversationId(conversationId: string, parentConversationId?: string) {

@@ -288,6 +288,19 @@ describe("OpenClaw rescue message", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
+  it("replies with a completed command's findings when it exits non-zero (#195432)", async () => {
+    vi.mocked(runPluginsListCommand).mockImplementation(async (_opts, runtime) => {
+      runtime?.log("warning finding");
+      runtime?.exit(1);
+    });
+
+    await expectReply(
+      "/openclaw plugins list",
+      "warning finding\n\nOpenClaw operation exited with code 1.",
+      true,
+    );
+  });
+
   it("consumes a pending approval at most once under concurrent approvals", async () => {
     await runRescue("/openclaw restart gateway", {});
     const replies = await Promise.all([

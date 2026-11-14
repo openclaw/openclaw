@@ -238,7 +238,7 @@ extension LocationServicing {
             await appModel.waitForGatewaySessionResetIfNeeded()
             _ = await controller.makeConnectOptions(deviceAuthGatewayID: nil)
             #expect(appModel.activeGatewayConnectConfig == nil)
-            #expect(!appModel.gatewayAutoReconnectEnabled)
+            #expect(!appModel.canAutoReconnect)
             withExtendedLifetime(controller) {}
         }
     }

@@ -1,2 +1,0 @@
-# Join idle-loaded menu catalog evaluation before the stream-only commit measurement.
-39

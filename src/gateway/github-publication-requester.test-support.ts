@@ -38,6 +38,7 @@ import {
 } from "./github-publication.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
 import {
@@ -139,6 +140,7 @@ export async function createGitHubPublicationRequesterFixture(params: {
   sessionKey: string;
   agentId: string;
   getCommittedRuntimeConfig?: () => OpenClawConfig;
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
 }) {
   const [{ createOperatorWsClient }, { prepareGatewayConnectOperatorAccess }] = await Promise.all([
     import("./server/ws-connection/authenticated-request-dispatch.test-support.js"),
@@ -155,6 +157,9 @@ export async function createGitHubPublicationRequesterFixture(params: {
     hasAvatar: false,
     updatedAt: 1,
   };
+  if (params.openclawIdPrincipal) {
+    client.internal = { ...client.internal, openclawIdPrincipal: params.openclawIdPrincipal };
+  }
   prepareGatewayConnectOperatorAccess(client);
   const context = {
     getRuntimeConfig: currentGitHubPublicationConfig,

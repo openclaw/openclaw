@@ -58,3 +58,50 @@ describe("OpenClaw ID link status", () => {
     });
   });
 });
+
+it("exposes configured and undefined member roles without replacing their opaque names", async () => {
+  const { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } =
+    await import("../../config/runtime-snapshot.js");
+  const claw = await linkedClaw();
+  for (const [account, role, byte] of [
+    ["custom", "guest", 13],
+    ["deleted", "removed-role", 14],
+  ] as const) {
+    await claw.authority.submit(
+      await claw.sign({
+        op: "add",
+        account_id: account,
+        role,
+        peer_keys: [formatIrohEndpointKey(new Uint8Array(32).fill(byte))],
+        invite_id: null,
+      }),
+      "tunnel",
+    );
+  }
+  setRuntimeConfigSnapshot({
+    gateway: {
+      roles: {
+        definitions: {
+          guest: { sessions: { others: "view" }, agents: "*", scopes: ["operator.sessions.read"] },
+        },
+      },
+    },
+  });
+  const { service } = serviceFor(claw.authority);
+  try {
+    const status = await service.linkStatus();
+    expect(status).toMatchObject({
+      roles: [
+        { name: "guest", defined: true },
+        { name: "removed-role", defined: false },
+      ],
+      members: [
+        { role: "guest", roleDefined: true },
+        { role: "removed-role", roleDefined: false },
+      ],
+    });
+  } finally {
+    await service.stop();
+    clearRuntimeConfigSnapshot();
+  }
+});

@@ -171,6 +171,107 @@ describe("Codex tool response fidelity", () => {
   });
 });
 
+describe("live native command output", () => {
+  it("publishes recent stdout beyond the capture cap without persisting the live tail", async () => {
+    const onAgentEvent = vi.fn();
+    const { projector } = await createConfiguredProjection({ verboseLevel: "off", onAgentEvent });
+    const command = createNativeCommandItem({ id: "long-live-command", aggregatedOutput: null });
+    await startCommand(projector, command);
+    await delta(projector, command.id, "CAPTURED BEGINNING\n" + "x".repeat(12_000));
+    await delta(projector, command.id, "\nLATEST STDOUT\n");
+    const updates = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "tool" && event.data.phase === "update");
+    const partial = updates.at(-1)?.data.partialResult;
+    expect(partial.liveOutput.text).toMatch(/\nLATEST STDOUT\n$/u);
+    expect(partial.liveOutput.text.length).toBeLessThanOrEqual(600);
+    expect(partial.text).toHaveLength(10_000);
+    expect(partial.text).toMatch(/^CAPTURED BEGINNING\n/u);
+    expect(partial.text).not.toContain("LATEST STDOUT");
+    expect(Reflect.set(partial, "text", "observer mutation")).toBe(false);
+    expect(Reflect.set(partial.liveOutput, "text", "observer mutation")).toBe(false);
+    await itemEvent(projector, "completed", command);
+    const result = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .findLast((event) => event.stream === "tool" && event.data.phase === "result");
+    expect(result?.data.result.text).toBe(partial.text);
+    expect(result?.data.result).not.toHaveProperty("liveOutput");
+    expect(
+      snapshot(projector).messagesSnapshot.find((message) => message.role === "toolResult"),
+    ).toMatchObject({ content: [{ type: "text", text: partial.text }] });
+  });
+
+  it.each(["off", "full"] as const)(
+    "publishes cumulative stdout before completion and preserves it in the receipt (%s)",
+    async (verboseLevel) => {
+      const onAgentEvent = vi.fn();
+      const { projector } = await createConfiguredProjection({ verboseLevel, onAgentEvent });
+      const command = createNativeCommandItem({
+        id: "live-command",
+        status: "failed",
+        exitCode: 2,
+      });
+      await startCommand(projector, command);
+      await delta(projector, command.id, " first\n");
+      await delta(projector, command.id, "last \n");
+      const toolEvents = () =>
+        onAgentEvent.mock.calls.map(([event]) => event).filter((event) => event.stream === "tool");
+      expect(
+        toolEvents()
+          .filter((event) => event.data.phase === "update")
+          .map((event) => event.data.partialResult),
+      ).toEqual([{ text: " first\n" }, { text: " first\nlast \n" }]);
+      expect(toolEvents().filter((event) => event.data.outputOnly === true)).toEqual(
+        toolEvents().filter((event) => event.data.phase === "update"),
+      );
+      expect(toolEvents().some((event) => event.data.phase === "result")).toBe(false);
+      await itemEvent(projector, "completed", command);
+      expect(toolEvents().at(-1)?.data).toMatchObject({
+        phase: "result",
+        toolCallId: command.id,
+        isError: true,
+        result: {
+          text: " first\nlast \n",
+          exitCode: 2,
+          details: { status: "failed", exitCode: 2, durationMs: 42 },
+        },
+      });
+      expect(toolEvents().at(-1)?.data).not.toHaveProperty("outputOnly");
+      expect(
+        snapshot(projector).messagesSnapshot.find((message) => message.role === "toolResult"),
+      ).toMatchObject({ content: [{ type: "text", text: " first\nlast \n" }], isError: true });
+    },
+  );
+
+  it("keeps a silent native command silent when Codex reports a null aggregate", async () => {
+    const onAgentEvent = vi.fn();
+    const { projector } = await createConfiguredProjection({ onAgentEvent });
+    const command = createNativeCommandItem({ id: "silent-command", aggregatedOutput: null });
+    await startCommand(projector, command);
+    await itemEvent(projector, "completed", command);
+    const result = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .findLast((event) => event.stream === "tool" && event.data.phase === "result");
+    expect(result?.data.result).toMatchObject({ text: "", exitCode: 0 });
+    expect(
+      snapshot(projector).messagesSnapshot.find((message) => message.role === "toolResult"),
+    ).toMatchObject({ content: [{ type: "text", text: "" }], isError: false });
+  });
+
+  it("uses authoritative final output and retains an empty stdout result", async () => {
+    const onAgentEvent = vi.fn();
+    const { projector } = await createConfiguredProjection({ onAgentEvent });
+    const command = createNativeCommandItem({ id: "empty-output", aggregatedOutput: "" });
+    await startCommand(projector, command);
+    await delta(projector, command.id, "provisional");
+    await itemEvent(projector, "completed", command);
+    const result = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .findLast((event) => event.stream === "tool" && event.data.phase === "result");
+    expect(result?.data.result).toMatchObject({ text: "", exitCode: 0 });
+  });
+});
+
 describe("streamed-output-echo", () => {
   it("extracts raw assistant text once for buffering and transcript projection", async () => {
     const projector = await h.createProjector();

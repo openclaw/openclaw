@@ -1,2 +1,0 @@
-# Extend existing three-socket equivalence proof for count-only participant updates.
-15

@@ -75,21 +75,10 @@ suite.define(() => {
       expect(await rows.count()).toBe(2);
       expect(await entries.count()).toBe(0);
 
-      await gateway.emitGatewayEvent("session.tool", {
-        stream: "tool",
-        runId: "run-review",
-        sessionKey: running.key,
-        data: {
-          phase: "result",
-          name: "read",
-          toolCallId: "read-release-notes",
-          result: { text: "Release notes checked." },
-        },
-      });
-      await expectCount(entries).toBe(1);
-      await page.getByRole("button", { name: "Clear", exact: true }).click();
-      await expectCount(entries).toBe(0);
-      expect(await rows.count()).toBe(2);
+      // Sidebar narration remains; Activity must not acquire full tool streams.
+      for (const { params } of await gateway.getRequests("sessions.messages.subscribe")) {
+        expect(params).toMatchObject({ mode: "narration" });
+      }
 
       await gateway.setMethodResponse("sessions.list", listing([queued]));
       await gateway.emitGatewayEvent("sessions.changed", {

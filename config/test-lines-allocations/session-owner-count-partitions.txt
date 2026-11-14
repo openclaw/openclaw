@@ -1,0 +1,3 @@
+# Extend retained-selection regressions with owner-count queries, mixed owners and
+# 60k-row admission pressure so count acceleration cannot evict sidebar baselines.
+16

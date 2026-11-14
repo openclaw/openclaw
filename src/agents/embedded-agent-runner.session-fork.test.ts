@@ -317,14 +317,29 @@ it.each([
           expect(replayMessages).toHaveLength(originalMessages.length + 2);
           expect(JSON.stringify(replay.instructions)).toBe(JSON.stringify(original.instructions));
         } else {
-          // Older routes do not persist their full system prompt or ephemeral temporal carrier.
           // Rebuild from configured bootstrap context while preserving the durable conversation.
           expect(JSON.stringify(replayMessages)).toContain(
             "Stable plugin context\\n\\nParent question",
           );
           if (api === "anthropic-messages") {
-            expect(JSON.stringify(replayMessages[0])).toBe(JSON.stringify(originalMessages[0]));
-            expect(replayMessages).toHaveLength(3);
+            const originalUser = originalMessages[0];
+            if (!isRecord(originalUser) || typeof originalUser.content !== "string") {
+              throw new Error("Missing original Anthropic user text");
+            }
+            expect(replayMessages.slice(0, originalMessages.length)).toEqual([
+              {
+                ...originalUser,
+                content: [
+                  {
+                    type: "text",
+                    text: originalUser.content,
+                    cache_control: { type: "ephemeral" },
+                  },
+                ],
+              },
+              ...originalMessages.slice(1),
+            ]);
+            expect(replayMessages).toHaveLength(originalMessages.length + 2);
           }
         }
         expect(JSON.stringify(original)).toContain("REVIEW_CONTEXT_1672");

@@ -8,14 +8,30 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { runCronSessionTurn } from "../../../cron/session-run.js";
 import * as fetchGuard from "../../../infra/net/fetch-guard.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import * as agentScope from "../../agent-scope.js";
+import { codeModeSwarmHandlers } from "../../code-mode-swarm.runtime.js";
+import { applyCodeModeCatalog } from "../../code-mode.js";
+import { createCodeModeHarness } from "../../code-mode.test-support.js";
+import { createRequestNativeSubagentRuntime } from "../../plugin-native-subagent.js";
 import { setPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
 import { getPreparedModelRuntimeMocks } from "../../prepared-model-runtime.test-harness.js";
+import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import { ToolSearchRuntime } from "../../tool-search-runtime.js";
+import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
+import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { installSpawnAccessCodex } from "./subagent-spawn.access-codex.test-support.js";
+import { runCronAccessLifecycle } from "./subagent-spawn.cron-access.test-support.js";
+import {
+  holdNativeCapacity,
+  nativeRequestSource,
+} from "./subagent-spawn.plugin-native-rewrite.test-support.js";
 import {
   createBoundSpawnInvocation,
   createSpawnOperatorSource,
@@ -25,7 +41,7 @@ import {
 export function registerAccessRequestSpawnCases(
   options: NativePluginSpawnTestOptions & { parentSessionKey: string },
 ) {
-  const cases = [
+  const nativeCases = [
     ...(["OpenClaw", "Codex"] as const).flatMap((runtimeName) =>
       (["explicit", "inherited"] as const).flatMap((selection) =>
         (["allowed", "unavailable", "revoked", "reassigned"] as const).map((outcome) => ({
@@ -37,22 +53,86 @@ export function registerAccessRequestSpawnCases(
     ),
     { runtimeName: "OpenClaw", selection: "explicit", outcome: "requester-revoked" } as const,
   ];
-  it.each(cases)(
-    "$selection child Access at final $runtimeName submission: $outcome",
-    async ({ runtimeName, selection, outcome }) => {
-      const program = selection === "explicit" ? "daybreak_blue" : "daybreak_red";
+  const cases = [
+    ...nativeCases.map(({ runtimeName, selection, outcome }) => ({
+      runtimeName,
+      selection,
+      outcome,
+      adapter: "native" as const,
+      queued: false,
+    })),
+    ...(["code-mode", "plugin"] as const).map((adapter) => ({
+      runtimeName: "OpenClaw" as const,
+      selection: "standard" as const,
+      outcome: "allowed" as const,
+      adapter,
+      queued: false,
+    })),
+    ...(["code-mode", "plugin"] as const).flatMap((adapter) =>
+      ([false, true] as const).flatMap((queued) =>
+        (
+          [
+            "allowed",
+            "unavailable",
+            "revoked",
+            "reassigned",
+            "requester-revoked",
+            "role-denied",
+          ] as const
+        ).map((outcome) => ({
+          runtimeName: "OpenClaw" as const,
+          selection: "explicit" as const,
+          outcome,
+          adapter,
+          queued,
+        })),
+      ),
+    ),
+    ...(["cron", "cron-session"] as const).flatMap((adapter) =>
+      (["allowed", "unavailable", "revoked", "reassigned", "role-denied"] as const).map(
+        (outcome) => ({
+          runtimeName: "OpenClaw" as const,
+          selection: "explicit" as const,
+          outcome,
+          adapter,
+          queued: false,
+        }),
+      ),
+    ),
+  ];
+  it.each<(typeof cases)[number]>(cases)(
+    "$adapter queued=$queued $selection child Access at final $runtimeName submission: $outcome",
+    async ({ runtimeName, selection, outcome, adapter, queued }) => {
+      const program =
+        selection === "standard"
+          ? "standard"
+          : selection === "explicit"
+            ? "daybreak_blue"
+            : "daybreak_red";
       const actualScope = await vi.importActual<typeof agentScope>("../../agent-scope.js");
       const resolver = vi
         .spyOn(agentScope, "resolveSessionAgentIds")
         .mockImplementation(actualScope.resolveSessionAgentIds);
       onTestFinished(() => resolver.mockRestore());
       const source = createSpawnOperatorSource("access-admin", ["operator.admin"], {
-        rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
+        rolePolicy: {
+          sessionAccessCap: "none",
+          sandboxRequired: false,
+          agents: "*",
+          ...(outcome === "role-denied" ? { accessPrograms: { cyber: [] } } : {}),
+        },
       });
       const bound = await options.createBoundParent(source.authority);
       await upsertSessionEntryCore(
         { storePath: bound.storePath, sessionKey: options.parentSessionKey },
-        { cyberAccessProgram: selection === "inherited" ? program : undefined },
+        {
+          cyberAccessProgram:
+            selection === "inherited"
+              ? program
+              : selection === "standard"
+                ? "daybreak_blue"
+                : undefined,
+        },
       );
       const runtimeMocks = getPreparedModelRuntimeMocks();
       Object.assign(runtimeMocks.pluginMetadataSnapshot.index, { diagnostics: [] });
@@ -316,7 +396,7 @@ export function registerAccessRequestSpawnCases(
       onTestFinished(() => guardSpy.mockRestore());
       const actual = await import("../../embedded-agent-runner/run.js");
       const done = createDeferred<unknown>();
-      options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      const runActual = async (params: Parameters<typeof actual.runEmbeddedAgent>[0]) => {
         try {
           const result = await actual.runEmbeddedAgent(params);
           done.resolve(result);
@@ -325,23 +405,118 @@ export function registerAccessRequestSpawnCases(
           done.resolve(error);
           throw error;
         }
-      });
+      };
+      if (adapter === "cron" || adapter === "cron-session") {
+        options.runEmbeddedAgent.mockImplementation(runActual);
+      } else {
+        options.runEmbeddedAgent.mockImplementationOnce(runActual);
+      }
+      if (queued) {
+        await holdNativeCapacity(bound, "access-capacity");
+        onTestFinished(() => {
+          releaseSwarmRun("access-capacity");
+        });
+      }
+      let cronResult: Awaited<ReturnType<typeof runCronSessionTurn>> | undefined;
       let childRunId: string | undefined;
+      let childSessionKey: string | undefined;
       const failures: unknown[] = [];
       try {
-        const result = await createBoundSpawnInvocation(
-          bound,
-          { cyberAccessProgram: selection === "explicit" ? program : undefined },
-          { provider: "openai", model: model.id },
-        )();
-        expect(result.details).toMatchObject({ status: "accepted" });
-        const details = result.details as { runId: string; childSessionKey: string };
-        childRunId = details.runId;
-        expect(
-          loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
-            ?.cyberAccessProgram,
-        ).toBe(program);
-        const completed = await done.promise;
+        if (adapter === "cron" || adapter === "cron-session") {
+          const cron = await runCronAccessLifecycle({
+            adapter,
+            outcome,
+            program,
+            modelId: model.id,
+            bound,
+            context,
+            options,
+            writes,
+          });
+          if (cron.skipped) {
+            return;
+          }
+          cronResult = cron.result;
+        } else {
+          const requested = selection === "inherited" ? undefined : program;
+          const invoke = createBoundSpawnInvocation(
+            bound,
+            { cyberAccessProgram: requested },
+            { provider: "openai", model: model.id },
+          );
+          let result;
+          if (adapter === "plugin") {
+            const accepted = await withPluginRuntimeGatewayRequestScope(
+              { context, isWebchatConnect: () => false },
+              () =>
+                createRequestNativeSubagentRuntime(nativeRequestSource(bound, source), {
+                  pluginId: "access-fixture",
+                  assertCurrent: source.authority.assertCurrent,
+                }).spawn({
+                  requestId: "access-proof",
+                  task: "bounded child",
+                  model: `openai/${model.id}`,
+                  cyberAccessProgram: requested,
+                }),
+            );
+            result = { details: { status: "accepted", ...accepted } };
+          } else if (adapter === "code-mode") {
+            const harness = createCodeModeHarness();
+            Object.assign(harness.config.tools, { swarm: { enabled: true } });
+            Object.assign(harness.ctx, {
+              sessionKey: options.parentSessionKey,
+              runId: bound.parentRunId,
+            });
+            const spawn = createSessionsSpawnTool({
+              config: bound.cfg,
+              agentSessionKey: options.parentSessionKey,
+            });
+            // Bind the real tool to the admitted parent; never replace the native spawn owner.
+            spawn.execute = async (_id, input) =>
+              createBoundSpawnInvocation(
+                bound,
+                { collect: true },
+                { provider: "openai", model: model.id },
+              )(undefined, undefined, input);
+            applyCodeModeCatalog({
+              tools: [...harness.tools, spawn],
+              config: harness.config,
+              catalogRef: harness.catalogRef,
+            });
+            result = {
+              details: await codeModeSwarmHandlers.agentSpawn({
+                runtime: new ToolSearchRuntime(
+                  harness.ctx,
+                  resolveToolSearchConfig(harness.config),
+                ),
+                ctx: harness.ctx,
+                parentToolCallId: "access-code",
+                codeModeRunId: "access-code",
+                request: {
+                  id: "access-spawn",
+                  method: "agentSpawn",
+                  args: ["bounded child", { cyberAccessProgram: requested }],
+                },
+              }),
+            };
+          } else {
+            result = await invoke();
+          }
+          expect(result.details).toMatchObject({ status: "accepted" });
+          const details = result.details as { runId: string; childSessionKey: string };
+          childRunId = details.runId;
+          childSessionKey = details.childSessionKey;
+          expect(
+            loadSessionEntry({ storePath: bound.storePath, sessionKey: details.childSessionKey })
+              ?.cyberAccessProgram,
+          ).toBe(program);
+          if (queued) {
+            expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
+            expect(writes).toHaveLength(0);
+            releaseSwarmRun("access-capacity");
+          }
+        }
+        const completed = adapter === "cron-session" ? cronResult : await done.promise;
         if (native) {
           expect(writes, "native child must not fall back to OpenClaw transport").toHaveLength(0);
         }
@@ -361,8 +536,8 @@ export function registerAccessRequestSpawnCases(
           }
         } else if (outcome !== "allowed") {
           if (!native) {
-            expect(accountChanged).toBe(outcome !== "unavailable");
-            if (outcome !== "unavailable") {
+            expect(accountChanged).toBe(outcome !== "unavailable" && outcome !== "role-denied");
+            if (outcome !== "unavailable" && outcome !== "role-denied") {
               expect(rejectedSubmissions.length).toBeGreaterThan(0);
               for (const rejection of rejectedSubmissions) {
                 expect(rejection).toMatchObject({ code: "OPENAI_ACCESS_PROGRAM_UNAVAILABLE" });
@@ -379,14 +554,16 @@ export function registerAccessRequestSpawnCases(
             );
           }
           if (completed instanceof Error) {
-            expect(completed.message).toMatch(/Daybreak|account changed/i);
-          } else {
+            expect(completed.message).toMatch(/Daybreak|account changed|Access|not allowed/i);
+          } else if (adapter !== "cron-session") {
             expect(completed).toMatchObject({
               payloads: expect.arrayContaining([
                 expect.objectContaining({
                   isError: true,
-                  ...(native || outcome === "unavailable"
-                    ? { text: expect.stringMatching(/Daybreak|account changed/i) }
+                  ...(native || outcome === "unavailable" || outcome === "role-denied"
+                    ? {
+                        text: expect.stringMatching(/Daybreak|account changed|Access|not allowed/i),
+                      }
                     : {}),
                 }),
               ]),
@@ -403,14 +580,29 @@ export function registerAccessRequestSpawnCases(
                 expect.objectContaining({ text: "Completed as account-a" }),
               ]),
             });
-          } else {
+          } else if (adapter !== "cron-session") {
             expect(completed).toMatchObject({
               payloads: expect.arrayContaining([
                 expect.objectContaining({ text: "Access child completed" }),
               ]),
             });
           }
-          expect(requests).toHaveLength(1);
+          expect(requests).toHaveLength(adapter === "cron" || adapter === "cron-session" ? 3 : 1);
+          if (program === "standard") {
+            expect(requests[0]).toMatchObject({ access_programs: { cyber: "standard" } });
+            console.log(
+              JSON.stringify({
+                adapter,
+                saved: {
+                  cyberAccessProgram: loadSessionEntry({
+                    storePath: bound.storePath,
+                    sessionKey: expectDefined(childSessionKey, "spawned child session"),
+                  })?.cyberAccessProgram,
+                },
+                finalRequest: { elevatedAccess: false, count: requests.length },
+              }),
+            );
+          }
           expect(requests[0]).toMatchObject(
             native
               ? {
@@ -424,8 +616,26 @@ export function registerAccessRequestSpawnCases(
           );
         }
       } catch (error) {
-        failures.push(error);
+        if (
+          outcome === "role-denied" &&
+          !(error instanceof Error && error.name === "AssertionError")
+        ) {
+          expect(String(error)).toMatch(/Access|permitted|allowed/i);
+          expect(writes).toHaveLength(0);
+          expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
+        } else {
+          failures.push(error);
+        }
       } finally {
+        if (childRunId) {
+          await markSubagentRunTerminated({
+            runId: childRunId,
+            reason: "Access fixture finished",
+            suppressTaskDelivery: true,
+            suppressSessionEffects: true,
+          });
+          releaseSwarmRun(childRunId);
+        }
         failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
         options.throwBoundFailures(failures);
       }

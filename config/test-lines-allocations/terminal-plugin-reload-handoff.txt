@@ -1,5 +1,0 @@
-# Accepted plugin reload handoff adversarial regressions.
-# Exact-base red/fixed green coverage for native and Code Mode terminal receipt
-# ownership, parked-wait acceptance, cleanup leases, and successor admission.
-# Verified net test-line growth against 490aff93 and the CI comparison: +302.
-302

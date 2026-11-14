@@ -221,6 +221,27 @@ describe("agentLoop steering", () => {
     expect(agent.hasQueuedMessages()).toBe(false);
   });
 
+  it("continues one queued steer per request after committing the initial batch", async () => {
+    const { agent, requests } = makeAgent(
+      [],
+      { initialState: { messages: [makeAssistantMessage(text("ready"))] } },
+      [done, done],
+    );
+    const first = user("first steer", 2);
+    const second = user("second steer", 3);
+    agent.steer(first);
+    agent.steer(second);
+
+    await agent.continue();
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.at(-1)).toBe(first);
+    expect(requests[0]).not.toContain(second);
+    expect(requests[1]?.at(-1)).toBe(second);
+    expect(agent.state.messages.filter((message) => message === first)).toHaveLength(1);
+    expect(agent.state.messages.filter((message) => message === second)).toHaveLength(1);
+  });
+
   it("cancels a drained steering message and permits an explicit re-enqueue", async () => {
     const turn = gate();
     const { agent, requests } = makeAgent(
@@ -356,12 +377,17 @@ describe("agentLoop steering", () => {
   });
 
   it("disposes private preflight when the steering checkpoint throws", async () => {
-    const { tool, execute, dispose } = preparedTool("cleanup");
-    const getSteeringMessages = vi
-      .fn<() => Promise<AgentMessage[]>>()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
-      .mockRejectedValueOnce(new Error("steering checkpoint failed"));
+    let prepared = false;
+    const { tool, execute, dispose } = preparedTool("cleanup", (args) => {
+      prepared = true;
+      return args;
+    });
+    const getSteeringMessages = async () => {
+      if (prepared) {
+        throw new Error("steering checkpoint failed");
+      }
+      return [];
+    };
 
     await expect(
       runLoop(

@@ -871,7 +871,7 @@ jobs:
           INPUT_UBUNTU_RUNNER: ${{ inputs.ubuntu_runner }}
           INPUT_WINDOWS_RUNNER: ${{ inputs.windows_runner }}
           INPUT_MACOS_RUNNER: ${{ inputs.macos_runner }}
-          VAR_UBUNTU_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER }}
+          VAR_UBUNTU_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'ubuntu-24.04') || '' }}
           VAR_WINDOWS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER }}
           VAR_MACOS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER }}
         run: |

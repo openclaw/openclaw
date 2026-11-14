@@ -3466,6 +3466,7 @@ class NodeRuntime internal constructor(
    * Reconnect a live node only when Android authority changed since its last connect.
    */
   fun refreshNodePermissionSurface() {
+    refreshVoiceWakePermission()
     val permissions = connectionManager.buildPermissions()
     if (permissions == lastNodeConnectOptions?.permissions) return
     refreshAcceptedGatewayConnection(refreshOperator = false)
@@ -6082,7 +6083,6 @@ class NodeRuntime internal constructor(
       val sessionKey = parseSessionCatalogContinueResult(response, json)
       return withCurrentGatewayData(gatewayScope) {
         if (sessionCatalogContinueSeq.get() != requestSeq) return@withCurrentGatewayData false
-        _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
         if (!chatSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) return@withCurrentGatewayData false
         stopMessageSpeech()
         chat.switchSession(sessionKey, entry.agentId)
@@ -6095,12 +6095,18 @@ class NodeRuntime internal constructor(
         if (sessionCatalogContinueSeq.get() == requestSeq) {
           _sessionCatalogState.value =
             _sessionCatalogState.value.copy(
-              continuingEntryId = null,
               errorText = nativeString("Could not open this session."),
             )
         }
       }
       return false
+    } finally {
+      // The Activity's ViewModel can be cleared while this process runtime stays connected.
+      publishGatewayData(gatewayScope) {
+        if (sessionCatalogContinueSeq.get() == requestSeq) {
+          _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
+        }
+      }
     }
   }
 

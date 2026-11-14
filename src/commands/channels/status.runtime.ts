@@ -10,7 +10,7 @@ import {
   hasResolvedCredentialValue,
 } from "../../channels/account-snapshot-fields.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import {
   resolveChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
@@ -255,10 +255,12 @@ export async function renderChannelsStatusFallback(params: {
     lines.push(`Config: ${snapshot.path}`);
   }
   lines.push(`Mode: ${mode}`, "");
-  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
-    activationSourceConfig: sourceConfig,
-    includeSetupFallbackPlugins: true,
-  }).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
+  const plugins = (
+    await listReadOnlyChannelPluginsForConfigAsync(cfg, {
+      activationSourceConfig: sourceConfig,
+      includeSetupFallbackPlugins: true,
+    })
+  ).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
   const visibleChannelIds = new Set<string>();
   const statusLinesStart = lines.length;
   for (const plugin of plugins) {

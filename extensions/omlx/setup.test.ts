@@ -34,9 +34,11 @@ function configWithProvider(overrides: Partial<ModelProviderConfig>): OpenClawCo
 }
 
 const rows = [
-  { id: "text-embedding-mini", max_model_len: 512 },
-  { id: modelId, max_model_len: 32_768 },
-  { id: "custom-chat", max_model_len: 8_192 },
+  { id: "text-embedding-mini", model_type: "embedding", max_model_len: 512 },
+  { id: modelId, model_type: "llm", max_model_len: 32_768 },
+  { id: "custom-chat", model_type: "vlm", max_model_len: 8_192 },
+  { id: "voice", model_type: "tts", max_model_len: 32_768 },
+  { id: "unclassified", max_model_len: 32_768 },
 ];
 
 function fixture(data: unknown = rows, status = 200) {
@@ -163,6 +165,11 @@ describe("oMLX setup through the inference catalog", () => {
       profiles: [],
       defaultModel: `omlx/${modelId}`,
     });
+    expect(
+      prepared?.configPatch?.models?.providers?.omlx?.models?.every(
+        (model) => model.inference?.chat !== false,
+      ),
+    ).toBe(true);
     expect(prepared?.configPatch?.models?.providers?.omlx).toMatchObject({
       api: "openai-completions",
       apiKey: "omlx-local",
@@ -433,7 +440,7 @@ describe("oMLX setup through the inference catalog", () => {
     },
   );
 
-  it.each(["missing", { unexpected: "value" }])(
+  it.each(["missing", "voice", "unclassified", { unexpected: "value" }])(
     "rejects invalid model %j before persistence",
     async (model) => {
       const fetchMock = fixture();

@@ -33,7 +33,7 @@ const {
   enqueueSystemEventEntry: enqueue,
   captureSessionEventTargetForHost: captureTarget,
   enqueueSessionEventForHost: handoff,
-  agentCommandFromIngress: dispatch,
+  agentCommandFromGatewayIngress: dispatch,
   upsertSessionEntryCore: touchSession,
   loadSessionEntry: lookupSession,
   registerApnsRegistration: registerApns,

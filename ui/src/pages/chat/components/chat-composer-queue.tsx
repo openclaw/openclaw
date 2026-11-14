@@ -11,6 +11,7 @@ import {
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
@@ -137,8 +138,8 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
   queueMicrotask(() => {
     if (element.isConnected) {
       fitQueueEditInput(element);
-      element.focus();
-      element.setSelectionRange(value.length, value.length);
+      focusComposerInput(element);
+      selectComposerInput(element, value.length, value.length);
     }
   });
 }
@@ -625,23 +626,21 @@ function ChatQueueItem(rowProps: {
           </>
         ) : null}
         {busy() || editing() ? null : (
-          <openclaw-tooltip prop:content={t("chat.queue.removeQueuedMessage")}>
-            <button
-              class="chat-queue__remove"
-              type="button"
-              disabled={item().serverQueued && !rowProps.controls.canRemoveServerQueued}
-              aria-label={t("chat.queue.removeQueuedMessage")}
-              onClick={(event: MouseEvent) => {
-                // Chromium retargets click 2 after row removal; detail still owns the gesture.
-                if (event.detail <= 1) {
-                  rowProps.controls.onQueueRemove(item().id);
-                }
-              }}
-              onDblClick={(event: MouseEvent) => event.stopPropagation()}
-            >
-              <Icon name="trash" />
-            </button>
-          </openclaw-tooltip>
+          <button
+            class="chat-queue__remove"
+            type="button"
+            disabled={item().serverQueued && !rowProps.controls.canRemoveServerQueued}
+            aria-label={t("chat.queue.removeQueuedMessage")}
+            onClick={(event: MouseEvent) => {
+              // Chromium retargets click 2 after row removal; detail still owns the gesture.
+              if (event.detail <= 1) {
+                rowProps.controls.onQueueRemove(item().id);
+              }
+            }}
+            onDblClick={(event: MouseEvent) => event.stopPropagation()}
+          >
+            <Icon name="trash" />
+          </button>
         )}
         {editing() || !editable() ? null : (
           <Menu
@@ -681,7 +680,7 @@ function ChatQueueItem(rowProps: {
         )}
       </span>
       {mentions()?.length ? (
-        <span class="chat-queue__mentions">
+        <span class="chat-queue__mentions" title={t("chat.mentions.invite")}>
           {t("chat.mentions.selected", {
             names: (mentions() ?? [])
               .map(({ start, end }) => mentionText().slice(start, end))

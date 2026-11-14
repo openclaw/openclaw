@@ -224,11 +224,17 @@ function isExecCompletionEvent(event: string): boolean {
   if (/^exec finished(?::|\s*\()/i.test(trimmed)) {
     return true;
   }
+  // Current notices add a duration and carry the output tail after ":"; historical ones used " :: ".
   const match =
-    /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*)|\n\n([\s\S]+))?$/i.exec(
+    /^exec (?:completed|failed) \([a-z0-9_-]{1,64}, (?:code -?\d+|signal [^),]+)(?:, [0-9a-z]+)?\)(?: :: [\s\S]*|(?:, last \d+ of \d+ output chars \([^)]*\))?: [\s\S]*| with no output\.(?: ([\s\S]+))?|\n\n([\s\S]+))?$/i.exec(
       trimmed,
     );
-  return Boolean(match && (match[5] === undefined || match[5] === EXEC_TIMEOUT_RETRY_GUIDANCE));
+  return Boolean(
+    match &&
+    [match[1], match[2]].every(
+      (rest) => rest === undefined || rest === EXEC_TIMEOUT_RETRY_GUIDANCE,
+    ),
+  );
 }
 
 /** Pages are bounded by rendered UTF-16 code units, about 1 MiB each. */

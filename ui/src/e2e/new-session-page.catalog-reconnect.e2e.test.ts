@@ -111,6 +111,7 @@ suite.define(() => {
     ).at(0);
     expect(catalogRequest?.params).toEqual({ agentId: "roboclaw", metadataOnly: true });
     await page.locator('[data-chat-model-select="true"]').click();
+    await page.locator('[data-chat-model-provider-toggle="target:cliAgents"]').click();
     const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
     await expect.poll(() => cliGroup.isVisible()).toBe(true);
     await pollLocatorText(cliGroup).toContain("Claude Code");
@@ -156,6 +157,7 @@ suite.define(() => {
       )
       .toMatchObject({ params: { agentId: "main", metadataOnly: true } });
     await page.locator('[data-chat-model-select="true"]').click();
+    await page.locator('[data-chat-model-provider-toggle="target:cliAgents"]').click();
     const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
     await expect.poll(() => cliGroup.isVisible()).toBe(true);
     await pollLocatorText(cliGroup).toContain("CLI agents");
@@ -270,7 +272,7 @@ suite.define(() => {
     expect(await page.locator(".new-session-page__start-split").count()).toBe(0);
     await page.locator("#new-session-checkout-trigger").click();
     const placePopover = page.locator(".oc-popover.new-session-page__checkout-popover");
-    const worktreeButton = button(placePopover, "New worktree Isolated copy of the repo", true);
+    const worktreeButton = button(placePopover, "New worktree", true);
     await worktreeButton.waitFor({ state: "visible" });
     const initialBranchRequestCount = (await gateway.getRequests("worktrees.branches")).length;
     await worktreeButton.click();
@@ -581,7 +583,7 @@ suite.define(() => {
     const placeSelect = page.locator(".oc-popover.new-session-page__checkout-popover");
     const placeTrigger = page.locator("#new-session-checkout-trigger");
     await placeTrigger.click();
-    const worktreeItem = button(placeSelect, "New worktree Isolated copy of the repo", true);
+    const worktreeItem = button(placeSelect, "New worktree", true);
     await worktreeItem.click();
     const baseInput = checkoutBaseRefInput(placeSelect);
     await expectAttribute(baseInput, "placeholder", "main");

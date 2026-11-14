@@ -218,21 +218,28 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-tool-card__block code")).toBe("with Example Deck");
   });
 
-  it("infers a status-only result failure without changing its neutral disclosure", async () => {
-    const output = '{\n  "status": "error"\n}';
-    const group = toolResultGroup("status-error", "sessions_spawn", output);
-    for (const expanded of [false, true]) {
-      await renderToolGroups([group], { isToolMessageExpanded: () => expanded });
-      const summary = requireElement(".chat-tool-msg-summary", HTMLButtonElement);
-      expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-      expect(elementText(".chat-tool-msg-summary__label")).toBe("Tool output");
-      expect(elementText(".chat-tool-msg-summary__names")).toBe("sessions_spawn");
-      expect(Boolean(element(".chat-tool-msg-body"))).toBe(expanded);
-    }
-    expect(elementText(".chat-tool-card__outcome")).toBe("failed");
-    expect(elementText(".chat-tool-msg-body .chat-text pre code")).toBe(output);
-    expectAbsent(".chat-tool-msg-body details, .code-block-json-mode");
-  });
+  it.each([undefined, 0, 7])(
+    "keeps the standalone failure footer and neutral disclosure with exit code %s",
+    async (exitCode) => {
+      const output = '{\n  "status": "error"\n}';
+      const group = toolResultGroup("status-error", "sessions_spawn", output, {
+        details: { exitCode },
+      });
+      for (const expanded of [false, true]) {
+        await renderToolGroups([group], { isToolMessageExpanded: () => expanded });
+        const summary = requireElement(".chat-tool-msg-summary", HTMLButtonElement);
+        expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
+        expect(elementText(".chat-tool-msg-summary__label")).toBe("Tool output");
+        expect(elementText(".chat-tool-msg-summary__names")).toBe("sessions_spawn");
+        expect(Boolean(element(".chat-tool-msg-body"))).toBe(expanded);
+      }
+      expect(elementText(".chat-tool-card__outcome")).toBe(
+        exitCode ? `Exit code ${exitCode}` : "failed",
+      );
+      expect(elementText(".chat-tool-msg-body .chat-text pre code")).toBe(output);
+      expectAbsent(".chat-tool-msg-body details, .code-block-json-mode");
+    },
+  );
 
   it.each(["image only", "text then image", "image then text"])(
     "keeps inspected images in tool details with %s",

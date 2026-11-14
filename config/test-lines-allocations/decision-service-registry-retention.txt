@@ -1,2 +1,0 @@
-# Prove unchanged decision services release retired sibling registries after transfer.
-62

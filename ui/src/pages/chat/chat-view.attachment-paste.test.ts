@@ -92,7 +92,11 @@ function attachFile(container: Element, file: File, entry: "clipboard" | "file p
   if (entry === "clipboard") {
     const paste = new Event("paste", { bubbles: true, cancelable: true });
     Object.defineProperty(paste, "clipboardData", {
-      value: { items: [{ type: file.type, getAsFile: () => file }], getData: () => "" },
+      value: {
+        files: [file],
+        items: [{ type: file.type, getAsFile: () => file }],
+        getData: () => "",
+      },
     });
     getComposerTextarea(container).dispatchEvent(paste);
   } else if (entry === "file picker") {

@@ -1,2 +1,0 @@
-# Regression receipts for failed phase/class and no global promisor scan during creation.
-15

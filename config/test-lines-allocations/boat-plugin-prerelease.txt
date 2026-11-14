@@ -1,2 +1,0 @@
-# Preserve actual hourly manifest placement and manual/group runner contracts.
-40

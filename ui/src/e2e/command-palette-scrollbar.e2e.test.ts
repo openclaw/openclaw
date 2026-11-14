@@ -22,7 +22,8 @@ suite.define(() => {
       const input = page.locator("openclaw-command-palette .cmd-palette__input");
       await input.fill("a".repeat(1000));
       await input.press("Control+Home");
-      await expect.poll(() => input.evaluate((element) => element.clientHeight)).toBe(66);
+      // A draft this long moves to Compose, whose field grows to eight lines before it scrolls.
+      await expect.poll(() => input.evaluate((element) => element.clientHeight)).toBe(168);
       await expect
         .poll(() => input.evaluate((element) => element.scrollHeight > element.clientHeight))
         .toBe(true);

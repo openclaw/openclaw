@@ -8,6 +8,7 @@ import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-tu
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { getCurrentSessionControllerClaim } from "../../../sessions/session-controller.lifecycle.js";
 import { getExistingSessionControllerMailbox } from "../../../sessions/session-controller.mailbox.js";
@@ -17,6 +18,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { SessionFollowupCompletion } from "../completion/session-followup-completion.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -82,6 +84,47 @@ describe("requester settle dispatch deadline", () => {
   useRequesterSettleDispatchFixture();
 
   beforeEach(() => setRuntimeConfigSnapshot({}));
+
+  it("keeps a followup completion owed while its policy is unavailable", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    let unavailable = false;
+    const owner = SessionFollowupCompletion.bind({
+      runId: "followup-before-yield",
+      requesterSessionKey: "agent:main:original-requester",
+      requesterSessionId: "original-requester",
+      requesterAgentId: "main",
+      targetAgentId: "main",
+      targetSessionKey: REQUESTER_KEY,
+      custody: {
+        signal: new AbortController().signal,
+        release() {},
+        assertCurrent() {
+          if (unavailable) {
+            throw new GatewayOperatorAccessUnavailableError();
+          }
+        },
+        run: (run) => run(),
+      },
+    });
+    onTestFinished(() => owner.close());
+    child.requesterSettleWake!.rearmGeneration = 1;
+    owner.promoteYield("followup-before-yield", [child], 1);
+    owner.finishExecution("followup-before-yield");
+    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+    deliver.mockImplementationOnce(async () => {
+      unavailable = true;
+      return { delivered: false, path: "none", disposition: "retryable" };
+    });
+    await expect(run()).rejects.toThrow(GatewayOperatorAccessUnavailableError);
+    expect(completeBatch).not.toHaveBeenCalled();
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(child.requesterSettleWake).toBeDefined();
+    unavailable = false;
+    deliver.mockResolvedValue({ delivered: true, path: "direct" });
+    await expect(run()).resolves.toBe(true);
+    expect(completeBatch).toHaveBeenCalledOnce();
+  });
 
   it("does not reserve a foreground-blocking source for a wholly superseded yielded cohort", async () => {
     const context = createContext();

@@ -113,6 +113,11 @@ function resolveOAuthStatus(
   };
 }
 
+/** A grant that existed and lapsed or failed to refresh is expired, not missing. */
+function isExpiredReason(reasonCode: AuthCredentialReasonCode): boolean {
+  return reasonCode === "expired" || reasonCode === "refresh_failed";
+}
+
 /** Build profile and provider auth health rollups from an auth profile store. */
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
@@ -188,7 +193,7 @@ export function buildAuthHealthSummary(params: {
         (healthCredential.type !== "oauth" || storedEligibility.reasonCode === "unresolved_ref")
       ) {
         return Object.assign({}, profile, {
-          status: storedEligibility.reasonCode === "expired" ? "expired" : "missing",
+          status: isExpiredReason(storedEligibility.reasonCode) ? "expired" : "missing",
           reasonCode: storedEligibility.reasonCode,
         } satisfies Partial<AuthProfileHealth>);
       }
@@ -220,7 +225,7 @@ export function buildAuthHealthSummary(params: {
       });
       if (!eligibility.eligible) {
         return Object.assign({}, profile, {
-          status: eligibility.reasonCode === "expired" ? "expired" : "missing",
+          status: isExpiredReason(eligibility.reasonCode) ? "expired" : "missing",
           reasonCode: eligibility.reasonCode,
         } satisfies Partial<AuthProfileHealth>);
       }

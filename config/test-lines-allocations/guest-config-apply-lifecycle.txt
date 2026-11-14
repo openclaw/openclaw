@@ -1,2 +1,0 @@
-150
-# Real Gateway configuration application with unrelated service facts and preserved alias policy.

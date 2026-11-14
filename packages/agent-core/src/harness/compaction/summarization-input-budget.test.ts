@@ -18,8 +18,10 @@ import {
   user,
 } from "./shard-fixtures.test-support.js";
 import {
+  createConversationSerializationIndex,
   MAX_SUMMARY_INPUT_CHARS,
   serializeConversation,
+  serializeConversationSourceWithinBudget,
   serializeConversationWithinBudget,
 } from "./utils.js";
 
@@ -122,6 +124,36 @@ async function summarize(messages: AgentMessage[], model: Model, previousSummary
 }
 
 describe("summary request input budget", () => {
+  it("renders only selected entries from a repeatable payload-free source", () => {
+    const count = 1_000;
+    for (const budget of [0, 200, 300, 400, 1_000, 8_000, 160_000, 1_100_000]) {
+      const rendered = new Set<number>();
+      const messages = {
+        length: count,
+        get(index: number) {
+          expect(rendered.has(index)).toBe(false);
+          rendered.add(index);
+          return {
+            role: "user" as const,
+            content: `entry-${index} `.padEnd(1_000, "x"),
+            timestamp: 0,
+          };
+        },
+      };
+      const index = createConversationSerializationIndex(messages);
+      for (let position = 0; position < count; position++) {
+        index.append(position, messages.get(position));
+      }
+      expect(rendered.size).toBe(count);
+      rendered.clear();
+      const result = serializeConversationSourceWithinBudget(index.source, budget);
+      expect(rendered.size).toBe(count - result.omittedEntries);
+      if (budget >= 1_000) {
+        expect(result.text).toContain("entry-999");
+      }
+    }
+  });
+
   it("sends terminal facts from long ordinary tool results to the summarizer", async () => {
     const output = `REPORT-START\n${"ordinary observation\n".repeat(600)}RESULT_CODE=STUDY-01-OK`;
     const messages = [toolResult(output)];

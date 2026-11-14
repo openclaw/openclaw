@@ -2,7 +2,12 @@
  * Synthetic managed-browser route workload; never attaches to a user profile.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/browser-protocol-retention.ts \
  *   --output .local/browser-retention/base --executable /path/to/chromium --mode mixed
- * Modes console/wait/requests isolate the producers; mixed also navigates/snapshots.
+ * Modes console/wait/requests isolate producers; mixed also navigates/snapshots.
+ * attached keeps one page polling with 16 KiB POSTs every 500ms, console/DOM
+ * updates, and snapshots/screenshots every 30 steps, without navigation. Example:
+ * --mode attached --measure timing --steps 120 --rounds 10 (20 minutes).
+ * Acceptance after warmup: retained ArrayBuffers and heap grow <1 MiB/min;
+ * require unchanged A/A controls and unchanged request/console outputs.
  * Default: 3 x 200 steps, 20 console arguments and 20 fetches/step. Snapshots
  * measure the browser owner's Node isolate, not Chromium or a full Gateway.
  * Use --measure timing or allocation for separate untraced/sampled owner costs;
@@ -57,11 +62,14 @@ const { values } = parseArgs({
     "gateway-entry": { type: "string" },
     controlled: { type: "boolean", default: false },
     warmup: { type: "string", default: "1" },
+    "interval-ms": { type: "string", default: "1000" },
+    "activity-interval-ms": { type: "string", default: "500" },
+    "assert-plateau": { type: "boolean", default: false },
   },
 });
 assert(globalThis.gc, "Run with --expose-gc");
 assert(values.output, "--output must name a new directory");
-assert(["mixed", "console", "wait", "requests"].includes(values.mode));
+assert(["mixed", "console", "wait", "requests", "attached"].includes(values.mode));
 assert(["heap", "timing", "allocation"].includes(values.measure));
 assert(!values.controlled || (values["gateway-entry"] && typeof process.send === "function"));
 const controlAbort = new AbortController();
@@ -79,6 +87,18 @@ assert(
 );
 const integer = (name: "steps" | "rounds" | "batch" | "port" | "warmup", fallback: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min: 1, fallback });
+const intervalMs = parseStrictIntegerOption({
+  raw: values["interval-ms"],
+  label: "--interval-ms",
+  min: 1,
+  fallback: 1000,
+});
+const activityIntervalMs = parseStrictIntegerOption({
+  raw: values["activity-interval-ms"],
+  label: "--activity-interval-ms",
+  min: 1,
+  fallback: 500,
+});
 const steps = integer("steps", 200);
 const rounds = integer("rounds", 3);
 const batch = integer("batch", 20);
@@ -262,6 +282,7 @@ let received = 0;
 const server = createServer((req, res) => {
   if (req.url?.startsWith("/data")) {
     received++;
+    req.resume();
     res.setHeader("Content-Type", "application/json").end(JSON.stringify({ synthetic: received }));
   } else {
     res
@@ -364,7 +385,26 @@ try {
   const requestCode = ["requests", "mixed"].includes(values.mode)
     ? `await Promise.all(Array.from({length:${batch}},(_,i)=>fetch('/data?i='+i).then(r=>r.json())));`
     : "";
+  if (values.mode === "attached") {
+    await call("POST", "/act", {
+      targetId,
+      kind: "evaluate",
+      fn: `() => { setInterval(() => {
+        fetch('/data', {method:'POST', body:'x'.repeat(16384)}).then(r=>r.json()).catch(()=>{});
+        console.log({synthetic:Date.now(), text:'fixture'});
+        document.querySelector('h1').textContent = 'Fixture ' + Date.now();
+      }, ${activityIntervalMs}); }`,
+    });
+  }
   async function step(index: number) {
+    if (values.mode === "attached") {
+      await delay(intervalMs);
+      if (index % 30 === 0) {
+        await call("GET", "/snapshot", { targetId, format: "ai" });
+        await call("POST", "/screenshot", { targetId, type: "png" });
+      }
+      return;
+    }
     await call("POST", "/act", {
       targetId,
       kind: "evaluate",
@@ -419,7 +459,14 @@ try {
         allocatedBytes = sumSampledHeapBytes(profile.head);
         inspector.disconnect();
       }
-      measured = { wallMs: driverWallMs, cpuMs: (used.user + used.system) / 1000, allocatedBytes };
+      globalThis.gc();
+      globalThis.gc();
+      measured = {
+        wallMs: driverWallMs,
+        cpuMs: (used.user + used.system) / 1000,
+        allocatedBytes,
+        memoryAfterGC: process.memoryUsage(),
+      };
     }
     measurements.push({
       ...measured,
@@ -449,17 +496,19 @@ try {
   }
   const requests = await call("GET", "/requests", { targetId });
   assert(Array.isArray(requests.requests));
-  if (requestCode) {
+  if (requestCode || values.mode === "attached") {
     assert(
       requests.requests.some(
         (request) => request.url.includes("/data") && request.status === 200 && request.ok === true,
       ),
     );
-    assert.equal(received, (warmup + rounds * steps) * batch);
+    if (values.mode !== "attached") {
+      assert.equal(received, (warmup + rounds * steps) * batch);
+    }
   }
   const consoleMessages = await call("GET", "/console", { targetId });
   assert(Array.isArray(consoleMessages.messages));
-  if (consoleCode) {
+  if (consoleCode || values.mode === "attached") {
     assert(
       consoleMessages.messages.some(
         (message) => message.type === "log" && message.text.includes("fixture"),
@@ -487,6 +536,17 @@ try {
     recentConsoleMessages: consoleMessages.messages.length,
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
+  if (values["assert-plateau"]) {
+    assert(values.mode === "attached" && measurements.length >= 2);
+    const first = measurements[0]!.memoryAfterGC as NodeJS.MemoryUsage;
+    const last = measurements.at(-1)!.memoryAfterGC as NodeJS.MemoryUsage;
+    const minutes =
+      measurements.slice(1).reduce((sum, entry) => sum + Number(entry.wallMs), 0) / 60_000;
+    for (const kind of ["arrayBuffers", "heapUsed"] as const) {
+      const bytesPerMinute = (last[kind] - first[kind]) / minutes;
+      assert(bytesPerMinute < 1024 * 1024, `${kind} retained growth: ${bytesPerMinute} bytes/min`);
+    }
+  }
 } finally {
   await commands?.return?.();
   inspector.disconnect();

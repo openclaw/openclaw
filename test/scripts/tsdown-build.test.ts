@@ -281,7 +281,7 @@ describe("resolveTsdownBuildInvocation", () => {
     [
       "config-free positional watch",
       ["--no-config", "packages/normalization-core/src/mountinfo-path.ts", "--watch"],
-      { env: {}, cgroupMemoryLimitBytes: 4 * GiB },
+      { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }, cgroupMemoryLimitBytes: 4 * GiB },
     ],
     [
       "custom config",
@@ -289,7 +289,7 @@ describe("resolveTsdownBuildInvocation", () => {
       {
         platform: "linux",
         nodeExecPath: "/usr/bin/node",
-        env: {},
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
         cgroupMemoryLimitBytes: 4 * GiB,
       },
     ],
@@ -298,6 +298,9 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(heapShortfall).toBeNull();
     expect(invocations).toHaveLength(1);
     expect(invocations[0]?.args.slice(-args.length)).toEqual(args);
+    if (params.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1") {
+      expect(invocations[0]?.args).not.toContain("--concurrency");
+    }
     if (args[1] === "tsdown.config.ts") {
       expect(
         invocations[0]?.args.filter((_arg, index, all) => all[index - 1] === "--filter"),
@@ -384,9 +387,8 @@ describe("resolveTsdownBuildInvocation", () => {
       TSDOWN_UNIFIED_CONFIG_GROUP,
       ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
     ]);
-    expect(result.invocations[1]?.args).toEqual(expect.arrayContaining(["--concurrency", "1"]));
-    expect(result.invocations[2]?.args).not.toContain("--concurrency");
     for (const invocation of result.invocations) {
+      expect(invocation.args).toEqual(expect.arrayContaining(["--concurrency", "1"]));
       expect(invocation.args.slice(-args.length)).toEqual(args);
       expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
     }
@@ -527,28 +529,29 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it.each([
-    ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
-    ["CLI override", ["--no-dts"], {}],
-  ])("applies the unified-runtime threshold to a %s plan", (_label, args, env) => {
-    const result = resolveTsdownBuildPlan({
-      args,
-      platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      env,
-      cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
-    });
-
-    for (const invocation of result.invocations) {
-      expect(invocation.args).not.toContain("--concurrency");
-    }
-    expect(result.maxOldSpaceMb).toBe(1280);
-    expect(result.heapShortfall?.fatal).toBe(true);
-    expect(result.invocations).toHaveLength(2);
-    expect(result.invocations[0]?.args).toEqual(
-      expect.arrayContaining(["--config", "tsdown.ai.config.ts"]),
-    );
-    expect(result.invocations[1]?.args).not.toContain("--filter");
-  });
+    ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }, 12, 11520, "1"],
+    ["CLI override", ["--no-dts"], {}, 2, 1280, "1"],
+    ["full heap", ["--no-dts"], {}, 16, 12288, "2"],
+    ["explicit heap", ["--no-dts"], { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "8192" }, 16, 8192, "1"],
+  ] as const)(
+    "bounds the %s runtime plan by its heap",
+    (_label, args, env, cgroupGiB, heap, concurrency) => {
+      const result = resolveTsdownBuildPlan({
+        args: [...args],
+        platform: "linux",
+        env,
+        cgroupMemoryLimitBytes: cgroupGiB * GiB,
+      });
+      const [ai, runtime] = result.invocations;
+      expect(result.maxOldSpaceMb).toBe(heap);
+      expect(Boolean(result.heapShortfall?.fatal)).toBe(heap === 1280);
+      expect(result.invocations).toHaveLength(2);
+      expect(ai?.args).toEqual(expect.arrayContaining(["--config", "tsdown.ai.config.ts"]));
+      expect(ai?.args).not.toContain("--concurrency");
+      expect(runtime?.args).toEqual(expect.arrayContaining(["--concurrency", concurrency]));
+      expect(runtime?.args).not.toContain("--filter");
+    },
+  );
 
   it.each([
     { label: "defaults", env: {}, limit: "3GiB" },
@@ -567,38 +570,41 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.GOGC).toBe("30");
   });
 
-  it("keeps the selected Windows runtime and literal compiler arguments", () => {
-    const args = ["--format", "esm", "--concurrency", "2"];
-    const result = resolveTsdownBuildInvocation({
-      args,
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      env: { npm_execpath: "/unrelated/pnpm.cjs" },
-      ...NO_MEMORY_LIMIT,
-    });
-    expect(result.command).toBe("C:\\Program Files\\nodejs\\node.exe");
-    expect(result.args).toEqual([
-      "node_modules/tsdown/dist/run.mjs",
-      "--config-loader",
-      "unrun",
-      "--logLevel",
-      "warn",
-      "--no-clean",
-      ...args,
-    ]);
-    expect(result.options).toEqual({
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-      windowsVerbatimArguments: undefined,
-      env: {
-        NODE_OPTIONS: "--max-old-space-size=8192",
-        npm_execpath: "/unrelated/pnpm.cjs",
-        GOGC: "30",
-        GOMAXPROCS: "2",
-        GOMEMLIMIT: "3GiB",
-      },
-    });
-  });
+  it.each([["--concurrency", "2"], ["--concurrency=3"]])(
+    "keeps the selected Windows runtime and literal compiler arguments %j",
+    (...concurrency) => {
+      const args = ["--format", "esm", ...concurrency];
+      const result = resolveTsdownBuildInvocation({
+        args,
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        env: { npm_execpath: "/unrelated/pnpm.cjs" },
+        ...NO_MEMORY_LIMIT,
+      });
+      expect(result.command).toBe("C:\\Program Files\\nodejs\\node.exe");
+      expect(result.args).toEqual([
+        "node_modules/tsdown/dist/run.mjs",
+        "--config-loader",
+        "unrun",
+        "--logLevel",
+        "warn",
+        "--no-clean",
+        ...args,
+      ]);
+      expect(result.options).toEqual({
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+        env: {
+          NODE_OPTIONS: "--max-old-space-size=8192",
+          npm_execpath: "/unrelated/pnpm.cjs",
+          GOGC: "30",
+          GOMAXPROCS: "2",
+          GOMEMLIMIT: "3GiB",
+        },
+      });
+    },
+  );
 
   it.each([
     [

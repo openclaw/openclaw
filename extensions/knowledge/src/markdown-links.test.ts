@@ -197,6 +197,7 @@ it("derived backlinks deduplicate passages, reflect edits, exclude unavailable r
   };
   const hidden = record("h", "Hidden", "people/hidden.md", "[[Alex]]", { record_class: "fixture" });
   const data: ScanResult = {
+    recall: new Map(),
     records: [a, s, edge, hidden],
     ontology: null,
     sources: [],

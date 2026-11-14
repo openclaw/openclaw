@@ -1,2 +1,0 @@
-# Prove partial UI selections retain every file while packing rows; preserve full/manual plans.
-28

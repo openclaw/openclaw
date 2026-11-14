@@ -109,3 +109,94 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
     }
   },
 );
+
+it("keeps a new predecessor stable after another row's owned measurement", async () => {
+  const viewport = document.body.appendChild(document.createElement("div"));
+  viewport.style.cssText = "height:400px;width:400px;overflow:auto;overflow-anchor:none";
+  const content = viewport.appendChild(document.createElement("div"));
+  content.style.cssText = "height:12000px;position:relative";
+  const column = content.appendChild(document.createElement("div"));
+  column.style.cssText = "position:absolute;top:400px;width:400px";
+  const row = (index: number, height: number) => {
+    const element = document.createElement("div");
+    element.style.height = `${height}px`;
+    element.dataset.index = String(index);
+    element.dataset.virtualRowKey = String(index);
+    return element;
+  };
+  const owned = column.appendChild(row(1, 150));
+  const retained = column.appendChild(row(2, 80));
+  viewport.scrollTop = 500;
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 100,
+    estimateSize: () => 120,
+    getItemKey: String,
+    getScrollElement: () => viewport,
+    initialRect: { width: 400, height: 400 },
+    initialOffset: 500,
+    scrollMargin: 280,
+    overscan: 1,
+    scrollToFn: vi.fn(),
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+  });
+  virtualizer.scrollElement = viewport;
+  virtualizer.targetWindow = window;
+  virtualizer.elementsCache.set("1", owned);
+  virtualizer.elementsCache.set("2", retained);
+  virtualizer.resizeItem(1, owned.offsetHeight);
+  const prependAnchor: { messageKey: string | null } = { messageKey: null };
+  const anchor = new TranscriptReaderAnchor(
+    {
+      virtualizer,
+      layout: new TranscriptLayoutOwner(() => {}),
+      offsetState: new TranscriptOffsetState(),
+      renderer: { columnElement: column, queueAfterCommit: () => {} },
+      initialRange: { pending: false },
+      prependAnchor,
+      headerHeight: 0,
+      scrollElement: viewport,
+      contentElement: content,
+    },
+    () => {},
+  );
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = anchor.landSize;
+  const rows = [owned, retained];
+  onTestFinished(() => {
+    rows.forEach((element) => anchor.unobserve(element));
+    viewport.remove();
+  });
+  rows.forEach((element) => anchor.observe(element));
+  await new Promise<void>((resolve) => {
+    const ready = new ResizeObserver(() => {
+      ready.disconnect();
+      resolve();
+    });
+    onTestFinished(() => ready.disconnect());
+    ready.observe(retained);
+  });
+  const top = retained.getBoundingClientRect().top;
+  // The positioning owner measures and restores this row before native delivery.
+  prependAnchor.messageKey = "2";
+  const previousHeight = owned.offsetHeight;
+  owned.style.height = "210px";
+  virtualizer.resizeItem(1, owned.offsetHeight);
+  viewport.scrollTop += owned.offsetHeight - previousHeight;
+  prependAnchor.messageKey = null;
+
+  const predecessor = row(0, 80);
+  rows.push(predecessor);
+  const measured = new Promise<number>((resolve) => {
+    const ready = new ResizeObserver(() => {
+      ready.disconnect();
+      resolve(retained.getBoundingClientRect().top);
+    });
+    onTestFinished(() => ready.disconnect());
+    virtualizer.elementsCache.set("0", predecessor);
+    anchor.observe(predecessor);
+    ready.observe(predecessor);
+  });
+  column.prepend(predecessor);
+  column.style.top = "280px";
+  expect(await measured).toBe(top);
+});

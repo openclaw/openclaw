@@ -9,6 +9,7 @@ import {
   sleepWithAbort,
   waitForAbortSignal,
 } from "openclaw/plugin-sdk/runtime-env";
+import { TELEGRAM_SKIPPED_UPDATE_SUFFIX } from "./api-logging.js";
 import { apiThrottler } from "./bot.runtime.js";
 import {
   createOwnedGrammyApiThrottler,
@@ -25,6 +26,8 @@ type TelegramApiSignal = Parameters<ApiThrottlerTransformer>[3];
 // owner: every call for the token waits for the deadline, non-replaceable calls
 // (final replies, deletes, reactions) retry within this budget, and replaceable
 // calls (stream previews, typing) yield instead of queueing behind the penalty.
+// The budget is wall-clock time from the call's start: queue and transport time
+// between 429s counts, so slow flooded attempts cannot stretch it.
 const TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS = 5 * 60_000;
 // Telegram 429s carry retry_after; a bare 429 gets one short fixed pause, with
 // no state carried into later responses.
@@ -73,12 +76,12 @@ export function runAuthorizedTelegramRequest<T>(
 // Synthetic 429s for requests the limiter held back; they never reached Telegram.
 const unsentFloodResponses = new WeakSet<object>();
 
-function skippedFloodResponse(waitMs: number, reason: string): ApiError {
+function skippedFloodResponse(waitMs: number, reason: string, replaceable: boolean): ApiError {
   const retryAfter = Math.max(1, Math.ceil(waitMs / 1000));
   const response: ApiError = {
     ok: false,
     error_code: 429,
-    description: `Too Many Requests: retry after ${retryAfter} (${reason}; request not sent)`,
+    description: `Too Many Requests: retry after ${retryAfter} (${reason}${replaceable ? TELEGRAM_SKIPPED_UPDATE_SUFFIX : "; request not sent)"}`,
     parameters: { retry_after: retryAfter },
   };
   unsentFloodResponses.add(response);
@@ -102,7 +105,7 @@ function admitAtNetwork(
     runInContext(async () => {
       const waitMs = method === "getUpdates" ? 0 : gate.remainingMs();
       if (waitMs > 0) {
-        return skippedFloodResponse(waitMs, "flood wait active");
+        return skippedFloodResponse(waitMs, "flood wait active", scope?.replaceable === true);
       }
       scope?.assertCurrent?.();
       return prev(method, payload, signal);
@@ -158,19 +161,20 @@ function callThroughFloodGate(
     if (method === "getUpdates") {
       return prev(method, payload, signal);
     }
-    let waitedMs = 0;
+    const startedAtMs = Date.now();
     let flooded: ApiError | undefined;
     for (;;) {
       const waitMs = gate.remainingMs();
       if (waitMs > 0) {
         if (replaceable) {
-          return flooded ?? skippedFloodResponse(waitMs, "flood wait active");
+          return flooded ?? skippedFloodResponse(waitMs, "flood wait active", true);
         }
-        if (waitedMs + waitMs > TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS) {
-          return flooded ?? skippedFloodResponse(waitMs, "flood wait exceeds delivery budget");
+        if (Date.now() - startedAtMs + waitMs > TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS) {
+          return (
+            flooded ?? skippedFloodResponse(waitMs, "flood wait exceeds delivery budget", false)
+          );
         }
         await sleepForFloodGate(waitMs, signal);
-        waitedMs += waitMs;
         continue;
       }
       const closeGate = (retryAfterSeconds: number | undefined) => {
@@ -542,7 +546,7 @@ function createTelegramAccountThrottler(
         laneKey,
         () => baseThrottler(prev, method, payload, signal),
         replaceable
-          ? { skip: () => skippedFloodResponse(1_000, "yielded to a pending reply") }
+          ? { skip: () => skippedFloodResponse(1_000, "yielded to a pending reply", true) }
           : undefined,
       );
     };

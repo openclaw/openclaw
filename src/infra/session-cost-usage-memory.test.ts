@@ -44,7 +44,7 @@ const dayBucket = { mode: "utc-offset", utcOffsetMinutes: 0 } as const;
 const runUsage = (
   binding: Parameters<typeof runSessionActorUsage>[0],
   operation: Parameters<typeof runSessionActorUsage>[1],
-) => runSessionActorUsage(binding, operation, () => undefined);
+) => runSessionActorUsage(binding, operation, async () => () => undefined);
 const refreshUsage = (binding: Parameters<typeof runSessionActorUsage>[0]) =>
   runUsage(binding, { kind: "refresh", pricingFingerprint: "fixture" });
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
@@ -337,7 +337,7 @@ describe("actor memory usage", () => {
           pricingFingerprint: "fixture",
           sessionFiles: [second.sessionFile],
         },
-        () => undefined,
+        async () => () => undefined,
         true,
       );
       await expect(refreshing).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });

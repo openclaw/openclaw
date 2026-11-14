@@ -274,7 +274,8 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   expect(container.textContent).toContain("Subscribed");
   expect(container.textContent).not.toContain("Checking");
   expect(
-    container.querySelector<HTMLInputElement>('input[aria-label="Notification label"]')?.value,
+    container.querySelector<HTMLInputElement>('input[aria-label="Notification title prefix"]')
+      ?.value,
   ).toBe("Settings test browser");
   const unsubscribe = buttonNamed(container, "Unsubscribe");
   expect(unsubscribe.disabled).toBe(false);

@@ -94,11 +94,27 @@ function collectToolNamesFromFile(sourcePath: string, names: Set<string>) {
 }
 
 function serializeToolDisplayConfig(config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG): string {
-  const tools = Object.entries(config.tools);
+  // Clients render prepared activity and only consume icon/title/detail/action metadata.
+  // Progress labels and reference policy stay in the Gateway's source registry.
+  const clientSpec = ({ progress: _progress, actions, ...spec }: ToolDisplayConfig["fallback"]) =>
+    actions
+      ? {
+          ...spec,
+          actions: Object.fromEntries(
+            Object.entries(actions).map(([name, { progress: _actionProgress, ...action }]) => [
+              name,
+              action,
+            ]),
+          ),
+        }
+      : spec;
+  const tools = Object.entries(config.tools).map(
+    ([name, spec]) => [name, clientSpec(spec)] as const,
+  );
   return [
     "{",
     `  "version": ${JSON.stringify(config.version)},`,
-    `  "fallback": ${JSON.stringify(config.fallback)},`,
+    `  "fallback": ${JSON.stringify(clientSpec(config.fallback))},`,
     '  "tools": {',
     ...tools.map(
       ([name, spec], index) =>

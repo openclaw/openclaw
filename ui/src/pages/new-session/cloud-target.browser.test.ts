@@ -75,8 +75,7 @@ it.each([
     mountSolid(() => createComponent(SessionMenuItem, { item, submitting: false }), {
       container,
     });
-    const name = compact && disabled ? "production Unavailable" : "production";
-    const choice = await expectChoice(name, expected);
+    const choice = await expectChoice("production", expected);
     if (disabled) {
       container.querySelector<HTMLButtonElement>("[data-value]")!.click();
       expect(onSelect).not.toHaveBeenCalled();

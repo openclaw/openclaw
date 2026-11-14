@@ -21,7 +21,7 @@ export const RERANK_DECISION_CAPABILITIES = {
 } satisfies DecisionCapabilities;
 
 /** One `/rerank` call: a query scored against documents. */
-export type RerankRequest = { readonly query: string; readonly documents: readonly string[] };
+type RerankRequest = { readonly query: string; readonly documents: readonly string[] };
 
 /** Where each scored document lands in the Decision answers. */
 type Slot =

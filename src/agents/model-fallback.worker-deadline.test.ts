@@ -123,7 +123,11 @@ it("keeps real pool overload local through fallback and the normal failure reply
       (error: unknown) => error,
     );
     expect(overload).toBeInstanceOf(WorkerTaskError);
-    expect(overload).toMatchObject({ code: "overloaded", message: "worker task capacity reached" });
+    expect(overload).toMatchObject({
+      code: "overloaded",
+      message:
+        "worker task capacity reached [task=extension.task pool pending tasks: pendingTasks=1 maxPendingTasks=1 inputBytes=0]",
+    });
     expect(outcome).toBe(overload);
     expect(run).toHaveBeenCalledOnce();
     expect(

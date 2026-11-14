@@ -112,7 +112,7 @@ extension GatewayIngressControllerTests {
         let fingerprint = String(repeating: "ab", count: 32)
         let controller = GatewayConnectionController(
             appModel: model, startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in
                 await gate.wait()
                 return .fingerprint(fingerprint)
@@ -167,7 +167,7 @@ extension GatewayIngressControllerTests {
         let ingress = fixture.controller(retirement: { _ in await model.waitForGatewaySessionResetIfNeeded() })
         let controller = GatewayConnectionController(
             appModel: model, startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: String(repeating: "ab", count: 32)) },
             ingress: ingress)
         let auth = GatewayConnectionController.ManualAuthOverride.explicit(
@@ -277,7 +277,7 @@ extension GatewayIngressControllerTests {
                 if label.contains("setup-route") {
                     await gate.wait()
                 }
-                return true
+                return .reachable
             },
             tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: fingerprint) },
             persistTLSFingerprint: { _, _ in true }, ingress: ingress)
@@ -411,6 +411,7 @@ extension GatewayIngressControllerTests {
         #expect(ingress.attention?.id == attention.id)
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == activeID)
     }
+
     @Test(arguments: ["renew", "stop", "switch"]) @MainActor
     func `common recovery restores the desired active profile sharing background attention`(
         action: String) async throws
@@ -462,7 +463,7 @@ extension GatewayIngressControllerTests {
         let controller = GatewayConnectionController(
             appModel: model,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint(fingerprint) },
             forceReconnectReset: { model in
                 resetEntered += 1
@@ -595,7 +596,7 @@ extension GatewayIngressControllerTests {
             appModel: model,
             startDiscovery: false,
             discovery: discovery,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint(fingerprint) },
             serviceEndpointResolver: { _ in (host: "gateway.example.test", port: 8443) },
             ingress: ingress)
@@ -621,7 +622,7 @@ extension GatewayIngressControllerTests {
         let controller = GatewayConnectionController(
             appModel: model,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint(fingerprint) },
             persistTLSFingerprint: { _, _ in true },
             ingress: ingress,
@@ -702,7 +703,7 @@ extension GatewayIngressControllerTests {
         defer { model.disconnectGateway() }
         let controller = GatewayConnectionController(
             appModel: model, startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint(String(repeating: "ab", count: 32)) },
             ingress: ingress, now: { fixture.now })
         let expiry = fixture.now.addingTimeInterval(30)
@@ -1111,7 +1112,7 @@ extension GatewayIngressControllerTests {
         let controller = GatewayConnectionController(
             appModel: model,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint(String(repeating: "ab", count: 32)) },
             ingress: ingress, now: { fixture.now })
         defer {
@@ -1137,7 +1138,7 @@ extension GatewayIngressControllerTests {
         try await waitForIngress { !controller._test_pendingAutoConnectState().pending }
         #expect(model.activeGatewayConnectConfig == nil)
         #expect(model.lastGatewayProblem == nil)
-        #expect(model.gatewayStatusText == "Offline")
+        #expect(GatewayStatusBuilder.build(appModel: model) == .disconnected)
         #expect(ingress.attention?.message == "Sign-in was canceled. Choose Sign in to try again.")
         #expect(fixture.browser.presented.isEmpty)
         #expect(fixture.persisted == nil)

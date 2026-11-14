@@ -34,7 +34,7 @@ function anchors(palette: Locator) {
       ".cmd-palette",
       ".cmd-palette__input",
       ".cmd-palette__create",
-      'button[aria-label="New session settings"]',
+      ".palette-session-settings__trigger",
     ].map((selector) => {
       const node = element.querySelector(selector);
       if (!node) {
@@ -47,8 +47,58 @@ function anchors(palette: Locator) {
 }
 
 suite.define(() => {
+  it("previews an image above the palette and preserves both drafts after dismissal", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, scenario());
+      const { palette, input, composer, url } = await openFromForeground(
+        page,
+        suite.server.baseUrl,
+      );
+      await input.press("Tab");
+      await input.fill("Compare these images");
+      await pasteImages(input, 2);
+      const images = palette.locator(".chat-attachment-thumb img");
+      await expect.poll(() => images.count()).toBe(2);
+      const preview = page.getByRole("dialog", { name: "Image preview: image-0.png", exact: true });
+      const thumbnail = palette.getByRole("button", {
+        name: "Open image image-0.png",
+        exact: true,
+      });
+      await thumbnail.click();
+      await preview.waitFor({ state: "visible" });
+      expect(await preview.locator("img").getAttribute("src")).toBe(
+        await images.first().getAttribute("src"),
+      );
+      await page.keyboard.press("Escape");
+      await preview.waitFor({ state: "hidden" });
+      await expect
+        .poll(() => thumbnail.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      expect(await input.inputValue()).toBe("Compare these images");
+      expect(await images.count()).toBe(2);
+      await thumbnail.press("Enter");
+      await preview.waitFor({ state: "visible" });
+      await preview.getByRole("button", { name: "Close image preview", exact: true }).click();
+      await preview.waitFor({ state: "hidden" });
+      await palette.getByRole("button", { name: "Remove image-0.png", exact: true }).click();
+      await expect.poll(() => images.count()).toBe(1);
+      expect(await page.locator("openclaw-image-lightbox").count()).toBe(0);
+      await input.press("Escape");
+      await input.waitFor({ state: "hidden" });
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "visible" });
+      expect(await input.inputValue()).toBe("Compare these images");
+      expect(await images.count()).toBe(1);
+      expect(await page.locator("openclaw-image-lightbox").count()).toBe(0);
+      expect(page.url()).toBe(url);
+      expect(await composer.inputValue()).toBe(foregroundDraft);
+      expect(await gateway.getRequests("sessions.create")).toEqual([]);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+    });
+  });
+
   it.each([1280, 390])(
-    "keeps the input and actions anchored through paste and removal at %s px",
+    "keeps the card anchored through paste and restores it after removal at %s px",
     async (width) => {
       await suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
@@ -66,7 +116,16 @@ suite.define(() => {
             page,
             suite.server.baseUrl,
           );
+          await input.press("Tab");
           await page.evaluate(() => document.fonts.ready);
+          // Anchors are measured after the card settles from its mode glide.
+          await page.evaluate(() =>
+            Promise.allSettled(
+              (document.querySelector(".cmd-palette-stack")?.getAnimations() ?? []).map(
+                (animation) => animation.finished,
+              ),
+            ),
+          );
           const images = palette.locator(".chat-attachment-thumb img");
           const start = palette.getByRole("button", {
             name: "Start new session in background",
@@ -83,10 +142,11 @@ suite.define(() => {
             const initial = await anchors(palette);
             await pasteImages(input, 2);
             await expect.poll(() => images.count()).toBe(2);
-            expect(await anchors(palette)).toEqual(initial);
+            // The strip docks above the text, as in the composer; only the card's top is fixed.
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             await pasteImages(input, 10);
             await expect.poll(() => images.count()).toBe(12);
-            expect(await anchors(palette)).toEqual(initial);
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             expect(
               await palette
                 .locator(".chat-attachments-preview")
@@ -94,7 +154,7 @@ suite.define(() => {
             ).toBe(true);
             await remove.first().click();
             await expect.poll(() => images.count()).toBe(11);
-            expect(await anchors(palette)).toEqual(initial);
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             // The first pointer removal covers interaction; clear the unchecked tail together.
             await remove.evaluateAll((buttons) => {
               for (const button of buttons) {

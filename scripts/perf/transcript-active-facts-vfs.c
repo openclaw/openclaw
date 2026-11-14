@@ -12,6 +12,12 @@
  * measuring. The extension is process-lived so delayed native closes cannot call
  * unloaded VFS methods. Never load this tool in a serving Gateway.
  *
+ * buf696_target(path, 1) optionally selects only that DB/WAL/journal and forces
+ * xFetch misses, so a worker's configured mmap cannot bypass counted xRead calls.
+ * Set it before opening measured connections, while no worker is reading. NULL/0
+ * restores the original all-file/mmap behavior for subsequently opened files.
+ * Atomic counters support read-worker threads; reset only between settled opens.
+ *
  * buf696_reset() resets process-wide I/O and this connection's pager counters.
  * buf696_io() returns both as JSON; page_reads counts intersected 4 KiB page spans,
  * including repeated and short overflow-pointer reads. These are logical VFS
@@ -21,21 +27,30 @@
 #include <sqlite3ext.h>
 SQLITE_EXTENSION_INIT1
 #include <stdint.h>
+#include <stdatomic.h>
 #include <string.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
-  uint64_t reads, read_bytes, writes, write_bytes, page_reads, small_reads;
+  _Atomic uint64_t reads, read_bytes, writes, write_bytes, page_reads, small_reads;
 } Io;
 
 typedef struct {
   sqlite3_file base;
   sqlite3_file *real;
   int kind;
+  int selected;
 } File;
 
 static sqlite3_vfs *under;
 static Io counters[4]; /* main, WAL, journal, other */
-static int counting;
+static _Atomic int counting;
+static _Atomic int force_read;
+static char *target_path;
 static const int page_size = 4096;
 
 static int close_file(sqlite3_file *file) {
@@ -45,7 +60,7 @@ static int close_file(sqlite3_file *file) {
 
 static int read_file(sqlite3_file *file, void *buffer, int bytes, sqlite3_int64 offset) {
   File *f = (File *)file;
-  if (counting) {
+  if (counting && f->selected) {
     Io *counter = &counters[f->kind];
     counter->reads++;
     counter->read_bytes += bytes;
@@ -57,7 +72,7 @@ static int read_file(sqlite3_file *file, void *buffer, int bytes, sqlite3_int64 
 
 static int write_file(sqlite3_file *file, const void *buffer, int bytes, sqlite3_int64 offset) {
   File *f = (File *)file;
-  if (counting) {
+  if (counting && f->selected) {
     counters[f->kind].writes++;
     counters[f->kind].write_bytes += bytes;
   }
@@ -131,7 +146,7 @@ static int shm_unmap(sqlite3_file *file, int remove) {
 
 static int fetch_file(sqlite3_file *file, sqlite3_int64 offset, int bytes, void **result) {
   File *f = (File *)file;
-  if (f->real->pMethods->iVersion < 3 || !f->real->pMethods->xFetch) {
+  if (force_read || f->real->pMethods->iVersion < 3 || !f->real->pMethods->xFetch) {
     *result = NULL;
     return SQLITE_OK;
   }
@@ -161,6 +176,11 @@ static int open_file(sqlite3_vfs *vfs, const char *name, sqlite3_file *file,
   f->kind = flags & SQLITE_OPEN_MAIN_DB ? 0 : flags & SQLITE_OPEN_WAL ? 1 :
     flags & (SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_TEMP_JOURNAL |
              SQLITE_OPEN_SUBJOURNAL | SQLITE_OPEN_SUPER_JOURNAL) ? 2 : 3;
+  size_t target_length = target_path ? strlen(target_path) : 0;
+  f->selected = !target_path || (name &&
+    ((!strcmp(name, target_path)) ||
+     (!strncmp(name, target_path, target_length) &&
+      (!strcmp(name + target_length, "-wal") || !strcmp(name + target_length, "-journal")))));
   int result = under->xOpen(under, name, f->real, flags, out_flags);
   if (result == SQLITE_OK) f->base.pMethods = &io;
   return result;
@@ -252,7 +272,11 @@ static void restore_vfs(sqlite3_context *context, int argc, sqlite3_value **argv
 static void reset_counters(sqlite3_context *context, int argc, sqlite3_value **argv) {
   (void)argc;
   (void)argv;
-  memset(counters, 0, sizeof(counters));
+  for (int index = 0; index < 4; index++) {
+    counters[index].reads = counters[index].read_bytes = 0;
+    counters[index].writes = counters[index].write_bytes = 0;
+    counters[index].page_reads = counters[index].small_reads = 0;
+  }
   counting = 1;
   int current, highwater;
   sqlite3 *db = sqlite3_context_db_handle(context);
@@ -272,7 +296,11 @@ static void read_counters(sqlite3_context *context, int argc, sqlite3_value **ar
   sqlite3_str_appendf(out, "{\"cache_hits\":%d,\"cache_misses\":%d,", hits, misses);
   const char *names[] = {"main", "wal", "journal", "other"};
   for (int index = 0; index < 4; index++) {
-    Io value = counters[index];
+    Io value = {
+      atomic_load(&counters[index].reads), atomic_load(&counters[index].read_bytes),
+      atomic_load(&counters[index].writes), atomic_load(&counters[index].write_bytes),
+      atomic_load(&counters[index].page_reads), atomic_load(&counters[index].small_reads)
+    };
     sqlite3_str_appendf(out,
       "%s\"%s\":{\"reads\":%llu,\"read_bytes\":%llu,\"page_reads\":%llu,"
       "\"small_reads\":%llu,\"writes\":%llu,\"write_bytes\":%llu}",
@@ -281,8 +309,29 @@ static void read_counters(sqlite3_context *context, int argc, sqlite3_value **ar
       (unsigned long long)value.page_reads, (unsigned long long)value.small_reads,
       (unsigned long long)value.writes, (unsigned long long)value.write_bytes);
   }
+#ifdef __APPLE__
+  struct rusage_info_v4 usage;
+  if (!proc_pid_rusage(getpid(), RUSAGE_INFO_V4, (rusage_info_t *)&usage)) {
+    sqlite3_str_appendf(out, ",\"physical\":{\"read_bytes\":%llu,\"write_bytes\":%llu}",
+      (unsigned long long)usage.ri_diskio_bytesread,
+      (unsigned long long)usage.ri_diskio_byteswritten);
+  }
+#endif
   sqlite3_str_appendall(out, "}");
   sqlite3_result_text(context, sqlite3_str_finish(out), -1, sqlite3_free);
+}
+
+/* Configure only while no measured connection is active. The filename selection
+ * is captured at open; it cannot change a connection already borrowed by a worker. */
+static void select_target(sqlite3_context *context, int argc, sqlite3_value **argv) {
+  (void)argc;
+  const char *path = (const char *)sqlite3_value_text(argv[0]);
+  char *selected = path ? sqlite3_mprintf("%s", path) : NULL;
+  if (path && !selected) { sqlite3_result_error_nomem(context); return; }
+  sqlite3_free(target_path);
+  target_path = selected;
+  force_read = sqlite3_value_int(argv[1]) != 0;
+  sqlite3_result_int(context, 1);
 }
 
 #ifdef _WIN32
@@ -322,5 +371,7 @@ int sqlite3_bufprobe_init(sqlite3 *db, char **error, const sqlite3_api_routines 
     db, "buf696_reset", 0, SQLITE_UTF8, NULL, reset_counters, NULL, NULL);
   if (result == SQLITE_OK) result = sqlite3_create_function(
     db, "buf696_io", 0, SQLITE_UTF8, NULL, read_counters, NULL, NULL);
+  if (result == SQLITE_OK) result = sqlite3_create_function(
+    db, "buf696_target", 2, SQLITE_UTF8, NULL, select_target, NULL, NULL);
   return result == SQLITE_OK ? SQLITE_OK_LOAD_PERMANENTLY : result;
 }

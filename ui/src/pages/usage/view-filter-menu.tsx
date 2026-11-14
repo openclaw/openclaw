@@ -298,7 +298,6 @@ export function UsageAppliedFilters(props: {
       type="button"
       class="usage-filter-chip__remove"
       aria-label={`${t("usage.filters.remove")}: ${label}`}
-      title={t("usage.filters.remove")}
       onClick={remove}
     >
       <Icon name="x" />

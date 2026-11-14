@@ -1,2 +1,0 @@
-12
-# Guard the native-only dependency footprint that leaves room for system-image extraction.

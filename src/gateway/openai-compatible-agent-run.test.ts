@@ -28,6 +28,7 @@ import {
   resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
 } from "./openai-compatible-agent-run.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
@@ -129,8 +130,10 @@ describe("OpenAI-compatible operator run authority", () => {
           default: "reader",
           definitions: {
             reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            operator: structuredClone(MEMBER_ROLE_PRESETS.operator),
           },
         };
+        setRuntimeConfigSnapshot(fixture.cfg);
         const principal: OpenClawIdTunnelPrincipal = {
           ...(kind === "member"
             ? { kind, accountId: "acct_compat_operator", role: "operator" as const }

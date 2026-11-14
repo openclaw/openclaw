@@ -174,7 +174,11 @@ it("enriches a pre-assistant preview cache without changing settings or transcri
     await appendTranscript(
       target,
       { role: "user", content: "Existing question", timestamp: 100 },
-      { role: "assistant", content: "Existing reply", timestamp: 200 },
+      {
+        role: "assistant",
+        content: "| Color | Hex |\n| --- | --- |\n| Blue | #0000ff |",
+        timestamp: 200,
+      },
     );
     expect(setUserPreferences("existing-profile", { "ui.themeMode": "dark" }).ok).toBe(true);
     const settings = getUserPreferences("existing-profile");
@@ -196,8 +200,8 @@ it("enriches a pre-assistant preview cache without changing settings or transcri
         .prepare("SELECT row_transcript_json FROM session_windows WHERE session_id = ?")
         .get(target.sessionId)?.row_transcript_json as string | undefined;
     const preview = {
-      lastMessagePreview: "Existing reply",
-      lastAssistantMessage: { text: "Existing reply", timestamp: 200 },
+      lastMessagePreview: "Color Hex Blue #0000ff",
+      lastAssistantMessage: { text: "Color Hex Blue #0000ff", timestamp: 200 },
     };
     const stored = JSON.parse(readCache() ?? "null") as Record<string, unknown>;
     expect(stored).toMatchObject(preview);
@@ -208,7 +212,7 @@ it("enriches a pre-assistant preview cache without changing settings or transcri
     expect(JSON.parse(readCache() ?? "null")).not.toHaveProperty("lastAssistantMessage");
 
     const enriched = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
-      row.lastAssistantMessage?.text === "Existing reply" ? row.key : "",
+      row.lastAssistantMessage?.text === "Color Hex Blue #0000ff" ? row.key : "",
     );
     {
       using projection = await createTestProjection({ cfg, modelCatalog: [] });

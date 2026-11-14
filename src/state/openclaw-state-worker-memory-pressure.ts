@@ -5,9 +5,10 @@ const memoryPressure = channel("openclaw.memory.critical");
 /** Subscribe only while the worker owner retains resources that pressure can reclaim. */
 export function createStateWorkerMemoryPressureSubscription(
   hasCustody: () => boolean,
-  retireIdleWorkers: () => void,
+  retireIdleWorkers: (critical: boolean) => void,
 ) {
   let subscribed = false;
+  const onPressure = (critical: unknown) => retireIdleWorkers(critical === true);
   return () => {
     const required = hasCustody();
     if (required === subscribed) {
@@ -15,9 +16,9 @@ export function createStateWorkerMemoryPressureSubscription(
     }
     subscribed = required;
     if (required) {
-      memoryPressure.subscribe(retireIdleWorkers);
+      memoryPressure.subscribe(onPressure);
     } else {
-      memoryPressure.unsubscribe(retireIdleWorkers);
+      memoryPressure.unsubscribe(onPressure);
     }
   };
 }

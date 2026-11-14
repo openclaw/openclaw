@@ -18,6 +18,9 @@
  * --profile is a separate diagnostic pass: real worker CPU/allocation sampling, SQL
  * statement counts/native duration, and writer-hold intervals; exclude its timings.
  * All files are synthetic. The output retains the fixture, report and operation timings.
+ * --clean keeps the Git tree unchanged and verifies service.restore after removal.
+ * --reuse-fixture can reuse its live synthetic-removal checkout; after restoration,
+ * reinstall its synthetic dependencies from repo/node_modules before the next sample.
  * --mode gc-overlimit prepares a real projection, adds 32 synthetic 32-MiB files,
  * and measures first rejection plus --passes 5 later idle sweeps. It retains all
  * files and the rejected checkpoint. --archive-overlimit first accepts the ignored
@@ -64,6 +67,7 @@ const { values } = parseArgs({
     "prepare-only": { type: "boolean", default: false },
     report: { type: "string", default: "report.json" },
     passes: { type: "string", default: "5" },
+    clean: { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output must name a new task-owned directory");
@@ -76,7 +80,6 @@ assert(tracked >= 3);
 assert(["snapshot", "gc-overlimit", "gc-legacy-build"].includes(values.mode));
 const gcMode = values.mode !== "snapshot";
 const legacyBuild = values.mode === "gc-legacy-build";
-assert(!values["reuse-fixture"] || gcMode);
 assert(!values["prepare-only"] || gcMode);
 assert(!values["archive-overlimit"] || values.mode === "gc-overlimit");
 assert(!values.profile || values.mode === "snapshot");
@@ -134,6 +137,9 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
     GIT_CONFIG_SYSTEM: os.devNull,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_ATTR_NOSYSTEM: "1",
+    ...(values.clean
+      ? { GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" }
+      : {}),
     ...(baseline ? { OPENCLAW_BENCH_BASELINE_DIR: baseline } : {}),
     ...profileEnv,
   },
@@ -598,18 +604,23 @@ if (gcMode) {
 }
 
 try {
-  const created = await service.create({
-    repoRoot: repo,
-    name: "synthetic-removal",
-    baseRef: "HEAD",
-    runSetupScript: false,
-  });
+  const created = values["reuse-fixture"]
+    ? (await service.listRegistryRecords()).find((record) => record.name === "synthetic-removal")
+    : await service.create({
+        repoRoot: repo,
+        name: "synthetic-removal",
+        baseRef: "HEAD",
+        runSetupScript: false,
+      });
+  assert(created && !created.removedAt, "Fixture must have a live synthetic-removal checkout");
   assert.equal(
     fs.statSync(path.join(created.path, dependencyDirectory(files - 1), `${files - 1}.js`)).size,
     fileBytes,
   );
-  fs.writeFileSync(path.join(created.path, "src/0.ts"), "export const userEdit = true;\n");
-  fs.writeFileSync(path.join(created.path, "user-notes.txt"), "synthetic unsaved user work\n");
+  if (!values.clean) {
+    fs.writeFileSync(path.join(created.path, "src/0.ts"), "export const userEdit = true;\n");
+    fs.writeFileSync(path.join(created.path, "user-notes.txt"), "synthetic unsaved user work\n");
+  }
   fs.writeFileSync(path.join(created.path, ".env.local"), "SYNTHETIC_SETTING=edited\n");
   if (values.profile) {
     const { runGitWorkerOperation } = await import("../../src/infra/git-worker.js");
@@ -645,11 +656,16 @@ try {
   loop.disable();
   await profileWorkers("stop");
   assert(removed.removed && removed.snapshotRef);
-  assert.equal(git(["show", `${removed.snapshotRef}:src/0.ts`]), "export const userEdit = true;");
   assert.equal(
-    git(["show", `${removed.snapshotRef}:user-notes.txt`]),
-    "synthetic unsaved user work",
+    git(["show", `${removed.snapshotRef}:src/0.ts`]),
+    values.clean ? "export const value0 = 0;" : "export const userEdit = true;",
   );
+  if (!values.clean) {
+    assert.equal(
+      git(["show", `${removed.snapshotRef}:user-notes.txt`]),
+      "synthetic unsaved user work",
+    );
+  }
   const states = await getRegistryWorktreeProvisionedState(process.env, created.id);
   assert(states?.some((state) => state.path === ".env.local" && state.chunks === 1));
   assert.equal(
@@ -709,22 +725,40 @@ try {
     path.join(output, "operations.jsonl"),
     timings.map((timing) => JSON.stringify(timing)).join("\n") + "\n",
   );
-  fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(result, null, 2));
+  fs.writeFileSync(path.join(output, values.report), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
-  assert.equal(result.persistedDependencyFiles, baseline ? files : 0);
-  assert.equal(result.persistedProvisionedFiles, baseline ? files + 1 : 1);
+  const legacyProvisioning = baseline && !values.clean;
+  assert.equal(result.persistedDependencyFiles, legacyProvisioning ? files : 0);
+  assert.equal(result.persistedProvisionedFiles, legacyProvisioning ? files + 1 : 1);
   assert.equal(
     summary["worktrees.writeProvisionedSnapshot.chunk"]?.count,
-    baseline ? files + 1 : 1,
+    legacyProvisioning ? files + 1 : 1,
   );
   assert.equal(
     summary["worktrees.writeProvisionedSnapshot.chunk"]?.bytes,
-    (baseline ? files * fileBytes : 0) + Buffer.byteLength("SYNTHETIC_SETTING=edited\n"),
+    (legacyProvisioning ? files * fileBytes : 0) + Buffer.byteLength("SYNTHETIC_SETTING=edited\n"),
   );
   if (!baseline && !values.profile) {
     assert(
       result.snapshotMs !== undefined && result.snapshotMs < 10_000,
       "Candidate snapshot exceeded the 10s acceptance bound",
+    );
+  }
+  if (values.clean) {
+    const originalHead = git(["rev-parse", `${removed.snapshotRef}^`]);
+    assert.equal(
+      git(["rev-parse", `${removed.snapshotRef}^{tree}`]),
+      git(["rev-parse", `${originalHead}^{tree}`]),
+    );
+    const restored = await service.restore({ id: created.id });
+    assert.equal(git(["rev-parse", "HEAD"], restored.path), originalHead);
+    assert.equal(git(["status", "--porcelain", "--untracked-files=no"], restored.path), "");
+    assert.equal(
+      fs.readFileSync(path.join(restored.path, ".env.local"), "utf8"),
+      "SYNTHETIC_SETTING=edited\n",
+    );
+    console.log(
+      "Verified clean snapshot restore, original HEAD, tracked bytes, and provisioned edit",
     );
   }
 } finally {

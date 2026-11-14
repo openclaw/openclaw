@@ -6,6 +6,7 @@ import {
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { AutomationLastMeaningfulResultSchema } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
+import { CyberAccessProgramSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -105,6 +106,14 @@ export function getInvalidPersistedCronJobReason(
     } catch {
       return "invalid-plugin-command";
     }
+  }
+  if (
+    candidate.cyberAccessProgram !== undefined &&
+    (!Value.Check(CyberAccessProgramSchema, candidate.cyberAccessProgram) ||
+      (asRecord(candidate.payload).kind !== "agentTurn" &&
+        asRecord(candidate.payload).kind !== "accessAgentTurn"))
+  ) {
+    return "invalid-execution-policy";
   }
   if (candidate.idleOnly !== undefined && typeof candidate.idleOnly !== "boolean") {
     return "invalid-execution-policy";
@@ -251,7 +260,10 @@ export function getInvalidPersistedCronJobReason(
     return "missing-payload";
   }
   const payloadRecord = payload as Record<string, unknown>;
-  const payloadKind = payloadRecord.kind;
+  if (payloadRecord.kind === "accessAgentTurn" && candidate.cyberAccessProgram === undefined) {
+    return "invalid-execution-policy";
+  }
+  const payloadKind = payloadRecord.kind === "accessAgentTurn" ? "agentTurn" : payloadRecord.kind;
   if (payloadKind === "pluginCommand" || candidate.pluginCommand !== undefined) {
     // Stored form `pluginCommand`; the decoded runtime form is the reserved agentTurn sentinel.
     const stored =

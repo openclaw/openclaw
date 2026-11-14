@@ -68,13 +68,29 @@ suite.define(() => {
           expect(await reasoningItems.count()).toBe(2);
           expect(await reasoningItems.locator("pre code").allTextContents()).toEqual([code, code]);
           expect(await reasoningItems.locator("p").allTextContents()).toEqual([
-            "Reasoning:",
             reasoningText,
             conclusion,
-            "Reasoning:",
             reasoningText,
             conclusion,
           ]);
+          // Each thought is a one-line step until its reader opens it.
+          const toggle = pane.getByRole("button", { name: "Reasoning", exact: true }).first();
+          const row = reasoning.locator("xpath=..");
+          const collapsed = await row.boundingBox();
+          expect(collapsed?.height).toBeLessThan(24);
+          // The preview stays out of focus and selection until it opens.
+          expect(await reasoning.getAttribute("inert")).not.toBeNull();
+          await toggle.click();
+          await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+          expect(await reasoning.getAttribute("inert")).toBeNull();
+          await expect
+            .poll(async () => (await row.boundingBox())?.height ?? 0)
+            .toBeGreaterThan(collapsed!.height * 3);
+          // The opened thought survives its rows remounting when Worked closes and reopens.
+          await worked.click();
+          await expect.poll(() => reasoning.isVisible()).toBe(false);
+          await worked.click();
+          await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
         }
         expect(await answer.isVisible()).toBe(true);
       }

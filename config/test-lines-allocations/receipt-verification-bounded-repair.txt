@@ -1,3 +1,0 @@
-# Single-owner npm handoff: one full authentication, exact producer/qualification
-# binding, late authority revocation, and Actions ordering/wiring regression.
-94

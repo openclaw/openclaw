@@ -18,6 +18,21 @@ function expectSchemaFailurePath(result: SchemaParseResult, prefix: string): voi
 const validateAgents = (agents: OpenClawConfig["agents"]) => validateConfigObject({ agents });
 
 describe("agent defaults schema", () => {
+  it("accepts only a Boolean opt-in for the usage-ranked tool index without adding defaults", () => {
+    expect(AgentDefaultsSchema.parse({})?.experimental).toBeUndefined();
+    for (const usageRankedToolIndex of [true, false]) {
+      expect(AgentDefaultsSchema.parse({ experimental: { usageRankedToolIndex } })).toMatchObject({
+        experimental: { usageRankedToolIndex },
+      });
+    }
+    for (const usageRankedToolIndex of ["true", { enabled: true }, null]) {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ experimental: { usageRankedToolIndex } }),
+        "experimental.usageRankedToolIndex",
+      );
+    }
+  });
+
   it("accepts bounded explicit picker runtimes only on exact model refs", () => {
     const models = {
       "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },

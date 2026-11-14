@@ -195,6 +195,9 @@ jobs:
           OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
           OPENCLAW_E2E_WORKERS: "2"
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          # Reuse only deployment fixtures; retain every ordinary UI shard file.
+          OPENCLAW_UI_E2E_DEPLOYMENT_ARTIFACT_ROOT: ${{ github.workspace }}/dist/control-ui
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/repo-e2e-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}
           TARGET_REQUIRED_SCRIPT: ${{ matrix.target_script || '' }}
         run: |
           set -euo pipefail
@@ -210,6 +213,17 @@ jobs:
             exit 0
           fi
           ${{ matrix.command }}
+
+      - name: Upload public repo E2E timeout diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: repo-e2e-timeout-${{ strategy.job-index }}-${{ github.run_attempt }}
+          # Raw diagnostics and screenshots remain private.
+          path: .artifacts/control-ui-e2e-timeouts/repo-e2e-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}/failure-*/failure.public.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
 
       # This fixture uses synthetic documents and a mocked Gateway; exclude other UI artifacts.
       - name: Upload synthetic widget prompt failure evidence

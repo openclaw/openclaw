@@ -228,6 +228,13 @@ export function createReplyOperationRecovery(context: ReplyOperationRecoveryCont
         context.detachUpstreamAbort();
         backend?.cancel("superseded");
       } else {
+        // Record the stall cause on the controller-owned operation before the abort
+        // commits, so both the watchdog-timer-driven stop and the diagnostics-triggered
+        // stop carry it into run history and the chat alert. A precise semantic cause
+        // supplied by diagnostics wins; otherwise fall back to the watchdog decision.
+        if (operation.recoveryClassification === undefined) {
+          operation.recoveryClassification = effect.reason;
+        }
         stopSession({
           capture: captureSessionControllerStop({ operations: [operation] }),
           source: "watchdog",

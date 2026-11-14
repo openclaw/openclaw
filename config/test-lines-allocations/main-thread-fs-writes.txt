@@ -1,3 +1,0 @@
-# Bounded stall caller retention and async publication work counts, authority retirement,
-# and copy-fallback expected-entry/refusal regressions. Exact net growth in this change.
-133

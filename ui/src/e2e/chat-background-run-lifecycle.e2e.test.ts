@@ -80,7 +80,7 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const thread = page.locator(".chat-thread-inner");
-      const savings = page.getByText("saved 183.7k tokens", { exact: true });
+      const savings = page.getByText("saved 183.7k tokens (73.1%)", { exact: true });
       const working = page.locator(".chat-working-indicator");
       await savings.waitFor();
       await working.waitFor();

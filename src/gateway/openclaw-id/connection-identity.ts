@@ -50,6 +50,32 @@ export function createOpenClawIdConnectionAccess(params: {
   };
 
   return {
+    /** Retains the selected profile through membership preparation and the role write. */
+    async prepareMemberProfileCheck(profileId: string): Promise<() => boolean> {
+      if (!params.enabled()) {
+        return () => false;
+      }
+      const { prepareUserProfileRoleAuthority } =
+        await import("../../state/user-channel-identity-operations.js");
+      const target = await prepareUserProfileRoleAuthority(profileId);
+      const owner = await params.getAuthority();
+      const profiles = await owner.memberProfiles(
+        Object.keys(owner.current()?.authority?.members ?? {}),
+      );
+      return () => {
+        if (target && !target.isCurrent()) {
+          throw new Error("Target profile changed; retry the role assignment.");
+        }
+        return (
+          params.enabled() &&
+          Object.entries(profiles).some(
+            ([accountId, profile]) =>
+              profile.id === target?.profileId &&
+              Object.hasOwn(owner.current()?.authority?.members ?? {}, accountId),
+          )
+        );
+      };
+    },
     /** Prepares a synchronous current-owner guard for event publication. */
     prepareOwnerClientCheck,
     /** Counts active owner certificates; callers must authorize the owner before disclosing. */

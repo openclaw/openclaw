@@ -39,6 +39,17 @@ errors. `Retry-After` and exhausted quota reset headers are honored by the provi
 error parser. A full-refill reset is not a minimum wait when the bucket still has
 tokens and the provider supplies a shorter retry hint.
 
+A timed 429 with a retry delay longer than one minute also uses this shared
+route/account gate, even without organization-TPM wording. When the remaining
+wait exceeds `retry.provider.maxRetryDelayMs`, later turns fail fast without
+sending another request to that route. The terminal notice names the limited
+model, gives the provider's reset time as a relative wait and an absolute date,
+and points to the model picker or `agents.defaults.model.fallbacks` in Settings.
+Dates use the configured UI locale and `agents.defaults.userTimezone` when
+available, otherwise the host's locale and timezone. Short or unknown waits
+retain the brief retry notice. These in-memory gates do not survive a Gateway
+restart; saved auth-profile cooldowns retain their existing persistence.
+
 During recovery, interactive turns take priority over subagents and background
 work such as reviews and titles. Queued requests resume one at a time with
 100–250 ms of jitter between admissions. The status reads **Waiting for rate

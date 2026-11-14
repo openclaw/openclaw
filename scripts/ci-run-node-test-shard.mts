@@ -597,6 +597,18 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         (baseEnv.GITHUB_RUN_ID ?? "").endsWith("0"))),
   );
   const observedRuntimes = new Set<string>();
+  const auditCliRoot = baseEnv.OPENCLAW_CI_TEST_AUDIT_CLI_DIR;
+  const observeAuditCli = Boolean(
+    auditCliRoot &&
+    baseEnv.GITHUB_EVENT_NAME === "schedule" &&
+    baseEnv.GITHUB_RUN_ATTEMPT === "1" &&
+    !plans.some(
+      (entry) =>
+        entry.kind === "group" &&
+        entry.plan.configs.includes("test/vitest/vitest.unit-fast.config.ts"),
+    ),
+  );
+  let observedAuditCli = false;
   const extraArgs = (entry: ShardPlan) =>
     [
       inheritedEnv,
@@ -980,18 +992,28 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
           }
           Object.assign(childEnv, selection.env, preparedBuildEnv);
           delete childEnv.OPENCLAW_VITEST_OBSERVATION_DIR;
-          if (
-            observe &&
-            !nativeBun &&
-            !observedRuntimes.has(runtime) &&
+          delete childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY;
+          const auditCli =
+            observeAuditCli &&
+            !observedAuditCli &&
             selectedArgs.length === 1 &&
-            selectedArgs[0] === "test/vitest/vitest.unit-fast.config.ts"
+            selectedArgs[0] === "test/vitest/vitest.cli-process.config.ts" &&
+            selectedVitestArgs.length === 0;
+          if (
+            !nativeBun &&
+            (auditCli ||
+              (observe &&
+                !observedRuntimes.has(runtime) &&
+                selectedArgs.length === 1 &&
+                selectedArgs[0] === "test/vitest/vitest.unit-fast.config.ts"))
           ) {
             try {
-              mkdirSync(observationRoot!, { recursive: true });
-              childEnv.OPENCLAW_VITEST_OBSERVATION_DIR = mkdtempSync(
-                join(observationRoot!, `${runtime}-`),
-              );
+              const root = auditCli ? auditCliRoot! : observationRoot!;
+              mkdirSync(root, { recursive: true });
+              childEnv.OPENCLAW_VITEST_OBSERVATION_DIR = mkdtempSync(join(root, `${runtime}-`));
+              if (auditCli) {
+                childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY = "1";
+              }
               // Runtime membership and native sharding are already decided. Adding
               // experimental flags before that boundary changes Bun eligibility.
               args = [
@@ -1001,9 +1023,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 "--reporter=verbose",
                 ...(childEnv.GITHUB_ACTIONS === "true" ? ["--reporter=github-actions"] : []),
                 "--reporter=./scripts/lib/vitest-resource-reporter.mts",
-                "--experimental.recordDependencies",
+                ...(auditCli ? [] : ["--experimental.recordDependencies"]),
               ];
-              observedRuntimes.add(runtime);
+              if (auditCli) {
+                observedAuditCli = true;
+              } else {
+                observedRuntimes.add(runtime);
+              }
               try {
                 const { writeCiTestLaunchInputs } = await import("./lib/ci-test-launch-inputs.mts");
                 writeCiTestLaunchInputs({

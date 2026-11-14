@@ -13,6 +13,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js"
 import {
   decodeLocalWorkspaceTree,
   localWorkspaceDigestBytes,
+  localWorkspaceDigestReference,
   prepareLocalWorkspaceSourcePathSet,
   prepareLocalWorkspaceTreePacks,
   type LocalWorkspacePreparation,
@@ -22,7 +23,6 @@ import {
   deleteLocalWorkspaceSweepBatchInDatabase,
   prepareLocalWorkspaceContentInDatabase,
   readLocalWorkspaceSourcePaths,
-  readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
@@ -35,7 +35,9 @@ import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
 } from "./local-workspace-manifest-tree.js";
+import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import {
+  localWorkspaceReadOperations,
   mutateLocalWorkspaceProjection,
   readLocalWorkspaceProjectionInDatabase,
 } from "./local-workspace-store.kernel.js";
@@ -566,10 +568,12 @@ it("accepts a prepared tree with only the projection root flip inside the writer
   ).toEqual(records);
 });
 
-it("sweeps unreachable content while retaining baseline, previous and pending roots and newly reused content", () => {
-  using db = new DatabaseSync(":memory:");
+it("releases sweep read pages for checkpoints while retaining live and concurrently reused content", () => {
+  const databasePath = path.join(dirs.make("workspace-sweep-pages-"), "state.sqlite");
+  using db = new DatabaseSync(databasePath);
+  db.exec("PRAGMA journal_mode=WAL");
   db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
-  const id = randomUUID();
+  const id = "m-existing-projection";
   const baseline = createLocalWorkspaceManifestTree(
     Array.from({ length: 300 }, (_, index) => [
       { path: `dir-${index}`, type: "directory" as const },
@@ -586,15 +590,17 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   const pending = tree("c");
   const abandoned = tree("d");
   const reused = tree("e");
+  const published = tree("f");
   mutateLocalWorkspaceProjection(db, id, {
     kind: "create",
     row: localWorkspaceProjectionFixture(id, "/synthetic"),
   });
-  for (const records of [baseline, previous, pending, abandoned, reused]) {
+  for (const records of [baseline, previous, pending, abandoned, reused, published]) {
     prepareTreePacks(db, records);
   }
   const livePaths = prepareLocalWorkspaceSourcePathSet('["entry.txt"]');
-  const orphanPaths = prepareLocalWorkspaceSourcePathSet('["abandoned.txt"]');
+  // This digest sorts after the live path set, exercising the final unbounded range.
+  const orphanPaths = prepareLocalWorkspaceSourcePathSet('["orphan-after-retained.txt"]');
   const reusedPaths = prepareLocalWorkspaceSourcePathSet('["reused.txt"]');
   for (const paths of [livePaths, orphanPaths, reusedPaths]) {
     prepareLocalWorkspaceContentInDatabase(db, { paths });
@@ -632,23 +638,45 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   });
   expect(beginLocalWorkspaceSweepInDatabase(db)).toBe(1);
   const epoch = beginLocalWorkspaceSweepInDatabase(db);
+  assert(epoch !== null);
   expect(epoch).toBe(2);
-  const packCount = Number(
-    db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n,
+  using reader = new DatabaseSync(databasePath, { readOnly: true });
+  const checkpointBusy: number[] = [];
+  const reads = trackSqliteStatementExecutions(reader, ["packs", "epochs"], (sql) => {
+    if (!/^select\b/i.test(sql) || !sql.includes('from "local_workspace_tree_packs"')) {
+      return null;
+    }
+    if (!checkpointBusy.length) {
+      // Publish behind the projection cursor, after its first page but before graph reads.
+      prepareTreePacks(db, published);
+      mutateLocalWorkspaceProjection(db, "a-new-projection", {
+        kind: "create",
+        row: {
+          ...localWorkspaceProjectionFixture("a-new-projection", "/synthetic/new"),
+          baseline_ref: reference(published),
+          tree_root_digest: localWorkspaceDigestBytes(root(published)),
+        },
+      });
+      checkpointBusy.push(Number(db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()!.busy));
+    }
+    return sql.includes("sweep_epoch") ? "epochs" : "packs";
+  });
+  const { candidates } = localWorkspaceReadOperations["localWorkspace.sweepCandidates"](
+    { epoch },
+    reader,
   );
-  const reads = trackSqliteStatementExecutions(db, ["packs"], (sql) =>
-    /^select\b/i.test(sql) && sql.includes('from "local_workspace_tree_packs"') ? "packs" : null,
-  );
-  const candidates = readLocalWorkspaceSweepCandidates(db, epoch);
   reads.restore();
-  // Every old digest is returned by candidate discovery; traversal already knows its lookup keys.
-  expect(reads.blobBytes.packs).toBe(packCount * 32);
+  expect(checkpointBusy).toEqual([0]);
+  // Live packs need no epoch lookup; only unreachable old packs become candidates.
+  expect(reads.rowCounts.epochs).toBeLessThanOrEqual(6);
+  // Candidate paging reads each digest once; graph traversal already knows its lookup keys.
+  expect(reads.blobBytes.packs + reads.blobBytes.epochs).toBeLessThanOrEqual(6 * 32);
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
-  // A writer reusing content after the snapshot protects it with the current epoch.
+  // A writer reusing content after discovery protects it with the current epoch.
   prepareTreePacks(db, reused, reusedPaths);
   deleteLocalWorkspaceSweepBatchInDatabase(db, epoch, candidates);
-  for (const records of [baseline, previous, pending, reused]) {
+  for (const records of [baseline, previous, pending, reused, published]) {
     expect(
       decodeLocalWorkspaceTree(
         readLocalWorkspaceTree(db, localWorkspaceDigestBytes(root(records))),
@@ -667,4 +695,36 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   expect(() =>
     readLocalWorkspaceSourcePaths(db, localWorkspaceDigestBytes(orphanPaths.digest)),
   ).toThrow("source path set is missing");
+  // With no retained path roots, the same paging still collects expired content.
+  mutateLocalWorkspaceProjection(db, id, {
+    kind: "update",
+    revision: 1,
+    patch: { source_paths_digest: null },
+  });
+  const next = localWorkspaceReadOperations["localWorkspace.sweepCandidates"]({ epoch }, reader);
+  expect(next.candidates.paths.map(localWorkspaceDigestReference)).toEqual([livePaths.digest]);
+});
+
+it("distinguishes committed deletion from unknown or mismatched mutation coverage", () => {
+  const worktreeId = randomUUID();
+  const previous = { ...localWorkspaceProjectionFixture(worktreeId, "/synthetic"), revision: 0 };
+  const mutation = { kind: "delete" as const, revision: 0 };
+  expect(readLocalWorkspaceCommit(null, worktreeId, mutation, previous)).toBeUndefined();
+  expect(() => readLocalWorkspaceCommit(undefined, worktreeId, mutation, previous)).toThrow(
+    "coverage is incomplete",
+  );
+  for (const receipt of [
+    null,
+    { worktree_id: randomUUID(), revision: 1 },
+    { worktree_id: worktreeId, revision: 2 },
+  ]) {
+    expect(() =>
+      readLocalWorkspaceCommit(
+        receipt,
+        worktreeId,
+        { kind: "update", revision: 0, patch: {} },
+        previous,
+      ),
+    ).toThrow("commit identity is invalid");
+  }
 });

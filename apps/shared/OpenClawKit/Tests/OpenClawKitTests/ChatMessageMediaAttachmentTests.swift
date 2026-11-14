@@ -46,7 +46,7 @@ struct ChatMessageMediaAttachmentTests {
 
     @Test(arguments: ["null", "false", #"{"url":42}"#])
     @MainActor
-    func `media facts do not duplicate existing file rows or inline image slots`(malformedFact: String) throws {
+    func `media facts do not duplicate existing file rows or inline image slots`(malformedFact: String) async throws {
         let raw = try JSONDecoder().decode(AnyCodable.self, from: Data("""
         {"role":"user","content":[
           {"type":"file","url":"media://inbound/report.pdf","mimeType":"application/pdf",
@@ -61,7 +61,7 @@ struct ChatMessageMediaAttachmentTests {
         ],"mediaImageLayout":{"slots":[{"kind":"inline"},{"kind":"inline","factIndex":2}]}}}
         """.utf8))
 
-        let messages = OpenClawChatViewModel.decodeMessages([raw])
+        let messages = await OpenClawChatViewModel.decodeMessages([raw])
         #expect(messages.count == 1)
         let message = try #require(messages.first)
         #expect(message.content.count == 4)

@@ -87,6 +87,7 @@ type GatewayShutdownStep = {
   name: string;
   run: () => Promise<void> | void;
   required?: true;
+  joinedByLateSidecarCleanup?: true;
 };
 
 /** Cleanup leftovers require process exit, but are not a failed external stop. */
@@ -147,8 +148,16 @@ export async function runGatewayCloseSteps(params: {
     ...(params.disposeTerminalSessions
       ? [{ name: "terminal sessions", run: params.disposeTerminalSessions }]
       : []),
-    { name: "gateway lifetime sidecars", run: owner.stopRegisteredGatewayLifetimeSidecars },
-    { name: "post-ready sidecars", run: owner.stopRegisteredPostReadySidecars },
+    {
+      name: "gateway lifetime sidecars",
+      run: owner.stopRegisteredGatewayLifetimeSidecars,
+      joinedByLateSidecarCleanup: true,
+    },
+    {
+      name: "post-ready sidecars",
+      run: owner.stopRegisteredPostReadySidecars,
+      joinedByLateSidecarCleanup: true,
+    },
     ...(params.runStopHooks
       ? [{ name: "gateway_stop plugin hooks", run: params.runStopHooks }]
       : []),
@@ -183,7 +192,10 @@ export async function runGatewayCloseSteps(params: {
           await pending;
           continue;
         }
-        leftovers.push(new Error(message));
+        // The required late join owns these sidecars' final settlement, including rejection.
+        if (!step.joinedByLateSidecarCleanup) {
+          leftovers.push(new Error(message));
+        }
       }
     } catch (error) {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;

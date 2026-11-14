@@ -16,6 +16,7 @@ import {
   createFreshRunIntegrationState,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import type { CompactionAccountingFact } from "./run/internal-params.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -105,8 +106,24 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     };
     let requestAuthority: (() => void) | undefined;
     let claimAuthority: (() => void) | undefined;
+    const observe = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
+    const { loadSessionEntry } = await import("../../config/sessions/session-accessor.js");
     const effect = vi.fn();
     hooks.runBeforeAgentReply.mockImplementation(async (_event, context) => {
+      const entry = loadSessionEntry({ ...params.sessionTarget, readConsistency: "latest" });
+      expect(entry?.activeWriterRunId).toBe(params.runId);
+      expect(observe).toHaveBeenCalledExactlyOnceWith({
+        kind: "durable",
+        count: 0,
+        target: {
+          agentId: "main",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: params.sessionTarget.storePath,
+          lifecycleRevision: params.sessionTarget.expectedLifecycleRevision,
+          activeWriterRunId: params.runId,
+        },
+      });
       requestAuthority = captureGuardedFetchRequestAuthority();
       claimAuthority = readClaimingHookAdmission(context)?.assertCurrent;
       expect(requestAuthority).toBeTypeOf("function");
@@ -117,7 +134,7 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
       return handledReply("hook completed");
     });
 
-    const result = await runEmbeddedAgent(params);
+    const result = await runEmbeddedAgent({ ...params, onCompactionAccounting: observe });
     const [payload, context] = firstBeforeAgentReplyCall();
     expect(payload).toEqual({ cleanedBody: params.prompt });
     expect(context).toMatchObject({

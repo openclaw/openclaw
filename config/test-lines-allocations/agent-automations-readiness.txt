@@ -1,2 +1,0 @@
-# Independent scheduler status and agent inventory readiness, retry, and scope-retirement regressions.
-31

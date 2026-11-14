@@ -56,6 +56,11 @@ configuration separately. Binding controls keep their own loading and error
 state until configuration is available; a slow configuration read does not
 hold the inventory page open.
 
+Device and command-approval panels build their contents when first opened, then
+keep them mounted when closed so drafts survive reopening. Summary rows continue
+to update while closed. Browser find-in-page searches panel contents only after
+you have opened that panel.
+
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a
@@ -107,25 +112,43 @@ Send or clear any existing composer draft first; recovery never replaces it.
 Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
-Rewinding does not undo external actions.
+Rewinding does not undo external actions. Large local histories are copied incrementally.
+If an individual event or the history navigation metadata exceeds the safe memory
+budget, the request fails without changing the conversation; other sessions remain
+available. Export the transcript to inspect it.
 
 ## Command palette file attachments
+
+The command palette has **Search** and **Compose** modes, switched from the bar
+along its bottom edge or with **Tab** from its main input, without losing text.
+Search finds commands and sessions; Compose prepares a new background session.
+While you are in Search, text of 60 characters or more, a second line, or a file
+moves the palette to Compose; emptying that draft returns it to Search. Choosing
+Search again keeps it for the current draft. Reopening the palette returns to the
+mode you last chose, not to an automatic switch. That choice is remembered in this
+browser, including after a reload, when browser storage is available.
+**Cmd/Ctrl+Enter** starts a new background session from either mode using the
+current text and attachments; plain **Enter** still selects a search result.
+**Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
 images or files onto the palette, or paste images into its input, to prepare a
 new background session without changing your current conversation or composer.
 
-The first attachment switches the palette from navigation to **New session**.
-Add optional instructions, adjust the session settings, then choose **New session**
-or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
+Each newly added attachment switches the palette to **Compose**, including after
+you return to Search with an attachment still in the draft.
+Add optional instructions, then send or press **Cmd/Ctrl+Enter**. The settings
+button at the left of the composer opens **New session settings** for the agent,
+folder, worktree, and **Remember settings**; the model picker sits beside Send.
+Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending
 automatic start. File admission and size limits match the chat composer.
 
 Closing the palette keeps its attachment draft in memory for the same Gateway
-and account. Removing the final attachment keeps new-session mode while
-instructions remain; clearing both files and instructions restores navigation.
+and account. When files moved the palette to Compose, removing them and clearing
+the instructions returns it to Search.
 Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Choose a session workspace
@@ -232,10 +255,9 @@ page in your default browser. Update the browser or operating system if that
 browser also shows the update screen.
 
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
-the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
-and **Circle**. Square preserves the full image; rounded and circular icons use a
-centered crop. The choice is saved with your tab-icon preference, and activity
-badges remain visible on every shape.
+the selected agent’s image with a centered circular crop. Activity badges remain
+visible. Earlier saved square or rounded-avatar choices now use the same circle;
+you do not need to reset your preference.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 
@@ -253,7 +275,7 @@ The saved sidebar also retains the session rows for its initial viewport, along 
 
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 
-Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
+Message reactions appear in a compact tab on the message bubble. Flat agent replies have no bubble, so their tab leads the row under the reply and stays in place while the name, time and actions appear on hover. Open the tab to see each emoji count, including in read-only sessions. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
 The desktop **Subagents** tab places nested subagents beneath the subagent that started them. Each row keeps its own activity and controls. Floating **Details** and the mobile list remain compact, direct-child views.
 
@@ -333,7 +355,7 @@ The chat header’s **Details** panel groups session information into collapsibl
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
-Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Recorded pull requests update when their receipts or session access and lineage change, without polling passive rows or rechecking unrelated audiences on owner-certified metadata-only updates. Delivery still checks each recipient’s current access. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
@@ -547,8 +569,10 @@ teammates'), or one project. Then pick sessions from that list; the search butto
 searches every session you can access, not only those loaded in the sidebar, and
 teammates' sessions show their owner. **Edit section** opens on the session list;
 **Back** returns to the name and source. Sessions inside a section follow the
-sidebar's **Sort by** selection. Drag an existing session into a section to add it. Drag section headers
-to reorder them, or use **Move up** and **Move down** in the section menu.
+sidebar's **Sort by** selection. Drag an existing session into a section to add it.
+Dragging a session from one personal section to another moves that reference,
+leaving references in other sections unchanged. Drag section headers to reorder
+them, or use **Move up** and **Move down** in the section menu.
 **Remove section** removes only that personal section; it never deletes sessions.
 Pins and shared groups are independent, and **Move to group** still changes shared
 group membership.

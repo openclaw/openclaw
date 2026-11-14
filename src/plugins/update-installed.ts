@@ -9,6 +9,7 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import {
   resolveBundledPluginSources,
   resolveSourceCheckoutBundledPluginIds,
@@ -59,20 +60,16 @@ import {
   type NpmPluginUpdateSuccess,
 } from "./update-attempt.js";
 import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
-import {
-  hasRunnableInstalledNpmPayload,
-  migratePluginConfigId,
-  resolveRecordedExtensionsDir,
-} from "./update-config.js";
+import { migratePluginConfigId, resolveRecordedExtensionsDir } from "./update-config.js";
 import {
   reconcileDuplicateNpmPluginAliases,
   stageDuplicateNpmPluginAlias,
 } from "./update-duplicate-aliases.js";
 import { prepareNpmPluginUpdateMetadata } from "./update-npm-metadata.js";
+import { canRetainInstalledNpmPayload } from "./update-retention.js";
 import {
   createStablePluginUpdateVersionPolicy,
   expectedIntegrityForNpmUpdate,
-  isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
   resolveClawHubNpmUpdateFallback,
   resolveClawHubUpdateSpecs,
@@ -140,6 +137,9 @@ async function runInstalledPluginUpdate(
   const completedCanonicalUpdates = new Set<string>();
 
   for (const pluginId of targets) {
+    if (params.signal?.aborted) {
+      break;
+    }
     if (params.skipIds?.has(pluginId)) {
       recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (already updated).`);
       continue;
@@ -379,17 +379,12 @@ async function runInstalledPluginUpdate(
         !params.dryRun &&
         currentVersion
       ) {
-        const compatible = isNpmMetadataCompatibleWithCurrentHost(
-          { packageOpenClaw: installedManifest?.openclaw },
-          { hostVersion: params.coreVersion, allowLegacyBareSemver: true },
-        );
-        try {
-          installedPayloadRunnable =
-            compatible &&
-            (await hasRunnableInstalledNpmPayload({ installPath, manifest: installedManifest }));
-        } catch {
-          // Damaged or unreadable payloads do not qualify for retention.
-        }
+        installedPayloadRunnable = await canRetainInstalledNpmPayload({
+          currentHostVersion: params.coreVersion ?? resolveCompatibilityHostVersion(),
+          pluginId,
+          installPath,
+          manifest: installedManifest,
+        });
       }
       if (retainOnUnavailable && installedPayloadRunnable) {
         const retainedMessage =

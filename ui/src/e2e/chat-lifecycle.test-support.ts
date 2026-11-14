@@ -23,12 +23,12 @@ export async function pairFixture(page: Page, instance: OpenClawTestInstance) {
   });
 }
 
-export async function assertServedUi(page: Page, baseUrl: string) {
+export async function assertServedUi(page: Page, baseUrl: string, buildRoot = process.cwd()) {
   const script = await page.locator('script[type="module"][src]').first().getAttribute("src");
   expect(script).toMatch(/^\/assets\/.+\.js$/);
   const asset = await page.context().request.get(new URL(script!, baseUrl).href);
   expect(asset.ok()).toBe(true);
-  const built = await readFile(path.join("dist/control-ui", script!.slice(1)));
+  const built = await readFile(path.join(buildRoot, "dist/control-ui", script!.slice(1)));
   expect((await asset.body()).equals(built), "served UI must be this checkout's built bundle").toBe(
     true,
   );

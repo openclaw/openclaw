@@ -1,3 +1,0 @@
-# install.sh git-checkout publication regression tests (shell moves before Node is provisioned).
-# Exact remaining net growth for PR #195382 that left main over the test-lines ceiling.
-19

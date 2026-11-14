@@ -60,8 +60,14 @@ export async function writeTsdownDeclarations(
       const before = cacheEnabled
         ? new CompilerInputSnapshot(root, {
             toolchainFiles: resolveTsdownCompilerFiles(),
+            // The compiler reports read sources, not failed resolution probes or the
+            // manifests and configs it consulted; key on all of those instead. Dependency
+            // versions need no lockfile key: read dependency files resolve to versioned
+            // node_modules/.pnpm paths, so a version change already changes the inputs.
             generatorInputs,
-            isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+            isGeneratorInput: (file) =>
+              /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file) ||
+              (/(?:^|\/)tsconfig[^/]*\.json$/u.test(file) && !file.includes("node_modules/")),
           })
         : undefined;
       const liveDist = path.join(root, "dist");

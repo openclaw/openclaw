@@ -1,2 +1,0 @@
-# Startup regression covers enumeration I/O/parse failures and quiet empty success.
-58

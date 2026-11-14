@@ -1816,7 +1816,7 @@ async function openProviderModelPicker(page: Page) {
 async function focusProviderModelSearch(page: Page) {
   const picker = providerModelPicker(page);
   const toggle = picker.locator(".header-search__toggle");
-  // Historical bundles focus search on open; current bundles expose a Search action.
+  // Bundles with a collapsed header search expose a Search action; the rest focus search on open.
   if (await toggle.isVisible()) {
     await toggle.click();
   }

@@ -1,6 +1,8 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
+import { keyboardHints } from "../../lib/keyboard-hints.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../../lib/reactive/keyboard-hints.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { registryFor } from "../overlay-registry.ts";
@@ -87,17 +89,12 @@ export function HeaderSearchToggle(props: {
   closeLabel?: string;
   disabled?: boolean;
   controlRef?: () => ((element: HTMLElement) => void) | undefined;
-  toggleRef?: (element: HTMLButtonElement) => void;
-  typeToSearch?: boolean;
   onToggle: () => void;
 }) {
   return (
     <button
       ref={[
         props.controlRef?.(),
-        (element: HTMLButtonElement) => {
-          props.toggleRef?.(element);
-        },
         // Menus stop content clicks natively, before any delegated handler could run.
         nativeListener("click", (event) => {
           event.stopPropagation();
@@ -107,7 +104,6 @@ export function HeaderSearchToggle(props: {
       type="button"
       class="header-search__toggle"
       data-form-control=""
-      data-search-toggle={props.typeToSearch && !props.open ? "" : undefined}
       aria-label={props.open ? (props.closeLabel ?? t("common.close")) : props.label}
       disabled={props.disabled}
     >
@@ -117,47 +113,63 @@ export function HeaderSearchToggle(props: {
 }
 
 export type HeaderSearchProps = {
-  title: JSX.Element;
   leading?: JSX.Element;
   label: string;
   placeholder?: string;
-  closeLabel?: string;
+  clearLabel?: string;
   query: string;
-  open: boolean;
   disabled?: boolean;
+  /**
+   * Takes focus when a hardware keyboard is likely: "popover" whenever its surface opens,
+   * "menu" as the menu's initial item. Menus without it keep row focus and still search on typing.
+   */
+  autofocus?: "popover" | "menu";
   class?: string;
   inputClass?: string;
   inputProps?: JSX.InputHTMLAttributes<HTMLInputElement>;
   controlRef?: () => ((element: HTMLElement) => void) | undefined;
   inputRef?: (element: HTMLInputElement) => void;
-  toggleRef?: (element: HTMLButtonElement) => void;
-  onOpenChange: (open: boolean) => void;
   onQueryChange: (query: string) => void;
   onInputKeyDown?: (event: KeyboardEvent) => void;
+  /** Lets a host leave Escape to another open overlay. */
   ownsEscape?: () => boolean;
-  /** Let list-row typing focus an already visible field instead of list typeahead. */
-  typeToSearchWhenOpen?: boolean;
 };
 
-/** One header row that swaps its title for the search field while searching. */
+/** The search row that heads a card: always visible, so the list below filters as you type. */
 export function HeaderSearch(props: HeaderSearchProps) {
   let root!: HTMLDivElement;
-  let toggle!: HTMLButtonElement;
-  let input: HTMLInputElement | undefined;
-  let focusField = false;
-  const openSearch = () => {
-    focusField = true;
-    props.onOpenChange(true);
-  };
-  const close = () => {
-    props.onQueryChange("");
-    props.onOpenChange(false);
-    toggle.focus({ preventScroll: true });
+  let input!: HTMLInputElement;
+  // A phone sheet holds its full height while the on-screen keyboard is up.
+  const [focused, setFocused] = createSignal(false);
+  const focusInput = () => {
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(input.value.length, input.value.length);
   };
   onSettled(() => {
     // Menu entries can be built before insertion, while their nodes belong to a template document.
     const ownerDocument = document;
-    const releaseTyping = listen(
+    const owner = () => {
+      // The overlay owner chooses the active card, including hover-opened submenus.
+      const active = registryFor(ownerDocument).stack.at(-1);
+      return active?.open && active.surface.contains(root) && root.checkVisibility()
+        ? active.surface
+        : undefined;
+    };
+    // A lazily loaded card can arrive after its surface's native autofocus has run.
+    if (props.autofocus === "popover" && !props.disabled && keyboardHints.visible()) {
+      const surface = owner();
+      const active = ownerDocument.activeElement;
+      if (
+        surface &&
+        (!active ||
+          active === ownerDocument.body ||
+          active === surface ||
+          !surface.contains(active))
+      ) {
+        focusInput();
+      }
+    }
+    return listen(
       ownerDocument,
       "keydown",
       (event) => {
@@ -166,7 +178,6 @@ export function HeaderSearch(props: HeaderSearchProps) {
           event.isComposing ||
           event.keyCode === 229 ||
           props.disabled ||
-          (props.open && !props.typeToSearchWhenOpen) ||
           event.key.length !== 1 ||
           event.key === " " ||
           event.ctrlKey ||
@@ -178,89 +189,83 @@ export function HeaderSearch(props: HeaderSearchProps) {
               (target) =>
                 target instanceof Element &&
                 target.matches('input, textarea, select, [contenteditable="true"]'),
-            )
+            ) ||
+          !owner()
         ) {
           return;
         }
-        // The overlay owner chooses the active card, including hover-opened submenus.
-        const active = registryFor(ownerDocument).stack.at(-1);
-        if (!active?.open || !active.surface.contains(root) || !root.checkVisibility()) {
-          return;
-        }
-        event.preventDefault();
+        // Typing on a list row searches: the key lands in the field, not in row typeahead.
+        focusInput();
         event.stopImmediatePropagation();
-        // An automatically visible field may have yielded focus to a menu row.
-        if (props.open) {
-          input?.focus({ preventScroll: true });
-        }
-        focusField = true;
-        props.onOpenChange(true);
-        props.onQueryChange(event.key);
       },
       true,
     );
-    const releaseClose = listen(
-      ownerDocument,
-      "overlay-after-hide",
-      (event) => {
-        if (
-          event.target instanceof HTMLElement &&
-          event.target.contains(root) &&
-          props.open &&
-          !props.query
-        ) {
-          props.onOpenChange(false);
-        }
-      },
-      true,
-    );
-    return () => {
-      releaseTyping();
-      releaseClose();
-    };
   });
   return (
     <div
-      ref={(element) => (root = element)}
+      ref={[
+        (element) => (root = element),
+        // The whole row reads as the field, including its icon and padding.
+        nativeListener("click", (event) => {
+          if (!(event.target instanceof Element && event.target.closest("button, input"))) {
+            focusInput();
+          }
+        }),
+      ]}
       class={["header-search", props.class]}
-      data-searching={props.open ? "" : undefined}
+      data-searching={props.query || focused() ? "" : undefined}
+      onFocusIn={() => setFocused(true)}
+      onFocusOut={(event) =>
+        setFocused(event.relatedTarget instanceof Node && root.contains(event.relatedTarget))
+      }
     >
       {props.leading}
-      {props.open ? (
-        <HeaderSearchField
-          label={props.label}
-          placeholder={props.placeholder}
-          query={props.query}
-          disabled={props.disabled}
-          focus={focusField}
-          class={props.inputClass}
-          inputProps={props.inputProps}
-          controlRef={props.controlRef}
-          inputRef={(element) => {
-            input = element;
-            props.inputRef?.(element);
-          }}
-          onQueryChange={props.onQueryChange}
-          onClose={close}
-          onKeyDown={props.onInputKeyDown}
-          ownsEscape={props.ownsEscape}
-        />
-      ) : (
-        <span class="header-search__title">{props.title}</span>
-      )}
-      <HeaderSearchToggle
-        typeToSearch
-        open={props.open}
+      <span class="header-search__icon" aria-hidden="true">
+        <Icon name="search" />
+      </span>
+      <HeaderSearchField
         label={props.label}
-        closeLabel={props.closeLabel}
+        placeholder={props.placeholder}
+        query={props.query}
         disabled={props.disabled}
-        controlRef={props.controlRef}
-        toggleRef={(element) => {
-          toggle = element;
-          props.toggleRef?.(element);
+        focus={false}
+        class={props.inputClass}
+        inputProps={{
+          ...props.inputProps,
+          autofocus: props.autofocus === "popover" && keyboardHintsVisible(),
+          "data-initial-focus":
+            props.autofocus === "menu" && keyboardHintsVisible() ? "" : undefined,
         }}
-        onToggle={() => (props.open ? close() : openSearch())}
+        controlRef={props.controlRef}
+        inputRef={(element) => {
+          input = element;
+          props.inputRef?.(element);
+        }}
+        onQueryChange={props.onQueryChange}
+        onClose={() => props.onQueryChange("")}
+        onKeyDown={props.onInputKeyDown}
+        // Escape clears a query first; an empty field leaves it to the surface.
+        ownsEscape={() => Boolean(props.query) && props.ownsEscape?.() !== false}
       />
+      <Show when={props.query && !props.disabled}>
+        <button
+          ref={[
+            props.controlRef?.(),
+            // Menus stop content clicks natively, before any delegated handler could run.
+            nativeListener("click", (event) => {
+              event.stopPropagation();
+              props.onQueryChange("");
+              focusInput();
+            }),
+          ]}
+          type="button"
+          class="header-search__clear"
+          data-form-control=""
+          aria-label={props.clearLabel ?? t("common.clearSearch")}
+        >
+          <Icon name="x" />
+        </button>
+      </Show>
     </div>
   );
 }

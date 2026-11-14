@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
@@ -43,11 +44,18 @@ it.each(["result", "exception", "uncertain-warning"] as const)(
     const uncertain = new CommandProcessCleanupError();
     const observed: Omit<UpdateStepResult, "cwd">[] = [];
     let candidateRoot: string | undefined;
+    let inspectionRoot: string | undefined;
     try {
       const pending = fixture.run(
         {
           validateCandidate: async (root) => {
             candidateRoot = root;
+            inspectionRoot = fixture.git(
+              root,
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir",
+            );
             if (failure !== "result") {
               throw original;
             }
@@ -71,8 +79,13 @@ it.each(["result", "exception", "uncertain-warning"] as const)(
           return fixture.runCommand(argv, options);
         },
       );
-      if (failure !== "result") {
-        await expect(pending).rejects.toBe(failure === "exception" ? original : uncertain);
+      if (failure === "uncertain-warning") {
+        await expect(pending).rejects.toMatchObject({
+          cause: original,
+          errors: [original, uncertain],
+        });
+      } else if (failure === "exception") {
+        await expect(pending).rejects.toBe(original);
       } else {
         const result = await pending;
         expect(result).toMatchObject({
@@ -95,9 +108,88 @@ it.each(["result", "exception", "uncertain-warning"] as const)(
       expect(warning?.advisory).toMatchObject({ kind: "recoverable-maintenance" });
       expect(warning?.advisory?.message).toContain(path.dirname(candidateRoot!));
       expect(warning?.advisory?.message).toContain("Error");
+      expect(inspectionRoot).toBeDefined();
+      expect(fs.existsSync(inspectionRoot!)).toBe(true);
+      expect(fixture.git(candidateRoot!, "rev-parse", "HEAD")).toBe(fixture.target);
     } finally {
       if (candidateRoot) {
         fs.rmSync(path.dirname(candidateRoot), { recursive: true, force: true });
+      }
+      if (inspectionRoot) {
+        fs.rmSync(path.dirname(inspectionRoot), { recursive: true, force: true });
+      }
+    }
+  },
+);
+
+it.each(["result", "exception", "denied"] as const)(
+  "settles failed candidate ownership before its inspection repository (%s)",
+  async (failure) => {
+    const fixture = createGitAdmissionFixture();
+    const before = fixture.git(fixture.install, "rev-parse", "HEAD");
+    const original = new Error("synthetic candidate validation failure");
+    let candidateRoot: string | undefined;
+    let inspectionRoot: string | undefined;
+    const remove = fsPromises.rm.bind(fsPromises);
+    const removal = vi.spyOn(fsPromises, "rm").mockImplementation(async (entry, options) => {
+      if (failure === "denied" && candidateRoot && entry === path.dirname(candidateRoot)) {
+        throw Object.assign(new Error("synthetic cleanup denied"), { code: "EACCES" });
+      }
+      return remove(entry, options);
+    });
+    try {
+      const pending = fixture.run(
+        {
+          validateCandidate: async (root) => {
+            candidateRoot = root;
+            inspectionRoot = fixture.git(
+              root,
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir",
+            );
+            if (failure === "exception") {
+              throw original;
+            }
+          },
+        },
+        async (argv, options) => {
+          if (candidateRoot && argv.includes("status") && argv.includes(candidateRoot)) {
+            return { code: 128, stdout: "", stderr: "synthetic candidate status failure" };
+          }
+          if (argv.includes("worktree") && argv.includes("remove")) {
+            expect(fs.existsSync(inspectionRoot!)).toBe(true);
+            if (failure === "denied") {
+              return { code: 1, stdout: "", stderr: "synthetic cleanup denied" };
+            }
+          }
+          return fixture.runCommand(argv, options);
+        },
+      );
+      if (failure === "exception") {
+        await expect(pending).rejects.toBe(original);
+      } else {
+        await expect(pending).resolves.toMatchObject({
+          status: "error",
+          reason: "preflight-no-good-commit",
+        });
+      }
+      expect(candidateRoot).toBeDefined();
+      expect(inspectionRoot).toBeDefined();
+      expect(fs.existsSync(path.dirname(candidateRoot!))).toBe(failure === "denied");
+      expect(fs.existsSync(path.dirname(inspectionRoot!))).toBe(failure === "denied");
+      if (failure === "denied") {
+        expect(fixture.git(candidateRoot!, "rev-parse", "HEAD")).toBe(fixture.target);
+      } else {
+        expect(removals(fixture)).toHaveLength(1);
+      }
+      expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(before);
+    } finally {
+      removal.mockRestore();
+      for (const root of [candidateRoot, inspectionRoot]) {
+        if (root) {
+          await remove(path.dirname(root), { recursive: true, force: true });
+        }
       }
     }
   },

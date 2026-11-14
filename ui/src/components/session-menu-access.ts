@@ -50,8 +50,8 @@ export function sessionMenuReasons(params: {
   const promotionReason = !session.sessionId?.trim()
     ? t("sessionsView.lifecycleIdentityRequired")
     : patchReason({ sidebarRoot: true }, true);
-  const iconReason = patchReason({ icon: null });
-  const colorReason = patchReason({ color: null });
+  const iconReason = patchReason({ icon: null }, true);
+  const colorReason = patchReason({ color: null }, true);
   const communicationReason = patchReason({ communication: null });
   const batchSession = batchRows ? sessionAccessRowForBatch(batchRows) : session;
   const batchPatchReason = (patch: Record<string, unknown>, sessionScope = false) => {

@@ -1,6 +1,9 @@
 # Deep Research
 
 A default-enabled, lazy bundled research tool. Existing plugin allowlists and tool policy still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
+The running Gateway must provide session-work authority. If the service reports
+missing session-work support, update OpenClaw and restart the Gateway; reloading
+the plugin alone cannot add the missing host capability.
 Supply a question; the host selects its configured model and isolated agent runtime.
 An explicit model override requires the existing plugin LLM policy permission.
 The controller uses `llm.complete` with `execution.mode: "isolated-agent-runtime"`

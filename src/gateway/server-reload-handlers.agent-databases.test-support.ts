@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it, onTestFinished } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   applyAgentDatabaseReaderRequest,
@@ -41,6 +42,7 @@ export function registerGatewayAgentDatabaseReloadTests(
             if (!commit) {
               throw new Error("config publication rejected");
             }
+            setRuntimeConfigSnapshot(nextConfig, nextConfig);
             await publishConfig();
           },
         });

@@ -1,2 +1,0 @@
-# Desktop Details stacked subagents keep distinct identity tints.
-5

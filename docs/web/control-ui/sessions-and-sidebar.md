@@ -311,6 +311,11 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 When a remote project session starts before its repository finishes cloning, chat shows workspace preparation progress. If preparation fails, opening or reloading chat restores the session's failure summary. Correct the reported problem, then send a new message in the same session to retry preparation.
 
+An unrecognized Git clone or refresh failure includes a **Diagnostic ID**. Give
+that ID to the Gateway operator to find the matching `projects/clone` file-log
+entry, which retains Git's exit status and process output. Raw Git output stays
+out of the shared conversation; the diagnostic ID does not grant log access.
+
 Accepted browser messages, including initial prompts waiting for workspace
 preparation and follow-ups during a run, remain visible as normal message bubbles
 until their own turn starts, without an additional receipt notice. Inputs accepted through `sessions_send` or the
@@ -660,8 +665,8 @@ The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark
 - In the sidebar session menu, **Snooze** offers **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), and **Next week** (next Monday at 09:00 local). On Sundays, Next week is omitted because it matches Tomorrow. Each preset shows its wake time in your locale. Active sessions eligible for pinning can be snoozed, except protected main and sentinel sessions; archived and nested child sessions cannot. A child moved to the top level can be snoozed. A snoozed session offers **Wake session** instead.
 - **Icon & color** opens one picker with color swatches, an icon grid, and **Reset to default**. It stays open while you change both; the sidebar reflects your changes.
 - **Move to group** includes **New group** and **Remove from group**. **Assign to** stays on the root menu when more than one eligible owner is available ([session ownership](/concepts/multi-user#assigning-an-owner)).
-  On phones, **Search groups** matches canonically equivalent accented names
-  without changing the stored group name; an unaccented query remains distinct.
+  **Search groups** matches canonically equivalent accented names without
+  changing the stored group name; an unaccented query remains distinct.
 - **Fork session** creates a separate session; while the agent is replying, it forks from the last completed message. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
 - **Copy link** copies the session link in one step. **Advanced → Copy details** offers the preview link, conversation text as Markdown, and the session ID, without duplicating the common session link. The link requires normal Gateway authentication and session access; copying it does not grant access. Markdown loads the available conversation history, not just the messages currently visible. Both copied Markdown and `/export` downloads retain the conversation's sender labels, so messages from different participants remain distinguishable. Records without exportable text, such as tool calls without text output, are omitted.
 - In the Control UI, `/export` and `/export-session` load the available conversation history before downloading Markdown through your browser, even when older messages have not been scrolled into view. If history cannot be read completely or the conversation changes while paging, the export fails instead of downloading a partial file; retry the command. These commands take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
@@ -880,7 +885,9 @@ If startup is rejected, the draft remains available to correct and retry.
 
 ### OpenClaw Chat workspace startup
 
-On an OpenClaw Chat send, the submitted text and attachments appear immediately with a **Starting** indicator while the Gateway creates or adopts the session. This is a pending submission, not a Gateway acknowledgment. If creation is rejected, your prompt and attachments remain available to correct and retry. Once creation succeeds, the UI opens the session's chat. If navigation fails, the submitted message stays visible with an **Open session** action that retries navigation without creating or sending again. A background start keeps the same visible acknowledgment above the next draft, with a link to the created session.
+On an OpenClaw Chat send, the submitted text and attachments appear immediately with a **Starting** indicator while the Gateway creates or adopts the session. This is a pending submission, not a Gateway acknowledgment. If creation is rejected, your prompt and attachments remain available to correct and retry. Once creation succeeds, the UI opens the session's chat. If navigation fails, the submitted message stays visible with an **Open session** action that retries navigation without creating or sending again. A background start leaves the normal New session screen in place. The composer keeps its prompt until creation is accepted, then clears and regains focus for the next prompt. The same Session started notice as the command palette links to the created session; failures keep their existing recovery action instead of adding a transcript to New session.
+
+On desktop, press **⌘Enter** on Mac or **Ctrl+Enter** on Windows/Linux in the New session composer to start in the background, the same chord the command palette uses. New session stays open for your next prompt, and the started session appears in the sidebar. With the **Cmd/Ctrl+Enter** send shortcut selected, that chord remains the normal start; add **Shift** to start in the background. **Draft** sessions and native coding CLI starts always open the session they create.
 
 If the model catalog is still loading, session creation stops waiting after a shared 20-second catalog deadline and reports that the session was not created. Retry shortly; your draft remains available. Closing the requesting connection or losing its authority also ends a pending catalog wait.
 

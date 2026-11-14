@@ -389,6 +389,17 @@ export const GatewayConfigSchema = z
                   .refine(isAbsolute, "Expected an absolute credential file path"),
               })
               .optional(),
+            /** Optional organization commit credit, supplied only by the authenticated proxy. */
+            gitCoauthor: z
+              .strictObject({
+                nameHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailVerifiedHeader: z
+                  .string()
+                  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
+                  .optional(),
+              })
+              .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({
@@ -427,11 +438,11 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
-    /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
+    /** Role definitions; a default enables profile-bound named-role enforcement. */
     roles: z
       .strictObject({
-        /** Required default for profiles without a valid explicit or GitHub login assignment. */
-        default: GatewayOperatorRoleNameSchema,
+        /** Enables named-role enforcement and supplies the fallback for unassigned profiles. */
+        default: GatewayOperatorRoleNameSchema.optional(),
         assignments: z
           .strictObject({
             /** Case-insensitive GitHub login assignments; explicit profile assignments win. */
@@ -447,11 +458,19 @@ export const GatewayConfigSchema = z
           ),
       })
       .superRefine((roles, ctx) => {
-        if (!Object.hasOwn(roles.definitions, roles.default)) {
+        if (roles.default !== undefined && !Object.hasOwn(roles.definitions, roles.default)) {
           ctx.addIssue({
             code: "custom",
             message: "gateway.roles.default must name a configured role definition",
             path: ["default"],
+          });
+        }
+        if (roles.default === undefined && roles.assignments?.byGithubLogin !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message:
+              "gateway.roles.assignments.byGithubLogin requires gateway.roles.default to enable named-role enforcement",
+            path: ["assignments", "byGithubLogin"],
           });
         }
         const githubLogins = new Set<string>();

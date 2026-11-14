@@ -379,6 +379,8 @@ it.each([false, true])(
             await verifyAgentDatabaseStartupIntegrity(input);
           },
         });
+        // Join fixture startup before exercising the bounded request-facing write admission.
+        await admission.waitForAgentPreparation("main", { env });
         await admission.waitForAgentPreparation("main", { env, forWrite: true });
         expect(() => assertAgentDatabaseAdmitted("main", { env })).not.toThrow();
         expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
@@ -404,7 +406,7 @@ it.each([false, true])(
 );
 
 it.each(["healthy", "inconclusive", "corrupt"] as const)(
-  "settles owed runtime verification outside the writer without retrying %s scans",
+  "settles owed runtime verification outside the writer after native loss (%s)",
   async (outcome) => {
     const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("runtime-verification-")) };
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
@@ -460,22 +462,26 @@ it.each(["healthy", "inconclusive", "corrupt"] as const)(
           expect(readSqliteDatabaseIntegrityVerification(pathname)?.verifiedAt !== undefined).toBe(
             outcome === "healthy",
           );
-          await closeOpenClawAgentDatabasesAsync();
-          // Native loss revokes transferred admission; it cannot restart the same physical scan.
-          invalidateOpenClawAgentDatabaseValidation(pathname);
-          revokeSqliteDatabaseAdmissionsForPath(pathname);
           await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 4 });
           await admission.pendingPreparation;
           expect(verifyIntegrity).toHaveBeenCalledOnce();
           await closeOpenClawAgentDatabasesAsync();
+          // Native loss requires fresh proof; an inconclusive attempt still must not loop.
+          invalidateOpenClawAgentDatabaseValidation(pathname);
+          revokeSqliteDatabaseAdmissionsForPath(pathname);
+          await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 5 });
+          await admission.pendingPreparation;
+          expect(verifyIntegrity).toHaveBeenCalledTimes(outcome === "healthy" ? 2 : 1);
+          await closeOpenClawAgentDatabasesAsync();
+          expect(readSqliteDatabaseCleanClose(pathname)).toBe(outcome === "healthy");
           closeOpenClawAgentDatabasesForTest();
           fs.renameSync(pathname, `${pathname}.previous`);
           fs.copyFileSync(`${pathname}.previous`, pathname);
           invalidateOpenClawAgentDatabaseValidation(pathname);
           revokeSqliteDatabaseAdmissionsForPath(pathname);
-          await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 5 });
+          await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 6 });
           await admission.pendingPreparation;
-          expect(verifyIntegrity).toHaveBeenCalledTimes(2);
+          expect(verifyIntegrity).toHaveBeenCalledTimes(outcome === "healthy" ? 3 : 2);
         }
       } finally {
         checking.resolve();

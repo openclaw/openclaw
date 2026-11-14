@@ -82,9 +82,13 @@ it.each([
   expect(onSend).not.toHaveBeenCalled();
 });
 
-it("waits for startup progress rather than claiming preparation before the first status", () => {
+it("waits for startup progress rather than claiming preparation before the first status", async () => {
+  // A pending shared frame keeps this mount's transcript admission asynchronous.
+  const queuedLayout = {};
+  scheduleLayout(queuedLayout, () => {});
+  onTestFinished(() => cancelLayout(queuedLayout));
   const container = renderChatView({ runActive: true, stream: "" });
-  expect(workingStatus(container)).toContain("Working…");
+  await waitForSolid(() => expect(workingStatus(container)).toContain("Working…"));
   expect(
     container.querySelector(".chat-working-indicator__status > span:first-child")?.className,
   ).toContain("sr-only");

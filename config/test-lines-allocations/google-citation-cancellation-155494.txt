@@ -1,2 +1,0 @@
-# Google regressions: citation cancellation, no later batches/cache publication, header precedence.
-63

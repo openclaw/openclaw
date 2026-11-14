@@ -77,14 +77,12 @@ function itemDependencies(item: TranscriptDependencyItem): readonly unknown[] {
     ];
   }
   if (item.kind === "work-group") {
-    const anchors = Array.from(item.previewAfterGroup ?? []).flat();
     return [
       item.key,
       item.durationMs,
       item.replyRunId,
       item.ownerless,
       ...item.groups.flatMap(groupDependencies),
-      ...anchors,
     ];
   }
   if (item.kind === "activity-run") {

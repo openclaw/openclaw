@@ -1,6 +1,7 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
@@ -246,30 +247,18 @@ function isMemoryWikiImportResult(value: unknown): value is MemoryWikiImportedSo
   );
 }
 
-async function callWikiGateway(method: "wiki.status", agentId?: string): Promise<MemoryWikiStatus>;
-async function callWikiGateway(
-  method: "wiki.doctor",
-  agentId?: string,
-): Promise<MemoryWikiDoctorReport>;
-async function callWikiGateway(
-  method: "wiki.bridge.import",
-  agentId?: string,
-): Promise<MemoryWikiImportedSourceSyncResult>;
-async function callWikiGateway(
+async function callWikiGateway<T>(
   method: "wiki.status" | "wiki.doctor" | "wiki.bridge.import",
+  isResult: (value: unknown) => value is T,
   agentId?: string,
-) {
-  const result = await callGatewayFromCli(
-    method,
-    { timeout: WIKI_GATEWAY_TIMEOUT_MS },
-    agentId ? { agentId } : undefined,
-    { progress: false },
-  );
-  if (
-    (method === "wiki.status" && isMemoryWikiStatus(result)) ||
-    (method === "wiki.doctor" && isMemoryWikiDoctorReport(result)) ||
-    (method === "wiki.bridge.import" && isMemoryWikiImportResult(result))
-  ) {
+  signal?: AbortSignal,
+): Promise<T> {
+  const options = { timeout: WIKI_GATEWAY_TIMEOUT_MS };
+  const params = agentId ? { agentId } : undefined;
+  const result = await callGatewayFromCli(method, options, params, { progress: false, signal });
+  // A reply that settles after Ctrl+C or SIGTERM is dropped, not printed.
+  signal?.throwIfAborted();
+  if (isResult(result)) {
     return result;
   }
   throw new Error(`Invalid Gateway response for ${method}.`);
@@ -435,19 +424,28 @@ async function runWikiStatus(params: {
     localStatus = await resolveMemoryWikiStatus(params.config, { appConfig: params.appConfig });
   }
   const format = routeThroughGateway ? formatGatewayJsonOrText : formatJsonOrText;
-  if (params.doctor) {
-    const report = localStatus
-      ? buildMemoryWikiDoctorReport(localStatus)
-      : await callWikiGateway("wiki.doctor", params.agentId);
-    if (!report.healthy) {
-      process.exitCode = 1;
+  // Bridge reads stop with the command, and an interrupted read prints nothing.
+  const signal = routeThroughGateway ? getAsyncWorkSignal() : undefined;
+  try {
+    if (params.doctor) {
+      const report = localStatus
+        ? buildMemoryWikiDoctorReport(localStatus)
+        : await callWikiGateway("wiki.doctor", isMemoryWikiDoctorReport, params.agentId, signal);
+      if (!report.healthy) {
+        process.exitCode = 1;
+      }
+      writeOutput(format(report, params.json, renderMemoryWikiDoctor));
+      return;
     }
-    writeOutput(format(report, params.json, renderMemoryWikiDoctor));
-    return report;
+    const status =
+      localStatus ??
+      (await callWikiGateway("wiki.status", isMemoryWikiStatus, params.agentId, signal));
+    writeOutput(format(status, params.json, renderMemoryWikiStatus));
+  } catch (error) {
+    if (!signal?.aborted) {
+      throw error;
+    }
   }
-  const status = localStatus ?? (await callWikiGateway("wiki.status", params.agentId));
-  writeOutput(format(status, params.json, renderMemoryWikiStatus));
-  return status;
 }
 
 async function runWikiBridgeImport(params: {
@@ -459,7 +457,11 @@ async function runWikiBridgeImport(params: {
   const render = (value: MemoryWikiImportedSourceSyncResult) =>
     terminalText`Bridge import synced ${value.artifactCount} artifacts across ${value.workspaces} workspaces (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`;
   if (shouldRouteBridgeRuntimeThroughGateway(params.config)) {
-    const result = await callWikiGateway("wiki.bridge.import", params.agentId);
+    const result = await callWikiGateway(
+      "wiki.bridge.import",
+      isMemoryWikiImportResult,
+      params.agentId,
+    );
     writeOutput(formatGatewayJsonOrText(result, params.json, render));
     return result;
   }

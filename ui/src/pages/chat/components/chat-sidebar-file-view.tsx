@@ -51,14 +51,14 @@ export function saveFileWrapPreference(wrap: boolean): void {
 }
 
 export function computeFileMatches(content: string, query: string): number[] {
-  const normalizedQuery = query.toLocaleLowerCase();
+  const normalizedQuery = query.toLocaleLowerCase().normalize("NFC");
   if (!normalizedQuery) {
     return [];
   }
   return content
     .split(/\r\n?|\n/)
     .flatMap((line, index) =>
-      line.toLocaleLowerCase().includes(normalizedQuery) ? [index + 1] : [],
+      line.toLocaleLowerCase().normalize("NFC").includes(normalizedQuery) ? [index + 1] : [],
     );
 }
 

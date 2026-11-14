@@ -1,4 +1,8 @@
-import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
+import {
+  WORKBOARD_STATUSES,
+  WORKBOARD_VERIFICATION_OUTCOMES,
+  type WorkboardCard,
+} from "@openclaw/workboard-contract";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -173,6 +177,35 @@ const toolSchemas = {
     createdCardIds: Type.Optional(
       Type.Array(Type.String(), { description: "Cards created during this run." }),
     ),
+    claims: Type.Optional(
+      Type.Array(
+        strictObject({
+          statement: Type.String({ description: "One thing you claim the result does." }),
+          proofId: Type.Optional(
+            Type.String({ description: "Existing proof id that backs this claim." }),
+          ),
+        }),
+        {
+          description:
+            "Optional itemized claims, recorded as your claims; completion never waits on them.",
+        },
+      ),
+    ),
+  }),
+  verify: strictObject({
+    id: cardIdField(),
+    scope: Type.String({ description: "What you checked, and how." }),
+    outcome: Type.Union(
+      WORKBOARD_VERIFICATION_OUTCOMES.map((outcome) => Type.Literal(outcome)),
+      { description: "Your conclusion." },
+    ),
+    claimId: Type.Optional(Type.String({ description: "Claim record you checked." })),
+    proofId: Type.Optional(Type.String({ description: "Proof record you checked." })),
+    artifactId: Type.Optional(Type.String({ description: "Artifact you checked." })),
+    runId: Type.Optional(Type.String({ description: "Run whose result you checked." })),
+    note: Type.Optional(Type.String({ description: "Short finding." })),
+    url: Type.Optional(Type.String({ description: "http(s) link to your check." })),
+    token: ScopedClaimTokenField,
   }),
   attachment_add: strictObject({
     id: cardIdField(),
@@ -211,8 +244,9 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const { store } = params;
   const ownerId = contextOwner(params.context);
+  const runId = params.context?.runId;
   const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
-    createWorkboardCardMutations(store, ownerId);
+    createWorkboardCardMutations(store, ownerId, runId);
   const tools: AnyAgentTool[] = [
     {
       name: "workboard_list",
@@ -368,6 +402,14 @@ export function createWorkboardTools(params: {
       execute: claimedCardMutation((id, record, scope) => store.complete(id, record, scope)),
     },
     {
+      name: "workboard_verify",
+      label: "Workboard Verify",
+      description:
+        "Record your check of a Workboard card's result: what you checked and what you concluded. Evidence only; it never changes the card's status.",
+      parameters: toolSchemas.verify,
+      execute: scopedCardMutation((id, record, scope) => store.verify(id, record, scope)),
+    },
+    {
       name: "workboard_attachment_add",
       label: "Workboard Attachment Add",
       description:
@@ -427,7 +469,7 @@ export function createWorkboardTools(params: {
         store.move(id, record.status, undefined, scope),
       ),
     },
-    ...createWorkboardOrchestrationTools({ store, ownerId }),
+    ...createWorkboardOrchestrationTools({ store, ownerId, runId }),
   ];
   for (const tool of tools) {
     const execute = tool.execute;

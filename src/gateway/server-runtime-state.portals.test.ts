@@ -1,6 +1,7 @@
 import { request } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 vi.mock("../infra/tailscale.js", () => ({ claimTailscaleServePort: vi.fn() }));
@@ -49,7 +50,12 @@ describe("Gateway portal ingress startup", () => {
             portals: { ingress: { domain: "previews.example.net", port: 0 } },
           },
         },
-        getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
+        getReadiness: createPreparedReadinessFixture(() => ({
+          ready: true,
+          coreReady: true,
+          failing: [],
+          uptimeMs: 1,
+        })),
       });
       runtimes.push(runtime);
       const gatewayServers = [...runtime.httpServers];

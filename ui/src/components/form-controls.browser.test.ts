@@ -37,7 +37,10 @@ function readUiCss(): string {
     "chat/sidebar-panels",
     "plugins",
   ];
-  return files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)).join("\n");
+  return [
+    ...files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)),
+    readStyleSheet("ui/src/pages/chat/components/chat-session-workspace-desktop.css"),
+  ].join("\n");
 }
 
 function readStyles(
@@ -625,7 +628,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <span data-scale class="sidebar-agent-card__name">Agent</span>
               <span data-scale class="settings-sidebar__item-label">Settings</span>
               <span data-scale class="sidebar-file-view__path">workspace/file.ts</span>
-              <span data-scale class="chat-workspace-rail__file-badge">3 files</span>
+              <div class="workspace-desktop"><span data-scale class="workspace-desktop__filename">3 files</span></div>
               <span data-scale class="session-menu__shortcut">⌘K</span>
               <div class="file-view__search"><input data-scale data-baseline="12" value="query" /><span data-scale class="file-view__search-counter">1/2</span></div>
               <div class="sidebar-recent-session"><button class="sidebar-child-session-toggle"><span class="sidebar-child-session-toggle__count">100</span></button></div>

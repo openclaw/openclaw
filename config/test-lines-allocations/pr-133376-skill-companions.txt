@@ -1,2 +1,0 @@
-# Regression proof for local skill companion confinement, placement and revocation.
-190

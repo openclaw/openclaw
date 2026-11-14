@@ -11,6 +11,16 @@ title: "Integrity, troubleshooting, and recovery"
 
 Gateway process owns every OpenClaw database and its state. In-process writer receipts invalidate cached rows across workers and handles; use direct reads when cache cannot be covered. Never add runtime foreign-commit probes (`PRAGMA data_version`, version observations, foreign-observation scopes); remove when touched. Outside writers, including CLI, Doctor, cron, plugin children: must use Gateway or hold exclusive ownership while Gateway stopped. Preserve live-authority checks at effect boundaries and consistent snapshots for multi-statement reads.
 
+Process lock guards consume retained custody and immediate in-process revocation.
+The heartbeat worker verifies lock bytes and physical identity; manual removal or
+replacement is detected on its next observation, not by reopening both sidecars
+at every effect. Peers cannot reclaim a live process's exclusive-create lock.
+Overdue verification refuses work until asynchronous renewal recovers, without
+synchronous filesystem recovery on the Gateway thread. Offline schema custody
+and selected-path alias checks retain their separate physical checks.
+Native handle and recorded-lease cleanup prepare a fresh worker observation of
+their captured owner before choosing ordinary settlement or loss recovery.
+
 Shared-state SQLite workers load operation handlers by domain on first use. A
 session operation does not initialize unrelated cron, secrets, transcript, or
 update handlers. The worker backend still owns database handles, write admission,
@@ -92,6 +102,15 @@ refuses admission, and
 migrations, noncanonical schema changes, and explicit FULL verification retain
 their checks. Older crash-recovery quick receipts remain readable until their
 existing expiry; new crash admissions do not create them.
+
+When native retirement revokes a completed background verification, the next
+runtime admission schedules a new background check. A completed attempt cannot
+stand in for revoked proof. Pending and inconclusive attempts remain shared to
+avoid repeated scans on worker churn. Successful verification publishes through
+the admitted writer and supplies the existing clean-close seal. Runtime-admitted
+stores retain their physical database and Gateway lifetime checks independently
+of the configured startup roster; configuration-selected startup stores also
+retain their configuration-change checks.
 
 The borrowing process never checked the file itself, so if it closes last it
 leaves the next opener to verify instead of writing a seal. Live-peer provenance

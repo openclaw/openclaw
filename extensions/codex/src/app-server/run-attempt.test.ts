@@ -391,7 +391,7 @@ function createGoogleCalendarRequest(
     }
     if (method === "config/read") {
       expect((params as { includeLayers?: boolean } | undefined)?.includeLayers).toBe(true);
-      return { config: {}, layers: [] };
+      return { config: {}, origins: {}, layers: [] };
     }
     if (
       method === "app/installed" &&
@@ -770,7 +770,7 @@ describe("runCodexAppServerAttempt", () => {
         : { enabled: true, backendId: "codex-test-sandbox", workspaceAccess: "rw" };
       const request = vi.fn(async (method: string, _requestParams?: unknown) => {
         if (method === "config/read") {
-          return execServer ? { config: {}, origins: {}, layers: [] } : { config: {}, layers: [] };
+          return { config: {}, origins: {}, layers: [] };
         }
         if (execServer && method === "configRequirements/read") {
           return { requirements: null };
@@ -1470,7 +1470,7 @@ describe("runCodexAppServerAttempt", () => {
     params.onAgentEvent = onAgentEvent;
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "config/read") {
-        return { config: {}, layers: [] };
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "configRequirements/read") {
         return { requirements: null };

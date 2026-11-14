@@ -273,6 +273,7 @@ export function parsePullListItem(value: unknown) {
     ...(headRepository ? { headRepository } : {}),
     baseRef: readNonBlankString(base.ref),
     mergeCommitSha: readNonBlankString(value.merge_commit_sha),
+    createdAt: readNonBlankString(value.created_at),
   };
 }
 

@@ -337,7 +337,7 @@ it.each([
       expect(page.textContent).toContain(expected);
       expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
       if (outcome === "timeout") {
-        expect(page.textContent).not.toContain("Another surface or an earlier attempt");
+        expect(page.textContent).not.toContain("A decision was already recorded");
       }
     }
   },

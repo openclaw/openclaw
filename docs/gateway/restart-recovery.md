@@ -218,6 +218,11 @@ Startup opens external input after recovery discovery installs each session's
 admission wait. Recovery admission continues in the background: a fresh turn for
 a recovering session waits until its resume input and retained FIFO inputs own
 their ordinary queue slots. Other sessions in the same agent can proceed.
+Incoming session events wait before reserving their FIFO position, so they cannot
+block the recovery input that must precede them. A shutdown marker still resumes
+the interrupted work when shutdown left the session marked as killed or when a
+completed reply had background commands; an empty queued-input list does not
+discard that continuation.
 Stores prepared later install these waits before publishing database admission.
 This also applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
@@ -273,6 +278,20 @@ and `null` means its boolean status is unavailable. A zero effect count does not
 mean the full admissions join has settled: it also waits for source, subagent, and
 terminal-persistence cleanup.
 
+Agent database native closes taking at least 500 ms append phase durations to the
+existing clean-close receipt: WAL-maintenance stop, checkpoint, native close, and
+lease release. A per-database resource drain taking at least 500 ms also emits one
+`agent database close settled` line on the same logger, separating resource join,
+native executor join, and remaining native-owner cleanup. Executor join includes
+accepted work, native receipt phases, and subsequent shared-state cleanup; these durations overlap
+and should not be added together. Native receipt totals also include preparation
+and identity checks outside the named phases. Both lines carry the agent ID, thread ID, and a
+short hash of the captured database path for correlation without printing the path.
+Different aliases of a path can have different hashes. Fast closes retain their
+existing logging. These diagnostics identify a slow owner without changing its
+receipts, deadlines, checkpoints, or durability. For an updated Gateway, collect
+them at the handoff **after** deployment: the outgoing release runs shutdown.
+
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
@@ -289,12 +308,19 @@ is never reused for an in-process restart. Node exits naturally after owned hand
 close; the native shutdown watchdog kills the process if leaked handles keep it
 alive two seconds past the shutdown deadline. Its worker and main-thread fallback
 share one monotonic deadline, including worker startup time, and report retained
-cleanup owners before forcing exit. After a clean shutdown retires those
-watchdogs, the command waits ten seconds past its own final cleanup. If a leaked
-handle still keeps the process alive, the Gateway prints the active resource types
-to stderr. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
+cleanup owners before forcing exit. Shutdown cleanup runs under the Gateway's
+own plugin authority, so a completed requesting invocation cannot prevent memory
+or channel transports from closing. After settled shutdown retires those
+watchdogs, the Gateway command waits one second past its own final cleanup. If a
+leaked handle still keeps the process alive, it prints active resource and handle
+types to stderr, plus details for at most eight handles: stdout/stderr labels, TLS
+servername and remote address, or a child executable (without arguments). Endpoint
+names and executable strings are bounded to 255 characters and JSON escaped. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
 which supervisors count as a clean stop. A non-zero status, which can be a
-supervisor restart instruction, and Windows keep the report only. A duplicate `SIGTERM` during shutdown is
+supervisor restart instruction, and Windows keep the report only. A recorded
+cleanup rejection with status `1` and no retained work uses `SIGUSR2` after one second,
+so supervisors observe failure; logs and any stability bundle preserve the reason. Pending persistence or
+retained resources still keep the hard deadline. A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
@@ -557,7 +583,7 @@ one new input through the normal session-event path:
 
 > The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
 
-If the session had running background exec processes, that same input also says:
+If the session had running ordinary (non-durable) background exec processes, that same input also says:
 
 > Background exec processes were stopped; rerun them if still needed.
 
@@ -618,7 +644,7 @@ Children are not adopted or independently resumed at startup.
 A child that already ended its execution with `sessions_yield waitFor:"message"`
 keeps its paused task across restart. Shutdown marks that session directly;
 startup consumes the marker while preserving the registry's exact paused task,
-without replaying execution or restoring old tool or completion authority.
+without replaying execution or restoring old tool authority.
 The same registry fact protects a recorded message wait after an unclean stop.
 A fresh continuation from its controlling requester goes through ordinary
 admission and retains task-owned result delivery. If the requester finishes or
@@ -639,6 +665,15 @@ A requester yielded for children that restart stopped keeps the ordinary root
 recovery path. Its single resume input reconciles the stopped children's work;
 it is not re-parked waiting for their old executions. A stopped child also needs
 reconciliation when other children still have reachable waits.
+
+Startup admits pending completion custody against the requester's current
+principal, session ID, and lifecycle revision. It never reuses the previous
+process's authority. This covers nested yielded requesters and captured results
+that were waiting for a busy or yielded requester. The whole outstanding cohort
+keeps one requester authority, including when a paused child continues in a new
+turn. Normal delivery records the receipt so another restart cannot deliver it
+again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
+custody.
 
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes

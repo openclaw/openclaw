@@ -20,15 +20,6 @@ export type WhereChipProps = {
 };
 
 export function WhereChip(props: WhereChipProps) {
-  let picker: PopoverHandle | undefined;
-  let pendingSearchFocus: Element | null | undefined;
-  const focusSearch = (search: HTMLElement) => {
-    // The first chunk may arrive after native popover autofocus has finished.
-    if (picker?.overlay.open && search.ownerDocument.activeElement === pendingSearchFocus) {
-      search.focus({ preventScroll: true });
-    }
-    pendingSearchFocus = undefined;
-  };
   const kind = createMemo(() => props.state.kind);
   const triggerIcon = createMemo(() =>
     kind() === "hosted" ? (
@@ -74,13 +65,7 @@ export function WhereChip(props: WhereChipProps) {
   return (
     <SessionPicker
       lazy
-      onBeforeShow={() => {
-        pendingSearchFocus = picker?.overlay.surface.ownerDocument.activeElement;
-      }}
-      ref={(handle) => {
-        picker = handle;
-        props.ref?.(handle);
-      }}
+      ref={props.ref}
       kind="where"
       label={`${t("newSession.where")}: ${view().label}`}
       value={view().label}
@@ -101,7 +86,7 @@ export function WhereChip(props: WhereChipProps) {
       }}
       params={props.params}
     >
-      <WherePickerContent params={props.params} state={props.state} onReady={focusSearch} />
+      <WherePickerContent params={props.params} state={props.state} />
     </SessionPicker>
   );
 }

@@ -1,2 +1,0 @@
-# Pin unknown tooling weights so live stripe membership cannot invalidate the pricing regression.
-4

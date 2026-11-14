@@ -33,6 +33,10 @@ import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { chatGoalOperations } from "./chat-goals.ts";
+import {
+  inlineCommandPresentation,
+  type InlineCommandPresentation,
+} from "./chat-inline-command-presentation.ts";
 import { adoptBootComposer } from "./chat-pane-boot-composer.ts";
 import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
@@ -91,6 +95,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     "replyNavigationId",
   ]);
   const [ready, setReady] = createSignal(false);
+  let preparedInlineCommands: InlineCommandPresentation | undefined;
+  let preparationError: string | undefined;
   let disposed = false;
   let pendingLayout: Promise<void> | undefined;
   let pendingCommit: Deferred<boolean> | undefined;
@@ -141,15 +147,26 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         { sessionKey: runtime.sessionKey },
       ),
     );
-    if (pendingSnapshot) {
-      void pendingSnapshot.then(() => {
+    if (!pendingSnapshot && !runtime.context.theme.settings.chatInlineCommands) {
+      setReady(true);
+      return;
+    }
+    const prepare = async () => {
+      await pendingSnapshot;
+      if (runtime.context.theme.settings.chatInlineCommands) {
+        preparedInlineCommands = await inlineCommandPresentation();
+      }
+    };
+    // No live subscription starts until an enabled renderer can consume stdout.
+    void prepare()
+      .catch((error: unknown) => {
+        preparationError = formatUiError(error);
+      })
+      .finally(() => {
         if (!disposed) {
           setReady(true);
         }
       });
-    } else {
-      setReady(true);
-    }
   });
   onCleanup(() => {
     disposed = true;
@@ -188,7 +205,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function PreparedPane() {
     // Projections created by start belong to this retained component.
     if (!runtime.isConnected) {
-      runtime.start();
+      // The ready gate defers connection until settlement; its projections belong to this view.
+      runtime.start(preparedInlineCommands, preparationError);
     }
     const initialState = runtime.state;
     // Freeze admission before yielding: live refill must not turn a cold load warm.

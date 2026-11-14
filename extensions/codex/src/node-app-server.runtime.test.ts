@@ -264,6 +264,10 @@ describe("Codex worker model process", () => {
             request(30, "command/exec", {
               command: [process.execPath, "-e", "process.stdout.write('worker-command-proof')"],
               cwd: workspaceDir,
+              // Proves gated forwarding, not Linux namespace availability: Codex's
+              // default policy wraps the command in bwrap, which containers and
+              // AppArmor-restricted hosts deny.
+              sandboxPolicy: { type: "dangerFullAccess" },
             }),
           ).resolves.toMatchObject({ result: { stdout: "worker-command-proof", exitCode: 0 } });
           return startedThreadId;

@@ -7,7 +7,7 @@ export function RefreshButton(props: {
   onClick: () => void;
   busy?: boolean;
   disabled?: boolean;
-  /** Replaces the label in the tooltip, for example to add the last update time. */
+  /** Optional tooltip, such as the last update time; the refresh icon needs no label. */
   tooltip?: string;
   class?: JSX.ClassValue;
 }) {
@@ -16,7 +16,7 @@ export function RefreshButton(props: {
       class={["refresh-button", props.class]}
       icon="refresh"
       label={props.label}
-      tooltip={props.tooltip}
+      tooltip={props.tooltip || false}
       busy={props.busy}
       disabled={props.busy || props.disabled}
       onClick={() => props.onClick()}

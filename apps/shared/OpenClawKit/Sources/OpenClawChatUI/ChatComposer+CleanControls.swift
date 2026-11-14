@@ -14,7 +14,6 @@ extension OpenClawChatComposer {
         }
         .buttonStyle(.plain)
         .controlSize(.small)
-        .help("Add attachment")
         .accessibilityLabel("Attachments")
         .accessibilityIdentifier("chat-attachment-picker")
         .disabled(!self.isAttachmentInputEnabled)

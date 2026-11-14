@@ -48,6 +48,8 @@ export async function updateNpmInstalledHookPacks(params: {
   beforePersistentApply?: () => void;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+  /** Once aborted, no further hook pack update starts; this loop does not stop one in progress. */
+  signal?: AbortSignal;
 }) {
   const logger = params.logger ?? {};
   const transactionRequest = resolvePluginInstallTransactionRequest(params);
@@ -74,6 +76,9 @@ export async function updateNpmInstalledHookPacks(params: {
   let changed = false;
 
   for (const hookId of targets) {
+    if (params.signal?.aborted) {
+      break;
+    }
     const record = installs[hookId];
     if (!record) {
       outcomes.push({

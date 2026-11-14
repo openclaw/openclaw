@@ -1,2 +1,0 @@
-# Beam logical handoff: publisher ownership, durable destination identity, model resolution, and lifecycle/ACL regressions.
-2334

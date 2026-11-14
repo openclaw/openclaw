@@ -71,8 +71,17 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
     write(receipt, `${JSON.stringify({ inputs, lookups: result.lookups })}\n`);
     return new BoundaryInputSnapshot(root).record(config, args, receipt, [receipt]);
   };
+  const mismatches: string[] = [];
   const matches = (record: ArtifactRecord) =>
-    new BoundaryInputSnapshot(root).matchesReceipt(record, config, args, [receipt], receipt);
+    new BoundaryInputSnapshot(root).matchesReceipt(
+      record,
+      config,
+      args,
+      [receipt],
+      receipt,
+      undefined,
+      (reason) => mismatches.push(reason),
+    );
   const record = await publish();
   const edit = async (file: string, text: string | null, valid: boolean, diagnostic?: RegExp) => {
     if (text === null) {
@@ -86,6 +95,7 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
     }
   };
   expect(matches(record)).toBe(true);
+  expect(mismatches).toEqual([]);
   const captured = new BoundaryInputSnapshot(root);
   expect(captured.matchesReceipt(record, config, args, [receipt], receipt)).toBe(true);
   expect(captured.matchesReceipt(record, config, args, [receipt], receipt)).toBe(true);
@@ -108,9 +118,13 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
   expect(matches(record)).toBe(true);
 
   const originalReceipt = fs.readFileSync(path.join(root, receipt), "utf8");
+  const receiptData: { inputs: string[]; lookups: unknown[] } = JSON.parse(originalReceipt);
   for (const contents of [
     JSON.stringify({ inputs: record.inputs }),
     JSON.stringify({ inputs: record.inputs, lookups: [] }),
+    ...[[], [null], ["../outside.ts"], [...receiptData.inputs, receiptData.inputs[0]]].map(
+      (inputs) => JSON.stringify({ inputs, lookups: receiptData.lookups }),
+    ),
   ]) {
     write(receipt, contents);
     const forgedOutput = {
@@ -128,6 +142,9 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
   await edit("src/fallback.ts", marker("number"), false, /TS2322/u);
   await edit("src/fallback.ts", marker(), true);
   await edit("src/preferred.ts", marker("number"), false, /TS2322/u);
+  expect(mismatches.at(-1)).toMatch(
+    /compiler resolution lookup changed: .+ "src(?:\/preferred\.ts)?"/u,
+  );
   await edit("src/preferred.ts", null, true);
   await edit("src/package.json", '{"type":"commonjs"}\n', false, /TS1470/u);
   fs.unlinkSync(path.join(root, "src/package.json"));

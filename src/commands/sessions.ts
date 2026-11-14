@@ -34,6 +34,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { classifySessionKind, type SessionKind } from "../sessions/classify-session-kind.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import {
@@ -174,6 +175,7 @@ export async function sessionsCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const signal = getAsyncWorkSignal();
   const aggregateAgents = opts.allAgents === true;
   const cfg = await captureRuntimeConfigAsyncReader()();
   const { resolveModelContextTokenProjection } = await import("../agents/context.js");
@@ -293,6 +295,7 @@ export async function sessionsCommand(
           ? callGateway<ModelsListResult>({
               config: cfg,
               localPortOverride: gatewayOwner.port,
+              signal,
               method: "models.list",
               params: {
                 agentId,
@@ -312,6 +315,9 @@ export async function sessionsCommand(
                 ),
               }))
               .catch(() => {
+                if (signal?.aborted) {
+                  return undefined;
+                }
                 warnCatalogUnavailable();
                 return readSavedCatalog();
               })
@@ -432,6 +438,9 @@ export async function sessionsCommand(
       });
     }),
   );
+  if (signal?.aborted) {
+    return;
+  }
   const hasMore = rows.length < totalCount;
 
   if (opts.json) {

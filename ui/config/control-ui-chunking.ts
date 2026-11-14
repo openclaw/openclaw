@@ -31,8 +31,6 @@ const chatPresentationModules = new Set([
   "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-render-model.ts",
   "ui/src/pages/chat/components/chat-message-bubble-tools.tsx",
-  "ui/src/pages/chat/components/chat-permission-card.tsx",
-  "ui/src/pages/chat/components/chat-tool-content.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-cards.solid.tsx",
   "ui/src/pages/chat/components/chat-message-activity-operation.tsx",
   "ui/src/pages/chat/components/chat-diff-stat.solid.tsx",
@@ -41,7 +39,6 @@ const chatPresentationModules = new Set([
   "ui/src/lib/chat/tool-call-input.ts",
   "src/agents/tool-display-name.ts",
   "ui/src/i18n/locales/en-chat-details.ts",
-  "ui/src/i18n/locales/en-chat-permissions.ts",
   "ui/src/pages/chat/components/chat-details-process-row.tsx",
   "ui/src/pages/chat/components/chat-environment-content.tsx",
 ]);
@@ -258,12 +255,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
-    case "ui/src/components/solid/tabs.tsx":
-    case "ui/src/lib/tabs.ts":
-    case "ui/src/lib/reactive/shadow-styles.ts":
-    case "ui/src/styles/tabs.css":
-      // Both tab renderers already load the owner, adapter, and generic styles together.
-      return "tabs-runtime";
     case "ui/src/components/solid/hub-page-header.tsx":
     case "ui/src/components/solid/settings-workspace.tsx":
     case "ui/src/components/solid/settings-select.tsx":
@@ -346,6 +337,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "chat-outputs";
     case "ui/src/pages/chat/components/chat-details-people-list.tsx":
       return "chat-details-people-list";
+    // Defer noble initialization inside this chunk without another cold-boot request.
+    case "ui/src/lib/nodes/device-signing.noble.ts":
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
     case "ui/src/pages/chat/chat-live-events.runtime.ts":
@@ -403,6 +396,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-composer-skill-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-dom.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-values.ts":
     case "ui/src/pages/chat/components/chat-composer-slash-menu.tsx":
       // Share interaction-only rows without four separate preload-map entries.
       return "composer-invocation-menus";
@@ -422,6 +416,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-session-organization-shared.ts":
       // Settings, New Session, and Chat share this English copy.
       return "chat-english";
+    case "ui/src/i18n/locales/en-session-organization.ts":
+      // Slash commands use shared labels; management copy loads with its own consumers.
+      return "session-management-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":

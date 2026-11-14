@@ -1,5 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { readSqliteInspectionBudget } from "../infra/sqlite-readonly-worker.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -96,7 +96,7 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
       admission: root.admission,
       close,
     });
-    reader = retainSessionHistoryWorkerDatabase(options, maintenanceLane);
+    reader = retainSessionHistoryWorkerDatabase(options, sessionStoreLane);
   } catch (error) {
     log.warn(`Trajectory retention deferred until the next sweep: ${String(error)}`);
     state.pending = cleanup();

@@ -1,3 +1,0 @@
-152
-# Real-CSS Chromium geometry regressions for the Settings sidebar header stack,
-# Agents toolbar, emoji trigger nesting and the 390px phone menu cascade (PR #196129).

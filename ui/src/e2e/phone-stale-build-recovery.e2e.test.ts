@@ -35,7 +35,7 @@ const proofBuildId = proofIdentity.expectedRevisionSha
 const suite = createControlUiE2eSuite({
   name: "Control UI phone stale-build recovery E2E",
   startServer: () =>
-    startPhoneProofServer(proofBuildId, inject("controlUiE2ePrebuiltAssets")?.root),
+    startPhoneProofServer(proofBuildId, inject("controlUiE2eDeploymentAssets")?.root),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,

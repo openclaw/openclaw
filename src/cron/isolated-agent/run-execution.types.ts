@@ -65,6 +65,7 @@ export type CronRunExecutionParams = Pick<
       agentRuntime: string,
     ) => Promise<ModelCatalogEntry[]>;
     persistRunContinuationSession?: CronRunContinuationSession["sync"];
+    recordScheduledMemoryParent?: CronRunContinuationSession["recordScheduledMemoryParent"];
     abortSignal?: AbortSignal;
     abortReason: () => string;
     isAborted: () => boolean;

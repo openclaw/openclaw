@@ -1,2 +1,0 @@
-# Keep operator role policy independent of the heavy protocol validator.
-5

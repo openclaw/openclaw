@@ -16,7 +16,7 @@ const compare = (previous: Record<string, unknown>, current: Record<string, unkn
     prepareSessionRowDeltaFields(previous),
     prepareSessionRowDeltaFields(current),
     current,
-  );
+  ).patch;
 
 it("preserves JSON values and removes fields that disappear from the wire", () => {
   const previous = Object.fromEntries(
@@ -109,7 +109,7 @@ it("recomputes mutable children shared by distinct shallow-frozen row snapshots"
   usage.output = 5;
   const current = Object.freeze({ usage });
   expect(
-    createSessionRowDeltaDiffer()(previous, prepareSessionRowDeltaFields(current), current),
+    createSessionRowDeltaDiffer()(previous, prepareSessionRowDeltaFields(current), current).patch,
   ).toEqual({ set: { usage: { input: 4, output: 5 } }, remove: [] });
 });
 
@@ -151,7 +151,7 @@ it("matches JSON patches through consecutive revisions and audience changes", ()
       remove: Object.keys(before).filter((field) => !(field in after)),
     };
     const current = prepareSessionRowDeltaFields(row);
-    expect(createSessionRowDeltaDiffer()(fields, current, row)).toEqual(expected);
+    expect(createSessionRowDeltaDiffer()(fields, current, row).patch).toEqual(expected);
     previous = row;
     fields = current;
   }
@@ -170,11 +170,8 @@ it("reuses materialized field digests across clock samples without hiding viewer
   for (let snapshotAt = 0; snapshotAt < 20; snapshotAt++) {
     const current = { ...source, snapshotAt };
     expect(
-      createSessionRowDeltaDiffer()(
-        initial,
-        prepareSessionRowDeltaFields(current, source),
-        current,
-      ),
+      createSessionRowDeltaDiffer()(initial, prepareSessionRowDeltaFields(current, source), current)
+        .patch,
     ).toEqual({ set: { snapshotAt }, remove: [] });
   }
   expect(hash).not.toHaveBeenCalled();
@@ -188,11 +185,8 @@ it("reuses materialized field digests across clock samples without hiding viewer
   for (const [field, value] of Object.entries(overrides)) {
     const current = { ...source, [field]: value };
     expect(
-      createSessionRowDeltaDiffer()(
-        initial,
-        prepareSessionRowDeltaFields(current, source),
-        current,
-      ),
+      createSessionRowDeltaDiffer()(initial, prepareSessionRowDeltaFields(current, source), current)
+        .patch,
     ).toEqual({ set: { [field]: value }, remove: [] });
   }
   const replacement = Object.freeze(overrides);
@@ -202,6 +196,6 @@ it("reuses materialized field digests across clock samples without hiding viewer
       initial,
       prepareSessionRowDeltaFields(current, replacement),
       current,
-    ),
+    ).patch,
   ).toEqual({ set: overrides, remove: [] });
 });

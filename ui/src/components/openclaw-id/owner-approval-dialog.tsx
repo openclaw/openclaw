@@ -12,6 +12,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { IconButton } from "../solid/icon-button.tsx";
+import { clawNameFromHostname } from "./claw-name.ts";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { createOwnerDialogMotion } from "./owner-dialog-motion.ts";
 
@@ -21,6 +22,7 @@ registerEnglishCatalog(registerOpenClawIdEnglish);
 // Each request owns its optional expiry input, not the cryptographic attempt state.
 function ApprovalRow(props: {
   request: OwnerApprovalRequest;
+  claw: string;
   owner: OwnerApproval;
   onDevices: () => void;
 }) {
@@ -41,6 +43,19 @@ function ApprovalRow(props: {
         <p class="openclaw-id-devices__description openclaw-id-owner-enter">
           {t("openclawId.approvalCompare")}
         </p>
+      </Show>
+      <Show when={!props.request.error && !props.request.expired && props.request.tools}>
+        {(tools) => (
+          <p class="openclaw-id-devices__description openclaw-id-owner-enter">
+            {t("openclawId.approvalRunsTools", {
+              device: props.request.label,
+              claw: props.claw,
+              surface:
+                [...new Set([...tools().caps, ...tools().commands])].join(", ") ||
+                t("openclawId.approvalNoTools"),
+            })}
+          </p>
+        )}
       </Show>
       <Show when={error()}>
         {(message) => (
@@ -154,7 +169,13 @@ export function showOwnerApprovalDialog(params: {
           onModal-cancel={() => modal.finish(undefined)}
         >
           <div ref={motion.card} class="exec-approval-card openclaw-id-devices">
-            <h2 class="openclaw-id-devices__title">{t("openclawId.approveNewDevice")}</h2>
+            <h2 class="openclaw-id-devices__title">
+              <Show when={projection?.read().hostname} fallback={t("openclawId.approveNewDevice")}>
+                {(hostname) =>
+                  t("openclawId.approveNewDeviceFor", { claw: clawNameFromHostname(hostname()) })
+                }
+              </Show>
+            </h2>
             <IconButton
               class="openclaw-id-devices__close"
               icon="x"
@@ -192,6 +213,10 @@ export function showOwnerApprovalDialog(params: {
               {(request) => (
                 <ApprovalRow
                   request={request()}
+                  claw={
+                    clawNameFromHostname(projection?.read().hostname ?? "") ||
+                    t("openclawId.yourClaw")
+                  }
                   owner={owner!}
                   onDevices={() => {
                     modal.finish(undefined);

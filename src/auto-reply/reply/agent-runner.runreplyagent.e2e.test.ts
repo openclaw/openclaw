@@ -831,7 +831,7 @@ describe("runReplyAgent active steering", () => {
       reason: "tool_authority_mismatch",
       disposition: "followup-policy",
       channel: "whatsapp",
-      sessionId: provided.sessionId,
+      sessionKey: provided.key,
       runId: undefined,
       activeRunId: undefined,
     });
@@ -945,14 +945,10 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
-    expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
-      reason: "runtime_rejected",
-      disposition: "followup-policy",
-      channel: "discord",
-      sessionId: "session",
-      runId: "incoming-run-1",
-      activeRunId: "active-run-1",
-    });
+    expect(warning).toHaveBeenCalledWith(
+      "steering rejected; applying follow-up policy",
+      expect.objectContaining({ error: "Error: queue rejected" }),
+    );
     expect(parkedSteer.fallback).toHaveBeenCalledOnce();
     expect(parkedSteer.consume).not.toHaveBeenCalled();
     active.complete();

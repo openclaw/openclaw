@@ -310,47 +310,141 @@ async function consolidatePacks(
   options: NonNullable<Parameters<typeof requireGit>[2]>,
   onlyIfBacklogged: boolean,
 ) {
-  const present = new Set(names);
-  const packs: Array<{ name: string; size: number; indexBytes: number; promisor: boolean }> = [];
-  for (const name of names) {
-    // Git also publishes indexed loose-* packs; dot-temporary packs stay excluded.
-    if (!/^(?:pack|loose)-[a-f0-9]+\.pack$/.test(name)) {
-      continue;
+  type PackRetirement = { hash: string; selected: string[] };
+  const retirementKey = `worktrees.packRetirement:${repoRoot}`;
+  let objectFormat: string | undefined;
+  const verify = async (selected: string[]) => {
+    objectFormat ??= await requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
+    const verifyDeadline = performance.now() + PACK_BATCH_TIMEOUT_MS;
+    for (let offset = 0; offset < selected.length; offset += 128) {
+      const timeoutMs = Math.ceil(verifyDeadline - performance.now());
+      if (timeoutMs <= 0) {
+        throw new Error("Git pack verification exceeded its thirty-minute budget");
+      }
+      // Relative names and bounded argv also fit Windows' command-line limit.
+      await requireGit(
+        directory,
+        [
+          "-c",
+          "pack.threads=1",
+          "verify-pack",
+          `--object-format=${objectFormat}`,
+          ...selected.slice(offset, offset + 128),
+        ],
+        {
+          ...options,
+          timeoutMs,
+          // Standalone verification checks this pack/index, without rediscovering
+          // the entire partial clone for every index-pack child. Git ignores a ceiling at cwd.
+          env: { ...options.env, GIT_CEILING_DIRECTORIES: path.dirname(directory) },
+        },
+      );
     }
-    const stem = name.slice(0, -5);
-    if (
-      !present.has(`${stem}.idx`) ||
-      present.has(`${stem}.keep`) ||
-      present.has(`${stem}.mtimes`)
-    ) {
-      continue;
-    }
+  };
+  const retire = async ({ hash, selected }: PackRetirement) => {
+    let remaining: string[] = [];
+    // Copying every input object ignores refs, so verification and rewriting run
+    // beside fetch. Only retirement joins the ref queue: OpenClaw fetches read these
+    // packs, and Windows cannot unlink a pack another process has open.
+    await enqueueGitRefMutation(
+      repoRoot,
+      commonDir,
+      () =>
+        withProjectCheckoutLifecycle(
+          repoRoot,
+          { env, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.retire" },
+          async (lease) => {
+            // Leave valid duplicate packs for a later sweep rather than queue foreground
+            // preparation behind a large retirement. Finish each pack's sidecars together.
+            const deadline = performance.now() + PACK_RETIREMENT_BUDGET_MS;
+            for (let offset = 0; offset < selected.length; offset++) {
+              const name = selected[offset]!;
+              if (performance.now() >= deadline) {
+                remaining = selected.slice(offset);
+                break;
+              }
+              const stem = path.join(directory, name.slice(0, -5));
+              // The union can already be one of the inputs. Never retire the output or
+              // a pack another Git writer has since pinned or marked as cruft.
+              if (
+                name === `pack-${hash}.pack` ||
+                (await lstatIfExists(`${stem}.keep`)) ||
+                (await lstatIfExists(`${stem}.mtimes`))
+              ) {
+                continue;
+              }
+              for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+                options.beforeRun?.();
+                lease.assertCurrent();
+                await fs.rm(`${stem}.${extension}`, { force: true });
+              }
+            }
+          },
+        ),
+      options.signal,
+    );
     options.beforeRun?.();
-    const stat = await fs.stat(path.join(directory, name));
-    const index = await fs.stat(path.join(directory, `${stem}.idx`));
-    packs.push({
-      name,
-      size: stat.size,
-      indexBytes: index.size,
-      promisor: present.has(`${stem}.promisor`),
-    });
-  }
-  // Half a batch of individually small inputs fits the existing byte/index
-  // budgets. Count each pack class separately; they must never be combined.
+    await writeConfigMachineStateAsync(
+      retirementKey,
+      remaining.length > 0 ? { hash, selected: remaining } : null,
+      { env },
+    );
+    return remaining.length > 0;
+  };
+  let pending = await readConfigMachineStateAsync<PackRetirement | null>(retirementKey, { env });
+  const present = new Set(names);
   if (
-    onlyIfBacklogged &&
-    ![true, false].some(
-      (promisor) =>
-        packs.filter(
-          (pack) =>
-            pack.promisor === promisor &&
-            pack.size <= PACK_BATCH_BYTES / PACK_BATCH_COUNT &&
-            pack.indexBytes <= PACK_BATCH_INDEX_BYTES / PACK_BATCH_COUNT,
-        ).length >=
-        PACK_BATCH_COUNT / 2,
-    )
+    pending &&
+    (!present.has(`pack-${pending.hash}.pack`) || !present.has(`pack-${pending.hash}.idx`))
   ) {
-    return null;
+    // Another Git compactor replaced this output. Its old input list no longer
+    // proves retirement safe; abandon it and select from the current inventory.
+    options.beforeRun?.();
+    await writeConfigMachineStateAsync(retirementKey, null, { env });
+    pending = null;
+  }
+  const packs: Array<{ name: string; size: number; indexBytes: number; promisor: boolean }> = [];
+  if (!pending) {
+    for (const name of names) {
+      // Git also publishes indexed loose-* packs; dot-temporary packs stay excluded.
+      if (!/^(?:pack|loose)-[a-f0-9]+\.pack$/.test(name)) {
+        continue;
+      }
+      const stem = name.slice(0, -5);
+      if (
+        !present.has(`${stem}.idx`) ||
+        present.has(`${stem}.keep`) ||
+        present.has(`${stem}.mtimes`)
+      ) {
+        continue;
+      }
+      options.beforeRun?.();
+      const stat = await fs.stat(path.join(directory, name));
+      const index = await fs.stat(path.join(directory, `${stem}.idx`));
+      packs.push({
+        name,
+        size: stat.size,
+        indexBytes: index.size,
+        promisor: present.has(`${stem}.promisor`),
+      });
+    }
+    // Half a batch of individually small inputs fits the existing byte/index
+    // budgets. Count each pack class separately; they must never be combined.
+    if (
+      onlyIfBacklogged &&
+      ![true, false].some(
+        (promisor) =>
+          packs.filter(
+            (pack) =>
+              pack.promisor === promisor &&
+              pack.size <= PACK_BATCH_BYTES / PACK_BATCH_COUNT &&
+              pack.indexBytes <= PACK_BATCH_INDEX_BYTES / PACK_BATCH_COUNT,
+          ).length >=
+          PACK_BATCH_COUNT / 2,
+      )
+    ) {
+      return null;
+    }
   }
   // MIDX is optional lookup metadata. Invalidate both entry points without
   // enumerating every object to rebuild the whole repo.
@@ -365,9 +459,19 @@ async function consolidatePacks(
       }
     },
   );
+  if (pending) {
+    // Resume the admitted retirement, not geometric selection: its verified union
+    // can dominate the remaining inputs or put them over the next batch's limits.
+    await verify([`pack-${pending.hash}.pack`]);
+    const retirementPending = await retire(pending);
+    const remainingNames = await fs.readdir(directory);
+    return {
+      remaining: remainingNames.filter((name) => name.endsWith(".pack")).length,
+      retirementPending,
+    };
+  }
   packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
   let retirementPending = false;
-  let objectFormat: string | undefined;
   for (const promisor of [true, false]) {
     const candidates = packs.filter((pack) => pack.promisor === promisor);
     const batch = [];
@@ -397,34 +501,8 @@ async function consolidatePacks(
       continue;
     }
     const selected = batch.map((pack) => pack.name);
-    // Validate only the packs this pass may retire, without walking refs or
-    // missing partial-clone objects. The streaming writer does not check source CRCs.
-    objectFormat ??= await requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
-    const verifyDeadline = performance.now() + PACK_BATCH_TIMEOUT_MS;
-    for (let offset = 0; offset < selected.length; offset += 128) {
-      const timeoutMs = Math.ceil(verifyDeadline - performance.now());
-      if (timeoutMs <= 0) {
-        throw new Error("Git pack verification exceeded its thirty-minute budget");
-      }
-      // Relative names and bounded argv also fit Windows' command-line limit.
-      await requireGit(
-        directory,
-        [
-          "-c",
-          "pack.threads=1",
-          "verify-pack",
-          `--object-format=${objectFormat}`,
-          ...selected.slice(offset, offset + 128),
-        ],
-        {
-          ...options,
-          timeoutMs,
-          // Standalone verification checks this pack/index, without rediscovering
-          // the entire partial clone for every index-pack child. Git ignores a ceiling at cwd.
-          env: { ...options.env, GIT_CEILING_DIRECTORIES: path.dirname(directory) },
-        },
-      );
-    }
+    // Validate only selected inputs. The streaming writer does not check source CRCs.
+    await verify(selected);
     // Copy every object, including unreachable ones, and compress separately fetched revisions.
     // index-pack publishes the promisor marker and verified index before returning the hash.
     const alias =
@@ -443,45 +521,13 @@ async function consolidatePacks(
     if (!hash) {
       throw new Error("Git pack consolidation returned an invalid pack identity");
     }
-    // Copying every input object ignores refs, so verification and rewriting run
-    // beside fetch. Only retirement joins the ref queue: OpenClaw fetches read these
-    // packs, and Windows cannot unlink a pack another process has open.
-    await enqueueGitRefMutation(
-      repoRoot,
-      commonDir,
-      () =>
-        withProjectCheckoutLifecycle(
-          repoRoot,
-          { env, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.retire" },
-          async (lease) => {
-            // Leave valid duplicate packs for a later sweep rather than queue foreground
-            // preparation behind a large retirement. Finish each pack's sidecars together.
-            const deadline = performance.now() + PACK_RETIREMENT_BUDGET_MS;
-            for (const name of selected) {
-              if (performance.now() >= deadline) {
-                retirementPending = true;
-                break;
-              }
-              const stem = path.join(directory, name.slice(0, -5));
-              // The union can already be one of the inputs. Never retire the output or
-              // a pack another Git writer has since pinned or marked as cruft.
-              if (
-                name === `pack-${hash}.pack` ||
-                (await lstatIfExists(`${stem}.keep`)) ||
-                (await lstatIfExists(`${stem}.mtimes`))
-              ) {
-                continue;
-              }
-              for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
-                options.beforeRun?.();
-                lease.assertCurrent();
-                await fs.rm(`${stem}.${extension}`, { force: true });
-              }
-            }
-          },
-        ),
-      options.signal,
-    );
+    // Record the verified replacement before retirement can yield, defer, or restart.
+    options.beforeRun?.();
+    await writeConfigMachineStateAsync(retirementKey, { hash, selected }, { env });
+    retirementPending = await retire({ hash, selected });
+    if (retirementPending) {
+      break;
+    }
   }
   const remainingNames = await fs.readdir(directory);
   return {

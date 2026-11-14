@@ -17,6 +17,8 @@ export type WorkerGatewayToolRuntime = {
   getPromptProjection(identity: WorkerConnectionIdentity): Promise<{
     tools: NonNullable<WorkerInferenceContext["tools"]>;
     toolSchemaDirectoryPrompt?: string;
+    /** Run-granted deferred tools, listed in the turn's context instead of the cached directory. */
+    runGrantedToolDirectory?: string;
   }>;
   invoke(
     identity: WorkerConnectionIdentity,

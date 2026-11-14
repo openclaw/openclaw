@@ -47,8 +47,13 @@ function normalizedOrigin(value: string | undefined): string | undefined {
   }
 }
 
+/** The linked claw's own origin, or undefined while remote access is off or the claw is not linked. */
+export function resolveOpenClawIdClawOrigin(): string | undefined {
+  return normalizedOrigin(resolver?.());
+}
+
 /** True when `origin` is the linked claw's own origin. */
 export function isOpenClawIdClawOrigin(origin: string | undefined): boolean {
-  const claw = normalizedOrigin(resolver?.());
+  const claw = resolveOpenClawIdClawOrigin();
   return claw !== undefined && normalizedOrigin(origin) === claw;
 }

@@ -27,6 +27,7 @@ export function GoalComposerMode(props: { composer: GoalComposer }) {
             class="composer-context-strip__dismiss"
             icon="x"
             label={t("chat.goals.cancel")}
+            tooltip={false}
             disabled={props.composer.pending}
             onClick={() => props.composer.cancel()}
           />

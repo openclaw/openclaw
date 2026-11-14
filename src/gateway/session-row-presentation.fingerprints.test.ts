@@ -51,6 +51,8 @@ it("retains nested publication facts across real transcript writes without hidin
       clients.map((client) => [client, new ConnectionSessionRows()]),
     );
     const cfg = rolePolicyConfig();
+    // Permission fingerprints do not depend on automatic utility-model discovery.
+    cfg.agents = { defaults: { utilityModel: "" } };
     const query = { agentId: "main", key: "agent:main:fingerprint-publication" };
     const target = { agentId: query.agentId, sessionKey: query.key, sessionId: "fingerprints" };
     const toolOverrides = { mcpToolsDeny: { synthetic: ["unchanged-tool".repeat(100)] } };
@@ -134,7 +136,7 @@ it("retains nested publication facts across real transcript writes without hidin
       expect(nestedHashes).toHaveLength(0);
       current.forEach(({ row, fields }, index) => {
         expect(
-          JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row)),
+          JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row).patch),
         ).toBe(
           JSON.stringify({ set: { updatedAt: Date.now(), snapshotAt: Date.now() }, remove: [] }),
         );
@@ -153,15 +155,15 @@ it("retains nested publication facts across real transcript writes without hidin
     const changed = await read();
     changed.forEach(({ row, fields }, index) => {
       expect(
-        JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row)),
+        JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row).patch),
       ).toBe(JSON.stringify({ set: { toolOverrides: replacement }, remove: [] }));
     });
     setUserProfileRole(profiles[2]!.id, "write");
     prepareGatewayRecipientProfile(clients[2]!);
     const admitted = await read();
     expect(
-      createSessionRowDeltaDiffer()(changed[2]!.fields, admitted[2]!.fields, admitted[2]!.row).set
-        .activitySummary,
+      createSessionRowDeltaDiffer()(changed[2]!.fields, admitted[2]!.fields, admitted[2]!.row).patch
+        .set.activitySummary,
     ).toEqual({ state: "unavailable", canEnsure: true });
     // The row fact owner may publish equal JSON values in a different property order.
     const record = projection.describe(query)!;

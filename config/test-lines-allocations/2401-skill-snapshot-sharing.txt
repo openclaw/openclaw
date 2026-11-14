@@ -1,2 +1,0 @@
-# Fresh snapshots share equal metadata after eligibility, while changed eligibility stays fresh.
-10

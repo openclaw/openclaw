@@ -1,2 +1,0 @@
-# Real container regression: absent HOME, read-only root, offline pnpm, scratch isolation.
-84
