@@ -391,6 +391,58 @@ suite.define(() => {
     });
   });
 
+  it("keeps a failed first Secrets read out of the empty state and recovers with Retry", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "secrets.store.list",
+            "secrets.store.set",
+          ],
+          heldMethods: ["secrets.store.list"],
+          methodResponses: { "secrets.store.list": { entries: [] } },
+        });
+        await page.goto(new URL("settings/secrets", suite.server.baseUrl).href);
+        await gateway.waitForRequest("secrets.store.list");
+        const surface = page.locator("openclaw-secrets-page");
+        await surface.locator(".settings-loading-skeleton").waitFor();
+        const empty = surface.getByText("No secrets yet.", { exact: false });
+        expect(await empty.count()).toBe(0);
+        await gateway.rejectDeferred("secrets.store.list", {
+          message: "Could not read the Secrets inventory",
+        });
+        const error = surface.getByRole("alert");
+        await error.waitFor();
+        expect(await error.textContent()).toContain("Could not read the Secrets inventory");
+        const falseEmpty = await empty.count();
+        const artifacts =
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? createControlUiE2eArtifactDir("secrets-first-read")
+            : undefined;
+        if (artifacts) {
+          const frame = await takeControlUiScreenshotFrame(page, surface, [error], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(artifacts, "failed.png"), frame.png);
+        }
+        await error.getByRole("button", { name: "Retry", exact: true }).click();
+        await error.waitFor({ state: "hidden" });
+        await empty.waitFor();
+        expect(await error.count()).toBe(0);
+        expect(await gateway.getRequests("secrets.store.list")).toHaveLength(2);
+        if (artifacts) {
+          const frame = await takeControlUiScreenshotFrame(page, surface, [empty], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(artifacts, "empty.png"), frame.png);
+        }
+        expect(falseEmpty, "A failed inventory read is not proof that no secrets exist").toBe(0);
+      },
+    );
+  });
+
   it("wraps row-shaped loading controls at the compact breakpoint", async () => {
     await suite.withPage(
       {
