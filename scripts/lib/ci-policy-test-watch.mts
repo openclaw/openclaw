@@ -306,7 +306,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   ...[
     "extensions/qa-lab/src/ci-smoke-plan.test.ts",
-    "extensions/qa-lab/src/cli.runtime.test.ts",
+    "extensions/qa-lab/src/cli-scenario-selection.test.ts",
     "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts",
     "extensions/qa-lab/src/profile-evidence-plan.test.ts",
     "extensions/qa-lab/src/scenario-retained-final.test.ts",
@@ -393,7 +393,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   ...[
     "extensions/qa-lab/src/ci-smoke-plan.test.ts",
-    "extensions/qa-lab/src/cli.runtime.test.ts",
+    "extensions/qa-lab/src/cli-coverage.runtime.test.ts",
     "extensions/qa-lab/src/profile-evidence-plan.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,

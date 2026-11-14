@@ -160,7 +160,7 @@ it.each(["aggressive", "full"] as const)(
     // #182101: the retention census imports this helper but has its own opt-in config.
     const helper = "ui/src/test-helpers/control-ui-e2e.ts";
     const optIn = "scripts/control-ui-retention/dependency-retention.test.ts";
-    const consumer = "ui/src/test-helpers/control-ui-e2e.test.ts";
+    const consumer = "ui/src/test-helpers/control-ui-e2e-browser-lifetime.test.ts";
     const cwd = fixture({
       [helper]: "export const helper = 1;\n",
       [optIn]: 'import "../../ui/src/test-helpers/control-ui-e2e.ts";\n',

@@ -287,9 +287,14 @@ const gitToolingTargets = [
 const lintSuppressionInventoryTest = "test/scripts/lint-suppressions.test.ts";
 
 it("keeps activity unit changes narrow alongside root package metadata", () => {
-  expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
+  expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.presence.test.ts"])).toBe(
+    false,
+  );
   expect(
-    hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts", "package.json"]),
+    hasUiE2eAffectingChange([
+      "ui/src/pages/activity/activity-page.presence.test.ts",
+      "package.json",
+    ]),
   ).toBe(false);
 });
 
@@ -339,8 +344,11 @@ it.each(
   [
     [],
     ["ui/src/pages/activity/deleted.test.ts"],
-    ["ui/src/pages/activity/activity-page.test.ts", "ui/src/pages/activity/activity-page.tsx"],
-    ["ui/src/test-helpers/control-ui-e2e.test.ts"],
+    [
+      "ui/src/pages/activity/activity-page.presence.test.ts",
+      "ui/src/pages/activity/activity-page.tsx",
+    ],
+    ["ui/src/test-helpers/control-ui-e2e-browser-lifetime.test.ts"],
     ["ui/src/app/gateway-store.test-support.ts"],
     ["ui/src/styles/cursor-policy.browser.test.ts"],
     ["ui/src/pages/channels/view.detail.browser.test.tsx"],

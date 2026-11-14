@@ -2873,7 +2873,6 @@ export function createVitestCacheWarmGroups(
       "ui/src/components/app-sidebar.people.test.ts",
       "ui/src/components/app-sidebar.sessions.test.ts",
       "ui/src/pages/chat/chat-view.test.ts",
-      "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
       "ui/src/pages/usage/metrics.node.test.ts",
     ].map((file) => resolveUiTypeScriptPath(file)),
     shard_name: "cache-warm:ui-package",

@@ -633,15 +633,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/lib/chat/chat-types.ts", "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/chat-panel-layout.e2e.test.ts",
-    ["chat", "terminal"],
-    [
-      "ui/src/components/terminal/terminal-panel-registration.tsx",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-permission-refresh.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
@@ -884,7 +875,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/components/chat-tool-output-view.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-tool-steering-skip.e2e.test.ts", ["chat"]),
-  pageWatch("ui/src/e2e/chat-tool-turn-outcome.e2e.test.ts", ["chat", "terminal"]),
   pageWatch("ui/src/e2e/chat-transcript-disclosure-anchor.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-transcript-focus.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-user-avatar-alignment.e2e.test.ts", ["chat", "profile"]),
