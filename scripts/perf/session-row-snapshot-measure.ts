@@ -273,7 +273,8 @@ if (recipientCount) {
     capture: (query: records.Lookup) => read.describe(query),
     isCurrent: (row: records.Row) => rows.get(row.key)?.generation === row.generation,
     ancestorRows: (row: records.Row) => {
-      const parent = row.entry.spawnedBy && rows.get(row.entry.spawnedBy);
+      const parentKey = row.entry?.spawnedBy;
+      const parent = parentKey && rows.get(parentKey);
       return parent ? [parent] : [];
     },
   });
@@ -341,6 +342,7 @@ if (recipientCount) {
     const client: GatewayWsClient = {
       connId: `synthetic-${index}`,
       socket,
+      usesSharedGatewayAuth: false,
       connect: {
         minProtocol: 1,
         maxProtocol: 1,
@@ -371,7 +373,9 @@ if (recipientCount) {
     });
     const differ = createSessionRowDeltaDiffer();
     for (const row of rosterPage) {
-      history.deliver(history.prepareDelivery(row, [], "fixture", differ));
+      history.deliver(
+        history.prepareDelivery(row, [], "00000000-0000-4000-8000-000000000000", differ),
+      );
     }
   }
   const broadcaster = createGatewayBroadcaster({
