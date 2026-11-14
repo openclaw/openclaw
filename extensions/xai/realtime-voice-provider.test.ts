@@ -2,7 +2,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS } from "./realtime-voice-config.js";
-import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const { FakeWebSocket, isProviderAuthProfileConfiguredAsyncMock, resolveApiKeyForProviderMock } =
   await vi.hoisted(() => import("./realtime-voice-socket.test-support.js"));
@@ -17,7 +16,8 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredAsyncMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
@@ -283,47 +283,37 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
-  it("requires xAI credentials for native realtime websocket bridges", async () => {
+  it("rejects a missing pinned profile before websocket creation", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const bridge = createTestBridge({
-      cfg: {},
-      providerConfig: { model: "grok-voice-latest" },
+      providerConfig: { apiKey: "xai-inline", profileId: "xai:missing" },
     });
-
     await expect(bridge.connect()).rejects.toThrow("xAI credentials missing for realtime voice");
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it("resolves realtime auth from the selected agent directory", async () => {
-    isProviderAuthProfileConfiguredAsyncMock.mockImplementation(
-      async ({ agentDir }) => agentDir === "/tmp/openclaw-molty-agent",
-    );
+  it("locks a pinned profile from the selected agent directory", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     resolveApiKeyForProviderMock.mockImplementation(async ({ agentDir }) => ({
       apiKey: agentDir === "/tmp/openclaw-molty-agent" ? "xai-molty" : undefined,
     }));
     const cfg = {
       agents: {
         entries: {
-          helper: { agentDir: "/tmp/openclaw-helper-agent" },
           molty: { agentDir: "/tmp/openclaw-molty-agent" },
         },
       },
     };
-    expect(
-      await buildXaiRealtimeVoiceProvider().isConfiguredAsync?.({
-        cfg,
-        providerConfig: {},
-        agentId: "molty",
-      }),
-    ).toBe(true);
-    const { socket } = await connect({ cfg, agentId: "molty", providerConfig: {} });
+    const providerConfig = { apiKey: "xai-inline", profileId: "xai:subscription" };
+    const { socket } = await connect({ cfg, agentId: "molty", providerConfig });
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
       provider: "xai",
       cfg,
       agentDir: "/tmp/openclaw-molty-agent",
+      profileId: "xai:subscription",
+      lockedProfile: true,
     });
-    expect((socket.args[1] as { headers?: Record<string, string> }).headers?.Authorization).toBe(
-      "Bearer xai-molty",
-    );
+    expect(socket.options?.headers?.Authorization).toBe("Bearer xai-molty");
   });
 
   it("arms the socket timeout only after async credentials resolve", async () => {
@@ -837,32 +827,37 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onReady).toHaveBeenCalledOnce();
   });
 
-  it("cancels a pending reconnect and allows a later explicit connect", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: ["xai", "test"].join("-") });
+  it("fails a reconnect when a pinned profile is removed, then allows recovery", async () => {
+    resolveApiKeyForProviderMock
+      .mockResolvedValueOnce({ apiKey: "xai-profile" })
+      .mockResolvedValueOnce({ apiKey: undefined })
+      .mockResolvedValue({ apiKey: "xai-restored" });
     const onError = vi.fn();
     const { bridge, socket: firstSocket } = await resumable({
-      providerConfig: { sessionResumption: true },
+      providerConfig: {
+        apiKey: "xai-inline",
+        profileId: "xai:subscription",
+        sessionResumption: true,
+      },
       onError,
     });
     firstSocket.close(1006, "connection lost");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(1);
-
-    void bridge.close();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(onError).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledOnce();
     const { connecting: reconnecting, socket: reconnectedSocket } = await pendingConnection(
       bridge,
       1,
     );
-    expect(String(reconnectedSocket.args[0])).not.toContain("conversation_id=");
     ready(reconnectedSocket);
     await reconnecting;
     expect(bridge.isConnected()).toBe(true);
-    expect(FakeWebSocket.instances).toHaveLength(2);
-    expect(onError).not.toHaveBeenCalled();
+    reconnectedSocket.close(1006, "connection lost");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    void bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([
