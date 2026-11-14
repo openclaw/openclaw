@@ -45,6 +45,8 @@ export type WorkerTaskResponse = {
   transferList?: readonly Transferable[];
   /** Remaining owner budget, plus its existing watchdog grace. */
   timeoutMs: number;
+  /** Advisory exchanges keep the owner's current deadline, including an absent one. */
+  preserveDeadline?: true;
   /** Release input ownership only after worker consumption or confirmed termination. */
   onConsumed?: () => void;
 };

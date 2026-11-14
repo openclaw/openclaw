@@ -8,6 +8,7 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveWorkerPoolSize } from "../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { createPluginSourceAdmissionPublisher } from "../plugins/plugin-source-admission-store.js";
 import { createPluginSourceCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
 
 export type PreparedModelCatalogWorkerData = {
@@ -25,6 +26,8 @@ const CATALOG_WORKER_HEAP_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenera
  * while no task is waiting. It reports its first close so the owner can tell that from its own.
  */
 export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, Output> {
+  readonly publishSourceAdmission: ReturnType<typeof createPluginSourceAdmissionPublisher>;
+
   constructor(
     env: NodeJS.ProcessEnv,
     validateResult: (result: Output) => void,
@@ -60,6 +63,8 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
       },
       validateResult,
     });
+    // Cached artifacts can publish on later tasks, but never under a replacement store owner.
+    this.publishSourceAdmission = createPluginSourceAdmissionPublisher({ env });
   }
 
   override close(error?: Error): Promise<void> {
