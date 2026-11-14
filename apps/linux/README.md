@@ -106,6 +106,39 @@ The capability uses the existing native device-settings transport and its
 document token, origin/path, and generation checks. Reading tabs receive no
 access. Failed actions show the dashboard's native notice.
 
+## ClawHub review links
+
+The Tauri companion accepts these identity-only links:
+
+- `openclaw://plugins/install?name=<package>`
+- `openclaw://skills/install?name=<skill>`
+- `openclaw://templates/install?name=<package>`
+
+Names are lowercase package identities (optionally `@owner/name`), at most 214
+UTF-8 bytes. Skills preserve the canonical `@owner/slug` identity; supported
+unscoped skill names also remain unscoped. Encode the name as one query value.
+The links reject credentials, ports, fragments, extra query parameters, traversal
+in names, and other actions. Invalid or unrelated links only focus the app;
+`openclaw://dashboard` retains its existing dashboard behavior.
+The existing Tauri plugin supplies parsed URLs, so these checks apply after URL
+normalization; original path dot segments and empty userinfo are not available
+to the handler. Package-name traversal is rejected after query decoding.
+
+Review opens in the **main window's currently selected, ready Gateway**, retaining
+its base path, trusted authentication fragment, and existing authentication
+session. External-link fragments remain rejected. It reuses the Gateway window
+navigation owner: plugins open `/plugins/ch_<base64url-name>`, skills open
+`/skills?clawhub=<encoded-name>`, and Templates open
+`/templates/packages/<encoded-name>`. Links cannot select a Gateway, supply
+authentication, install a package, or enable anything. If the main dashboard is
+not ready (including cold startup), connect first and open the link again; the
+link itself does not start connection or setup work. Installation and consent
+remain in the Gateway's review UI.
+
+This is shared Tauri source support for Linux and the Windows backup app, not
+verification of OS URL dispatch or a live Linux/Windows install flow. It does not
+describe or verify the separate native Windows Hub.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.

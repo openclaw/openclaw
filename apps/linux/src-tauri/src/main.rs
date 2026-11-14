@@ -1,6 +1,7 @@
 mod bundled_runtime;
 mod chrome_setup;
 mod cli;
+mod deep_links;
 #[cfg(target_os = "linux")]
 mod desktop_bridge;
 mod desktop_node;
@@ -184,53 +185,35 @@ fn is_release_version(version: &str) -> bool {
     version != "0.1.0"
 }
 
-// The openclaw:// URL contract is deliberately tiny and handled entirely in
-// Rust: `openclaw://dashboard` opens/connects the dashboard; anything else
-// just focuses the app. New routes are added to this enum — the renderer
-// (which is often navigated away to the remote dashboard) never sees URLs.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DeepLinkRoute {
-    Dashboard,
-    FocusOnly,
-}
-
-fn deep_link_route(url: &Url) -> DeepLinkRoute {
+// The renderer never receives external URLs, only a validated review destination.
+fn handle_deep_links(app: &AppHandle, urls: Vec<Url>) {
     let scheme = if test_profile::enabled() {
         "openclaw-aot"
     } else {
         "openclaw"
     };
-    if url.scheme() == scheme && url.host_str() == Some("dashboard") {
-        DeepLinkRoute::Dashboard
-    } else {
-        DeepLinkRoute::FocusOnly
-    }
-}
-
-fn handle_deep_links(app: &AppHandle, urls: Vec<Url>) {
     for url in urls {
-        match deep_link_route(&url) {
-            DeepLinkRoute::Dashboard => {
-                tray::open_dashboard(app);
+        match deep_links::route(&url, scheme) {
+            deep_links::DeepLinkRoute::Dashboard => tray::open_dashboard(app),
+            deep_links::DeepLinkRoute::Review(review) => {
+                let current_app = app.clone();
+                if let Err(error) = app.run_on_main_thread(move || {
+                    if current_app.state::<DesktopState>().is_quitting() {
+                        return;
+                    }
+                    tray::show_window(&current_app);
+                    if let Err(error) = current_app
+                        .state::<gateway_windows::GatewayWindows>()
+                        .open_clawhub_review(&current_app, &review)
+                    {
+                        notify::notify(&current_app, "OpenClaw", &error);
+                    }
+                }) {
+                    eprintln!("Could not open ClawHub review: {error}");
+                }
             }
-            DeepLinkRoute::FocusOnly => tray::show_window(app),
+            deep_links::DeepLinkRoute::FocusOnly => tray::show_window(app),
         }
-    }
-}
-
-#[cfg(test)]
-mod deep_link_tests {
-    use super::{deep_link_route, DeepLinkRoute, Url};
-
-    #[test]
-    fn dashboard_route_matches_only_the_openclaw_dashboard_host() {
-        let dashboard = Url::parse("openclaw://dashboard/ignored?source=test").unwrap();
-        let other = Url::parse("openclaw://settings/dashboard").unwrap();
-        let other_scheme = Url::parse("https://dashboard/").unwrap();
-
-        assert_eq!(deep_link_route(&dashboard), DeepLinkRoute::Dashboard);
-        assert_eq!(deep_link_route(&other), DeepLinkRoute::FocusOnly);
-        assert_eq!(deep_link_route(&other_scheme), DeepLinkRoute::FocusOnly);
     }
 }
 

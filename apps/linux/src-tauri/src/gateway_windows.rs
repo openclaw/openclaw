@@ -1648,6 +1648,36 @@ impl GatewayWindows {
         }
     }
 
+    /// External package links reuse the selected document; they never connect or install.
+    /// Called on the main thread, like the existing dashboard navigation owner.
+    pub(crate) fn open_clawhub_review(
+        &self,
+        app: &AppHandle,
+        review: &crate::deep_links::ClawHubReview,
+    ) -> Result<(), String> {
+        const UNAVAILABLE: &str =
+            "Connect to a Gateway in the main window, then open the ClawHub link again.";
+        if !self.ready_document(app, "main") {
+            return Err(UNAVAILABLE.into());
+        }
+        let target = {
+            let state = self.routing.lock().map_err(|_| STALE)?;
+            if state.closing {
+                return Err(STALE.into());
+            }
+            let document = state
+                .windows
+                .get("main")
+                .and_then(|route| route.document.as_ref())
+                .filter(|document| document.phase == NavigationPhase::Active)
+                .ok_or(UNAVAILABLE)?;
+            review.dashboard_url(&document.url)
+        };
+        let view = app.get_webview("main").ok_or(UNAVAILABLE)?;
+        self.navigate_document(&view, target)?;
+        Ok(())
+    }
+
     pub fn navigate_document(&self, view: &Webview, url: Url) -> Result<bool, String> {
         let queued = {
             let mut state = self.routing.lock().map_err(|_| STALE)?;

@@ -62,6 +62,32 @@ ledger and orphan cleanup across app instances, and port reservation inspects
 other profiles' Gateway service claims. Use a clean test account or VM when
 validation must not access or change operator state.
 
+## ClawHub catalog links (macOS)
+
+The app accepts the same identity-only contract for all three catalog families:
+
+```text
+openclaw://plugins/install?name=openclaw-hello-world
+openclaw://skills/install?name=%40alice%2Fcalendar
+openclaw://templates/install?name=%40maker%2Ftravel-planner
+```
+
+Encode the exact package name or publisher-qualified skill reference with
+`URLSearchParams`. Links open the matching review in the selected Gateway:
+plugin catalog details, the ClawHub skill review, or the published Template
+detail page. Skill installation retains the existing agent selection. Templates
+retain the existing Labs prerequisite and Add review/consent flow; links do not
+enable Labs or create an agent.
+
+The app accepts only one `name` parameter and a package identifier, not artifact
+URLs, versions, Gateway addresses, tokens, or install/enable commands. Opening a
+link never installs or enables code. The user explicitly confirms the existing
+Gateway-owned installation or Template Add flow and its policy checks.
+
+Browser pages cannot reliably detect whether a compatible app is installed or
+opened. CLI/Prompt remains the manual fallback. The Tauri desktop app has its own
+handler; native Windows Hub support is a separate app integration.
+
 ## Native tests
 
 Run the full app suite only in disposable macOS CI or a VM without operator
