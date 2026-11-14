@@ -61,7 +61,8 @@ vi.mock("../plugins/runtime/generation-scope.js", async () => {
   };
 });
 
-vi.mock("./model-auth.js", () => ({
+vi.mock("./model-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth.js")>()),
   applySecretRefHeaderSentinels: (model: Model) => model,
   applyLocalNoAuthHeaderOverride: (model: Model) => model,
   formatMissingAuthError: vi.fn(),

@@ -35,6 +35,7 @@ import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugi
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
+  applyAuthHeaderOverride,
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
@@ -446,8 +447,14 @@ async function prepareSimpleCompletionModelCore(
   assertCurrent?.();
   params.signal?.throwIfAborted();
   const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
-  const model = applySecretRefHeaderSentinels(
-    applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+  // Utility helpers must authenticate exactly like agent turns: an
+  // `authHeader: true` provider sends Bearer credentials here too.
+  const model = applyAuthHeaderOverride(
+    applySecretRefHeaderSentinels(
+      applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+      params.cfg,
+    ),
+    resolvedAuth,
     params.cfg,
   );
   const providerRuntimeHandle = resolveProviderRuntimePluginHandle({
