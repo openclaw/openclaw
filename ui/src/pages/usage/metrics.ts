@@ -1,8 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  addCostUsageTotals,
-  createEmptyCostUsageTotals,
-} from "../../../../src/infra/session-cost-usage-totals.js";
 import { t } from "../../i18n/index.ts";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import {
@@ -11,12 +7,10 @@ import {
   formatUsd,
   formatTimeMs,
 } from "../../lib/format.ts";
-import type { UsageTotals } from "./types.ts";
 
 registerUsageEnglish();
 
 const CHARS_PER_TOKEN = 4;
-const DAY_MS = 86_400_000;
 const dayLabelFormatter = createMsFormatter({ month: "short", day: "numeric", timeZone: "UTC" });
 const fullDateFormatter = createMsFormatter({
   month: "long",
@@ -84,11 +78,6 @@ function parseYmdDate(dateStr: string): Date | null {
     : null;
 }
 
-function parseIsoDayIndex(dateStr: string): number | null {
-  const date = parseYmdDate(dateStr);
-  return date ? date.getTime() / DAY_MS : null;
-}
-
 function formatDayLabel(dateStr: string): string {
   const date = parseYmdDate(dateStr);
   if (!date) {
@@ -105,42 +94,6 @@ function formatFullDate(dateStr: string): string {
   return fullDateFormatter(date.getTime());
 }
 
-function buildUsageCostWindows(
-  daily: Array<UsageTotals & { date: string }>,
-  rangeStartDate: string,
-  rangeEndDate: string,
-): {
-  days: number;
-  endDate: string;
-  totals: UsageTotals;
-}[] {
-  const rangeStartDay = parseIsoDayIndex(rangeStartDate);
-  const rangeEndDay = parseIsoDayIndex(rangeEndDate);
-  if (rangeStartDay === null || rangeEndDay === null || rangeStartDay > rangeEndDay) {
-    return [];
-  }
-
-  const rangeDays = rangeEndDay - rangeStartDay + 1;
-  const windows = [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => ({
-    days,
-    endDate: rangeEndDate,
-    totals: createEmptyCostUsageTotals(),
-  }));
-  for (const entry of daily) {
-    const day = parseIsoDayIndex(entry.date);
-    if (day === null || day < rangeStartDay || day > rangeEndDay) {
-      continue;
-    }
-    const daysAgo = rangeEndDay - day;
-    for (const window of windows) {
-      if (daysAgo < window.days) {
-        addCostUsageTotals(window.totals, entry);
-      }
-    }
-  }
-  return windows;
-}
-
 type UsageInsightStats = {
   durationCount: number;
   avgDurationMs: number;
@@ -151,7 +104,6 @@ type UsageInsightStats = {
 
 export type { UsageInsightStats };
 export {
-  buildUsageCostWindows,
   buildPeakErrorHours,
   charsToTokens,
   formatUsageCost,

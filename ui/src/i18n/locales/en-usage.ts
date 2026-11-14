@@ -127,13 +127,6 @@ const enUsage = {
       costTitle: "Daily cost",
       compressedScaleHint: "Square-root scale keeps low-usage days visible.",
     },
-    costWindows: {
-      title: "Cost windows",
-      subtitle: "Calendar windows ending {date}",
-      selectedRange: "Selected range",
-      lastDays: "Last {count} days",
-      perDay: "/ day",
-    },
     overview: {
       messageCounts: "{user} user · {assistant} assistant",
       uniqueToolsCount: "{count} tools used",

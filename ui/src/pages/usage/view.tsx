@@ -19,7 +19,6 @@ import { createUsageControls, type UsageControlsProps } from "./view-controls.ts
 import { UsageCreators } from "./view-creators.tsx";
 import { UsageHeatmap } from "./view-heatmap.tsx";
 import {
-  CostWindowComparison,
   renderFilterChips,
   renderProviderUsage,
   UsageInsights,
@@ -294,12 +293,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               )}
               sessionCount={analyticsSessionCount()}
               totalSessions={analyticsTotalSessions()}
-            />
-            <CostWindowComparison
-              daily={analyticsData().aggregates?.costDaily ?? props.data.costDaily}
-              rangeStartDate={props.filters.startDate}
-              rangeEndDate={props.filters.endDate}
-              timeZone={props.filters.timeZone}
             />
           </div>
         </Show>
