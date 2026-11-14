@@ -161,6 +161,9 @@ export async function persistCliAssistantTranscript(params: {
   yielded?: true;
   /** The native Claude row this message mirrors; the history merge joins them by it. */
   nativeIdentity?: { cliSessionId: string; externalId: string };
+  /** Held answers commit before the final run-owned row and retain their own retry identity. */
+  interim?: true;
+  interimReplies?: CliOutput["interimNativeReplies"];
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -177,7 +180,28 @@ export async function persistCliAssistantTranscript(params: {
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
     return { owned: false };
   }
-  const idempotencyKey = cliAssistantItemId(runParams.runId);
+  // Completed held answers are separate native rows; narration remains native-only.
+  for (const reply of params.interimReplies ?? []) {
+    if (
+      reply.cliSessionId === params.nativeIdentity?.cliSessionId &&
+      reply.externalId === params.nativeIdentity.externalId
+    ) {
+      continue;
+    }
+    await persistCliAssistantTranscript({
+      runParams,
+      text: reply.text,
+      modelId: params.modelId,
+      nativeIdentity: { cliSessionId: reply.cliSessionId, externalId: reply.externalId },
+      interim: true,
+      stopReason: "stop",
+    });
+  }
+  runParams.assertCurrent?.();
+  const idempotencyKey =
+    params.interim && params.nativeIdentity
+      ? `${cliAssistantItemId(runParams.runId)}:interim:${params.nativeIdentity.cliSessionId}:${params.nativeIdentity.externalId}`
+      : cliAssistantItemId(runParams.runId);
   let committed = false;
   try {
     const result = await appendExactAssistantMessageToSessionTranscript({

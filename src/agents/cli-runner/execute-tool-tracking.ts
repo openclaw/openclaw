@@ -703,7 +703,13 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       return {
         ...output,
         ...(shouldSuppressAssistantOutput()
-          ? { text: "", rawText: "", rawFinalText: "", textParts: undefined }
+          ? {
+              text: "",
+              rawText: "",
+              rawFinalText: "",
+              textParts: undefined,
+              interimNativeReplies: undefined,
+            }
           : {}),
         ...(yielded ? { yielded: true as const } : {}),
         ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),

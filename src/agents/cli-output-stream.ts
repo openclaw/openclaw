@@ -493,6 +493,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           ? { text: "", errorText: stoppedTurnErrorText, terminalFailure: stoppedTurn }
           : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        ...(output?.interimNativeReplies
+          ? { interimNativeReplies: output.interimNativeReplies }
+          : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
       // The result envelope carries the final message when present.
@@ -503,6 +506,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         !output.errorText &&
         !output.terminalFailure
       ) {
+        const finalText = output.rawFinalText ?? nextText;
+        if (sessionId && resumeCheckpointId && finalText) {
+          output.interimNativeReplies = [
+            ...(output.interimNativeReplies ?? []),
+            { text: finalText, cliSessionId: sessionId, externalId: resumeCheckpointId },
+          ];
+        }
         params.onCompletedReply?.(completedText, textParts.length - 1);
       }
       // An interim result commits its segment. Rebase boundary state so later

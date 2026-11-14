@@ -1,0 +1,2 @@
+# Real Claude parser -> runner -> SQLite -> canonical reader proves completed held parent and final child answers survive independently, with output transforms and native-import deduplication; retains existing narration/interruption contracts.
+107
