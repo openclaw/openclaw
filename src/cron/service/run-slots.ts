@@ -56,13 +56,17 @@ export function resolveCronRunSlots(cron: CronConfig | undefined): number {
  * Pushback while the automation lane holds more agent sessions than eight: automation may hold
  * half as many runs. The sessions already in flight keep retrying, so while they exceed the
  * ceiling their pushback holds it where it is instead of halving it again; pushback once they
- * have come down to it is new evidence and halves again.
+ * have come down to it is new evidence and halves again. Pushback that cannot lower a reduced
+ * ceiling, at eight sessions or fewer, also holds it, so each step up follows a quiet minute.
  */
 function reduceCronRunSlots(cause: string): void {
   const nowMs = Date.now();
   const ceiling = currentCeiling(nowMs);
   const inFlight = getCommandLaneSnapshot(CommandLane.CronNested).activeCount;
-  if (ceiling !== undefined && inFlight > ceiling) {
+  if (
+    ceiling !== undefined &&
+    (inFlight > ceiling || inFlight <= DEFAULT_CRON_MAX_CONCURRENT_RUNS)
+  ) {
     pushback.reduction = { ceiling, atMs: nowMs };
     return;
   }
