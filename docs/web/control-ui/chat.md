@@ -297,6 +297,11 @@ Type `/` to open the command menu. `/steer` guides the agent’s current reply;
 `/redirect` restarts the agent’s reply with a new message. `/clear` clears the
 conversation. The `/help` result uses the heading **Available commands**.
 
+For `/steer` and `/redirect`, an acknowledgement that the request is still in progress
+shows **Steering requested.** or **Redirect requested.**, not a completed outcome.
+An already-completed successful acknowledgement keeps **Steered.** or **Redirected.**
+The reply and queued-input state continue to show what happens next.
+
 Command failures explain what could not be done and what to try next. For example,
 `/model` shows “Couldn’t load model details. Try again.” when model details cannot
 be loaded, followed by the diagnostic in a separate paragraph.
