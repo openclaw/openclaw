@@ -29,7 +29,19 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
   assertPrivateInputCurrent?: () => void;
   prepareCredentialUse?: () => Promise<void>;
+  /** Present when a plugin registers before_agent_finalize; native Stop asks it to settle. */
+  runBeforeAgentFinalize?: (stop: ClaudeCliFinalizeStop) => Promise<ClaudeCliFinalizeDecision>;
 };
+export type ClaudeCliFinalizeStop = {
+  stopHookActive: boolean;
+  lastAssistantMessage?: string;
+  transcriptPath?: string;
+  cwd?: string;
+};
+export type ClaudeCliFinalizeDecision =
+  | { action: "continue" }
+  | { action: "revise"; reason: string }
+  | { action: "finalize"; reason?: string };
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
   controller: AbortController;
@@ -209,6 +221,22 @@ async function handleRequest(
     return additionalContext
       ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } }
       : {};
+  }
+  if (request.callback_id === "Stop" && input.hook_event_name === "Stop") {
+    const finalize = turn?.context.runBeforeAgentFinalize;
+    if (!turn || signal.aborted || !finalize) {
+      return {};
+    }
+    const decision = await finalize({
+      stopHookActive: input.stop_hook_active === true,
+      ...(typeof input.last_assistant_message === "string"
+        ? { lastAssistantMessage: input.last_assistant_message }
+        : {}),
+      ...(typeof input.transcript_path === "string" ? { transcriptPath: input.transcript_path } : {}),
+      ...(typeof input.cwd === "string" ? { cwd: input.cwd } : {}),
+    }).catch(() => ({ action: "continue" as const }));
+    // A blocked Stop keeps the native turn going with the reason as its next instruction.
+    return decision.action === "revise" ? { decision: "block", reason: decision.reason } : {};
   }
   if (request.callback_id === "PreToolUse" && input.hook_event_name === "PreToolUse") {
     if (
@@ -662,6 +690,7 @@ export async function* executeClaudeCli(
             hooks: {
               UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
               PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
+              Stop: [{ hookCallbackIds: ["Stop"] }],
             },
           },
           onMessage: (message) => acceptMessage(session, message),
