@@ -141,6 +141,20 @@ function discoverDatabases(stateDir: string): DatabaseTarget[] {
 const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
   target.kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
 
+/**
+ * Whether this start must take state ownership: an interrupted swap to finish or a
+ * database older than this build. Read-only, so a start that another live owner
+ * refuses learns that from its usual admission check.
+ */
+export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
+  const stateDir = path.resolve(resolveStateDir(env));
+  return (
+    fs.existsSync(stateDir) &&
+    (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX)) ||
+      discoverDatabases(stateDir).some((target) => target.version < expectedVersion(target)))
+  );
+}
+
 function readConfiguredWorkspaces(configPath: string, stateDir: string): string[] {
   try {
     // SAFETY: only optional fields are read, and each is type-checked before use.

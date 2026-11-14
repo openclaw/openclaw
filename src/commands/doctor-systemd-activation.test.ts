@@ -17,6 +17,12 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import * as schemaMigrations from "./doctor-schema-migrations.js";
 
+// The copy-and-swap upgrade at Gateway start brings these databases current before the
+// activation repair can see them. This file covers the repair path that remains for starts the
+// upgrade skips (for example a database under a symlinked directory), so the upgrade is off here.
+vi.mock("../state/state-upgrade-startup.js", () => ({
+  upgradeStateOnGatewayStart: vi.fn(async () => {}),
+}));
 vi.mock("../cli/run-main-service-installation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof serviceInstallation>()),
   readOwnGatewayServiceCommand: vi.fn(),
