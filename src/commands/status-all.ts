@@ -274,9 +274,7 @@ export async function statusAllCommand(
         queryingChannelStatus: "Querying gateway…",
         summarizingChannels: "Summarizing channels…",
       },
-    }).catch((error: unknown) =>
-      reportStatusScanFailureUnlessInterrupted(error, runtime, opts?.timeoutMs),
-    );
+    });
     progress.setLabel("Checking services…");
     const [daemon, nodeService] = await resolveStatusServiceSummaries(opts.timeoutMs);
     const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
