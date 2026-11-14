@@ -342,15 +342,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/codex/src/session-catalog-native-performance.test.ts",
     watchGlobs: ["pnpm-lock.yaml"],
   },
-  ...[
-    "extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-    ],
-  })),
+  ...["extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: [
+        "src/config/sessions/session-transcript-reconcile.worker.ts",
+        "src/config/sessions/session-transcript.worker.ts",
+      ],
+    }),
+  ),
   ...[
     "extensions/diffs/src/store.test.ts",
     "extensions/diffs/src/tool.test.ts",
@@ -402,10 +402,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/team-reports/src/store.test.ts",
     watchGlobs: ["extensions/team-reports/src/store.worker.ts"],
   },
-  ...["extensions/workboard/src/dispatcher.test.ts"].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["extensions/workboard/src/sqlite-store.worker.ts"],
-  })),
   {
     testFile: "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
     watchGlobs: [

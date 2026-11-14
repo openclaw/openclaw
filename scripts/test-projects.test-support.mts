@@ -5153,9 +5153,6 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
-  if (relative === "src/gateway/gateway.test.ts") {
-    return "e2e";
-  }
   const channelContractKind = resolveChannelContractTargetKind(relative);
   if (channelContractKind) {
     return channelContractKind;
