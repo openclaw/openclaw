@@ -596,6 +596,11 @@ describe("IRC formatted text on the wire", () => {
     expect(results[0]?.receipt?.replyToId).toBe("parent-1");
   });
 
+  it("keeps tab-separated words apart", async () => {
+    await send("Name\tState\ndocs\tready");
+    expect(messages()).toEqual([`${prefix}Name State docs ready`]);
+  });
+
   it.each([
     ["code", "PRIVMSG #room :| Name | State | | ---- | ----- | | docs | ready |"],
     ["bullets", "PRIVMSG #room :docs \u2022 State: ready"],
