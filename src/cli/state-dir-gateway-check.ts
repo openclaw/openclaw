@@ -1,6 +1,11 @@
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceNameCandidates,
+  resolveGatewayWindowsTaskName,
+} from "../daemon/constants.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
   buildGatewayConnectionDetails,
@@ -96,17 +101,6 @@ export function compareCliGatewayStateDirs(params: {
       message: `CLI and ${params.source} use different ${detail}. Local commands may read or write state the Gateway does not use.`,
     };
   }
-  if (params.serviceSelector) {
-    const key = params.serviceSelector.split("=")[0];
-    return {
-      kind: "refuse",
-      message: [
-        `No credentials or configuration were written. CLI and ${params.source} use different ${detail}.`,
-        `This shell selects that service with ${params.serviceSelector}, usually inherited from a Gateway process.`,
-        `Fix: run unset ${key}, then ${params.command ?? "openclaw configure"}.`,
-      ].join(" "),
-    };
-  }
   return {
     kind: "refuse",
     message: [
@@ -114,7 +108,9 @@ export function compareCliGatewayStateDirs(params: {
       `Fix: run OPENCLAW_STATE_DIR=${quoteCliArg(gatewayStateDir)} OPENCLAW_CONFIG_PATH=${quoteCliArg(gatewayConfigPath)} ${params.command ?? "openclaw configure"}.`,
       params.source === "live Gateway"
         ? "To write another local store intentionally, stop the running Gateway first."
-        : "To write another local store intentionally, uninstall or reconfigure the divergent Gateway service first.",
+        : params.serviceSelector
+          ? `This shell selects that service with ${params.serviceSelector}, usually inherited from another Gateway. To write this store, remove ${params.serviceSelector.split("=")[0]} from this shell's environment and retry.`
+          : "To write another local store intentionally, uninstall or reconfigure the divergent Gateway service first.",
     ].join(" "),
   };
 }
@@ -167,11 +163,22 @@ export async function checkCliGatewayStateDir(params: {
     return { kind: "warn", message: GATEWAY_SERVICE_PATHS_UNVERIFIED };
   }
   if (servicePaths.kind === "known") {
-    const selectorKey = [
-      "OPENCLAW_LAUNCHD_LABEL",
-      "OPENCLAW_SYSTEMD_UNIT",
-      "OPENCLAW_WINDOWS_TASK_NAME",
-    ].find((key) => process.env[key]?.trim());
+    // Name the active backend's selector only when clearing it would pick this profile's service.
+    const profile = process.env.OPENCLAW_PROFILE;
+    const [selectorKey, profileServiceNames] =
+      process.platform === "darwin"
+        ? ["OPENCLAW_LAUNCHD_LABEL", [resolveGatewayLaunchAgentLabel(profile)]]
+        : process.platform === "win32"
+          ? ["OPENCLAW_WINDOWS_TASK_NAME", [resolveGatewayWindowsTaskName(profile)]]
+          : ["OPENCLAW_SYSTEMD_UNIT", resolveGatewaySystemdServiceNameCandidates(profile)];
+    const selectorValue = process.env[selectorKey]?.trim();
+    const redirectingSelector =
+      selectorValue &&
+      !profileServiceNames.some(
+        (name) => selectorValue === name || selectorValue === `${name}.service`,
+      )
+        ? `${selectorKey}=${selectorValue}`
+        : undefined;
     return compareCliGatewayStateDirs({
       cliStateDir,
       cliConfigPath,
@@ -180,7 +187,7 @@ export async function checkCliGatewayStateDir(params: {
       source: "installed Gateway service",
       mode: "refuse",
       command: params.command,
-      serviceSelector: selectorKey && `${selectorKey}=${process.env[selectorKey]?.trim()}`,
+      serviceSelector: redirectingSelector,
     });
   }
 

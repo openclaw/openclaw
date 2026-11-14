@@ -96,26 +96,50 @@ describe("state-dir-gateway-check", () => {
     expect(mocks.readServiceCommand.mock.calls[0]?.[1]).toMatchObject({ requireEffective: true });
   });
 
-  it("names an inherited service selector instead of advising uninstall", async () => {
+  const selectorKey =
+    process.platform === "darwin"
+      ? "OPENCLAW_LAUNCHD_LABEL"
+      : process.platform === "win32"
+        ? "OPENCLAW_WINDOWS_TASK_NAME"
+        : "OPENCLAW_SYSTEMD_UNIT";
+
+  it.each([
+    ["names an inherited selector for another service", "production-gateway", true],
+    ["keeps the uninstall advice for this profile's own service", undefined, false],
+  ] as const)("%s", async (_name, selector, named) => {
     const canonicalRoot = await fs.realpath(root);
-    const serviceStateDir = path.join(canonicalRoot, "production");
+    vi.stubEnv("OPENCLAW_PROFILE", "beta");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(canonicalRoot, "beta"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(canonicalRoot, "beta", "openclaw.json"));
-    vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.production");
-    serviceEnv({ OPENCLAW_STATE_DIR: serviceStateDir });
+    const {
+      resolveGatewayLaunchAgentLabel,
+      resolveGatewaySystemdServiceName,
+      resolveGatewayWindowsTaskName,
+    } = await import("../daemon/constants.js");
+    const ownService =
+      process.platform === "darwin"
+        ? resolveGatewayLaunchAgentLabel("beta")
+        : process.platform === "win32"
+          ? resolveGatewayWindowsTaskName("beta")
+          : resolveGatewaySystemdServiceName("beta");
+    vi.stubEnv(selectorKey, selector ?? ownService);
+    serviceEnv({ OPENCLAW_STATE_DIR: path.join(canonicalRoot, "production") });
 
     const outcome = await check();
 
-    expect(outcome).toMatchObject({
-      kind: "refuse",
-      message: expect.stringContaining(
-        "This shell selects that service with OPENCLAW_LAUNCHD_LABEL=ai.openclaw.production",
-      ),
-    });
-    expect(outcome).toMatchObject({
-      message: expect.stringContaining("Fix: run unset OPENCLAW_LAUNCHD_LABEL"),
-    });
-    expect(outcome).not.toMatchObject({ message: expect.stringContaining("uninstall") });
+    expect(outcome.kind).toBe("refuse");
+    const message = outcome.kind === "refuse" ? outcome.message : "";
+    expect(message).toContain("Fix: run OPENCLAW_STATE_DIR=");
+    if (named) {
+      expect(message).toContain(
+        `This shell selects that service with ${selectorKey}=production-gateway`,
+      );
+      expect(message).toContain(`remove ${selectorKey} from this shell's environment`);
+      expect(message).not.toContain("uninstall");
+    } else {
+      expect(message).not.toContain("This shell selects");
+      expect(message).toContain("uninstall or reconfigure");
+    }
   });
 
   it("allows an offline command and does not probe an ordinary transport failure", async () => {
