@@ -32,7 +32,7 @@ public final class OpenClawChatViewModel {
     var isApplyingWebSession = false
     @ObservationIgnored
     var inputHistoriesBySession: [String: ChatInputHistory] = [:]
-    /// Native attachments, including images restored by rewind/fork, stay in memory only.
+    /// Drafts for a model without a durable draft store; see `ChatViewModel+ComposerDrafts.swift`.
     /// The staging guard prevents session switches while attachments are being prepared.
     @ObservationIgnored
     var draftsBySession: [String: String] = [:]
@@ -95,7 +95,10 @@ public final class OpenClawChatViewModel {
     var attachmentStagingCount = 0
     public private(set) var isAborting = false
     public var errorText: String?
-    public var attachments: [OpenClawPendingAttachment] = []
+    public var attachments: [OpenClawPendingAttachment] = [] {
+        didSet { self.composerAttachmentsChanged(from: oldValue) }
+    }
+
     public internal(set) var healthOK: Bool = false
     /// Bumped after every successful group-catalog mutation so views keyed on it
     /// refetch; catalog-only changes (e.g. creating an empty group) alter no
@@ -162,6 +165,8 @@ public final class OpenClawChatViewModel {
     }
 
     /// Presentation is paced independently; event consumers always see the newest stream text.
+    /// The live bubble renders `displayedStreamingAssistantText`; the transcript decides whether it
+    /// shows from the untracked copy (`liveTextShape`). A clear empties only the untracked copy.
     private(set) var displayedStreamingAssistantText: String?
     @ObservationIgnored private(set) var displayedStreamingAssistantTextUntracked: String?
     @ObservationIgnored var streamPacing = ChatStreamPacing()
@@ -240,6 +245,14 @@ public final class OpenClawChatViewModel {
     let haptics: OpenClawChatHaptics
     let transcriptCache: (any OpenClawChatTranscriptCache)?
     let outbox: (any OpenClawChatCommandOutbox)?
+    /// The client-state store owns drafts when it is also the outbox.
+    let composerDraftStore: OpenClawChatSQLiteTranscriptCache?
+    /// Key of the stored draft now buffered in `input`/`attachments`; nil while unresolved or loading.
+    var composerDraftKey: String?
+    /// Stored position of each composer attachment; one without a position still pins this model.
+    var composerDraftAttachmentPositions: [OpenClawPendingAttachment.ID: Int] = [:]
+    @ObservationIgnored
+    var composerDraftSync = ComposerDraftSync()
     @ObservationIgnored
     let modelPickerStore: ChatModelPickerStore
     /// Per-message outbox display state; rows without an entry are normal
@@ -251,9 +264,10 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var outboxMessageIDsByCommandID: [String: UUID] = [:]
     @ObservationIgnored
-    var outboxFailureVersionsByMessageID: [
-        UUID: (attemptVersion: Int, retryCount: Int, lastError: String?)
-    ] = [:]
+    var outboxFailuresByMessageID: [UUID: OutboxFailure] = [:]
+    @ObservationIgnored var outboxRestoreEvidence = OutboxRestoreEvidence()
+    /// "Not sent" notices for messages restored into a composer, by composer key.
+    var composerNoticesBySession: [String: String] = [:]
     /// Recent canonical keys let the MainActor resolve proof that arrives
     /// after SQLite cancellation commits but before its UI continuation runs.
     @ObservationIgnored
@@ -555,6 +569,7 @@ public final class OpenClawChatViewModel {
         self.modelPickerFavorites = modelPickerStore.favorites
         self.modelPickerRecents = modelPickerStore.recents
         self.outbox = outbox
+        self.composerDraftStore = outbox as? OpenClawChatSQLiteTranscriptCache
         self.activeAgentId = ChatPayloadDecoding.trimmedNonEmptyString(activeAgentId)?.lowercased()
         self.sessionRoutingContract = ChatPayloadDecoding.trimmedNonEmptyString(sessionRoutingContract)
         let normalizedThinkingLevel = Self.normalizedThinkingLevel(initialThinkingLevel)
@@ -608,6 +623,7 @@ public final class OpenClawChatViewModel {
                 }
             }
         }
+        self.syncComposerDraftKey()
     }
 
     isolated deinit {
@@ -617,6 +633,8 @@ public final class OpenClawChatViewModel {
     /// Permanently retires a replaced presentation without aborting its gateway run.
     public func detachTransport() {
         guard !self.isTransportDetached else { return }
+        self.flushComposerDraftText()
+        self.composerDraftSync.load?.cancel()
         self.cancelHistoryInvalidationRefresh()
         self.retireQuestionAuthority()
         self.resetSessionReactions()
@@ -717,6 +735,7 @@ public final class OpenClawChatViewModel {
         }
         self.activeAgentId = nextAgentId
         self.sessionRoutingContract = nextContract
+        self.syncComposerDraftKey()
         let bootstrapIdentityChanged =
             (agentChanged && self.usesMutableAgentRouting) ||
             contractRoutingChanged
@@ -797,11 +816,14 @@ extension OpenClawChatViewModel {
     }
 
     func applyStreamingAssistantDisplay(_ text: String?) {
-        guard self.displayedStreamingAssistantText != text else { return }
+        guard self.displayedStreamingAssistantTextUntracked != text else { return }
         // Compare both projections against current history: a durable row may have suppressed
         // the previous live words since the last stream update.
         let previousShape = self.streamingTextShape(self.displayedStreamingAssistantTextUntracked)
-        self.displayedStreamingAssistantText = text
+        // Keep the bubble's last words on a clear: emptied in its own observation scope, the bubble
+        // laid out at zero a pass before the transcript swapped in the final row, which collapsed
+        // the transcript and clamped the scroll offset to the top. The next run's words replace them.
+        if let text { self.displayedStreamingAssistantText = text }
         self.displayedStreamingAssistantTextUntracked = text
         guard self.streamingTextShape(text) != previousShape else { return }
         self.liveTextShape &+= 1

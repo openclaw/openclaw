@@ -65,7 +65,7 @@ it.each<[string, string[], string[]?]>([
     ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"],
   ],
   ["prefix:src/a.ts and see src/b.ts", ["src/b.ts"], ["prefix:src/a.ts"]],
-
+  ["C:\\me\\.cfg\\a.json \\\\s\\h\\_x", ["C:\\me\\.cfg\\a.json"], ["\\\\s\\h\\_x"]],
   ["bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)", ["assets/part.3mf"]],
   ["`a/x.ts` `x.ts` `i.csv` `f.b()` `n.xyz`", ["a/x.ts", "x.ts", "i.csv"], ["f.b()", "n.xyz"]],
   ["`e\u0301.md` and `C:\\文档\\café.md:9`", ["e\u0301.md", "C:\\文档\\café.md"]],
@@ -79,6 +79,17 @@ it.each<[string, string[], string[]?]>([
   expect(fragment.querySelectorAll("a[data-file-path]")).toHaveLength(paths.length);
   for (const text of preserved) {
     expect(fragment.textContent).toContain(text);
+  }
+});
+
+it("preserves authored Windows file actions before rejecting unsupported schemes", () => {
+  const source = "[Read](C:/repo/notes.md) [Unsafe](javascript:alert)";
+  const link = workspaceLink(render(source), "C:/repo/notes.md");
+  expect(link?.textContent).toBe("Read");
+  for (const options of [{ fileLinks: true }, {}]) {
+    const fragment = render(source, options);
+    expect(fragment.querySelector("a[href]")).toBeNull();
+    expect(fragment.textContent).toContain("Unsafe");
   }
 });
 

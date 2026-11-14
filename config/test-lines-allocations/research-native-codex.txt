@@ -1,3 +1,0 @@
-711
-# Cover native API-key execution, exact endpoint/model and credential boundaries, registration cleanup, and structured standalone search sources.
-# Includes a real native CLI against a synthetic upstream; no live credential mutation.

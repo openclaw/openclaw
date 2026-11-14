@@ -3,6 +3,7 @@ import {
   hasSqliteDatabaseSchemaAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
 } from "../../infra/sqlite-database-admission.js";
+import { getArtifactPreservingSqliteRead } from "../../infra/sqlite-snapshot-source.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
@@ -18,10 +19,7 @@ import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import { readSessionActorProjectionReceipt } from "./session-actor-replica.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
-import {
-  createSessionHistoryWorkerReaders,
-  type SessionHistoryWorkerRequestRunner,
-} from "./session-transcript-worker-readers.js";
+import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
@@ -38,6 +36,7 @@ import {
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
+  SessionHistoryWorkerRequestRunner,
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
@@ -62,6 +61,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
     case "history-page":
       return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
+    case "compaction-source":
     case "transcript-hydration":
     case "current-turn-entry":
     case "recent-active-events":
@@ -294,6 +294,7 @@ export function retainSessionHistoryWorkerDatabase(
                         );
                       }
                       input.preserveSourceArtifacts = true;
+                      input.inspectionSnapshot = getArtifactPreservingSqliteRead(database.path);
                       input.inspectionSourcePath = options.readSourcePath;
                       inspectionIdentity ??= input.expectedIdentity;
                       if (inspectionIdentity) {

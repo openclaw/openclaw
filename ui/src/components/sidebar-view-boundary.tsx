@@ -1,4 +1,5 @@
 import { Errored, Loading, onSettled, Repeat, type ParentProps } from "solid-js";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -7,6 +8,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 
 function SidebarViewError(props: { error: unknown; reset: () => void }) {
+  onSettled(() => finishBootFrame());
   let active = true;
   onSettled(() => () => {
     active = false;

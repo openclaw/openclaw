@@ -34,3 +34,8 @@ export function openResolvedImage(
 export function imageTitle(image: ImageBlock): string {
   return image.alt?.trim() || image.fileName?.trim() || t("chat.imageLightbox.untitled");
 }
+
+/** False when imageTitle falls back to the generic untitled label. */
+export function imageHasTitle(image: ImageBlock): boolean {
+  return Boolean(image.alt?.trim() || image.fileName?.trim());
+}

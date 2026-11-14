@@ -17,6 +17,76 @@ const sessionKey = "agent:main:dashboard:bubble-activity";
 
 suite.define(() => {
   it.each([
+    { width: 1600, height: 1000 },
+    { width: 932, height: 430 },
+    { width: 390, height: 844 },
+  ])("keeps Markdown tables inside chat bubbles at $width px", async (viewport) => {
+    await suite.withPage({ viewport }, async ({ page }) => {
+      await page.addInitScript(
+        ({ key, session }) => {
+          localStorage.setItem(key, JSON.stringify({ chatBubbleSessionKeys: [session] }));
+        },
+        { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), session: sessionKey },
+      );
+      const markdown = [
+        "Service availability across the supported deployment regions.",
+        "| Service | Operational evidence | Availability |\n| --- | --- | --- |\n" +
+          "| Background jobs | Scheduled processing continues while interactive requests complete. | Healthy across all regions. |",
+        "| " +
+          Array.from({ length: 8 }, (_, index) => `Region ${index + 1}`).join(" | ") +
+          " |\n" +
+          "| " +
+          Array(8).fill("---").join(" | ") +
+          " |\n" +
+          "| " +
+          Array(8).fill("0123456789abcdef0123456789abcdef").join(" | ") +
+          " |",
+      ].join("\n\n");
+      await installMockGateway(page, {
+        sessionKey,
+        historyMessages: [{ role: "assistant", content: markdown, timestamp: 1 }],
+      });
+      await page.route("**/control-ui-config.json", (route) =>
+        route.fulfill({
+          json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
+        }),
+      );
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const chat = page.locator("section.chat");
+      await browserExpect(chat).toHaveClass(/chat--bubbles/);
+      const bubble = chat.locator(".chat-group.assistant .chat-bubble");
+      const tables = bubble.locator(".markdown-table");
+      await browserExpect(tables).toHaveCount(2);
+      const frame = await takeControlUiScreenshotFrame(page, chat, [tables.first()], {
+        animations: "disabled",
+        elements: [chat],
+      });
+      writeFileSync(
+        path.join(suite.artifactDir, `table-bubbles-${viewport.width}.png`),
+        frame.elements[0]!.png,
+      );
+      for (const table of await tables.all()) {
+        const geometry = await table.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const parent = element.closest(".chat-bubble")!;
+          const bubbleBounds = parent.getBoundingClientRect();
+          const style = getComputedStyle(parent);
+          return {
+            leadingGap: bounds.left - bubbleBounds.left - Number.parseFloat(style.paddingLeft),
+            trailingGap: bubbleBounds.right - bounds.right - Number.parseFloat(style.paddingRight),
+          };
+        });
+        expect(geometry.leadingGap).toBeGreaterThanOrEqual(-1);
+        expect(geometry.trailingGap).toBeGreaterThanOrEqual(-1);
+      }
+      const dense = tables.last().locator(".markdown-table__viewport");
+      expect(
+        await dense.evaluate((element) => element.scrollWidth - element.clientWidth),
+      ).toBeGreaterThan(0);
+    });
+  });
+
+  it.each([
     { width: 1280, height: 900 },
     { width: 390, height: 844 },
   ])("keeps identity on the first message and work compact at $width px", async (viewport) => {

@@ -1,3 +1,0 @@
-# Cold first-frame continuity, quiet/reduced-motion loading, zero warm geometry,
-# parked-animation cleanup, and migration of existing scroll-body fixtures.
-201

@@ -1,2 +1,0 @@
-45
-# Preserve caller token and sampling settings at the native inference wire owner.

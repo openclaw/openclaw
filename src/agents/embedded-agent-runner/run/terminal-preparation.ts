@@ -137,10 +137,6 @@ export function prepareEmbeddedRunTerminal(input: {
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
   const costUsd = estimateAggregateUsageCost({
     usage: usageMeta.usage,
-    provider: reportedModelRef.provider,
-    model: reportedModelRef.model,
-    config: runParams.config,
-    agentDir: runParams.agentDir,
   });
   // Attempt normalization already folded every attempt (terminal included)
   // into the accumulator, so read it directly instead of re-adding the attempt.
@@ -257,6 +253,9 @@ export function prepareEmbeddedRunTerminal(input: {
   const payloads = buildEmbeddedRunPayloads({
     rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
     ...attempt,
+    agentTerminal: isEmbeddedRunTerminalInterrupted(input.terminalState.outcome)
+      ? undefined
+      : attempt.agentTerminal,
     preparedTerminalReply,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     lastAssistant: payloadAssistant,
@@ -297,13 +296,13 @@ export function prepareEmbeddedRunTerminal(input: {
     payloads.some((payload) => getReplyPayloadMetadata(payload)?.toolErrorWarning)
   ) {
     const message = formatErrorMessage(promptError);
-    const failure = resolveReplyFailoverFacts(promptError, message);
+    const failure = resolveReplyFailoverFacts(promptError, message, runParams.config);
     const copy =
-      failure.reason === "rate_limit" || failure.reason === "overloaded"
+      failure.requestFailureText ??
+      (failure.reason === "rate_limit" || failure.reason === "overloaded"
         ? renderRateLimitOrOverloadedCopy({ reason: failure.reason, raw: message })
         : (failure.providerRequestError?.userMessage ??
-          failure.requestFailureText ??
-          renderAssistantRequestFailureCopy(failure));
+          renderAssistantRequestFailureCopy(failure)));
     if (copy) {
       const failurePayload = {
         text: sanitizeUserFacingText(copy, { errorContext: true }),

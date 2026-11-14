@@ -45,7 +45,7 @@ export {
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
-const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
+const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp", "openclaw"]);
 const VALID_PLUGIN_KINDS: ReadonlySet<string> = new Set<PluginKind>(["memory", "context-engine"]);
 
 export function isCoreReservedPluginId(id: string): boolean {
