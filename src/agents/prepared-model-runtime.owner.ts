@@ -189,9 +189,19 @@ export function preparedModelRuntimeConfigsMatch(
 }
 
 function modelRuntimeConfigFingerprint(config: OpenClawConfig): string {
-  // Canonical values change at publication; caller-owned projections still need a fresh hash.
+  // Canonical values change at publication; other configs reuse hashes only within a read batch.
   const published = config === getRuntimeConfigSnapshot() && getRuntimeConfigSnapshotMetadata();
-  return published ? published.fingerprint : hashRuntimeConfigValue(config);
+  if (published) {
+    return published.fingerprint;
+  }
+  const batch = activePreparedModelRuntimeReadBatch;
+  const cached = batch?.configFingerprints.get(config);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const fingerprint = hashRuntimeConfigValue(config);
+  batch?.configFingerprints.set(config, fingerprint);
+  return fingerprint;
 }
 
 function stampPreparedModelRuntimeSnapshotConfig(
@@ -302,17 +312,23 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
   });
 }
 
-type PreparedModelRuntimeReadBatch = WeakMap<
-  Map<string, PreparedModelRuntimeOwner>,
-  Map<string, PreparedModelRuntimeOwner[]>
->;
+type PreparedModelRuntimeReadBatch = {
+  configuredOwners: WeakMap<
+    Map<string, PreparedModelRuntimeOwner>,
+    Map<string, PreparedModelRuntimeOwner[]>
+  >;
+  configFingerprints: WeakMap<OpenClawConfig, string>;
+};
 
 let activePreparedModelRuntimeReadBatch: PreparedModelRuntimeReadBatch | undefined;
 
 /** Reuse configured candidates only during synchronous reads; never publish or yield here. */
 export function withPreparedModelRuntimeReadBatch<T>(read: () => T): T {
   const parent = activePreparedModelRuntimeReadBatch;
-  activePreparedModelRuntimeReadBatch = new WeakMap();
+  activePreparedModelRuntimeReadBatch = {
+    configuredOwners: new WeakMap(),
+    configFingerprints: new WeakMap(),
+  };
   try {
     return read();
   } finally {
@@ -328,7 +344,7 @@ function configuredOwnerCandidates(
   if (!batch || agentId === undefined) {
     return owners.values();
   }
-  let byAgent = batch.get(owners);
+  let byAgent = batch.configuredOwners.get(owners);
   if (!byAgent) {
     byAgent = new Map();
     for (const owner of owners.values()) {
@@ -342,7 +358,7 @@ function configuredOwnerCandidates(
         byAgent.set(owner.input.agentId, [owner]);
       }
     }
-    batch.set(owners, byAgent);
+    batch.configuredOwners.set(owners, byAgent);
   }
   return byAgent.get(agentId) ?? [];
 }

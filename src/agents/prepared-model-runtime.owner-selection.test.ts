@@ -12,6 +12,8 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import * as runtimeSnapshot from "../config/runtime-snapshot.js";
+import { readPreparedGatewayModelCatalogBatch } from "../gateway/server-model-catalog.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import {
@@ -109,6 +111,54 @@ function holdNextCatalogWrite() {
 }
 
 describe("prepared model runtime owner selection", () => {
+  it("bounds config hashing for a Gateway fleet catalog read and refreshes between batches", async () => {
+    const agentIds = ["default", ...Array.from({ length: 127 }, (_, index) => `fleet-${index}`)];
+    const config = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          defaults: { model: "openai/gpt-5.5" },
+          entries: Object.fromEntries(agentIds.map((agentId) => [agentId, {}])),
+        },
+      },
+      "default",
+    );
+    mocks.configuredAgentIds = agentIds;
+    for (const agentId of agentIds) {
+      mocks.configuredAgentDirs.set(agentId, fixture.state.agentDir(agentId));
+      mocks.configuredWorkspaces.set(agentId, `/tmp/${agentId}-workspace`);
+    }
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+
+    const requestConfig = structuredClone(config);
+    const hashRuntimeConfig = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
+    try {
+      const read = await readPreparedGatewayModelCatalogBatch(agentIds, {
+        getConfig: () => requestConfig,
+        includeSessionRowPolicy: false,
+      });
+      expect(read).toHaveLength(agentIds.length);
+      expect(read.every((result) => result.status === "fulfilled" && result.value)).toBe(true);
+      expect(hashRuntimeConfig).toHaveBeenCalledTimes(2);
+
+      hashRuntimeConfig.mockClear();
+      requestConfig.agents!.defaults!.model = "openai/gpt-5.4";
+      const afterMutation = await readPreparedGatewayModelCatalogBatch(agentIds, {
+        getConfig: () => requestConfig,
+        includeSessionRowPolicy: false,
+      });
+      expect(afterMutation).toHaveLength(agentIds.length);
+      expect(afterMutation.every((result) => result.status === "fulfilled" && !result.value)).toBe(
+        true,
+      );
+      expect(hashRuntimeConfig).toHaveBeenCalledTimes(2);
+    } finally {
+      hashRuntimeConfig.mockRestore();
+    }
+  });
+
   it("awaits cold metadata preparation before deriving runtime selections", async () => {
     const prepared = createDeferred<pluginMetadata.PluginMetadataSnapshot>();
     const metadataStarted = createDeferred();
