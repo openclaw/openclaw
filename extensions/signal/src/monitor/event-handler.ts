@@ -790,7 +790,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         isGroup,
         cfg,
-        hasControlCommand: hasControlCommandInMessage,
+        commandText: messageText,
         contextBinding,
       });
     const accessDecision = await resolveChannelIngress();
