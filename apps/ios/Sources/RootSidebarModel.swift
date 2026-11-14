@@ -291,6 +291,8 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
+            // Empty headers are move targets while browsing, not search results.
+            includeEmptyGroups: !isSearching,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
     }
@@ -359,6 +361,7 @@ final class RootSidebarModel {
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
+        await appModel.sessionGroups.refresh(appModel: appModel)
         self.rosterGeneration &+= 1
         self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
@@ -375,6 +378,7 @@ final class RootSidebarModel {
         switch loadedRoster {
         case let .success(roster):
             self.applyRoster(roster, activeAgentID: appModel.chatDeliveryAgentId)
+            appModel.sessionGroups.pruneCollapsed(for: self.sessions)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:

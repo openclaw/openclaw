@@ -38,6 +38,7 @@ import {
   withRecentActiveTranscriptEvents as visitRecentEvents,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
+import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection as waitProjection } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
@@ -652,14 +653,15 @@ it("keeps reset history closed across compaction with a warm history cache", asy
   const manager = SessionManager.open(scope);
   const appendUser = (content: string) =>
     manager.appendMessage({ role: "user", content, timestamp: 1 });
-  const settle = async () => {
+  const expectHistory = async (ids: string[]) => {
     manager.flushPendingPersistence();
     await waitProjection(scope);
-  };
-  const expectHistory = (ids: string[]) => {
     const page = readHistory(scope);
     expect(page.totalMessages).toBe(ids.length);
     expect(page.events.map(({ event }) => (event as { id: string }).id)).toEqual(ids);
+    const hydrated = await prepareSessionTranscriptHydration(scope, { compaction: true }).read();
+    expect(hydrated.kind).toBe("bounded");
+    expect(hydrated.snapshot).toEqual(boundedContext(scope, { compaction: true }));
   };
   const expectContext = (messages: unknown[]) => {
     expect(manager.buildSessionContext().messages).toMatchObject(messages);
@@ -672,30 +674,28 @@ it("keeps reset history closed across compaction with a warm history cache", asy
   manager.appendMessage(
     makeAgentAssistantMessage({ content: [{ type: "text", text: "before-reset assistant" }] }),
   );
-  manager.appendResetBoundary("new");
+  const resetId = manager.appendResetBoundary("new");
+  const abandoned = appendUser("abandoned branch");
+  manager.branch(resetId);
   const freshUserId = appendUser("fresh user");
-  await settle();
-  expectHistory([freshUserId]);
+  await expectHistory([freshUserId]);
+  expect(eventIds(boundedContext(scope, { compaction: true }).events)).not.toContain(abandoned);
 
   manager.appendCompaction("fresh-only summary", freshUserId, 100);
-  await settle();
-  expectHistory([freshUserId]);
+  await expectHistory([freshUserId]);
   expectContext([summary("fresh-only summary"), message("fresh user")]);
 
   const nextUserId = appendUser("after compaction");
-  await settle();
-  expectHistory([freshUserId, nextUserId]);
+  await expectHistory([freshUserId, nextUserId]);
   expect(activeStats(scope).eventCount).toBe(3);
 
   manager.appendResetBoundary("new", nextUserId);
   const newestUserId = appendUser("after second reset");
-  await settle();
-  expectHistory([nextUserId, newestUserId]);
+  await expectHistory([nextUserId, newestUserId]);
   expectContext([message("after compaction"), message("after second reset")]);
 
   manager.appendCompaction("newest-only summary", newestUserId, 100);
-  await settle();
-  expectHistory([nextUserId, newestUserId]);
+  await expectHistory([nextUserId, newestUserId]);
   const reopened = SessionManager.open(scope);
   expect(reopened.buildSessionContext().messages).toMatchObject([
     summary("newest-only summary"),

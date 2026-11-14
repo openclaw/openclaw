@@ -304,6 +304,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "placeholder",
+      "path": "ui/src/pages/config/talk-transcription.tsx",
+      "text": "openrouter/openai/whisper-large-v3-turbo"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/updates-recorded-attempt.tsx",

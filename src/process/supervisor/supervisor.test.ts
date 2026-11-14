@@ -11,11 +11,19 @@ import type { SpawnInput } from "./types.js";
 const { child, pty, readMemory } = vi.hoisted(() => ({
   child: vi.fn(),
   pty: vi.fn(),
-  readMemory: vi.fn<(path: string, callback: (error: null, text: Buffer) => void) => void>(),
+  readMemory: vi.fn<(path: string) => Buffer>(),
 }));
 const memoryOwner = vi.hoisted(() => ({
   setBudget: (_budget: { memoryBytes: number; swapBytes: number } | undefined) => {},
 }));
+vi.mock("../../../node-version.mjs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../node-version.mjs")>();
+  return {
+    ...actual,
+    parseNodeReleaseVersion: (version: string) =>
+      actual.parseNodeReleaseVersion(version === process.versions.node ? "24.22.1" : version),
+  };
+});
 vi.mock("../../shared/global-singleton.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../shared/global-singleton.js")>();
   return {
@@ -42,7 +50,14 @@ vi.mock("./adapters/child.js", () => ({
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
-  readFile: readMemory,
+  readFile: (
+    path: string,
+    optionsOrCallback: { buffer: Buffer } | ((error: null, content: Buffer) => void) | undefined,
+    callback?: (error: null, content: Buffer) => void,
+  ) => {
+    const done = typeof optionsOrCallback === "function" ? optionsOrCallback : callback!;
+    done(null, readMemory(path));
+  },
 }));
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
@@ -137,7 +152,7 @@ describe("process supervisor", () => {
     await run.waitForExtinction!().catch(() => undefined);
     await expectCollected(callerRef);
     await expect(cleanup()).rejects.toBe(failure);
-    await expect(supervisor.shutdown()).rejects.toBe(failure);
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
     expect(failure.code).toBe("ECLEANUP");
     expect(failure.stack).toContain("cleanup identity lost");
   });
@@ -148,9 +163,7 @@ describe("process supervisor", () => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
       memoryOwner.setBudget({ memoryBytes: 128 * 1024, swapBytes: 0 });
-      const read = readMemory.mockImplementation((_path, callback) => {
-        callback(null, Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
-      });
+      const read = readMemory.mockReturnValue(Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
       const adapter = terminating();
       adapter.memoryRootPid = 4321;
       if (mode === "pty") {
@@ -170,7 +183,7 @@ describe("process supervisor", () => {
           expect(read).not.toHaveBeenCalled();
           adapter.settle(0);
         } else {
-          expect(read).toHaveBeenCalledWith("/proc/4321/status", expect.any(Function));
+          expect(read).toHaveBeenCalledWith("/proc/4321/status");
           expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
           await expect(run.wait()).resolves.toMatchObject({
             reason: "memory-limit",
@@ -716,7 +729,9 @@ describe("process supervisor", () => {
     },
   );
 
-  it("retains a cleanup failure for its owner without poisoning a later scope", async () => {
+  it("retains a terminal cleanup failure for its owner without poisoning later shutdown", async () => {
+    const log = await import("./supervisor-log.runtime.js");
+    const warning = vi.spyOn(log, "warnProcessSupervisorFailure").mockImplementation(() => {});
     const { adapter, extinction } = owned();
     const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: "required-all" });
     const run = await spawn({ scopeKey: "scope" });
@@ -729,7 +744,10 @@ describe("process supervisor", () => {
     await expect(
       supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
     ).resolves.toBeUndefined();
-    await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      "Earlier cleanup failed: Error: cleanup identity lost",
+    );
     await expect(spawn()).rejects.toThrow("process supervisor is shut down");
   });
 
@@ -808,7 +826,7 @@ describe("process supervisor", () => {
       await expect(
         supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
       ).resolves.toBeUndefined();
-      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      await expect(supervisor.shutdown()).resolves.toBeUndefined();
       await expect(spawn()).rejects.toThrow("process supervisor is shut down");
     },
   );

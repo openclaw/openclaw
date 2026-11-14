@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -15,7 +16,7 @@ export const MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS =
   "Generated media; delivering completion";
 
 export function buildMediaGenerationRequestKey(value: Record<string, unknown>): string {
-  return stableStringify(value);
+  return createHash("sha256").update(stableStringify(value)).digest("hex");
 }
 
 function mediaGenerationSourceMatches(
@@ -108,8 +109,13 @@ async function findDuplicateGuardMediaGenerationTaskForSession(params: {
   if (!sessionKey) {
     return undefined;
   }
-  const tasks = listMediaGenerationOperations(sessionKey, params.agentId);
-  const active = selectActiveMediaGenerationTasks(params, tasks)[0];
+  // Explicitly superseded work still settles, but must not block its replacement.
+  const tasks = listMediaGenerationOperations(sessionKey, params.agentId).filter(
+    (task) => !task.superseded,
+  );
+  const active = selectActiveMediaGenerationTasks(params, tasks).find(
+    (task) => !params.requestKey || task.requestKey === params.requestKey,
+  );
   if (active || !params.requestKey) {
     return active;
   }

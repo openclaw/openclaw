@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { preparePluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
+import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import * as catalogReader from "../gateway/server-methods/requester-model-catalog.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
 import { createPluginRecord } from "./loader-records.js";
@@ -66,7 +67,7 @@ function registry() {
 }
 
 it("advertises a version without removing the released string-list capability contract", () => {
-  const runtime = createRuntimeBase();
+  const runtime = createRuntimeBase(enqueueSessionEventForHost);
   expect(runtime.capabilities).toContain("requester-model-catalog-v1");
   expect(runtime.capabilities).toContain("requester-model-family-v1");
   expect(runtime.capabilities).toContain("sender-restricted-hidden-helpers-v1");

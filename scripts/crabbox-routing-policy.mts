@@ -50,7 +50,7 @@ export function crabboxProviderChain({
     case "ci-fast":
     case "ci-proof":
     case "release-proof":
-      return available(["blacksmith-testbox", "daytona", ...cloudFallback], providers);
+      return available(["ascii-box", "daytona", ...cloudFallback], providers);
     case "interactive":
       return available(["daytona", ...cloudFallback], providers);
     case "desktop":

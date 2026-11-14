@@ -6,7 +6,11 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { subscriptionRoute as selectedRoute } from "./model-auth-availability.test-support.js";
-import { providerConfig, row } from "./model-catalog-fixtures.test-support.js";
+import {
+  model as modelFixture,
+  providerConfig,
+  row,
+} from "./model-catalog-fixtures.test-support.js";
 import {
   prepareLogicalVisibleModelCatalog,
   resolveLogicalModelCatalogEntryState,
@@ -316,6 +320,18 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     expect(result.map((entry) => entry.id).toSorted()).toEqual(["primary"]);
   });
 
+  it("never lists typed-only rows as chat choices under any allowlist", async () => {
+    const catalog = [row("demo", "chat"), row("demo", "typed", { inference: { chat: false } })];
+    for (const models of [undefined, { "demo/*": {} }, { "demo/typed": {}, "demo/new": {} }]) {
+      const cfg = { agents: { defaults: { models } } } as OpenClawConfig;
+      for (const view of ["default", "configured", "all"] as const) {
+        const ids = (await visible(catalog, { cfg, view })).map(({ id }) => id);
+        expect(ids).not.toContain("typed");
+        expect(ids).toContain(models?.["demo/new"] && view !== "all" ? "new" : "chat");
+      }
+    }
+  });
+
   it("dedupes physical routes after selected-route projection in the default view", async () => {
     const catalog = [
       { ...platform, alias: "platform" },
@@ -328,6 +344,35 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     });
 
     expect(result).toEqual([{ ...chatGPT, alias: "selected" }]);
+  });
+
+  it("excludes discovered non-chat models even when their provider rows are configured", async () => {
+    const cfg = providerConfig("demo", {
+      api: "openai-completions",
+      baseUrl: "https://example.test/v1",
+      models: [modelFixture("voice")],
+    });
+    const catalog = [
+      row("demo", "voice", {
+        api: "openai-completions",
+        baseUrl: "https://example.test/v1",
+        inference: { chat: false },
+      }),
+    ];
+    for (const view of ["default", "configured", "all"] as const) {
+      expect(await visible(catalog, { cfg, view })).toEqual([]);
+    }
+  });
+
+  it("excludes a selected non-chat route even when its logical sibling supports chat", async () => {
+    const catalog = [platform, { ...chatGPT, inference: { chat: false } }];
+    expect(
+      await visible(catalog, {
+        routeVariants: catalog,
+        defaultProvider: "openai",
+        evaluateEntry: evaluateSelectedEntry,
+      }),
+    ).toEqual([]);
   });
 
   it("uses the selected route's deprecated lifecycle status", async () => {

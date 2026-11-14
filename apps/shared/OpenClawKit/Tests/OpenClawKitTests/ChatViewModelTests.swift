@@ -2,7 +2,11 @@ import Foundation
 import Observation
 import OpenClawKit
 import OpenClawProtocol
+import SwiftUI
 import Testing
+#if os(macOS)
+import AppKit
+#endif
 @testable import OpenClawChatUI
 
 private func chatTextMessage(
@@ -14523,20 +14527,20 @@ struct ChatStreamPresentationTests {
             _ = vm.hasStreamingAssistantText
             _ = vm.timelineRevision
         } onChange: { transcript.count += 1 }
-        withObservationTracking { _ = vm.liveAssistantDisplayText } onChange: { bubble.count += 1 }
+        withObservationTracking { _ = vm.displayedStreamingAssistantText } onChange: { bubble.count += 1 }
         vm.updateStreamingAssistantText("First second")
         vm.updateStreamingAssistantText("First second third")
         #expect(vm.streamingAssistantText == "First second third")
-        #expect(vm.liveAssistantDisplayText == "First")
+        #expect(vm.displayedStreamingAssistantText == "First")
         #expect(bubble.count == 0)
         try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
-        #expect(vm.liveAssistantDisplayText == "First second third")
+        #expect(vm.displayedStreamingAssistantText == "First second third")
         #expect(bubble.count == 1)
         #expect(transcript.count == 0)
         #expect(vm.timelineRevision == before)
         vm.updateStreamingAssistantText(nil)
         #expect(transcript.count == 1)
-        #expect(vm.liveAssistantDisplayText == nil)
+        #expect(vm.displayedStreamingAssistantText == nil)
     }
 
     @Test @MainActor func `retired callback cannot publish old or new session text`() throws {
@@ -14550,10 +14554,10 @@ struct ChatStreamPresentationTests {
         vm.updateStreamingAssistantText("New queued")
         let current = try #require(vm.streamPacing.scheduledID)
         vm.flushStreamingAssistantDisplay(scheduledID: retired)
-        #expect(vm.liveAssistantDisplayText == "New first")
+        #expect(vm.displayedStreamingAssistantText == "New first")
         #expect(vm.streamPacing.scheduledID == current)
         vm.flushStreamingAssistantDisplay(scheduledID: current)
-        #expect(vm.liveAssistantDisplayText == "New queued")
+        #expect(vm.displayedStreamingAssistantText == "New queued")
     }
 
     @Test @MainActor func `visibility changes invalidate shape and durable history suppresses live duplicates`() throws {
@@ -14568,13 +14572,12 @@ struct ChatStreamPresentationTests {
         #expect(transcript.count == 1)
         vm.replaceMessages([OpenClawChatMessage(
             role: "assistant", content: [.init(type: "text", text: "Ready")], timestamp: 1)])
-        #expect(vm.liveAssistantDisplayText == nil)
         #expect(vm.liveAssistantTextShape == nil)
         let restored = Fired()
         withObservationTracking { _ = vm.liveAssistantTextShape } onChange: { restored.count += 1 }
         vm.updateStreamingAssistantText("Ready now")
         try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
-        #expect(vm.liveAssistantDisplayText == "Ready now")
+        #expect(vm.displayedStreamingAssistantText == "Ready now")
         #expect(restored.count == 1)
     }
 }
@@ -15468,3 +15471,35 @@ struct ChatHistoryMutationTests {
         #expect(model.messages.isEmpty)
     }
 }
+
+#if os(macOS)
+struct ChatObscuredStreamPacingTests {
+    @Test @MainActor func `covered chat paces live text slower until it is revealed`() {
+        _ = NSApplication.shared
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        func content(obscured: Bool) -> some View {
+            OpenClawChatView(viewModel: vm, showsComposer: false)
+                .environment(\.openClawChatIsObscured, obscured)
+        }
+        let host = NSHostingView(rootView: content(obscured: true))
+        window.contentView = host
+        defer {
+            vm.detachTransport()
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.5)
+
+        host.rootView = content(obscured: false)
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.15)
+    }
+}
+#endif

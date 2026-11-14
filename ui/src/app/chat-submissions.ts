@@ -47,7 +47,7 @@ export function createChatSubmissions() {
   let pendingCreate: PendingChatCreate | undefined;
   // Accepted metadata survives admission without retaining the draft's message or composer.
   let acceptedCreate: AcceptedChatCreate | undefined;
-  // Background starts never navigate; each previews only its own session route.
+  // Background starts and displaced admitted drafts preview only their own session route.
   const backgroundCreates = new Map<string, PendingChatCreate>();
   const readCreateFor = (sessionKey: string) => {
     const pending =
@@ -110,10 +110,23 @@ export function createChatSubmissions() {
     retain,
     // Display-only admission state; no run id, outbox attempt or accepted send.
     beginCreate: (pending: PendingChatCreate) => {
+      if (
+        pendingCreate &&
+        !pendingCreate.creation.admitted &&
+        pendingCreate.composer?.canRecover()
+      ) {
+        // Starting another chat cannot revoke an admitted agent's setup recovery.
+        backgroundCreates.set(pendingCreate.creation.sessionKey, pendingCreate);
+      }
       setPendingCreate(pending);
       return () => {
         if (pendingCreate === pending) {
           setPendingCreate(undefined);
+        }
+        const key = pending.creation.sessionKey;
+        if (backgroundCreates.get(key) === pending) {
+          backgroundCreates.delete(key);
+          createListeners.publish();
         }
       };
     },

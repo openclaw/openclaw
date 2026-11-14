@@ -220,6 +220,8 @@ failed and ask you to restart the Gateway. The diagnosis is logged once and
 further worker launches fail immediately; ordinary worker crashes do not mark
 the runtime unavailable. A health or readiness check that finds the executable
 missing publishes the same diagnosis, even when resident workers still serve reads.
+Clients without `operator.admin` see `[redacted]` in `childRuntime.execPath` while
+the availability flag remains visible.
 
 For a service-managed Gateway, the lifecycle owner checks the effective service
 command's Node with a bounded `--version` probe. On macOS, the loaded launchd

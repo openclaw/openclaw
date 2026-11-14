@@ -193,7 +193,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const environmentAccess = createWorkerEnvironmentAccess({
     ...options,
     store,
-    getCleanupError: (record) => sessionAttachments.getCleanupError(record),
     readStartStatus: providerLifecycle.readStartStatus,
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
@@ -679,9 +678,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentId: string,
       abandonment?: WorkerEnvironmentAbandonment,
       forceAbandon?: () => Promise<void>,
+      authorize?: () => void,
     ) =>
       environmentAccess.project(
-        await providerLifecycle.destroy(environmentId, { abandonment, forceAbandon }),
+        await providerLifecycle.destroy(environmentId, { abandonment, forceAbandon, authorize }),
       ),
     reclaim: async (environmentId: string) =>
       environmentAccess.project(await providerLifecycle.reclaim(environmentId)),
@@ -689,10 +689,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
-    destroyUnattached: async (environmentId: string) => {
-      await preparedPool.cancelPreparation(environmentId);
+    destroyUnattached: async (environmentId: string, authorize?: () => void) => {
+      await preparedPool.cancelPreparation(environmentId, authorize);
       return environmentAccess.project(
-        await providerLifecycle.destroy(environmentId, { requireUnattached: true }),
+        await providerLifecycle.destroy(environmentId, { requireUnattached: true, authorize }),
       );
     },
     observeDesktop: environmentAccess.observeDesktop,

@@ -72,6 +72,11 @@ export const sessionManagerOpenTranscriptCohort = Symbol.for(
 /** @internal Compaction planning retains its transcript and metadata from one read snapshot. */
 export const sessionManagerOpenCompaction = Symbol.for("openclaw.session-manager.open-compaction");
 
+/** @internal The owner that opened this view drops its loaded transcript once its turn has settled. */
+export const sessionManagerReleaseTranscript = Symbol.for(
+  "openclaw.session-manager.release-transcript",
+);
+
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
   protected sessionId = "";
@@ -722,6 +727,20 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
+  /** Drop an owned, settled view without retaining its history through late callbacks. */
+  [sessionManagerReleaseTranscript](): void {
+    this.fileEntries = [];
+    this.opaqueFileEntries = [];
+    this.pendingWritableTranscriptEntries.clear();
+    this.clearNavigation();
+    this.boundedParentIds.clear();
+    this.boundedFirstKeptById.clear();
+    this.cacheTtlProjectionPrefixes = undefined;
+    this.invalidateTranscriptView(
+      new Error("Session transcript view was released when its turn ended"),
+    );
+  }
+
   override getBranch(fromId?: string): SessionEntry[] {
     const branch = this[sessionManagerReadTranscriptBranch](fromId);
     return this.ownTranscriptEntries(branch.map((entry) => this.byId.get(entry.id)))
@@ -751,21 +770,3 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     return target ? { ...target, ...(target.env ? { env: { ...target.env } } : {}) } : undefined;
   }
 }
-
-export type ReadonlySessionManager = Pick<
-  SessionManagerCore,
-  | "getCwd"
-  | "getSessionId"
-  | "getSessionTarget"
-  | "getLeafId"
-  | "getAppendParentId"
-  | "getAppendMode"
-  | "getLeafEntry"
-  | "getEntry"
-  | "getLabel"
-  | "getBranch"
-  | "getHeader"
-  | "getEntries"
-  | "getTree"
-  | "getSessionName"
->;

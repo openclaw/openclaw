@@ -27,7 +27,7 @@
 
 .transcripts-layout:not(.transcripts-layout--selected) .transcripts-library {
   width: 100%;
-  max-width: 960px;
+  max-width: 1120px;
   margin-inline: auto;
 }
 
@@ -321,6 +321,12 @@
 
 .transcripts-utterances p {
   white-space: pre-wrap;
+}
+
+.meetings-notes {
+  /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .meetings-notes pre {

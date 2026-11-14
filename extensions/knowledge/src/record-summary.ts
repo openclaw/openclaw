@@ -7,7 +7,6 @@ export function recordSummary({
   metadata,
   body: _body,
   raw: _raw,
-  hash: _hash,
   redirected: _redirected,
   ...base
 }: LoadedRecord) {

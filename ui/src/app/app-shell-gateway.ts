@@ -1,7 +1,7 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -340,13 +340,34 @@ export class ShellGatewayOwner {
     if (!command) {
       return;
     }
-    if (command.kind === "agent-github-settings") {
+    if (command.kind === "template-review") {
       const agentId = commandParams.agentId?.trim();
-      if (agentId) {
-        context.navigate("agents", {
-          pathname: pathForAgentPanel(agentId, "tools", context.basePath),
-        });
+      const sessionKey = commandParams.sessionKey?.trim();
+      if (agentId && sessionKey) {
+        const reviewClient = context.gateway.snapshot.client;
+        const revision = context.gateway.connectionRevision;
+        const isCurrent = () =>
+          this.host.context === context &&
+          context.gateway.snapshot.client === reviewClient &&
+          context.gateway.connectionRevision === revision;
+        void (async () => {
+          try {
+            const { openTemplateCreator } = await import("../pages/templates/creator-owner.ts");
+            if (isCurrent()) {
+              openTemplateCreator(context, { agentId, sessionKey, draftId: command.draftId });
+            }
+          } catch (error) {
+            if (isCurrent()) {
+              showToast({ severity: "error", message: String(error) });
+            }
+          }
+        })();
       }
+      return;
+    }
+    if (command.kind === "agent-github-settings") {
+      // Every agent's GitHub account, and the shared agent account, are changed in Profile.
+      context.navigate("profile", { hash: "#settings-profile-github-connections" });
       return;
     }
     if (command.kind === "sidebar") {
@@ -368,7 +389,7 @@ export class ShellGatewayOwner {
             commandParams.agentId !== undefined &&
             commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
-        this.host.shellNavigation.selectChatSession(sessionKey, commandParams.agentId);
+        return; // Background panel requests must not steal navigation or replay on return.
       }
       const panelEvent = new CustomEvent(
         {

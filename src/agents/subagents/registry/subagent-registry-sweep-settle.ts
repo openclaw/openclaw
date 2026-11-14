@@ -29,17 +29,24 @@ export async function settleUnreachableYieldedSubagentRun(params: {
   entry: SubagentRunRecord;
   readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
-  requesterEnded?: boolean;
 }): Promise<boolean> {
   const { runId, entry, readScope, complete } = params;
-  let requesterEnded = params.requesterEnded;
-  if (isYieldedSubagentRun(entry) && entry.waitForMessage && requesterEnded === undefined) {
+  let requesterEnded = false;
+  if (isYieldedSubagentRun(entry) && entry.waitForMessage) {
+    // An unclaimed wait belongs to the session across turns. Only a real
+    // continuation claim makes the requester's committed turn end close it.
     const requester = await loadSessionEntryByKey(
       entry.requesterSessionKey,
       entry.requesterAgentId,
     );
+    const requesterCompletion = subagentRuns.getRequesterCompletion(entry);
     requesterEnded =
-      !requester || requester.archivedAt !== undefined || isTerminalSessionStatus(requester.status);
+      requesterCompletion?.ended === true ||
+      !requester ||
+      requester.archivedAt !== undefined ||
+      (requesterCompletion !== undefined &&
+        isTerminalSessionStatus(requester.status) &&
+        requester.lastRunId === requesterCompletion.runId);
   }
   const retired = subagentRuns.isCompletionAuthorityRetired(entry);
   let continuation = isYieldedSubagentRun(entry)

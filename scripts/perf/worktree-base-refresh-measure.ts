@@ -11,6 +11,8 @@
  * --base-fetch-file compares the extracted fetch owner. --registration starts a
  * real no-checkout worktree registration when the fetch reaches Git execution;
  * reports its admission wait separately, with no injected network delay.
+ * --repair --repair-target <sha> measures missing-tip recovery through project refresh;
+ * --base-repair-file selects its baseline owner. The seed must lack that remote commit.
  * Run on Node 26 for the exact V8 total_allocated_bytes counter.
  * JS allocation is exact V8 allocation; native Git CPU/RSS uses macOS time -l.
  * File copying, startup and hydration are outside baseRefresh. This is neither
@@ -25,7 +27,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 
@@ -34,6 +36,9 @@ const { values } = parseArgs({
     seed: { type: "string" },
     "base-file": { type: "string" },
     "base-fetch-file": { type: "string" },
+    "base-repair-file": { type: "string" },
+    "repair-target": { type: "string" },
+    repair: { type: "boolean" },
     output: { type: "string" },
     pairs: { type: "string", default: "5" },
     arm: { type: "string" },
@@ -49,6 +54,9 @@ const output = path.resolve(values.output);
 const baseline = values["base-file"] ? path.resolve(values["base-file"]) : undefined;
 const baselineFetch = values["base-fetch-file"]
   ? path.resolve(values["base-fetch-file"])
+  : undefined;
+const baselineRepair = values["base-repair-file"]
+  ? path.resolve(values["base-repair-file"])
   : undefined;
 const actualGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -72,11 +80,21 @@ const ownerSha256 = createHash("sha256")
       baselineFetch ?? new URL("../../src/agents/worktrees/base-fetch.ts", import.meta.url),
     ),
   )
+  .update(
+    values.repair
+      ? readFileSync(
+          baselineRepair ?? new URL("../../src/infra/git-repository-repair.ts", import.meta.url),
+        )
+      : "",
+  )
   .digest("hex");
 await fs.mkdir(output);
 
 if (!values.arm) {
-  assert(baseline || baselineFetch, "A baseline owner file is required for paired comparison");
+  assert(
+    baseline || baselineFetch || baselineRepair,
+    "A baseline owner file is required for paired comparison",
+  );
   const pairs = Number(values.pairs);
   assert(Number.isSafeInteger(pairs) && pairs >= 5);
   const rows: unknown[] = [];
@@ -96,6 +114,12 @@ if (!values.arm) {
           "--arm",
           arm,
         ];
+        if (values.repair) {
+          args.push("--repair");
+          if (values["repair-target"]) {
+            args.push("--repair-target", values["repair-target"]);
+          }
+        }
         if (values.advancing) {
           args.push("--advancing");
         }
@@ -105,6 +129,9 @@ if (!values.arm) {
         if (arm === "base" || control) {
           if (baseline) {
             args.push("--base-file", baseline);
+          }
+          if (baselineRepair) {
+            args.push("--base-repair-file", baselineRepair);
           }
           if (baselineFetch) {
             args.push("--base-fetch-file", baselineFetch);
@@ -132,16 +159,50 @@ if (!values.arm) {
     env: gitEnv,
     encoding: "utf8",
   }).trim();
-  const expected = values.advancing
-    ? execFileSync(actualGit, ["-C", fileURLToPath(origin), "rev-parse", "HEAD"], {
-        env: gitEnv,
-        encoding: "utf8",
-      }).trim()
-    : cached;
+  const expected =
+    values["repair-target"] ??
+    (values.advancing || values.repair
+      ? execFileSync(actualGit, ["-C", fileURLToPath(origin), "rev-parse", "HEAD"], {
+          env: gitEnv,
+          encoding: "utf8",
+        }).trim()
+      : cached);
   if (values.advancing) {
     assert.notEqual(cached, expected, "--advancing needs an unfetched origin tip");
   }
+  let repairOrigin = origin;
+  if (values.repair) {
+    assert.notEqual(cached, expected, "Repair requires a missing newer commit");
+    const fixtureGit = (cwd: string, args: string[], input?: Buffer) =>
+      execFileSync(actualGit, ["-C", cwd, ...args], { env: gitEnv, input });
+    // Own a tiny remote metadata copy; borrow only the immutable fixture objects.
+    const remote = path.join(output, "origin.git");
+    fixtureGit(output, ["init", "--bare", "--initial-branch=main", remote]);
+    const sourceObjects = fixtureGit(fileURLToPath(origin), [
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-path",
+      "objects",
+    ])
+      .toString()
+      .trim();
+    await fs.writeFile(path.join(remote, "objects/info/alternates"), `${sourceObjects}\n`);
+    fixtureGit(remote, ["config", "uploadpack.allowFilter", "true"]);
+    fixtureGit(remote, ["update-ref", "refs/heads/main", expected]);
+    repairOrigin = pathToFileURL(remote).href;
+    fixtureGit(clone, ["remote", "set-url", "origin", repairOrigin]);
+    fixtureGit(
+      clone,
+      ["hash-object", "-t", "commit", "-w", "--stdin"],
+      fixtureGit(remote, ["cat-file", "commit", expected]),
+    );
+    fixtureGit(clone, ["update-ref", "refs/remotes/origin/main", expected]);
+    fixtureGit(clone, ["commit-graph", "write", "--reachable"]);
+    await fs.unlink(path.join(clone, ".git/objects", expected.slice(0, 2), expected.slice(2)));
+  }
   const metrics = path.join(output, "git-metrics");
+  const packDirectory = path.join(clone, ".git/objects/pack");
+  const existingPacks = new Set(await fs.readdir(packDirectory));
   const bin = path.join(output, "bin");
   await fs.mkdir(metrics);
   await fs.mkdir(bin);
@@ -226,9 +287,9 @@ if (!values.arm) {
         }
         if (phase === "baseRefresh") {
           commandCount++;
-          fetches += Number(args[0] === "fetch");
-          advertisements += Number(args[0] === "ls-remote");
-          if (args[0] === "fetch") {
+          fetches += Number(args.includes("fetch"));
+          advertisements += Number(args.includes("ls-remote"));
+          if (args.includes("fetch")) {
             register?.();
           }
         }
@@ -238,6 +299,13 @@ if (!values.arm) {
   });
   const hook = registerHooks({
     load(url, context, next) {
+      if (url.endsWith("/src/infra/git-repository-repair.ts") && baselineRepair) {
+        return {
+          format: "module-typescript",
+          shortCircuit: true,
+          source: readFileSync(baselineRepair, "utf8"),
+        };
+      }
       if (url.endsWith("/src/agents/worktrees/base-ref.ts") && baseline) {
         return {
           format: "module-typescript",
@@ -306,7 +374,21 @@ if (!values.arm) {
     };
   }
   try {
-    const result = await resolveWorktreeBase(clone);
+    const result = values.repair
+      ? await (async () => {
+          const { refreshProjectCheckout } =
+            await import("../../src/projects/project-clone-runtime.js");
+          const { timeWorktreePreparationPhase } =
+            await import("../../src/agents/worktrees/preparation-timing.js");
+          await timeWorktreePreparationPhase("baseRefresh", () =>
+            refreshProjectCheckout({ target: clone, url: repairOrigin }),
+          );
+          return {
+            commit: await requireGit(clone, ["rev-parse", "refs/remotes/origin/main"]),
+            fetchSucceeded: true,
+          };
+        })()
+      : await resolveWorktreeBase(clone);
     if (values.registration) {
       assert(registration, "The refresh must fetch to measure concurrent registration");
       await registration;
@@ -320,13 +402,17 @@ if (!values.arm) {
     }
     assert.equal(result.commit, expected);
     assert.equal(result.fetchSucceeded, true);
-    assert.equal(fetches, values.advancing || baseline ? 1 : 0);
+    if (!values.repair) {
+      assert.equal(fetches, values.advancing || baseline ? 1 : 0);
+    }
     if (values.advancing) {
       execFileSync(actualGit, ["-C", clone, "merge-base", "--is-ancestor", cached, expected], {
         env: gitEnv,
       });
     }
-    assert.equal(advertisements, 1);
+    if (!values.repair) {
+      assert.equal(advertisements, 1);
+    }
     let gitCpuMs = 0;
     let gitPeakRssBytes = 0;
     let receivedObjects = 0;
@@ -367,7 +453,8 @@ if (!values.arm) {
     const row = {
       arm: values.arm,
       advancing: Boolean(values.advancing),
-      baseline: Boolean(baseline || baselineFetch),
+      repair: Boolean(values.repair),
+      baseline: Boolean(baseline || baselineFetch || baselineRepair),
       ownerSha256,
       ...phases.baseRefresh,
       commandCount,
@@ -376,6 +463,13 @@ if (!values.arm) {
       gitCpuMs,
       gitPeakRssBytes,
       receivedObjects,
+      receivedPackBytes: (
+        await Promise.all(
+          (await fs.readdir(packDirectory))
+            .filter((name) => name.endsWith(".pack") && !existingPacks.has(name))
+            .map(async (name) => (await fs.stat(path.join(packDirectory, name))).size),
+        )
+      ).reduce((total, size) => total + size, 0),
       offeredHaves,
       gitPhasesMs,
       registrationQueueWaitMs,

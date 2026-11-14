@@ -73,6 +73,22 @@ it("passes required flags as data to the tested runtime", () => {
   expect(runScript(script.url, "--openclaw-unsupported-'\";process.exit(42)")).toBe("");
 });
 
+it.each(["20.20.2", "24.16.0"])("checks Node %s in the generated probe", (version) => {
+  const script = createRuntimeProcessScriptFile("nodeRuntimeProbe");
+  using _ = { [Symbol.dispose]: () => script.dispose() };
+  const output = execFileSync(
+    node,
+    [
+      "--input-type=module",
+      "-e",
+      `Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(version)} });
+       await import(${JSON.stringify(script.url.href)});`,
+    ],
+    { encoding: "utf8", timeout: 5000, env: {} },
+  );
+  expect(output).toBe(version === "20.20.2" ? "" : node);
+});
+
 it("uses embedded self dispatch while keeping external runtime scripts physical", () => {
   const root = directories.make("runtime-script-dispatch-");
   vi.stubGlobal("__openclawStandaloneIsEmbeddedModule", () => true);

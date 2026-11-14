@@ -25,6 +25,12 @@ the browser process.
 
 Other common Linux launch failures:
 
+- `Socket path too long`: Chromium cannot fit its process-singleton Unix socket
+  under a long temporary-directory path. Managed launches use `/tmp` when the
+  inherited temp path exceeds 50 bytes, leaving room for Chromium's private
+  directory and socket name. This does not change the Gateway's environment
+  or managed browser profile directory.
+
 - `GPU process isn't usable. Goodbye.`: Chromium exhausted its GPU fallback
   options. Check the preceding Chrome stderr for the first GPU-process failure.
   Inherited jemalloc `LD_PRELOAD` with `MALLOC_CONF=background_thread:true`
@@ -117,6 +123,17 @@ WantedBy=default.target
 ```bash
 systemctl --user enable --now openclaw-browser.service
 ```
+
+### Missing shared libraries
+
+`error while loading shared libraries`: the browser binary exists, but the
+host is missing a required runtime library. `openclaw browser doctor` runs
+the local managed executable with `--version` and reports the loader error
+as a failed **Chromium executable** check. Install the named library through
+your distribution's package manager, or use a browser package that includes
+the required dependencies. Downloading Playwright's Chromium alone does not
+install system libraries. The probe does not start a browser or touch its
+profile; ordinary status checks remain passive.
 
 ### Verify the browser works
 

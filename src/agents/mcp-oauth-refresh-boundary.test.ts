@@ -10,7 +10,7 @@ import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js"
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import * as oauthStore from "./mcp-oauth-store.js";
-import { resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
+import { readMcpOAuthCredentialsStatus, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
 import { seedMcpOAuthStoreForTest } from "./mcp-oauth.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -65,6 +65,9 @@ async function expectFenced(fetchFn: typeof fetch) {
   await reopen();
   await expect(refresh(fetchFn)).rejects.toThrow(/uncertain/);
   expect(fetchFn).toHaveBeenCalledTimes(1);
+  await expect(readMcpOAuthCredentialsStatus(identity)).resolves.toEqual({
+    state: "requires-authorization",
+  });
 }
 function heldRefresh(
   options: Parameters<typeof refresh>[1] = {},

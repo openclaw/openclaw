@@ -13,6 +13,7 @@ export const SESSION_LIST_SOURCES = [
   "command-palette",
   "skill-workshop",
   "workboard-lifecycle",
+  "sessions-search",
 ] as const;
 
 export const SessionsListParamsSchema = closedObject({

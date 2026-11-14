@@ -56,6 +56,11 @@ configuration separately. Binding controls keep their own loading and error
 state until configuration is available; a slow configuration read does not
 hold the inventory page open.
 
+Device and command-approval panels build their contents when first opened, then
+keep them mounted when closed so drafts survive reopening. Summary rows continue
+to update while closed. Browser find-in-page searches panel contents only after
+you have opened that panel.
+
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a
@@ -83,6 +88,18 @@ text replaces the instructions after the read-only heading. End the notice with
 a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
 example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
 
+## Feedback and bug reports
+
+Open **Help** from the sidebar account menu to **Report a bug** or **Suggest a feature**.
+Connection and chat error notices also offer **Report a bug**. These links open the
+matching public GitHub issue form; they do not submit an issue.
+
+Only the issue template and a fixed **Control UI** title are prefilled. OpenClaw does
+not attach error text, diagnostics, logs, conversations, configuration, identifiers,
+credentials, or private URLs, and the links suppress the browser referrer. Review
+anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
+for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
+
 ## Edit a failed message
 
 If a model rejects a message (for example, because it contains too many images),
@@ -95,25 +112,40 @@ Send or clear any existing composer draft first; recovery never replaces it.
 Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
-Rewinding does not undo external actions.
+Rewinding does not undo external actions. Large local histories are copied incrementally.
+If an individual event or the history navigation metadata exceeds the safe memory
+budget, the request fails without changing the conversation; other sessions remain
+available. Export the transcript to inspect it.
 
 ## Command palette file attachments
+
+The command palette has **Search** and **Compose** modes, switched from the bar
+along its bottom edge or with **Tab** from its main input, without losing text.
+Search finds commands and sessions; Compose prepares a new background session.
+While you are in Search, text of 60 characters or more, a second line, or a file
+moves the palette to Compose; emptying that draft returns it to Search. Choosing
+Search again keeps it for the current draft. Reopening the palette in the same
+app window returns to the mode you last chose, not to an automatic switch.
+**Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
 images or files onto the palette, or paste images into its input, to prepare a
 new background session without changing your current conversation or composer.
 
-The first attachment switches the palette from navigation to **New session**.
-Add optional instructions, adjust the session settings, then choose **New session**
-or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
+Each newly added attachment switches the palette to **Compose**, including after
+you return to Search with an attachment still in the draft.
+Add optional instructions, then send or press **Cmd/Ctrl+Enter**. The settings
+button at the left of the composer opens **New session settings** for the agent,
+folder, worktree, and **Remember settings**; the model picker sits beside Send.
+Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending
 automatic start. File admission and size limits match the chat composer.
 
 Closing the palette keeps its attachment draft in memory for the same Gateway
-and account. Removing the final attachment keeps new-session mode while
-instructions remain; clearing both files and instructions restores navigation.
+and account. When files moved the palette to Compose, removing them and clearing
+the instructions returns it to Search.
 Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Choose a session workspace
@@ -126,7 +158,11 @@ while you scroll.
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
-Selecting a repository also shows its identity in the workspace control.
+The **Local projects** section filters the Gateway’s saved project catalog immediately;
+it does not scan the filesystem. GitHub search results appear separately, without
+repeating repositories already shown as local matches. If no local project matches,
+the picker says so explicitly. Selecting a repository also shows its identity in
+the workspace control.
 Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
@@ -150,7 +186,16 @@ child.
 
 Imported conversations can remain grouped under their original session source,
 such as Beam. After conversion, they use the normal session controls, including
-rename, pin, and archive; the source group does not require another import.
+rename, pin, and archive. Their child-session disclosure opens the normal nested
+conversation tree; the source group does not require another import.
+
+## Rename a session
+
+On desktop, double-click a session name in the sidebar to edit it in place, or
+click its name in the session header. The name is prefilled and selected. Press
+**Enter** or move focus away to save, or **Escape** to cancel. Read-only sessions
+cannot be renamed. A rejected sidebar rename keeps your text in place for correction.
+The sidebar menu’s **Rename…** action still opens its dialog.
 
 ## Automatic session names
 
@@ -220,11 +265,15 @@ Reloading a previously visited chat restores the last settled sidebar while the 
 
 On a warm chat reload, browsers that retain the previous page during navigation can reveal the cached sidebar and conversation together. If that cached page is slow to prepare, the usual loading layout appears instead. Missing cached content, sign-in, and route errors release the loading view immediately.
 
+When opened through OpenClaw ID, the Control UI waits for the Loader's live connection instead of restoring a previous sign-in's startup snapshot.
+
+After the connection and saved conversation are ready, chat fetches updates while the rest of the page loads. A slow or unavailable cache keeps the normal loading path.
+
 The saved sidebar also retains the session rows for its initial viewport, along with unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Reload starts at the top of the sidebar. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
 
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 
-Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
+Message reactions appear in a compact tab on the message bubble. Flat agent replies have no bubble, so their tab leads the row under the reply and stays in place while the name, time and actions appear on hover. Open the tab to see each emoji count, including in read-only sessions. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
 The desktop **Subagents** tab places nested subagents beneath the subagent that started them. Each row keeps its own activity and controls. Floating **Details** and the mobile list remain compact, direct-child views.
 
@@ -304,7 +353,7 @@ The chat header’s **Details** panel groups session information into collapsibl
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
-Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Recorded pull requests update when their receipts or session access and lineage change, without polling passive rows or rechecking unrelated audiences on owner-certified metadata-only updates. Delivery still checks each recipient’s current access. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
@@ -518,8 +567,10 @@ teammates'), or one project. Then pick sessions from that list; the search butto
 searches every session you can access, not only those loaded in the sidebar, and
 teammates' sessions show their owner. **Edit section** opens on the session list;
 **Back** returns to the name and source. Sessions inside a section follow the
-sidebar's **Sort by** selection. Drag an existing session into a section to add it. Drag section headers
-to reorder them, or use **Move up** and **Move down** in the section menu.
+sidebar's **Sort by** selection. Drag an existing session into a section to add it.
+Dragging a session from one personal section to another moves that reference,
+leaving references in other sections unchanged. Drag section headers to reorder
+them, or use **Move up** and **Move down** in the section menu.
 **Remove section** removes only that personal section; it never deletes sessions.
 Pins and shared groups are independent, and **Move to group** still changes shared
 group membership.
@@ -719,9 +770,12 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
 
-The agent's **Automations** panel shows an empty state only after its jobs read
-succeeds. Failed reads show an error with **Refresh** available; previously loaded
-jobs remain visible while a refresh is pending or fails.
+The agent's **Automations** panel shows loading placeholders for its initial
+scheduler and jobs reads independently, and an empty state only after its jobs
+read succeeds. Failed summary reads show **Failed** instead of an unexplained
+`n/a`, with the cause available on the value. Failed jobs reads show an error
+with **Refresh** available; previously loaded jobs remain visible while a
+refresh is pending or fails.
 
 Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
 This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**

@@ -74,8 +74,8 @@ it.each([
 
 it("validates caller schemas with repeated $id independently across calls", async () => {
   for (const [key, value, type, text] of [
-    ["foo", "bar", "string", '{\n  "foo": "bar"\n}'],
-    ["count", 1, "number", '{\n  "count": 1\n}'],
+    ["foo", "bar", "string", '{"foo":"bar"}'],
+    ["count", 1, "number", '{"count":1}'],
   ] as const) {
     const json = { [key]: value };
     const schema = {

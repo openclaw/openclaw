@@ -11,6 +11,7 @@ import {
 import { defaultRuntime } from "../../../runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../prepared-model-runtime-generation-scope.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
@@ -196,9 +197,11 @@ type SubagentCleanupAttempt = {
 };
 
 export function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
-  // Required cleanup continues under its admitted owner after ingress closes.
-  return withoutGatewayToolCallerIdentity(() =>
-    runWithGatewayDetachedWorkContinuation(run, "subagents:lifecycle-cleanup"),
+  // Completion custody outlives the turn's plugin scope; retries re-admit plugin calls.
+  return runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+    withoutGatewayToolCallerIdentity(() =>
+      runWithGatewayDetachedWorkContinuation(run, "subagents:lifecycle-cleanup"),
+    ),
   );
 }
 

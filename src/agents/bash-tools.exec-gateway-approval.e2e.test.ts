@@ -269,13 +269,15 @@ describe("gateway-hosted exec approvals", () => {
         command,
         workdir: workspaceDir,
       });
+      // Policy updates can reject execution before their driver RPC returns.
+      const rejected = expect(revoked).rejects.toThrow("Exec approval changed before execution");
       const revokedId = await pendingApprovalId();
       await setPolicy("deny", "off");
       await operator.request("exec.approval.resolve", {
         id: revokedId,
         decision: "allow-once",
       });
-      await expect(revoked).rejects.toThrow("Exec approval changed before execution");
+      await rejected;
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );
