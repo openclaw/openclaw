@@ -140,17 +140,21 @@ it.each([
   "imported",
   "ordinary assistant",
   "final source reply",
+  "missing finality",
+  "non-assistant",
 ])("checks unadopted source reply ownership with %s", (authority) => {
   const runId = "setup-run";
   const message = {
-    role: "assistant",
+    role: authority === "non-assistant" ? "toolResult" : "assistant",
     content: [{ type: "text", text: "Available to install." }],
     ...(authority === "ordinary assistant"
       ? {}
       : {
           openclawDeliveryMirror: {
             kind: "message-tool-source-reply",
-            final: authority === "final source reply",
+            ...(authority === "missing finality"
+              ? {}
+              : { final: authority === "final source reply" }),
           },
         }),
     __openclaw: {

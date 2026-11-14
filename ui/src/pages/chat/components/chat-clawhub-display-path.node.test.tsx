@@ -4,7 +4,7 @@
 // and renderer. Its server/state imports must not enter the browser module graph.
 
 import { For } from "solid-js";
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { projectChatDisplayMessagesWithState } from "../../../../../src/gateway/chat-display-projection.js";
 import { projectSessionMessagePayload } from "../../../../../src/gateway/session-transcript-message.js";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.js";
@@ -20,6 +20,12 @@ import { createSessionEventState, emitGatewayEvent } from "../chat-state.test-su
 import { buildItems } from "../chat-thread.test-support.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
+
+// These assistant-only rows do not resolve human profiles. Keep that unrelated
+// database out of jsdom while exercising the real transcript producer below.
+vi.mock("../../../../../src/gateway/current-user-profile-display.js", () => ({
+  resolveCurrentUserProfileDisplay: () => ({ kind: "unresolved" }),
+}));
 
 beforeEach(async () => {
   await i18n.setLocale("en");

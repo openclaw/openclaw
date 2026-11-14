@@ -77,6 +77,9 @@ export function readClawHubRecommendation(value: unknown): ClawHubRecommendation
       return undefined;
     }
   }
+  let variant:
+    | { official: boolean; kind: "plugin"; pluginId?: string }
+    | { official: true; kind: "skill"; registry: string; skillRef: string };
   if (value.kind === "plugin") {
     if (
       !boundedText(value.id, 512) ||
@@ -85,30 +88,26 @@ export function readClawHubRecommendation(value: unknown): ClawHubRecommendation
     ) {
       return undefined;
     }
-    return {
-      type: "clawhub",
-      id: value.id,
-      name: value.name,
-      ...("description" in value ? { description: value.description } : {}),
-      ...("iconUrl" in value ? { iconUrl } : {}),
-      installed: value.installed,
+    variant = {
       official: value.official,
       kind: "plugin",
       ...("pluginId" in value ? { pluginId: value.pluginId } : {}),
     };
-  }
-  if (
-    value.kind !== "skill" ||
-    !value.official ||
-    !boundedText(value.id, 256) ||
-    !skillReference.test(value.id) ||
-    value.skillRef !== value.id
-  ) {
-    return undefined;
-  }
-  const registry = readUrl(value.registry);
-  if (registry === undefined) {
-    return undefined;
+  } else {
+    if (
+      value.kind !== "skill" ||
+      !value.official ||
+      !boundedText(value.id, 256) ||
+      !skillReference.test(value.id) ||
+      value.skillRef !== value.id
+    ) {
+      return undefined;
+    }
+    const registry = readUrl(value.registry);
+    if (registry === undefined) {
+      return undefined;
+    }
+    variant = { official: true, kind: "skill", registry, skillRef: value.id };
   }
   return {
     type: "clawhub",
@@ -117,10 +116,7 @@ export function readClawHubRecommendation(value: unknown): ClawHubRecommendation
     ...("description" in value ? { description: value.description } : {}),
     ...("iconUrl" in value ? { iconUrl } : {}),
     installed: value.installed,
-    official: true,
-    kind: "skill",
-    registry,
-    skillRef: value.id,
+    ...variant,
   };
 }
 
