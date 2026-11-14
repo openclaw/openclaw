@@ -31,6 +31,7 @@ export async function acquireLease(
     leaseMs: number;
     operationLabel: string;
     processBound?: boolean;
+    wait?: boolean;
   },
   assertCurrent: () => void,
   signal?: AbortSignal,
@@ -82,10 +83,9 @@ export async function acquireLease(
   if (!result) {
     throw new Error("State lease acquisition requires an existing database");
   }
-  if (result.kind === "acquired") {
-    assertAdmission();
-    captureSource?.({ context, identity: sourceIdentity, database: opened });
-  }
+  // A held attempt can also have committed an intent needing exact-source cleanup.
+  captureSource?.({ context, identity: sourceIdentity, database: opened });
+  assertAdmission();
   return result;
 }
 
@@ -143,6 +143,7 @@ export function createOpenClawStateLeaseWorkerStorage(
       operationLabel: string,
       signal?: AbortSignal,
       observeExpiry = false,
+      wait = false,
     ): Promise<OpenClawStateLeaseAcquisition> {
       return owner.runLifecycle(
         "acquire",
@@ -155,6 +156,7 @@ export function createOpenClawStateLeaseWorkerStorage(
                 leaseMs,
                 operationLabel,
                 processBound,
+                wait,
                 ...(observeExpiry ? { observeExpiry: true as const } : {}),
               },
             },
