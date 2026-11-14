@@ -68,6 +68,23 @@ export function createCodexAppServerModelCatalog(runtime: string) {
   const scopeKey = (params: AgentHarnessModelCatalogParams) =>
     JSON.stringify([params.agentId, params.agentDir, params.workspaceDir]);
   let disposed = false;
+  const currentObservation = (
+    params: AgentHarnessModelCatalogParams & { provider: string },
+    pluginConfig: unknown,
+  ) => {
+    const observation = scopes.get(params.config)?.get(scopeKey(params));
+    if (
+      disposed ||
+      params.provider !== "openai" ||
+      observation === undefined ||
+      observation.pluginConfig !== pluginConfig ||
+      !observation.accountType ||
+      !observation.isCurrent?.()
+    ) {
+      return undefined;
+    }
+    return observation;
+  };
   return {
     dispose() {
       disposed = true;
@@ -76,19 +93,23 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
       pluginConfig: unknown,
     ) {
-      const observation = scopes.get(params.config)?.get(scopeKey(params));
-      return !disposed &&
-        params.provider === "openai" &&
-        observation !== undefined &&
-        observation.pluginConfig === pluginConfig &&
-        observation.models?.has(params.modelId) &&
-        observation.accountType &&
-        observation.isCurrent?.()
+      const observation = currentObservation(params, pluginConfig);
+      const accountType = observation?.models?.has(params.modelId)
+        ? observation.accountType
+        : undefined;
+      return accountType
         ? {
-            accountType: observation.accountType,
-            ...(observation.authMode ? { authMode: observation.authMode } : {}),
+            accountType,
+            ...(observation?.authMode ? { authMode: observation.authMode } : {}),
           }
         : undefined;
+    },
+    readAccountAuthMode(
+      params: AgentHarnessModelCatalogParams & { provider: string },
+      pluginConfig: unknown,
+    ) {
+      const mode = currentObservation(params, pluginConfig)?.authMode;
+      return mode === "oauth" || mode === "token" || mode === "api_key" ? mode : undefined;
     },
     async load(
       params: AgentHarnessModelCatalogParams,

@@ -748,6 +748,13 @@ type AgentHarnessContract<
   readModelCatalogReadiness?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
   ): { accountType: string; authMode?: string } | undefined;
+  /**
+   * Reports the current native login mode without treating a model as catalog membership.
+   * No I/O or discovery. Missing or stale evidence returns undefined.
+   */
+  readNativeAccountAuthMode?(
+    params: AgentHarnessModelCatalogParams & { provider: string },
+  ): string | undefined;
 };
 
 /**

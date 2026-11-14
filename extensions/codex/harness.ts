@@ -294,6 +294,8 @@ export function createCodexAppServerAgentHarness(
     },
     readModelCatalogReadiness: (params) =>
       modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
+    readNativeAccountAuthMode: (params) =>
+      modelCatalog?.readAccountAuthMode(params, resolveAttemptPluginConfig(params.config)),
     filterModelServiceTiers: ({ config, serviceTiers }) => {
       const appServer = asOptionalRecord(
         asOptionalRecord(resolveAttemptPluginConfig(config))?.appServer,
