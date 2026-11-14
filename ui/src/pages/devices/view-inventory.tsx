@@ -299,7 +299,9 @@ function InventoryEntry(props: {
   const showRoles = () => props.entry.roles.some((role) => !tokenRoles().has(role));
   const showScopes = () => props.entry.scopes.some((scope) => !tokenScopes().has(scope));
   const desktopUnavailable = () =>
-    !desktopEnvironment() && props.entry.node?.commands?.includes("desktop.stream");
+    props.devices.desktopEnvironments !== undefined &&
+    !desktopEnvironment() &&
+    props.entry.node?.commands?.includes("desktop.stream");
   const liveStats = () => (rowConnected() ? props.entry.node?.hostStats : undefined);
   const hasAlerts = () =>
     warnings().length > 0 || (liveStats() !== undefined && liveStats() !== null);
