@@ -203,6 +203,25 @@ async function runDelivery(
 }
 
 describe("live generated-media completion", () => {
+  it("classifies a successful empty image completion as a retryable missing reply", async () => {
+    const { result, callGateway } = await runDelivery("discord", {
+      sourceTool: "image_generate",
+      internalEvents: imageCompletionEvents({
+        result: "Generated 1 image.",
+        mediaUrls: [],
+        replyInstruction: "Follow the current visible-reply contract.",
+      }),
+      response: { status: "ok", result: { meta: {}, payloads: [] } },
+    });
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      disposition: "retryable",
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
   it("delivers a generated-media failure notice through the ordinary input path", async () => {
     const events = musicCompletionEvents({
       status: "error",

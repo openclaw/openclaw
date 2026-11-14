@@ -1,0 +1,2 @@
+48
+# Regression: a successful empty image completion is retryable, and the observer settles it once the Gateway dedupe entry expires.
