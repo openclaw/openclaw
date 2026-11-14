@@ -254,10 +254,14 @@ private func assertConfigLookupCannotRecreateRoute(
         var allIterator = all.makeAsyncIterator()
         await connection._test_handlePush(.event(EventFrame(
             type: "event", event: "health", payload: AnyCodable(["ok": false]))), socketGeneration: 1)
+        var dropCounts: [Int] = []
         for _ in 0..<250 {
-            await connection._test_handlePush(
+            dropCounts = await connection._test_handlePush(
                 .event(EventFrame(type: "event", event: "presence")), socketGeneration: 1)
         }
+        // The chat queue lost its initial snapshot, the lifecycle queue lost nothing,
+        // and the unfiltered queue lost one buffered delivery for every server event.
+        #expect(dropCounts == [0, 1, 251])
         let chatDelivery = await chatIterator.next()
         if let push = chatDelivery?.push,
            case .health(ok: false) = MacGatewayChatTransport.mapPushToTransportEvent(push)
@@ -288,6 +292,11 @@ private func assertConfigLookupCannotRecreateRoute(
             }
         }
         await connection._test_handleDisconnect(socketGeneration: 1)
+        let afterDisconnect = await connection._test_handlePush(
+            .event(EventFrame(type: "event", event: "presence")), socketGeneration: 1)
+        // Retirement evicts the unfiltered queue's sequence gap. The stale push
+        // is not admitted, so it must not add another drop.
+        #expect(afterDisconnect == [0, 1, 252])
         for stream in [chat, lifecycle] {
             var iterator = stream.makeAsyncIterator()
             let delivery = await iterator.next()
@@ -297,6 +306,61 @@ private func assertConfigLookupCannotRecreateRoute(
                 Issue.record("Event filters must not discard disconnects")
             }
         }
+        for stream in [chat, lifecycle, all] {
+            let consumer = Task {
+                for await _ in stream {}
+            }
+            consumer.cancel()
+            await consumer.value
+        }
+        await connection.shutdown()
+    }
+
+    @Test func `push overflow includes initial snapshots and forgets cancelled subscribers`() async throws {
+        let (connection, _) = makeTestGatewayConnection()
+        try await connection.refresh()
+        await connection._test_handlePush(
+            .snapshot(makeGatewayGenerationSnapshot(version: "overflow")), socketGeneration: 1)
+        // Zero capacity drops the initial snapshot even before the caller can start reading.
+        let unbuffered = await connection.subscribe(bufferingNewest: 0, matching: { _ in false })
+        let slow = await connection.subscribe(bufferingNewest: 1)
+        for sequence in 1...8 {
+            let counts = await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "target", seq: sequence)), socketGeneration: 1)
+            #expect(counts == [1, sequence])
+        }
+        var slowIterator = slow.makeAsyncIterator()
+        let latest = await slowIterator.next()
+        if case let .event(frame) = latest?.push {
+            #expect(frame.seq == 8)
+        } else {
+            Issue.record("Overflow must retain the newest delivery without synthesizing recovery")
+        }
+        for stream in [unbuffered, slow] {
+            let consumer = Task {
+                var iterator = stream.makeAsyncIterator()
+                _ = await iterator.next()
+            }
+            consumer.cancel()
+            await consumer.value
+        }
+        // A lifecycle push bypasses both filters and observes termination even
+        // if the asynchronous onTermination cleanup has not run yet.
+        let afterCancel = await connection._test_handlePush(
+            .snapshot(makeGatewayGenerationSnapshot(version: "replacement")), socketGeneration: 1)
+        #expect(afterCancel.isEmpty)
+        let replacement = await connection.subscribe(bufferingNewest: 1, matching: { _ in false })
+        let replacementCounts = await connection._test_handlePush(
+            .event(EventFrame(type: "event", event: "target")), socketGeneration: 1)
+        #expect(replacementCounts == [0])
+        var replacementIterator = replacement.makeAsyncIterator()
+        #expect(gatewayGenerationSnapshotVersion(await replacementIterator.next()) == "replacement")
+        let consumer = Task {
+            var iterator = replacement.makeAsyncIterator()
+            _ = await iterator.next()
+        }
+        consumer.cancel()
+        await consumer.value
         await connection.shutdown()
     }
 
