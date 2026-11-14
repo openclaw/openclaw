@@ -44,6 +44,7 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
   finish(): void {
     const external = new Map<string, HistoryRow>();
     const images = new Map<string, HistoryRow[]>();
+    const documents = new Map<string, HistoryRow[]>();
     const textGroups = new Map<string, HistoryRow[]>();
     const floors = new Map<string, number>();
     const key = (role: string | null, text: string) => JSON.stringify([role ?? "", text]);
@@ -57,6 +58,9 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
       registerExternal(row);
       if (row.image_key) {
         addToGroup(images, row.image_key, row);
+      }
+      if (row.document_key) {
+        addToGroup(documents, row.document_key, row);
       }
       if (row.text && row.role) {
         addToGroup(textGroups, key(row.role, row.text), row);
@@ -106,6 +110,7 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
     const store: CliHistoryMergeStore = {
       matchExternal: (identity) => external.get(identity),
       matchImage: (identity) => images.get(identity)?.find((row) => !row.consumed),
+      matchDocument: (identity) => documents.get(identity)?.find((row) => !row.consumed),
       matchers: { withIdentity: textMatchers(true), withoutIdentity: textMatchers(false) },
       minimumOrder: (role, text) => floors.get(key(role, text)) ?? 0,
       advanceOrderFloor: ({ role, text, minimumOrder }) => {
