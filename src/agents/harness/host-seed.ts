@@ -58,8 +58,12 @@ export function bindBoundedSeed(
   ) {
     return undefined;
   }
+  // Same order as attempt setup, so a seed never outgrows the model window.
   const hostTokenBudget =
-    floorPositiveFiniteNumber(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
+    floorPositiveFiniteNumber(input.contextTokenBudget) ??
+    floorPositiveFiniteNumber(input.model?.contextWindow) ??
+    floorPositiveFiniteNumber(input.model?.maxTokens) ??
+    DEFAULT_CONTEXT_TOKENS;
   const sessionTarget = { ...target, agentId, sessionId, sessionKey, storePath };
   const attempt = {
     ...input,
