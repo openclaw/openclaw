@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { marked } from "marked";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { bindMemoryMigrationPlanSources } from "./memory-migration-source.js";
@@ -10,9 +11,6 @@ import {
   writeMigrationReport,
 } from "./migration-runtime.js";
 import { createMigrationItem, summarizeMigrationItems } from "./migration.js";
-/**
- * Tests plugin SDK migration runtime facades and migration helper behavior.
- */
 import { createMigrationSummaryFixture } from "./migration.test-support.js";
 import type { MigrationProviderContext } from "./plugin-entry.js";
 
@@ -360,51 +358,54 @@ describe("copyMemoryMigrationFileItem", () => {
 });
 
 describe("writeMigrationReport", () => {
-  it("redacts nested secret-looking config values in JSON reports", async () => {
+  it("redacts JSON secrets and renders report metadata as literal text", async () => {
     const root = tempDirs.make("openclaw-migration-report-");
     const reportDir = path.join(root, "report");
-
-    await writeMigrationReport({
-      providerId: "hermes",
-      source: path.join(root, "hermes"),
-      summary: createMigrationSummaryFixture(1, 0, 1),
-      items: [
-        createMigrationItem({
-          id: "config:mcp-servers",
-          kind: "config",
-          action: "merge",
-          status: "migrated",
-          details: {
-            value: {
-              mcp: {
-                env: {
-                  OPENAI_API_KEY: "short-dev-key",
-                  SAFE_FLAG: "visible",
-                },
-                headers: {
-                  Authorization: "Bearer short-dev-key",
-                  "x-api-key": "another-short-dev-key",
+    const literal = "**draft** &copy; <local> [path](target) `value`";
+    await writeMigrationReport(
+      {
+        providerId: "hermes",
+        source: path.join(root, literal),
+        target: `target ${literal}`,
+        backupPath: `backup ${literal}`,
+        summary: createMigrationSummaryFixture(1, 0, 1),
+        items: [
+          createMigrationItem({
+            id: `config:${literal}`,
+            kind: "config",
+            action: "merge",
+            status: "migrated",
+            reason: `kept ${literal}`,
+            details: {
+              value: {
+                mcp: {
+                  env: { OPENAI_API_KEY: "short-dev-key", SAFE_FLAG: "visible" },
+                  headers: {
+                    Authorization: "Bearer short-dev-key",
+                    "x-api-key": "another-short-dev-key",
+                  },
                 },
               },
             },
-          },
-        }),
-      ],
-      reportDir,
-    });
+          }),
+        ],
+        reportDir,
+      },
+      { title: `Migration ${literal} #` },
+    );
 
     const report = await fs.readFile(path.join(reportDir, "report.json"), "utf8");
     expect(report).not.toContain("short-dev-key");
-    expect(report).not.toContain("another-short-dev-key");
     expect(JSON.parse(report).items[0].details.value.mcp).toEqual({
-      env: {
-        OPENAI_API_KEY: "[redacted]",
-        SAFE_FLAG: "visible",
-      },
-      headers: {
-        Authorization: "[redacted]",
-        "x-api-key": "[redacted]",
-      },
+      env: { OPENAI_API_KEY: "[redacted]", SAFE_FLAG: "visible" },
+      headers: { Authorization: "[redacted]", "x-api-key": "[redacted]" },
     });
+    const html = marked.parse(await fs.readFile(path.join(reportDir, "summary.md"), "utf8"));
+    const text = "**draft** &amp;copy; &lt;local&gt; [path](target) `value`";
+    expect(html).toContain(`<h1>Migration ${text} #</h1>`);
+    expect(html).toContain(
+      `Source: ${path.join(root, text)}\nTarget: target ${text}\nBackup: backup ${text}`,
+    );
+    expect(html).toContain(`<li>migrated: config:${text} (kept ${text})</li>`);
   });
 });

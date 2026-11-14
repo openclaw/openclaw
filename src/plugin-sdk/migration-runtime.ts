@@ -16,6 +16,7 @@ import {
   statRegularFileSync,
 } from "../infra/fs-safe.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { escapeMarkdownText } from "../shared/text/escape-markdown.js";
 import {
   assertMemoryMigrationSourceRevision,
   MAX_MEMORY_MIGRATION_FILE_BYTES,
@@ -470,11 +471,11 @@ export async function writeMigrationReport(
     "utf8",
   );
   const lines = [
-    `# ${opts.title ?? "Migration Report"}`,
+    `# ${escapeMarkdownText(opts.title ?? "Migration Report")}`,
     "",
-    `Source: ${result.source}`,
-    result.target ? `Target: ${result.target}` : undefined,
-    result.backupPath ? `Backup: ${result.backupPath}` : undefined,
+    `Source: ${escapeMarkdownText(result.source)}`,
+    result.target ? `Target: ${escapeMarkdownText(result.target)}` : undefined,
+    result.backupPath ? `Backup: ${escapeMarkdownText(result.backupPath)}` : undefined,
     "",
     `Migrated: ${result.summary.migrated}`,
     `Skipped: ${result.summary.skipped}`,
@@ -482,7 +483,8 @@ export async function writeMigrationReport(
     `Errors: ${result.summary.errors}`,
     "",
     ...result.items.map(
-      (item) => `- ${item.status}: ${item.id}${item.reason ? ` (${item.reason})` : ""}`,
+      (item) =>
+        `- ${item.status}: ${escapeMarkdownText(item.id)}${item.reason ? ` (${escapeMarkdownText(item.reason)})` : ""}`,
     ),
   ].filter((line): line is string => typeof line === "string");
   await fs.writeFile(path.join(result.reportDir, "summary.md"), `${lines.join("\n")}\n`, "utf8");
