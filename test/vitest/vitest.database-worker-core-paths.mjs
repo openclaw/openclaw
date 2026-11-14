@@ -1157,7 +1157,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/wizard/setup.test.ts",
   "src/wizard/setup.provenance.integration.test.ts",
   "src/flows/search-setup.test.ts",
-  "src/flows/channel-setup.test.ts",
   "src/flows/channel-setup-fallback.test.ts",
   "src/security/audit-config-symlink.test.ts",
   "src/security/audit-filesystem-windows.test.ts",
