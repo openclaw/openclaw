@@ -8,6 +8,7 @@ import {
   assertBrowserNavigationAllowed,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
+import { createStandingNavigationPolicy } from "./pw-session-navigation-standing.js";
 
 type Command = Parameters<CDPSession["send"]>[0];
 type CommandParameters = Parameters<CDPSession["send"]>[1];
@@ -20,7 +21,7 @@ type ProtocolMessage = {
 };
 type AttachedTarget = {
   sessionId: string;
-  targetInfo: { type: string; targetId: string };
+  targetInfo: { type: string; targetId: string; url: string };
 };
 
 /** A page target or its own independently attached OOPIF protocol session. */
@@ -41,7 +42,7 @@ type PausedRequest = {
   networkId?: string;
   frameId?: string;
   resourceType: string;
-  request: { url: string };
+  request: { url: string; headers: Record<string, string> };
 };
 type NetworkRequest = { requestId: string; type?: string; frameId?: string };
 type TargetState = {
@@ -72,7 +73,7 @@ export type NavigationAuthorityFenceDisposeOptions = {
 async function settleInterception(
   target: NavigationTargetSession,
   method: "Fetch.continueRequest" | "Fetch.failRequest",
-  params: { requestId: string; errorReason?: "Failed" | "Aborted" },
+  params: { requestId: string; errorReason?: "Failed" | "Aborted" | "BlockedByClient" },
 ): Promise<void> {
   try {
     await target.send(method, params);
@@ -102,14 +103,15 @@ const tabFences = new WeakMap<Page, ReturnType<typeof createTabFence>>();
 
 /**
  * One document interception session per tab, shared by the invocations that
- * claim it. Each claiming invocation decides a paused document in turn.
- * Interception runs only while an invocation claims the tab.
+ * claim it. Each claiming invocation decides a paused document in turn; with
+ * no claim, the tab's standing policy does.
  */
 function createTabFence(page: Page, session: CDPSession) {
   let mainFrameId: string | undefined;
   const states = new Map<NavigationTargetSession, TargetState>();
   const invocations = new Set<Invocation>();
   let stateChanged = createDeferred<void>();
+  const standing = createStandingNavigationPolicy();
   const notify = () => {
     stateChanged.resolve();
     stateChanged = createDeferred<void>();
@@ -118,6 +120,19 @@ function createTabFence(page: Page, session: CDPSession) {
     for (const invocation of invocations) {
       invocation.fail(error);
     }
+  };
+  const enforceStanding = async (target: NavigationTargetSession, event: PausedRequest) => {
+    const errorReason = await standing.denial({
+      url: event.request.url,
+      headers: event.request.headers,
+      frameId: event.frameId ?? (target.parent ? target.frameId : mainFrameId),
+      mainFrameId,
+    });
+    const settled = errorReason
+      ? settleInterception(target, "Fetch.failRequest", { requestId: event.requestId, errorReason })
+      : settleInterception(target, "Fetch.continueRequest", { requestId: event.requestId });
+    // A target lost meanwhile has nothing left to settle.
+    await settled.catch(() => {});
   };
   const interceptDocuments = (target: NavigationTargetSession) =>
     target.send("Fetch.enable", {
@@ -258,9 +273,8 @@ function createTabFence(page: Page, session: CDPSession) {
         started({ requestId: event.networkId, type: event.resourceType, frameId: event.frameId });
       }
       // Claims are fixed at arrival: a request never moves to a later invocation's grant.
-      // One paused as the last claim was released loads, as it would with interception off.
       const claims = [...invocations];
-      const operation = handle(event, claims).catch(() => {});
+      const operation = claims.length > 0 ? handle(event, claims) : enforceStanding(target, event);
       for (const invocation of claims) {
         invocation.inFlight.add(operation);
       }
@@ -281,6 +295,7 @@ function createTabFence(page: Page, session: CDPSession) {
         target.events.off("Network.loadingFinished", finished);
         target.events.off("Network.loadingFailed", finished);
         target.events.off("Page.frameNavigated", committed);
+        unobserveFrames();
       },
     };
     states.set(target, state);
@@ -289,6 +304,7 @@ function createTabFence(page: Page, session: CDPSession) {
     target.events.on("Network.loadingFinished", finished);
     target.events.on("Network.loadingFailed", finished);
     target.events.on("Page.frameNavigated", committed);
+    const unobserveFrames = standing.observe(target.events);
     if (target.parent && target.frameId) {
       // At OOPIF response handoff the parent no longer receives the document's
       // terminal Network event. The child initialization barrier owns the swap.
@@ -304,8 +320,9 @@ function createTabFence(page: Page, session: CDPSession) {
     notify();
     await target.send("Page.enable");
     if (invocations.size > 0) {
-      await Promise.all([target.send("Network.enable"), interceptDocuments(target)]);
+      await target.send("Network.enable");
     }
+    await interceptDocuments(target);
   };
   const detachedTarget = (target: NavigationTargetSession) => {
     states.get(target)?.removeListeners();
@@ -337,6 +354,8 @@ function createTabFence(page: Page, session: CDPSession) {
     "Network.loadingFailed",
     "Fetch.requestPaused",
     "Page.frameNavigated",
+    "Page.frameRequestedNavigation",
+    "Page.frameDetached",
     "Target.attachedToTarget",
     "Target.receivedMessageFromTarget",
     "Target.detachedFromTarget",
@@ -416,6 +435,7 @@ function createTabFence(page: Page, session: CDPSession) {
       // Register before any await so detach and nested protocol events always
       // resolve against the same operation-owned target identity.
       children.set(event.sessionId, { target: attachedSession, reject });
+      standing.frameCommitted(event.targetInfo.targetId, event.targetInfo.url);
       const operation = prepare(attachedSession, true).catch((error: unknown) => {
         if (!detached) {
           fail(error);
@@ -507,6 +527,7 @@ function createTabFence(page: Page, session: CDPSession) {
   const ready = (async () => {
     const tree = await session.send("Page.getFrameTree");
     mainFrameId = tree.frameTree.frame.id;
+    standing.seed(tree.frameTree);
     await prepare(rootTarget);
   })();
   const closed = () => {
@@ -537,6 +558,7 @@ function createTabFence(page: Page, session: CDPSession) {
     states,
     initialization,
     invocations,
+    standing,
     ready,
     notify,
     changed: () => stateChanged.promise,
@@ -545,11 +567,11 @@ function createTabFence(page: Page, session: CDPSession) {
       await Promise.allSettled(
         [...states].flatMap(([target, state]) => {
           if (claimed) {
-            return [target.send("Network.enable"), interceptDocuments(target)];
+            return [target.send("Network.enable")];
           }
           state.documents.clear();
           state.finishedDocuments.clear();
-          return [target.send("Fetch.disable"), target.send("Network.disable")];
+          return [target.send("Network.disable")];
         }),
       );
     },
@@ -600,6 +622,12 @@ export async function installNavigationAuthorityFence(
     assertTargetCurrent,
   };
   invocations.add(invocation);
+  if (policy.standingSsrfPolicy) {
+    tab.standing.set({
+      ssrfPolicy: policy.standingSsrfPolicy,
+      ...(policy.browserProxyMode ? { browserProxyMode: policy.browserProxyMode } : {}),
+    });
+  }
   const release = () => {
     invocations.delete(invocation);
     if (invocations.size === 0) {

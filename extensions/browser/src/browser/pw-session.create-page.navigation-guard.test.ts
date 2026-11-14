@@ -193,7 +193,7 @@ async function dispatch(
     networkId: requestId,
     frameId: opts.frame ? "child" : "main",
     resourceType: "Document",
-    request: { url: opts.url ?? publicUrl },
+    request: { url: opts.url ?? publicUrl, headers: {} },
   });
   await done.promise;
   f.session.emit("Network.loadingFinished", { requestId });

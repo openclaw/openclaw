@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as navigationGuard from "./navigation-guard.js";
@@ -15,6 +16,7 @@ async function fence(
     detach?: () => Promise<void>;
     isClosed?: () => boolean;
     assertCurrent?: () => void;
+    standingSsrfPolicy?: SsrFPolicy;
     handleDocument?: Parameters<typeof installNavigationAuthorityFence>[3];
   } = {},
 ) {
@@ -39,12 +41,19 @@ async function fence(
   const errors: unknown[] = [];
   const dispose = await installNavigationAuthorityFence(
     page as unknown as Page,
-    { assertNavigationCurrent: options.assertCurrent ?? (() => {}) },
+    {
+      assertNavigationCurrent: options.assertCurrent ?? (() => {}),
+      standingSsrfPolicy: options.standingSsrfPolicy,
+    },
     (error) => errors.push(error),
     options.handleDocument,
   );
   const pause = (requestId: string, url = "http://127.0.0.1/target") =>
-    session.emit("Fetch.requestPaused", { requestId, resourceType: "Document", request: { url } });
+    session.emit("Fetch.requestPaused", {
+      requestId,
+      resourceType: "Document",
+      request: { url, headers: {} },
+    });
   return { send, detach, session, page, errors, dispose, pause };
 }
 
@@ -79,7 +88,11 @@ describe("navigation authority fence lifecycle", () => {
     });
     releaseBarrier.resolve();
     await expect(cleanup).resolves.toBeUndefined();
-    expect(send).toHaveBeenCalledWith("Fetch.disable", undefined);
+    expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+      requestId: "interception",
+      errorReason: "Aborted",
+    });
+    expect(send).not.toHaveBeenCalledWith("Fetch.disable", undefined);
   });
 
   it("settles a document completed by the operation-owned interceptor", async () => {
@@ -192,6 +205,29 @@ describe("navigation authority fence lifecycle", () => {
     );
     expect(send).not.toHaveBeenCalledWith("Fetch.failRequest", expect.anything());
     expect(detach).not.toHaveBeenCalled();
+  });
+
+  it("returns the tab to its standing policy when the invocation releases its claim", async () => {
+    const { send, dispose, pause } = await fence({
+      standingSsrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      handleDocument: async (route) => {
+        await route.continue();
+      },
+    });
+    pause("granted", "http://127.0.0.1/during");
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "granted" }),
+    );
+    expect(await dispose()).toBeUndefined();
+    pause("private", "http://127.0.0.1/after");
+    pause("public", "http://93.184.216.34/after");
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+        requestId: "private",
+        errorReason: "BlockedByClient",
+      });
+      expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "public" });
+    });
   });
 
   it("retains interception until target close when revoked loading cannot be stopped", async () => {

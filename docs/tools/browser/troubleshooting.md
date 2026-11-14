@@ -66,6 +66,7 @@ Common examples:
     loopback external CDP service is configured without `attachOnly: true`
 - Navigation SSRF block:
   - `open`, `navigate`, snapshot, or tab-opening flows fail with a browser/network policy error while `start` and `tabs` still work
+  - An address typed into a tab the agent has used shows the browser's "is blocked" page with `ERR_BLOCKED_BY_CLIENT`: the [SSRF policy](/tools/browser/configuration#ssrf-policy) denies that address. Open it in a new tab, or allow the host with `browser.ssrfPolicy.allowedHostnames`.
 
 Use this minimal sequence to separate the two:
 
