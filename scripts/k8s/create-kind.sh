@@ -8,6 +8,7 @@ fi
 #   ./scripts/k8s/create-kind.sh             # Create with auto-detected engine
 #   ./scripts/k8s/create-kind.sh --name mycluster
 #   ./scripts/k8s/create-kind.sh --delete
+#   KIND_EXPERIMENTAL_PROVIDER=docker ./scripts/k8s/create-kind.sh  # Use a specific engine
 #
 # After creation, deploy with:
 #   export <AI_PROVIDER>_API_KEY="..." && ./scripts/k8s/deploy.sh
@@ -38,6 +39,9 @@ Options:
   --name NAME          Cluster name (default: openclaw)
   --delete             Delete the cluster instead of creating it
   -h, --help           Show this help message
+
+Environment:
+  KIND_EXPERIMENTAL_PROVIDER  Use this engine (docker or podman) instead of auto-detecting
 
 Examples:
   $(basename "$0")                          # Create cluster (auto-detect engine)
@@ -87,8 +91,21 @@ detect_provider() {
   fail "Neither podman nor docker found. Install one to use Kind."
 }
 
-CONTAINER_CMD=$(detect_provider)
-info "Auto-detected container engine: $CONTAINER_CMD"
+case "${KIND_EXPERIMENTAL_PROVIDER:-}" in
+  "")
+    CONTAINER_CMD=$(detect_provider)
+    info "Auto-detected container engine: $CONTAINER_CMD"
+    ;;
+  docker|podman)
+    CONTAINER_CMD="$KIND_EXPERIMENTAL_PROVIDER"
+    command -v "$CONTAINER_CMD" &>/dev/null ||
+      fail "KIND_EXPERIMENTAL_PROVIDER selects $CONTAINER_CMD, but it is not installed. Install it or unset KIND_EXPERIMENTAL_PROVIDER to auto-detect."
+    info "Using container engine from KIND_EXPERIMENTAL_PROVIDER: $CONTAINER_CMD"
+    ;;
+  *)
+    fail "Unsupported KIND_EXPERIMENTAL_PROVIDER '$KIND_EXPERIMENTAL_PROVIDER'. Use docker or podman, or unset it to auto-detect."
+    ;;
+esac
 
 if ! command -v kind &>/dev/null; then
   fail "kind is not installed. Install it from https://kind.sigs.k8s.io/"

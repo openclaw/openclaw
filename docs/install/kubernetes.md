@@ -47,6 +47,8 @@ If you do not have a cluster, create one locally with [Kind](https://kind.sigs.k
 ./scripts/k8s/create-kind.sh --delete  # tear down
 ```
 
+To use a specific engine when both are installed, set Kind's `KIND_EXPERIMENTAL_PROVIDER` to `docker` or `podman`. The script then uses that engine for create and delete, and stops with an error if it is not running.
+
 Then deploy as usual with `./scripts/k8s/deploy.sh`.
 
 ## Step by step
