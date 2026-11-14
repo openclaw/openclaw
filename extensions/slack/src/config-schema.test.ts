@@ -9,6 +9,27 @@ const relay = {
 };
 
 describe("slack config schema", () => {
+  it("accepts scoped strict bot-mention opt-ins without changing defaults", () => {
+    expect(
+      SlackConfigSchema.safeParse({
+        requireExplicitBotMention: true,
+        channels: {
+          "*": { requireExplicitBotMention: true },
+          C123: { requireExplicitBotMention: false },
+        },
+        accounts: { work: { requireExplicitBotMention: false } },
+      }).success,
+    ).toBe(true);
+    expect(SlackConfigSchema.parse({}).requireExplicitBotMention).toBeUndefined();
+    const invalid = SlackConfigSchema.safeParse({ requireExplicitBotMention: "true" });
+    expect(invalid.success).toBe(false);
+    if (!invalid.success) {
+      expect(invalid.error.issues.map((issue) => issue.path.join("."))).toEqual([
+        "requireExplicitBotMention",
+      ]);
+    }
+  });
+
   it("defaults groupPolicy to allowlist", () => {
     expect(SlackConfigSchema.parse({}).groupPolicy).toBe("allowlist");
   });

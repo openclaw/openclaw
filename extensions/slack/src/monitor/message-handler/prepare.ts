@@ -8,7 +8,6 @@ import {
   classifyChannelInboundEvent,
   formatInboundEnvelope,
   matchesMentionWithExplicit,
-  resolveInboundMentionDecision,
   resolveGroupThreadMentionFacts,
   resolveGroupThreadConfig,
   isGroupThreadRouteExclusive,
@@ -89,7 +88,10 @@ import { resolveSlackRoomHistory } from "./prepare-room-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackGroupSessionSubject } from "./prepare-session-presentation.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
-import { resolveSlackThreadMentionPolicy } from "./prepare-thread-mentions.js";
+import {
+  resolveSlackMentionDecision,
+  resolveSlackThreadMentionPolicy,
+} from "./prepare-thread-mentions.js";
 import {
   collectSlackMentionIds,
   isSlackSubteamMentionForBot,
@@ -872,8 +874,12 @@ export async function prepareSlackMessage(params: {
     threadTs &&
     runtimeBinding?.conversation.conversationId !== threadTs;
 
-  const mentionDecision = resolveInboundMentionDecision({
+  const requireExplicitBotMention =
+    channelConfig?.requireExplicitBotMention ?? account.config.requireExplicitBotMention ?? false;
+  const mentionDecision = resolveSlackMentionDecision({
     facts: {
+      explicitBotMention: explicitlyMentionedBotUser || opts.source === "app_mention",
+      explicitSubteamMention: explicitlyMentionedBotSubteam,
       canDetectMention,
       wasMentioned,
       hasAnyMention,
@@ -881,31 +887,23 @@ export async function prepareSlackMessage(params: {
     },
     policy: {
       isGroup: isRoom,
-      requireMention: shouldRequireMention,
+      requireMention:
+        shouldRequireMention ||
+        (isBotMessage && allowBotsMode === "mentions" && requireExplicitBotMention),
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
       implicitMentions,
     },
   });
-  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-  const shouldBypassMention = mentionDecision.shouldBypassMention;
-  const matchedImplicitMentionKinds = mentionDecision.matchedImplicitMentionKinds;
-  const mentionSource: NonNullable<FinalizedMsgContext["MentionSource"]> =
-    explicitlyMentionedBotUser || opts.source === "app_mention"
-      ? "explicit_bot"
-      : explicitlyMentionedBotSubteam
-        ? "subteam"
-        : shouldBypassMention
-          ? "command_bypass"
-          : wasMentioned
-            ? "mention_pattern"
-            : matchedImplicitMentionKinds.length > 0
-              ? "implicit_thread"
-              : "none";
+  const { effectiveWasMentioned, shouldBypassMention, matchedImplicitMentionKinds } =
+    mentionDecision;
 
   if (isBotMessage && allowBotsMode === "mentions") {
-    const botMentioned = isDirectMessage || effectiveWasMentioned || shouldBypassMention;
+    const botMentioned =
+      isDirectMessage ||
+      (requireExplicitBotMention ? wasMentioned : effectiveWasMentioned) ||
+      shouldBypassMention;
     if (!botMentioned) {
       return drop("bot-missing-mention");
     }
@@ -1349,7 +1347,7 @@ export async function prepareSlackMessage(params: {
               mentionedSubteamIds.length > 0 ? [...mentionedSubteamIds] : undefined,
             ImplicitMentionKinds:
               matchedImplicitMentionKinds.length > 0 ? [...matchedImplicitMentionKinds] : undefined,
-            MentionSource: mentionSource,
+            MentionSource: mentionDecision.mentionSource,
           }
         : {}),
     },
