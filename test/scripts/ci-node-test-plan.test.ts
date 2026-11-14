@@ -3043,10 +3043,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(reader).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
     expect(reader.predictedSeconds).toBeLessThanOrEqual(210);
     expect(reader.groups).toHaveLength(2);
-    expect(reader.groups.map((group) => group.pretestBuildMode).toSorted()).toEqual([
-      "private-qa",
-      "runtime",
-    ]);
+    expect(
+      reader.groups
+        .map((group) => required(group.pretestBuildMode))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["private-qa", "runtime"]);
     expectEvery(reader.groups, (group) => group.pretestBuildMode);
     expectSameEntries(reader.groups.flatMap(optionalPatterns), targets);
   });
