@@ -7,7 +7,6 @@ export function createExtensionCodexAppServerToolsVitestConfig(
 ) {
   return createScopedVitestConfig(
     [
-      "extensions/codex/src/app-server/approval-bridge.test.ts",
       "extensions/codex/src/app-server/computer-use.test.ts",
       "extensions/codex/src/app-server/dynamic-tool*.test.ts",
       "extensions/codex/src/app-server/dynamic-tools.test.ts",

@@ -319,7 +319,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/managed-image-attachments.test.ts", 24],
   ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],
-  ["test/scripts/test-projects-routing.test.ts", 21],
   // Single-worker Node file spans after splitting the sidebar's serial case groups.
   ["ui/src/components/app-sidebar.catalog.test.ts", 4],
   ["ui/src/components/app-sidebar.interactions.test.ts", 6],
