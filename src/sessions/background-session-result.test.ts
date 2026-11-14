@@ -694,6 +694,29 @@ it.each<[string, Partial<SessionEntry>, string]>([
   ).resolves.toEqual([]);
 });
 
+it("refuses a prepared subagent result whose producer loses custody before the write", async () => {
+  const target = await createTarget();
+  let prepared = false;
+  await expect(
+    target.commit({
+      provenance: { kind: "subagent-completion" },
+      // Display preparation is the last step before persistence: custody is
+      // revoked only after the result is fully prepared for the write.
+      prepareDisplayContent: async () => {
+        prepared = true;
+        return [{ type: "text", text: "Prepared child result" }];
+      },
+      assertCurrent: () => {
+        if (prepared) {
+          throw new Error("completion custody revoked");
+        }
+      },
+    }),
+  ).rejects.toThrow("completion custody revoked");
+  expect(prepared).toBe(true);
+  expect(await loadTranscriptEvents(target.scope)).toEqual([]);
+});
+
 it("treats a missing lifecycle revision as exact generation state", async () => {
   const target = await createTarget();
   const generation = { sessionId: target.sessionId, lifecycleRevision: undefined };

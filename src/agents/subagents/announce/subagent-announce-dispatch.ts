@@ -61,6 +61,8 @@ export type SubagentAnnounceDirectParams = {
   targetRequesterSessionKey: string;
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
+  /** Child findings for a paused-goal injection when completion events are absent. */
+  pausedGoalVisibleText?: string;
   expectsCompletionMessage: boolean;
   completionTarget?: "parent";
   completionRequesterSessionId?: string;

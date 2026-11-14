@@ -19,6 +19,23 @@ const { maybeWakeRequesterAfterAllChildrenSettled: wakeRequester } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
+  it("keeps a batch with a failed or empty owed child off the paused-goal row", async () => {
+    const answered = makeSettledChild({
+      runId: "run-a",
+      completion: { required: true, resultText: "blocked fetch" },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      answered,
+      makeSettledChild({
+        runId: "run-b",
+        outcome: { status: "timeout" },
+        completion: { required: true },
+      }),
+    ]);
+    expect(await wakeRequester(wakeParams({ settledEntry: answered }))).toBe(true);
+    expect(deliveredCallArg().pausedGoalVisibleText).toBeUndefined();
+  });
+
   it("wakes the requester once with a batch-stable idempotency key when the fan-out drains", async () => {
     const quietChild = makeSettledChild({
       runId: "run-quiet",
@@ -47,6 +64,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
       directIdempotencyKey: requesterSettleKey("run-a,run-b,run-quiet"),
     });
     expect(call.requireVisibleReply).toBeUndefined();
+    expect(String(call.pausedGoalVisibleText)).toContain("social findings");
+    expect(String(call.pausedGoalVisibleText)).toContain("network findings");
+    expect(String(call.pausedGoalVisibleText)).not.toContain("Review the settled results");
+    expect(String(call.pausedGoalVisibleText)).not.toContain("<prompt-data>");
     expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");

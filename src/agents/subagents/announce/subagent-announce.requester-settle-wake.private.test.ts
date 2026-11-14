@@ -81,6 +81,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       return;
     }
     const call = deliveredCallArg();
+    // Parent-only findings never become a visible paused-goal result.
+    expect(call.pausedGoalVisibleText).toBeUndefined();
     expect(call.completionRequesterSessionId).toBe("sess-main");
     expect(call.requireVisibleReply).toBeUndefined();
     expect(call.completionTarget).toBe(yielded && marked ? undefined : "parent");

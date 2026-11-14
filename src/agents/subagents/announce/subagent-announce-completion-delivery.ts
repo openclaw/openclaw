@@ -267,7 +267,11 @@ export function isDirectMessageDeliveryTarget(
   return deriveSessionChatTypeFromKey(requesterSessionKey) === "direct";
 }
 
-type DirectCompletionContent = { content: string; mediaUrls: string[]; audioAsVoice?: boolean };
+export type DirectCompletionContent = {
+  content: string;
+  mediaUrls: string[];
+  audioAsVoice?: boolean;
+};
 
 function collectDirectCompletionContent(params: {
   agentResult?: { payloads?: unknown };
@@ -355,6 +359,29 @@ function collectDirectCompletionContent(params: {
     }
   }
   return undefined;
+}
+
+/** Structured child content for one requested kind. Empty completed output stays empty. */
+export function resolveDirectCompletionInjectionContent(params: {
+  events: readonly AgentInternalEvent[] | undefined;
+  contentKind: "completed_result" | "failed_notice";
+}): DirectCompletionContent | undefined {
+  const extracted = collectDirectCompletionContent({
+    events: params.events,
+    contentKind: params.contentKind,
+  });
+  return extracted && (extracted.content || extracted.mediaUrls.length > 0) ? extracted : undefined;
+}
+
+/** Settled findings text with its media directives parsed into structured media. */
+export function resolveDirectCompletionTextContent(text: string): DirectCompletionContent {
+  return (
+    collectDirectCompletionContent({
+      agentResult: { payloads: [{ text }] },
+      events: undefined,
+      contentKind: "completed_result",
+    }) ?? { content: text, mediaUrls: [] }
+  );
 }
 
 export async function deliverCompletionDirect(params: {

@@ -64,6 +64,11 @@ import {
 } from "./subagent-announce-dispatch.js";
 import { resolveExactSubagentCompletionEvent } from "./subagent-announce-handoff.js";
 import { resolveCompletionDeliveryOrigins } from "./subagent-announce-origin.js";
+import {
+  PAUSED_GOAL_CHILD_RESULT_LABEL,
+  resolvePausedGoalChildInjection,
+} from "./subagent-announce-paused-goal.js";
+import { commitRequesterSubagentResult } from "./subagent-announce.runtime.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 /** Another owner (a yielded requester or an idle cron turn) settles this completion. */
@@ -448,6 +453,73 @@ async function sendSubagentAnnounceDirectlyBound(
     try {
       if (!isCompletionAdmissionAllowed()) {
         throw new SourceOwnerChangedError();
+      }
+      // Announce cleanup and requester-settle retries call this function again.
+      // A recorded result settles the completion, so a later attempt cannot
+      // turn the same pre-pause child into a requester model run.
+      const pausedGoalContent = resolvePausedGoalChildInjection({
+        completionTarget: params.completionTarget,
+        sourceSessionKey: params.sourceSessionKey,
+        settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
+        goal: requesterEntry?.goal,
+        internalEvents: params.internalEvents,
+        pausedGoalVisibleText: params.pausedGoalVisibleText,
+        // A successful child with no output keeps the ordinary path, as direct delivery does.
+        hasFailedOrMissingChildResult:
+          hasFailedTrustedSubagentCompletion ||
+          (hasRequiredSubagentNoOutputCompletion &&
+            !hasSuccessfulTrustedSubagentNoOutputCompletion),
+      });
+      // The row only records history. A requester with an external delivery route,
+      // or without a resolved generation, keeps the ordinary path that delivers it.
+      if (pausedGoalContent && !deliveryTarget.deliver && requesterAgentId && requesterSessionId) {
+        if (params.onBeforeDispatch) {
+          await params.onBeforeDispatch();
+          dispatchPrepared = true;
+        }
+        if (params.signal?.aborted) {
+          return { delivered: false, path: "none" };
+        }
+        if (!isCompletionAdmissionAllowed()) {
+          throw new SourceOwnerChangedError();
+        }
+        // The same model-visible result row a direct channel delivery records: shown
+        // now, and in context when the goal resumes. A retry reuses the committed row.
+        await commitRequesterSubagentResult({
+          agentId: requesterAgentId,
+          sessionKey: canonicalRequesterSessionKey,
+          expectedGeneration: {
+            sessionId: requesterSessionId,
+            lifecycleRevision: requesterLifecycleRevision,
+          },
+          payload: {
+            text: [`[${PAUSED_GOAL_CHILD_RESULT_LABEL}]`, pausedGoalContent.content]
+              .filter(Boolean)
+              .join("\n\n"),
+            ...(pausedGoalContent.mediaUrls.length > 0
+              ? { mediaUrls: pausedGoalContent.mediaUrls }
+              : {}),
+            ...(pausedGoalContent.audioAsVoice ? { audioAsVoice: true } : {}),
+          },
+          idempotencyKey: `${params.directIdempotencyKey}:paused-goal`,
+          config: cfg,
+          signal: params.signal,
+          assertCurrent: () => {
+            if (!isCompletionAdmissionAllowed()) {
+              throw new SourceOwnerChangedError();
+            }
+          },
+        });
+        if (!isCompletionDeliveryAllowed()) {
+          return sourceOwnerChangedResult();
+        }
+        try {
+          params.onAccepted?.(undefined);
+          params.onExecutionStarted?.();
+        } catch {
+          // Acceptance bookkeeping cannot reopen a completion already in the transcript.
+        }
+        return { delivered: true, path: "direct" };
       }
       directAnnounceResponse = await runAnnounceAgentCall({
         agentParams: directAgentParams,

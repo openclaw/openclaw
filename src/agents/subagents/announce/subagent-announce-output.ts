@@ -380,10 +380,27 @@ export async function readSubagentRunFinalAnswer(
 }
 
 /** Prepare complete result text without changing the bounded lifecycle evidence. */
+/**
+ * Each owed child's own result text, without the model-facing findings framing.
+ * Empty when any owed child failed or has no visible text, so that batch keeps
+ * the ordinary path that reports every outcome.
+ */
+function resolvePublicChildResults(
+  results: ReadonlyArray<{ child: SubagentRunRecord; text: string | undefined }>,
+): string[] {
+  const owed = results.filter(({ child }) => child.completion?.required !== false);
+  const reportable = owed.every(
+    ({ child, text }) =>
+      (child.execution.outcome === undefined || child.execution.outcome.status === "ok") &&
+      Boolean(text?.trim()),
+  );
+  return reportable ? owed.map(({ text }) => text!.trim()) : [];
+}
+
 export async function readChildCompletionFindings(
   children: SubagentRunRecord[],
   readSubagentRun?: AnnounceRunReader,
-): Promise<PreparedAnnounceResult> {
+): Promise<PreparedAnnounceResult & { childResults: string[] }> {
   const readCurrent =
     readSubagentRun ?? (await prepareAnnounceRunReader(children.map((child) => child.runId)));
   const results = await Promise.all(
@@ -408,6 +425,7 @@ export async function readChildCompletionFindings(
     text: buildChildCompletionFindings(
       results.map(({ child, text }) => Object.assign({}, child, { announceResult: text })),
     ),
+    childResults: resolvePublicChildResults(results),
     isCurrent,
   };
 }
