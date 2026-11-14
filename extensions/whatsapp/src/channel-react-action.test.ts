@@ -487,4 +487,11 @@ describe("whatsapp react action messageId resolution", () => {
     expect((err as Error).name).toBe("ToolInputError");
     expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
   });
+
+  it("rejects unknown actions", async () => {
+    await expect(action("delete", { messageId: "sent-1" })).rejects.toThrow(
+      "Action delete is not supported for provider whatsapp.",
+    );
+    expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
+  });
 });

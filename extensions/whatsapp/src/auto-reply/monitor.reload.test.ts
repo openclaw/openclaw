@@ -99,6 +99,7 @@ async function checkReload(root: string, accountId: string, changeChannel: boole
       },
       sendComposingTo: async () => {},
       sendReaction: async () => createAcceptedWhatsAppSendResult("reaction", "ack"),
+      editMessage: vi.fn(async () => {}),
     };
   };
   const finalText = named ? `${replyText} ${"x".repeat(150)}` : replyText;

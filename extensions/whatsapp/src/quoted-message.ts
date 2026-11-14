@@ -53,6 +53,12 @@ function getCache(): Map<string, CacheEntry> {
   return cache;
 }
 
+// Keys join account, JID and id with colons, so an id holding one could address another chat's
+// entry; such ids are never cached and never found.
+function isCacheableMessageId(messageId: string): boolean {
+  return Boolean(messageId) && !messageId.includes(":");
+}
+
 function makeCacheKey(accountId: string, remoteJid: string, messageId: string): string {
   return `${accountId}:${remoteJid}:${messageId}`;
 }
@@ -63,7 +69,7 @@ export function cacheInboundMessageMeta(
   messageId: string,
   meta: QuotedMeta,
 ): void {
-  if (!accountId || !messageId || !remoteJid) {
+  if (!accountId || !isCacheableMessageId(messageId) || !remoteJid) {
     return;
   }
   const cache = getCache();
@@ -76,6 +82,9 @@ export function lookupInboundMessageMeta(
   remoteJid: string,
   messageId: string,
 ): QuotedMeta | undefined {
+  if (!isCacheableMessageId(messageId)) {
+    return undefined;
+  }
   return readCachedMessageMeta(makeCacheKey(accountId, remoteJid, messageId));
 }
 
@@ -101,7 +110,10 @@ function isGroupJid(jid: string | undefined): boolean {
   return Boolean(jid && jid.endsWith("@g.us"));
 }
 
-function areComparableE164sEqual(left: string | undefined, right: string | undefined): boolean {
+export function areComparableE164sEqual(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
   const normalizedLeft = left?.trim();
   const normalizedRight = right?.trim();
   if (!normalizedLeft || !normalizedRight) {
@@ -110,7 +122,10 @@ function areComparableE164sEqual(left: string | undefined, right: string | undef
   return normalizedLeft === normalizedRight;
 }
 
-function areComparableJidsEqual(left: string | undefined, right: string | undefined): boolean {
+export function areComparableJidsEqual(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
   const normalizedLeft = normalizeComparableJid(left);
   const normalizedRight = normalizeComparableJid(right);
   if (!normalizedLeft || !normalizedRight) {
@@ -142,7 +157,7 @@ export function lookupInboundMessageMetaForTarget(
   targetJid: string,
   messageId: string,
 ): QuotedMetaLookup | undefined {
-  if (!accountId || !messageId || !targetJid) {
+  if (!accountId || !isCacheableMessageId(messageId) || !targetJid) {
     return undefined;
   }
   const exact = lookupInboundMessageMeta(accountId, targetJid, messageId);

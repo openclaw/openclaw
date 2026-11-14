@@ -34,8 +34,21 @@ import {
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
-import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
-import { markdownToWhatsAppChunks, resolveJidToE164, toWhatsappJid } from "./targets-runtime.js";
+import {
+  areComparableE164sEqual,
+  areComparableJidsEqual,
+  lookupInboundMessageMetaForTarget,
+  type WhatsAppQuotedMessageKey,
+} from "./quoted-message.js";
+import {
+  jidToE164,
+  markdownToWhatsAppChunks,
+  resolveJidToE164,
+  toWhatsappJid,
+  toWhatsappJidWithLid,
+} from "./targets-runtime.js";
+
+const WHATSAPP_EDIT_TEXT_LIMIT = 4_000;
 
 type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
 
@@ -334,6 +347,60 @@ export async function sendReactionWhatsApp(
     options.fromMe ?? false,
     options.participant,
   );
+}
+
+export async function editMessageWhatsApp(
+  chatJid: string,
+  messageId: string,
+  text: string,
+  options: { accountId?: string; cfg: OpenClawConfig; assertDirectAdapterHandoff?: () => void },
+): Promise<void> {
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp edit");
+  const { listener: active, accountId } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  const { authDir } = resolveWhatsAppAccount({ cfg, accountId });
+  const targetJid = toWhatsappJidWithLid(chatJid, { authDir });
+  if (isWhatsAppNewsletterJid(targetJid)) {
+    throw new Error("WhatsApp edit rejected: newsletter messages cannot be edited.");
+  }
+  const chunks = markdownToWhatsAppChunks(
+    text,
+    WHATSAPP_EDIT_TEXT_LIMIT,
+    resolveMarkdownTableMode({ cfg, channel: "whatsapp", accountId }),
+  );
+  const [formatted] = chunks;
+  if (!formatted?.trim()) {
+    throw new Error("WhatsApp edit rejected: text is empty.");
+  }
+  if (chunks.length > 1) {
+    throw new Error(
+      `WhatsApp edit rejected: text exceeds ${WHATSAPP_EDIT_TEXT_LIMIT} characters after formatting.`,
+    );
+  }
+  // fromMe scopes which messages this account is eligible to edit at the provider; it says nothing
+  // about whether the caller is still authorized, which the socket queue rechecks at the write.
+  // A cache miss proceeds: the entry may simply be gone, and WhatsApp's own refusal of a foreign
+  // edit arrives after this call has returned, so it never reaches the caller.
+  const cached = lookupInboundMessageMetaForTarget(accountId, targetJid, messageId);
+  if (cached?.fromMe === false) {
+    throw new Error("WhatsApp edit rejected: message was not sent by this account.");
+  }
+  // The quote lookup also matches a message through its sender. Only an entry whose stored peer
+  // number is the target's belongs to this one-to-one chat under its other JID; anything else (a
+  // status update keyed by its poster, a broadcast list) is another chat, and an edit may only
+  // ever be written to the chat the caller named.
+  if (
+    cached &&
+    !areComparableJidsEqual(targetJid, cached.remoteJid) &&
+    !areComparableE164sEqual(jidToE164(targetJid, { authDir }) ?? undefined, cached.participantE164)
+  ) {
+    throw new Error("WhatsApp edit rejected: message belongs to another chat.");
+  }
+  const remoteJid = cached?.remoteJid ?? targetJid;
+  await active.assertSendReady?.(remoteJid);
+  await active.editMessage(remoteJid, messageId, formatted, options.assertDirectAdapterHandoff);
 }
 
 export async function sendPollWhatsApp(
