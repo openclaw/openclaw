@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sandboxRuntime from "../../agents/sandbox/runtime-status.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   applyMixedDirectives,
@@ -28,6 +29,12 @@ const mocks = vi.hoisted(() => ({
     >(),
   applyModelSelection: vi.fn(),
   systemEvent: vi.fn(),
+  runActive: vi.fn((_sessionId: string) => false),
+}));
+
+vi.mock("../../sessions/session-controller.queries.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/session-controller.queries.js")>()),
+  isSessionRunActive: (sessionId: string) => mocks.runActive(sessionId),
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
@@ -114,6 +121,23 @@ function expectRejectedDirective(
 }
 
 describe("applyInlineDirectiveOverrides", () => {
+  it.each([false, true])(
+    "keeps directive acks out of an active turn's context: %s",
+    async (active) => {
+      mocks.runActive.mockReturnValueOnce(active);
+      mocks.handleDirective.mockResolvedValue({ text: "Thinking level set to medium." });
+      const sessionEntry = { sessionId: "busy-session", updatedAt: 1 };
+      const result = await applyInlineDirectiveOverrides(
+        directiveParams("/think medium", { sessionEntry }),
+      );
+      const reply =
+        result.kind === "reply" && !Array.isArray(result.reply) ? result.reply : undefined;
+      expect(reply?.text).toBe("Thinking level set to medium.");
+      expect(getReplyPayloadMetadata(reply ?? {})?.contextFreeCommand).toBe(active || undefined);
+      expect(mocks.runActive).toHaveBeenCalledWith("busy-session");
+    },
+  );
+
   it("does not read command-only payload fields for an ordinary message", async () => {
     const params = directiveParams("ordinary message");
     const formatModelSwitchEvent = vi.fn(() => (label: string) => label);

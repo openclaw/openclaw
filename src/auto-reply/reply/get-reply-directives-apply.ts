@@ -13,8 +13,10 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -60,6 +62,20 @@ type ApplyDirectiveResult =
       perMessageQueueMode?: InlineDirectives["queueMode"];
       perMessageQueueOptions?: Pick<InlineDirectives, "debounceMs" | "cap" | "dropPolicy">;
     };
+
+/**
+ * An active turn owns the session's model-context fence, so a directive acknowledgement
+ * recorded as context while it runs would invalidate the turn's prepared answer (#194451).
+ * Mid-turn acknowledgements stay in history like /status; idle ones keep entering context.
+ */
+function markMidTurnDirectiveReply(
+  reply: ReplyPayload | undefined,
+  sessionEntry: SessionEntry | undefined,
+): ReplyPayload | undefined {
+  return reply && sessionEntry?.sessionId && isSessionRunActive(sessionEntry.sessionId)
+    ? setReplyPayloadMetadata(reply, { contextFreeCommand: true })
+    : reply;
+}
 
 export async function applyInlineDirectiveOverrides(params: {
   ctx: MsgContext;
@@ -400,7 +416,10 @@ export async function applyInlineDirectiveOverrides(params: {
             : undefined,
         ].filter(Boolean);
         typing.cleanup();
-        return { kind: "reply", reply: { text: parts.join(" ") } };
+        return {
+          kind: "reply",
+          reply: markMidTurnDirectiveReply({ text: parts.join(" ") }, sessionEntry),
+        };
       }
     }
     const {
@@ -438,10 +457,12 @@ export async function applyInlineDirectiveOverrides(params: {
     typing.cleanup();
     return {
       kind: "reply",
-      reply:
+      reply: markMidTurnDirectiveReply(
         statusReply?.text && directiveReply?.text
           ? { text: `${directiveReply.text}\n${statusReply.text}` }
           : (statusReply ?? directiveReply),
+        sessionEntry,
+      ),
       preRunRejection,
     };
   }

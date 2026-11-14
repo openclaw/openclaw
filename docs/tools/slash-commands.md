@@ -74,8 +74,9 @@ Command replies delivered through the shared dispatcher are part of the conversa
 on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
 These exchanges appear in session history and later model context, except read-only
-`/status` replies: their command and reply remain visible in history but do not enter
-model context or interrupt an active turn.
+`/status` replies and directive acknowledgements (such as `/think`) sent while a turn is
+running: their command and reply remain visible in history but do not enter model context
+or interrupt the active turn. The directive itself still applies.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.
