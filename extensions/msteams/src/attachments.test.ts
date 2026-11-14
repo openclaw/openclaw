@@ -227,7 +227,7 @@ describe("msteams attachments", () => {
         createTeamsFileDownloadInfoAttachments(),
         createOkFetchMock(CONTENT_TYPE_IMAGE_PNG),
       );
-      expectSingleMedia(media);
+      expectSingleMedia(media, { path: SAVED_PNG_PATH, kind: "image" });
     });
 
     it("preserves inline bytes and exact size limits with whitespace", async () => {
@@ -543,13 +543,6 @@ describe("msteams attachments", () => {
       ])("routes $label through Graph shares endpoint", async ({ contentUrl }) => {
         const tokenProvider = createTokenProvider();
         const fetchMock = createGraphSharesFetchMock();
-        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
-        saveMediaBufferMock.mockResolvedValueOnce({
-          id: "saved.pdf",
-          path: SAVED_PDF_PATH,
-          size: Buffer.byteLength(PDF_PAYLOAD),
-          contentType: CONTENT_TYPE_APPLICATION_PDF,
-        });
 
         const media = await downloadMSTeamsAttachments(
           buildDownloadParams(

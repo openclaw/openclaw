@@ -1,16 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import {
   createChannelIngressMonitor,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { cleanupSessionStateForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createMSTeamsIngress } from "../msteams-ingress.js";
@@ -27,7 +26,7 @@ import {
   createTurnContext,
 } from "./message-handler.test-support.js";
 
-const dispatch = getRuntimeApiMockState().dispatchReplyWithBufferedBlockDispatcher;
+const { dispatchReplyFromConfig: dispatch, deliver, onIdle } = getRuntimeApiMockState();
 const openDM: OpenClawConfig = {
   channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
 };
@@ -145,11 +144,101 @@ describe("Microsoft Teams drain claim ownership", () => {
     }
   });
 
+  it("waits for provider finalization before settling an unadopted turn", async ({ signal }) => {
+    const { deps } = createMessageHandlerDeps(openDM);
+    const handler = createMSTeamsMessageHandler(deps);
+    const lifecycle = createLifecycle();
+    const drained = createDeferred<void>();
+    const finalization = createDeferred<{ visibleReplySent: true; messageIds: string[] }>();
+    let waitForIdle: (() => Promise<unknown>) | undefined;
+    onIdle.mockImplementationOnce(() => drained.resolve());
+    deliver.mockResolvedValueOnce({ visibleReplySent: false, finalization: finalization.promise });
+    // No agent adopts this turn; final delivery must finish before fallback settlement.
+    dispatch.mockImplementationOnce(async ({ dispatcher }) => {
+      waitForIdle = dispatcher.waitForIdle.bind(dispatcher);
+      return {
+        queuedFinal: dispatcher.sendFinalReply({ text: "deferred reply" }),
+        counts: dispatcher.getQueuedCounts(),
+      };
+    });
+    let settled = false;
+    const result = handler(context(directActivity("finalization", "reply to me")), lifecycle);
+    const outcome = result.then(
+      (value) => {
+        settled = true;
+        return { status: "fulfilled" as const, value };
+      },
+      (reason: unknown) => {
+        settled = true;
+        return { status: "rejected" as const, reason };
+      },
+    );
+    let primary: { error: unknown } | undefined;
+    let joined: PromiseSettledResult<unknown>[];
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          drained.promise,
+          result,
+          "dispatch settled before its send drained",
+        ),
+        signal,
+      );
+      await setImmediate();
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(onIdle).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+      expect(lifecycle.onAdopted).not.toHaveBeenCalled();
+    } catch (error) {
+      primary = { error };
+    } finally {
+      finalization.resolve({ visibleReplySent: true, messageIds: ["settled-reply"] });
+      joined = await Promise.allSettled([result, waitForIdle?.()]);
+    }
+    const errors = new Set(primary ? [primary.error] : []);
+    for (const item of joined) {
+      if (item.status === "rejected") {
+        errors.add(item.reason);
+      }
+    }
+    if (errors.size === 1) {
+      throw [...errors][0];
+    }
+    if (errors.size > 1) {
+      throw new AggregateError([...errors], "Teams finalization test failed");
+    }
+    expect(await outcome).toEqual({ status: "fulfilled", value: { kind: "deferred" } });
+    expectAdopted(lifecycle);
+  });
+
+  it("preserves durable dispatch failure and abandons without a legacy warning", async () => {
+    const { deps } = createMessageHandlerDeps(openDM);
+    const lifecycle = createLifecycle();
+    const incoming = context(directActivity("failed", "retry this turn"));
+    const failure = new Error("agent dispatch failed before adoption");
+    dispatch.mockRejectedValueOnce(failure);
+    await expect(createMSTeamsMessageHandler(deps)(incoming, lifecycle)).rejects.toBe(failure);
+    expect(dispatch.mock.calls[0]?.[0].replyOptions?.turnAdoptionLifecycle).toMatchObject({
+      admission: "exclusive",
+      abortSignal: lifecycle.abortSignal,
+    });
+    expect(lifecycle.onAdopted).not.toHaveBeenCalled();
+    expect(lifecycle.onAbandoned).toHaveBeenCalledTimes(1);
+    expect(incoming.sendActivity).not.toHaveBeenCalled();
+    expect(deps.runtime.error).toHaveBeenCalledWith(
+      "msteams dispatch failed: agent dispatch failed before adoption",
+    );
+  });
+
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);
     vi.setSystemTime(now);
-    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-abandon-"));
+    const testHome = process.env.OPENCLAW_TEST_HOME;
+    if (!testHome) {
+      throw new Error("Teams ingress fixture requires the isolated test home");
+    }
+    const created = await fs.mkdtemp(path.join(testHome, "openclaw-msteams-abandon-"));
     const stateDir = await fs.realpath(created);
     type Queue = NonNullable<Parameters<typeof createMSTeamsIngress>[0]["queue"]>;
     type Payload = Parameters<Queue["enqueue"]>[1];
@@ -224,6 +313,7 @@ describe("Microsoft Teams drain claim ownership", () => {
       return { ...observed, lastAttemptAt: observed.lastAttemptAt };
     };
 
+    const errors = new Set<unknown>();
     try {
       const firstAttempt = await restart(now, 1, 1, false);
       await restart(firstAttempt.lastAttemptAt + 999, firstAttempt, 1);
@@ -251,19 +341,40 @@ describe("Microsoft Teams drain claim ownership", () => {
         4,
       );
       await restart(beyondAttempt.lastAttemptAt + 1_000, beyondAttempt, 4);
+    } catch (error) {
+      errors.add(error);
     } finally {
+      let cleanupFailed = false;
       try {
         await stopCurrent?.();
-      } finally {
-        vi.useRealTimers();
-        dispatchMock.mockReset();
-        if (priorImplementation) {
-          dispatchMock.mockImplementation(priorImplementation);
-        }
-        await closeOpenClawStateDatabaseAsync();
-        closeOpenClawStateDatabaseForTest();
-        await fs.rm(stateDir, { recursive: true, force: true });
+      } catch (error) {
+        cleanupFailed = true;
+        errors.add(error);
       }
+      vi.useRealTimers();
+      dispatchMock.mockReset();
+      if (priorImplementation) {
+        dispatchMock.mockImplementation(priorImplementation);
+      }
+      try {
+        await cleanupSessionStateForTest({ stateDir, rootPath: stateDir });
+      } catch (error) {
+        cleanupFailed = true;
+        errors.add(error);
+      }
+      if (!cleanupFailed) {
+        try {
+          await fs.rm(stateDir, { recursive: true, force: true });
+        } catch (error) {
+          errors.add(error);
+        }
+      }
+    }
+    if (errors.size === 1) {
+      throw [...errors][0];
+    }
+    if (errors.size > 1) {
+      throw new AggregateError([...errors], "Teams ingress retry fixture failed");
     }
   });
 });
