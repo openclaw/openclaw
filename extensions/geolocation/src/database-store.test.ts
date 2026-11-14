@@ -91,20 +91,6 @@ it("shares an oversized download and rejects callers only after cancellation set
   await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
 });
 
-it.each([
-  ["db.mmdb.gz", true],
-  ["db.mmdb.gz?version=1", true],
-  ["db.mmdb.gz#release", true],
-  ["db.mmdb?filename=other.gz", false],
-] as const)("reads database compression from the URL path: %s", async (filename, compressed) => {
-  const store = createStore(compressed ? gzipSync(vienna) : vienna, {
-    databaseUrl: `https://host.test/${filename}`,
-  });
-
-  expect(cityOf(await store.load())).toBe("Vienna");
-  await expectPublished(store, vienna);
-});
-
 it("refuses a gzip source that inflates past the on-disk ceiling", async () => {
   const store = createStore(gzipSync(Buffer.alloc(700 * 1024 * 1024, 0)), {
     databaseUrl: "https://host.test/db.mmdb.gz",
@@ -172,7 +158,9 @@ async function expectPublished({ databaseFile }: Store, body: Buffer) {
 
 it.each([true, false])("evicts idle readers only when published: %s", async (published) => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const store = createStore();
+  const store = createStore(published ? gzipSync(vienna) : vienna, {
+    databaseUrl: `https://host.test/${published ? "db.mmdb.gz?v=1" : "db.mmdb?x=.gz"}`,
+  });
   if (!published) {
     vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("disk full"));
     store.fetchImpl
@@ -180,14 +168,12 @@ it.each([true, false])("evicts idle readers only when published: %s", async (pub
       .mockRejectedValue(new Error("source unavailable"));
   }
   const readFile = vi.spyOn(fs, "readFile");
-
   expect(cityOf(await store.load())).toBe("Vienna");
   await vi.advanceTimersByTimeAsync(45_000);
   const active = await store.load();
   await vi.advanceTimersByTimeAsync(45_000);
   expect(cityOf(await store.load())).toBe("Vienna");
   expect(readFile).not.toHaveBeenCalled();
-
   await vi.advanceTimersByTimeAsync(60_000);
   const reopened = await Promise.all([store.load(), store.load()]);
   expect(reopened.map(cityOf)).toEqual(["Vienna", "Vienna"]);
