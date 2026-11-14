@@ -16,6 +16,8 @@ type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/
 type ReasoningItemText = {
   summary: Map<number, string>;
   content: Map<number, string>;
+  text: string;
+  tail: { sections: Map<number, string>; index: number } | undefined;
   timestamp: number;
   completed: boolean;
 };
@@ -27,6 +29,8 @@ export class CodexReasoningProjection {
   private readonly reasoningTextByItem = new Map<string, ReasoningItemText>();
   private readonly planTextByItem = new Map<string, string>();
   private turnPlanText: string | undefined;
+  private reasoningSnapshot: string | undefined;
+  private reasoningSnapshotItemId: string | undefined;
   private reasoningStarted = false;
   private reasoningEnded = false;
 
@@ -48,13 +52,24 @@ export class CodexReasoningProjection {
       return;
     }
     const item = this.ensureReasoningItem(itemId);
-    const previousText = reasoningItemText(item);
+    const previousText = item.text;
     // Codex indexes reasoning sections independently within an item.
     const index = params[method === "item/reasoning/textDelta" ? "contentIndex" : "summaryIndex"];
     const groupIndex =
       typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
     const sections = method === "item/reasoning/textDelta" ? item.content : item.summary;
     sections.set(groupIndex, `${sections.get(groupIndex) ?? ""}${delta}`);
+    if (item.tail?.sections === sections && item.tail.index === groupIndex) {
+      item.text = `${previousText}${delta}`;
+      if (this.reasoningSnapshot !== undefined && this.reasoningSnapshotItemId === itemId) {
+        this.reasoningSnapshot = `${this.reasoningSnapshot}${delta}`;
+      } else {
+        this.reasoningSnapshot = undefined;
+      }
+      await this.emitReasoning(itemId, item.text, delta);
+      return;
+    }
+    refreshReasoningItemText(item);
     await this.publishReasoning(itemId, item, previousText);
   }
 
@@ -113,10 +128,11 @@ export class CodexReasoningProjection {
   async recordItem(item: CodexThreadItem | undefined): Promise<void> {
     if (item?.type === "reasoning") {
       const state = this.ensureReasoningItem(item.id);
-      const previousText = reasoningItemText(state);
+      const previousText = state.text;
       // Contributors can suppress deltas; completed sections are authoritative.
       state.summary = readReasoningSections(item.summary);
       state.content = readReasoningSections(item.content);
+      refreshReasoningItemText(state);
       if (!state.completed) {
         state.completed = true;
         // An orphaned item after stream recovery must not block tool durability.
@@ -146,14 +162,24 @@ export class CodexReasoningProjection {
     const state = this.ensureReasoningItem(item.id);
     state.summary = readReasoningSections(item.summary);
     state.content = readReasoningSections(item.content);
+    refreshReasoningItemText(state);
     await this.publishReasoning(item.id, state, "");
   }
 
   reasoningText(): string {
-    return [...this.reasoningTextByItem.values()]
-      .map(reasoningItemText)
-      .filter(Boolean)
-      .join("\n\n");
+    if (this.reasoningSnapshot !== undefined) {
+      return this.reasoningSnapshot;
+    }
+    const texts: string[] = [];
+    this.reasoningSnapshotItemId = undefined;
+    for (const [itemId, item] of this.reasoningTextByItem) {
+      if (item.text) {
+        texts.push(item.text);
+        this.reasoningSnapshotItemId = itemId;
+      }
+    }
+    this.reasoningSnapshot = texts.join("\n\n");
+    return this.reasoningSnapshot;
   }
 
   collectMessages(completedOnly = false) {
@@ -172,6 +198,8 @@ export class CodexReasoningProjection {
     const item: ReasoningItemText = {
       summary: new Map(),
       content: new Map(),
+      text: "",
+      tail: undefined,
       timestamp: this.options.nextTimestamp(),
       completed: false,
     };
@@ -180,11 +208,10 @@ export class CodexReasoningProjection {
   }
 
   private reasoningMessage(itemId: string, item: ReasoningItemText) {
-    const text = reasoningItemText(item);
-    return text
+    return item.text
       ? attachCodexAssistantItemIds(
           attachCodexMirrorIdentity(
-            createAssistantReasoningMessage(this.params, text, item.timestamp),
+            createAssistantReasoningMessage(this.params, item.text, item.timestamp),
             `${this.options.turnId}:reasoning:${itemId}`,
           ),
           [itemId],
@@ -197,19 +224,24 @@ export class CodexReasoningProjection {
     item: ReasoningItemText,
     previousText: string,
   ): Promise<void> {
-    const text = reasoningItemText(item);
+    const text = item.text;
     if (text === previousText) {
       return;
     }
+    this.reasoningSnapshot = undefined;
+    await this.emitReasoning(
+      itemId,
+      text,
+      text.startsWith(previousText) ? text.slice(previousText.length) : text,
+    );
+  }
+
+  private async emitReasoning(itemId: string, text: string, delta: string): Promise<void> {
     this.reasoningStarted = true;
     // Agent events serve Web chat independently of optional channel callbacks.
     this.emitAgentEvent({
       stream: "thinking",
-      data: {
-        itemId,
-        text,
-        delta: text.startsWith(previousText) ? text.slice(previousText.length) : text,
-      },
+      data: { itemId, text, delta },
     });
     await this.params.onReasoningStream?.({
       text: this.reasoningText(),
@@ -273,10 +305,19 @@ function readReasoningSections(value: unknown): Map<number, string> {
   );
 }
 
-function reasoningItemText({ summary, content }: ReasoningItemText): string {
-  return [summary, content]
-    .flatMap((sections) => [...sections].toSorted(([left], [right]) => left - right))
-    .map(([, text]) => text)
-    .filter((text) => text.trim().length > 0)
-    .join("\n\n");
+function refreshReasoningItemText(item: ReasoningItemText): void {
+  const visible: string[] = [];
+  let tail: ReasoningItemText["tail"];
+  for (const sections of [item.summary, item.content]) {
+    const sorted = [...sections].toSorted(([left], [right]) => left - right);
+    for (const [index, text] of sorted) {
+      if (text.trim().length === 0) {
+        continue;
+      }
+      visible.push(text);
+      tail = { sections, index };
+    }
+  }
+  item.text = visible.join("\n\n");
+  item.tail = tail;
 }
