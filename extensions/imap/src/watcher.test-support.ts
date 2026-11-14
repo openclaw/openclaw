@@ -32,7 +32,6 @@ export class ScriptedImapServer {
   rejectAuthentication = false;
   omitUidNext = false;
   beforeSequenceFetch: (() => void) | undefined;
-  beforeBodyFetch: ((socket: Socket) => void) | undefined;
   sequenceFetchGate: Promise<void> | undefined;
   sequenceUidOverride: number | undefined;
   fetchGate: Promise<void> | undefined;
@@ -151,9 +150,6 @@ export class ScriptedImapServer {
               return ranges.some(([minimum, maximum]) => value >= minimum && value <= maximum);
             });
           const respond = () => {
-            if (line.includes("BODY")) {
-              this.beforeBodyFetch?.(socket);
-            }
             for (const mail of matches) {
               const wantsBody = line.includes("BODY");
               if (wantsBody && mail.uid > 1) {
