@@ -147,6 +147,7 @@ async function fetchGoogleCalendarEvents(params: GoogleMeetCalendarQuery) {
   defaultTimeMax.setDate(defaultTimeMax.getDate() + 7);
   const events: GoogleMeetCalendarEvent[] = [];
   let pageToken: string | undefined;
+  const seenPageTokens = new Set<string>();
   do {
     pageToken = await requestGoogleApi(
       {
@@ -179,6 +180,12 @@ async function fetchGoogleCalendarEvents(params: GoogleMeetCalendarQuery) {
         return payload.nextPageToken;
       },
     );
+    if (pageToken) {
+      if (seenPageTokens.has(pageToken)) {
+        throw new Error("Google Calendar events.list repeated nextPageToken; retry later.");
+      }
+      seenPageTokens.add(pageToken);
+    }
   } while (pageToken);
   return { calendarId, events, now };
 }

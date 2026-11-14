@@ -72,3 +72,22 @@ describe("Google Meet calendar URL extraction", () => {
     }
   });
 });
+
+it.each([
+  ["second", "second"],
+  ["second", "third", "second"],
+])("rejects repeated Calendar page tokens: %j", async (...tokens) => {
+  const fetch = vi.fn<typeof globalThis.fetch>(async (): Promise<Response> => {
+    const index = fetch.mock.calls.length - 1;
+    if (index >= tokens.length) {
+      throw new Error("test iteration cap: Calendar kept requesting pages");
+    }
+    return Response.json({ items: [], nextPageToken: tokens[index] });
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  await expect(listGoogleMeetCalendarEvents({ accessToken: "test-token" })).rejects.toThrow(
+    "Google Calendar events.list repeated nextPageToken",
+  );
+  expect(fetch).toHaveBeenCalledTimes(tokens.length);
+});
