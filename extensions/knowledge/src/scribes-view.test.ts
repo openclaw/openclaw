@@ -996,3 +996,25 @@ it("shows a Run now the scheduler refused instead of reporting it running", asyn
   expect(ui.announce).not.toHaveBeenCalledWith("Knowledge Consolidation is running.");
   expect(load).not.toHaveBeenCalled();
 });
+
+it("keeps failed run-history reads distinct from an empty history and recovers on reopen", async () => {
+  const { render, ui, request, calls } = fixture({ sessions: reviewSession, jobs: [reviewJob] });
+  ui.s.scribe = "claim-consolidation";
+  const original = request.getMockImplementation()!;
+  request.mockImplementation(async (method, params) => {
+    if (method === "cron.runs") {
+      throw new Error("History unavailable");
+    }
+    return original(method, params);
+  });
+  const failed = await render();
+  expect(failed.querySelector(".scribe-history")?.textContent).toContain(
+    "Could not load recent runs.",
+  );
+  expect(failed.querySelector(".scribe-history")?.textContent).not.toContain("No runs yet.");
+  request.mockImplementation(original);
+  expect((await render()).querySelector(".scribe-history")?.textContent).toContain(
+    "9 filed · 2 pages created",
+  );
+  expect(calls.some(([method]) => method === "cron.run")).toBe(false);
+});
