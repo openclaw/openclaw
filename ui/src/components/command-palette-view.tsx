@@ -304,28 +304,32 @@ function PaletteSearch(props: {
       {(latest(props.sessionRead), null)}
       {/* A cold catalog read must not hide already available commands. */}
       <Loading>{readCatalog()}</Loading>
-      <Show when={current().searchQuery.trim() && current().onSelectSession}>
+      <Show when={current().searchQuery.trim()}>
         <div class="cmd-palette__filters" role="group" aria-label={t("palette.filterLabel")}>
-          <For each={["all", "sessions", "messages"] as const}>
-            {(filter) => (
-              <button
-                type="button"
-                class="cmd-palette__filter"
-                aria-pressed={current().filter === filter ? "true" : "false"}
-                onClick={() => props.readCurrentProps().onFilterChange(filter)}
-              >
-                {t(`palette.filters.${filter}`)}
-                <span>
-                  {results().matches.filter((item) => matchesFilter(item, filter)).length}
-                </span>
-              </button>
-            )}
-          </For>
-        </div>
-      </Show>
-      <Show when={sessionSearchPending() || catalogSearchPending()}>
-        <div class="cmd-palette__empty" role="status">
-          {t(sessionSearchPending() ? "palette.searchingSessions" : "palette.searchingCommands")}
+          <Show when={current().onSelectSession}>
+            <For each={["all", "sessions", "messages"] as const}>
+              {(filter) => (
+                <button
+                  type="button"
+                  class="cmd-palette__filter"
+                  aria-pressed={current().filter === filter ? "true" : "false"}
+                  onClick={() => props.readCurrentProps().onFilterChange(filter)}
+                >
+                  {t(`palette.filters.${filter}`)}
+                  <span>
+                    {results().matches.filter((item) => matchesFilter(item, filter)).length}
+                  </span>
+                </button>
+              )}
+            </For>
+          </Show>
+          <Show when={sessionSearchPending() || catalogSearchPending()}>
+            <div class="cmd-palette__search-status" role="status">
+              {t(
+                sessionSearchPending() ? "palette.searchingSessions" : "palette.searchingCommands",
+              )}
+            </div>
+          </Show>
         </div>
       </Show>
       <div
