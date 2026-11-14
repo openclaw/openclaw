@@ -69,11 +69,11 @@ export function renderComposerTextarea(
   return (
     <>
       {/* Safari AutoFill guesses a field's type from nearby page text unless a label
-          element names it; aria-label does not stop that guess, and autocomplete="off"
-          does not either. Without this label, contact words in the transcript (a
-          streaming reply sits right above the composer) put AutoFill Contact over
-          the iPhone keyboard. */}
-      <label class="sr-only" for={inputId}>
+          element names it; aria-label and autocomplete="off" do not stop that guess, so
+          contact words in a streaming reply put AutoFill Contact over the iPhone
+          keyboard. aria-label stays the accessible name (the mention editor copies it),
+          so this label is hidden from assistive technology. */}
+      <label class="sr-only" for={inputId} aria-hidden="true">
         {t("chat.composer.composerInput")}
       </label>
       <textarea
@@ -158,6 +158,7 @@ export function renderComposerTextarea(
             handleChatAttachmentPaste(event, composer);
           }
         }}
+        aria-label={t("chat.composer.composerInput")}
         placeholder={context().dictation?.active ? "" : view.placeholder}
         rows="1"
       />

@@ -738,7 +738,7 @@ async function installFirstRunReadiness(page: Page) {
           : null,
         chat: [
           ".chat-pane-cache__pane--active .chat-thread",
-          ".chat-pane-cache__pane--active .agent-chat__composer-combobox > textarea",
+          ".chat-pane-cache__pane--active textarea[aria-label='Chat composer']",
         ].map((selector) => {
           const rect = main?.querySelector(selector)?.getBoundingClientRect();
           return { selector, rect: rect ? [rect.x, rect.y, rect.width, rect.height] : null };
