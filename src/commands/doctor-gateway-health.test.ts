@@ -293,6 +293,38 @@ describe("checkGatewayHealth", () => {
     expect(JSON.stringify(note.mock.calls)).not.toContain("private log payload");
   });
 
+  it("escapes terminal controls in gateway-owned channel status issues", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        runtimeVersion: "2026.4.23",
+        childRuntime: {
+          execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
+          available: false,
+        },
+        sqliteWal: createSqliteWalHealth({ walBytes: null, databaseBytes: null }),
+      })
+      .mockResolvedValueOnce({
+        statusIssues: [
+          {
+            channel: "signal",
+            accountId: "default",
+            kind: "runtime",
+            message: "Issue\u001b[31m text\nnext\u001b]2;forged\u0007",
+            fix: "fix\rrow\ttab",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ events: [] });
+
+    await expectHealthy();
+    expect(note).toHaveBeenCalledWith(
+      "- signal default: Issue text\\nnext (fix\\rrow\\ttab)",
+      "Channel warnings",
+    );
+    expect(JSON.stringify(note.mock.calls)).not.toContain("\u001b");
+    expect(JSON.stringify(note.mock.calls)).not.toContain("\u0007");
+  });
+
   describe("latency-aware diagnostics", () => {
     beforeEach(async () => {
       await import("../agents/tools/in-process-gateway.js");
