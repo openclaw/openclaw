@@ -10,6 +10,7 @@ import {
   buildTaskScript,
   buildStartupLauncherScript,
   readScheduledTaskCommand,
+  readStartupEntryCommand,
   resolveStartupEntryPaths,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
@@ -127,6 +128,55 @@ describe("readScheduledTaskCommand", () => {
       ).rejects.toThrow(inspectionError);
     },
   );
+
+  it.each([
+    [
+      "a .vbs program used directly",
+      "C:\\Users\\test\\.openclaw\\gateway.vbs",
+      "Unrecognized Scheduled Task launcher",
+    ],
+    [
+      "a quoted action path",
+      '"C:\\Users\\test\\.openclaw\\gateway.vbs"',
+      "Scheduled Task launcher path is not absolute and literal",
+    ],
+    [
+      "an unsupported action program",
+      "C:\\Users\\test\\.openclaw\\gateway.ps1",
+      "Unsupported Scheduled Task action",
+    ],
+  ])("names the refused task action shape for %s", async (_kind, actionPath, reason) => {
+    // A .vbs used as the Task Command instead of wscript.exe "<launcher>.vbs" reaches the
+    // launcher parser and is refused; the surface message must say why, not just fail.
+    mockRegisteredTask([taskAction(actionPath)], "\\Custom\\Gateway");
+    mockLauncherFiles(new Map([[actionPath, 'Set shell = CreateObject("WScript.Shell")']]));
+    await expect(
+      readScheduledTaskCommand(
+        { OPENCLAW_WINDOWS_TASK_NAME: "\\Custom\\Gateway" },
+        { requireEffective: true, requireLoaded: true },
+      ),
+    ).rejects.toThrow(
+      `${inspectionError} The task action was refused: ${reason}. Accepted Scheduled Task action shapes: a native .exe; cmd.exe with Arguments /d /s /c ""<launcher>.cmd""; wscript.exe with Arguments "<launcher>.vbs".`,
+    );
+  });
+
+  it("names the Startup entry shape when the Startup launcher is refused", async () => {
+    // A Startup entry is not a Task action: the reader only accepts the generated
+    // start "" /min wrapper, so the recovery example must not advertise .exe or Task quoting.
+    const startupEntry =
+      "C:\\Users\\test\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\OpenClaw Gateway.cmd";
+    mockLauncherFiles(
+      new Map([
+        [
+          startupEntry,
+          '@echo off\r\n"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" gateway --port 18789\r\n',
+        ],
+      ]),
+    );
+    await expect(readStartupEntryCommand(startupEntry)).rejects.toThrow(
+      'Startup service command could not be inspected. The startup entry was refused: Unrecognized Startup launcher. Accepted Startup entry shapes: start "" /min cmd.exe /d /c "<launcher>.cmd".',
+    );
+  });
 
   it.each([
     "cmd",
