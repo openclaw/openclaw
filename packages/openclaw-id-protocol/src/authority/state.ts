@@ -14,7 +14,12 @@ import type {
   SignedStatement,
   UnixSeconds,
 } from "../statements/types.js";
-import type { OwnerDeviceLookup, TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import type {
+  MemberDeviceLookup,
+  OwnerDeviceLookup,
+  TrustAnchor,
+  VerifyErrorCode,
+} from "../statements/verify.js";
 import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../version.js";
 
 /**
@@ -52,9 +57,23 @@ export type OwnerDeviceRecord = {
   peer_listed_seq?: number[];
 };
 
+/** Who admitted a member device to this claw. */
+export type MemberDeviceApprover =
+  | { kind: "invite"; invite_id: string }
+  | { kind: "owner"; by: "root" | KeyFingerprint }
+  | { kind: "member_device"; device_fp: KeyFingerprint };
+
+/** A member's signing key and untrusted display label, attached to its peer key. */
+export type MemberDevice = {
+  device_pub: Ed25519PublicKey;
+  label: string;
+  approved_by: MemberDeviceApprover;
+};
+
 /** A member and the browsers (peer keys) they use at this claw. */
 export type MemberRecord = {
   role: MemberRole;
+  devices?: Partial<Record<IrohEndpointKey, MemberDevice>>;
   peer_keys: IrohEndpointKey[];
   /** Last tunnel admission per peer key (or when it was added), unix seconds. */
   last_seen: Partial<Record<IrohEndpointKey, UnixSeconds>>;
@@ -73,6 +92,7 @@ export type InviteRecord = {
   pending: {
     account_id: string;
     device_pub: Ed25519PublicKey;
+    label: string;
     peer_key: IrohEndpointKey;
     requested_at: UnixSeconds;
   } | null;
@@ -132,7 +152,12 @@ export type AuthorityEvent =
   | { type: "cancel_runs"; account_id: string }
   | {
       type: "notify_owners";
-      event: "kit_used" | "redemption_pending" | "redemption_resolved" | "rebind";
+      event:
+        | "kit_used"
+        | "redemption_pending"
+        | "redemption_resolved"
+        | "rebind"
+        | "member_device_added";
       ref: string;
     }
   | { type: "publish_snapshot" };
@@ -240,6 +265,21 @@ export function ownerLookup(state: AuthorityState, now: UnixSeconds): OwnerDevic
     activeOwnerDevices(state, now).map((record) => [record.cert.body.device_pub, record.caps]),
   );
   return (devicePub) => caps.get(devicePub);
+}
+
+/** Listed member signing keys. A peer without device metadata has no signing authority. */
+export function memberLookup(state: AuthorityState): MemberDeviceLookup {
+  return (devicePub) => {
+    for (const [account_id, member] of Object.entries(state.members)) {
+      const peer_key = member.peer_keys.find(
+        (peer) => member.devices?.[peer]?.device_pub === devicePub,
+      );
+      if (peer_key) {
+        return { account_id, peer_key };
+      }
+    }
+    return undefined;
+  };
 }
 
 /**
