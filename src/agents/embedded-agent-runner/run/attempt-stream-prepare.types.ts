@@ -20,6 +20,7 @@ export type PrepareEmbeddedAttemptStreamInput = {
     | "clientToolCallSlots"
     | "hasDeliveredSourceReply"
     | "markSourceReplyDelivered"
+    | "sameChannelThreadRequired"
     | "builtinToolNames"
     | "coreBuiltinToolNames"
     | "replaySafeToolNames"
