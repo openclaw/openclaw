@@ -1,8 +1,8 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionDeletionEnglish } from "../../i18n/locales/en-session-deletion.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionDeletionEnglish();
 
 /** Match the Gateway's transcript-retention distinction without changing deletion authority. */
 export function sessionDeleteConfirmationMessage(
