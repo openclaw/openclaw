@@ -191,6 +191,9 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     }
   }
   const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
+  if (typeof options.stagger === "string" && !staggerRaw) {
+    throw new CronCliError("Invalid --stagger; use e.g. 30s, 1m, 5m");
+  }
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {
     throw new CronCliError("Choose either --stagger or --exact, not both");

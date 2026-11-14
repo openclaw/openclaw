@@ -88,6 +88,11 @@ async function reject(args: readonly string[], message: string, reads: string[] 
   expect(methods()).toEqual(reads);
 }
 
+it("rejects an explicitly blank stagger when editing a cron schedule", async () => {
+  existing({ schedule: cron({ expr: "0 * * * *", staggerMs: 30_000 }) });
+  await rejectEdit(["--cron", "0 * * * *", "--stagger", " "], "Invalid --stagger");
+});
+
 beforeEach(() => {
   callGatewayFromCli.mockReset().mockImplementation(async (method: string) => gatewayReply(method));
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
