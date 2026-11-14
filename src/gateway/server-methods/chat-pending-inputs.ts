@@ -17,6 +17,10 @@ import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
+import {
+  prepareLinkedChannelSenderDisplay,
+  type LinkedChannelSenderDisplayResolver,
+} from "../chat-display-projection.linked-sender-preparation.js";
 import { replaceOversizedChatHistoryMessages } from "../chat-history-budget.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
@@ -61,6 +65,7 @@ export function projectPendingInputMessage(
   maxChars: number,
   projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay),
   resolveCronJobName?: (jobId: string) => string | undefined,
+  resolveLinkedChannelSenderDisplay?: LinkedChannelSenderDisplayResolver,
 ) {
   if (input.state === "cancelled" && input.message.display === false) {
     // Retire retained client copies without returning a withdrawn prompt's content.
@@ -72,7 +77,11 @@ export function projectPendingInputMessage(
       __openclaw: { id: `${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}` },
     };
   }
-  const projected = projectChatDisplayMessage(input.message, { maxChars, resolveCronJobName });
+  const projected = projectChatDisplayMessage(input.message, {
+    maxChars,
+    resolveCronJobName,
+    resolveLinkedChannelSenderDisplay,
+  });
   const message = projected ? projectProfile(projected) : undefined;
   if (!message) {
     return undefined;
@@ -108,6 +117,9 @@ export async function readChatPendingInputs(
     page.items.map((input) => input.message),
     options.cronStorePath,
   );
+  const resolveLinkedChannelSenderDisplay = await prepareLinkedChannelSenderDisplay(
+    page.items.map((input) => input.message),
+  );
   const projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   const matchesScope =
     scope.storePath &&
@@ -122,6 +134,7 @@ export async function readChatPendingInputs(
       options.maxChars,
       projectProfile,
       resolveCronJobName,
+      resolveLinkedChannelSenderDisplay,
     );
     return message ? [{ input, message }] : [];
   });

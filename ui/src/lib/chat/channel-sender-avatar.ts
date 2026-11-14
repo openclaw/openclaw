@@ -18,6 +18,7 @@ export function resolveChannelSenderAvatarUrl(
   const origin = session?.origin;
   const route = session?.channelAvatarUrl;
   if (
+    sender.displayProfileId ||
     identity?.type !== "observation" ||
     identity.senderKind !== "human" ||
     !identity.pluginId ||

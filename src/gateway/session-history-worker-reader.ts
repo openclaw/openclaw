@@ -17,6 +17,7 @@ import {
   projectForwardedMessages,
   readForwardedCronJobIds,
 } from "./chat-display-projection.history.js";
+import { prepareLinkedChannelSenderDisplay } from "./chat-display-projection.linked-sender-preparation.js";
 import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
 import type { prepareCliSessionHistoryReader } from "./cli-session-history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
@@ -40,6 +41,21 @@ export async function readSessionHistoryRequest(
     readOnly: true,
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
+    prepareLinkedChannelDisplay: (messages: readonly unknown[]) => {
+      const state = readTarget.stateDatabase;
+      const source = state ? { path: state.path, env: state.environment } : undefined;
+      return prepareLinkedChannelSenderDisplay(messages, {
+        resolveDisplay: (id) =>
+          resolveCurrentUserProfileDisplay(id, (profileId) =>
+            getUserProfileDisplaysNative([profileId], source).get(profileId),
+          ),
+        readLink: async (identity) =>
+          (await import("../state/user-channel-identities.js")).resolveUserChannelIdentity(
+            identity,
+            source,
+          )?.profileId,
+      });
+    },
   };
   if (request.kind === "recent-usage") {
     return {

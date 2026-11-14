@@ -30,6 +30,7 @@ import {
   getMaxChatHistoryMessagesBytes,
   reportOmittedChatHistory,
 } from "../chat-history-budget.js";
+import { createChatHistoryDisplayCursor } from "../chat-history-display-cursor.js";
 import {
   decodeChatHistoryPageCursor,
   resolveChatHistorySelectorError,
@@ -109,6 +110,7 @@ export async function handleChatHistoryRequest({
   const includePluginSteering = client?.connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const messageId = pageCursor?.messageId ?? wireMessageId;
   const deltaCursor = pageCursor ? undefined : cursor;
+  const displayCursor = createChatHistoryDisplayCursor();
   const retainedSessionId = retainedTranscript?.sessionId;
   const requestedSessionId = retainedSessionId ?? pageCursor?.sessionId ?? wireSessionId;
   const selectorError = resolveChatHistorySelectorError(params, pageCursor, retainedSessionId);
@@ -315,18 +317,15 @@ export async function handleChatHistoryRequest({
     const startupProjection = await (startupProjectionPromise ?? readStartupProjection());
     const startupMetadata = method === "chat.startup" ? startupProjection?.metadata : undefined;
     const { sessionModelCatalog, defaultModelCatalog } = startupProjection ?? {};
-    const modelReadScope = {
-      context,
-      client,
-      agentId: sessionAgentId,
-      catalog: defaultModelCatalog,
-    };
     const presentHistory = (
       payload: Parameters<typeof projectOperatorModelRead>[1] & {
         pendingInputs: typeof pendingInputs;
       },
     ) => {
-      const projected = projectOperatorModelRead(modelReadScope, payload);
+      const projected = projectOperatorModelRead(
+        { context, client, agentId: sessionAgentId, catalog: defaultModelCatalog },
+        payload,
+      );
       if (knownState === undefined) {
         return projected;
       }
@@ -538,7 +537,7 @@ export async function handleChatHistoryRequest({
                 toolResultMaxChars,
                 includePluginSteering,
                 agentId: sessionAgentId,
-                cursor: deltaCursor,
+                cursor: displayCursor.read(deltaCursor),
                 maxBytes: maxResponseBytes,
                 scope,
                 sessionKey: canonicalKey,
@@ -584,7 +583,7 @@ export async function handleChatHistoryRequest({
               kind: "delta",
               messages: delta.messages,
               ...(delta.activity.length > 0 ? { activity: delta.activity } : {}),
-              deltaCursor: delta.deltaCursor,
+              ...displayCursor.write(delta.deltaCursor),
               pendingInputs,
               ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
               sessionInfo,
@@ -609,7 +608,7 @@ export async function handleChatHistoryRequest({
         ...responseFields,
         pendingInputs,
         ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
-        ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
+        ...displayCursor.write(historyPage.deltaCursor),
         ...(historyPage.windowReset ? { windowReset: true } : {}),
         ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
         defaults,

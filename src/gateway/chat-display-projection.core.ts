@@ -47,6 +47,10 @@ import {
   projectPluginSteeringMessage,
   toProjectedMessages,
 } from "./chat-display-projection.history.js";
+import {
+  projectLinkedChannelSenderDisplay,
+  type LinkedChannelSenderDisplayResolver,
+} from "./chat-display-projection.linked-senders.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
   prepareAssistantHistoryMessage,
@@ -71,6 +75,7 @@ export type ChatDisplayProjectionOptions = {
   toolResultMaxChars?: number;
   activity?: false;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
+  resolveLinkedChannelSenderDisplay?: LinkedChannelSenderDisplayResolver;
   stripEnvelope?: boolean;
   turnBoundaryPending?: boolean;
   assistantErrorPending?: boolean;
@@ -601,7 +606,11 @@ export function projectChatDisplayMessagesWithState(
 ): ChatDisplayProjectionResult {
   options?.subagentCoordination?.assertCurrent?.();
   const recovery = createChatHistoryRecoveryProjection(options);
-  const catalogDisplay = messages.flatMap(projectPreservedCatalogMessageForDisplay);
+  const catalogDisplay = messages
+    .map((message) =>
+      projectLinkedChannelSenderDisplay(message, options?.resolveLinkedChannelSenderDisplay),
+    )
+    .flatMap(projectPreservedCatalogMessageForDisplay);
   recovery.append(catalogDisplay);
   const recoveredErrors = recovery.result();
   const projectedErrors = projectEmptyAssistantErrorMessages(

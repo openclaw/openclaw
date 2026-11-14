@@ -19,6 +19,7 @@ import {
   isProjectedHistoryTurnBoundaryMessage,
   createPreSessionStartAnnouncePairFilter,
 } from "./chat-display-projection.history.js";
+import type { LinkedChannelSenderDisplayPreparation } from "./chat-display-projection.linked-sender-preparation.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import type {
   SessionTranscriptPageReader,
@@ -328,6 +329,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
   readMessageSequence?: (message: unknown) => number | undefined;
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
+  prepareLinkedChannelDisplay?: LinkedChannelSenderDisplayPreparation;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
 }): Promise<IncrementalChatHistoryTail> {
@@ -413,6 +415,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
           ),
           contextMessage,
         );
+  let resolveLinkedChannelSenderDisplay: ChatDisplayProjectionOptions["resolveLinkedChannelSenderDisplay"];
   const project = (
     messages = rawMessages,
     contextMessage = overreadContextMessage,
@@ -429,6 +432,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
         maxChars: params.effectiveMaxChars,
         toolResultMaxChars: params.toolResultMaxChars,
         resolveCronJobName: params.resolveCronJobName,
+        resolveLinkedChannelSenderDisplay,
         ...(resolveProfileDisplay && !params.deferProfileDisplay
           ? { resolveCurrentUserProfileDisplay }
           : {}),
@@ -450,6 +454,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
     return { filteredRawMessages, projected, projection };
   };
   const projectWindow = async () => {
+    resolveLinkedChannelSenderDisplay = await params.prepareLinkedChannelDisplay?.(rawMessages);
     const result = project();
     if (
       recoveryContext !== undefined ||

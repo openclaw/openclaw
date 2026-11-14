@@ -12,6 +12,7 @@ import {
   augmentChatHistoryWithCanvasBlocks,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
+import { prepareLinkedChannelSenderDisplay } from "../chat-display-projection.linked-sender-preparation.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
@@ -107,12 +108,16 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
             [pending.message],
             context.cronStorePath,
           );
+          const resolveLinkedChannelSenderDisplay = await prepareLinkedChannelSenderDisplay([
+            pending.message,
+          ]);
           await withCurrentSession(() => {
             const message = projectPendingInputMessage(
               pending,
               effectiveMaxChars,
               undefined,
               resolveCronJobName,
+              resolveLinkedChannelSenderDisplay,
             );
             respondMessage(message);
           });
@@ -155,6 +160,9 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           [resolved.message],
           context.cronStorePath,
         );
+        const resolveLinkedChannelSenderDisplay = await prepareLinkedChannelSenderDisplay([
+          resolved.message,
+        ]);
         const displayed = asOptionalRecord(
           (
             await createChannelMentionProjector(context, client, canonicalKey).project([
@@ -169,6 +177,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
                 includePluginSteering,
                 maxChars: effectiveMaxChars,
                 resolveCurrentUserProfileDisplay,
+                resolveLinkedChannelSenderDisplay,
                 resolveCronJobName,
               })
             : undefined;

@@ -11,6 +11,7 @@ import type {
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import { projectForwardedMessages } from "../chat-display-projection.history.js";
+import { prepareLinkedChannelSenderDisplay } from "../chat-display-projection.linked-sender-preparation.js";
 import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";
 import { readChatHistoryPageKernel } from "../chat-history-page-kernel.js";
 import { projectChatHistoryWithReplies } from "../chat-history-reply-messages.js";
@@ -96,6 +97,7 @@ async function readChatHistoryPageUnprojected(
         readers: createSessionActorTranscriptReader(memory),
         readOnly: true,
         resolveCurrentUserProfileDisplay,
+        prepareLinkedChannelDisplay: prepareLinkedChannelSenderDisplay,
         resolveCronJobName: () => undefined,
       });
     }
@@ -113,6 +115,7 @@ async function readChatHistoryPageUnprojected(
     const page = await readChatHistoryPageKernel(params, {
       readers: sessionTranscriptReaders,
       resolveCurrentUserProfileDisplay,
+      prepareLinkedChannelDisplay: prepareLinkedChannelSenderDisplay,
       resolveCronJobName: () => undefined,
     });
     return { ...page, messages: await refreshForwardedLabels(page.messages) };

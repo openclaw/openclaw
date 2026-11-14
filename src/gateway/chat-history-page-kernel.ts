@@ -14,6 +14,7 @@ import {
   dropPreSessionStartAnnouncePairs,
   isProjectedHistoryTurnBoundaryMessage,
 } from "./chat-display-projection.history.js";
+import type { LinkedChannelSenderDisplayPreparation } from "./chat-display-projection.linked-sender-preparation.js";
 import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
 import { isChatHistoryResponsePageByteLimited } from "./chat-history-response-page.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
@@ -34,6 +35,7 @@ export type ChatHistoryPageKernelOptions = {
   readers: SessionTranscriptPageReader;
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
+  prepareLinkedChannelDisplay?: LinkedChannelSenderDisplayPreparation;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
   readMessageSequence?: (message: unknown) => number | undefined;
@@ -152,8 +154,9 @@ export async function readChatHistoryPageKernel(
       ),
       overreadContextMessage,
     );
-    const project = (messages: unknown[]) =>
+    const project = async (messages: unknown[]) =>
       projectChatDisplayMessagesWithState(messages, {
+        resolveLinkedChannelSenderDisplay: await options.prepareLinkedChannelDisplay?.(messages),
         includePluginSteering: params.includePluginSteering,
         subagentCoordination: options.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
@@ -165,7 +168,7 @@ export async function readChatHistoryPageKernel(
           : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
         turnBoundaryPending: isProjectedHistoryTurnBoundaryMessage(overreadContextMessage),
       });
-    const projection = project(localMessages);
+    const projection = await project(localMessages);
     let projected = projection.messages;
     const newestPageSeq = readSequence(localMessages.at(-1));
     if (
@@ -191,7 +194,7 @@ export async function readChatHistoryPageKernel(
         sessionStartedAt: entry?.sessionStartedAt,
       });
       if (recoveryContext.length > 0) {
-        projected = project([...localMessages, ...recoveryContext]).messages.filter(
+        projected = (await project([...localMessages, ...recoveryContext])).messages.filter(
           (message) => (readSequence(message) ?? Infinity) <= newestPageSeq,
         );
       }

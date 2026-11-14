@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { createChatHistoryDisplayCursor } from "../chat-history-display-cursor.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
   prepareOperatorModelPresentation,
@@ -502,7 +503,10 @@ describe("historical model disclosure", () => {
           if (stage.startsWith("delta")) {
             expect(payload).toMatchObject({
               kind: "delta",
-              deltaCursor: preparedDelta?.kind === "delta" ? preparedDelta.deltaCursor : undefined,
+              deltaCursor:
+                preparedDelta?.kind === "delta"
+                  ? createChatHistoryDisplayCursor().write(preparedDelta.deltaCursor).deltaCursor
+                  : undefined,
             });
             expect(message).toMatchObject({
               messageId: "history-policy-reply",

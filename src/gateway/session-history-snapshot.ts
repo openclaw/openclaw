@@ -8,6 +8,7 @@ import {
   type ChatDisplayProjectionOptions,
 } from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
+import type { LinkedChannelSenderDisplayPreparation } from "./chat-display-projection.linked-sender-preparation.js";
 import { getMaxChatHistoryMessagesBytes } from "./chat-history-budget.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import {
@@ -23,6 +24,7 @@ type SessionHistorySnapshotOptions = {
   readers: SessionTranscriptReader;
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
+  prepareLinkedChannelDisplay?: LinkedChannelSenderDisplayPreparation;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
 };
@@ -51,6 +53,7 @@ export async function readSessionHistorySnapshotKernel(
       transcriptPath = page.transcriptPath;
     }
     projected = projectChatDisplayMessagesWithState(rawMessages, {
+      resolveLinkedChannelSenderDisplay: await options.prepareLinkedChannelDisplay?.(rawMessages),
       subagentCoordination: options.readers.subagentCoordination,
       includeCommentaryFallbacks: true,
       maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,

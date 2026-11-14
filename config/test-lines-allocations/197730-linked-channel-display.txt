@@ -1,0 +1,5 @@
+# Issue #197730: 642 net test lines, 242 above the default allowance.
+# Native admission/persistence and pending-message parity; real Gateway + built UI
+# link/unlink/reassignment (including warm history cursors); independent renderer
+# own-side/source and raw-identity/reprojection contracts. Existing harnesses reused.
+242

@@ -8,6 +8,7 @@ import {
   projectChatDisplayMessage,
   type ChatDisplayProjectionOptions,
 } from "./chat-display-projection.core.js";
+import type { LinkedChannelSenderDisplayPreparation } from "./chat-display-projection.linked-sender-preparation.js";
 import type { SessionTranscriptPageReader } from "./session-transcript-read.types.js";
 
 /** Batch label projection includes quoted originals without recursively following their replies. */
@@ -68,6 +69,7 @@ export async function attachChatHistoryReplyMessages(
       "readSessionMessageByIdAsync" | "subagentCoordination"
     >;
     deferProfileDisplay?: boolean;
+    prepareLinkedChannelDisplay?: LinkedChannelSenderDisplayPreparation;
   },
 ): Promise<unknown[]> {
   const replies = new Map<string, ChatMessageGetResult>();
@@ -103,6 +105,9 @@ export async function attachChatHistoryReplyMessages(
       const projected = original.message
         ? projectChatDisplayMessage(original.message, {
             maxChars: 500,
+            resolveLinkedChannelSenderDisplay: await options.prepareLinkedChannelDisplay?.([
+              original.message,
+            ]),
             includePluginSteering: params.includePluginSteering,
             subagentCoordination: options.readers.subagentCoordination,
             resolveCronJobName: options.resolveCronJobName,

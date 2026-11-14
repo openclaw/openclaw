@@ -13,6 +13,8 @@ export type SenderIdentity = {
   name?: string;
   username?: string;
   profileAvatarUrl?: string;
+  /** Gateway read-time association for presentation, never participant identity. */
+  displayProfileId?: string;
 };
 
 type SenderIdentityInput = {
@@ -21,6 +23,7 @@ type SenderIdentityInput = {
   name?: unknown;
   username?: unknown;
   profileAvatarUrl?: unknown;
+  displayProfileId?: unknown;
 };
 
 /** Formats durable sender identity without assuming ids will always be email addresses. */
@@ -44,6 +47,8 @@ export function normalizeSenderIdentity(
   const username = normalizeLabelPart(sender?.username);
   const profileAvatarUrl = normalizeLabelPart(sender?.profileAvatarUrl);
   const identity = readTranscriptSenderIdentity(sender?.identity);
+  const displayProfileId =
+    identity?.type === "observation" ? normalizeLabelPart(sender?.displayProfileId) : undefined;
   if (!id && !name && !username && !profileAvatarUrl) {
     return null;
   }
@@ -53,6 +58,7 @@ export function normalizeSenderIdentity(
     ...(name ? { name } : {}),
     ...(username ? { username } : {}),
     ...(profileAvatarUrl ? { profileAvatarUrl } : {}),
+    ...(displayProfileId ? { displayProfileId } : {}),
   };
 }
 
@@ -60,12 +66,22 @@ export function resolveMessageSender(
   metadata: Record<string, unknown> | undefined,
 ): SenderIdentity | null {
   const identity = readTranscriptSenderIdentity(metadata?.senderIdentity);
+  const displayProfileId =
+    identity?.type === "observation"
+      ? normalizeLabelPart(metadata?.senderDisplayProfileId)
+      : undefined;
   return normalizeSenderIdentity({
+    displayProfileId,
     identity,
     id: metadata?.senderId,
-    name: metadata?.senderName,
+    name: displayProfileId
+      ? (metadata?.senderDisplayName ?? metadata?.senderName)
+      : metadata?.senderName,
     username: metadata?.senderUsername,
-    profileAvatarUrl: identity?.type === "profile" ? metadata?.senderProfileAvatarUrl : undefined,
+    profileAvatarUrl:
+      identity?.type === "profile" || displayProfileId
+        ? metadata?.senderProfileAvatarUrl
+        : undefined,
   });
 }
 

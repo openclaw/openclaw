@@ -16,6 +16,7 @@ import {
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
+import { prepareLinkedChannelSenderDisplay } from "./chat-display-projection.linked-sender-preparation.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
@@ -388,6 +389,73 @@ it("refreshes cached profile aliases without rewriting non-profile or unresolved
     });
   }
   expect(projected.slice(2)).toEqual(messages.slice(2));
+});
+
+it("requires exact attestation and historical requester agreement for channel presentation", async () => {
+  const identity = {
+    type: "observation",
+    id: "native-id",
+    pluginId: "telegram",
+    accountId: "default",
+    senderKind: "human",
+  };
+  const origin = { sessionKey: "agent:main:linked", operatorProfileId: "old-profile" };
+  const row = (fields: Record<string, unknown> = {}) =>
+    userRow("Channel message", {
+      senderId: identity.id,
+      senderIdentity: identity,
+      requesterOrigin: origin,
+      senderDisplayProfileId: "injected-profile",
+      senderDisplayName: "Injected",
+      ...fields,
+    });
+  const messages = [
+    row(),
+    row({ requesterOrigin: { ...origin, operatorProfileId: "other" } }),
+    row({ requesterOrigin: undefined }),
+    row({ senderIdentity: { ...identity, accountId: "other" } }),
+    row({ senderIdentity: { ...identity, pluginId: "discord" } }),
+    row({ senderIdentity: { ...identity, senderKind: "bot" } }),
+    row({ senderIdentity: undefined }),
+    row({ requesterOrigin: { ...origin, operatorProfileId: "gateway-owner" } }),
+    { ...row(), provenance: { kind: "internal_system" } },
+  ];
+  const before = structuredClone(messages);
+  const readLink = vi.fn((source: { channelId: string; accountId: string }) =>
+    source.channelId === "telegram" && source.accountId === "default" ? "canonical" : undefined,
+  );
+  const resolveLinkedChannelSenderDisplay = await prepareLinkedChannelSenderDisplay(messages, {
+    readLink,
+    resolveDisplay: (id) => ({
+      kind: "resolved",
+      profileId: id === "old-profile" ? "canonical" : id,
+      avatarUrl: "/api/users/canonical/avatar?v=1",
+      label: "Current name",
+    }),
+  });
+  const result = projectChatDisplayMessages(messages, { resolveLinkedChannelSenderDisplay });
+  expect(result[0]).toMatchObject({
+    __openclaw: {
+      senderIdentity: identity,
+      senderDisplayProfileId: "canonical",
+      senderDisplayName: "Current name",
+      senderProfileAvatarUrl: "/api/users/canonical/avatar?v=1",
+    },
+  });
+  for (const message of result.slice(1)) {
+    expect(message["__openclaw"]).not.toHaveProperty("senderDisplayProfileId");
+    expect(message["__openclaw"]).not.toHaveProperty("senderDisplayName");
+  }
+  for (const message of result) {
+    expect(message["__openclaw"]).not.toHaveProperty("requesterOrigin");
+  }
+  expect(projectChatDisplayMessages(result, { resolveLinkedChannelSenderDisplay })).toEqual(result);
+  const copied = structuredClone(result);
+  expect(
+    projectChatDisplayMessages(copied, { resolveLinkedChannelSenderDisplay })[0]?.["__openclaw"],
+  ).not.toHaveProperty("senderDisplayProfileId");
+  expect(readLink).toHaveBeenCalledTimes(3);
+  expect(messages).toEqual(before);
 });
 
 it("matches later audio against text left by an earlier supplement", () => {
