@@ -233,6 +233,38 @@ describe("navigation authority fence lifecycle", () => {
     });
   });
 
+  it("fails the next invocation when the last release is never acknowledged", async () => {
+    vi.useFakeTimers();
+    const { send, page, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Fetch.disable") {
+          await new Promise(() => {});
+        }
+      },
+    });
+    const enables = () => send.mock.calls.filter(([method]) => method === "Fetch.enable").length;
+    const enabledBefore = enables();
+    const released = dispose();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Fetch.disable", undefined));
+    let outcome: unknown = "pending";
+    void installNavigationAuthorityFence(page as unknown as Page, {}, () => {}).then(
+      () => {
+        outcome = "claimed";
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect({ outcome, enabledAfterRelease: enables() - enabledBefore }).toEqual({
+      outcome: new Error("Browser navigation interception was not released in time"),
+      enabledAfterRelease: 0,
+    });
+    expect(await released).toEqual(
+      new Error("Browser navigation did not settle before authority cleanup"),
+    );
+  });
+
   it("fails an invocation whose interception does not start", async () => {
     let refused = false;
     const { page, dispose } = await fence({

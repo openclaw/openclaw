@@ -543,8 +543,17 @@ function createTabFence(page: Page, session: CDPSession) {
     changed: () => stateChanged.promise,
     /** Starts what only a claimed tab runs, once the last release is acknowledged. */
     claim: async () => {
-      // A transport may refuse Fetch.enable while its Fetch.disable is unanswered.
-      await released;
+      // A transport may refuse Fetch.enable while its Fetch.disable is unanswered,
+      // so a release that is never answered fails the claim instead of being enabled over.
+      const unanswered = createDeferred<never>();
+      const timer = setTimeout(() => {
+        unanswered.reject(new Error("Browser navigation interception was not released in time"));
+      }, resolveBrowserNavigationTimeoutMs());
+      try {
+        await Promise.race([released, unanswered.promise]);
+      } finally {
+        clearTimeout(timer);
+      }
       await Promise.all(
         [...states.keys()].flatMap((target) =>
           [target.send("Network.enable"), interceptDocuments(target)].map((enabled) =>
