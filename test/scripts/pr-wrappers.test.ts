@@ -2965,8 +2965,8 @@ esac
     writeExecutable(
       join(fixture.bin, "node"),
       `#!/bin/sh
-if [ "$1" = --input-type=module ] && [ "$2" = - ] && [ "\${5##*/}" = node_modules ]; then
-  printf 'not a directory\\n' > "$5"
+if [ "$1" = --input-type=module ] && [ "$2" = - ] && [ "$4" = materialize-dependencies ] && [ "\${8##*/}" = node_modules ]; then
+  printf 'not a directory\\n' > "$8"
 fi
 exec "$OPENCLAW_TEST_NODE" "$@"
 `,
