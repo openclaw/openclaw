@@ -73,6 +73,8 @@ export function castValue(
         return { ok: true, value };
       }
       return { ok: true, value: Buffer.from(String(value), "utf8") };
+    default:
+      return { ok: false };
   }
 }
 

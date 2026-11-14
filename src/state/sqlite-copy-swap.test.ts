@@ -165,7 +165,7 @@ describe("generic rebuild data rules", () => {
     );
     expect(rows).toEqual([{ id: "c", n: 1 }]);
     expect(
-      report.setAside.map((row) => `${row.table}:${row.row.id ?? row.row.v}`).toSorted(),
+      report.setAside.map((row) => `${row.table}:${String(row.row.id ?? row.row.v)}`).toSorted(),
     ).toEqual(["gone:keep me", "t:a", "t:b"]);
     expect(report.conservationMismatches).toEqual([]);
   });

@@ -614,8 +614,11 @@ export function buildSqliteByCopy(
         report.tables.filter((other) => other.target === entry.target).length > 1;
       const actual = Number(
         // SAFETY: the statement fixes the column names and types of each row.
-        (built.prepare(`SELECT count(*) AS n FROM ${quote(entry.target)}`).get() as { n: number })
-          .n,
+        (
+          built.prepare(`SELECT count(*) AS n FROM ${quote(entry.target)}`).get() as {
+            n: number | bigint;
+          }
+        ).n,
       );
       if (!sharedTarget && actual < entry.copied) {
         report.conservationMismatches.push(entry.table);
