@@ -573,6 +573,19 @@ const manifestSchema = z
       }
       cronIds.add(job.id);
     });
+  })
+  .transform((manifest) => {
+    // Avatars match their destination portably; store the declared path the runtime resolves.
+    const avatar = manifest.agent.identity?.avatar;
+    const declared =
+      avatar &&
+      manifest.workspace.files.find(
+        (file) => portableTemplatePathKey(file.path) === portableTemplatePathKey(avatar),
+      )?.path;
+    if (declared && manifest.agent.identity) {
+      manifest.agent.identity.avatar = declared;
+    }
+    return manifest;
   });
 
 type TemplateDependencyReference = z.output<typeof dependencyReferenceSchema>;
