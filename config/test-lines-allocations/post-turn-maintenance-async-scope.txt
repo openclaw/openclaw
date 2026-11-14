@@ -1,0 +1,2 @@
+# Prove post-turn memory upkeep survives its foreground async scope closing.
+25

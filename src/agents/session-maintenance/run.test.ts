@@ -20,6 +20,7 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { waitForSessionMaintenance } from "./coordinator.js";
@@ -178,6 +179,30 @@ it("admits maintenance on its Gateway successor after the foreground plugin scop
       await waitForSessionMaintenance(scope.sessionKey);
       await owner.close();
       restoreActivePluginRegistrySnapshot(snapshot);
+    }
+  });
+});
+
+it("finishes post-turn upkeep after the foreground async work scope closes", async () => {
+  await withOpenClawTestState({ label: "maintenance-async-handoff" }, async ({ env }) => {
+    const { scope, schedule } = await setup(env, "maintenance-async-handoff");
+    const foreground = new AsyncWorkScope();
+    const finished = createDeferredCore<boolean>();
+    memory.runMemoryFlushIfNeeded.mockImplementationOnce(async () => {
+      // Model preparation and its session readers observe the ambient work signal.
+      getAsyncWorkSignal()?.throwIfAborted();
+      return {};
+    });
+    try {
+      foreground.run(() => schedule(finished.promise));
+      await foreground.drain();
+      finished.resolve(true);
+      await waitForSessionMaintenance(scope.sessionKey);
+      expectEffects(1);
+    } finally {
+      finished.resolve(false);
+      await waitForSessionMaintenance(scope.sessionKey);
+      await foreground.drain();
     }
   });
 });
