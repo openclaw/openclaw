@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { CRON_DISPLAY_NAME_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/cron-shared.js";
 import { PROFILE_OPTIONS } from "../agents/core-tool-facts.js";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import {
@@ -230,12 +231,15 @@ const agentSettingsSchema = z
         every: nonEmptyString
           .refine((value) => {
             try {
-              parseDurationMs(value, { defaultUnit: "m" });
-              return true;
+              const everyMs = parseDurationMs(value, { defaultUnit: "m" });
+              return (
+                everyMs === 0 ||
+                computeNextRunAtMs({ kind: "every", everyMs }, Date.now()) !== undefined
+              );
             } catch {
               return false;
             }
-          }, "Invalid heartbeat duration.")
+          }, "Invalid heartbeat duration, or too long for the scheduler to run.")
           .optional(),
         activeHours: z
           .object({
@@ -419,7 +423,12 @@ export const mcpServerSchema = z.union([stdioMcpServerSchema, remoteMcpServerSch
 export const cronJobSchema = z
   .object({
     id: agentId,
-    name: optionalString,
+    name: nonEmptyString
+      .max(
+        CRON_DISPLAY_NAME_MAX_LENGTH,
+        `Automation names may be at most ${CRON_DISPLAY_NAME_MAX_LENGTH} characters.`,
+      )
+      .optional(),
     enabled: z.boolean().optional(),
     schedule: z.object({ cron: nonEmptyString, timezone: nonEmptyString }).strict(),
     session: z.enum(["main", "isolated"]),

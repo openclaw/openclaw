@@ -5,6 +5,7 @@ import {
   AutomationResultSchema,
 } from "./cron-automation-result.js";
 import {
+  CRON_DISPLAY_NAME_MAX_LENGTH,
   CronDateTimestampMsSchema,
   MAX_DATE_TIMESTAMP_MS,
   cronAgentTurnPayloadSchema,
@@ -72,7 +73,11 @@ const CronDeliveryStatusSchema = stringLiteralUnion([
 ]);
 const NonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
 const CronDeclarationKeySchema = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
-const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
+const CronDisplayNameSchema = Type.String({
+  minLength: 1,
+  maxLength: CRON_DISPLAY_NAME_MAX_LENGTH,
+  pattern: "\\S",
+});
 const CronOwnerSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),

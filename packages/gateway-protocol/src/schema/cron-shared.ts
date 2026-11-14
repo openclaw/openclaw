@@ -4,6 +4,7 @@ import { closedObject } from "./closed-object.js";
 // ECMAScript Date's inclusive timestamp limit. Keep public schedule numbers
 // inside the range the scheduler can represent and serialize.
 export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
+export const CRON_DISPLAY_NAME_MAX_LENGTH = 200;
 export const CronDateTimestampMsSchema = Type.Integer({
   minimum: 0,
   maximum: MAX_DATE_TIMESTAMP_MS,

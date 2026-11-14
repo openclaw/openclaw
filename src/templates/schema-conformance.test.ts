@@ -52,6 +52,26 @@ describe("portable Template schema conformance", () => {
     }
   });
 
+  it("rejects automation names and heartbeat intervals the scheduler cannot store", () => {
+    const job = {
+      id: "daily",
+      schedule: { cron: "0 9 * * *", timezone: "UTC" },
+      session: "main",
+      message: "hi",
+    };
+    const withName = (name: string) =>
+      parseTemplateManifest({ ...baseManifest, automations: [{ ...job, name }] });
+    const withHeartbeat = (every: string) =>
+      parseTemplateManifest({
+        ...baseManifest,
+        agent: { id: "portable-agent", heartbeat: { every } },
+      });
+    expect(withName("A".repeat(200)).ok).toBe(true);
+    expectInvalid(withName("A".repeat(201)), "$.automations[0].name");
+    expect(withHeartbeat("99000000d").ok).toBe(true);
+    expectInvalid(withHeartbeat("100000000d"), "$.agent.heartbeat.every");
+  });
+
   it("requires exact package versions", () => {
     const result = parseTemplateManifest({
       ...baseManifest,
