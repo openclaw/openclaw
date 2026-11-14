@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
-import { NativeWorker } from "../infra/worker-native-handle.js";
 import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -65,8 +63,7 @@ function recoveryFixture(id: string, body: string) {
   };
 }
 
-it("joins worker-backed recovery cleanup without blocking foreground work", async () => {
-  const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+it("joins host-local recovery cleanup without blocking foreground work", async () => {
   await using fixture = recoveryFixture(
     "recovery-cleanup",
     'module.exports = { id: "recovery-cleanup", register(api) { api.registerProvider({ id: "recovery-provider", label: "Active", auth: [], normalizeModelId: ({ modelId }) => `active:${modelId}` }); } };',
@@ -74,33 +71,24 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
   const { plugin, load, capturedRoot } = fixture;
   await fixture.run(async () => {
     const previous = await load();
-    const captureParent = path.dirname(capturedRoot());
+    // The transferred source stays in worker scratch; recovery owns a host-local sibling.
+    const workerScratch = path.dirname(capturedRoot());
+    const captureParent = path.dirname(workerScratch);
     const capturesBefore = fs.readdirSync(captureParent);
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
-    recovery.capture(new Set([plugin.id]));
-    expect(fs.readdirSync(captureParent)).toHaveLength(capturesBefore.length + 1);
-    const capture = posts.mock.calls.findIndex(
-      ([value]) => isRecord(value) && isRecord(value.input) && value.input.operation === "capture",
-    );
-    expect(capture).toBeGreaterThanOrEqual(0);
-    const worker = posts.mock.contexts[capture] as NativeWorker;
-    let foregroundRan = false;
-    const foregroundAtReplies: boolean[] = [];
-    const observeReply = (value: unknown) => {
-      if (isRecord(value) && value.status === "ok") {
-        foregroundAtReplies.push(foregroundRan);
-      }
-    };
-    worker.on("message", observeReply);
-    // Synchronous worker polling delivers its reply before queued foreground work.
-    const foreground = Promise.resolve().then(() => {
-      foregroundRan = true;
-    });
     try {
-      await recovery.dispose();
-      await foreground;
-      expect(foregroundAtReplies).not.toHaveLength(0);
-      expect(foregroundAtReplies.every(Boolean)).toBe(true);
+      expect(recovery.capture(new Set([plugin.id]))).toEqual([]);
+      const addedCaptures = fs
+        .readdirSync(captureParent)
+        .filter((entry) => !capturesBefore.includes(entry));
+      expect(addedCaptures).toHaveLength(1);
+      const recoveryRoot = path.join(captureParent, addedCaptures[0]!);
+      // Physical removal must yield to already queued foreground work, not synchronously drain.
+      const foreground = Promise.resolve().then(() => {
+        expect(fs.existsSync(recoveryRoot)).toBe(true);
+      });
+      await Promise.all([recovery.dispose(), foreground]);
+      expect(fs.existsSync(recoveryRoot)).toBe(false);
       expect(fs.readdirSync(captureParent)).toEqual(capturesBefore);
       expect(
         previous.providers[0]!.provider.normalizeModelId!({
@@ -109,7 +97,6 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
         }),
       ).toBe("active:still-callable");
     } finally {
-      worker.off("message", observeReply);
       await recovery.dispose();
     }
   });

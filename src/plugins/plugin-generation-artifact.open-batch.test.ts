@@ -4,6 +4,7 @@ import * as fsSafe from "@openclaw/fs-safe/advanced";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { createPluginGenerationArtifactSteps } from "./plugin-generation-capture.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
@@ -125,3 +126,57 @@ it.each(["success", "capture failure", "receipt failure"] as const)(
     expect(fs.readdirSync(captures)).toEqual([]);
   },
 );
+
+it("yields before recursive capture finishes and closes guarded roots at every yield", () => {
+  const root = fs.realpathSync(temp.make("plugin-cooperative-copy-"));
+  const source = path.join(root, "source");
+  const captures = path.join(root, "captures");
+  fs.mkdirSync(source);
+  fs.mkdirSync(captures);
+  for (let index = 0; index < 96; index++) {
+    fs.writeFileSync(path.join(source, "file-" + index + ".txt"), "captured " + index);
+  }
+  const createBatch = fsSafe.createRootFileOpenBatchSync;
+  let active = 0;
+  const opened = new Set<string>();
+  vi.spyOn(fsSafe, "createRootFileOpenBatchSync").mockImplementation(() => {
+    const batch = createBatch();
+    active++;
+    const close = () => {
+      batch.close();
+      active--;
+    };
+    return {
+      openFile(params) {
+        if (params.absolutePath.startsWith(source + path.sep)) {
+          opened.add(params.absolutePath);
+        }
+        return batch.openFile(params);
+      },
+      close,
+      [Symbol.dispose]: close,
+    };
+  });
+  const steps = createPluginGenerationArtifactSteps(source);
+  const advance = () => withPluginSourceCaptureDirectory(captures, () => steps.next());
+  let step = advance();
+  expect(step.done).toBe(false);
+  expect(opened.size).toBeGreaterThan(0);
+  expect(opened.size).toBeLessThan(96);
+  let yields = 0;
+  while (!step.done) {
+    expect(active, "guarded roots cannot survive a foreground yield").toBe(0);
+    yields++;
+    step = advance();
+  }
+  try {
+    expect(yields).toBeGreaterThan(1);
+    expect(opened.size).toBe(96);
+    expect(active).toBe(0);
+    expect(fs.readFileSync(step.value.resolve(path.join(source, "file-95.txt")), "utf8")).toBe(
+      "captured 95",
+    );
+  } finally {
+    step.value.dispose();
+  }
+});

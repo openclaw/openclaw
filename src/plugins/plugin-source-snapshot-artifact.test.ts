@@ -11,10 +11,8 @@ import {
   captureSqliteDatabaseAdmissions,
   retainSqliteDatabaseAdmissionLocation,
 } from "../infra/sqlite-database-admission.js";
-import {
-  capturePluginSnapshotGeneration,
-  capturePluginSourceSnapshot,
-} from "./plugin-generation-capture.js";
+import { capturePluginSourceSnapshot } from "./plugin-generation-capture.js";
+import { capturePluginSnapshotGeneration } from "./plugin-generation-frozen-source.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   hasPluginNativeCaptureCleanupCandidates,

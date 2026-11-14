@@ -6,9 +6,9 @@ import { withPluginInstallRoots } from "./install-root-context.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   createPluginGenerationArtifact,
-  capturePluginSnapshotGeneration,
   capturePluginSourceSnapshot,
 } from "./plugin-generation-capture.js";
+import { capturePluginSnapshotGeneration } from "./plugin-generation-frozen-source.js";
 import {
   createPluginGenerationMetrics,
   withPluginGenerationMetrics,
@@ -159,10 +159,7 @@ function createPreparationSession(context: CaptureCommand) {
     }
   }
   function requestHost(
-    request:
-      | { kind: "mapping"; captureId: number; filename: string }
-      | { kind: "native-root" }
-      | { kind: "native-root-reference"; directory: string },
+    request: { kind: "native-root" } | { kind: "native-root-reference"; directory: string },
   ): Extract<GenerationWorkerCallback, { kind: "callback-result" }> {
     if (!callbacks) {
       throw new Error("Plugin preparation host is unavailable");
@@ -202,11 +199,6 @@ function createPreparationSession(context: CaptureCommand) {
       }
       Atomics.wait(signal, 0, 0, 2);
     }
-  }
-  function mapSource(captureId: number, filename: string): string {
-    return callbacks
-      ? (requestHost({ kind: "mapping", captureId, filename }).filename ?? filename)
-      : filename;
   }
   function createNativeRoot() {
     const reference = requestHost({ kind: "native-root" }).root;
@@ -366,18 +358,18 @@ function createPreparationSession(context: CaptureCommand) {
                         snapshot,
                         command.entryFile,
                         (run) => run(),
-                        (filename) => mapSource(command.captureId, filename),
+                        undefined,
                       )
                     : createPluginGenerationArtifact(
                         command.rootDir,
                         command.entryFile,
                         (run) => run(),
-                        (filename) => mapSource(command.captureId, filename),
+                        undefined,
                         undefined,
                         undefined,
                         command.bundledReloadSource,
                         retained,
-                        command.retainSourceCustody,
+                        true,
                       ),
                 );
               } catch (error) {
@@ -410,7 +402,10 @@ function createPreparationSession(context: CaptureCommand) {
               if (command.retainSourceCustody) {
                 result = { sourceDigest: artifact.sourceDigest };
               } else {
-                result = artifact;
+                const custody = artifact.retainSourceCustody();
+                failedCapture = custody.source;
+                result = custody;
+                await artifact.disposeAsync();
               }
             }
           } else {
