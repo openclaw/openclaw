@@ -41,6 +41,7 @@ type ChannelRow = {
 
 type ChannelAccountRow = ChannelAccountInspectionResult & {
   accountId: string;
+  liveCredentialAvailable?: boolean;
 };
 
 function summarizeSources(sources: Array<string | undefined>): string {
@@ -118,6 +119,7 @@ export async function buildChannelsTable(
       hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId })
         ? {
             ...entry,
+            liveCredentialAvailable: true,
             // A live account can establish availability when local resolution failed.
             account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
           }
@@ -170,113 +172,167 @@ export async function buildChannelsTable(
         }
       }
     }
-    const tokenSummary = ((): { state: "ok" | "setup" | "warn" | null; detail: string | null } => {
-      const enabled = accountsForTokenSummary.filter((a) => a.enabled);
-      if (enabled.length === 0) {
-        return { state: null, detail: null };
-      }
-
-      const accountRecs = enabled.map((a) => asRecord(a.account));
-      // Token field names are plugin-owned; infer credential mode from exposed fields.
-      const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
-      const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
-      const hasSigningSecretField = accountRecs.some(
-        (r) => "signingSecret" in r || "signingSecretSource" in r || "signingSecretStatus" in r,
-      );
-      const hasTokenField = accountRecs.some((r) => "token" in r);
-      if (!hasBotTokenField && !hasAppTokenField && !hasSigningSecretField && !hasTokenField) {
-        return { state: null, detail: null };
-      }
-
-      const httpMode =
-        hasBotTokenField &&
-        hasSigningSecretField &&
-        accountRecs.every((rec) => typeof rec.mode === "string" && rec.mode.trim() === "http");
-      const unavailable = enabled.filter((a) =>
-        hasConfiguredUnavailableCredentialStatus(a.account),
-      );
-      const tokenHint = (account: unknown, key: string) => {
-        const value = asRecord(account)[key];
-        if (typeof value !== "string" || !value.trim()) {
-          return "";
-        }
-        const token = value.trim();
-        if (!showSecrets) {
-          // Stable fingerprints let operators compare tokens without leaking them.
-          return `sha256:${sha256HexPrefixCore(token, 8)} · len ${token.length}`;
-        }
-        return token.length <= 10
-          ? `${token} · len ${token.length}`
-          : `${sliceUtf16Safe(token, 0, 4)}…${sliceUtf16Safe(token, -4)} · len ${token.length}`;
-      };
-      const paired = httpMode || (hasBotTokenField && hasAppTokenField);
-      const tokenKey = hasBotTokenField ? "botToken" : "token";
-      const secondaryKey = httpMode ? "signingSecret" : "appToken";
-      const secondaryLabel = httpMode ? "signing" : "app";
-      const label = paired
-        ? httpMode
-          ? "credentials"
-          : "tokens"
-        : hasBotTokenField
-          ? "bot token"
-          : "token";
-      const need = paired ? ` (need bot+${secondaryLabel})` : "";
-      const hasCredential = (rec: Record<string, unknown>, key: string) =>
-        Boolean(normalizeOptionalString(rec[key])) ||
-        (httpMode && rec[`${key}Status`] === "available");
-      const ready = enabled.filter((a) => {
-        const rec = asRecord(a.account);
-        return hasCredential(rec, tokenKey) && (!paired || hasCredential(rec, secondaryKey));
-      });
-      const partial = paired
-        ? enabled.filter((a) => {
-            const rec = asRecord(a.account);
-            return hasCredential(rec, tokenKey) !== hasCredential(rec, secondaryKey);
-          }).length
-        : 0;
-
-      // HTTP reports unavailable credentials first; socket mode prioritizes incomplete pairs.
-      if (unavailable.length > 0 && (httpMode || partial === 0)) {
-        return {
-          state: "warn",
-          detail: `configured ${httpMode ? "http credentials" : label} unavailable in this command path · accounts ${unavailable.length}`,
-        };
-      }
-      if (partial > 0) {
-        return { state: "warn", detail: `partial ${label}${need} · accounts ${partial}` };
-      }
-      if (ready.length === 0) {
-        return { state: "setup", detail: `no ${label}${need}` };
-      }
-
-      if (paired) {
-        const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
-        const secondarySources = summarizeSources(
-          ready.map(
-            (a) => a.snapshot[httpMode ? "signingSecretSource" : "appTokenSource"] ?? "none",
-          ),
+    // Identity and transport requirements can differ between accounts in one channel.
+    const tokenGroups = new Map<string, ChannelAccountRow[]>();
+    for (const entry of accountsForTokenSummary.filter((a) => a.enabled)) {
+      const rec = asRecord(entry.account);
+      const key = JSON.stringify([normalizeOptionalString(rec.mode), rec.identity === "user"]);
+      const group = tokenGroups.get(key) ?? [];
+      group.push(entry);
+      tokenGroups.set(key, group);
+    }
+    const tokenSummaries = [...tokenGroups.values()].map(
+      (
+        enabled,
+      ): {
+        state: "ok" | "setup" | "warn" | null;
+        detail: string | null;
+      } => {
+        const accountRecs = enabled.map((a) => asRecord(a.account));
+        const userIdentity = accountRecs[0]?.identity === "user";
+        const relayMode = accountRecs[0]?.mode === "relay";
+        // Token field names are plugin-owned; infer credential mode from exposed fields.
+        const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
+        const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
+        const hasSigningSecretField = accountRecs.some(
+          (r) => "signingSecret" in r || "signingSecretSource" in r || "signingSecretStatus" in r,
         );
-        const botHint = tokenHint(ready[0]?.account, "botToken");
-        const secondaryHint = tokenHint(ready[0]?.account, secondaryKey);
-        const hint =
-          botHint || secondaryHint
-            ? ` (bot ${botHint || "?"}, ${secondaryLabel} ${secondaryHint || "?"})`
-            : "";
+        const hasTokenField = accountRecs.some((r) => "token" in r);
+        if (!hasBotTokenField && !hasAppTokenField && !hasSigningSecretField && !hasTokenField) {
+          return { state: null, detail: null };
+        }
+
+        const httpMode =
+          hasBotTokenField &&
+          hasSigningSecretField &&
+          accountRecs.every((rec) => typeof rec.mode === "string" && rec.mode.trim() === "http");
+        const unavailable = enabled.filter((a) =>
+          hasConfiguredUnavailableCredentialStatus(a.account),
+        );
+        const tokenHint = (account: unknown, key: string) => {
+          const value = asRecord(account)[key];
+          if (typeof value !== "string" || !value.trim()) {
+            return "";
+          }
+          const token = value.trim();
+          if (!showSecrets) {
+            // Stable fingerprints let operators compare tokens without leaking them.
+            return `sha256:${sha256HexPrefixCore(token, 8)} · len ${token.length}`;
+          }
+          return token.length <= 10
+            ? `${token} · len ${token.length}`
+            : `${sliceUtf16Safe(token, 0, 4)}…${sliceUtf16Safe(token, -4)} · len ${token.length}`;
+        };
+        const paired = !relayMode && (httpMode || (hasBotTokenField && hasAppTokenField));
+        const identityLabel = userIdentity ? "user" : "bot";
+        const tokenKey = userIdentity ? "userToken" : hasBotTokenField ? "botToken" : "token";
+        const secondaryKey = httpMode ? "signingSecret" : "appToken";
+        const secondaryLabel = httpMode ? "signing" : "app";
+        const label = paired
+          ? httpMode
+            ? "credentials"
+            : "tokens"
+          : hasBotTokenField
+            ? `${identityLabel} token`
+            : "token";
+        const need = paired ? ` (need ${identityLabel}+${secondaryLabel})` : "";
+        const hasCredential = (entry: ChannelAccountRow, key: string) => {
+          const rec = asRecord(entry.account);
+          return (
+            Boolean(normalizeOptionalString(rec[key])) ||
+            ((httpMode || entry.liveCredentialAvailable === true) &&
+              rec[`${key}Status`] === "available")
+          );
+        };
+        const ready = enabled.filter((a) =>
+          // Relay readiness includes plugin-owned configuration beyond the displayed token fields.
+          relayMode
+            ? a.snapshot.configured === true
+            : hasCredential(a, tokenKey) && (!paired || hasCredential(a, secondaryKey)),
+        );
+        const partial = paired
+          ? enabled.filter((a) => hasCredential(a, tokenKey) !== hasCredential(a, secondaryKey))
+              .length
+          : 0;
+
+        // HTTP reports unavailable credentials first; socket mode prioritizes incomplete pairs.
+        if (unavailable.length > 0 && (httpMode || partial === 0)) {
+          return {
+            state: "warn",
+            detail: `configured ${httpMode ? "http credentials" : label} unavailable in this command path · accounts ${unavailable.length}`,
+          };
+        }
+        if (partial > 0) {
+          return { state: "warn", detail: `partial ${label}${need} · accounts ${partial}` };
+        }
+        if (ready.length === 0) {
+          return { state: "setup", detail: relayMode ? "not configured" : `no ${label}${need}` };
+        }
+        const unconfigured = enabled.filter(
+          (account) => account.snapshot.configured === false && !ready.includes(account),
+        );
+        if (unconfigured.length > 0) {
+          return {
+            state: "warn",
+            detail: `incomplete configuration · accounts ${unconfigured.length}`,
+          };
+        }
+
+        if (paired) {
+          const identitySources = summarizeSources(
+            ready.map(
+              (a) => a.snapshot[userIdentity ? "userTokenSource" : "botTokenSource"] ?? "none",
+            ),
+          );
+          const secondarySources = summarizeSources(
+            ready.map(
+              (a) => a.snapshot[httpMode ? "signingSecretSource" : "appTokenSource"] ?? "none",
+            ),
+          );
+          const identityHint = tokenHint(ready[0]?.account, tokenKey);
+          const secondaryHint = tokenHint(ready[0]?.account, secondaryKey);
+          const hint =
+            identityHint || secondaryHint
+              ? ` (${identityLabel} ${identityHint || "?"}, ${secondaryLabel} ${secondaryHint || "?"})`
+              : "";
+          return {
+            state: "ok",
+            detail: `${label} ok (${identityLabel} ${identitySources}, ${secondaryLabel} ${secondarySources})${hint} · accounts ${ready.length}/${enabled.length}`,
+          };
+        }
+
+        const source = relayMode
+          ? summarizeSources(
+              ready.map(
+                (a) => a.snapshot[userIdentity ? "userTokenSource" : "botTokenSource"] ?? "none",
+              ),
+            )
+          : hasBotTokenField
+            ? "config"
+            : summarizeSources(ready.map((a) => a.snapshot.tokenSource));
+        const hint = tokenHint(ready[0]?.account, tokenKey);
         return {
           state: "ok",
-          detail: `${label} ok (bot ${botSources}, ${secondaryLabel} ${secondarySources})${hint} · accounts ${ready.length}/${enabled.length}`,
+          detail: `${label} ${source}${hint ? ` (${hint})` : ""} · accounts ${ready.length}/${enabled.length}`,
         };
-      }
-
-      const source = hasBotTokenField
-        ? "config"
-        : summarizeSources(ready.map((a) => a.snapshot.tokenSource));
-      const hint = tokenHint(ready[0]?.account, tokenKey);
-      return {
-        state: "ok",
-        detail: `${label} ${source}${hint ? ` (${hint})` : ""} · accounts ${ready.length}/${enabled.length}`,
-      };
-    })();
+      },
+    );
+    const states = new Set(tokenSummaries.map((entry) => entry.state));
+    const tokenSummary = {
+      state:
+        states.has("warn") || (states.has("ok") && states.has("setup"))
+          ? ("warn" as const)
+          : states.has("ok")
+            ? ("ok" as const)
+            : states.has("setup")
+              ? ("setup" as const)
+              : null,
+      detail:
+        tokenSummaries
+          .map((entry) => entry.detail)
+          .filter(Boolean)
+          .join("; ") || null,
+    };
 
     const issues = plugin.status?.collectStatusIssues
       ? plugin.status.collectStatusIssues(accounts.map((a) => a.snapshot))

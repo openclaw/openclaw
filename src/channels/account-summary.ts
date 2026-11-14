@@ -115,6 +115,7 @@ export function buildChannelAccountNotes(
   const sources = [
     ["token", snapshot.tokenSource],
     ["bot", snapshot.botTokenSource],
+    ["user", snapshot.userTokenSource],
     ["app", snapshot.appTokenSource],
     ["signing", snapshot.signingSecretSource],
   ].flatMap(([label, source]) => (source && source !== "none" ? [`${label}:${source}`] : []));
