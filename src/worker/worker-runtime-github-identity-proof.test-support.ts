@@ -131,7 +131,7 @@ export async function runManagedWorkerGitIdentityProof({
     const certificate = await readFile(certPath);
     const privateKey = await readFile(keyPath);
     tlsServer = createHttpsServer({ cert: certificate, key: privateKey }, (request, response) => {
-      const host = (request.headers.host ?? "").toLowerCase().split(":")[0];
+      const host = (request.headers.host ?? "").toLowerCase().split(":")[0] ?? "";
       const expected = expectedCredentials.get(host);
       const authorization = request.headers.authorization ?? "";
       const decoded = authorization.startsWith("Basic ")
@@ -261,11 +261,13 @@ export async function runManagedWorkerGitIdentityProof({
         const stateDir = process.env.OPENCLAW_STATE_DIR;
         expect(stateDir).toBeTruthy();
         const profileDir = githubProfileDir(stateDir!, launch.assignment.turnId);
+        const content = toolResult?.content;
         const output =
-          toolResult?.content
-            .filter((block) => block.type === "text")
-            .map((block) => block.text)
-            .join("\n") ?? "";
+          typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n")
+              : "";
         if (authenticatedHosts.size !== 2) {
           const safeOutput = output
             .replaceAll(binding.token, "[redacted]")
