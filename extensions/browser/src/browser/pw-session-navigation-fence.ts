@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CDPSession, Page } from "playwright-core";
 import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { isRetiredFetchInterceptionError } from "./cdp-fetch-interception.js";
@@ -8,6 +9,7 @@ import {
   assertBrowserNavigationAllowed,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
+import { createStandingNavigationPolicy } from "./pw-session-navigation-standing.js";
 
 type Command = Parameters<CDPSession["send"]>[0];
 type CommandParameters = Parameters<CDPSession["send"]>[1];
@@ -20,7 +22,7 @@ type ProtocolMessage = {
 };
 type AttachedTarget = {
   sessionId: string;
-  targetInfo: { type: string; targetId: string };
+  targetInfo: { type: string; targetId: string; url: string };
 };
 
 /** A page target or its own independently attached OOPIF protocol session. */
@@ -41,15 +43,13 @@ type PausedRequest = {
   networkId?: string;
   frameId?: string;
   resourceType: string;
-  request: { url: string };
+  request: { url: string; headers: Record<string, string> };
 };
 type NetworkRequest = { requestId: string; type?: string; frameId?: string };
 type TargetState = {
   documents: Map<string, string | undefined>;
   finishedDocuments: Set<string>;
   transferredFrames: Set<string>;
-  removeFetchListener: () => void;
-  restoreFetchListener: () => void;
   removeListeners: () => void;
 };
 
@@ -74,7 +74,7 @@ export type NavigationAuthorityFenceDisposeOptions = {
 async function settleInterception(
   target: NavigationTargetSession,
   method: "Fetch.continueRequest" | "Fetch.failRequest",
-  params: { requestId: string; errorReason?: "Failed" | "Aborted" },
+  params: { requestId: string; errorReason?: "Failed" | "Aborted" | "BlockedByClient" },
 ): Promise<void> {
   try {
     await target.send(method, params);
@@ -85,45 +85,69 @@ async function settleInterception(
   }
 }
 
-/** Fence every Chromium redirect hop, including separately hosted iframe targets. */
-export async function installNavigationAuthorityFence(
-  page: Page,
-  policy: BrowserNavigationPolicyOptions,
-  onError: (error: unknown) => void,
-  handleDocument?: (
-    route: NavigationDocumentRoute,
-    request: NavigationDocumentRequest,
-  ) => Promise<void>,
-): Promise<(options?: NavigationAuthorityFenceDisposeOptions) => Promise<unknown>> {
-  const assertCurrent = policy.assertNavigationCurrent ?? (() => {});
-  const session = await page.context().newCDPSession(page);
+type NavigationDocumentHandler = (
+  route: NavigationDocumentRoute,
+  request: NavigationDocumentRequest,
+) => Promise<void>;
+
+/** One invocation's claim on its tab's document decisions. */
+type Invocation = {
+  policy: BrowserNavigationPolicyOptions;
+  handleDocument?: NavigationDocumentHandler;
+  inFlight: Set<Promise<void>>;
+  isOpen: () => boolean;
+  fail: (error: unknown) => void;
+  assertTargetCurrent: () => void;
+};
+
+const tabFences = new WeakMap<Page, ReturnType<typeof createTabFence>>();
+
+/**
+ * One document interception session per tab, shared by the invocations that
+ * claim it. Each claiming invocation decides a paused document in turn; with
+ * no claim, the tab's standing policy does.
+ */
+function createTabFence(page: Page, session: CDPSession) {
   let mainFrameId: string | undefined;
   const states = new Map<NavigationTargetSession, TargetState>();
-  const inFlight = new Set<Promise<void>>();
+  const invocations = new Set<Invocation>();
+  let released: Promise<unknown> = Promise.resolve();
   let stateChanged = createDeferred<void>();
-  let closing = false;
-  let failed = false;
+  const standing = createStandingNavigationPolicy();
   const notify = () => {
     stateChanged.resolve();
     stateChanged = createDeferred<void>();
   };
   const fail = (error: unknown) => {
-    failed = true;
-    onError(error);
-    notify();
-  };
-  const assertTargetCurrent = () => {
-    assertCurrent();
-    if (closing || failed) {
-      throw new Error("Browser navigation authority fence is no longer admitting targets");
+    for (const invocation of invocations) {
+      invocation.fail(error);
     }
   };
+  const enforceStanding = async (target: NavigationTargetSession, event: PausedRequest) => {
+    const errorReason = await standing.denial({
+      url: event.request.url,
+      headers: event.request.headers,
+      frameId: event.frameId ?? (target.parent ? target.frameId : mainFrameId),
+      mainFrameId,
+    });
+    const settled = errorReason
+      ? settleInterception(target, "Fetch.failRequest", { requestId: event.requestId, errorReason })
+      : settleInterception(target, "Fetch.continueRequest", { requestId: event.requestId });
+    // A target lost meanwhile has nothing left to settle.
+    await settled.catch(() => {});
+  };
+  const interceptDocuments = (target: NavigationTargetSession) =>
+    target.send("Fetch.enable", {
+      patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
+    });
   const initialize = async (target: NavigationTargetSession) => {
     const documents = new Map<string, string | undefined>();
     const finishedDocuments = new Set<string>();
     const transferredFrames = new Set<string>();
     const started = (event: NetworkRequest) => {
+      // Documents are owned only while an invocation waits on them to settle.
       if (
+        invocations.size > 0 &&
         event.type === "Document" &&
         !finishedDocuments.has(event.requestId) &&
         !(event.frameId && transferredFrames.has(event.frameId))
@@ -150,9 +174,15 @@ export async function installNavigationAuthorityFence(
       }
       notify();
     };
-    const handle = async (event: PausedRequest) => {
+    const handle = async (event: PausedRequest, claims: Invocation[]): Promise<void> => {
+      const [invocation, ...later] = claims;
+      if (!invocation) {
+        await settleInterception(target, "Fetch.continueRequest", { requestId: event.requestId });
+        return;
+      }
+      const { policy, handleDocument } = invocation;
       try {
-        if (!closing && !failed) {
+        if (invocation.isOpen()) {
           if (handleDocument) {
             const isTopLevel = !target.parent && (!event.frameId || event.frameId === mainFrameId);
             const finishInterceptedDocument = () => {
@@ -178,10 +208,8 @@ export async function installNavigationAuthorityFence(
               notify();
             };
             const resume = async () => {
-              assertTargetCurrent();
-              await settleInterception(target, "Fetch.continueRequest", {
-                requestId: event.requestId,
-              });
+              invocation.assertTargetCurrent();
+              await handle(event, later);
             };
             await handleDocument(
               {
@@ -218,11 +246,9 @@ export async function installNavigationAuthorityFence(
           if (!states.has(target)) {
             return;
           }
-          if (!closing && !failed) {
-            assertCurrent();
-            await settleInterception(target, "Fetch.continueRequest", {
-              requestId: event.requestId,
-            });
+          if (invocation.isOpen()) {
+            policy.assertNavigationCurrent?.();
+            await handle(event, later);
             return;
           }
         }
@@ -230,7 +256,7 @@ export async function installNavigationAuthorityFence(
         if (!states.has(target)) {
           return;
         }
-        fail(error);
+        invocation.fail(error);
       }
       if (!states.has(target)) {
         return;
@@ -240,7 +266,7 @@ export async function installNavigationAuthorityFence(
         errorReason: "Aborted",
       }).catch((error: unknown) => {
         if (states.has(target)) {
-          fail(error);
+          invocation.fail(error);
         }
       });
     };
@@ -248,10 +274,16 @@ export async function installNavigationAuthorityFence(
       if (event.networkId) {
         started({ requestId: event.networkId, type: event.resourceType, frameId: event.frameId });
       }
-      const operation = handle(event);
-      inFlight.add(operation);
+      // Claims are fixed at arrival: a request never moves to a later invocation's grant.
+      const claims = [...invocations];
+      const operation = claims.length > 0 ? handle(event, claims) : enforceStanding(target, event);
+      for (const invocation of claims) {
+        invocation.inFlight.add(operation);
+      }
       void operation.then(() => {
-        inFlight.delete(operation);
+        for (const invocation of claims) {
+          invocation.inFlight.delete(operation);
+        }
         notify();
       });
     };
@@ -259,14 +291,13 @@ export async function installNavigationAuthorityFence(
       documents,
       finishedDocuments,
       transferredFrames,
-      removeFetchListener: () => target.events.off("Fetch.requestPaused", listener),
-      restoreFetchListener: () => target.events.on("Fetch.requestPaused", listener),
       removeListeners: () => {
         target.events.off("Fetch.requestPaused", listener);
         target.events.off("Network.requestWillBeSent", started);
         target.events.off("Network.loadingFinished", finished);
         target.events.off("Network.loadingFailed", finished);
         target.events.off("Page.frameNavigated", committed);
+        unobserveFrames();
       },
     };
     states.set(target, state);
@@ -275,6 +306,7 @@ export async function installNavigationAuthorityFence(
     target.events.on("Network.loadingFinished", finished);
     target.events.on("Network.loadingFailed", finished);
     target.events.on("Page.frameNavigated", committed);
+    const unobserveFrames = standing.observe(target.events);
     if (target.parent && target.frameId) {
       // At OOPIF response handoff the parent no longer receives the document's
       // terminal Network event. The child initialization barrier owns the swap.
@@ -288,29 +320,27 @@ export async function installNavigationAuthorityFence(
       }
     }
     notify();
-    assertTargetCurrent();
     await target.send("Page.enable");
-    assertTargetCurrent();
-    await target.send("Network.enable");
-    assertTargetCurrent();
-    await target.send("Fetch.enable", {
-      patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
-    });
-    assertTargetCurrent();
+    if (invocations.size > 0) {
+      await target.send("Network.enable");
+    }
+    await interceptDocuments(target);
   };
   const detachedTarget = (target: NavigationTargetSession) => {
     states.get(target)?.removeListeners();
     states.delete(target);
     if (target.parent && target.frameId) {
       states.get(target.parent)?.transferredFrames.delete(target.frameId);
-    } else if (!closing && !page.isClosed()) {
+    } else if (!page.isClosed()) {
+      // The lost session released its interception; the next invocation attaches anew.
+      retire();
       fail(new Error("Browser navigation authority target detached"));
     }
     notify();
   };
   /**
    * Public CDPSession has no child-session factory. Non-flat Target protocol keeps
-   * child sessions under this operation's independently attached page session;
+   * child sessions under this tab's independently attached page session;
    * Playwright continues managing its own frame sessions and debugger resumes.
    */
   const initialization = new Set<Promise<void>>();
@@ -326,6 +356,8 @@ export async function installNavigationAuthorityFence(
     "Network.loadingFailed",
     "Fetch.requestPaused",
     "Page.frameNavigated",
+    "Page.frameRequestedNavigation",
+    "Page.frameDetached",
     "Target.attachedToTarget",
     "Target.receivedMessageFromTarget",
     "Target.detachedFromTarget",
@@ -405,6 +437,7 @@ export async function installNavigationAuthorityFence(
       // Register before any await so detach and nested protocol events always
       // resolve against the same operation-owned target identity.
       children.set(event.sessionId, { target: attachedSession, reject });
+      standing.frameCommitted(event.targetInfo.targetId, event.targetInfo.url);
       const operation = prepare(attachedSession, true).catch((error: unknown) => {
         if (!detached) {
           fail(error);
@@ -460,6 +493,8 @@ export async function installNavigationAuthorityFence(
       childSession.reject(new Error("Navigation frame target detached"));
     };
     const closeChildren = () => {
+      // The tab outlives its frames; a detached target takes its cleanup with it.
+      removers.delete(remove);
       for (const childSession of children.values()) {
         childSession.reject(new Error("Navigation frame ancestor detached"));
       }
@@ -469,7 +504,7 @@ export async function installNavigationAuthorityFence(
     target.events.on("Target.attachedToTarget", attached);
     target.events.on("Target.receivedMessageFromTarget", received);
     target.events.on("Target.detachedFromTarget", detached);
-    removers.add(() => {
+    const remove = () => {
       target.events.off("navigationDetached", closeChildren);
       target.events.off("Target.attachedToTarget", attached);
       target.events.off("Target.receivedMessageFromTarget", received);
@@ -477,11 +512,9 @@ export async function installNavigationAuthorityFence(
       for (const childSession of children.values()) {
         childSession.reject(new Error("Navigation authority fence ended"));
       }
-    });
-    // Register the target with its policy owner even if authority was lost, so
-    // cancellation includes a newly attached, debugger-paused frame.
+    };
+    removers.add(remove);
     await initialize(target);
-    assertTargetCurrent();
     await target.send("Target.setAutoAttach", {
       autoAttach: true,
       waitForDebuggerOnStart: true,
@@ -489,27 +522,26 @@ export async function installNavigationAuthorityFence(
       filter: [{ type: "iframe" }, { exclude: true }],
     });
     if (child) {
-      assertTargetCurrent();
+      // Interception is already on, so the frame's own documents stay fenced.
       await target.send("Runtime.runIfWaitingForDebugger");
     }
   };
   const ready = (async () => {
     const tree = await session.send("Page.getFrameTree");
     mainFrameId = tree.frameTree.frame.id;
+    standing.seed(tree.frameTree);
     await prepare(rootTarget);
-    while (initialization.size > 0) {
-      await Promise.all(initialization);
-    }
-    assertTargetCurrent();
   })();
   const closed = () => {
     for (const state of states.values()) {
       state.documents.clear();
     }
+    retire();
     notify();
   };
   page.on("close", closed);
-  const removeListeners = () => {
+  const retire = () => {
+    tabFences.delete(page);
     for (const state of states.values()) {
       state.removeListeners();
     }
@@ -519,21 +551,114 @@ export async function installNavigationAuthorityFence(
     removers.clear();
     states.clear();
     page.off("close", closed);
+    void session.detach().catch(() => {});
   };
+  // A tab that never attached must not hand the same failure to every later invocation.
+  ready.catch(retire);
+  return {
+    session,
+    states,
+    initialization,
+    invocations,
+    standing,
+    ready,
+    notify,
+    changed: () => stateChanged.promise,
+    /**
+     * Waits for the last release's answer. A release that is never answered fails
+     * the wait instead of being started over.
+     */
+    untilReleased: async () => {
+      await raceWithTimeout(released, resolveBrowserNavigationTimeoutMs(), () => {
+        throw new Error("Browser navigation interception was not released in time");
+      });
+    },
+    /** Starts what only a claimed tab runs. */
+    claim: async () => {
+      await Promise.all(
+        [...states.keys()].map((target) =>
+          target.send("Network.enable").catch((error: unknown) => {
+            // A frame target lost meanwhile has nothing left to track.
+            if (states.has(target)) {
+              throw error;
+            }
+          }),
+        ),
+      );
+    },
+    release: () => {
+      released = Promise.allSettled(
+        [...states.keys()].map((target) => target.send("Network.disable")),
+      ).then(() => {
+        // Nothing tracked before tracking stopped reports its end.
+        for (const state of states.values()) {
+          state.documents.clear();
+          state.finishedDocuments.clear();
+        }
+      });
+      return released;
+    },
+  };
+}
+
+/** Fence every Chromium redirect hop, including separately hosted iframe targets. */
+export async function installNavigationAuthorityFence(
+  page: Page,
+  policy: BrowserNavigationPolicyOptions,
+  onError: (error: unknown) => void,
+  handleDocument?: NavigationDocumentHandler,
+): Promise<(options?: NavigationAuthorityFenceDisposeOptions) => Promise<unknown>> {
+  const assertCurrent = policy.assertNavigationCurrent ?? (() => {});
+  let tab = tabFences.get(page);
+  if (!tab) {
+    const session = await page.context().newCDPSession(page);
+    // A concurrent invocation may have attached the tab meanwhile.
+    tab = tabFences.get(page);
+    if (tab) {
+      void session.detach().catch(() => {});
+    } else {
+      tab = createTabFence(page, session);
+      tabFences.set(page, tab);
+    }
+  }
+  const { session, states, initialization, invocations, notify } = tab;
+  const inFlight = new Set<Promise<void>>();
+  let closing = false;
+  let failed = false;
+  const fail = (error: unknown) => {
+    failed = true;
+    onError(error);
+    notify();
+  };
+  const assertTargetCurrent = () => {
+    assertCurrent();
+    if (closing || failed) {
+      throw new Error("Browser navigation authority fence is no longer admitting targets");
+    }
+  };
+  const invocation: Invocation = {
+    policy,
+    handleDocument,
+    inFlight,
+    isOpen: () => !closing && !failed,
+    fail,
+    assertTargetCurrent,
+  };
+  invocations.add(invocation);
+  if (policy.standingSsrfPolicy) {
+    tab.standing.set({
+      ssrfPolicy: policy.standingSsrfPolicy,
+      ...(policy.browserProxyMode ? { browserProxyMode: policy.browserProxyMode } : {}),
+    });
+  }
   const dispose = async (options: NavigationAuthorityFenceDisposeOptions = {}) => {
     const deadline = createDeferred<never>();
     const timer = setTimeout(() => {
       deadline.reject(new Error("Browser navigation did not settle before authority cleanup"));
     }, resolveBrowserNavigationTimeoutMs());
     // Bound each wait, not a detached cleanup coroutine that could later release
-    // interception after the timeout path has retained it.
+    // the claim after the timeout path has retained it.
     const bounded = <T>(operation: Promise<T>) => Promise.race([operation, deadline.promise]);
-    const retainUntilClose = () => {
-      page.once("close", () => {
-        removeListeners();
-        void session.detach().catch(() => {});
-      });
-    };
     const checkCurrent = () => {
       try {
         assertCurrent();
@@ -560,19 +685,18 @@ export async function installNavigationAuthorityFence(
         await bounded(Promise.allSettled([...inFlight, ...initialization]));
       }
     };
-    let fetchListenersRemoved = false;
     try {
       checkCurrent();
       // Actions such as `location.href = ...` can resolve in Playwright before
       // this independently attached session receives the queued document event.
       // A same-target round trip establishes an event-delivery barrier before
-      // the first idle-state decision tears down interception.
+      // the first idle-state decision releases this invocation's claim.
       await bounded(session.send("Runtime.evaluate", { expression: "void 0" }));
       let loadingSettled = false;
       for (;;) {
         // Capture before reading state so a terminal event cannot notify
         // between the predicate and the wait and leave cleanup asleep.
-        const changed = stateChanged.promise;
+        const changed = tab.changed();
         if (!loadingSettled && options.stopLoading) {
           await stopLoading();
           loadingSettled = true;
@@ -599,43 +723,53 @@ export async function installNavigationAuthorityFence(
         await stopLoading();
         await drain();
       }
-      // Remove request listeners synchronously before detach can invalidate ids.
-      for (const state of states.values()) {
-        state.removeFetchListener();
+      invocations.delete(invocation);
+      notify();
+      if (invocations.size === 0) {
+        // The next invocation's document tracking starts after this one's has stopped.
+        await bounded(tab.release());
       }
-      fetchListenersRemoved = true;
-      await bounded(
-        Promise.allSettled([...states.keys()].map((target) => target.send("Fetch.disable"))),
-      );
-      await bounded(session.detach());
-      removeListeners();
       return undefined;
     } catch (error) {
       closing = true;
       if (page.isClosed()) {
-        removeListeners();
-        void session.detach().catch(() => {});
+        invocations.delete(invocation);
+        notify();
         return undefined;
       }
       fail(error);
-      if (fetchListenersRemoved) {
-        for (const state of states.values()) {
-          state.restoreFetchListener();
-        }
+      // Unconfirmed cancellation must not release pending requests: the closed
+      // claim stays and refuses every document. Only this genuinely failed
+      // cleanup requires closing the selected tab to recover. Later invocations
+      // have nothing of this one's left to wait for.
+      for (const state of states.values()) {
+        state.documents.clear();
       }
-      // Unconfirmed cancellation must not release pending requests. Only this
-      // genuinely failed cleanup requires closing the selected tab to recover.
-      retainUntilClose();
+      notify();
       return error;
     } finally {
       clearTimeout(timer);
     }
   };
+  let started = false;
   try {
-    await ready;
+    await tab.ready;
+    await tab.untilReleased();
+    started = true;
+    await tab.claim();
+    while (initialization.size > 0) {
+      await Promise.all(initialization);
+    }
+    assertTargetCurrent();
   } catch (error) {
     fail(error);
-    await dispose();
+    if (started) {
+      await dispose();
+    } else {
+      // Nothing of this invocation started, so it only gives up its claim.
+      invocations.delete(invocation);
+      notify();
+    }
     throw error;
   }
   return dispose;

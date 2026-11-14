@@ -193,7 +193,7 @@ async function dispatch(
     networkId: requestId,
     frameId: opts.frame ? "child" : "main",
     resourceType: "Document",
-    request: { url: opts.url ?? publicUrl },
+    request: { url: opts.url ?? publicUrl, headers: {} },
   });
   await done.promise;
   f.session.emit("Network.loadingFinished", { requestId });
@@ -225,14 +225,25 @@ async function quarantineExistingPage(targetId: string, lookupTargetId?: string)
 function failRouteSetup(error: Error) {
   vi.spyOn(f.page.context(), "newCDPSession").mockRejectedValueOnce(error);
 }
-function expectRouteRemoved() {
-  expect(f.sessionDetach).toHaveBeenCalledOnce();
-  expect(f.session.listenerCount("Fetch.requestPaused")).toBe(0);
+async function expectClaimReleased() {
+  // Interception stays with the tab; a released invocation no longer decides its documents.
+  const route = await dispatch({ url: privateUrl });
+  expect(route.fallback).toHaveBeenCalledOnce();
+  expect(f.sessionDetach).not.toHaveBeenCalled();
 }
 function cleanupFailure(closed: boolean) {
   Object.assign(f.page, { isClosed: () => closed });
   const error = new Error("navigation CDP cleanup failed");
-  f.sessionDetach.mockRejectedValueOnce(error);
+  const send = f.sessionSend.getMockImplementation();
+  if (!send) {
+    throw new Error("Session fixture has no send implementation");
+  }
+  f.sessionSend.mockImplementation(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      throw error;
+    }
+    return await send(method, params);
+  });
   return error;
 }
 function observeDenials() {
@@ -437,7 +448,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     const error = new Error("page.goto: net::ERR_CONNECTION_REFUSED");
     f.pageGoto.mockRejectedValueOnce(error);
     f.pageClose.mockRejectedValueOnce(new Error("close failed"));
-    cleanupFailure(false);
     await expect(create()).rejects.toBe(error);
     expect(f.pageClose).toHaveBeenCalledTimes(1);
   });
@@ -519,7 +529,7 @@ describe("pw-session guarded browser navigation interception cleanup", () => {
     pending.resolve();
     await rejected;
     expect(f.pageGoto).not.toHaveBeenCalled();
-    expectRouteRemoved();
+    await expectClaimReleased();
   });
   it("surfaces navigation interception cleanup failure while the page remains open", async () => {
     const error = cleanupFailure(false);
@@ -568,7 +578,7 @@ describe("pw-session selected-page interaction request guard", () => {
     await denied(guard(action, { onPolicyDenied }));
     expect(events).toEqual(["detected", "handled:false"]);
     expect(action).not.toHaveBeenCalled();
-    expectRouteRemoved();
+    await expectClaimReleased();
   });
   it("intercepts documents without routing subresources", async () => {
     const documentRoute = createMockRoute();
@@ -583,7 +593,7 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(f.sessionSend).toHaveBeenCalledWith("Fetch.enable", {
       patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
     });
-    expectRouteRemoved();
+    await expectClaimReleased();
   });
   it("does not claim preservation when postflight also finds a policy violation", async () => {
     const route = createMockRoute();
@@ -695,13 +705,13 @@ describe("pw-session selected-page interaction request guard", () => {
     expect(deniedRoute.fulfill).toHaveBeenCalledWith({ status: 204, body: "" });
     expect(wasBrowserNavigationSourcePreservedAfterPolicyDenial(caught)).toBe(false);
   });
-  it("removes its exact route when the action fails before a request", async () => {
+  it("releases its claim when the action fails before a request", async () => {
     await expect(
       guard(async () => {
         throw new Error("locator failed");
       }),
     ).rejects.toThrow("locator failed");
-    expectRouteRemoved();
+    await expectClaimReleased();
   });
   it("rolls back its exact route when setup rejects", async () => {
     const error = new Error("route setup failed");
