@@ -257,6 +257,17 @@ describe("templates cli", () => {
     },
   );
 
+  it("strips terminal controls from invalid registry manifest diagnostics", async () => {
+    const registry = await registryFixture("manifest");
+    await add([], registry.name);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    const message = String(mocks.runtime.error.mock.calls[0]?.[0]);
+    expect(message).toContain("Downloaded Template package manifest is invalid");
+    expect(message).toContain("evil");
+    expect(message).not.toMatch(/[\u202e\u009b]/u);
+    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+  });
+
   it("prints versioned experimental JSON for a development manifest", async () => {
     const manifestPath = await writeManifest();
 
@@ -485,7 +496,7 @@ describe("templates cli", () => {
 // Wire fixtures keep the real registry client, trust gate, downloader, extractor,
 // manifest reader, and Add planner; only HTTP responses and the final mutation are controlled.
 async function registryFixture(
-  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency",
+  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency" | "manifest",
 ) {
   const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
   const manifestPath = join(root, "CLAW.md");
@@ -493,6 +504,9 @@ async function registryFixture(
   if (failure !== "dependency") {
     manifest.skills = [];
     manifest.plugins = [];
+  }
+  if (failure === "manifest") {
+    manifest["evil\u202ekey\u009b31m"] = true;
   }
   await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
   const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");

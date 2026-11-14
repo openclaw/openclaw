@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { downloadClawHubPackageArchive } from "../infra/clawhub-artifacts.js";
 import { normalizeClawHubSha256Hex } from "../infra/clawhub-integrity.js";
@@ -13,7 +14,7 @@ import type {
   ClawHubResolvedArtifact,
 } from "../infra/clawhub-packages.js";
 import { readTemplateManifestFile } from "./reader.js";
-import type { TemplateReadResult } from "./types.js";
+import type { TemplateDiagnostic, TemplateReadResult } from "./types.js";
 
 const TEMPLATE_SOURCE_CACHE_DIR = "templates/sources";
 export const CLAWHUB_TIMEOUT_MS = 30_000;
@@ -234,6 +235,29 @@ export async function persistExtractedSource(params: {
   }
 }
 
+const MAX_REPORTED_MANIFEST_DIAGNOSTICS = 3;
+
+// Without the reason, a publisher or user cannot tell a retired format from a broken release.
+// Reader messages name files by their Gateway cache path; clients only need the package path.
+async function describeManifestDiagnostics(
+  sourceRoot: string,
+  diagnostics: readonly TemplateDiagnostic[],
+): Promise<string> {
+  const canonicalRoot = await fs.realpath(sourceRoot).catch(() => sourceRoot);
+  // Longest first: a realpath such as /private/tmp/x contains its link path /tmp/x.
+  const roots = [...new Set([canonicalRoot, sourceRoot])].toSorted((a, b) => b.length - a.length);
+  const reported = diagnostics.slice(0, MAX_REPORTED_MANIFEST_DIAGNOSTICS).map((diagnostic) => {
+    let message = diagnostic.message;
+    for (const root of roots) {
+      message = message.replaceAll(`${root}${path.sep}`, "").replaceAll(root, ".");
+    }
+    // Diagnostics quote publisher text; Gateway RPC clients print this message verbatim.
+    return sanitizeTerminalText(`${diagnostic.code} at ${diagnostic.path}: ${message}`);
+  });
+  const remaining = diagnostics.length - reported.length;
+  return ` ${reported.join("; ")}${remaining > 0 ? ` (${remaining} more)` : ""}`;
+}
+
 export async function readVerifiedArtifactSource(params: {
   sourceRoot: string;
   packageName: string;
@@ -245,7 +269,7 @@ export async function readVerifiedArtifactSource(params: {
   if (!loaded.ok) {
     throw new ClawHubSourceError(
       "clawhub_manifest_invalid",
-      "Downloaded Template package manifest is invalid.",
+      `Downloaded Template package manifest is invalid.${await describeManifestDiagnostics(params.sourceRoot, loaded.diagnostics)}`,
     );
   }
   if (
