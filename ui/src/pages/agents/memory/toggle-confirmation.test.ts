@@ -63,10 +63,12 @@ describe("renderDreamingToggleConfirmation", () => {
     confirm?.click();
     await waitForSolid(() => expect(confirm?.textContent?.trim()).toBe("Saving…"));
     expect(confirm?.hasAttribute("disabled")).toBe(true);
+    expect(confirm?.getAttribute("aria-busy")).toBe("true");
     host.querySelector("openclaw-modal-dialog")?.dispatchEvent(new CustomEvent("modal-cancel"));
     expect(onCancel).not.toHaveBeenCalled();
     pending.resolve();
     await waitForSolid(() => expect(confirm?.hasAttribute("disabled")).toBe(false));
+    expect(confirm?.hasAttribute("aria-busy")).toBe(false);
     host.querySelector("openclaw-modal-dialog")?.dispatchEvent(new CustomEvent("modal-cancel"));
     expect(onCancel).toHaveBeenCalledOnce();
   });

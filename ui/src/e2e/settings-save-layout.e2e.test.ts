@@ -127,6 +127,27 @@ suite.define(() => {
         await gateway.deferNext("config.patch");
         await confirm.getByRole("button", { name: "Turn off dreaming", exact: true }).click();
         await gateway.waitForRequest("config.patch");
+        const saving = confirm.getByRole("button", { name: "Saving…", exact: true });
+        await saving.waitFor();
+        expect(await saving.isDisabled()).toBe(true);
+        expect(await saving.getAttribute("aria-busy")).toBe("true");
+        expect(await saving.evaluate((button) => getComputedStyle(button).opacity)).toBe("1");
+        expect(
+          await confirm
+            .getByRole("button", { name: "Cancel", exact: true })
+            .evaluate((button) => getComputedStyle(button).opacity),
+        ).toBe("0.5");
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const pendingFrame = await takeControlUiScreenshotFrame(page, confirm, [saving], {
+            animations: "disabled",
+            elements: [confirm],
+          });
+          await writeFile(path.join(suite.artifactDir, "saving.png"), pendingFrame.png);
+          await writeFile(
+            path.join(suite.artifactDir, "saving-dialog.png"),
+            pendingFrame.elements[0]!.png,
+          );
+        }
         await gateway.rejectDeferred("config.patch", {
           code: "UNAVAILABLE",
           message: "Synthetic write rejected",

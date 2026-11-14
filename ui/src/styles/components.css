@@ -986,6 +986,12 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
   cursor: not-allowed;
 }
 
+/* Busy controls are working, not unavailable; keep their feedback readable. */
+.btn[aria-busy="true"]:is(:disabled, [aria-disabled="true"]) {
+  opacity: 1;
+  cursor: progress;
+}
+
 .field {
   display: grid;
   gap: 6px;
