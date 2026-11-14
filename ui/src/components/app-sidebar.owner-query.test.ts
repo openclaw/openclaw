@@ -42,6 +42,7 @@ it.each(["visible", "bounded"])(
           expect(sidebar.querySelector(`[data-session-key="agent:main:${key}"]`)).not.toBeNull();
         }
       },
+      { savedOwnerId: viewer.id },
     );
   },
 );

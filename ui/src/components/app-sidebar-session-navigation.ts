@@ -37,6 +37,8 @@ import {
   createSidebarPinnedSessions,
   personalSidebarOwnerProjection,
   personalSidebarOwnerFilterId,
+  personalSidebarSessionsAcrossAgents,
+  personalSidebarOwnerFacetScope,
   projectUnpinnedSessionRows,
   sidebarVisibleRowsInOrder,
 } from "./app-sidebar-personal-navigation.ts";
@@ -231,6 +233,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     this.invalidate();
   }
 
+  sidebarSessionsAcrossAgents = (): boolean => personalSidebarSessionsAcrossAgents(this);
+
   sidebarSessionOwnerFilter() {
     return { ownerId: this.sessionOwnerFilterId, involvingMe: this.sessionInvolvingMeFilterActive };
   }
@@ -374,8 +378,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     ownerFacet: SessionsListResult["owners"],
   ): SidebarRecentSession[] {
     const result = personalSidebarOwnerProjection(this, projected, ownerFacet);
-    const agentId = this.sidebarAgentsMode === "roster" ? "*" : this.expandedAgentId();
-    this.sessionOwnerFilter.observeOwnerFacet(agentId, ownerFacet);
+    this.sessionOwnerFilter.observeOwnerFacet(personalSidebarOwnerFacetScope(this), ownerFacet);
     this.ownerOptions = result.ownerOptions;
     this.sessionOwnershipVisibility = result.ownershipVisibility;
     this.activeSessionOwnerId = result.activeOwnerId;

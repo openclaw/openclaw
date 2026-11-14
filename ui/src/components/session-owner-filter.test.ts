@@ -98,6 +98,23 @@ function expectReads(host: ReturnType<typeof fixture>["host"], scheduled: number
 }
 
 describe("sidebar owner filter", () => {
+  it("uses broad owner facets across agents without reusing an agent-scoped facet", () => {
+    const { filter, disconnect } = fixture();
+    try {
+      filter.observeOwnerFacet("main", [{ type: "human", id: "foreign" }]);
+      expect(filter.hasMultipleOwners("main")).toBe(true);
+      expect(filter.hasMultipleOwners("research")).toBe(false);
+      filter.observeOwnerFacet("*", [{ type: "human", id: "foreign" }]);
+      expect(filter.hasMultipleOwners("main")).toBe(true);
+      expect(filter.hasMultipleOwners("research")).toBe(true);
+      filter.observeOwnerFacet("research", [{ type: "human", id: "profile-ada" }]);
+      expect(filter.hasMultipleOwners("research")).toBe(false);
+      expect(filter.hasMultipleOwners("main")).toBe(false);
+    } finally {
+      disconnect();
+    }
+  });
+
   it("retains a known profile's filter while reconnect identity is unresolved", () => {
     storeSidebarSessionOwnerFilter(gatewayUrl, "profile-ada", choice("profile-ada"));
     const { gateway, host, update } = fixture();

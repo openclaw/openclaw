@@ -468,6 +468,31 @@ export function projectUnpinnedSessionRows(
   }));
 }
 
+export function personalSidebarSessionsAcrossAgents(host: {
+  readonly sessionDataContext?: Pick<ApplicationContext, "agents">;
+  readonly sidebarSnapshot: Pick<SidebarSnapshotModel, "ownerId"> | null;
+  readonly sessionOwnerFilter: SessionOwnerFilter;
+}): boolean {
+  // Keep personal browsing independent of the solo-install legacy owner fallback.
+  // A single-agent roster can continue using its canonical list during bootstrap.
+  return (
+    (host.sessionDataContext?.agents.state.agentsList?.agents.length ?? 0) > 1 &&
+    Boolean(
+      host.sidebarSnapshot ? host.sidebarSnapshot.ownerId : host.sessionOwnerFilter.read().ownerId,
+    )
+  );
+}
+
+export function personalSidebarOwnerFacetScope(host: {
+  readonly sidebarAgentsMode: "chip" | "roster";
+  readonly sessionData: Pick<SessionDataOwner, "sessionsAgentId">;
+  expandedAgentId(): string;
+}): string {
+  return host.sidebarAgentsMode === "roster" || host.sessionData.sessionsAgentId === null
+    ? "*"
+    : host.expandedAgentId();
+}
+
 export function personalSidebarOwnerFilterId(
   host: PersonalNavigationHost & {
     readonly sidebarAgentsMode: "chip" | "roster";
