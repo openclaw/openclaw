@@ -1,5 +1,9 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexNativeSubagentNotification } from "./native-subagent-notification.js";
+import {
+  readCodexNativeSubagentInputReceipts,
+  type CodexNativeSubagentNotification,
+} from "./native-subagent-notification.js";
+import type { JsonValue } from "./protocol.js";
 
 type ReceiptParent = Readonly<{
   parentThreadId: string;
@@ -45,6 +49,7 @@ export function registerCodexNativeSubagentReceiptAlias<Parent extends ReceiptPa
 }
 
 type Receipt = { agentPath: string; result?: string };
+type NativeReceipt = CodexNativeSubagentNotification["receipts"][number];
 type Outcome = {
   paths: Set<string>;
   result?: string;
@@ -57,6 +62,40 @@ export class CodexNativeSubagentDeliveryReceipts {
   private readonly seen = new Set<string>();
   private readonly pending: Receipt[] = [];
   private readonly outcomes = new Map<string, Outcome>();
+  private readonly sampled = new Map<string, NativeReceipt[]>();
+
+  /**
+   * Hold receipts the parent turn's latest model request carried. Resumed native threads emit
+   * no raw item events, so request input is their only receipt. Each request replaces the
+   * last: preemption, compaction or a budget rollover can leave an earlier request's receipt
+   * out of the sampling that completes the turn.
+   */
+  holdSampled(request: { threadId: string; turnId: string; input?: JsonValue }): void {
+    const receipts = readCodexNativeSubagentInputReceipts(
+      request.threadId,
+      request.turnId,
+      request.input,
+    );
+    this.discardSampled(request.turnId);
+    if (receipts.length > 0) {
+      this.sampled.set(request.turnId, receipts);
+    }
+  }
+
+  takeSampled(turnId: string): NativeReceipt[] {
+    const held = this.sampled.get(turnId) ?? [];
+    this.sampled.delete(turnId);
+    return held;
+  }
+
+  /** Drops held foreground sampling evidence; assignment matching state is kept. */
+  discardSampled(turnId?: string): void {
+    if (turnId === undefined) {
+      this.sampled.clear();
+    } else {
+      this.sampled.delete(turnId);
+    }
+  }
 
   observe(receipts: CodexNativeSubagentNotification["receipts"]): string[] {
     for (const { id, agentPath, result } of receipts) {
