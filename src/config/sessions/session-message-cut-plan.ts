@@ -46,6 +46,8 @@ export type SessionMessageCutInPlacePlan =
   | {
       status: "prepared";
       leafEvent: TranscriptEvent;
+      /** Selected active tip after the repoint; null restores an empty branch. */
+      leafTargetId: string | null;
       result: Extract<SessionMessageCutResult, { status: "created" }>;
     };
 
@@ -217,6 +219,7 @@ export function planInPlaceSessionMessageCut(
   }
   return {
     status: "prepared",
+    leafTargetId: repointTargetId,
     leafEvent: {
       type: "leaf",
       id: reader.allocateEventId(),

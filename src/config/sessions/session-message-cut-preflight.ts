@@ -29,7 +29,7 @@ export function refuseInPlaceSessionMessageCut(
     const reader = createSessionMessageCutReader(database, resolved.sessionId, {
       reconcile: false,
     });
-    if (!reader.activePathReady()) {
+    if (!reader) {
       return undefined;
     }
     const plan = planInPlaceSessionMessageCut(entry, reader, intent, sourceRepositoryWorkspaceId);

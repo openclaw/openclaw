@@ -15,6 +15,12 @@ import {
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import { readTranscriptPayload } from "./transcript-payload.js";
+import {
+  isSessionTranscriptLeafControl,
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
+  selectSessionTranscriptTreeTipNodes,
+} from "./transcript-tree.js";
 
 export type SessionMessageCutTarget = {
   /** Parsed payload of the target row; the only event body this path reads. */
@@ -23,28 +29,63 @@ export type SessionMessageCutTarget = {
   /** Visible predecessor on the active path, or null at the root. */
   repointTargetId: string | null;
   onActivePath: boolean;
-  seq: number;
 };
 
 export type SessionMessageCutReader = {
-  /**
-   * False when the active-path projection lags, so a read-only caller must
-   * defer to the committing transaction instead of guessing the active branch.
-   */
-  activePathReady(): boolean;
   readTarget(entryId: string): SessionMessageCutTarget | undefined;
   /** True when no non-control event continues past this entry. */
   isBranchTip(entryId: string): boolean;
   activeLeafEventId(): string | null;
-  /**
-   * Logical owner of the existing transcript rows. An aliased store key owns its
-   * transcript, so an in-place append must target that key, not the cut's target.
-   */
-  transcriptOwnerKey(): string | undefined;
   /** Physical append cursor: the newest identity row, which the leaf control chains onto. */
   tailEventId(): string | null;
   allocateEventId(): string;
 };
+
+/**
+ * Reader for a memory-resident transcript, where the whole event list is already
+ * in the actor's working state and the navigation tree is the only index.
+ */
+export function createMemorySessionMessageCutReader(
+  events: readonly unknown[],
+): SessionMessageCutReader {
+  const tree = scanSessionTranscriptTree(events);
+  const activeIds = new Set(
+    selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.id),
+  );
+  return {
+    readTarget(entryId) {
+      const node = tree.byId.get(entryId);
+      if (!node) {
+        return undefined;
+      }
+      const record = asRecord(node.entry);
+      return {
+        event: record,
+        eventType: typeof record?.type === "string" ? record.type : null,
+        onActivePath: activeIds.has(entryId),
+        repointTargetId: node.parentId,
+      };
+    },
+    isBranchTip(entryId) {
+      const node = tree.byId.get(entryId);
+      return (
+        node !== undefined &&
+        !isSessionTranscriptLeafControl(node.entry) &&
+        selectSessionTranscriptTreeTipNodes(tree).some((tip) => tip.id === entryId)
+      );
+    },
+    activeLeafEventId: () => tree.leafId,
+    tailEventId: () => tree.nodes.at(-1)?.id ?? null,
+    allocateEventId() {
+      for (;;) {
+        const candidate = randomUUID().slice(0, 8);
+        if (!tree.byId.has(candidate)) {
+          return candidate;
+        }
+      }
+    },
+  };
+}
 
 /**
  * Builds the indexed reader for one session inside the caller's transaction.
@@ -57,10 +98,13 @@ export function createSessionMessageCutReader(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   options: { reconcile?: boolean } = {},
-): SessionMessageCutReader {
-  let ready = true;
+): SessionMessageCutReader | undefined {
   if (options.reconcile === false) {
-    ready = !sessionTranscriptIndexNeedsReconcile(database.db, sessionId);
+    // A read-only caller cannot reconcile, so a lagging projection has no
+    // trustworthy active path and the caller must defer to the committing write.
+    if (sessionTranscriptIndexNeedsReconcile(database.db, sessionId)) {
+      return undefined;
+    }
   } else {
     reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
   }
@@ -113,7 +157,6 @@ export function createSessionMessageCutReader(
         .limit(1),
     )?.event_id ?? null;
   return {
-    activePathReady: () => ready,
     readTarget(entryId) {
       const row = readIdentity(entryId);
       if (!row) {
@@ -137,7 +180,6 @@ export function createSessionMessageCutReader(
         eventType: row.event_type,
         onActivePath,
         repointTargetId,
-        seq: row.seq,
       };
     },
     isBranchTip(entryId) {
@@ -168,12 +210,6 @@ export function createSessionMessageCutReader(
             .where("session_id", "=", sessionId),
         )?.leaf_event_id ?? null
       );
-    },
-    transcriptOwnerKey() {
-      return executeSqliteQueryTakeFirstSync(
-        database.db,
-        db.selectFrom("session_windows").select("session_key").where("session_id", "=", sessionId),
-      )?.session_key;
     },
     tailEventId() {
       return (

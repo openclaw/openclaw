@@ -1,6 +1,7 @@
 import { isMainThread } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -22,12 +23,16 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import {
+  getSessionKysely,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  readNextTranscriptSeq,
+  rotateTranscriptGenerationInTransaction,
+} from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionBranchSwitchMutationParams,
@@ -45,16 +50,21 @@ import {
   readSessionMessageCut,
   SESSION_MESSAGE_CUT_MAX_BYTES,
 } from "./session-message-cut-read.js";
-import { createSessionMessageCutReader } from "./session-message-cut-target.js";
+import {
+  createMemorySessionMessageCutReader,
+  createSessionMessageCutReader,
+} from "./session-message-cut-target.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutPreconditions,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
 import {
-  reconcileSessionTranscriptIndexInTransaction,
-  shouldRebuildSessionTranscriptIndexSynchronously,
-} from "./session-transcript-index.js";
+  applySessionTranscriptActivePathRepoint,
+  prepareSessionTranscriptActivePathRepoint,
+} from "./session-transcript-active-path-repoint.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
+import { withSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import {
   captureSessionTranscriptStorageEnvironment,
@@ -218,21 +228,26 @@ export async function mutateSqliteSessionAtMessage(
               sessionId: entry.sessionId,
               lifecycleRevision: entry.lifecycleRevision,
             };
-            const refused = refuseInPlaceSessionMessageCut(
-              {
+            // A memory-resident transcript is already whole in the actor's state,
+            // so its own reader validates the cut before the workspace retires.
+            const events = await withSessionTranscriptHydrationCaller("history-mutation", () =>
+              loadSessionTranscriptEvents({
                 ...memoryScope,
                 maxEventBytes: SESSION_MESSAGE_CUT_MAX_BYTES,
                 agentId: memory.agentId,
                 storePath: memory.path,
                 sessionId: entry.sessionId,
-              },
+              }),
+            );
+            memory.authority.assertCurrent();
+            const planned = planInPlaceSessionMessageCut(
               entry,
+              createMemorySessionMessageCutReader(events),
               { ...intent, mode },
               preconditions?.sourceRepositoryWorkspaceId,
             );
-            memory.authority.assertCurrent();
-            if (refused) {
-              return refused;
+            if (planned.status !== "prepared") {
+              return planned;
             }
           }
           const target = captureSessionTranscriptTargetBinding({
@@ -504,6 +519,9 @@ function installInPlaceSessionMessageCut(
   }
   const sessionId = currentEntry.sessionId;
   const reader = createSessionMessageCutReader(database, sessionId);
+  if (!reader) {
+    throw new Error(`Session transcript projection is unavailable for ${sessionId}`);
+  }
   const plan = planInPlaceSessionMessageCut(
     currentEntry,
     reader,
@@ -515,22 +533,51 @@ function installInPlaceSessionMessageCut(
   }
   commitSqliteSessionDeletion(params.sourceKey, currentEntry);
   rotateTranscriptGenerationInTransaction(database, sessionId);
-  const rebuildSynchronously = shouldRebuildSessionTranscriptIndexSynchronously(
+  // Plan the projection difference against the still-clean projection; the append
+  // below marks it dirty, and the repoint publishes the exact replacement rows.
+  const repoint = prepareSessionTranscriptActivePathRepoint(
     database.db,
     sessionId,
-    [plan.leafEvent],
+    plan.leafTargetId,
   );
-  appendTranscriptEventsInTransaction(
+  const appended = appendTranscriptEventsInTransaction(
     database,
-    { ...resolved, sessionId, sessionKey: reader.transcriptOwnerKey() ?? params.targetKey },
+    // An aliased store key owns its transcript rows, so the append must target
+    // the persisted owner, not the cut's target key.
+    {
+      ...resolved,
+      sessionId,
+      sessionKey: readTranscriptOwnerSessionKey(database, sessionId) ?? params.targetKey,
+    },
     [plan.leafEvent],
     projection,
   );
-  if (rebuildSynchronously) {
-    reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
+  if (repoint && appended > 0) {
+    applySessionTranscriptActivePathRepoint(
+      database.db,
+      sessionId,
+      repoint,
+      readNextTranscriptSeq(database, sessionId) - 1,
+    );
   } else {
+    // The projection was already lagging, or the divergence exceeded its bound.
+    // Its reconcile owner publishes the result, as it does for any dirty session.
     projection?.onProjectionReconcileNeeded?.();
   }
   writeSessionEntry(database, params.targetKey, plan.result.entry);
   return plan.result;
+}
+
+/** Logical owner of the existing transcript rows, which may be an aliased key. */
+function readTranscriptOwnerSessionKey(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): string | undefined {
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("session_windows")
+      .select("session_key")
+      .where("session_id", "=", sessionId),
+  )?.session_key;
 }

@@ -86,6 +86,25 @@ describe("rewind composer ownership", () => {
     expect(state.chatMessage).toBe("edit me");
   });
 
+  // The restored prompt is the next action after a rewind. Waiting for the
+  // transcript reload left the composer empty for the whole read.
+  it("refills the composer before the rewind history reload resolves", async () => {
+    const history = createDeferred<ChatHistoryResult>();
+    const started = createDeferred();
+    const state = createRewindHost(Promise.resolve({ editorText: "edit me" }), undefined, () => {
+      started.resolve();
+      return history.promise;
+    });
+    state.chatMessages = [
+      { role: "user", content: "edit me", __openclaw: { id: "selected", seq: 1 } },
+    ];
+    const pending = rewindChatHistory(state, "selected", new ChatAttachmentReadLifecycle(() => {}));
+    await started.promise;
+    expect(state.chatMessage).toBe("edit me");
+    history.resolve({ messages: [] });
+    await expect(pending).resolves.toMatchObject({ editorText: "edit me" });
+  });
+
   it.each(["accepted", "newer draft"] as const)(
     "retires pending attachment reads only for an accepted replacement: %s",
     async (outcome) => {

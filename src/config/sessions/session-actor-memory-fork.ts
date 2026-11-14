@@ -26,7 +26,8 @@ import {
 } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
-import { planSessionMessageCut } from "./session-message-cut-plan.js";
+import { planInPlaceSessionMessageCut, planSessionMessageCut } from "./session-message-cut-plan.js";
+import { createMemorySessionMessageCutReader } from "./session-message-cut-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { mergeSessionEntry, type InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -195,24 +196,43 @@ export function executeSessionActorMemoryForkCommand(
     case "session.messageCut": {
       const { intent, sourceRepositoryWorkspaceId } = command.input;
       const source = context.get(normalizeStoreSessionKey(intent.sourceKey));
+      const sourceEvents = source?.events.map(({ event }) => event) ?? [];
+      const preparedIntent = {
+        ...intent,
+        expectedState:
+          intent.expectedState ??
+          (source?.hot.entry && {
+            sessionId: source.hot.entry.sessionId,
+            lifecycleRevision: source.hot.entry.lifecycleRevision,
+          }),
+      };
+      const targetKey = normalizeStoreSessionKey(intent.targetKey);
+      // Rewind and switch share the file-backed identity contract: the transcript
+      // keeps its id and gains one appended control row.
+      if (preparedIntent.mode !== "fork") {
+        const plan = planInPlaceSessionMessageCut(
+          source?.hot.entry,
+          createMemorySessionMessageCutReader(sourceEvents),
+          { ...preparedIntent, mode: preparedIntent.mode },
+          sourceRepositoryWorkspaceId,
+        );
+        if (plan.status !== "prepared") {
+          return plan;
+        }
+        const target = context.edit(targetKey);
+        const entry = installSessionActorMemoryEntry(target, plan.result.entry);
+        createSessionActorMemoryEvents({ ...context, state: target }).appendRaw(plan.leafEvent);
+        return { ...plan.result, entry };
+      }
       const plan = planSessionMessageCut(
         source?.hot.entry,
-        source?.events.map(({ event }) => event) ?? [],
-        {
-          ...intent,
-          expectedState:
-            intent.expectedState ??
-            (source?.hot.entry && {
-              sessionId: source.hot.entry.sessionId,
-              lifecycleRevision: source.hot.entry.lifecycleRevision,
-            }),
-        },
+        sourceEvents,
+        preparedIntent,
         sourceRepositoryWorkspaceId,
       );
       if (plan.status !== "prepared") {
         return plan;
       }
-      const targetKey = normalizeStoreSessionKey(intent.targetKey);
       const target = context.edit(targetKey);
       const entry = installSessionActorMemoryEntry(target, plan.result.entry);
       const events = createSessionActorMemoryEvents({ ...context, state: target });

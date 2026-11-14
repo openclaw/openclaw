@@ -1237,8 +1237,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
+  // A branch switch keeps the transcript identity, so staleness is no longer a
+  // rotated session id. The surviving boundary is that a send naming a session id
+  // the store does not own is refused, and the switched transcript is untouched.
   it.each(["copied-leaf", null])(
-    "rejects leaf %s from before a branch switch",
+    "rejects leaf %s sent with a foreign session id after a branch switch",
     async (expectedLeafEntryId) => {
       const { context, respond, send } = await createSqliteChatRequest(
         "openclaw-chat-send-rotated-exact-leaf-",
@@ -1269,7 +1272,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         env: suiteFixtureEnv,
         path: suiteDatabasePath,
       });
-      const staleSessionId = mockState.sessionId;
+      const foreignSessionId = "00000000-0000-4000-8000-00000000dead";
       const switched = await switchSessionBranch({
         agentId: "main",
         env: suiteFixtureEnv,
@@ -1281,7 +1284,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       if (switched.status !== "created") {
         throw new Error("expected branch switch test invariant");
       }
-      expect(switched.entry.sessionId).not.toBe(staleSessionId);
+      expect(switched.entry.sessionId).not.toBe(foreignSessionId);
       mockState.sessionId = switched.entry.sessionId;
       const before = loadTranscriptEventsSync(transcriptScope());
       expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
@@ -1290,7 +1293,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-rotated-exact-leaf",
         requestParams: {
           expectedLeafEntryId,
-          sessionId: staleSessionId,
+          sessionId: foreignSessionId,
         },
         waitFor: "none",
       });

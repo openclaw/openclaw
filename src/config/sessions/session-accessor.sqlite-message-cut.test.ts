@@ -34,7 +34,6 @@ import {
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
-import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
 const { createSession } = useSessionMessageCutFixtures();
@@ -306,7 +305,10 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
   });
 });
 
-it("defers an oversized rewind projection until the reconcile worker finishes", async () => {
+// A rewind appends one control row, so the active-path projection is repointed
+// incrementally. An oversized transcript must not send history readers through a
+// full rebuild, which previously made the next read fail with "rebuilding".
+it("repoints an oversized transcript without a rebuilding wait", async () => {
   const { scope, params } = await createSession();
   await appendEvent(scope, {
     type: "oversized-padding",
@@ -316,10 +318,16 @@ it("defers an oversized rewind projection until the reconcile worker finishes", 
   const result = await rewind(params);
   assert(result.status === "created");
   const targetScope = { ...scope, sessionId: result.entry.sessionId };
-  expect(() => readMessages(targetScope)).toThrow(/projection is rebuilding/);
-
-  await waitForSessionTranscriptProjection(targetScope);
   expect(readMessages(targetScope)).toHaveLength(2);
+  expect(
+    readPage(
+      { agentId, env: scope.env, sessionId: result.entry.sessionId },
+      {
+        maxMessages: 0,
+        offset: 0,
+      },
+    ).totalMessages,
+  ).toBe(2);
 });
 
 it("forks an exact active-path prefix without changing the source", async () => {

@@ -205,6 +205,7 @@ it.each([
           "committed session",
         );
         expect(committed.localWorkspaceHandoff?.fromSessionId).toBe(scope.sessionId);
+        expect(committed.lifecycleRevision).not.toBe(original.lifecycleRevision);
         expect(projectPublicSessionEntry(committed)).not.toHaveProperty("localWorkspaceHandoff");
         const settled = expectDefined(
           await readLocalWorkspaceProjection(worktree.id),
@@ -218,12 +219,14 @@ it.each([
           const next = invokeMessageCut("sessions.branches.switch", scope);
           expect(await next.error).toBeUndefined();
           expectCutReply(next.respond, {});
-          const firstSuccessor = committed.sessionId;
+          const firstSuccessor = committed.lifecycleRevision;
           committed = expectDefined(
             await readSessionEntryReadOnlyInWorker(scope),
             "committed session",
           );
-          expect(committed.localWorkspaceHandoff?.fromSessionId).toBe(firstSuccessor);
+          // The second cut's handoff transfers from the first cut's incarnation.
+          expect(committed.localWorkspaceHandoff?.fromSessionId).toBe(scope.sessionId);
+          expect(committed.localWorkspaceHandoff?.lifecycleRevision).toBe(firstSuccessor);
         } else if (failure === "reset before adoption") {
           await resetSessionEntryLifecycle({
             agentId: scope.agentId,
@@ -254,7 +257,10 @@ it.each([
           await resolveLocalWorkspaceOwner({ cfg, ...scope }),
           "managed workspace owner",
         );
-        expect(resumed.sessionId).not.toBe(scope.sessionId);
+        // An in-place cut keeps the transcript id; custody moves to the new
+        // lifecycle revision, which is what retires the pre-cut owner.
+        expect(resumed.sessionId).toBe(scope.sessionId);
+        expect(resumed.lifecycleRevision).not.toBe(original.lifecycleRevision);
         expect(
           (await readSessionEntryReadOnlyInWorker(scope))?.localWorkspaceHandoff,
         ).toBeUndefined();
