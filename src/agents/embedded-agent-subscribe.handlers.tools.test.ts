@@ -25,6 +25,7 @@ import {
   activateAskUserPrompt,
   createBasicAskUserArgs,
   finishPendingAskUserPrompts,
+  registerAskUserPromptFailureTests,
 } from "./embedded-agent-subscribe.handlers.tools.ask-user.test-support.js";
 import { handleToolExecutionUpdate } from "./embedded-agent-subscribe.handlers.tools.progress.js";
 import { registerToolChannelProgressTests } from "./embedded-agent-subscribe.handlers.tools.progress.test-support.js";
@@ -41,11 +42,7 @@ import {
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import * as questionDispatch from "./harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "./harness/gateway-question.js";
-import {
-  cancelAskUserPromptDelivery,
-  normalizeAskUserParams,
-  reserveAskUserPromptDelivery,
-} from "./tools/ask-user-tool.js";
+import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { createDeploymentQuestion } from "./tools/ask-user-tool.test-support.js";
 import * as gatewayTransport from "./tools/gateway.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
@@ -280,6 +277,8 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  registerAskUserPromptFailureTests(startTool);
+
   it("reserves the question before flushing and delivers only its numbered prompt", async () => {
     const { ctx, onBlockReplyFlush } = createTestContext();
     const flush = createDeferred();
@@ -519,28 +518,6 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(payload).not.toHaveProperty("presentationTextMode");
     expect(payload?.channelData).toEqual({ askUser: { questionId: activation.questionId } });
     await activation.finish();
-  });
-
-  it("releases ask_user reservation when the callback flush throws synchronously", () => {
-    const { ctx, onBlockReplyFlush } = createTestContext();
-    ctx.params.onToolResult = vi.fn();
-    const failure = new Error("flush failed");
-    onBlockReplyFlush.mockImplementation(() => {
-      throw failure;
-    });
-    const args = createBasicAskUserArgs();
-
-    expect(() =>
-      startTool(ctx, { toolName: "ask_user", toolCallId: "ask-callback-failure", args }),
-    ).toThrow(failure);
-    onTestFinished(() => cancelAskUserPromptDelivery("ask-callback-retry", "agent:unit-session"));
-    expect(
-      reserveAskUserPromptDelivery({
-        toolCallId: "ask-callback-retry",
-        sessionKey: "agent:unit-session",
-        questions: normalizeAskUserParams(args).questions,
-      }),
-    ).toBeDefined();
   });
 
   it("releases an undelivered ask_user reservation when execution is rejected", async () => {
