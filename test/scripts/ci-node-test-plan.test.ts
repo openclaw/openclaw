@@ -3742,7 +3742,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       gatewayWorkerFiles,
     );
     const selected = [
-      "src/plugin-state/plugin-state-store.test.ts",
+      "src/plugin-state/plugin-state-store.runtime.test.ts",
       "test/plugins/beam-http-identity.test.ts",
     ];
     const includeFile = join(tempDirs.make("database-worker-routing-"), "include.json");

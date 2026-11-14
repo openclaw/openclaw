@@ -346,7 +346,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/gateway/session-row-projection.subagent-index.test.ts",
         "src/gateway/session-subagent-resume.test.ts",
         "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
-        "test/plugins/deep-research-routing.gateway.test.ts",
       ],
       preset: "runtime",
     },
