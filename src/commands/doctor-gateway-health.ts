@@ -3,7 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { readMissingScopeError } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
@@ -523,7 +523,7 @@ export async function checkGatewayHealth(params: {
           issues
             .map(
               (issue) =>
-                `- ${issue.channel} ${issue.accountId}: ${issue.message}${
+                terminalText`- ${issue.channel} ${issue.accountId}: ${issue.message}${
                   issue.fix ? ` (${issue.fix})` : ""
                 }`,
             )
