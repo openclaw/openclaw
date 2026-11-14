@@ -10,8 +10,10 @@ const { collect, warn } = vi.hoisted(() => {
   return { collect: gc, warn: vi.fn() };
 });
 
-// mock-isolation: Capture worker GC diagnostics without initializing process-wide logging.
-vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ warn }) }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+  createSubsystemLogger: () => ({ warn }),
+}));
 
 vi.mock("node:inspector/promises", () => ({
   Session: class {
@@ -119,13 +121,15 @@ it("names a forced collection slow enough to delay requests posted to the worker
   scheduleWorkerIdleGc();
   await vi.advanceTimersByTimeAsync(1_000);
   expect(collect).toHaveBeenCalledTimes(2);
-  expect(warn).toHaveBeenCalledExactlyOnceWith(
-    "slow idle worker garbage collection",
-    expect.objectContaining({
-      elapsedMs: 2_400,
-      threadId: 14,
-      heapUsedBeforeBytes: baseline + 64 * MiB,
-      heapUsedAfterBytes: baseline,
-    }),
+  await vi.waitFor(() =>
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "slow idle worker garbage collection",
+      expect.objectContaining({
+        elapsedMs: 2_400,
+        threadId: 14,
+        heapUsedBeforeBytes: baseline + 64 * MiB,
+        heapUsedAfterBytes: baseline,
+      }),
+    ),
   );
 });
