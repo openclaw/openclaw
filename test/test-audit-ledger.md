@@ -837,6 +837,14 @@ instrumentation restored byte for byte. Independent review preserves all coverag
 the lifecycle credential-redaction substring assertion remains a separate
 source-only follow-up, with no production leak claimed.
 
+### Managed proxy credential-redaction proof
+
+At `7ebb510477ac76cb8f0224dd964c775c29625d37`, the startup redaction case
+rejects only a combined username/password substring. The candidate will inspect
+all logged messages for either distinct fixture credential while retaining the
+positive proxy-origin assertion. Baseline and independent username/password
+mutation proof are pending; no production leak is claimed.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
