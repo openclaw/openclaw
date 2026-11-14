@@ -5,13 +5,19 @@ import { computeFileMatches } from "./chat-sidebar-file-view.tsx";
 
 describe("computeFileMatches", () => {
   it.each(["NFC", "NFD"] as const)(
-    "matches file lines across %s and the other normalization form",
+    "matches file lines across %s content and the other normalization form query",
     (form) => {
-      const content = ["intro", "Café line", "Naïve line", "plain"].join("\n");
-      const equivalent = (text: string) => text.normalize(form === "NFC" ? "NFD" : "NFC");
-      expect(computeFileMatches(content, equivalent("café"))).toEqual([2]);
-      expect(computeFileMatches(content, equivalent("naïve"))).toEqual([3]);
-      expect(computeFileMatches(content, equivalent("none"))).toEqual([]);
+      const canonical = (text: string) => text.normalize(form);
+      const other = (text: string) => text.normalize(form === "NFC" ? "NFD" : "NFC");
+      const content = [
+        canonical("intro"),
+        canonical("Café line"),
+        canonical("Naïve line"),
+        "plain",
+      ].join("\n");
+      expect(computeFileMatches(content, other("café"))).toEqual([2]);
+      expect(computeFileMatches(content, other("naïve"))).toEqual([3]);
+      expect(computeFileMatches(content, other("none"))).toEqual([]);
     },
   );
 
