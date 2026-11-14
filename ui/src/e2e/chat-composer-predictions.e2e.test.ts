@@ -91,7 +91,7 @@ suite.define(() => {
         for (const [nextRun, key] of [
           ["dismiss-escape", "Escape"],
           ["dismiss-typing", "x"],
-        ]) {
+        ] as const) {
           await gateway.deferNext("chat.predict");
           await gateway.emitChatFinal({
             runId: nextRun,
