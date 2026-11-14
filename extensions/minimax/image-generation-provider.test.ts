@@ -110,4 +110,38 @@ describe("minimax image-generation provider", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
+
+  it.each([
+    ["generate", "/v1/images/generations", { aspectRatio: "16:9" }, { aspect_ratio: "16:9" }],
+    [
+      "edit",
+      "/v1/images/edits",
+      {
+        inputImages: [{ buffer: Buffer.from("ref"), mimeType: "image/png" }],
+      },
+      {
+        images: [{ image_url: `data:image/png;base64,${Buffer.from("ref").toString("base64")}` }],
+      },
+    ],
+  ])(
+    "routes MiniMax-H3-Image %s requests to the Images API",
+    async (_mode, path, overrides, extra) => {
+      const postJsonResponse = vi.spyOn(providerHttp, "postJsonResponse");
+      await generateImage(
+        { model: "MiniMax-H3-Image", ...overrides },
+        { data: [{ b64_json: Buffer.from("jpeg-data").toString("base64") }] },
+      );
+      expect(postJsonResponse).toHaveBeenCalledOnce();
+      expect(postJsonResponse.mock.calls[0]?.[0]).toMatchObject({
+        url: `https://api.minimax.io${path}`,
+        body: {
+          model: "MiniMax-H3-Image",
+          prompt: "draw a cat",
+          response_format: "b64_json",
+          n: 1,
+          ...extra,
+        },
+      });
+    },
+  );
 });
