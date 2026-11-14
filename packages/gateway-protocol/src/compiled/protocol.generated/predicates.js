@@ -8597,8 +8597,7 @@ var External = [
   check_1218 = (value) =>
     Array.isArray(value) &&
     value.every((unique_768, index) => check_1219(unique_768)) &&
-    value.length >= 1 &&
-    value.length <= 64,
+    value.length >= 1,
   check_1219 = (value) =>
     typeof value == "object" &&
     value !== null &&

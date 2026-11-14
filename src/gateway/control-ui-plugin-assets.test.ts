@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
+import { Compile } from "typebox/compile";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  PluginsControlUiCatalogSchema,
+  PluginsControlUiStatusResultSchema,
+} from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -239,6 +244,33 @@ it("omits settings-only presentations from activation while keeping ordinary plu
   expect(listControlUiPluginActivations({})).toEqual([]);
 });
 
+it("keeps policy diagnostics above 64 without activating settings-only UIs", async () => {
+  await withConfig(async () => {
+    const fixture = activateFixture("workspace");
+    const records = Array.from({ length: 65 }, (_, index) =>
+      createPluginRecord({ ...fixture.record, id: `custom-ui-${index}` }),
+    );
+    const settings = records.map((record) =>
+      createPluginRecord({
+        ...record,
+        id: `settings-${record.id}`,
+        controlUi: { ...record.controlUi!, activation: "settings-only" },
+      }),
+    );
+    publishOwner(fixture, [...records, ...settings]);
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins).toEqual([]);
+    expect(catalog.diagnostics).toHaveLength(65);
+    expect(catalog.diagnostics.map(({ pluginId, code }) => ({ pluginId, code }))).toEqual(
+      records
+        .map(({ id }) => ({ pluginId: id, code: "custom-plugin-ui-disabled" }))
+        .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId)),
+    );
+    expect(Compile(PluginsControlUiCatalogSchema).Check(catalog)).toBe(true);
+    expect(listControlUiPluginActivations({})).toEqual([]);
+  }, customPlugins(false));
+});
+
 it.each([
   { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: "webchat" },
   { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: "ui" },
@@ -248,9 +280,24 @@ it.each([
 ] as const)(
   "records current receipts only from a live $id/$mode connection",
   async ({ id, mode }) => {
-    activateFixture();
-    const [entry] = (await listControlUiPluginCatalog()).plugins;
-    const report = activation(entry!.revision);
+    const fixture = activateFixture();
+    const count = id === GATEWAY_CLIENT_IDS.CONTROL_UI ? 65 : 1;
+    publishOwner(
+      fixture,
+      Array.from({ length: count }, (_, index) =>
+        createPluginRecord({ ...fixture.record, id: `native-ui-${index}` }),
+      ),
+    );
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins).toHaveLength(count);
+    expect(new Set(catalog.plugins.map((plugin) => plugin.pluginId)).size).toBe(count);
+    expect(Compile(PluginsControlUiCatalogSchema).Check(catalog)).toBe(true);
+    const reports = catalog.plugins.map(({ pluginId, revision }) => ({
+      pluginId,
+      revision,
+      status: "activated" as const,
+    }));
+    const report = reports[0]!;
     const client = makeGatewayClient({
       connId: "activation-browser",
       clientId: id,
@@ -273,33 +320,34 @@ it.each([
       });
       return respond.mock.calls[0]!;
     };
-    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    expect((await call("plugins.controlUi.report", { reports }))[0]).toBe(false);
     connected = true;
     liveClient = { ...client };
-    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    expect((await call("plugins.controlUi.report", { reports }))[0]).toBe(false);
     liveClient = client;
     client.connect.client.id = GATEWAY_CLIENT_IDS.CLI;
-    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+    expect((await call("plugins.controlUi.report", { reports }))[0]).toBe(false);
     expect(listControlUiPluginActivations(client)).toEqual([]);
     client.connect.client.id = id;
     if (id !== GATEWAY_CLIENT_IDS.CONTROL_UI) {
       client.connect.client.mode = "node";
-      expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+      expect((await call("plugins.controlUi.report", { reports }))[0]).toBe(false);
       expect((await call("plugins.controlUi.status", {}))[1]).toEqual({ clients: [] });
       client.connect.client.mode = mode;
     }
     const [ok, , error] = await call("plugins.controlUi.report", {
-      reports: [{ ...report, pluginId: "retired-ui" }, report],
+      reports: [{ ...report, pluginId: "retired-ui" }, ...reports],
     });
     expect(ok).toBe(false);
     expect(error).toMatchObject({
       code: "INVALID_REQUEST",
       details: { rejectedPluginIds: ["retired-ui"] },
     });
-    expect((await call("plugins.controlUi.status", {}))[1]).toEqual({
-      clients: [{ connId: client.connId, activations: [report] }],
-    });
-    expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(true);
+    const status = (await call("plugins.controlUi.status", {}))[1];
+    expect(status).toEqual({ clients: [{ connId: client.connId, activations: reports }] });
+    expect(Compile(PluginsControlUiStatusResultSchema).Check(status)).toBe(true);
+    expect(listControlUiPluginActivations(client)).toEqual(reports);
+    expect((await call("plugins.controlUi.report", { reports }))[0]).toBe(true);
   },
 );
 
