@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { withEngineStoreAdmission as admitted } from "../../infra/database-engine/admission-scope.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -9,6 +10,7 @@ import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-even
 import * as execution from "../../state/openclaw-agent-execution.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
+import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as native from "./session-native-binding.execution.test-support.js";
 import {
@@ -160,6 +162,12 @@ it.each([
   ({ mode, entryId, leafId, loseReply }) =>
     withCutFixture(async (fixture) => {
       const client = await fixture.attachClient();
+      const readGeneration = () =>
+        admitted(() =>
+          readTranscriptGenerationInTransaction(fixture.database, fixture.scope.sessionId),
+        );
+      const before = { entry: fixture.readEntry(), generation: readGeneration() };
+      expect(before.generation).toBeTruthy();
       const arrived = createDeferred();
       const release = createDeferred();
       const published = vi.fn();
@@ -184,7 +192,13 @@ it.each([
       const cut = fixture.cut(mode, entryId);
       try {
         await awaitGateBeforeSettlement(arrived.promise, cut, "C3 did not reach receipt delivery");
-        expect(fixture.readEntry()?.sessionId).not.toBe(fixture.scope.sessionId);
+        // C3's transaction has committed, so the stored row already holds the new
+        // incarnation. An in-place cut keeps the session id and fences pre-cut
+        // owners with a rotated lifecycle revision and transcript generation.
+        const cutEntry = fixture.readEntry();
+        expect(cutEntry?.sessionId).toBe(fixture.scope.sessionId);
+        expect(cutEntry?.lifecycleRevision).not.toBe(before.entry?.lifecycleRevision);
+        expect(readGeneration()).not.toBe(before.generation);
         expect(fixture.readBinding()).toBeUndefined();
         expect(published).not.toHaveBeenCalled();
         expect(client.release).not.toHaveBeenCalled();
@@ -193,7 +207,8 @@ it.each([
         release.resolve();
         const result = await cut;
         assert(result.status === "created");
-        expect(result.entry.previousSessionId).toBe(fixture.scope.sessionId);
+        expect(result.entry.sessionId).toBe(fixture.scope.sessionId);
+        expect(result.entry.previousSessionId).toBeUndefined();
         expect(
           loadTranscriptEventsSync({ ...fixture.scope, sessionId: result.entry.sessionId }).at(-1),
         ).toMatchObject({ type: "leaf", targetId: leafId });
