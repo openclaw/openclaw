@@ -93,6 +93,7 @@ export async function readOwnerLinkStatus(params: {
       : undefined,
     ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
     members: members.map((member) => Object.assign(member, { roleDefined: defined(member.role) })),
+    existingProfiles: await (await getAuthority()).inviteProfiles(),
     invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
     nodes: Object.entries(state?.nodes ?? {})
       .filter(
