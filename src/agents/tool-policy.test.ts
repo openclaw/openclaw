@@ -13,10 +13,21 @@ import {
   couldNormalizeToolNamePrefixToAllowedTool,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   hasRestrictiveAllowPolicy,
+  mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 
 describe("tool-policy", () => {
+  it("keeps an empty allowlist unrestricted when runtime controls are added", () => {
+    // `tools.allow: []` permits every tool; adding Tool Search controls must not narrow it.
+    const merged = mergeAlsoAllowPolicy({ allow: [] }, ["tool_search", "dispatch_action"]);
+    expect(isToolAllowedByPolicyName("exec", merged)).toBe(true);
+    expect(mergeAlsoAllowPolicy({ allow: ["read"] }, ["tool_search"])?.allow).toEqual([
+      "read",
+      "tool_search",
+    ]);
+  });
+
   it("keeps shipped dispatcher policies effective in runtime and sandbox matching", () => {
     expect(isToolAllowedByPolicyName("dispatch_action", { deny: ["tool_call"] })).toBe(false);
     expect(isToolAllowedByPolicyName("dispatch_action", { allow: ["tool_call"] })).toBe(true);
