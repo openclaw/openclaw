@@ -7,6 +7,7 @@
  * scheduler-owned execution replaces that scope for work that can outlive the request.
  */
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import {
   getGatewayServiceInstallation,
   withGatewayServiceInstallation,
@@ -63,21 +64,25 @@ export function createScheduledGatewayRunner(
   const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   return async <T>(run: () => Promise<T>): Promise<T> =>
     await withoutGatewayToolCallerIdentity(() =>
-      runWithSpawnBroker(spawnBroker, async () => {
-        const runWithRegistry = () =>
-          withPluginRuntimeRegistryScope(resolvePluginRegistry?.(), () =>
-            runWithReadOnlyWorkers(() => withGatewayServiceInstallation(installationContext, run)),
+      runWithoutOwnedSessionTranscriptWrites(() =>
+        runWithSpawnBroker(spawnBroker, async () => {
+          const runWithRegistry = () =>
+            withPluginRuntimeRegistryScope(resolvePluginRegistry?.(), () =>
+              runWithReadOnlyWorkers(() =>
+                withGatewayServiceInstallation(installationContext, run),
+              ),
+            );
+          if (!resolveGatewayContext) {
+            return await runWithRegistry();
+          }
+          return await withPluginRuntimeGatewayContextResolver(
+            resolveGatewayContext,
+            runWithRegistry,
+            {
+              inheritRequestScope: false,
+            },
           );
-        if (!resolveGatewayContext) {
-          return await runWithRegistry();
-        }
-        return await withPluginRuntimeGatewayContextResolver(
-          resolveGatewayContext,
-          runWithRegistry,
-          {
-            inheritRequestScope: false,
-          },
-        );
-      }),
+        }),
+      ),
     );
 }
