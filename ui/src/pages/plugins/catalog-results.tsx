@@ -422,7 +422,7 @@ function RawResults(props: CatalogResultsState): JSX.Element {
           <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
         </SettingsSection>
       ) : items().length === 0 ? (
-        renderCatalogEmptyState()
+        !props.remoteError && renderCatalogEmptyState()
       ) : (
         <>
           {props.query.trim() && official().length > 0 && community().length > 0 ? (
