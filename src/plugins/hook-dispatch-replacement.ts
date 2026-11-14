@@ -1,4 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 // One hook dispatch's view of plugins a reload replaced while it was dispatching.
 import type { PluginHookName, PluginHookRegistration } from "./hook-types.js";
 import { isPluginReloadingError } from "./plugin-replacement-retry.js";
@@ -57,7 +58,12 @@ export class HookDispatchSelection<K extends PluginHookName> {
       return HOOK_REPLACED;
     };
     try {
-      const result = run();
+      // Post-turn hooks own fresh instance admission, never the finished turn's lease.
+      const result =
+        registration.hookName === "subagent_ended" ||
+        registration.hookName === "subagent_delivery_target"
+          ? runOutsidePreparedModelRuntimePluginGenerationScope(run)
+          : run();
       return isPromiseLike(result)
         ? Promise.resolve(result).then(undefined, replace)
         : Promise.resolve(result);
