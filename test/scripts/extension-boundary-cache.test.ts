@@ -118,9 +118,13 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
   expect(matches(record)).toBe(true);
 
   const originalReceipt = fs.readFileSync(path.join(root, receipt), "utf8");
+  const receiptData: { inputs: string[]; lookups: unknown[] } = JSON.parse(originalReceipt);
   for (const contents of [
     JSON.stringify({ inputs: record.inputs }),
     JSON.stringify({ inputs: record.inputs, lookups: [] }),
+    ...[[], [null], ["../outside.ts"], [...receiptData.inputs, receiptData.inputs[0]]].map(
+      (inputs) => JSON.stringify({ inputs, lookups: receiptData.lookups }),
+    ),
   ]) {
     write(receipt, contents);
     const forgedOutput = {
