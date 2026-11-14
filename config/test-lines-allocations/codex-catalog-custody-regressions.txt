@@ -1,0 +1,3 @@
+# Remaining net regression lines for completion custody, SQLite receipt retirement,
+# and revoked native metadata reads; the original allocation covered 115 of 133.
+18

@@ -30,6 +30,7 @@ import {
   observeCompletionAttempts,
   parentRegistration as parentParams,
 } from "./native-subagent-monitor.test-support.js";
+import { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
 import { createClientHarness } from "./test-support.js";
 
 async function runtimeFixture(client = createClient(), runtime = createRuntime()) {
@@ -98,6 +99,34 @@ function waitReceipt(id: string, status: string, message: string | null) {
 }
 
 describe("native completion delivery ownership", () => {
+  it("acknowledges consumed raw completion before projection writes can outlive its parent", async () => {
+    const { client, runtime, owner } = await monitorFixture();
+    const attempts = observeCompletionAttempts();
+    const writeEntered = createDeferred<void>();
+    const writeReleased = createDeferred<void>();
+    await startChild(client, owner, "/root/worker");
+    await client.notify(completedChild());
+    await attempts.settle();
+    const writes = vi
+      .spyOn(CodexNativeSubagentSubmissionOwner.prototype, "settleWrites")
+      .mockImplementation(async () => {
+        writeEntered.resolve();
+        await writeReleased.promise;
+      });
+    const receipt = client.notify(deliveredNativeCompletion());
+    await writeEntered.promise;
+    const retirement = owner.unregister();
+    try {
+      await attempts.settle();
+      expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+    } finally {
+      writeReleased.resolve();
+      await Promise.all([receipt, retirement]);
+      writes.mockRestore();
+      attempts.restore();
+    }
+  });
+
   it("does not repeat a shutdown result returned by native wait", async () => {
     const { client, runtime, monitor, owner: parent } = await monitorFixture();
     await startChild(client, parent);
@@ -274,6 +303,33 @@ describe("native completion delivery ownership", () => {
     await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(false);
     await owner.unregister();
     expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  });
+
+  it("restores a retired child's trusted receipt alias when the same parent observes it again", async () => {
+    const { client, runtime, monitor, owner: first } = await monitorFixture();
+    const attempts = observeCompletionAttempts();
+    await startChild(client, first, "/root/worker");
+    await client.notify(completedChild());
+    await client.notify(deliveredNativeCompletion());
+    await attempts.settle();
+    await first.unregister();
+    const second = await registerParent(monitor);
+    second.bindTurn("next-parent-turn");
+    try {
+      await notifyChildStarted(client);
+      await client.startTurn("next-child-turn");
+      await client.notify(completedChild("next-child-turn"));
+      const receipt = deliveredNativeCompletion();
+      receipt.params.turnId = "next-parent-turn";
+      Object.assign(receipt.params.item, { id: "next-native-receipt" });
+      await client.notify(receipt);
+      await second.unregister();
+      await attempts.settle();
+      expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+    } finally {
+      await second.unregister();
+      attempts.restore();
+    }
   });
 
   it("does not carry an unmatched receipt into a later parent run", async () => {
