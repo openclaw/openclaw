@@ -2136,7 +2136,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/config/sessions/session-accessor.reset-progress.test.ts",
   "src/config/sessions/session-accessor.sqlite-active-events.test.ts",
   "src/config/sessions/session-accessor.sqlite-archive-read.test.ts",
-  "src/config/sessions/session-accessor.sqlite-archive-session.test.ts",
   "src/config/sessions/session-accessor.sqlite-archive.worker.test.ts",
   "src/config/sessions/session-accessor.sqlite-bounded-context.test.ts",
   "src/config/sessions/session-accessor.sqlite-branch-summaries.test.ts",

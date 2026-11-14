@@ -1017,7 +1017,6 @@
 ["src/acp/runtime/session-meta-store.test.ts","../../config/sessions/paths.js","d23cca8525f82118fdcb34e554e35bfb1c85981445e5e6681436010dd0bae4c5",1]
 ["src/acp/runtime/session-meta-store.test.ts","../../config/sessions/session-accessor.js","c4a152a854ed47f15bc5727e64ecaa694e0b11f73651ea4359cf1a83e25bf504",1]
 ["src/agents/agent-bundle-mcp-acquisition.test.ts","./mcp-oauth.js","dd6c24511b481338fa0ba89e4716f33732f2ab0ca51d53b9838ceac2317ae300",1]
-["src/agents/agent-bundle-mcp-manager.lifecycle.test.ts","./agent-bundle-mcp-runtime.js","289acfe5420ba1bb2f09e2dad165d7468aa18062297ab0763b0f320b4b7b1b73",1]
 ["src/agents/agent-bundle-mcp-manager.requester-connect.test.ts","./mcp-oauth.js","d5abd95d0264a6180d88c1e4e32f8d82e49ee50a9490f761bfb066aa47864e1a",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","../gateway/control-ui-http-utils.js","4a94446306c9f26fd08007ccc8388ee34680763e6e518fa38dc91ece65a483b1",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","../gateway/http-common.js","f29c63ffb64f99bab9de679f464569dfdfdc0ad8191104a3238629a82878b11c",1]

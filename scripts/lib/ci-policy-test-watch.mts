@@ -1690,7 +1690,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/config/sessions/session-accessor.sqlite-archive-session.test.ts",
     "src/config/sessions/session-history-budget-owner.test.ts",
     "src/config/sessions/session-history-eviction.test.ts",
   ].map((testFile): PolicyTestWatch => ({
