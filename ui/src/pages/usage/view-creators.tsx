@@ -1,4 +1,4 @@
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type {
   SessionUsageCreator,
   SessionsUsageAggregates,
@@ -211,26 +211,24 @@ export function UsageCreators(props: UsageCreatorsProps) {
     </table>
   );
 
+  // One identity, recorded or not, would only repeat the header totals. A selected
+  // row stays, so choosing an identity here does not remove the way back.
   return (
-    <SettingsSection
-      title={t("usage.creators.title")}
-      description={t("usage.creators.description")}
-    >
-      <div class="usage-panel usage-creators">
-        {groups().length > 0 ? (
+    <Show when={groups().length > 1 || props.selectedKey !== null}>
+      <SettingsSection
+        title={t("usage.creators.title")}
+        description={t("usage.creators.description")}
+      >
+        <div class="usage-panel usage-creators">
           <CreatorTable rows={groups().slice(0, 8)} />
-        ) : (
-          <div class="usage-empty-block usage-empty-block--compact">
-            {t("usage.creators.empty")}
-          </div>
-        )}
-        {groups().length > 8 ? (
-          <details class="usage-creators-more">
-            <summary>{t("usage.creators.more", { count: String(groups().length - 8) })}</summary>
-            <CreatorTable rows={groups().slice(8)} />
-          </details>
-        ) : undefined}
-      </div>
-    </SettingsSection>
+          {groups().length > 8 ? (
+            <details class="usage-creators-more">
+              <summary>{t("usage.creators.more", { count: String(groups().length - 8) })}</summary>
+              <CreatorTable rows={groups().slice(8)} />
+            </details>
+          ) : undefined}
+        </div>
+      </SettingsSection>
+    </Show>
   );
 }
