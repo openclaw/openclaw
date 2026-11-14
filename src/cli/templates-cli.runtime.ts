@@ -299,7 +299,7 @@ async function runTemplatesAddFromSource(
       existingWorkspacePaths: existingAgentIds.map((agentId) =>
         resolveAgentWorkspaceDir(config, agentId),
       ),
-      existingMcpServers: listedMcpServers.mcpServers,
+      existingMcpServers: listedMcpServers.authoredConfig?.mcp?.servers ?? {},
       packagePreflight: (pkg, workspace, sourceContext) =>
         preflightTemplatePackage(pkg, workspace, { config, ...sourceContext }),
     },
