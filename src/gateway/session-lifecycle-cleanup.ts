@@ -3,11 +3,8 @@ import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.
 import { acquireAgentRuntimeCleanupRegistries } from "../agents/prepared-model-runtime.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
 import { closeAcpRuntimeForSession, closeChildAcpRuntimesForParent } from "./session-reset-acp.js";
 import { ensureSessionRuntimeCleanup } from "./session-reset-runtime-cleanup.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
@@ -36,39 +33,6 @@ export async function resetSessionAgentHarnesses(params: {
     owners.registries,
   );
   params.assertCurrent?.();
-}
-
-export async function emitSessionUnboundLifecycleEvent(params: {
-  targetSessionKey: string;
-  reason: "session-reset" | "session-delete";
-  emitHooks?: boolean;
-}) {
-  const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  await getSessionBindingService().unbind({
-    targetSessionKey: params.targetSessionKey,
-    reason: params.reason,
-  });
-
-  if (params.emitHooks === false) {
-    return;
-  }
-
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("subagent_ended")) {
-    return;
-  }
-  await hookRunner.runSubagentEnded(
-    {
-      targetSessionKey: params.targetSessionKey,
-      targetKind,
-      reason: params.reason,
-      sendFarewell: true,
-      outcome: params.reason === "session-reset" ? "reset" : "deleted",
-    },
-    {
-      childSessionKey: params.targetSessionKey,
-    },
-  );
 }
 
 export async function cleanupSessionBeforeMutation(params: {

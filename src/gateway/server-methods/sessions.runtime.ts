@@ -6,6 +6,6 @@ export {
   emitGatewayBeforeResetPluginHook,
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
-  emitSessionUnboundLifecycleEvent,
   performGatewaySessionReset,
 } from "../session-reset-service.js";
+export { emitSessionUnboundLifecycleEvent } from "../session-unbound-lifecycle.js";
