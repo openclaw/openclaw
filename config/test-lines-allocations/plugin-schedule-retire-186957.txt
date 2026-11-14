@@ -1,0 +1,2 @@
+# Plugin command schedules retire once their plugin is disabled or removed, or their parent conversation is reset.
+98
