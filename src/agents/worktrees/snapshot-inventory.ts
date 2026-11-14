@@ -1,4 +1,3 @@
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "../../infra/fs-safe.js";
@@ -42,16 +41,6 @@ type SnapshotInventory = {
 const assertCurrent = () =>
   requestGitWorkerEffect<"worktree.assert-current">({ type: "worktree.assert-current", input: {} });
 
-// @types/node omits opendir's buffer encoding and declares only string names.
-function openRawDirectory(directoryPath: string | Buffer) {
-  // SAFETY: Node accepts buffer encoding; the consumer validates names before use.
-  const openDirectory = fs.opendir as (
-    path: string | Buffer,
-    options: { encoding: BufferEncoding | "buffer" },
-  ) => Promise<AsyncIterable<Dirent<string | Buffer>>>;
-  return openDirectory(directoryPath, { encoding: "buffer" });
-}
-
 async function listCollapsedOtherPaths(checkoutPath: string, ignored: boolean): Promise<Buffer[]> {
   // --directory collapses whole untracked/ignored trees to one entry each, so the
   // Git output stays bounded by top-level entries instead of every dependency file.
@@ -80,24 +69,33 @@ async function walkCollapsedPaths(
     ) {
       return true;
     }
-    // Buffer names preserve bytes through Node's lstat fallback for unknown entry
-    // types. opendir batches entries and closes the handle even on early retention.
-    const directory = await openRawDirectory(checkoutPathFromGitBytes(checkoutPath, relative));
-    for await (const entry of directory) {
-      if (!Buffer.isBuffer(entry.name)) {
-        throw new Error("Expected raw directory-entry bytes");
-      }
-      const child = Buffer.concat([relative, Buffer.from("/"), entry.name]);
-      if (options.skip?.has(gitPathKey(child))) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        if (await visitDirectory(child)) {
-          return true;
+    // Buffer one directory's names at a time; classify raw paths without relying
+    // on Buffer-encoded Dirent metadata or following symlinks.
+    const names = await fs.readdir(checkoutPathFromGitBytes(checkoutPath, relative), {
+      encoding: "buffer",
+    });
+    for (let offset = 0; offset < names.length; offset += 64) {
+      const children = names
+        .slice(offset, offset + 64)
+        .map((name) => Buffer.concat([relative, Buffer.from("/"), name]))
+        .filter((child) => !options.skip?.has(gitPathKey(child)));
+      // Join every read before recursing or retaining a nested repository.
+      const stats = await Promise.allSettled(
+        children.map((child) => rawPathStat(checkoutPathFromGitBytes(checkoutPath, child))),
+      );
+      for (const [index, result] of stats.entries()) {
+        if (result.status === "rejected") {
+          throw result.reason;
         }
-      } else {
-        // Never follow symlinks; only ordinary Git-style leaf paths enter the snapshot.
-        await options.visitFile?.(child);
+        const child = children[index]!;
+        if (result.value?.isDirectory()) {
+          if (await visitDirectory(child)) {
+            return true;
+          }
+        } else {
+          // Never follow symlinks; only ordinary Git-style leaf paths enter the snapshot.
+          await options.visitFile?.(child);
+        }
       }
     }
     return false;
