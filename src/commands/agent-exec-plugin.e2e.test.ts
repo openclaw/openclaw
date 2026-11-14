@@ -15,6 +15,18 @@ import { killPidIfAlive } from "../test-utils/process-tree.js";
 const execFileAsync = promisify(execFile);
 const TRANSPORT_CLEANUP_GUARD_MS = 5_000;
 let cleanupFixture: (() => Promise<void>) | undefined;
+
+type HarnessCatalogModel = {
+  id: string;
+  contextWindow?: number;
+  contextWindowSource?: "synthetic";
+};
+
+type HarnessPluginOptions = {
+  catalogModels?: HarnessCatalogModel[];
+  reportContextWindow?: boolean;
+};
+
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
   afterEach(async () => {
     try {
@@ -27,7 +39,24 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
   }),
 );
 
-async function writeHarnessPlugin(stateDir: string, workspace?: string): Promise<void> {
+async function writeHarnessPlugin(
+  stateDir: string,
+  workspace?: string,
+  options: HarnessPluginOptions = {},
+): Promise<void> {
+  const modelIds = options.catalogModels?.map(({ id }) => id) ?? ["proof-model"];
+  const catalogRows = options.catalogModels?.map((model) => ({
+    provider: "exec-proof",
+    name: model.id,
+    nativeRuntime: "exec-proof",
+    ...model,
+  }));
+  const loadModelCatalog = catalogRows
+    ? `async loadModelCatalog() { return ${JSON.stringify(catalogRows)}; },`
+    : "";
+  const attemptText = options.reportContextWindow
+    ? 'const text = "PLUGIN_HARNESS_OK contextWindow=" + String(params.model.contextWindow);'
+    : 'const text = "PLUGIN_HARNESS_OK";';
   const config: OpenClawConfig = {
     plugins: {
       allow: ["exec-proof"],
@@ -38,18 +67,25 @@ async function writeHarnessPlugin(stateDir: string, workspace?: string): Promise
         "exec-proof": {
           api: "openai-responses",
           baseUrl: "https://example.invalid/v1",
-          models: [
-            nativeModel("proof-model", {
-              name: "Proof model",
-              contextWindow: 128000,
+          models: modelIds.map((id) =>
+            nativeModel(id, {
+              name: id,
+              contextWindow: options.reportContextWindow ? 200_000 : 128_000,
               maxTokens: 4096,
               agentRuntime: { id: "exec-proof" },
             }),
-          ],
+          ),
         },
       },
     },
-    agents: { defaults: { model: { primary: "exec-proof/proof-model" } } },
+    agents: {
+      defaults: {
+        model: { primary: `exec-proof/${modelIds[0]}` },
+        models: Object.fromEntries(
+          modelIds.map((id) => [`exec-proof/${id}`, { agentRuntime: { id: "exec-proof" } }]),
+        ),
+      },
+    },
   };
   if (workspace) {
     config.agents = { defaults: { ...config.agents?.defaults, workspace, skipBootstrap: true } };
@@ -81,8 +117,9 @@ async function writeHarnessPlugin(stateDir: string, workspace?: string): Promise
           supports: ({ provider }) => provider === "exec-proof"
             ? { supported: true, priority: 100 }
             : { supported: false },
-          async runAttempt() {
-            const text = "PLUGIN_HARNESS_OK";
+          ${loadModelCatalog}
+          async runAttempt(params) {
+            ${attemptText}
             const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
             const assistant = {
               role: "assistant",
@@ -313,6 +350,32 @@ it("runs an operator-installed harness without retaining run state", async () =>
     stdout: expect.not.stringContaining("PLUGIN_HARNESS_OK"),
   });
   await expect(fs.stat(path.join(stateDir, "agents"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("runs the CLI with context windows discovered by a native harness", async () => {
+  const stateDir = tempDirs.make("openclaw-agent-exec-native-context-window-");
+  const catalogModels: HarnessCatalogModel[] = [
+    { id: "reported-model", contextWindow: 1_048_576 },
+    { id: "unknown-model" },
+    { id: "synthetic-model", contextWindow: 1_048_576, contextWindowSource: "synthetic" },
+  ];
+  await writeHarnessPlugin(stateDir, undefined, {
+    catalogModels,
+    reportContextWindow: true,
+  });
+
+  for (const [modelId, expectedContextWindow, proof] of [
+    ["reported-model", 1_048_576, "discovered"],
+    ["unknown-model", 200_000, "unknown fallback"],
+    ["synthetic-model", 200_000, "synthetic fallback"],
+  ] as const) {
+    const result = await runCli(stateDir, `prove ${proof}`, "--model", `exec-proof/${modelId}`);
+    const payload = JSON.parse(result.stdout) as { final?: string };
+    console.log(`native CLI ${proof}: model=${modelId} output=${payload.final}`);
+    expect(payload.final, result.stderr).toBe(
+      `PLUGIN_HARNESS_OK contextWindow=${expectedContextWindow}`,
+    );
+  }
 });
 
 it("exits naturally after a one-shot ingress turn with workspace skills", async () => {

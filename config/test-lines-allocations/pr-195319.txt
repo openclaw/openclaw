@@ -1,0 +1,3 @@
+# Exact native-owned context-window selection plus CLI discovery-path proof.
+# Net +63 test lines for CLI discovery and conservative fallback proof.
+63

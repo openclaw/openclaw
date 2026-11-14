@@ -33,7 +33,14 @@ export function resolveDefaultModelMaxTokens(contextWindow?: number): number {
 export function createNativeModelOwnedRuntimeModel(params: {
   provider: string;
   modelId: string;
+  contextWindow?: number;
 }): ProviderRuntimeModel {
+  const contextWindow =
+    typeof params.contextWindow === "number" &&
+    Number.isFinite(params.contextWindow) &&
+    params.contextWindow > 0
+      ? params.contextWindow
+      : DEFAULT_CONTEXT_TOKENS;
   return {
     provider: params.provider,
     id: params.modelId,
@@ -43,7 +50,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    contextWindow,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
   };
 }
@@ -64,7 +71,16 @@ export function resolveNativeOwnedRuntimeModel(params: {
   }
   const owned = (entry: ModelCatalogSnapshot["entries"][number]) =>
     entry.provider === provider && entry.id === modelId && entry.nativeRuntime === runtimeId;
-  return catalog.entries.some(owned) || catalog.routeVariants.some(owned)
-    ? createNativeModelOwnedRuntimeModel({ provider, modelId })
-    : undefined;
+  const ownedEntries = [...catalog.entries, ...catalog.routeVariants].filter(owned);
+  if (ownedEntries.length === 0) {
+    return undefined;
+  }
+  const contextWindow = ownedEntries.find(
+    (entry) =>
+      entry.contextWindowSource !== "synthetic" &&
+      typeof entry.contextWindow === "number" &&
+      Number.isFinite(entry.contextWindow) &&
+      entry.contextWindow > 0,
+  )?.contextWindow;
+  return createNativeModelOwnedRuntimeModel({ provider, modelId, contextWindow });
 }
