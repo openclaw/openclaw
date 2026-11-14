@@ -276,7 +276,6 @@ function targetOwner(shards: ReturnType<typeof createChangedNodeTestShards>, tar
 
 const gitToolingTargets = [
   "ci-git-owner",
-  "ci-linux-git",
   "ci-platform-checkout",
   "openclaw-performance-workflow",
   "openclaw-performance-git-lifecycle",
