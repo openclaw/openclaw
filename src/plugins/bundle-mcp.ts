@@ -15,7 +15,11 @@ import {
   loadEnabledBundleConfig,
   readBundleJsonObject,
 } from "./bundle-config-shared.js";
-import { BUNDLE_MANIFEST_PATHS, resolveBundleComponentPaths } from "./bundle-manifest.js";
+import {
+  BUNDLE_MANIFEST_PATHS,
+  CURSOR_BUNDLE_MCP_DEFAULT_PATHS,
+  resolveBundleComponentPaths,
+} from "./bundle-manifest.js";
 import type {
   BundleMcpConfig,
   BundleMcpDataDirOwnership,
@@ -56,7 +60,11 @@ function resolveBundleMcpConfigPaths(params: {
   if (params.bundleFormat === "agent") {
     return pluginCacheExistsSync(path.join(params.rootDir, "mcp.json")) ? ["mcp.json"] : [];
   }
-  return resolveBundleComponentPaths(params.raw.mcpServers, params.rootDir, [".mcp.json"]);
+  return resolveBundleComponentPaths(
+    params.raw.mcpServers,
+    params.rootDir,
+    params.bundleFormat === "cursor" ? CURSOR_BUNDLE_MCP_DEFAULT_PATHS : [".mcp.json"],
+  );
 }
 
 export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
