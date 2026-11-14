@@ -174,6 +174,13 @@ export async function preflightBundledTemplatePlugin(params: {
         (await snapshotTemplateDependencyDirectory({ rootDir: target })).digest !==
           params.snapshot.digest
       ) {
+        if (installed && exists) {
+          return {
+            ok: false,
+            code: "bundled_plugin_conflict",
+            message: `Plugin ${probe.pluginId} is already installed with different contents (installed version ${installed.version ?? "unknown"}; this Template bundles ${probe.version ?? "unknown"}). Template Add does not replace shared plugins. To use the bundled version, run "openclaw plugins install <folder> --force" with the ${dependency.path} folder from this Template release, then retry the Template Add.`,
+          };
+        }
         return {
           ok: false,
           code: "bundled_plugin_conflict",

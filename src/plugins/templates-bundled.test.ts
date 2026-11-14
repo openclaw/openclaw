@@ -167,11 +167,38 @@ process.stdin.on("end", () => {
     expect(await rollbackStatelessTemplatePackages(receipts)).toEqual([]);
     expect((await loadInstalledPluginIndexInstallRecords())[pluginId]).toEqual(record);
 
+    writeJsonFile(path.join(extracted.packageRoot, "package.json"), {
+      name: "@fixture/bundled-plugin-template",
+      version: "1.1.0",
+      openclaw: { template: "CLAW.md" },
+    });
+    writeJsonFile(path.join(extracted.packageRoot, "plugins/probe/package.json"), {
+      name: "@fixture/template-directory-probe",
+      version: "1.1.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    await writeFile(path.join(extracted.packageRoot, "plugins/probe/index.js"), pluginCode);
+    const updatedSource = await readTemplateManifestFile(extracted.packageRoot);
+    assert(updatedSource.ok, JSON.stringify(updatedSource.diagnostics));
+    const versionConflict = await buildGatewayTemplateAddPlan(updatedSource, {
+      config,
+      sourceMcpServers: {},
+      agentId: "third-consumer",
+    });
+    expect(versionConflict.blockers).toContainEqual(
+      expect.objectContaining({
+        code: "bundled_plugin_conflict",
+        message:
+          'Plugin template-directory-probe is already installed with different contents (installed version 1.0.0; this Template bundles 1.1.0). Template Add does not replace shared plugins. To use the bundled version, run "openclaw plugins install <folder> --force" with the plugins/probe folder from this Template release, then retry the Template Add.',
+      }),
+    );
+
     await writeFile(
       path.join(record!.installPath!, "index.js"),
       "Preserve the installed owner's change.\n",
     );
-    const conflict = await buildGatewayTemplateAddPlan(source, {
+    const conflict = await buildGatewayTemplateAddPlan(updatedSource, {
       config,
       sourceMcpServers: {},
       agentId: "third-consumer",
