@@ -1,4 +1,4 @@
-# 12,998 net test LF against main f2c308e4 minus the single 400-line PR allowance.
+# 13,014 net test LF against main f2c308e4 minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -18,4 +18,4 @@
 # Hermes source-IO refusal targets the owned skills root without consuming runtime admission stats.
 # Failed cold Talk discovery aborts its test wait and joins accepted writes and real reads.
 # Concurrent bootstrap publication uses the same workspace FIFO as every production caller.
-12598
+12614

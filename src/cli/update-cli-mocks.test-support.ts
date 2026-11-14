@@ -366,7 +366,7 @@ vi.mock("node:child_process", async () => {
     args[1] = sqliteHostArgv(args[1]);
     return true;
   };
-  return {
+  const mocked = {
     ...actual,
     // SQLite and directory-watch helpers need real IPC; updater/service children stay simulated.
     spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
@@ -411,6 +411,7 @@ vi.mock("node:child_process", async () => {
         : spawn(...args);
     },
   };
+  return { ...mocked, default: mocked };
 });
 
 // Synthetic CLI packages omit the candidate worker; native delegation is covered separately.
