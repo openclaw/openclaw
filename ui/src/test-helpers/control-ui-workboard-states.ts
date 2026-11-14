@@ -1,4 +1,4 @@
-import { createControlUiMockSessionRow as sessionRow } from "./control-ui-session-fixtures.ts";
+import { createControlUiWorkboardSessionRow as sessionRow } from "./control-ui-workboard-session.ts";
 
 // State, display label, card column, and linked-session status.
 const STATES = [

@@ -1,7 +1,7 @@
-import type { createControlUiMockSessionRow } from "./control-ui-session-fixtures.ts";
+import type { createControlUiWorkboardSessionRow } from "./control-ui-workboard-session.ts";
 
 type ProgressSession = Pick<
-  ReturnType<typeof createControlUiMockSessionRow>,
+  ReturnType<typeof createControlUiWorkboardSessionRow>,
   "key" | "updatedAt" | "status"
 >;
 
