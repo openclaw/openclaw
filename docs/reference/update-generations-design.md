@@ -10,7 +10,7 @@ read_when:
 
 # Update generations design
 
-**Design proposal. One slice is implemented and in review; nothing else here is built. A maintainer accepted the seven [decisions](#decisions) on November 13, 2026. That sets the direction; each slice still needs its own review.**
+**Design proposal. One slice has merged; nothing else here is built. A maintainer accepted the seven [decisions](#decisions) on November 13, 2026. That sets the direction; each slice still needs its own review.**
 Two changes to `openclaw update`: keep each release in its own directory on
 prefixes that OpenClaw owns and switch between them by repointing one link, and
 move update work out of the installed updater into the candidate in stages.
@@ -21,12 +21,12 @@ This is the fourth version. Source reviews at
 [Rejected approaches](#rejected-approaches). Counts under "Why change it" are
 from `6acf398088c430ba93944a5bc07eec1b2299ac00`.
 
-| Slice                                        | Status                                                                                 |
-| -------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Candidate-owned rehearsal                    | Implemented in [#197922](https://github.com/openclaw/openclaw/pull/197922), in review. |
-| Release directories behind a linked root     | Direction accepted in decisions 1 to 4. Not built.                                     |
-| Owed steps after the commit point            | Proposed.                                                                              |
-| Stop, publish, and rollback in the candidate | Not designed.                                                                          |
+| Slice                                        | Status                                                                 |
+| -------------------------------------------- | ---------------------------------------------------------------------- |
+| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922). |
+| Release directories behind a linked root     | Direction accepted in decisions 1 to 4. Not built.                     |
+| Owed steps after the commit point            | Proposed.                                                              |
+| Stop, publish, and rollback in the candidate | Not designed.                                                          |
 
 ## Why change it
 
@@ -428,7 +428,7 @@ releases in Docker.
 
 ## Part B: move update work to the candidate in stages
 
-### B1: the candidate rehearses itself (implemented, in review)
+### B1: the candidate rehearses itself (merged)
 
 After staging, the updater runs the candidate's hidden
 `openclaw update rehearse --request <file>` in place of its own rehearsal when
@@ -538,10 +538,10 @@ older release, with no download when that release is still retained. See
 
 These are proposals, not permission to open them.
 
-1. **B1, candidate-owned rehearsal.** In review as #197922.
+1. **B1, candidate-owned rehearsal.** Merged as #197922.
 2. **Linked-root readiness, no layout change.** Each of these is its own pull
    request, and none changes what an existing installation does:
-   - a published-driver cell with a linked root;
+   - a published-driver cell with a linked root, in review as #198489;
    - a slot resolver that finds the link's own path, as a pure function;
    - a packaging test that fails if the `bin` launcher text changes;
    - the link lifecycle (capture, switch, verify, sweep), built and tested but
