@@ -94,7 +94,7 @@ function singletonGroup() {
     shard_name: "changed-extensions-config-1",
     includePatterns: [
       "extensions/telegram/src/telegram-ingress-spool.test.ts",
-      "extensions/telegram/src/webhook.test.ts",
+      "extensions/telegram/src/webhook-routing.test.ts",
     ],
     env: { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" },
   };

@@ -239,7 +239,7 @@ describe("extension executable test plans", () => {
   it("keeps Workboard directory and glob selections beside explicit PostgreSQL files", () => {
     const cwd = tempDirs.make("extension-mixed-postgres-");
     const files = [
-      "extensions/workboard/src/store.test.ts",
+      "extensions/workboard/src/store-lifecycle.test.ts",
       "extensions/workboard/src/retained-roots.test.ts",
       "extensions/logbook/src/postgres-store.test.ts",
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",

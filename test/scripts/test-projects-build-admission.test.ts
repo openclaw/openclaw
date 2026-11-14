@@ -1159,7 +1159,7 @@ describe("cache lease completion", () => {
       const files = [
         "extensions/telegram/src/polling-session.test.ts",
         "extensions/telegram/src/telegram-ingress-drain.test.ts",
-        "extensions/telegram/src/webhook.test.ts",
+        "extensions/telegram/src/webhook-routing.test.ts",
       ];
       vi.stubEnv("CI", scope === "local" ? "" : "1");
       vi.stubEnv("GITHUB_ACTIONS", "");

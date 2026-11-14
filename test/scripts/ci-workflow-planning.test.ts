@@ -291,7 +291,7 @@ describe("PostgreSQL conformance selection", () => {
     [["src/infra/kysely-sync.ts"], true],
     [["src/infra/kysely-sync-queries.ts"], true],
     [["src/infra/sqlite-transaction.ts"], true],
-    [["extensions/workboard/src/store.test.ts"], true],
+    [["extensions/workboard/src/store-lifecycle.test.ts"], true],
     [["extensions/workboard/src/nested/renamed.spec.ts"], true],
     [["test/scripts/generate-postgres-schema.test.ts"], true],
     [["extensions/logbook/src/postgres-store.test.ts"], true],

@@ -160,7 +160,7 @@ writeFileSync("checker-args", JSON.stringify(process.argv.slice(2)));
       "native:i18n:verify",
     ],
     [["extensions/x/openclaw.plugin.json"], "config:docs:check"],
-    [["extensions/feishu/src/bot.test.ts"], "check:line-cap-ratchet"],
+    [["extensions/feishu/src/bot.commands.test.ts"], "check:line-cap-ratchet"],
     [["src/gateway/AGENTS.md"], "check:agents-md-size"],
   ])("selects the CI-owned check for %j", (paths, script) => {
     expect(scripts(paths)).toContain(script);
