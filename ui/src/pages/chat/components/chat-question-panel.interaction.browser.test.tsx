@@ -54,7 +54,9 @@ afterEach(() => {
 
 async function draw(options: { requestedBySession?: string } = {}) {
   const interactions: string[] = [];
-  const [current, setCurrent] = createSignal(prompt("first"));
+  // Pending prompts keep their identity and drafts while the panel switches between them.
+  const prompts = new Map(["first", "second"].map((id) => [id, prompt(id)]));
+  const [current, setCurrent] = createSignal(prompts.get("first")!);
   const props = () =>
     createGatewayQuestionPanelProps(current(), {
       ...options,
@@ -66,7 +68,7 @@ async function draw(options: { requestedBySession?: string } = {}) {
   flush();
   await waitForSolid(() => expect(container.querySelector(".chat-question-panel")).not.toBeNull());
   const panel = () => container.querySelector<HTMLElement>(".chat-question-panel")!;
-  return { interactions, panel, show: (id: string) => setCurrent(prompt(id)) };
+  return { interactions, panel, show: (id: string) => setCurrent(prompts.get(id)!) };
 }
 
 it("ignores rendering, hover, programmatic focus and shortcuts", async () => {
@@ -115,12 +117,23 @@ it.each([
   expect(new Set(interactions)).toEqual(new Set(["first"]));
 });
 
-it("reports interaction for a child-session question and for the question then shown", async () => {
+it("keeps child-session drafts and interaction per question across switching", async () => {
   const { interactions, panel, show } = await draw({ requestedBySession: "Child task" });
-  await userEvent.click(panel().querySelector("textarea")!);
-  show("second");
-  flush();
-  await waitForSolid(() => expect(panel().textContent).toContain("second"));
-  await userEvent.click(panel().querySelector("textarea")!);
+  const answer = () => panel().querySelector("textarea")!;
+  const switchTo = async (id: string) => {
+    show(id);
+    flush();
+    await waitForSolid(() => expect(panel().textContent).toContain(`for ${id}?`));
+  };
+  await userEvent.click(answer());
+  await userEvent.keyboard("Teal");
+  await switchTo("second");
+  expect(answer().value).toBe("");
+  await userEvent.click(answer());
+  await userEvent.keyboard("Plum");
+  await switchTo("first");
+  expect(answer().value).toBe("Teal");
+  await switchTo("second");
+  expect(answer().value).toBe("Plum");
   expect(new Set(interactions)).toEqual(new Set(["first", "second"]));
 });

@@ -654,6 +654,25 @@ describe("QuestionManager", () => {
     expect(manager.get(cancelled.id)?.status).toBe("cancelled");
   });
 
+  it("still cancels an engaged question when its requesting run ends", async () => {
+    let active = true;
+    const record = manager.request({
+      questions,
+      timeoutMs: 50,
+      stopExpiryOnInteraction: true,
+      isRequesterActive: () => active,
+    });
+    manager.engage(record.id);
+    const waiting = manager.waitAnswer(record.id);
+    active = false;
+    manager.cancelClosedAuthorities();
+
+    await expect(waiting).resolves.toEqual({ status: "cancelled" });
+    expect(() => manager.engage(record.id)).toThrowError(
+      expect.objectContaining({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL }),
+    );
+  });
+
   it("retains authority sweeping for legacy requesters without a run selector", () => {
     let active = true;
     const resolved = vi.fn();

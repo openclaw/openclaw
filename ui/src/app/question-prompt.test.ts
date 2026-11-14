@@ -376,6 +376,32 @@ describe("question engagement", () => {
     );
   });
 
+  it("keeps engagement per question and never reports late interaction for a terminal one", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn<RequestFn>(async (method, params) => {
+      if (method === "question.engage") {
+        return { question: requestedPayload({ expiryStoppedAtMs: Date.now() }) };
+      }
+      return method === "question.get"
+        ? { question: requestedPayload({ id: (params as { id: string }).id, status: "expired" }) }
+        : resolvedQuestion(params);
+    });
+    const { state } = createConnectedState(request);
+    requestQuestion(state, { id: "question-2" });
+    requestQuestion(state, { id: "question-3" });
+
+    await engageQuestionPrompt(state, "question-1");
+    recordQuestionResolution(state, { id: "question-3", status: "cancelled" });
+    await engageQuestionPrompt(state, "question-3");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await engageQuestionPrompt(state, "question-2");
+
+    expect(request.mock.calls.filter(([method]) => method === "question.engage")).toHaveLength(1);
+    expectPrompt(state, { status: "pending" });
+    expectPrompt(state, { status: "expired", locallyExpired: true }, "question-2");
+    expectPrompt(state, { status: "cancelled" }, "question-3");
+  });
+
   it("keeps the original deadline when the Gateway does not stop expiry", async () => {
     vi.useFakeTimers();
     const request = vi.fn<RequestFn>(async (method) => {
