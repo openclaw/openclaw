@@ -304,6 +304,61 @@ describe("native declaration preparation", () => {
       }),
   );
 
+  it("emits directly selected declaration producers", { timeout: 30_000 }, ({ signal }) =>
+    fixture.run(async () => {
+      const f = createPreparationFixture("package-boundary", signal);
+      writeSelectedConsumer(f);
+      f.files({
+        "extensions/discord/package.json": {
+          name: "@openclaw/discord",
+          type: "module",
+          openclaw: { extensions: ["./index.ts"] },
+        },
+        "extensions/discord/openclaw.plugin.json": { id: "discord" },
+        "extensions/discord/tsconfig.json": {
+          extends: "../tsconfig.package-boundary.base.json",
+          include: ["**/*.ts"],
+          compilerOptions: { strict: true },
+        },
+        "extensions/discord/index.ts": "export const plugin = 1;",
+        "extensions/discord/api.ts": "export const api = 1;",
+        "extensions/discord/readiness.test-support.ts":
+          "export function createDiscordReadinessFixture() { return { ready: true }; }",
+      });
+      await f.run(f.root, f.root, ["discord"]);
+      expect(f.read(`${boundaryRoot}/plugins/discord/readiness.test-support.d.ts`)).toContain(
+        "createDiscordReadinessFixture",
+      );
+      expect(f.has(`${boundaryRoot}/plugins/memory-core/api.d.ts`)).toBe(false);
+
+      // Only the full producer config reaches these dependencies; its packaged
+      // index stays independent. SDK discovery and producer ordering must expand.
+      f.files({
+        "src/plugin-sdk/extra.ts": "export const extra = 7;",
+        "scripts/lib/plugin-sdk-entrypoints.json": ["core", "extra"],
+        "extensions/discord/readiness.test-support.ts":
+          'export type { ChannelValue } from "@openclaw/qa-channel/api.js";',
+        "extensions/qa-channel/api.ts":
+          'export type { MemoryValue as ChannelValue } from "@openclaw/memory-core/api.js";',
+        "extensions/memory-core/api.ts":
+          'export type MemoryValue = typeof import("openclaw/plugin-sdk/extra").extra;',
+      });
+      for (const id of ["qa-channel", "memory-core"]) {
+        f.json(`extensions/${id}/tsconfig.json`, {
+          extends: "../tsconfig.package-boundary.base.json",
+          files: ["api.ts"],
+          include: [],
+        });
+      }
+      await f.run(f.root, f.root, ["discord"]);
+      expect(f.has(`${f.output}/src/plugin-sdk/extra.d.ts`)).toBe(true);
+      for (const id of ["discord", "qa-channel", "memory-core"]) {
+        expect(readArtifactRecord(path.join(f.root, `${boundaryRoot}/${id}.json`))).toBeDefined();
+      }
+      expect(f.has(`${boundaryRoot}/plugins/matrix/test-api.d.ts`)).toBe(false);
+    }),
+  );
+
   it.for([false, true])(
     "prepares transitive producers reached only through emitted SDK declarations (shared=%s)",
     { timeout: 30_000 },
