@@ -13,6 +13,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import java.util.UUID
 
 private const val NOTIFICATION_CHANNEL_BASE_ID = "openclaw.system.notify"
 private const val NOTIFICATION_CONTENT_REQUEST_CODE = 3
@@ -46,7 +47,8 @@ private class AndroidSystemNotificationPoster(
     }
     val channelId = ensureChannel(request.priority)
     val notification = buildSystemNotification(appContext, channelId, request)
-    NotificationManagerCompat.from(appContext).notify((System.currentTimeMillis() and 0x7FFFFFFF).toInt(), notification)
+    // Each command posts a new notification, even when calls share a clock tick.
+    NotificationManagerCompat.from(appContext).notify(UUID.randomUUID().toString(), 0, notification)
   }
 
   private fun ensureChannel(priority: String?): String {
