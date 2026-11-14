@@ -103,7 +103,7 @@ suite.define(() => {
         expect(referrers).toEqual([undefined, undefined, undefined, undefined]);
         await thumbnails.last().focus();
         await page.keyboard.press("Enter");
-        const expandedImage = page.locator("openclaw-image-lightbox img");
+        const expandedImage = page.locator("openclaw-image-lightbox .stage img.image");
         await expectActivityImagesLoaded(expandedImage);
         await screenshot(page, `expanded-${width}`);
         await page.getByRole("button", { name: "Previous image", exact: true }).click();

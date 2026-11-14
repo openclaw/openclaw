@@ -379,7 +379,7 @@ suite.define(() => {
       expect(previewRequest?.searchParams.get("variant")).toBe(boundedPreview ? "thumbnail" : null);
       const inlineSource = await image.getAttribute("src");
       await page.getByRole("button", { name: /Open image/ }).click();
-      const display = page.locator("openclaw-image-lightbox img").first();
+      const display = page.locator("openclaw-image-lightbox .stage img.image");
       await display.waitFor({ state: "visible" });
       if (boundedPreview) {
         await expect.poll(() => display.getAttribute("src")).toContain("width=1920");
