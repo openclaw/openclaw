@@ -467,28 +467,52 @@ test.each([
   },
 );
 
-test("sessions.search accepts an ACP allowlist owner absent from the agent roster", async () => {
-  const agentId = "codex";
-  const sessionKey = `agent:${agentId}:acp:search-owner`;
-  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
-  const cfg = await setAgentsConfig({ entries: { main: {} } });
-  cfg.acp = { allowedAgents: [agentId] };
-  await seedReadableSession(
-    sessionScope(sessionKey, agentId, storePath),
-    "ACP owner search needle",
-  );
-  await expectRead(
-    "sessions.search",
-    { agentId, query: "ACP owner search needle", sessionKeys: [sessionKey] },
-    { results: [expect.objectContaining({ sessionKey })] },
-  );
-  await expectInvalidRead("sessions.search", {
-    agentId,
-    query: "ACP owner search needle",
-    sessionKeys: [`agent:claude:acp:search-owner`],
-  });
-  expect(await listAgentIdsViaRpc()).toEqual(["main"]);
-});
+test.each(["acp:search-owner", "ordinary"])(
+  "sessions.search accepts an ACP allowlist owner absent from the agent roster: %s",
+  async (rest) => {
+    const agentId = "codex";
+    const sessionKey = `agent:${agentId}:${rest}`;
+    const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+    const cfg = await setAgentsConfig({ entries: { main: {} } });
+    cfg.acp = { allowedAgents: [agentId] };
+    await seedReadableSession(
+      sessionScope(sessionKey, agentId, storePath),
+      "ACP owner search needle",
+    );
+    await expectRead(
+      "sessions.search",
+      { agentId, query: "ACP owner search needle", sessionKeys: [sessionKey] },
+      { results: [expect.objectContaining({ sessionKey })] },
+    );
+    await expectInvalidRead("sessions.search", {
+      agentId,
+      query: "ACP owner search needle",
+      sessionKeys: [`agent:claude:${rest}`],
+    });
+    expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+  },
+);
+
+test.each(["per-sender", "global"] as const)(
+  "sessions.search keeps configured store owners from bypassing fixed-store main aliases in %s scope",
+  async (scope) => {
+    const agentId = "codex";
+    await configureFixedSessionStore("acp-main-aliases");
+    testState.sessionConfig = { scope, mainKey: "primary" };
+    const cfg = await setAgentsConfig({
+      entries: { main: {} },
+      defaults: { sessionStore: { agentId: "main" } },
+    });
+    cfg.acp = { allowedAgents: [agentId] };
+    for (const key of [`agent:${agentId}:main`, `agent:${agentId}:primary`]) {
+      await expectInvalidRead("sessions.search", {
+        agentId,
+        query: "main alias needle",
+        sessionKeys: [key],
+      });
+    }
+  },
+);
 
 test("sessions history reads a configured ACP owner without an explicit agent id", async () => {
   const agentId = "gemini";

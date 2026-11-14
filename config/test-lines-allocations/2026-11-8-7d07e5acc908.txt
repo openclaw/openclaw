@@ -1,0 +1,5 @@
+24
+# LOCAL 2026.11.8 row 77; source 7d07e5acc90883c79d1393a8941c99a4545156fd.
+# Existing qualified store owners searchable without fixed-store main/global aliases or mismatched owners.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
