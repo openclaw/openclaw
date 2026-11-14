@@ -346,7 +346,20 @@ test("delivers a recovered artifact once while preserving its inter-session tran
       { timeoutMs: 35_000 },
     );
     expect(waited).toMatchObject({ status: "ok" });
-    await expect.poll(() => documents.length, { timeout: 30_000 }).toBe(1);
+    try {
+      await expect.poll(() => documents.length, { timeout: 30_000 }).toBe(1);
+    } catch (error) {
+      console.error({
+        writeCalls: writeCalls.length,
+        completedWrites: completedWrites.length,
+        overloads,
+        finalizers: finalizers.length,
+        markerResponses: markerResponses.length,
+        markerResponseObserved: markerResponses.includes(true),
+        documents: documents.length,
+      });
+      throw error;
+    }
     const history = (await gateway.call("chat.history", { sessionKey, limit: 30 })) as {
       messages: Array<{ role: string; content: unknown }>;
     };

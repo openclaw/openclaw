@@ -446,6 +446,9 @@ export default {
                   enabled: true,
                   config: {
                     appServer: {
+                      command: createRequire(
+                        path.join(REPO_ROOT, "extensions/codex/package.json"),
+                      ).resolve("@openai/codex/bin/codex.js"),
                       sandbox: "workspace-write",
                       loopDetectionPreToolUseRelay: false,
                     },
