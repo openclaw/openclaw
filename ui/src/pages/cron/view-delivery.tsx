@@ -213,12 +213,6 @@ export function Advanced(
               help={t("cron.form.deleteAfterRunHelp")}
             />
           ) : undefined}
-          <ToggleRow
-            {...props}
-            field="clearAgent"
-            label={t("cron.form.clearAgentOverride")}
-            help={t("cron.form.clearAgentHelp")}
-          />
           <CronInput
             {...props}
             field="sessionKey"

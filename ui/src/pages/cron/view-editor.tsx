@@ -14,6 +14,7 @@ import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createCronEditorClearance } from "./editor-clearance.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
+import { CronAgentPicker } from "./view-agent.tsx";
 import { DeliverySection, Advanced } from "./view-delivery.tsx";
 import {
   collectBlockingFields,
@@ -327,15 +328,7 @@ function GeneralSection(props: CronProps) {
         errorKey="name"
         placeholder={t("cron.form.namePlaceholder")}
       />
-      <CronInput
-        {...props}
-        field="agentId"
-        label={t("cron.form.agentId")}
-        help={t("cron.form.agentHelp")}
-        list="cron-agent-suggestions"
-        disabled={props.form.clearAgent}
-        placeholder={t("cron.form.agentPlaceholder")}
-      />
+      <CronAgentPicker {...props} />
       <CronSelect
         {...props}
         field="ownerProfileId"
