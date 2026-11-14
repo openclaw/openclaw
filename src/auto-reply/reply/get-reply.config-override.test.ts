@@ -309,7 +309,7 @@ function makeReasoningModelConfig(
         },
         anthropic: {
           baseUrl: "https://api.anthropic.test/v1",
-          models: [makeTestModel("claude-fallback", "Claude Fallback", false)],
+          models: [makeTestModel("nonthinking-fallback", "Nonthinking Fallback", false)],
         },
       },
     },
@@ -321,7 +321,7 @@ async function mockAutoFallbackSession(modelSelectionLocked?: boolean) {
       sessionId: "fallback-session",
       updatedAt: Date.now(),
       providerOverride: "anthropic",
-      modelOverride: "claude-fallback",
+      modelOverride: "nonthinking-fallback",
       modelOverrideSource: "auto",
       modelOverrideFallbackOriginProvider: "openai",
       modelOverrideFallbackOriginModel: "gpt-5.5",
@@ -336,7 +336,7 @@ function mockFallbackDirectiveResult(sessionKey: string, overrides: DirectiveOve
   mocks.resolveReplyDirectives.mockImplementation(async () =>
     continueDirectives("hello", sessionKey, {
       provider: "anthropic",
-      model: "claude-fallback",
+      model: "nonthinking-fallback",
       ...overrides,
     }),
   );
@@ -435,10 +435,10 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
     expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
       provider: "anthropic",
-      model: "claude-fallback",
+      model: "nonthinking-fallback",
       hasResolvedHeartbeatModelOverride: false,
     });
-    expect(runParams()).toMatchObject({ provider: "anthropic", model: "claude-fallback" });
+    expect(runParams()).toMatchObject({ provider: "anthropic", model: "nonthinking-fallback" });
     expect(runParams()?.autoFallbackPrimaryProbe).toBeUndefined();
     expect(runParams()).not.toHaveProperty("configuredProfileId", "openai:metered");
   });
@@ -489,7 +489,12 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
     const catalog = [
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
-      { provider: "anthropic", id: "claude-fallback", name: "Claude Fallback", reasoning: false },
+      {
+        provider: "anthropic",
+        id: "nonthinking-fallback",
+        name: "Nonthinking Fallback",
+        reasoning: false,
+      },
     ];
     vi.mocked(catalogRuntime.loadPreparedModelCatalogSnapshot).mockResolvedValueOnce({
       entries: catalog,
@@ -499,7 +504,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     const prepared = await expectPreparedReply(makeReasoningModelConfig("high", true));
     expect(prepared?.modelState).toMatchObject({
       provider: "anthropic",
-      model: "claude-fallback",
+      model: "nonthinking-fallback",
     });
     expect(prepared).toMatchObject({
       provider: "openai",

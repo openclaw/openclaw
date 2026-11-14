@@ -111,7 +111,7 @@ describe("Anthropic 5.5 transport parity", () => {
   it.each([
     { source: "claude-haiku-5-5", target: "claude-haiku-5-5", preserve: true },
     { source: "claude-haiku-5-5", target: "claude-haiku-4-5", preserve: false },
-    { source: "claude-haiku-4-5", target: "claude-haiku-5-5", preserve: false },
+    { source: "claude-haiku-4-5", target: "claude-haiku-5-5", preserve: true },
     { source: "claude-haiku-5-5", target: "claude-fable-5-1", preserve: false },
     { source: "claude-haiku-5-5", target: "claude-sonnet-5-5", preserve: false },
     { source: "claude-opus-5-5", target: "claude-opus-5-5", preserve: true },

@@ -822,7 +822,7 @@ it("discovers deduplicated native model IDs through initialize without a turn", 
       id: "claude-future[1m]",
       name: "Future",
       thinkingLevelMap: {
-        off: "off",
+        off: null,
         minimal: null,
         low: "low",
         medium: null,

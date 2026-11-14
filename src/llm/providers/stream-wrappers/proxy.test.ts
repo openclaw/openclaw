@@ -159,7 +159,7 @@ describe("proxy stream wrappers", () => {
     "composes managed requests with %s retention and string-only=%s",
     (cacheRetention, requiresStringContent) => {
       const model: Model<"openai-completions"> & {
-        compat: { requiresStringContent: boolean };
+        compat: { requiresStringContent: boolean; supportsDeveloperRole: boolean };
       } = {
         api: "openai-completions",
         provider: "openrouter",
@@ -171,7 +171,7 @@ describe("proxy stream wrappers", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-        compat: { requiresStringContent },
+        compat: { requiresStringContent, supportsDeveloperRole: true },
       };
       let payload: Record<string, unknown> = {};
       const base: StreamFn = (resolvedModel, context, options) => {

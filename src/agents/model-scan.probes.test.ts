@@ -4,9 +4,11 @@ import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
 const { complete } = vi.hoisted(() => ({ complete: vi.fn() }));
+// mock-isolation: Keep model probes synthetic without registering real provider or transport state.
 vi.mock("@openclaw/ai", () => ({
   createLlmRuntime: () => ({ complete, registry: {} }),
   configureAiTransportHost: vi.fn(),
+  getDefaultAiTransportHost: () => ({}),
 }));
 vi.mock("@openclaw/ai/providers", () => ({ registerBuiltInApiProviders: vi.fn() }));
 

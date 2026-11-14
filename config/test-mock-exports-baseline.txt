@@ -2708,7 +2708,6 @@
 ["src/agents/model-provider-auth.test.ts","./model-auth-availability.js","bed343575206fad890a4b4b2df278cd66d9b27258c82a838aee457544a9d6f40",1]
 ["src/agents/model-provider-auth.test.ts","./model-auth.js","f18c2ba1bb018c636da9674fdd329f86d170e86f8c29f0f7ac2677673a67f492",1]
 ["src/agents/model-runtime-choice.test.ts","./prepared-model-catalog.js","312007b4b9576ba99d7f54f4c0c80464768e25aace6b87ae41658d2c71bbbb1a",1]
-["src/agents/model-scan.probes.test.ts","@openclaw/ai","c19f0736091f7306e6fccb7bb0d636f47ab441c6b970f56624e87e118a8e9c6e",1]
 ["src/agents/model-scan.probes.test.ts","@openclaw/ai/providers","d33f70a034f7d0491fc5bc742f77c351e88e82ff526cb1ec4e2569921d3c5e61",1]
 ["src/agents/model-selection-manifest-workspace.test.ts","../plugins/manifest-contract-eligibility.js","7b191740e9f7bd5149038caca6c6847f1f341f9bc3ed44cf7d95755e44b37b10",1]
 ["src/agents/model-selection-manifest-workspace.test.ts","../plugins/runtime-state.js","2fdbf3b4dd6c19730db82846f376258d388c737340b3f22d0913033d73b2d0ec",1]
