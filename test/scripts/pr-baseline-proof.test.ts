@@ -461,7 +461,7 @@ describePosix("proof baseline with retained predecessor authority", () => {
     writeFileSync(archive, original.toString() + "\n");
     const tampered = f.run(command, f.args);
     expect(tampered.status).not.toBe(0);
-    expect(tampered.stdout + tampered.stderr).toMatch(/Retained successor proof changed/u);
+    expect(tampered.stdout + tampered.stderr).toContain("Proof baseline source identity changed");
     writeFileSync(archive, original);
     const marker = f.local("bound-custody-replaced");
     replaceCustodyAfterObservation(f, marker);
@@ -666,6 +666,178 @@ function nativeTrace(
 }
 
 describePosix("proof baseline from the retained publication lifecycle", () => {
+  it("retries a completed baseline from its original source review after the default review is replaced", () => {
+    const f = fixture();
+    f.writeLocal("correction-review.json", f.readLocal("source-review.json"));
+    const args = f.args.filter(
+      (value, index) => value !== "--source-review" && f.args[index - 1] !== "--source-review",
+    );
+    const first = f.run(command, args, f.extra);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const candidate = f.prepGit("rev-parse", "HEAD");
+    const record = JSON.parse(f.readLocal("prepare-baseline.json").toString());
+    expect(f.oid("correction-review.json")).not.toBe(f.oid("source-review.json"));
+    const before = nativeState(f);
+    const repeated = f.run(command, args, f.extra);
+    expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
+    expect(nativeState(f)).toEqual(before);
+    const original = join(f.worktree, record.archive, "baseline-source-review.json");
+    writeFileSync(original, f.readLocal("source-review.json").toString() + "\n");
+    // Even an available live review with the requested hash cannot replace the
+    // completed operation's canonical archived source bytes.
+    f.writeLocal("correction-review.json", f.readLocal("source-review.json"));
+    const changed = f.run(command, args, f.extra);
+    expect(changed.status).not.toBe(0);
+    expect(changed.stderr).toContain("Proof baseline source identity changed");
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(candidate);
+    expect(existsSync(f.effects)).toBe(false);
+  });
+
+  it.each(["closure", "commit"])(
+    "keeps reviewed workflow identity when main advances by %s",
+    (change) => {
+      const f = fixture();
+      const retained = JSON.parse(f.git(f.repo, "show", f.binding + ":binding.json")).source;
+      const acquireMain = () => {
+        const fetchHead = readFileSync(join(f.repo, ".git/FETCH_HEAD"));
+        f.git(
+          f.repo,
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          "fetch",
+          "--no-auto-maintenance",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--refmap=",
+          "origin",
+          "refs/heads/main:refs/remotes/origin/main",
+        );
+        expect(readFileSync(join(f.repo, ".git/FETCH_HEAD"))).toEqual(fetchHead);
+      };
+      const refuseStaleCache = (operation: string, args: string[]) => {
+        f.git(f.repo, "update-ref", "refs/remotes/origin/main", retained);
+        const before = nativeState(f);
+        const refused = f.run(operation, args, f.extra);
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain(
+          "Reviewed proof workflow is absent from cached official main",
+        );
+        expect(nativeState(f)).toEqual(before);
+        acquireMain();
+      };
+      const advance = (label: string) => {
+        if (change === "closure") {
+          const path = join(f.repo, "scripts/pr-lib/common.sh");
+          writeFileSync(path, readFileSync(path, "utf8") + `\n# ${label}\n`);
+          f.git(f.repo, "add", "scripts/pr-lib/common.sh");
+        }
+        f.git(f.repo, "commit", "--allow-empty", "-qm", `test: ${label}`);
+        const main = f.git(f.repo, "rev-parse", "HEAD");
+        acquireMain();
+        return main;
+      };
+      const main = advance("main advanced before baseline");
+      refuseStaleCache(command, f.args);
+      const advancedMain = f.git(
+        f.repo,
+        "commit-tree",
+        `${main}^{tree}`,
+        "-p",
+        main,
+        "-m",
+        "test: main advanced during qualification",
+      );
+      const fetches = f.local("checkpoint-fetches");
+      const proxy = f.extra.OPENCLAW_PR_GIT;
+      const originalProxy = readFileSync(proxy, "utf8");
+      // Move both live main and its shared tracking ref after the real private
+      // fetch. Baseline planning must consume that one captured checkpoint.
+      writeFileSync(
+        proxy,
+        originalProxy.replace(
+          'exec git "$@"',
+          `for arg in "$@"; do
+  case "$arg" in refs/heads/main|+refs/heads/main:*)
+    git "$@" || exit $?
+    printf '%s\\n' "$arg" >> "$FIXTURE_CHECKPOINT_FETCHES"
+    git -C "$FIXTURE_REPO" update-ref refs/heads/main "$FIXTURE_ADVANCED_MAIN" "$FIXTURE_CAPTURED_MAIN" || exit $?
+    git -C "$FIXTURE_REPO" update-ref refs/remotes/origin/main "$FIXTURE_ADVANCED_MAIN" "$FIXTURE_CAPTURED_MAIN" || exit $?
+    exit 0 ;;
+  esac
+done
+exec git "$@"`,
+        ),
+      );
+      // Caller-relative review selection must survive materialization and the
+      // supervisor changing cwd to the canonical repository.
+      const args = f.args.map((value, index) =>
+        f.args[index - 1] === "--source-review" ? ".local/source-review.json" : value,
+      );
+      const refreshed = spawnSync(join(f.repo, "scripts/pr"), [command, "42", ...args], {
+        cwd: f.worktree,
+        env: {
+          ...f.env,
+          ...f.extra,
+          FIXTURE_CHECKPOINT_FETCHES: fetches,
+          FIXTURE_CAPTURED_MAIN: main,
+          FIXTURE_ADVANCED_MAIN: advancedMain,
+        },
+        encoding: "utf8",
+      });
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(fetches, "utf8").trim().split("\n")).toEqual([
+        expect.stringMatching(/^\+refs\/heads\/main:refs\/openclaw\/pr-workflow-qualification\//u),
+      ]);
+      expect(f.git(f.repo, "rev-parse", "refs/remotes/origin/main")).toBe(advancedMain);
+      writeFileSync(proxy, originalProxy);
+      const candidate = f.prepGit("rev-parse", "HEAD");
+      const baseline = f.readLocal("prepare-baseline.json");
+      expect(JSON.parse(baseline.toString())).toMatchObject({
+        capturedMain: main,
+        baselineHead: f.baseline,
+        proofSource: { workflowSource: f.workflow, sourceReviewOid: f.oid("source-review.json") },
+      });
+      advance("main advanced before candidate review");
+      f.writeLocal(
+        "correction-review.json",
+        JSON.stringify(f.proofReview(candidate, f.published, f.oid("review.json"))),
+      );
+      const review = f.readLocal("correction-review.json");
+      advance("main advanced before proof succession");
+      const successorArgs = [
+        "--for-proof",
+        ...flags({
+          "--expected-binding": f.binding,
+          "--from-workflow": retained,
+          "--to-workflow": f.workflow,
+          "--expected-head": candidate,
+          "--expected-tree": f.tree,
+          "--expected-review": f.oid("correction-review.json"),
+          "--expected-hosted-head": f.published,
+        }),
+      ];
+      refuseStaleCache("prepare-workflow-successor", successorArgs);
+      const succeeded = f.run("prepare-workflow-successor", successorArgs, f.extra);
+      expect(succeeded.status, succeeded.stdout + succeeded.stderr).toBe(0);
+      const binding = f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42");
+      expect(JSON.parse(f.git(f.repo, "show", binding + ":binding.json")).source).toBe(f.workflow);
+      advance("main advanced before proof publication");
+      const published = f.run("prepare-publish-for-proof", [], f.extra);
+      expect(published.status, published.stdout + published.stderr).toBe(0);
+      const receipt = f.readLocal("prepare-push-result.env");
+      expect(f.run("prepare-publish-for-proof", [], f.extra).status).toBe(0);
+      expect(f.readLocal("prepare-push-result.env")).toEqual(receipt);
+      expect(f.readLocal("correction-review.json")).toEqual(review);
+      expect(f.readLocal("prepare-baseline.json")).toEqual(baseline);
+      expect(f.git(f.repo, "rev-parse", "topic")).toBe(candidate);
+      expect(readFileSync(f.effects, "utf8")).toBe("push\n");
+      f.prepGit("verify-commit", candidate);
+      f.expectAbsent("prep.env", "gates.env");
+    },
+  );
+
   it("refuses both old routes, creates a descendant, then publishes only with new exact-candidate proof review", () => {
     const f = fixture();
     const ordinary = f.run("prepare-correction-continue", f.continuation, f.extra);
@@ -1078,15 +1250,17 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     const expected =
       fault === "wrong-review"
         ? /Selected proof source review changed/u
-        : fault === "wrong-proof-lease"
-          ? /Proof source hosted lease changed/u
-          : fault === "private-baseline"
-            ? /merge-base --is-ancestor/u
-            : fault.startsWith("unsigned")
-              ? /verify-commit/u
-              : fault === "stale-lease"
-                ? /PR head changed|PR identity changed/u
-                : /Proof publication requires|workflow continuation changed|does not exist/u;
+        : fault === "wrong-workflow"
+          ? /Reviewed proof workflow is absent from cached official main/u
+          : fault === "wrong-proof-lease"
+            ? /Proof source hosted lease changed/u
+            : fault === "private-baseline"
+              ? /merge-base --is-ancestor/u
+              : fault.startsWith("unsigned")
+                ? /verify-commit/u
+                : fault === "stale-lease"
+                  ? /PR head changed|PR identity changed/u
+                  : /Proof publication requires|workflow continuation changed|does not exist/u;
     expect(error).toMatch(expected);
     f.expectSnapshot(f.before);
     expect(existsSync(f.local("prepare-baseline.json"))).toBe(false);
@@ -1192,6 +1366,13 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
       Buffer.from(JSON.parse(journal.toString()).binding as string, "base64").toString(),
     );
     expect(record.coauthors).toEqual(coauthors);
+    const invalidJournal = { ...JSON.parse(journal.toString()), source: f.published };
+    f.writeLocal("review-transition.json", JSON.stringify(invalidJournal));
+    const malformed = f.run(command, args, f.extra);
+    expect(malformed.status).not.toBe(0);
+    expect(malformed.stderr).toContain("Proof baseline source identity changed");
+    expect(JSON.parse(f.readLocal("review-transition.json").toString())).toEqual(invalidJournal);
+    f.writeLocal("review-transition.json", journal);
     const beforeChangedCredit = nativeState(f);
     f.writeLocal("coauthors.json", JSON.stringify(["Other Example <other@example.invalid>"]));
     const changedCredit = f.run(command, args, f.extra);
@@ -1223,6 +1404,9 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     expect(f.readLocal("review-transition.json")).toEqual(journal);
     // The injected foreign ref belongs only to this settled private fixture.
     f.git(f.repo, "update-ref", "-d", "refs/openclaw/pr-operation-locks/42", f.source);
+    // Recovery and completed retries own the archived source review, including
+    // after the caller removes its external input file.
+    unlinkSync(f.local("source-review.json"));
     const beforeRecovery = nativeState(f);
     const recovered = f.run(command, args, f.extra);
     nativeTrace(f, "allowed-original-transition-recovery", beforeRecovery, recovered, 0);

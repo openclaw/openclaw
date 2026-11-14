@@ -431,6 +431,10 @@ the transition or restore an archived gate stamp. Both states require fresh
 ordinary `prepare-gates` before qualified correction publication or merge.
 For an explicitly authorized pending-proof correction, `--for-proof` instead
 validates the typed [proof-publication review](/reference/scripts/pr-preparation#publish-a-candidate-for-required-proof).
+It selects the exact reviewed workflow from authenticated official-main history,
+even when main advances before succession. A private main checkpoint authenticates
+the retained-to-reviewed ancestry under the operation lock; it does not replace
+the reviewed source or require its executable closure to match newer main.
 It admits only exact-commit proof publication while NEEDS WORK and unresolved
 findings continue to block ordinary qualification and merge. This command
 does not change the candidate, publish it, waive CI/security/review requirements,

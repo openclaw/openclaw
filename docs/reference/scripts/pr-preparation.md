@@ -100,7 +100,7 @@ finding sets, and changed source or review authority refuse publication.
 If the retained workflow predates this command, first land the capability through
 ordinary review and qualification. Then use the existing exact-identity
 `prepare-workflow-successor` command with `--for-proof`, naming that authenticated
-current-main workflow in the review record. It preserves the same candidate,
+main-history workflow in the review record. It preserves the same candidate,
 review, predecessor binding, and atomic operation-lock/binding transaction.
 The record keeps the predecessor binding OID; the successor binds those exact
 review bytes. Neither an unlanded implementation nor a manual binding edit can
@@ -131,11 +131,33 @@ scripts/pr prepare-baseline-refresh <PR> --for-proof \
   --baseline <canonical-main-SHA>
 ```
 
-This explicit producer invocation selects authenticated current official-main
-workflow code through the existing native selection descriptor and private
-qualification fetch. It does not replace the retained workflow binding. Land
+This explicit producer invocation selects the workflow commit named by the exact
+`--expected-review` bytes. Under the operation lock, a private official-main fetch
+authenticates that the retained workflow is an ancestor of the reviewed workflow,
+and the reviewed workflow is an ancestor of captured main. The complete executable
+closure and dependencies use that reviewed commit; captured main supplies the
+operation's baseline checkpoint. Later main movement does not replace the reviewed
+workflow identity. It does not replace the retained workflow binding. Land
 and independently review this capability first; an unlanded wrapper cannot admit
 itself, and developer-wrapper opt-in still grants no authority.
+
+Both proof commands first authenticate the reviewed workflow against the canonical
+owner's cached `refs/remotes/origin/main`, before executing that workflow. A stale
+cache therefore refuses even when the reviewed workflow has landed. Keep the
+review unchanged. Resolve the canonical owner with `gwt owner`, check `low-data
+status`, verify its `origin` is the official OpenClaw repository, and verify the
+tracking ref is nonsymbolic. Then acquire main through the guarded Git command:
+
+```bash
+git -C <canonical-owner> -c gc.auto=0 -c maintenance.auto=false fetch \
+  --no-auto-maintenance --no-tags --no-write-fetch-head --refmap= \
+  origin refs/heads/main:refs/remotes/origin/main
+```
+
+Using the named canonical `origin` preserves its configured transport and partial
+clone filter. Do not force the ref, bypass low-data admission, or replace the
+reviewed source with a local commit. Retry the original proof command after
+acquisition; its locked private-main checkpoint still revalidates ancestry.
 
 The source review must be a fresh independent exact-source correction review with
 that same typed pending-proof authorization, incoming review, workflow source,
@@ -202,19 +224,27 @@ the same selected identities; a different request cannot adopt its journal.
 
 The source review authorizes materialization only. The producer initializes a
 new, unapproved exact-candidate review through the existing correction-review
-owner while it still owns current-main execution. Pending IMPORTANT findings from
+owner while it still owns the reviewed workflow execution. Pending IMPORTANT findings from
 the source review remain visible in that template, including findings absent from
 the original incoming review. READY, successful tests, and proof-publication
 authorization are never inherited. Complete that independent
 review for the new candidate; if the retained workflow predates this capability,
 use the existing exact-identity `prepare-workflow-successor --for-proof` operation
-to advance it to the authenticated current-main workflow named by that new review.
+to advance it to the authenticated main-history workflow named by that new review.
 Only that new exact-candidate typed NEEDS WORK authorization can use `prepare-publish-for-proof`. No successful gate
 or qualified preparation is created. Ordinary gates, push, sync, and merge still
 require READY. `--for-proof` remains exclusive to `prepare-baseline-refresh`;
 using it with `prepare-baseline-successor` or remote signing, incomplete predecessor
 pairs, mixed continuation options, duplicate options, and unknown options refuses before locking.
 Qualified version-1 refresh, successor, and signing contracts are unchanged.
+
+Retries select source review bytes by the existing transition phase. A pending
+journal selects its signed target binding; a completed baseline selects its exact
+signed HEAD binding. Both read `baseline-source-review.json` from that binding's
+archive and require the original review OID. They never substitute a new candidate
+review or another archive. Invalid pending evidence stops recovery even when a
+live review is available. Before a transition, the selected source-review file
+remains authoritative, with caller-relative paths preserved across handoffs.
 
 ## Signing a baseline on another host
 

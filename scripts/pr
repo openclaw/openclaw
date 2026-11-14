@@ -175,6 +175,9 @@ pr_read_workflow_successor_request "$@" || {
 # Lexical baseline admission precedes source selection and lock acquisition.
 # The admitted workflow rechecks semantic identities against its owned checkout.
 PR_BASELINE_FOR_PROOF=0
+PR_BASELINE_REVIEW=""
+PR_BASELINE_REVIEW_PATH=""
+PR_BASELINE_HEAD=""
 pr_preflight_baseline_arguments() {
   local command="${1-}" proof=false seen=" " option value
   if [ "$command" = prepare-baseline-signing-continue ]; then
@@ -201,6 +204,11 @@ pr_preflight_baseline_arguments() {
       --signer) [ "$command" = prepare-baseline-signing-request ] || return 2 ;;
       *) return 2 ;;
     esac
+    if [ "$option" = --expected-review ]; then PR_BASELINE_REVIEW="$value"; fi
+    if [ "$option" = --expected-head ]; then PR_BASELINE_HEAD="$value"; fi
+    if [ "$option" = --source-review ]; then
+      PR_BASELINE_REVIEW_PATH=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$value") || return 1
+    fi
     shift 2
   done
   if [ "$proof" = true ]; then
@@ -226,7 +234,7 @@ PR_WORKFLOW_RECOVERY_OUTCOME=""
 PR_WORKFLOW_RECOVERY_HEAD=""
 PR_WORKFLOW_RECOVERY_ACTION=merge
 PR_WORKFLOW_ADMISSION=0
-# This one producer invocation uses authenticated current-main code; the retained
+# This producer uses the exact reviewed, main-authenticated code; the retained
 # workflow binding stays unchanged until an independently reviewed successor.
 if [ "$requested_subcommand" = prepare-baseline-refresh ] && [ "$PR_BASELINE_FOR_PROOF" = 1 ]; then
   PR_WORKFLOW_ADMISSION=proof-baseline
@@ -289,7 +297,7 @@ pr_read_current_workflow_request "$@" || {
 pr_batch_wrapper_git() {
   node --input-type=module - "$GIT_EXEC" "$@" <<'EOF_WRAPPER_GIT'
 import { spawnSync } from "node:child_process";
-import { fstatSync, lstatSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const [binary, operation, repository, revision, ...paths] = process.argv.slice(2);
@@ -410,6 +418,69 @@ try {
         throw new Error("Current workflow first admission requires no retained outcome; reconcile through the bound workflow");
       }
     };
+    const requireProofAdmission = (source, reviewOid, reviewPath, anchor = "refs/remotes/origin/main", expectedHead = "") => {
+      let retainedSource;
+      const regular = path => {
+        const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          if (!fstatSync(fd).isFile()) throw new Error("Invalid proof source review");
+          return readFileSync(fd);
+        } finally { closeSync(fd); }
+      };
+      const worktree = join(repository, `.worktrees/pr-${revision}`);
+      if (expectedHead) {
+        const journalPath = join(worktree, ".local/review-transition.json");
+        const pending = lstatSync(journalPath, { throwIfNoEntry: false });
+        const head = git(worktree, ["rev-parse", "HEAD"]).toString().trim();
+        if (pending || head !== expectedHead) {
+          // A transition retires the live review. Select its original signed
+          // source record by phase; malformed pending evidence never falls back.
+          const journal = pending ? JSON.parse(regular(journalPath)) : null;
+          const binding = journal ? Buffer.from(journal.binding, "base64") : regular(join(worktree, ".local/prepare-baseline.json"));
+          const record = JSON.parse(binding);
+          const target = journal?.target ?? head;
+          const bindingOid = git(repository, ["hash-object", "--no-filters", "--stdin"], binding).toString().trim();
+          if (journal && (journal.mode !== "prep" || journal.source !== expectedHead) ||
+              !oid.test(target) || record.version !== 2 || record.purpose !== "proof" || record.pr !== Number(revision) ||
+              record.sourceHead !== expectedHead || record.proofSource?.sourceReviewOid !== reviewOid ||
+              !/^\.local\/prep-evidence\.[A-Za-z0-9]+$/.test(record.archive) ||
+              !run(["show", "-s", "--format=%B", target]).split("\n").includes(`Baseline-Refresh: ${bindingOid}`)) {
+            throw new Error("Proof baseline source identity changed.");
+          }
+          run(["verify-commit", target]);
+          retainedSource = record.proofSource.workflowSource;
+          reviewPath = join(worktree, record.archive, "baseline-source-review.json");
+        }
+      }
+      const bytes = regular(reviewPath);
+      if (!oid.test(reviewOid)) throw new Error("Invalid proof source review");
+      if (git(repository, ["hash-object", "--no-filters", "--stdin"], bytes).toString().trim() !== reviewOid) {
+        throw new Error(retainedSource === undefined ? "Selected proof source review changed." : "Proof baseline source identity changed.");
+      }
+      const proof = JSON.parse(bytes).correction?.proofPublication;
+      if (proof?.version !== 1 || proof.kind !== "published-candidate-proof" ||
+          !oid.test(proof.workflowSource) || proof.workflowBinding !== current?.oid ||
+          retainedSource !== undefined && proof.workflowSource !== retainedSource ||
+          source !== undefined && proof.workflowSource !== source) {
+        throw new Error("Proof publication requires an exact typed workflow authorization.");
+      }
+      // Main authenticates the reviewed source, but never replaces its identity.
+      // Full review/candidate policy remains with the preparation owner.
+      requireAdmission(run(["rev-parse", "--verify", `${anchor}^{commit}`]), anchor);
+      try {
+        requireSource(current.source, proof.workflowSource);
+      } catch {
+        throw new Error("Proof publication requires a workflow descended from the retained source.");
+      }
+      try {
+        requireSource(proof.workflowSource, anchor);
+      } catch {
+        throw new Error(anchor === "refs/remotes/origin/main"
+          ? "Reviewed proof workflow is absent from cached official main. Land it first; if already landed, refresh the canonical owner's official main tracking ref as documented in PR preparation, then retry the unchanged review."
+          : "Reviewed proof workflow is not an ancestor of captured official main.");
+      }
+      return proof.workflowSource;
+    };
     const requireSuccessor = (source, value, anchor = "refs/remotes/origin/main") => {
       const request = JSON.parse(value);
       const keys = ["binding", "from", "head", "hostedHead", ...(request.purpose === "proof" ? ["purpose"] : []), "review", "to", "tree"];
@@ -419,7 +490,9 @@ try {
           request.to !== source || request.from === source) throw new Error("Workflow successor identity changed");
       // The common predicate authenticates main and excludes any merge outcome;
       // it grants none of the separate admin first-admission permissions.
-      requireAdmission(source, anchor);
+      if (request.purpose === "proof") {
+        requireProofAdmission(source, request.review, join(repository, `.worktrees/pr-${revision}/.local/correction-review.json`), anchor);
+      } else requireAdmission(source, anchor);
       return request;
     };
     const requireRecovery = (source, outcome, replacementHead, anchor = "refs/remotes/origin/main", action = "merge") => {
@@ -453,8 +526,12 @@ try {
       const historical = readAt(paths[0]);
       if (historical.source !== paths[1]) throw new Error("Historical workflow source changed");
       process.stdout.write(historical.source);
+    } else if (operation === "workflow-proof-select") {
+      const source = requireProofAdmission(undefined, paths[0], paths[1], undefined, paths[2]);
+      process.stdout.write(`${current.oid}\t${source}\n`);
     } else if (operation === "workflow-successor-select") {
-      const source = run(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"]);
+      const request = JSON.parse(paths[0]);
+      const source = request.purpose === "proof" ? request.to : run(["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"]);
       requireSuccessor(source, paths[0]);
       process.stdout.write(`${current.oid}\t${source}\n`);
     } else if (operation === "workflow-successor-commit") {
@@ -514,12 +591,13 @@ try {
       if (current && operation === "workflow-read") requireSource(current.source);
       if (current) process.stdout.write(`${current.oid}\t${current.source}\n`);
     } else if (operation === "workflow-context-write") {
-      const [source, binding, creator, bootstrapFlag, outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge"] = paths;
+      const [source, binding, creator, bootstrapFlag, outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge", review = "", reviewPath = "", expectedHead = ""] = paths;
       const bootstrap = bootstrapFlag === "1";
       if (successor) {
         if (bootstrap || outcome || admission !== "0") throw new Error("Conflicting workflow successor selection");
         requireSuccessor(source, successor);
-      } else if (isCurrentAdmission(admission)) requireAdmission(source);
+      } else if (admission === "proof-baseline") requireProofAdmission(source, review, reviewPath, undefined, expectedHead);
+      else if (isCurrentAdmission(admission)) requireAdmission(source);
       else if (outcome) requireRecovery(source, outcome, replacementHead, undefined, action);
       if (!oid.test(source) || (current?.oid ?? "") !== binding || !successor && !isCurrentAdmission(admission) && !outcome && !bootstrap && current && current.source !== source ||
           !/^[1-9][0-9]*$/.test(creator)) throw new Error("Workflow selection changed before handoff");
@@ -528,7 +606,8 @@ try {
       } else requireSource(source);
       process.stdout.write(JSON.stringify({ version: 1, owner, repository: identity, pr: revision, source, binding, creator, bootstrap,
         ...(outcome ? { recovery: { outcome, replacementHead, action } } : {}), ...(isCurrentAdmission(admission) ? { admission: admission === "1" ? true : admission } : {}),
-        ...(successor ? { successor: JSON.parse(successor) } : {}) }));
+        ...(successor ? { successor: JSON.parse(successor) } : {}),
+        ...(admission === "proof-baseline" ? { proofReview: [review, reviewPath, expectedHead] } : {}) }));
     } else if (operation === "workflow-context-read") {
       const held = fstatSync(8);
       if (!held.isFile() || held.uid !== process.getuid() || (held.mode & 0o777) !== 0o400 || held.nlink !== 0 ||
@@ -538,7 +617,7 @@ try {
       const bytes = Buffer.alloc(held.size);
       if (readSync(8, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error("Incomplete workflow selection");
       const selection = JSON.parse(bytes.toString("utf8"));
-      const [creator, supervisor, outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge"] = paths;
+      const [creator, supervisor, outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge", review = "", reviewPath = "", expectedHead = ""] = paths;
       if (successor) {
         if (JSON.stringify(selection.successor) !== successor || selection.bootstrap || outcome || admission !== "0") {
           throw new Error("Workflow successor selection changed across handoff");
@@ -547,7 +626,10 @@ try {
       }
       if (isCurrentAdmission(admission)) {
         if (selection.admission !== (admission === "1" ? true : admission) || selection.bootstrap || outcome) throw new Error("Workflow admission selection changed across handoff");
-        requireAdmission(selection.source);
+        if (admission === "proof-baseline") {
+          if (JSON.stringify(selection.proofReview) !== JSON.stringify([review, reviewPath, expectedHead])) throw new Error("Proof review selection changed across handoff");
+          requireProofAdmission(selection.source, review, reviewPath, undefined, expectedHead);
+        } else requireAdmission(selection.source);
       }
       if (outcome) {
         if (JSON.stringify(selection.recovery) !== JSON.stringify({ outcome, replacementHead, action }) || selection.bootstrap) {
@@ -557,7 +639,7 @@ try {
       }
       const supervised = selection.creator === supervisor && process.env.OPENCLAW_PR_DEDICATED_PROCESS_GROUP === "1" &&
         process.env.OPENCLAW_PR_LOCK_NOTIFY_FD === "3" && process.env.OPENCLAW_PR_LOCK_SUPERVISOR_PID === supervisor;
-      const keys = ["binding", "bootstrap", "creator", "owner", "pr", "repository", "source", "version", ...(outcome ? ["recovery"] : []), ...(isCurrentAdmission(admission) ? ["admission"] : []), ...(successor ? ["successor"] : [])].sort();
+      const keys = ["binding", "bootstrap", "creator", "owner", "pr", "repository", "source", "version", ...(outcome ? ["recovery"] : []), ...(isCurrentAdmission(admission) ? ["admission"] : []), ...(successor ? ["successor"] : []), ...(admission === "proof-baseline" ? ["proofReview"] : [])].sort();
       if (JSON.stringify(Object.keys(selection).sort()) !== JSON.stringify(keys) ||
           selection.version !== 1 || selection.owner !== owner || selection.repository !== identity || selection.pr !== revision ||
           typeof selection.bootstrap !== "boolean" ||
@@ -593,11 +675,12 @@ try {
       }
       process.stdout.write(selected);
     } else if (operation === "workflow-admit") {
-      const [source, expected, anchor = "refs/remotes/origin/main", outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge"] = paths;
+      const [source, expected, anchor = "refs/remotes/origin/main", outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge", review = "", reviewPath = "", expectedHead = ""] = paths;
       if (successor) {
         if (outcome || admission !== "0") throw new Error("Conflicting workflow successor admission");
         requireSuccessor(source, successor, anchor);
-      } else if (isCurrentAdmission(admission)) requireAdmission(source, anchor);
+      } else if (admission === "proof-baseline") requireProofAdmission(source, review, reviewPath, anchor, expectedHead);
+      else if (isCurrentAdmission(admission)) requireAdmission(source, anchor);
       else if (outcome) requireRecovery(source, outcome, replacementHead, anchor, action);
       if (!oid.test(source) || (current?.oid ?? "") !== expected || !successor && !isCurrentAdmission(admission) && !outcome && current && current.source !== source) {
         throw new Error("Workflow binding changed before admission");
@@ -754,11 +837,19 @@ pr_read_workflow_binding() {
   case "$requested_subcommand" in gc | lock-recover | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
   [[ "${2-}" =~ ^[1-9][0-9]*$ ]] || return 0
   PR_WORKFLOW_PR="$2"
+  if [ "$PR_BASELINE_FOR_PROOF" = 1 ] && [ -z "$PR_BASELINE_REVIEW_PATH" ]; then
+    PR_BASELINE_REVIEW_PATH="$canonical_repo_root/.worktrees/pr-$2/.local/correction-review.json"
+  fi
   if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ]; then
     binding=$(pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" "$PR_WORKFLOW_PR" "$$" "$PPID" \
-      "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}") || return 1
+      "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}" "$PR_BASELINE_REVIEW" "$PR_BASELINE_REVIEW_PATH" "$PR_BASELINE_HEAD") || return 1
     IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION PR_WORKFLOW_BOOTSTRAP <<< "$binding"
   else
+    if [ "$PR_BASELINE_FOR_PROOF" = 1 ]; then
+      binding=$(pr_batch_wrapper_git workflow-proof-select "$canonical_repo_root" "$PR_WORKFLOW_PR" "$PR_BASELINE_REVIEW" "$PR_BASELINE_REVIEW_PATH" "$PR_BASELINE_HEAD") || return 1
+      IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
+      return 0
+    fi
     if [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
       binding=$(pr_batch_wrapper_git workflow-successor-select "$canonical_repo_root" "$PR_WORKFLOW_PR" "${PR_WORKFLOW_SUCCESSOR:-}") || return 1
       IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
@@ -814,7 +905,7 @@ hold_pr_workflow_selection() {
   context=$(mktemp "${TMPDIR:-/tmp}/openclaw-pr-selection.XXXXXX") || return 1
   if ! pr_batch_wrapper_git workflow-context-write "$canonical_repo_root" "$PR_WORKFLOW_PR" \
     "$1" "$PR_WORKFLOW_BINDING_OID" "$$" "$PR_WORKFLOW_BOOTSTRAP" \
-    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}" > "$context" || ! chmod 400 "$context"; then
+    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}" "$PR_BASELINE_REVIEW" "$PR_BASELINE_REVIEW_PATH" "$PR_BASELINE_HEAD" > "$context" || ! chmod 400 "$context"; then
     rm -f "$context"
     return 1
   fi
@@ -844,7 +935,12 @@ admit_pr_workflow_binding() {
     fi
     main=$(pr_git -C "$canonical_repo_root" rev-parse --verify "$qualification_ref^{commit}") || return 1
     PR_WORKFLOW_TRUST_ANCHOR="$main"
-    if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" != 0 ] || [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
+    if [ "$PR_BASELINE_FOR_PROOF" = 1 ] || [[ "${PR_WORKFLOW_SUCCESSOR:-}" = *'"purpose":"proof"'* ]]; then
+      # The reviewed closure stays fixed while the lock's private main checkpoint
+      # authenticates ancestry and supplies baseline planning for this operation.
+      selected="$PR_WORKFLOW_SOURCE_REVISION"
+      PR_MAIN_SHA="$main"
+    elif [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ] || [ "${PR_WORKFLOW_ADMISSION:-0}" != 0 ] || [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
       # Current main is selected only for this operation. Keep the historical
       # binding intact so normal reconciliation still uses its admitted source.
       verify_pr_workflow_source "$main" "$script_parent_dir/.." || {
@@ -867,7 +963,7 @@ admit_pr_workflow_binding() {
   mark_pr_operation_side_effects_started || return 1
   PR_WORKFLOW_BINDING_OID=$(pr_batch_wrapper_git workflow-admit "$canonical_repo_root" "$1" \
     "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$PR_WORKFLOW_TRUST_ANCHOR" \
-    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}") || return 1
+    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}" "$PR_BASELINE_REVIEW" "$PR_BASELINE_REVIEW_PATH" "$PR_BASELINE_HEAD") || return 1
   if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ]; then
     PR_WORKFLOW_RECOVERY_PROVENANCE=$(pr_batch_wrapper_git workflow-recovery-provenance "$canonical_repo_root" "$1" \
       "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "$PR_WORKFLOW_TRUST_ANCHOR" "$PR_WORKFLOW_SOURCE_REVISION" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}") || return 1
@@ -1578,7 +1674,7 @@ Usage:
     Recover any retained operation lock separately after proving its tools quiescent.
     Preserves source, review and publication facts; archives and invalidates gates before the binding CAS.
     Does not publish, merge or waive gates. Run ordinary prepare-gates after success.
-    --for-proof instead requires the exact typed pending-proof publication review; ordinary gates remain blocked.
+    --for-proof uses the main-authenticated workflow named by the exact pending-proof review; ordinary gates remain blocked.
   scripts/pr prepare-publish-for-proof <PR>
     Publish an exact signed correction for enumerated proof prerequisites. Keeps NEEDS WORK and unresolved findings.
     Requires no armed auto-merge/queue. Never qualifies gates or merge, and never creates a GraphQL commit alias.
