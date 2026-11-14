@@ -54,12 +54,17 @@ function enqueueExecExitNotification(
 export function prepareExecExitNotification(
   session: ProcessSession,
   subagentSession: boolean,
+  sessionsYieldAvailable: boolean,
 ): Promise<void> | undefined {
   if (!session.notifyOnExit || !session.sessionKey) {
     return undefined;
   }
   const hiddenSubagent = subagentSession || isSubagentSessionKey(session.sessionKey);
   // A one-shot run ends with its final reply; only a yield awaiting the command resumes it.
+  // Without sessions_yield (collectors, filtered tools) a hidden subagent keeps its passive notice.
+  if (hiddenSubagent && !sessionsYieldAvailable) {
+    return undefined;
+  }
   const oneShot = hiddenSubagent || isCronRunSessionKey(session.sessionKey);
   // Ordinary event admission can address the cron run directly, unlike heartbeat drains.
   const targetKey = oneShot
@@ -87,7 +92,7 @@ export function prepareExecExitNotification(
           }
         };
       }
-      if (oneShot) {
+      if (oneShot && sessionsYieldAvailable) {
         session.exitWakeAfterYield = true;
       }
       session.notifySessionTarget = target;

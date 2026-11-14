@@ -59,6 +59,7 @@ type ExitWakeFacts = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   notifySessionTarget?: object;
+  assertExitNotificationAcceptanceCurrent?: () => void;
   exitWakeAfterYield?: true;
   processActivity?: { deadlineAtMs?: number };
 };
@@ -74,7 +75,10 @@ export function hasExitWake(session: ExitWakeFacts): boolean {
     // An explicit tools.exec.notifyOnExitEmptySuccess=false opt-out leaves silent success unannounced.
     session.notifyOnExitEmptySuccess === true &&
     session.notifySessionTarget !== undefined &&
-    (session.exitWakeAfterYield !== true || session.processActivity?.deadlineAtMs !== undefined)
+    (session.exitWakeAfterYield === true
+      ? session.processActivity?.deadlineAtMs !== undefined
+      : // Cron completion admission otherwise requires its originating run.
+        session.assertExitNotificationAcceptanceCurrent === undefined)
   );
 }
 
