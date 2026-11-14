@@ -503,6 +503,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.enabled": "Automations Enabled",
   "cron.defaultTools": "Automation Default Tools",
   "cron.skipMissedJobs": "Skip Missed Recurring Automations",
+  "cron.dynamicConcurrency": "Dynamic Automation Concurrency",
   "cron.webhookToken": "Automations Webhook Bearer Token",
   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
   "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":

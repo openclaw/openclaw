@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { MIN_CRON_RUN_SLOTS } from "../../config/cron-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -127,7 +127,7 @@ export async function occupyWorkers(
   runTarget: NonNullable<CronServiceDeps["runIsolatedAgentJob"]> = async () => ({ status: "ok" }),
 ) {
   const now = job.createdAtMs;
-  const blockerJobs = Array.from({ length: MIN_CRON_RUN_SLOTS }, (_, index) =>
+  const blockerJobs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
     createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
   );
   await saveCronStore(fixture.storePath, { version: 1, jobs: [...blockerJobs, job] });
