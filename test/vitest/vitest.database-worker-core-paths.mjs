@@ -1360,7 +1360,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-memory-write-admission.test.ts",
   "src/state/openclaw-state-db.test.ts",
   "src/state/openclaw-state-db-read-admission.test.ts",
-  "src/state/openclaw-state-db-schema-policy.test.ts",
   "src/agents/provider-transport-fetch.capture.test.ts",
   "src/proxy-capture/proxy-server.test.ts",
   "src/proxy-capture/runtime.guarded-fetch.test.ts",

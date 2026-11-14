@@ -720,7 +720,6 @@ export const gatewayCoreTestExclude = [
   "src/gateway/**/*android-node*.test.ts",
   "src/gateway/**/*gateway-cli-backend*.test.ts",
   "src/gateway/**/*server*.test.ts",
-  "src/gateway/gateway.test.ts",
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
   "src/gateway/openai-http.test.ts",
