@@ -1616,6 +1616,10 @@ const config = {
       "session-catalog-plugin.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openclaw-id-access`]: bundledPluginWorkspace([
+      // Opt-in member-device visual proof selects this config directly through Vitest.
+      "test/member-devices.vitest.config.ts",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: bundledPluginWorkspace([
       // OAuth, model, and media provider helpers are runtime/plugin surfaces.
       "image-generation-provider.ts!",
