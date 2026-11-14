@@ -1021,6 +1021,42 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun oversizedRequestFailsWithoutDroppingTheSocket() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val readyCount = AtomicInteger()
+      val leases = ConcurrentLinkedQueue<GatewaySession.RequestLease>()
+      val server =
+        startGatewayServer(json = Json { ignoreUnknownKeys = true }) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val harness = createReconnectHarness()
+      val onReady = {
+        readyCount.incrementAndGet()
+        leases.add(requireNotNull(harness.session.captureRequestLease("manual|127.0.0.1|${server.port}")))
+        connected.complete(Unit)
+        Unit
+      }
+
+      try {
+        connectSession(harness.session, server.port, onReady = onReady)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val lease = requireNotNull(leases.poll())
+        // A 13 MiB video is 18,175,320 Base64 chars, past OkHttp's 16 MiB outgoing queue.
+        val content = "A".repeat(18_175_320)
+        val error = runCatching { lease.request(method = "chat.send", paramsJson = """{"attachments":[{"content":"$content"}]}""") }.exceptionOrNull()
+
+        // A retryable "not enqueued" would park the row as Queued and replay it on every reconnect.
+        assertTrue(error is GatewayRequestDefinitiveFailure && error !is GatewayRequestNotEnqueued)
+        delay(500)
+        assertTrue(lease.isCurrent())
+        assertEquals(1, readyCount.get())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun retiringConnectionRejectsQueuedRequestsBeforeSocketCancellation() =
     runBlocking {
       for (fireAndForget in listOf(false, true)) {
