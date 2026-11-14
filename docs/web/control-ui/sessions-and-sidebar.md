@@ -426,14 +426,24 @@ Up and Down move between choices, and Enter selects. Automation, system sessions
 and message previews use consistent on/off toggles. Escape closes an open picker first, then the popover and returns
 focus to the filter button. **Session sources** opens its Settings destination. In **Show all agents**
 mode, Display omits grouping and empty-group controls because the sidebar always
-groups by agent. Reset leaves those hidden preferences unchanged. Person grouping
+groups by agent. **Last updated** orders unpinned agents by their latest conversation
+activity, not by renames, pin changes, or other metadata edits. Tied agents keep
+the configured roster order; the other sort choices only affect conversation rows.
+Agent recency uses the available non-archived sessions in the shared 300-session
+window, so it is not an exhaustive activity ranking across all history. Selecting
+an agent still opens its main conversation, even when another conversation
+determines its position. Pinned agents and personal session pins keep their order.
+Reset leaves those hidden preferences unchanged. Person grouping
 stays available with one owner or an empty list and remains selected while owner data refreshes.
 
 In **Show all agents**, compact agent rows show a muted preview of the agent's
 most recent available agent reply across its visible, non-archived sessions.
 A newer user message does not replace that preview. Agents without an available
 agent reply keep a name-only row. The top-level roster does not show the
-session list's empty-filter hint.
+session list's empty-filter hint. A red dot on an agent avatar, including a pinned
+agent, means at least one available non-archived, non-incognito conversation in
+the shared activity window is unread. It clears when those conversations are marked read;
+opening the agent's main conversation does not clear unread independent chats.
 
 Choose **Pin** in an agent's options menu to move it into the icon section above
 the roster. Hover or focus its avatar to read the full name and a short preview

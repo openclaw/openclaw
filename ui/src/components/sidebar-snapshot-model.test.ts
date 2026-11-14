@@ -215,11 +215,12 @@ it("keeps display data without persisting authority, executable plugins, or watc
     token: "synthetic-secret",
     footer: { ...model.footer, scopes: ["operator.admin"] },
     plugins: [{ ...plugin, mount() {} }],
-    cards: [{ ...card, activeNow: true, lastActiveAt: 99 }],
+    cards: [{ ...card, activeNow: true, lastActiveAt: 99, unread: true }],
   });
   expect(admitted?.footer).toEqual(model.footer);
   expect(admitted?.plugins).toEqual([plugin]);
-  expect(admitted?.cards).toEqual([card]);
+  expect(admitted?.cards).toEqual([{ ...card, lastActiveAt: 99, unread: true }]);
+  expect(parse({ cards: [card] })?.cards).toEqual([card]);
   expect(admitted).not.toHaveProperty("token");
   expect(
     parse({ onlineUsers: [{ id: "operator", watchedSessions: ["private-session"] }] }),
