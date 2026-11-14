@@ -47,11 +47,16 @@ function boundedString(value: unknown, maxBytes = 1024): value is string {
 }
 
 function isoTimestamp(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/u.test(value) &&
-    Number.isFinite(Date.parse(value))
-  );
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/u.test(value) ||
+    !Number.isFinite(Date.parse(value))
+  ) {
+    return false;
+  }
+  // Validate the authored day before an offset or 24:00 can move it to another day.
+  const date = value.slice(0, 10);
+  return new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
 }
 
 /** Canonical JSON gives subscribe and unsubscribe the same filter identity. */
