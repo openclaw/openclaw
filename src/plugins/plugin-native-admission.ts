@@ -238,10 +238,10 @@ export function createPluginNativeAdmission(
   let finalReceipt: NativeReceipt | undefined;
   const namespaces = () => [...new Set(selected.values())];
   // A newer receipt can prune the shared map while this admission's generation is still live.
-  const owned = new Map<string, PluginNativeNamespaceFact>();
+  const owned = new Map<string, PluginNativeNamespaceFact>(recovery?.namespaces);
   const namespaceById = (id: string) => owned.get(id) ?? state.namespaces.get(id);
   for (const [alias, id] of recovery?.directories ?? []) {
-    const namespace = state.namespaces.get(id);
+    const namespace = namespaceById(id);
     if (namespace) {
       selected.set(alias, namespace);
     }
@@ -575,7 +575,7 @@ export function createPluginNativeAdmission(
       }
       const found = namespaceFor(resolvedSource);
       let namespace = recovered
-        ? state.namespaces.get(recovered.namespace)
+        ? namespaceById(recovered.namespace)
         : (namespaces().find(
             (candidate) => nativeMemberForSource(candidate, resolvedSource) !== undefined,
           ) ?? found?.[1]);
