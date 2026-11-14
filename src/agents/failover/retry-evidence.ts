@@ -5,6 +5,7 @@ import {
   parseRetryAfterTextSeconds,
 } from "@openclaw/ai/internal/retry-after";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractErrorHttpStatus,
@@ -105,6 +106,17 @@ function retryTextSeconds(message: string | undefined, nowMs: number): number | 
   return maxDefined(parseGoogleRetryDelaySeconds(message), proseRetrySeconds(message, nowMs));
 }
 
+/** A harness that knows when its quota resets states it as `retryAfterMs` on the error it throws. */
+function statedRetryAfterSeconds(error: unknown, depth = 0): number | undefined {
+  const record = asOptionalObjectRecord(error);
+  const stated = record?.retryAfterMs;
+  if (typeof stated === "number" && Number.isFinite(stated) && stated >= 0) {
+    return stated / 1000;
+  }
+  // The runtime wraps a harness failure, so the fact can sit on a cause.
+  return record && depth < 4 ? statedRetryAfterSeconds(record.cause, depth + 1) : undefined;
+}
+
 /**
  * Extracts the provider retry floor from error text and response headers. The greatest
  * explicit instruction (Retry-After headers, RetryInfo, retry prose) wins; an exhausted
@@ -120,6 +132,7 @@ export function resolveRetryAfterMs(
   const seconds =
     maxDefined(
       headers?.explicitSeconds,
+      statedRetryAfterSeconds(body),
       retryTextSeconds(message, nowMs),
       parseGoogleRetryDelaySeconds(errorBody),
     ) ?? headers?.resetSeconds;

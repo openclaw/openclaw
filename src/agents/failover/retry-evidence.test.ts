@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveReplyFailoverFacts } from "./request-error-facts.js";
 import {
   classifyRateLimitWindow,
   hasOrganizationTpmRateLimitEvidence,
@@ -55,6 +56,19 @@ describe("resolveRetryAfterMs", () => {
     expectDelay(body("soon"), 32_579);
     expectDelay("429 RESOURCE_EXHAUSTED: retry in 4.5s", 4_500);
     expectDelay("429 RESOURCE_EXHAUSTED: please retry soon", undefined);
+  });
+
+  it("reads the reset a harness states as retryAfterMs, also through the runtime's wrapper", () => {
+    const quota = "Muse usage limit reached (weekly); resets at 2015-10-21T12:27:00.000Z.";
+    const thrown = Object.assign(new Error(quota), { status: 429, retryAfterMs: 18_000_000 });
+    expectDelay(quota, undefined, new Error(quota));
+    expectDelay(quota, 18_000_000, thrown);
+    expectDelay(quota, 18_000_000, new Error(quota, { cause: thrown }));
+    expectDelay(quota, undefined, Object.assign(new Error(quota), { retryAfterMs: "soon" }));
+    expect(resolveReplyFailoverFacts(new Error(quota, { cause: thrown }), quota)).toMatchObject({
+      reason: "rate_limit",
+      requestFailureText: expect.stringContaining("The provider says to retry in 5 hours"),
+    });
   });
 
   it("reads RetryInfo in any key order from a structured error body", () => {
