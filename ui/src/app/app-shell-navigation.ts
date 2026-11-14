@@ -29,6 +29,7 @@ import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { readDeletedSessionStartup } from "./deleted-session-startup.ts";
 import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
+import type { NavDrawerCloseOptions } from "./navigation-surface.ts";
 
 export interface ShellNavigationHost {
   readonly context: ApplicationContext | undefined;
@@ -39,7 +40,7 @@ export interface ShellNavigationHost {
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
   settingsSearchQuery: string;
-  closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+  closeNavDrawer(options?: NavDrawerCloseOptions): void;
   ensureAgentsList(
     snapshot: ApplicationContext["gateway"]["snapshot"],
     agents?: ApplicationContext["agents"],
@@ -90,7 +91,7 @@ export class ShellNavigationOwner {
       return;
     }
     // The new draft owns focus after it mounts; a drawer return must not reclaim it.
-    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session" });
+    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session", finishMotion: true });
     context.navigate(
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
