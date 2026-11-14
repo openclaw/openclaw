@@ -14,10 +14,12 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { updateSubagentRunFixture as updateFixtureRun } from "./subagent-registry-result-refresh.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
-import { makeKilledRun } from "./subagent-registry.run-fixtures.test-support.js";
+import {
+  makeKilledRun,
+  updateSubagentRunFixture as updateFixtureRun,
+} from "./subagent-registry.run-fixtures.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
