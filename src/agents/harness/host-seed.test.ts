@@ -9,12 +9,12 @@ import {
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { onAgentRuntimeEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { onAgentRuntimeEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -483,10 +483,8 @@ it.each(["throws", "rejects"] as const)(
         return Promise.reject(new Error("observer down"));
       });
       const prepare = expectDefined(
-        fixture.bind(
-          { config: seedConfig(1024, false), runId, onAgentEvent },
-          source.signal,
-        )?.prepareBoundedSeed,
+        fixture.bind({ config: seedConfig(1024, false), runId, onAgentEvent }, source.signal)
+          ?.prepareBoundedSeed,
         "seed capability",
       );
       const seed = await prepare({ assertCurrent: () => {} });
