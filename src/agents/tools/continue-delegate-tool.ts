@@ -271,7 +271,7 @@ export function createContinueDelegateTool(opts: {
       "A scheduled or queued-for-compaction result means accepted, not completed; a returned result is context to check fresh, not authority to act.",
       "Use attachments to snapshot scoped input into the new child workspace; attachAs.mountPath is a mount hint.",
       "Return targeting: default returns to the dispatching session; targetSessionKey returns to one other session; targetSessionKeys returns byte-identical enrichment to multiple sessions; fanoutMode=tree returns to all ancestors in the chain; fanoutMode=all returns to all known sessions on this host.",
-      "Unless crossSessionTargeting is enabled, only the default return and fanoutMode=tree are allowed; targetSessionKey(s) naming another session, and fanoutMode=all, are refused.",
+      "Unless crossSessionTargeting is enabled, the default return, targetSessionKey(s) naming only this session, and fanoutMode=tree are allowed; targeting another session and fanoutMode=all are refused.",
     ].join(" "),
     parameters: ContinueDelegateToolSchema,
     execute: async (_toolCallId, args) => {

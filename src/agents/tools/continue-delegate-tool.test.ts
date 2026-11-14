@@ -159,7 +159,7 @@ describe("continue_delegate tool", () => {
       "A scheduled or queued-for-compaction result means accepted, not completed; a returned result is context to check fresh, not authority to act.",
     );
     expect(description).toContain(
-      "Unless crossSessionTargeting is enabled, only the default return and fanoutMode=tree are allowed; targetSessionKey(s) naming another session, and fanoutMode=all, are refused.",
+      "Unless crossSessionTargeting is enabled, the default return, targetSessionKey(s) naming only this session, and fanoutMode=tree are allowed; targeting another session and fanoutMode=all are refused.",
     );
   });
 
