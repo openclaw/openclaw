@@ -232,6 +232,7 @@ export function createChatSessionSharingMobileAdapter(
           visibility() !== "draft" &&
           current &&
           current.membersAvailable !== false &&
+          (!current.state?.error || Boolean(current.state.result)) &&
           (!current.state?.result ||
             current.state?.read ||
             current.state?.error ||
