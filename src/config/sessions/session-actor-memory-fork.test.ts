@@ -184,16 +184,44 @@ describe("memory actor fork and cut", () => {
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
     assert(rewind.status === "created", "Rewind failed");
-    await expect(async () => readMemory(storage(parent), "session.entry.read", {})).rejects.toThrow(
-      /closed/,
-    );
+    // The cut keeps the transcript identity, so the pre-cut handle stays usable
+    // and reads the rotated incarnation. Its writer claim is what is retired: an
+    // append carrying the pre-cut lifecycle revision is fenced, as on SQLite.
+    expect(await readMemory(storage(parent), "session.entry.read", {})).toMatchObject({
+      sessionId: "parent-session",
+    });
+    expect(rewind.entry.lifecycleRevision).not.toBe(expectedState.lifecycleRevision);
+    const stale = await mutateMemory(storage(parent), "session.event.append", {
+      scope: {
+        agentId: "main",
+        sessionKey: parentKey,
+        storePath,
+        sessionId: expectedState.sessionId,
+        expectedOwner: { lifecycleRevision: expectedState.lifecycleRevision },
+      },
+      eventJson: JSON.stringify({
+        type: "custom",
+        id: "stale-append",
+        customType: "synthetic",
+        parentId: "a2",
+        timestamp: "2026-01-01T00:00:05.000Z",
+        data: {},
+      }),
+    });
+    assert(stale.kind === "rolled-back", "Stale writer was admitted after the cut");
+    expect(stale.error.message).toMatch(/writer claim changed/);
     const active = await acquire();
     const old = await readMemory(storage(active), "session.history.hydrate", {
       sessionId: "parent-session",
     });
     expect(old.kind).toBe("full");
     if (old.kind === "full") {
-      expect(old.snapshot.events).toEqual(transcript);
+      // The original window is retained inside the same transcript: every seeded
+      // event, plus the one appended control that selected u2's predecessor.
+      expect(old.snapshot.events.slice(0, transcript.length)).toEqual(transcript);
+      expect(old.snapshot.events.slice(transcript.length)).toMatchObject([
+        { type: "leaf", parentId: "a2", targetId: "a1" },
+      ]);
     }
     const branch = await readMemory(storage(active), "session.parentFork.source", {});
     expect(branch?.branchEntries).toHaveLength(2);
