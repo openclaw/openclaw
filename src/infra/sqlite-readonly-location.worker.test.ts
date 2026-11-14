@@ -1,8 +1,14 @@
+import { writeSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { SqliteReadOnlyWorkerMode } from "./sqlite-readonly-worker-protocol.js";
 import { SqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+});
 
 const { prepare, prepareCopy, createToken, SourceChangedError } = vi.hoisted(() => ({
   prepare: vi.fn(),
@@ -92,13 +98,39 @@ async function expectWorkerFailure(
       process,
     ),
   );
-  const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk, ...rest) => {
+  let captured = "";
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk, ...rest) => {
     const callback = rest.find((argument) => typeof argument === "function");
     if (typeof callback === "function") {
       queueMicrotask(() => callback());
     }
+    // UNKNOWN stdout can acknowledge the synchronous child's write without delivering bytes.
+    if (mode !== "sync") {
+      captured += String(chunk);
+    }
     return true;
   });
+  vi.mocked(writeSync).mockImplementation(
+    (
+      file: number,
+      data: string | NodeJS.ArrayBufferView,
+      offset?: number | null,
+      length?: number | BufferEncoding | null,
+    ) => {
+      if (file !== 1) {
+        throw new Error("Unexpected descriptor in worker output fixture");
+      }
+      const bytes =
+        typeof data === "string"
+          ? Buffer.from(data, typeof length === "string" ? length : undefined)
+          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+      const start = typeof data === "string" ? 0 : (offset ?? 0);
+      const size = typeof length === "number" ? length : bytes.length;
+      const chunk = bytes.subarray(start, start + size);
+      captured += chunk.toString();
+      return chunk.length;
+    },
+  );
   if (mode === "async") {
     prepare.mockRejectedValueOnce(error);
   } else {
@@ -114,7 +146,7 @@ async function expectWorkerFailure(
     (contention ? "Retryable SQLite inspection contention: " : "") +
     (allocationRefused ? "SQLite snapshot directory creation refused: " : "");
   const stdout = JSON.stringify({ ok: false, message: `${prefix}${message}` });
-  expect(write).toHaveBeenCalledExactlyOnceWith(stdout, expect.any(Function));
+  expect(captured).toBe(stdout);
   expect(process.exitCode).toBe(1);
   expect(await readFailure(stdout, mode)).toEqual({
     contention,
