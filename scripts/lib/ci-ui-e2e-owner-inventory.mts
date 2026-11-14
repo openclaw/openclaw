@@ -676,7 +676,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/chat-rail-columns.e2e.test.ts",
     ["chat", "terminal"],
     [
       "ui/src/components/tooltip.ts",
@@ -855,7 +854,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch("ui/src/e2e/chat-startup-progress.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-stop-response-ownership.e2e.test.ts", ["chat"]),
   pageWatch(
-    "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-page.tsx", "ui/src/pages/chat/chat-pane.ts"],
   ),
@@ -1756,7 +1754,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/session-progress-hovercard.navigation.e2e.test.ts", ["chat"]),
   pageWatch(
-    "ui/src/e2e/session-progress-live-placement.e2e.test.ts",
     ["chat", "config"],
     [
       "ui/src/components/session-progress-card-controller.ts",

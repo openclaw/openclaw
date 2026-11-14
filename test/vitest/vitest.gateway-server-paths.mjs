@@ -77,7 +77,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-pr-workspace-acquisition.test.ts",
   "src/gateway/github-pr-workspace-preparation.test.ts",
   "src/gateway/github-pr-workspace-refresh.test.ts",
-  "src/gateway/github-publication-actions.test.ts",
   "src/gateway/github-publication-admission.test.ts",
   "src/gateway/github-publication-attribution.test.ts",
   "src/gateway/github-publication-availability.worker.test.ts",
