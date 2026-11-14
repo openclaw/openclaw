@@ -272,6 +272,7 @@ const enSettings = {
       stateConfigured: "Configured",
       stateAttention: "Needs attention",
       stateNotConfigured: "Not configured",
+      stateUnknown: "Status unknown",
       details: "Details",
       setUp: registerModelProviderAuthEnglish.catalog.channels.hub.setUp,
       guidedSetup: "Guided step-by-step setup",
