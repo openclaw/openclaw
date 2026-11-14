@@ -149,4 +149,27 @@ describe("createMessageReceiptFromOutboundResults", () => {
     expect(listMessageReceiptPlatformIds(receipt)).toEqual(["m1", "m2"]);
     expect(resolveMessageReceiptPrimaryId(receipt)).toBe("m1");
   });
+
+  it("does not treat a placeholder message id as a platform identity", () => {
+    // The bundled Matrix adapter answers `messageId: "unknown"` when it collected no event id.
+    const ambiguous = {
+      outcome: "sent" as const,
+      messageId: "unknown",
+      receipt: {
+        primaryPlatformMessageId: undefined,
+        platformMessageIds: [],
+        parts: [],
+        sentAt: 123,
+      },
+    };
+
+    expect(resolveReceiptSourceId(ambiguous)).toBeUndefined();
+
+    // A mixed batch keeps the real identity and gains no placeholder of its own.
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [ambiguous, { messageId: "matrix-event-2" }],
+    });
+    expect(receipt.platformMessageIds).toEqual(["matrix-event-2"]);
+    expect(receipt.parts.map((part) => part.platformMessageId)).toEqual(["matrix-event-2"]);
+  });
 });

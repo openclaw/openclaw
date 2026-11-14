@@ -53,12 +53,25 @@ export function listMessageReceiptSourceTargets(value: unknown): string[] {
   return [...targets];
 }
 
+/**
+ * An adapter without a provider identity substitutes a sentinel such as `"unknown"`. That is
+ * a placeholder, not a confirmed platform message: treating it as an id records an identified
+ * `sent` result, and downstream confirmed-message bookkeeping then trusts a message that was
+ * never identified.
+ */
+const PLATFORM_MESSAGE_ID_PLACEHOLDERS = new Set(["unknown", "n/a", "none"]);
+
+function normalizePlatformMessageId(value: unknown): string | undefined {
+  const id = normalizeOptionalString(value);
+  return id && !PLATFORM_MESSAGE_ID_PLACEHOLDERS.has(id.toLowerCase()) ? id : undefined;
+}
+
 export function resolveReceiptSourceId(result: MessageReceiptInputResult): string | undefined {
   if (result.outcome === "not_sent") {
     return undefined;
   }
   return (
-    normalizeOptionalString(result.messageId) ??
+    normalizePlatformMessageId(result.messageId) ??
     (result.receipt ? resolveMessageReceiptPrimaryId(result.receipt) : undefined) ??
     normalizeOptionalString(result.pollId)
   );
