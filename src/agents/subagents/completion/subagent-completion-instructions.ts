@@ -5,6 +5,18 @@ import { isInternalMessageChannel } from "../../../utils/message-channel.js";
 export const SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION =
   "This completion ends one child run, not necessarily the original user request. Compare the result with the requested outcome before deciding the task is done. Reviews, failed checks, and other in-scope fixable blockers require continued work or a follow-up in the kept child session; report a blocker only when progress needs new user authority or an unavailable external decision.";
 
+export const SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION =
+  "This completion ends one child run, and this turn only relays the captured child result without execution or delegation tools. Do not attempt tool calls or follow-up runs here. Report the result truthfully; if follow-up work is needed, state what follow-up is needed so the requester can start a normal turn.";
+
+export function rewriteSubagentCompletionReplyInstructionForRelayOnly(text: string): string {
+  return text.includes(SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION)
+    ? text.replaceAll(
+        SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
+        SUBAGENT_COMPLETION_RELAY_ONLY_OUTCOME_INSTRUCTION,
+      )
+    : text;
+}
+
 export function buildSubagentPrivateCompletionInstruction(
   requesterOrigin: DeliveryContext | undefined,
 ): string {
