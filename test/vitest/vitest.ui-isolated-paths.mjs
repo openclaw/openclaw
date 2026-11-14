@@ -76,7 +76,6 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/components/chat-rich-message-lazy.test.tsx",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
   "ui/src/pages/chat/components/chat-transcript-geometry.test.ts",
-  "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",
   "ui/src/pages/chat/components/chat-receipt-fanout.test.ts",
   "ui/src/pages/chat/components/chat-transcript-message-reveal.test.ts",
   "ui/src/pages/chat/components/chat-transcript-render.test.ts",

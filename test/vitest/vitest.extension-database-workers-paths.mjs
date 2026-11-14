@@ -430,7 +430,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/matrix/src/matrix/client/storage.test.ts",
   "extensions/matrix/src/matrix/credentials.test.ts",
   "extensions/matrix/src/matrix/delivery-plan.test.ts",
-  "extensions/matrix/src/matrix/send.test.ts",
   "extensions/matrix/src/matrix/send.authority.integration.test.ts",
   "extensions/matrix/src/direct-encryption.test.ts",
   "extensions/matrix/src/matrix/conversation-route-owner.test.ts",
