@@ -235,7 +235,7 @@ const enSettings = {
       editFile: "Edit file",
       closePreview: "Close preview",
       coreFilesTitle: "Core files",
-      coreFilesSubtitle: "Bootstrap persona, identity, and tool guidance.",
+      coreFilesSubtitle: "Instructions for this agent’s behavior, identity, and tools.",
       workspace: "Workspace",
       loadHint: "Load the agent workspace files to edit core instructions.",
       empty: "No files yet.",
@@ -587,7 +587,7 @@ const enSettings = {
       },
       bindings: {
         label: "Bindings",
-        description: "Key bindings and shortcuts",
+        description: "Route conversations to agents and bind persistent ACP sessions.",
       },
       broadcast: {
         label: "Broadcast",
@@ -631,7 +631,7 @@ const enSettings = {
       },
       acp: {
         label: "ACP",
-        description: "Agent Communication Protocol runtime and streaming settings",
+        description: "Agent Client Protocol (ACP) runtime and streaming settings",
       },
       mcp: {
         label: "MCP",
